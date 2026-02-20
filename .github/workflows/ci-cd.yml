@@ -1,0 +1,109 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: erp-mehrbanoo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Pack dist
+        run: tar -czf dist.tar.gz -C dist .
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Add server host key
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload bundle
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          scp -P "$SERVER_PORT" dist.tar.gz "$SERVER_USER@$SERVER_HOST:/tmp/erp-mehrbanoo-dist.tar.gz"
+
+      - name: Activate release
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          # Note: SSH does not forward env vars by default, so we pass DEPLOY_PATH explicitly.
+          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" << 'EOF'
+          set -euo pipefail
+
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/erp-mehrbanoo}"
+          ARCHIVE="/tmp/erp-mehrbanoo-dist.tar.gz"
+          TS="$(date +%Y%m%d%H%M%S)"
+
+          mkdir -p "$DEPLOY_PATH/releases"
+          RELEASE_DIR="$DEPLOY_PATH/releases/$TS"
+          mkdir -p "$RELEASE_DIR"
+
+          tar -xzf "$ARCHIVE" -C "$RELEASE_DIR"
+          ln -sfn "$RELEASE_DIR" "$DEPLOY_PATH/current"
+
+          # Keep last 5 releases for quick rollback.
+          if [ -d "$DEPLOY_PATH/releases" ]; then
+            ls -1dt "$DEPLOY_PATH/releases"/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          fi
+
+          # Reload nginx if allowed for this user.
+          if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl reload nginx || true
+          fi
+
+          echo "Deployed $RELEASE_DIR"
+          EOF

@@ -1,0 +1,35 @@
+/* React Multi Date Picker - Leather Theme */
+.rmdp-leather .rmdp-wrapper,
+.rmdp-leather .rmdp-calendar {
+	border-radius: 12px;
+	border: 1px solid #e5e7eb;
+	box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+}
+
+.rmdp-leather .rmdp-day.rmdp-selected .sd {
+    background-color: #a9713d !important;
+    color: #fff !important;
+}
+.rmdp-leather .rmdp-day.rmdp-today .sd {
+    background-color: #eabb92 !important;
+    color: #fff !important;
+}
+.rmdp-leather .rmdp-day.rmdp-range .sd {
+	background-color: #c58f60 !important;
+	color: #fff !important;
+}
+
+.rmdp-leather .rmdp-header-values,
+.rmdp-leather .rmdp-week-day {
+	color: #a9713d;
+}
+
+.rmdp-leather .rmdp-arrow {
+	border: solid #8b5a2b;
+	border-width: 0 2px 2px 0;
+}
+
+.rmdp-leather .rmdp-arrow-container:hover {
+	background-color: rgba(197, 143, 96, 0.1);
+}
+@import "./index.css";
