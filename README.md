@@ -1,4 +1,4 @@
-# Bartar Leather ERP (مهربانو)
+# KalamApp ERP
 
 یک سیستم جامع مدیریت منابع سازمانی (ERP) مدرن و ماژولار برای صنایع تولیدی و خرده‌فروشی، ساخته شده با React، TypeScript و Supabase.
 
