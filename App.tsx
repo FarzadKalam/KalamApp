@@ -1,11 +1,11 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Refine, Authenticated } from "@refinedev/core";
 import { notificationProvider, ErrorComponent } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
 import { BrowserRouter, Route, Routes, Outlet } from "react-router-dom";
-import { ConfigProvider, App as AntdApp } from "antd";
+import { ConfigProvider, App as AntdApp, theme as antdTheme } from "antd";
 import faIR from "antd/locale/fa_IR";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/Settings/SettingsPage";
@@ -26,13 +26,98 @@ import Dashboard from "./pages/Dashboard";
 import InquiryForm from "./pages/InquiryForm";
 import ProductionGroupOrdersList from "./pages/ProductionGroupOrdersList";
 import ProductionGroupOrderWizard from "./pages/ProductionGroupOrderWizard";
+import HRPage from "./pages/HRPage";
+import FilesGalleryPage from "./pages/FilesGalleryPage";
+import {
+  BRANDING_INTEGRATION_CONNECTION_TYPE,
+  BRANDING_INTEGRATION_PROVIDER,
+  BRANDING_UPDATED_EVENT,
+  DEFAULT_BRANDING,
+  THEME_STORAGE_KEY,
+  applyBrandCssVariables,
+  mergeBrandingConfig,
+  type BrandingSettingsPayload,
+} from "./theme/brandTheme";
 
-const APP_TITLE = "مهربانو اتوماسیون";
+const getInitialDarkMode = () => {
+  if (typeof window === "undefined") return false;
+  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === "dark") return true;
+  if (savedTheme === "light") return false;
+  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
+};
 
 function App() {
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
+  const [branding, setBranding] = useState(DEFAULT_BRANDING);
+
   useEffect(() => {
     document.body.style.fontFamily = 'Vazirmatn, sans-serif';
   }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDarkMode);
+    window.localStorage.setItem(THEME_STORAGE_KEY, isDarkMode ? "dark" : "light");
+  }, [isDarkMode]);
+
+  const loadBranding = useCallback(async () => {
+    try {
+      const [companyResult, themeResult] = await Promise.all([
+        supabase
+          .from('company_settings')
+          .select('*')
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('integration_settings')
+          .select('id, settings')
+          .eq('connection_type', BRANDING_INTEGRATION_CONNECTION_TYPE)
+          .eq('provider', BRANDING_INTEGRATION_PROVIDER)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+
+      const companyRow = (companyResult.data || {}) as Record<string, any>;
+      const companyFullName = String(companyRow.company_full_name || companyRow.company_name || '').trim();
+      const tradeName = String(companyRow.trade_name || '').trim();
+      const paletteKey = String(companyRow.brand_palette_key || '').trim();
+      const settingsContainer = themeResult.data?.settings;
+      const rawBranding =
+        settingsContainer &&
+        typeof settingsContainer === 'object' &&
+        'branding' in (settingsContainer as Record<string, unknown>) &&
+        (settingsContainer as Record<string, unknown>).branding &&
+        typeof (settingsContainer as Record<string, unknown>).branding === 'object'
+          ? ((settingsContainer as Record<string, unknown>).branding as Record<string, unknown>)
+          : (settingsContainer as Record<string, unknown> | undefined);
+
+      const merged = mergeBrandingConfig(DEFAULT_BRANDING, {
+        ...(rawBranding || {}),
+        palette_key: String(rawBranding?.palette_key || paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload['palette_key'],
+        brand_name: String(rawBranding?.brand_name || tradeName || companyFullName || DEFAULT_BRANDING.brandName),
+        app_title: String(rawBranding?.app_title || companyFullName || tradeName || DEFAULT_BRANDING.appTitle),
+        short_name: String(rawBranding?.short_name || tradeName || companyFullName || DEFAULT_BRANDING.shortName),
+      });
+      setBranding(merged);
+    } catch {
+      setBranding(DEFAULT_BRANDING);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBranding();
+    window.addEventListener(BRANDING_UPDATED_EVENT, loadBranding as EventListener);
+    return () => {
+      window.removeEventListener(BRANDING_UPDATED_EVENT, loadBranding as EventListener);
+    };
+  }, [loadBranding]);
+
+  useEffect(() => {
+    applyBrandCssVariables(branding);
+    document.documentElement.setAttribute('data-brand-title', branding.appTitle);
+  }, [branding]);
 
   useEffect(() => {
     const publicPaths = ["/inquiry"];
@@ -70,6 +155,8 @@ function App() {
     if (pathname.startsWith("/inquiry")) return "فرم استعلام";
     if (pathname.startsWith("/settings")) return "تنظیمات";
     if (pathname.startsWith("/profile")) return "پروفایل";
+    if (pathname.startsWith("/hr")) return "منابع انسانی";
+    if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
     return null;
   };
 
@@ -92,20 +179,20 @@ function App() {
     autoGeneratedTitle: string;
   }) => {
     const standalone = getStandalonePageTitle(pathname);
-    if (standalone) return `${standalone} | ${APP_TITLE}`;
+    if (standalone) return `${standalone} | ${branding.appTitle}`;
 
     const resourceLabel =
       resource?.meta?.label || resource?.label || MODULES?.[resource?.name]?.titles?.fa || resource?.name || "";
 
     if (resourceLabel) {
       if (action === "show" || action === "edit") {
-        return `${resourceLabel} | ${APP_TITLE}`;
+        return `${resourceLabel} | ${branding.appTitle}`;
       }
       const actionLabel = getActionLabel(action);
-      return actionLabel ? `${actionLabel} ${resourceLabel} | ${APP_TITLE}` : `${resourceLabel} | ${APP_TITLE}`;
+      return actionLabel ? `${actionLabel} ${resourceLabel} | ${branding.appTitle}` : `${resourceLabel} | ${branding.appTitle}`;
     }
 
-    return APP_TITLE;
+    return branding.appTitle;
   };
 
   return (
@@ -114,8 +201,9 @@ function App() {
         direction="rtl" 
         locale={faIR} 
         theme={{
+          algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: {
-            colorPrimary: '#c58f60', 
+            colorPrimary: branding.palette.primary,
             fontFamily: 'Vazirmatn, sans-serif',
           }
         }}
@@ -131,7 +219,7 @@ function App() {
             options={{
               syncWithLocation: true, 
               warnWhenUnsavedChanges: true, 
-              projectId: "bartar-leather-erp",
+              projectId: "kalam-tazeh-holding",
             }}
           >
             <Routes>
@@ -144,7 +232,11 @@ function App() {
                     key="authenticated-inner"
                     fallback={<CatchAllNavigate to="/login" />}
                   >
-                    <Layout isDarkMode={false} toggleTheme={() => {}}>
+                    <Layout
+                      isDarkMode={isDarkMode}
+                      toggleTheme={() => setIsDarkMode((prev) => !prev)}
+                      brandShortName={branding.shortName}
+                    >
                       <Outlet />
                     </Layout>
                   </Authenticated>
@@ -155,6 +247,9 @@ function App() {
                 <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
                 <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
                 <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
+                <Route path="/hr" element={<HRPage />} />
+                <Route path="/hr/:employeeId" element={<HRPage />} />
+                <Route path="/gallery" element={<FilesGalleryPage />} />
                 
                 <Route path="/:moduleId">
                   <Route index element={<ModuleListRefine />} />

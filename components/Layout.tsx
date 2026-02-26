@@ -19,9 +19,15 @@ import {
   CheckSquareOutlined,
   GoldOutlined,
   ExclamationCircleOutlined,
+  MoonOutlined,
+  ProjectOutlined,
+  RocketOutlined,
+  NodeIndexOutlined,
+  PictureOutlined,
+  SunOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { supabase } from '../supabaseClient'; // ðŸ‘ˆ Ø§ÛŒÙ…Ù¾ÙˆØ±Øª Ø³ÙˆÙ¾Ø§Ø¨ÛŒØ³
+import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import QrScanPopover from './QrScanPopover';
 import NotificationsPopover from './NotificationsPopover';
@@ -33,13 +39,14 @@ interface LayoutProps {
   children: React.ReactNode;
   isDarkMode: boolean;
   toggleTheme: () => void;
+  brandShortName: string;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
+const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName }) => {
   const [collapsed, setCollapsed] = useState(true);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [currentUser, setCurrentUser] = useState<any>(null); // Ø¨Ø±Ø§ÛŒ Ù†Ù…Ø§ÛŒØ´ Ø¢ÙˆØ§ØªØ§Ø± ÙˆØ§Ù‚Ø¹ÛŒ
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
   const [globalSearch, setGlobalSearch] = useState('');
@@ -94,61 +101,73 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
 
   const handleLogout = () => {
     Modal.confirm({
-      title: 'Ø®Ø±ÙˆØ¬ Ø§Ø² Ø­Ø³Ø§Ø¨ Ú©Ø§Ø±Ø¨Ø±ÛŒ',
+      title: 'خروج از حساب کاربری',
       icon: <ExclamationCircleOutlined />,
-      content: 'Ø¢ÛŒØ§ Ù…Ø·Ù…Ø¦Ù† Ù‡Ø³ØªÛŒØ¯ Ú©Ù‡ Ù…ÛŒâ€ŒØ®ÙˆØ§Ù‡ÛŒØ¯ Ø®Ø§Ø±Ø¬ Ø´ÙˆÛŒØ¯ØŸ',
-      okText: 'Ø¨Ù„Ù‡ØŒ Ø®Ø±ÙˆØ¬',
-      cancelText: 'Ø§Ù†ØµØ±Ø§Ù',
+      content: 'آیا مطمئن هستید که می‌خواهید خارج شوید؟',
+      okText: 'بله، خروج',
+      cancelText: 'انصراف',
       okType: 'danger',
       onOk: async () => {
         try {
           const { error } = await supabase.auth.signOut();
           if (error) throw error;
           navigate('/login');
-          message.success('Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ø®Ø§Ø±Ø¬ Ø´Ø¯ÛŒØ¯');
+          message.success('با موفقیت خارج شدید');
         } catch (error) {
-          message.error('Ø®Ø·Ø§ Ø¯Ø± Ø®Ø±ÙˆØ¬ Ø§Ø² Ø³ÛŒØ³ØªÙ…');
+          message.error('خطا در خروج از سیستم');
         }
       },
     });
   };
 
   const menuItems = [
-    { key: '/', icon: <DashboardOutlined />, label: 'Ø¯Ø§Ø´Ø¨ÙˆØ±Ø¯' },
-    { key: '/products', icon: <SkinOutlined />, label: 'Ù…Ø­ØµÙˆÙ„Ø§Øª' },
+    { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
+    { key: '/products', icon: <SkinOutlined />, label: 'محصولات' },
     { 
       key: 'warehouses', 
       icon: <GoldOutlined />, 
-      label: 'Ø§Ù†Ø¨Ø§Ø±',
+      label: 'انبار',
       children: [
-        { key: '/warehouses', label: 'Ø§Ù†Ø¨Ø§Ø±Ù‡Ø§' },
-        { key: '/shelves', label: 'Ù‚ÙØ³Ù‡â€ŒÙ‡Ø§' },
-        { key: '/stock_transfers', label: 'ØªØ±Ø¯Ø¯ Ú©Ø§Ù„Ø§Ù‡Ø§' }
+        { key: '/warehouses', label: 'انبارها' },
+        { key: '/shelves', label: 'قفسه‌ها' },
+        { key: '/stock_transfers', label: 'تردد کالاها' }
       ]
     },
     { 
         key: 'production', 
         icon: <ExperimentOutlined />, 
-        label: 'ØªÙˆÙ„ÛŒØ¯',
+        label: 'تولید',
         children: [
-            { key: '/production_boms', label: 'Ø´Ù†Ø§Ø³Ù†Ø§Ù…Ù‡â€ŒÙ‡Ø§ÛŒ ØªÙˆÙ„ÛŒØ¯ (BOM)' },
-            { key: '/production_orders', label: 'Ø³ÙØ§Ø±Ø´Ø§Øª ØªÙˆÙ„ÛŒØ¯' },
+            { key: '/production_boms', label: 'شناسنامه‌های تولید (BOM)' },
+            { key: '/production_orders', label: 'سفارشات تولید' },
         ] 
     },
-    { key: '/suppliers', icon: <BankOutlined />, label: 'ØªØ§Ù…ÛŒÙ† Ú©Ù†Ù†Ø¯Ú¯Ø§Ù†' },
+    { key: '/suppliers', icon: <BankOutlined />, label: 'تامین کنندگان' },
     {
       key: 'invoices',
       icon: <FileTextOutlined />,
-      label: 'ÙØ§Ú©ØªÙˆØ±Ù‡Ø§',
+      label: 'فاکتورها',
       children: [
-        { key: '/invoices', label: 'ÙØ§Ú©ØªÙˆØ±Ù‡Ø§ÛŒ ÙØ±ÙˆØ´' },
-        { key: '/purchase_invoices', label: 'ÙØ§Ú©ØªÙˆØ±Ù‡Ø§ÛŒ Ø®Ø±ÛŒØ¯' },
+        { key: '/invoices', label: 'فاکتورهای فروش' },
+        { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
       ]
     },
-    { key: '/tasks', icon: <CheckSquareOutlined />, label: 'ÙˆØ¸Ø§ÛŒÙ' },
-    { key: '/customers', icon: <ShopOutlined />, label: 'Ù…Ø´ØªØ±ÛŒØ§Ù†' },
-    { key: '/hr', icon: <TeamOutlined />, label: 'Ù…Ù†Ø§Ø¨Ø¹ Ø§Ù†Ø³Ø§Ù†ÛŒ' },
-    { key: '/settings', icon: <SettingOutlined />, label: 'ØªÙ†Ø¸ÛŒÙ…Ø§Øª' },
+    { key: '/tasks', icon: <CheckSquareOutlined />, label: 'وظایف' },
+    { key: '/customers', icon: <ShopOutlined />, label: 'مشتریان' },
+    { key: '/projects', icon: <ProjectOutlined />, label: 'پروژه‌ها' },
+    { key: '/marketing_leads', icon: <RocketOutlined />, label: 'لیدهای بازاریابی' },
+    {
+      key: 'processes',
+      icon: <NodeIndexOutlined />,
+      label: 'فرآیندها',
+      children: [
+        { key: '/process_templates', label: 'الگوهای فرآیند' },
+        { key: '/process_runs', label: 'اجرای فرآیندها' },
+      ]
+    },
+    { key: '/hr', icon: <TeamOutlined />, label: 'منابع انسانی' },
+    { key: '/gallery', icon: <PictureOutlined />, label: 'گالری فایل‌ها' },
+    { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     
   ];
 
@@ -223,17 +242,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
     items: [
       {
         key: 'profile',
-        label: 'Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ú©Ø§Ø±Ø¨Ø±ÛŒ',
+        label: 'پروفایل کاربری',
         icon: <UserOutlined />,
-        onClick: () => navigate('/profile'), // Ù‡Ø¯Ø§ÛŒØª Ø¨Ù‡ Ù¾Ø±ÙˆÙØ§ÛŒÙ„
+        onClick: () => navigate('/profile'),
       },
       { type: 'divider' as const },
       { 
         key: 'logout', 
-        label: 'Ø®Ø±ÙˆØ¬', 
+        label: 'خروج', 
         icon: <LogoutOutlined />, 
         danger: true,
-        onClick: handleLogout // Ø§ØªØµØ§Ù„ ØªØ§Ø¨Ø¹ Ø®Ø±ÙˆØ¬
+        onClick: handleLogout
       },
     ],
   };
@@ -247,11 +266,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
   };
 
   const mobileNavItems: MobileNavItem[] = [
-    { key: '/products', icon: <SkinOutlined />, label: 'Ù…Ø­ØµÙˆÙ„Ø§Øª' },
-    { key: '/production_orders', icon: <CheckSquareOutlined />, label: 'ØªÙˆÙ„ÛŒØ¯' },
-    { key: '/', icon: <HomeOutlined />, label: 'Ø®Ø§Ù†Ù‡', isCenter: true },
-    { key: '/invoices', icon: <FileTextOutlined />, label: 'ÙØ§Ú©ØªÙˆØ±Ù‡Ø§' },
-    { key: 'more', icon: <MenuFoldOutlined />, label: 'Ø¨ÛŒØ´ØªØ±', isMenu: true },
+    { key: '/products', icon: <SkinOutlined />, label: 'محصولات' },
+    { key: '/production_orders', icon: <CheckSquareOutlined />, label: 'تولید' },
+    { key: '/', icon: <HomeOutlined />, label: 'خانه', isCenter: true },
+    { key: '/invoices', icon: <FileTextOutlined />, label: 'فاکتورها' },
+    { key: 'more', icon: <MenuFoldOutlined />, label: 'بیشتر', isMenu: true },
   ];
 
   const toggleSidebar = () => {
@@ -259,7 +278,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
   };
 
   return (
-    <AntLayout className="min-h-screen bg-gray-100 dark:bg-[#141414] transition-colors duration-300">
+    <AntLayout className="min-h-screen bg-gray-100 dark:bg-dark-bg transition-colors duration-300">
       
       {isMobile && !collapsed && (
         <div 
@@ -274,7 +293,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
         collapsed={collapsed}
         collapsedWidth={isMobile ? 0 : 80}
         zeroWidthTriggerStyle={{ display: 'none' }}
-        className={`app-main-sider border-l border-gray-200 dark:border-gray-800 shadow-2xl transition-all duration-300 z-[1100] ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
+        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1100] ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
         style={{ 
           height: '100vh', 
           position: 'fixed', 
@@ -287,11 +306,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
         theme={isDarkMode ? 'dark' : 'light'}
         width={260}
       >
-        <div className="h-16 flex items-center justify-center border-b border-gray-200 dark:border-gray-800 overflow-hidden px-4 sticky top-0 bg-inherit z-10">
+        <div className="h-16 flex items-center justify-center border-b border-gray-200 dark:border-dark-border overflow-hidden px-4 sticky top-0 bg-inherit z-10">
           <div className={`transition-all duration-300 font-black text-lg text-leather-500 tracking-tighter whitespace-nowrap ${collapsed ? 'opacity-0 w-0 hidden' : 'opacity-100'}`}>
-            MEHRBANOO <span className="text-gray-800 dark:text-white">LEATHER</span>
+            {brandShortName}
           </div>
-          {collapsed && !isMobile && <div className="text-leather-500 font-black text-2xl absolute">B</div>}
+          {collapsed && !isMobile && <div className="text-leather-500 font-black text-2xl absolute">ک</div>}
         </div>
 
         <div style={{ height: 'calc(100vh - 128px)', overflowY: 'auto' }}>
@@ -309,7 +328,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
         </div>
 
         {!isMobile && (
-            <div className="absolute bottom-0 w-full h-16 border-t border-gray-200 dark:border-gray-800 flex items-center justify-center bg-inherit">
+            <div className="absolute bottom-0 w-full h-16 border-t border-gray-200 dark:border-dark-border flex items-center justify-center bg-inherit">
                 <Button 
                     type="text"
                     icon={collapsed ? <MenuUnfoldOutlined className="text-xl" /> : <MenuFoldOutlined className="text-xl" />}
@@ -321,41 +340,41 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
       </Sider>
 
       <AntLayout 
-        className="bg-gray-100 dark:bg-[#141414] transition-all duration-300 min-h-screen flex flex-col"
+        className="bg-gray-100 dark:bg-dark-bg transition-all duration-300 min-h-screen flex flex-col"
         style={{ 
           paddingRight: isMobile ? 0 : (collapsed ? 80 : 260), 
           width: '100%' 
         }}
       >
         <Header 
-          className="sticky top-0 z-[1000] px-4 flex items-center justify-between border-b border-gray-200 dark:border-gray-800 h-16 w-full transition-colors duration-300"
+          className="sticky top-0 z-[1000] px-4 flex items-center justify-between border-b border-gray-200 dark:border-dark-border h-16 w-full transition-colors duration-300"
           style={{ 
             backdropFilter: 'blur(20px)', 
-            backgroundColor: isDarkMode ? 'rgba(20, 20, 20, 0.8)' : 'rgba(255, 255, 255, 0.8)',
+            backgroundColor: isDarkMode ? 'rgba(23, 28, 48, 0.82)' : 'rgba(255, 255, 255, 0.82)',
           }}
         >
           <div className="relative flex items-center gap-4" ref={searchBoxRef}>          
-            <div className="flex items-center bg-gray-100 dark:bg-[#1a1a1a] rounded-xl px-3 py-1.5 border border-gray-200 dark:border-gray-800 w-48 sm:w-72 transition-colors">
+            <div className="flex items-center bg-gray-100 dark:bg-dark-surface rounded-xl px-3 py-1.5 border border-gray-200 dark:border-dark-border w-48 sm:w-72 transition-colors">
               <SearchOutlined className="text-gray-400" />
               <Input
                 ref={searchRef}
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
-                placeholder="Ø¬Ø³ØªØ¬Ùˆ Ø¯Ø± Ù‡Ù…Ù‡ Ø¬Ø§..."
+                placeholder="جستجو در همه جا..."
                 className="bg-transparent border-none outline-none text-xs text-gray-700 dark:text-gray-200 w-full mr-2 placeholder-gray-400"
                 bordered={false}
               />
             </div>
 
             {(searchLoading || searchResults.length > 0) && globalSearch.trim() && (
-              <div className="absolute top-12 right-0 z-[1200] w-72 sm:w-[420px] max-h-[60vh] overflow-auto rounded-b-2xl rounded-t-none border border-gray-200 dark:border-gray-800 bg-white dark:bg-[#1a1a1a] shadow-2xl p-1.5">
+              <div className="absolute top-12 right-0 z-[1200] w-72 sm:w-[420px] max-h-[60vh] overflow-auto rounded-b-2xl rounded-t-none border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-surface shadow-2xl p-1.5">
                 {searchLoading && (
                   <div className="flex items-center gap-2 text-xs text-gray-500 p-2">
-                    <Spin size="small" /> Ø¯Ø± Ø­Ø§Ù„ Ø¬Ø³ØªØ¬Ùˆ...
+                    <Spin size="small" /> در حال جستجو...
                   </div>
                 )}
                 {!searchLoading && searchResults.length === 0 && (
-                  <div className="text-xs text-gray-400 p-2">Ù†ØªÛŒØ¬Ù‡â€ŒØ§ÛŒ ÛŒØ§ÙØª Ù†Ø´Ø¯</div>
+                  <div className="text-xs text-gray-400 p-2">نتیجه‌ای یافت نشد</div>
                 )}
                 {!searchLoading && searchResults.map((group) => (
                   <div key={group.moduleId} className="mb-0.5">
@@ -388,6 +407,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
             )}
           </div>
           <div className="flex items-center gap-2 md:gap-4">
+            <Button
+              type="text"
+              shape="circle"
+              icon={isDarkMode ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggleTheme}
+              className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
+              title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
+            />
             <QrScanPopover
               label=""
               buttonProps={{ type: 'text', shape: 'circle' }}
@@ -397,15 +424,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
                   navigate(`/${moduleId}/${recordId}`);
                   return;
                 }
-                message.warning('Ú©Ø¯ Ù…Ø¹ØªØ¨Ø± Ù†ÛŒØ³Øª');
+                message.warning('کد معتبر نیست');
               }}
             />
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
             <NotificationsPopover isMobile={isMobile} />
-            {/* Ø§ØµÙ„Ø§Ø­: Ù‚Ø±Ø§Ø± Ø¯Ø§Ø¯Ù† Ø¢ÙˆØ§ØªØ§Ø± Ø¯Ø± div Ø¨Ø±Ø§ÛŒ Ø±ÙØ¹ ÙˆØ§Ø±Ù†ÛŒÙ†Ú¯ */}
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>
                 <div className="cursor-pointer transition-transform hover:scale-105">
-                   {/* Ø§Ø³ØªÙØ§Ø¯Ù‡ Ø§Ø² Ù…ØªØ§Ø¯ÛŒØªØ§ÛŒ Ú©Ø§Ø±Ø¨Ø± Ù„Ø§Ú¯ÛŒÙ† Ø´Ø¯Ù‡ Ø¨Ø±Ø§ÛŒ Ø¢ÙˆØ§ØªØ§Ø± */}
                    <Avatar 
                      size="small" 
                      src={currentUserProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "https://i.pravatar.cc/150?u=a1"} 
@@ -419,10 +444,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
         </Header>
 
         {breadcrumb && breadcrumb.moduleTitle && (
-          <div className="sticky top-16 z-[900] bg-white/90 dark:bg-[#1a1a1a]/90 backdrop-blur border-b border-gray-200 dark:border-gray-800 px-2 md:px-4 py-2 mb-3">
+          <div className="sticky top-16 z-[900] bg-white/90 dark:bg-dark-surface/90 backdrop-blur border-b border-gray-200 dark:border-dark-border px-2 md:px-4 py-2 mb-3">
             <div className="flex items-center gap-1 text-xs md:text-sm text-gray-500 whitespace-nowrap overflow-x-auto no-scrollbar">
               <button onClick={() => navigate('/')} className="flex items-center gap-1 hover:text-leather-600">
-                <HomeOutlined /> Ø®Ø§Ù†Ù‡
+                <HomeOutlined /> خانه
               </button>
               <span className="px-1 text-gray-300">/</span>
               {breadcrumb.moduleId ? (
@@ -447,7 +472,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode }) => {
         </Content>
 
         {!isKeyboardVisible && (
-          <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-[#1a1a1a]/95 backdrop-blur-xl border-t border-gray-200 dark:border-white/5 rounded-t-2xl flex items-center justify-around z-[1000] shadow-2xl transition-colors pb-[env(safe-area-inset-bottom)]">
+          <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-dark-surface/95 backdrop-blur-xl border-t border-gray-200 dark:border-dark-border rounded-t-2xl flex items-center justify-around z-[1000] shadow-2xl transition-colors pb-[env(safe-area-inset-bottom)]">
              {mobileNavItems.map((item) => {
                const isActive = location.pathname === item.key;
                if (item.isCenter) {

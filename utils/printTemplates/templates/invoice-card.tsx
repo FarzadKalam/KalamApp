@@ -81,7 +81,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
         style={{ 
           textAlign: 'right', 
           paddingBottom: isMobilePrint ? '8px' : '12px', 
-          borderBottom: '2px solid #c58f60', 
+          borderBottom: '2px solid rgb(var(--brand-500-rgb))', 
           marginBottom: isMobilePrint ? '8px' : '12px',
           lineHeight: '1.3'
         }}
@@ -89,7 +89,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
         <div style={{ 
           fontSize: isMobilePrint ? '13px' : '16px', 
           fontWeight: 'bold', 
-          color: '#c58f60', 
+          color: 'rgb(var(--brand-500-rgb))', 
           marginBottom: '2px' 
         }}>
           فاکتور فروش
@@ -290,7 +290,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
           border: '1px solid #ddd'
         }}>
           <thead>
-            <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #c58f60' }}>
+            <tr style={{ background: '#f5f5f5', borderBottom: '1px solid rgb(var(--brand-500-rgb))' }}>
               <th style={{ 
                 padding: isMobilePrint ? '2px' : '4px', 
                 textAlign: 'right', 
@@ -426,7 +426,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
           justifyContent: 'center',
           textAlign: 'center',
           padding: isMobilePrint ? '4px' : '6px',
-          background: '#c58f60',
+          background: 'rgb(var(--brand-500-rgb))',
           borderRadius: '3px',
           color: 'white'
         }}>
@@ -457,7 +457,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
         color: '#999',
         lineHeight: '1.2'
       }}>
-        تولیدی چرم مهربانو
+        {sellerName}
       </div>
     </div>
   );

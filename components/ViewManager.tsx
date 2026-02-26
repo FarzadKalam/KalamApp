@@ -301,7 +301,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                   },
                   {
                       key: 'filters',
-                      label: <div className="flex items-center gap-2"><FilterOutlined />فیلترها{config.filters && config.filters.length > 0 && <Badge count={config.filters.length} size="small" color="#c58f60" />}</div>,
+                      label: <div className="flex items-center gap-2"><FilterOutlined />فیلترها{config.filters && config.filters.length > 0 && <Badge count={config.filters.length} size="small" color="rgb(var(--brand-500-rgb))" />}</div>,
                       children: <div className="bg-white p-4 border border-t-0 rounded-b-lg min-h-[350px]"><FilterBuilder module={moduleConfig} filters={config.filters || []} onChange={handleFilterChange} /></div>
                   }
               ]} />

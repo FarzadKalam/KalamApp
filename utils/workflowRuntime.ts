@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { WorkflowAction, WorkflowCondition, WorkflowRecord } from './workflowTypes';
+import { sendSmsViaGateway } from './smsGateway';
 
 type WorkflowEvent = 'create' | 'upsert';
 
@@ -256,7 +257,7 @@ const normalizeSmsUrl = (url: string, mode: 'rest' | 'soap') => {
   }
 };
 
-const sendSms = async (to: string[], text: string) => {
+const sendSmsDirectLegacy = async (to: string[], text: string) => {
   const { data: smsRow, error: smsErr } = await supabase
     .from('integration_settings')
     .select('*')
@@ -281,6 +282,7 @@ const sendSms = async (to: string[], text: string) => {
   const password = String(settings.password || '').trim();
   const apiKey = String(settings.api_key || '').trim();
   const senderNumber = String(settings.sender_number || '').trim();
+  const bodyId = String(settings.body_id || '').trim();
   const isFlash = !!settings.is_flash;
 
   if (!baseUrl || !senderNumber) throw new Error('تنظیمات ارسال پیامک ناقص است.');
@@ -302,6 +304,7 @@ const sendSms = async (to: string[], text: string) => {
         text,
         isflash: isFlash ? 'true' : 'false',
       });
+      if (bodyId) body.set('bodyId', bodyId);
       response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -316,6 +319,7 @@ const sendSms = async (to: string[], text: string) => {
         text,
         isFlash,
       };
+      if (bodyId) payload.bodyId = bodyId;
       if (apiKey) {
         payload.apiKey = apiKey;
       } else {
@@ -333,6 +337,14 @@ const sendSms = async (to: string[], text: string) => {
     if (!response.ok) {
       throw new Error(raw || `HTTP ${response.status}`);
     }
+  }
+};
+
+const sendSms = async (to: string[], text: string) => {
+  try {
+    await sendSmsViaGateway({ to, text, allowDirectFallback: false });
+  } catch {
+    await sendSmsDirectLegacy(to, text);
   }
 };
 

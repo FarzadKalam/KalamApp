@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button, Card, Input, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { DEFAULT_BRANDING } from '../theme/brandTheme';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -10,9 +11,13 @@ const Login = () => {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [brandTitle, setBrandTitle] = useState(DEFAULT_BRANDING.brandName);
   const navigate = useNavigate();
 
   useEffect(() => {
+    const runtimeTitle = document.documentElement.getAttribute('data-brand-title');
+    if (runtimeTitle?.trim()) setBrandTitle(runtimeTitle.trim());
+
     const hash = window.location.hash || '';
     const search = window.location.search || '';
     if (hash.includes('type=recovery') || search.includes('type=recovery')) {
@@ -98,8 +103,8 @@ const Login = () => {
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 px-6 py-4">
-            <div className="text-lg font-black text-leather-600">تولیدی چرم مهربانو</div>
-            <div className="text-xs text-gray-400 mt-1">Mehrbanoo Leather ERP</div>
+            <div className="text-lg font-black text-leather-600">{brandTitle}</div>
+            <div className="text-xs text-gray-400 mt-1">Business Automation Platform</div>
           </div>
         </div>
 

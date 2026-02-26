@@ -8,6 +8,8 @@ import { ArrowRightOutlined, SaveOutlined } from "@ant-design/icons";
 import { supabase } from "../supabaseClient";
 import { applyInvoiceFinalizationInventory } from "../utils/invoiceInventoryWorkflow";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
+import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
+import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 
 export const ModuleCreate = () => {
   const { moduleId } = useParams();
@@ -160,6 +162,12 @@ export const ModuleCreate = () => {
                   invoiceItems: values?.invoiceItems ?? [],
                   userId,
                 });
+                if (moduleId === "invoices") {
+                  await syncCustomerLevelsByInvoiceCustomers({
+                    supabase: supabase as any,
+                    customerIds: [inserted?.customer_id || values?.customer_id],
+                  });
+                }
                 if (moduleId) {
                   await runWorkflowsForEvent({
                     moduleId,
@@ -172,12 +180,16 @@ export const ModuleCreate = () => {
                 return;
               }
 
-              await formProps.onFinish?.(values);
+              const payload = moduleId === "tasks"
+                ? attachTaskCompletionIfNeeded(values)
+                : values;
+
+              await formProps.onFinish?.(payload);
               if (moduleId) {
                 await runWorkflowsForEvent({
                   moduleId,
                   event: "create",
-                  currentRecord: values as Record<string, any>,
+                  currentRecord: payload as Record<string, any>,
                 });
               }
             } catch (err: any) {

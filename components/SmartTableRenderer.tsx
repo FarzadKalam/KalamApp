@@ -120,7 +120,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       </div>
     ),
     filterIcon: (filtered: boolean) => (
-      <SearchOutlined style={{ color: filtered ? '#c58f60' : undefined }} />
+      <SearchOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />
     ),
     onFilter: (value, record) => {
         const text = record[dataIndex] ? record[dataIndex].toString() : '';

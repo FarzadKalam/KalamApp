@@ -4,7 +4,7 @@ export type ModulePermissionConfig = {
   view?: boolean;
   edit?: boolean;
   delete?: boolean;
-  fields?: Record<string, boolean>;
+  fields?: Record<string, any>;
 };
 
 export type PermissionMap = Record<string, ModulePermissionConfig>;
@@ -12,6 +12,7 @@ export type PermissionMap = Record<string, ModulePermissionConfig>;
 export const SETTINGS_PERMISSION_KEY = '__settings_tabs';
 export const DASHBOARD_PERMISSION_KEY = '__dashboard_widgets';
 export const WORKFLOWS_PERMISSION_KEY = '__workflows';
+export const FILES_PERMISSION_KEY = '__files_access';
 
 export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'company', label: 'مشخصات شرکت' },
@@ -19,6 +20,7 @@ export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'roles', label: 'چارت سازمانی' },
   { key: 'formulas', label: 'فرمول های محاسباتی' },
   { key: 'connections', label: 'اتصالات' },
+  { key: 'customer_leveling', label: 'تنظیمات سطح بندی' },
   { key: 'workflows', label: 'گردش کارها' },
 ];
 
@@ -39,6 +41,11 @@ export const DASHBOARD_WIDGET_PERMISSIONS = [
 export const WORKFLOWS_PERMISSION_FIELDS = [
   { key: 'settings_tab', label: 'نمایش در تب تنظیمات' },
   { key: 'module_list_button', label: 'نمایش در بالای لیست ماژول ها' },
+];
+
+export const FILES_PERMISSION_FIELDS = [
+  { key: 'gallery_page', label: 'گالری فایل‌ها' },
+  { key: 'record_files_manager', label: 'مدیریت فایل‌ها' },
 ];
 
 const ensureField = (map: Map<string, string>, key: string, label: string) => {
@@ -152,6 +159,13 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     fields: createFieldsMap(WORKFLOWS_PERMISSION_FIELDS),
   };
 
+  defaults[FILES_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    fields: createFieldsMap(FILES_PERMISSION_FIELDS),
+  };
+
   return defaults;
 };
 
@@ -180,4 +194,50 @@ export const canAccessAssignedRecord = (
   if (record?.assignee_type === 'user' && record?.assignee_id === currentUserId) return true;
   if (record?.assignee_type === 'role' && currentUserRoleId && record?.assignee_id === currentUserRoleId) return true;
   return false;
+};
+
+export const resolveFilesAccessPermissions = (permissions: PermissionMap | null | undefined) => {
+  const perm = permissions?.[FILES_PERMISSION_KEY] || {};
+  const fields = perm.fields || {};
+  const canViewRoot = perm.view !== false;
+  const canEditRoot = perm.edit !== false;
+  const canDeleteRoot = perm.delete !== false;
+
+  const canViewGallery = canViewRoot && fields.gallery_page !== false;
+  const canViewRecordFilesManager = canViewRoot && fields.record_files_manager !== false;
+
+  return {
+    canViewGallery,
+    canEditGallery: canViewGallery && canEditRoot,
+    canDeleteGallery: canViewGallery && canDeleteRoot,
+    canViewRecordFilesManager,
+    canEditRecordFilesManager: canViewRecordFilesManager && canEditRoot,
+    canDeleteRecordFilesManager: canViewRecordFilesManager && canDeleteRoot,
+  };
+};
+
+export const fetchCurrentUserRolePermissions = async (supabaseClient: any): Promise<PermissionMap | null> => {
+  try {
+    const { data: authData } = await supabaseClient.auth.getUser();
+    const user = authData?.user;
+    if (!user?.id) return null;
+
+    const { data: profile } = await supabaseClient
+      .from('profiles')
+      .select('role_id')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (!profile?.role_id) return null;
+
+    const { data: role } = await supabaseClient
+      .from('org_roles')
+      .select('permissions')
+      .eq('id', profile.role_id)
+      .maybeSingle();
+
+    return (role?.permissions || null) as PermissionMap | null;
+  } catch {
+    return null;
+  }
 };

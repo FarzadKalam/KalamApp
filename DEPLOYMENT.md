@@ -17,7 +17,7 @@ In your GitHub repo: Settings -> Secrets and variables -> Actions -> Repository 
 - `SERVER_PORT` (example: `22`)
 - `SERVER_USER` (example: `deploy`)
 - `SERVER_SSH_KEY` (private key)
-- `DEPLOY_PATH` (example: `/var/www/erp-mehrbanoo`)
+- `DEPLOY_PATH` (example: `/var/www/kalamapp`)
 
 ## Server Setup (One-Time)
 
@@ -47,21 +47,21 @@ On Ubuntu, `Get-Content` does not exist; use `cat` only if the file is actually 
 Example:
 
 ```bash
-sudo mkdir -p /var/www/erp-mehrbanoo/releases
-sudo chown -R deploy:deploy /var/www/erp-mehrbanoo
+sudo mkdir -p /var/www/kalamapp/releases
+sudo chown -R deploy:deploy /var/www/kalamapp
 ```
 
-### 1.5) First-time cutover (if you currently deploy directly into `/var/www/erp-mehrbanoo`)
+### 1.5) First-time cutover (if you currently deploy directly into `/var/www/kalamapp`)
 
-If Nginx currently uses `root /var/www/erp-mehrbanoo;` and your files live directly in that folder, do one of these before switching Nginx root to `current`:
+If Nginx currently uses `root /var/www/kalamapp;` and your files live directly in that folder, do one of these before switching Nginx root to `current`:
 
 Option A (recommended): move current files into an initial release and create `current` symlink:
 
 ```bash
-sudo mkdir -p /var/www/erp-mehrbanoo/releases/initial
-sudo rsync -a --delete /var/www/erp-mehrbanoo/ /var/www/erp-mehrbanoo/releases/initial/ \
+sudo mkdir -p /var/www/kalamapp/releases/initial
+sudo rsync -a --delete /var/www/kalamapp/ /var/www/kalamapp/releases/initial/ \
   --exclude releases --exclude shared --exclude current
-sudo ln -sfn /var/www/erp-mehrbanoo/releases/initial /var/www/erp-mehrbanoo/current
+sudo ln -sfn /var/www/kalamapp/releases/initial /var/www/kalamapp/current
 ```
 
 Option B: run the GitHub deploy workflow once first (it will create `current`), then switch Nginx root.
@@ -70,11 +70,11 @@ Option B: run the GitHub deploy workflow once first (it will create `current`), 
 
 Change:
 
-- `root /var/www/erp-mehrbanoo;`
+- `root /var/www/kalamapp;`
 
 To:
 
-- `root /var/www/erp-mehrbanoo/current;`
+- `root /var/www/kalamapp/current;`
 
 Keep SPA routing:
 
@@ -98,7 +98,7 @@ If you want `http://212.23.201.161` to open the app, add a separate port 80 serv
 server {
   listen 80;
   server_name 212.23.201.161;
-  root /var/www/erp-mehrbanoo/current;
+  root /var/www/kalamapp/current;
   index index.html;
 
   location / {
@@ -113,7 +113,7 @@ Notes:
 
 ## Supabase URL on HTTPS sites
 
-If your app is served over `https://...`, the browser will block `http://...` API calls (mixed-content). Ensure `VITE_SUPABASE_URL` is an `https://` URL in GitHub Secrets, typically by putting your Supabase API behind Nginx + Certbot on a subdomain (for example `https://api.erp.bartarleather.com`).
+If your app is served over `https://...`, the browser will block `http://...` API calls (mixed-content). Ensure `VITE_SUPABASE_URL` is an `https://` URL in GitHub Secrets, typically by putting your Supabase API behind Nginx + Certbot on a subdomain (for example `https://api.your-erp-domain.com`).
 
 ### 4) Let deploy user reload nginx without password (recommended)
 
@@ -128,7 +128,7 @@ deploy ALL=NOPASSWD: /bin/systemctl reload nginx
 On server:
 
 ```bash
-ls -1 /var/www/erp-mehrbanoo/releases
-sudo ln -sfn /var/www/erp-mehrbanoo/releases/<OLD_TIMESTAMP> /var/www/erp-mehrbanoo/current
+ls -1 /var/www/kalamapp/releases
+sudo ln -sfn /var/www/kalamapp/releases/<OLD_TIMESTAMP> /var/www/kalamapp/current
 sudo systemctl reload nginx
 ```

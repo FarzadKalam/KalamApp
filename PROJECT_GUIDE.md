@@ -1,9 +1,12 @@
-# Bartar Leather ERP - Architecture & Technical Guide
+# KalamApp ERP - Project Technical Guide
 
-**Version:** 3.0 (CRM, SCM, & Advanced Views)
+**Version:** 4.2  
 **Stack:** React + TypeScript + Vite + Ant Design + Tailwind CSS + Supabase
 
-This document outlines the architectural standards and codebase structure for the Bartar Leather ERP. The system is designed as a **Meta-Driven Platform**, meaning the UI is dynamically generated based on JSON-like configuration files rather than hardcoded layouts.
+This document outlines technical standards and codebase structure for KalamApp ERP as a **Meta-Driven Platform**.
+
+> Official v1 execution roadmap (scope, sequence, milestones): `BLUEPRINT_V1.md`  
+> This file focuses on engineering structure and implementation patterns.
 
 ---
 
@@ -125,7 +128,7 @@ The backend relies on Supabase. Key tables include:
   * `org_roles`: Role-Based Access Control (RBAC) definitions.
   * `tags` & `record_tags`: Universal tagging.
   * `saved_views`: Stores user-defined filters for `ModuleList`.
-  * `company_settings`: Global settings (Logo, Name).
+  * `company_settings`: Global settings (Logo, organization names, brand palette key).
 
 **Security:** Row Level Security (RLS) is enabled. Currently set to allow authenticated access, but ready for granular policies.
 
@@ -192,25 +195,25 @@ Nested editable tables within a record:
 
 ---
 
-## 6. BOM (Bill of Materials) System
+## 6. Production Formula (Stage-First)
 
-The BOM system calculates production costs across multiple categories:
+Production in KalamApp is moving toward a generic **Formula + Stages** model.
 
-### Cost Calculation Tables:
-- **Leather Section** (`items_leather`): Material costs
-- **Lining Section** (`items_lining`): Fabric costs  
-- **Fittings Section** (`items_fitting`): Hardware costs
-- **Accessories Section** (`items_accessory`): Additional materials
-- **Labor Section** (`items_labor`): Workforce costs
+Current principles:
 
-### BOM as “Filter Definition” (Updated Workflow)
-In the current production flow, BOM tables **do not select a specific product**. Instead, each row represents a **filter** that later drives product selection inside Production Orders.
+- `productionStages` remains the primary workflow engine.
+- Formula rows define input filters and expected usage.
+- Domain-specific defaults are configurable through `dynamic_options`.
+- Optional dimensions can still calculate usage by $\text{length} \times \text{width}$.
 
-Key changes:
-- The first column in BOM tables is **"محصول مادر"** and is **read-only**.
-- It stores the **material category** (`leather`, `lining`, `accessory`, `fitting`) and acts as a base filter.
-- Each row uses the **spec fields** (e.g., `leather_type`, `lining_color`, `fitting_type`) to define product constraints.
-- For **Leather/Lining/Accessory**, optional **Length/Width** are available and **Usage** is auto-calculated as $\text{length} \times \text{width}$ when filled.
+### Formula as “Filter Definition”
+In the current flow, formula tables **do not force a fixed product**. Each row acts as a filter and product can be selected in Production Orders based on that filter.
+
+Key notes:
+
+- The first column is **"محصول مادر"** and remains read-only.
+- It stores a **material/service category** and acts as base criteria.
+- Rows can include generic spec fields for filtering and costing.
 
 ### Production Orders – BOM-driven Product Selection
 When creating a Production Order:
@@ -299,7 +302,7 @@ A flexible many-to-many tagging system:
 
 * **Theme:** Fully supports **Dark/Light** modes via Tailwind classes (`dark:bg-black`) and Ant Design ConfigProvider.
 * **Color Palette:**
-  * Primary: Leather Orange (`#c58f60`)
+  * Primary: Brand Primary (`#c58f60`)
   * Dark Backgrounds: Deep Black (`#141414`) and Dark Grey (`#1f1f1f`)
 
 * **Responsiveness:** Mobile-first design. Sidebar collapses on mobile, tables become scrollable, and headers adapt.

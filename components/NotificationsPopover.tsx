@@ -17,6 +17,7 @@ const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
 const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
 const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
+const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, 'primary' | 'id_only' | 'none'>();
 
 const loadSeenSet = (key: string) => {
   if (typeof window === 'undefined') return new Set<string>();
@@ -71,6 +72,32 @@ const sendBrowserNotification = (title: string, body: string, link?: string) => 
       notification.close();
     };
   }
+};
+
+const isMissingColumnError = (error: any, columnName: string) => {
+  const code = String(error?.code || '').toUpperCase();
+  if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
+  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  const col = columnName.toLowerCase();
+  return (
+    message.includes(`column "${col}"`) ||
+    message.includes(`${col} does not exist`) ||
+    message.includes(`could not find the '${col}' column`) ||
+    message.includes(`could not find the "${col}" column`) ||
+    message.includes(`schema cache`) && message.includes(col)
+  );
+};
+
+const moduleHasAssigneeField = (moduleConfig: any) => {
+  const headerFields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
+  if (headerFields.some((f: any) => String(f?.key || '') === 'assignee_id')) return true;
+
+  const blocks = Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [];
+  for (const block of blocks) {
+    const cols = Array.isArray(block?.tableColumns) ? block.tableColumns : [];
+    if (cols.some((c: any) => String(c?.key || '') === 'assignee_id')) return true;
+  }
+  return false;
 };
 
 
@@ -229,20 +256,55 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   };
 
   const fetchAssignedIdsForModule = async (table: string, userId: string, roleId: string | null) => {
-    const base = supabase.from(table).select('id').limit(200);
     const filtersPrimary = roleId
       ? `and(assignee_type.eq.user,assignee_id.eq.${userId}),and(assignee_type.eq.role,assignee_id.eq.${roleId})`
       : `and(assignee_type.eq.user,assignee_id.eq.${userId}),assignee_id.eq.${userId}`;
     const filtersNoType = `assignee_id.eq.${userId}`;
 
     const tryQuery = async (filters: string) => {
-      const { data, error } = await base.or(filters);
+      const { data, error } = await supabase
+        .from(table)
+        .select('id')
+        .limit(200)
+        .or(filters);
       if (error) return { data: [] as any[], error };
       return { data: data || [], error: null };
     };
 
+    const cachedMode = ASSIGNEE_QUERY_MODE_CACHE.get(table);
+    if (cachedMode === 'none') return [];
+
+    if (cachedMode === 'id_only') {
+      const fallback = await tryQuery(filtersNoType);
+      if (!fallback.error) return fallback.data || [];
+      if (isMissingColumnError(fallback.error, 'assignee_id')) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(table, 'none');
+      }
+      return [];
+    }
+
     let result = await tryQuery(filtersPrimary);
-    if (result.error) result = await tryQuery(filtersNoType);
+    if (!result.error) {
+      ASSIGNEE_QUERY_MODE_CACHE.set(table, 'primary');
+      return result.data || [];
+    }
+
+    if (isMissingColumnError(result.error, 'assignee_type')) {
+      const fallback = await tryQuery(filtersNoType);
+      if (!fallback.error) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(table, 'id_only');
+        return fallback.data || [];
+      }
+      if (isMissingColumnError(fallback.error, 'assignee_id')) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(table, 'none');
+      }
+      return [];
+    }
+
+    if (isMissingColumnError(result.error, 'assignee_id')) {
+      ASSIGNEE_QUERY_MODE_CACHE.set(table, 'none');
+      return [];
+    }
 
     return result.data || [];
   };
@@ -253,7 +315,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const roleId = profile.role_id;
 
     const modules = Object.values(MODULES)
-      .filter((mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id));
+      .filter((mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id))
+      .filter((mod: any) => moduleHasAssigneeField(mod));
 
     const pairs: { module_id: string; record_id: string }[] = [];
     for (const mod of modules) {
@@ -409,7 +472,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const roleId = profile.role_id;
 
     const modules = Object.values(MODULES)
-      .filter((mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id));
+      .filter((mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id))
+      .filter((mod: any) => moduleHasAssigneeField(mod));
 
     const results: any[] = [];
     for (const mod of modules) {
@@ -1063,7 +1127,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
   return (
     <>
-      <Badge count={formatBadgeCount(totalCount)} size="small" color="#c58f60">
+      <Badge count={formatBadgeCount(totalCount)} size="small" color="rgb(var(--brand-500-rgb))">
         <Button
           type="text"
           shape="circle"

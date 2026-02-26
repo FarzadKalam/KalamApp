@@ -1229,7 +1229,8 @@ const ModuleShow: React.FC = () => {
     if (!moduleConfig) return;
     const moduleTitle = moduleConfig.titles?.fa || moduleId;
     const recordName = getRecordTitle(data, moduleConfig, { fallback: '' });
-    document.title = recordName ? `${recordName} | ${moduleTitle} | مهربانو` : `${moduleTitle} | مهربانو`;
+    const brandTitle = document.documentElement.getAttribute('data-brand-title') || 'هلدینگ رسانه ای کلام تازه.';
+    document.title = recordName ? `${recordName} | ${moduleTitle} | ${brandTitle}` : `${moduleTitle} | ${brandTitle}`;
   }, [moduleConfig, moduleId, data]);
 
     const handleAssigneeChange = useCallback(async (value: string) => {

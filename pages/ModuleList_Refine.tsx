@@ -6,7 +6,7 @@ import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import { BlockType, FieldType, SavedView, ViewMode } from "../types";
 import { App, Badge, Button, Empty, Skeleton } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { FileExcelOutlined, PlusOutlined } from "@ant-design/icons";
 import ViewManager from "../components/ViewManager";
 import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
@@ -19,6 +19,8 @@ import { canAccessAssignedRecord, WORKFLOWS_PERMISSION_KEY } from "../utils/perm
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
+import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
+import ExcelImportWizard from "../components/moduleList/ExcelImportWizard";
 
 const ModuleListContentSkeleton: React.FC<{ viewMode: ViewMode }> = ({ viewMode }) => {
   if (viewMode === ViewMode.GRID) {
@@ -103,6 +105,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
   const [isBulkProductsModalOpen, setIsBulkProductsModalOpen] = useState(false);
   const [isWorkflowsModalOpen, setIsWorkflowsModalOpen] = useState(false);
+  const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState(false);
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
 
   const { tableProps, tableQueryResult, setFilters, filters } = useTable({
@@ -119,6 +122,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const loading = tableQueryResult.isLoading;
   const isRefreshing = tableQueryResult.isFetching && !loading;
   const allData = tableQueryResult.data?.data || [];
+  const hasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
   const selectedRows = useMemo(
     () => allData.filter((row: any) => selectedRowKeys.includes(row.id)),
     [allData, selectedRowKeys]
@@ -128,19 +132,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     if (!selectedRows.length) return false;
     return selectedRows.every((row: any) => String(row?.status || '') === 'pending');
   }, [resolvedModuleId, selectedRows]);
-  const [readyModuleId, setReadyModuleId] = useState<string | null>(null);
-  const showContentSkeleton = readyModuleId !== resolvedModuleId;
-
-  useEffect(() => {
-    setReadyModuleId(null);
-  }, [resolvedModuleId]);
-
-  useEffect(() => {
-    if (!resolvedModuleId) return;
-    if (!tableQueryResult.isLoading || tableQueryResult.isError) {
-      setReadyModuleId(resolvedModuleId);
-    }
-  }, [resolvedModuleId, tableQueryResult.isLoading, tableQueryResult.isError]);
+  const showContentSkeleton = loading && !hasQueryResult;
 
   useEffect(() => {
     if (isFullscreen) {
@@ -164,6 +156,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     setIsBulkEditMode(false);
     setIsBulkProductsModalOpen(false);
     setIsWorkflowsModalOpen(false);
+    setIsExcelImportModalOpen(false);
     setCanOpenWorkflows(true);
   }, [resolvedModuleId, moduleConfig?.defaultViewMode]);
 
@@ -621,11 +614,14 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           }
       });
       if (Object.keys(changes).length === 0) return;
+      const normalizedChanges = resolvedModuleId === 'tasks'
+        ? attachTaskCompletionIfNeeded(changes)
+        : changes;
 
       let completed = 0;
       selectedRowKeys.forEach(id => {
           updateRecord(
-            { resource: resolvedModuleId!, id: id as string, values: changes },
+            { resource: resolvedModuleId!, id: id as string, values: normalizedChanges },
             { onSuccess: () => {
                   completed++;
                   if (completed === selectedRowKeys.length) {
@@ -694,6 +690,15 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                     className="rounded-xl"
                   >
                     گردش کارها
+                  </Button>
+                )}
+                {canEditModule && (
+                  <Button
+                    icon={<FileExcelOutlined />}
+                    onClick={() => setIsExcelImportModalOpen(true)}
+                    className="rounded-xl"
+                  >
+                    وارد کردن از اکسل
                   </Button>
                 )}
                 {canEditModule && resolvedModuleId === 'products' && (
@@ -936,6 +941,16 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
         onClose={() => setIsWorkflowsModalOpen(false)}
         defaultModuleId={resolvedModuleId}
         context="module_list"
+      />
+      <ExcelImportWizard
+        open={isExcelImportModalOpen}
+        moduleId={resolvedModuleId}
+        moduleConfig={moduleConfig}
+        onClose={() => setIsExcelImportModalOpen(false)}
+        onImported={() => {
+          setIsExcelImportModalOpen(false);
+          tableQueryResult.refetch();
+        }}
       />
     </div>
   );

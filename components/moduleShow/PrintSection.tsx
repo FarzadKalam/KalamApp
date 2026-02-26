@@ -95,7 +95,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                   setActiveTab('preview');
                 }}
                 style={{
-                  border: selectedTemplateId === t.id ? '2px solid #c58f60' : '1px solid #e5e7eb',
+                  border: selectedTemplateId === t.id ? '2px solid rgb(var(--brand-500-rgb))' : '1px solid #e5e7eb',
                   borderRadius: '8px',
                   padding: '10px 10px',
                   background: selectedTemplateId === t.id ? '#fff8f3' : '#fff',
@@ -178,7 +178,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                               cursor: 'pointer',
                               padding: '12px',
                               borderRadius: '8px',
-                              border: isSelected ? '2px solid #c58f60' : '1px solid #e5e7eb',
+                              border: isSelected ? '2px solid rgb(var(--brand-500-rgb))' : '1px solid #e5e7eb',
                               background: isSelected ? '#fff8f3' : '#fff',
                               transition: 'all 0.2s ease',
                               userSelect: 'none',
@@ -188,9 +188,9 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                             <div style={{
                               width: '20px',
                               height: '20px',
-                              border: `2px solid ${isSelected ? '#c58f60' : '#d1d5db'}`,
+                              border: `2px solid ${isSelected ? 'rgb(var(--brand-500-rgb))' : '#d1d5db'}`,
                               borderRadius: '4px',
-                              background: isSelected ? '#c58f60' : '#fff',
+                              background: isSelected ? 'rgb(var(--brand-500-rgb))' : '#fff',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
@@ -203,7 +203,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                             </div>
                             <span style={{
                               fontSize: '13px',
-                              color: isSelected ? '#c58f60' : '#374151',
+                              color: isSelected ? 'rgb(var(--brand-500-rgb))' : '#374151',
                               fontWeight: isSelected ? 600 : 500
                             }}>
                               {field.labels.fa}

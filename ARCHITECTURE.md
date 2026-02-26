@@ -1,11 +1,13 @@
-# Architecture Documentation - Bartar Leather ERP
+# Architecture Documentation - KalamApp ERP
 
-**Version:** 4.0  
-**Last Updated:** February 9, 2026
+**Version:** 4.2  
+**Last Updated:** February 25, 2026
 
 ## 🎯 Overview
 
-Bartar Leather ERP uses a **Meta-Driven Architecture** where the entire user interface is generated dynamically from JSON-like configuration files. This document explains the technical architecture, data flow, and design patterns.
+KalamApp ERP uses a **Meta-Driven Architecture** where the user interface is generated dynamically from configuration files. This document explains technical architecture, data flow, and patterns.
+
+Official v1 roadmap and sequencing is defined in `BLUEPRINT_V1.md`.
 
 ---
 
@@ -516,7 +518,7 @@ test('loads and displays product data', async () => {
 test('create new product', async ({ page }) => {
   await page.goto('/products');
   await page.click('button:has-text("افزودن محصول")');
-  await page.fill('[name="name"]', 'کیف چرمی');
+  await page.fill('[name="name"]', 'محصول نمونه');
   await page.click('button:has-text("ذخیره")');
   await expect(page.locator('.ant-message-success')).toBeVisible();
 });

@@ -63,5 +63,5 @@ export const supplierModule: ModuleDefinition = {
       foreignKey: 'related_supplier'
     }
   ],
-  table: ''
+  table: 'suppliers'
 };

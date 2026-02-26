@@ -1,4 +1,6 @@
-/* React Multi Date Picker - Leather Theme */
+@import "./index.css";
+
+/* React Multi Date Picker - Brand Theme */
 .rmdp-leather .rmdp-wrapper,
 .rmdp-leather .rmdp-calendar {
 	border-radius: 12px;
@@ -7,29 +9,28 @@
 }
 
 .rmdp-leather .rmdp-day.rmdp-selected .sd {
-    background-color: #a9713d !important;
+    background-color: rgb(var(--brand-600-rgb)) !important;
     color: #fff !important;
 }
 .rmdp-leather .rmdp-day.rmdp-today .sd {
-    background-color: #eabb92 !important;
+    background-color: rgb(var(--brand-300-rgb)) !important;
     color: #fff !important;
 }
 .rmdp-leather .rmdp-day.rmdp-range .sd {
-	background-color: #c58f60 !important;
+	background-color: rgb(var(--brand-500-rgb)) !important;
 	color: #fff !important;
 }
 
 .rmdp-leather .rmdp-header-values,
 .rmdp-leather .rmdp-week-day {
-	color: #a9713d;
+	color: rgb(var(--brand-600-rgb));
 }
 
 .rmdp-leather .rmdp-arrow {
-	border: solid #8b5a2b;
+	border: solid rgb(var(--brand-700-rgb));
 	border-width: 0 2px 2px 0;
 }
 
 .rmdp-leather .rmdp-arrow-container:hover {
-	background-color: rgba(197, 143, 96, 0.1);
+	background-color: rgba(var(--brand-500-rgb), 0.1);
 }
-@import "./index.css";

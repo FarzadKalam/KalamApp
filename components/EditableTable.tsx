@@ -16,6 +16,7 @@ import { getInvoiceAmounts } from './editableTable/invoiceHelpers';
 import { fetchShelfOptions, updateProductStock } from './editableTable/inventoryHelpers';
 import { buildProductFilters, runProductsQuery } from './editableTable/productionOrderHelpers';
 import { MODULES } from '../moduleRegistry';
+import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 
 const { Text } = Typography;
 
@@ -715,6 +716,21 @@ const EditableTable: React.FC<EditableTableProps> = ({
     setTempData([]);
   };
 
+  const syncInvoiceCustomerStats = async () => {
+    if (!moduleId || moduleId !== 'invoices' || !recordId) return;
+    if (!(block?.id === 'payments' || block?.id === 'invoiceItems')) return;
+    const { data: invoiceRow, error } = await supabase
+      .from('invoices')
+      .select('customer_id')
+      .eq('id', recordId)
+      .maybeSingle();
+    if (error) throw error;
+    await syncCustomerLevelsByInvoiceCustomers({
+      supabase: supabase as any,
+      customerIds: [invoiceRow?.customer_id],
+    });
+  };
+
   const handleSave = async () => {
     if (mode === 'local' || mode === 'external_view') return;
     setSaving(true);
@@ -984,6 +1000,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
       message.success('ذخیره شد');
       setData(dataToSave);
       if (onSaveSuccess) onSaveSuccess(dataToSave);
+      try {
+        await syncInvoiceCustomerStats();
+      } catch (syncErr) {
+        console.warn('Customer stats sync failed after table save', syncErr);
+      }
       setIsEditing(false);
     } catch (e: any) {
       message.error(e.message);

@@ -11,7 +11,7 @@ import ProductionStagesField from './ProductionStagesField';
 import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import QrScanPopover from './QrScanPopover';
-import ProductImagesManager from './ProductImagesManager';
+import RecordFilesManager from './RecordFilesManager';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -76,10 +76,13 @@ interface SmartFieldRendererProps {
   allValues?: Record<string, any>;
   recordId?: string;
   moduleId?: string;
+  canViewFilesManager?: boolean;
+  canEditFilesManager?: boolean;
+  canDeleteFilesManager?: boolean;
 }
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -91,6 +94,16 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scannedCode, setScannedCode] = useState('');
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [isGlobalImageGalleryOpen, setIsGlobalImageGalleryOpen] = useState(false);
+  const [globalImageGalleryItems, setGlobalImageGalleryItems] = useState<Array<{
+    id: string;
+    url: string;
+    label: string;
+    createdAt: string | null;
+  }>>([]);
+  const [globalImageGalleryLoading, setGlobalImageGalleryLoading] = useState(false);
+  const supportsFilesGallery = moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'production_boms';
+  const canShowFilesGallery = supportsFilesGallery && canViewFilesManager;
 
   const fieldLabel = field?.labels?.fa || label || 'بدون نام';
   const fieldType = field?.type || type || FieldType.TEXT;
@@ -222,12 +235,32 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       setUploading(true);
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-      const filePath = `products/${fileName}`;
+      const modulePath = moduleId || 'misc';
+      const recordPath = recordId || 'draft';
+      const filePath = `record_files/${modulePath}/${recordPath}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage.from('images').upload(filePath, file);
       if (uploadError) throw uploadError;
 
       const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(filePath);
+
+      if (recordId && moduleId) {
+        const { error: fileInsertError } = await supabase
+          .from('record_files')
+          .insert([
+            {
+              module_id: moduleId,
+              record_id: recordId,
+              file_url: publicUrl,
+              file_type: 'image',
+              file_name: file.name || null,
+              mime_type: file.type || null,
+            },
+          ]);
+        if (fileInsertError) {
+          console.warn('Could not append file entry after image upload', fileInsertError);
+        }
+      }
 
       msg.success('تصویر با موفقیت آپلود شد');
       onChange(publicUrl);
@@ -238,6 +271,75 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       return null;
     } finally {
       setUploading(false);
+    }
+  };
+
+  const loadGlobalImageGallery = async () => {
+    setGlobalImageGalleryLoading(true);
+    try {
+      const [recordFilesResult, legacyImagesResult] = await Promise.allSettled([
+        supabase
+          .from('record_files')
+          .select('id, module_id, record_id, file_url, file_name, mime_type, file_type, created_at')
+          .order('created_at', { ascending: false })
+          .limit(300),
+        supabase
+          .from('product_images')
+          .select('id, product_id, image_url, created_at')
+          .order('created_at', { ascending: false })
+          .limit(300),
+      ]);
+
+      const isImageByUrl = (url: unknown) => /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif)(\?|$)/i.test(String(url || ''));
+      const recordFilesRes = recordFilesResult.status === 'fulfilled' ? recordFilesResult.value : null;
+      const legacyImagesRes = legacyImagesResult.status === 'fulfilled' ? legacyImagesResult.value : null;
+
+      const recordFileRows = Array.isArray(recordFilesRes?.data) ? recordFilesRes?.data : [];
+      const recordFileItems = recordFileRows
+        .filter((row: any) => {
+          const fileType = String(row?.file_type || '').toLowerCase();
+          const mimeType = String(row?.mime_type || '').toLowerCase();
+          return fileType === 'image' || mimeType.startsWith('image/') || isImageByUrl(row?.file_url);
+        })
+        .map((row: any, index: number) => ({
+          id: `rf_${row?.id || index}`,
+          url: String(row?.file_url || ''),
+          label: String(row?.file_name || row?.module_id || 'تصویر'),
+          createdAt: row?.created_at ? String(row.created_at) : null,
+        }))
+        .filter((row: any) => !!row.url);
+
+      const legacyRows = Array.isArray(legacyImagesRes?.data) ? legacyImagesRes?.data : [];
+      const legacyItems = legacyRows
+        .map((row: any, index: number) => ({
+          id: `legacy_${row?.id || index}`,
+          url: String(row?.image_url || ''),
+          label: `محصول ${String(row?.product_id || '').slice(0, 8) || '-'}`,
+          createdAt: row?.created_at ? String(row.created_at) : null,
+        }))
+        .filter((row: any) => !!row.url);
+
+      const merged = [...recordFileItems, ...legacyItems]
+        .sort((a, b) => (new Date(b.createdAt || 0).getTime()) - (new Date(a.createdAt || 0).getTime()));
+
+      const deduped: Array<{ id: string; url: string; label: string; createdAt: string | null }> = [];
+      const seen = new Set<string>();
+      merged.forEach((item) => {
+        if (!item.url || seen.has(item.url)) return;
+        seen.add(item.url);
+        deduped.push(item);
+      });
+
+      setGlobalImageGalleryItems(deduped);
+      if (!deduped.length && (recordFilesRes?.error || legacyImagesRes?.error)) {
+        msg.warning('تصویری برای انتخاب از گالری پیدا نشد');
+      }
+    } catch (error) {
+      console.warn('Could not load global image gallery', error);
+      msg.error('خطا در دریافت تصاویر گالری');
+      setGlobalImageGalleryItems([]);
+    } finally {
+      setGlobalImageGalleryLoading(false);
     }
   };
 
@@ -454,6 +556,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         placeholder: compactMode ? undefined : fieldLabel,
         style: { width: '100%' }
     };
+    const imageSourceMode = String((field as any)?.imageSourceMode || '').toLowerCase();
 
     switch (fieldType) {
       case FieldType.TEXT:
@@ -517,7 +620,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 allowClear
                 optionFilterProp="label"
                 getPopupContainer={() => document.body}
-                dropdownStyle={{ zIndex: 4000 }}
+                styles={{ popup: { root: { zIndex: 4000 } } }}
             />
         );
 
@@ -531,10 +634,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     category={field.dynamicOptionsCategory}
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     mode="multiple"
-                    onOptionsUpdate={onOptionsUpdate}
-                    disabled={!forceEditMode}
-                    getPopupContainer={() => document.body}
-                    dropdownStyle={{ zIndex: 4000 }}
+                onOptionsUpdate={onOptionsUpdate}
+                disabled={!forceEditMode}
+                getPopupContainer={() => document.body}
+                dropdownStyle={{ zIndex: 4000 }}
                 />
             );
         }
@@ -547,7 +650,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 allowClear
                 optionFilterProp="label"
                 getPopupContainer={() => document.body}
-                dropdownStyle={{ zIndex: 4000 }}
+                styles={{ popup: { root: { zIndex: 4000 } } }}
             />
         );
 
@@ -576,9 +679,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     optionFilterProp="label"
                     getPopupContainer={() => document.body}
                     popupMatchSelectWidth={false}
-                    dropdownStyle={{ zIndex: 4000, minWidth: 320 }}
+                    styles={{ popup: { root: { zIndex: 4000, minWidth: 320 } } }}
                     filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-                    dropdownRender={(menu) => (
+                    popupRender={(menu) => (
                         <>
                           {menu}
                           {!compactMode && canQuickCreate && (
@@ -683,6 +786,41 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         return <Input disabled placeholder="بعد از ذخیره، تگ‌ها قابل ویرایش است" />;
 
       case FieldType.IMAGE:
+        if (imageSourceMode === 'gallery') {
+          return (
+            <div className="flex flex-col gap-2">
+              {value ? (
+                <img src={String(value)} alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
+              ) : (
+                <div className="h-16 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[11px] text-gray-400">
+                  تصویری انتخاب نشده است
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setIsGlobalImageGalleryOpen(true);
+                    void loadGlobalImageGallery();
+                  }}
+                  disabled={!forceEditMode || isReadonly}
+                >
+                  انتخاب از گالری
+                </Button>
+                {!!value && (
+                  <Button
+                    size="small"
+                    danger
+                    onClick={() => onChange(null)}
+                    disabled={!forceEditMode || isReadonly}
+                  >
+                    حذف تصویر
+                  </Button>
+                )}
+              </div>
+            </div>
+          );
+        }
         return (
             <div className="flex flex-col gap-2">
               <Upload 
@@ -700,18 +838,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     <div><UploadOutlined /><div style={{ marginTop: 8 }}>آپلود</div></div>
                   )}
               </Upload>
-              {moduleId === 'products' && (
+              {canShowFilesGallery && (
                 <>
-                  <Button size="small" onClick={() => setIsGalleryOpen(true)} disabled={!forceEditMode}>
-                    مدیریت تصاویر
+                  <Button size="small" onClick={() => setIsGalleryOpen(true)}>
+                    گالری
                   </Button>
-                  <ProductImagesManager
+                  <RecordFilesManager
                     open={isGalleryOpen}
                     onClose={() => setIsGalleryOpen(false)}
-                    productId={recordId}
+                    moduleId={String(moduleId || '')}
+                    recordId={recordId}
                     mainImage={value}
                     onMainImageChange={(url) => onChange(url)}
-                    canEdit={forceEditMode && !isReadonly}
+                    canEdit={!!canEditFilesManager && !!forceEditMode && !isReadonly}
+                    canDelete={!!canDeleteFilesManager && !!forceEditMode && !isReadonly}
                   />
                 </>
               )}
@@ -734,6 +874,59 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
   const canRelationQuickCreate = fieldType === FieldType.RELATION
     && !!field.relationConfig?.targetModule;
+  const globalImageGalleryModalNode = (
+    <Modal
+      title="انتخاب تصویر از گالری"
+      open={isGlobalImageGalleryOpen}
+      onCancel={() => setIsGlobalImageGalleryOpen(false)}
+      footer={null}
+      width={980}
+      zIndex={12000}
+      destroyOnHidden
+    >
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-xs text-gray-500">
+          تصویر موردنظر را انتخاب کنید.
+        </div>
+        <Button
+          size="small"
+          onClick={() => {
+            void loadGlobalImageGallery();
+          }}
+          loading={globalImageGalleryLoading}
+        >
+          بروزرسانی
+        </Button>
+      </div>
+      {globalImageGalleryLoading ? (
+        <div className="h-44 flex items-center justify-center text-gray-500 text-sm gap-2">
+          <LoadingOutlined />
+          در حال بارگذاری...
+        </div>
+      ) : globalImageGalleryItems.length === 0 ? (
+        <div className="h-44 flex items-center justify-center text-gray-400 text-sm">
+          تصویری در گالری یافت نشد.
+        </div>
+      ) : (
+        <div className="max-h-[62vh] overflow-y-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {globalImageGalleryItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="rounded-lg border border-gray-200 overflow-hidden bg-white text-right hover:border-leather-400 transition-colors"
+              onClick={() => {
+                onChange(item.url);
+                setIsGlobalImageGalleryOpen(false);
+              }}
+            >
+              <img src={item.url} alt={item.label || 'image'} className="w-full h-28 object-cover" />
+              <div className="px-2 py-1 text-[11px] text-gray-600 truncate">{item.label || 'تصویر'}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
 
   if (compactMode) {
       return (
@@ -769,6 +962,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     suffix={<QrcodeOutlined />}
                 />
             </Modal>
+            {globalImageGalleryModalNode}
         </div>
       );
   }
@@ -815,6 +1009,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 suffix={<QrcodeOutlined />}
             />
         </Modal>
+        {globalImageGalleryModalNode}
     </>
   );
 };
@@ -851,7 +1046,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       allowClear: true,
       optionFilterProp: 'label' as const,
       getPopupContainer: () => document.body,
-      dropdownStyle: { zIndex: 5000 },
+      styles: { popup: { root: { zIndex: 5000 } } },
       className: 'w-full',
       disabled: isDisabled,
     };
@@ -862,8 +1057,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
           <Input
             allowClear
             disabled={isDisabled}
-            value={formatTextForInput(form.getFieldValue(field.key))}
-            onChange={(e) => form.setFieldValue(field.key, normalizeDigitsToEnglish(e.target.value))}
           />
         );
       case FieldType.LONG_TEXT:
@@ -871,8 +1064,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
           <Input.TextArea
             rows={2}
             disabled={isDisabled}
-            value={formatTextForInput(form.getFieldValue(field.key))}
-            onChange={(e) => form.setFieldValue(field.key, normalizeDigitsToEnglish(e.target.value))}
           />
         );
       case FieldType.NUMBER:
@@ -919,8 +1110,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
           <Input
             allowClear
             disabled={isDisabled}
-            value={formatTextForInput(form.getFieldValue(field.key))}
-            onChange={(e) => form.setFieldValue(field.key, normalizeDigitsToEnglish(e.target.value))}
           />
         );
     }
@@ -935,7 +1124,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       okText="افزودن"
       cancelText="انصراف"
       confirmLoading={loading}
-      destroyOnClose
+      destroyOnHidden
       zIndex={2000} 
     >
       <Form

@@ -98,7 +98,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [handoverContext, setHandoverContext] = useState<StageHandoverContext | null>(null);
   const [handoverGroups, setHandoverGroups] = useState<StageHandoverGroup[]>([]);
   const [handoverForms, setHandoverForms] = useState<StageHandoverForm[]>([]);
-  const [nextStageHandoverFormRows, setNextStageHandoverFormRows] = useState<StageHandoverFormListRow[]>([]);
+  const [, setNextStageHandoverFormRows] = useState<StageHandoverFormListRow[]>([]);
   const [activeHandoverFormId, setActiveHandoverFormId] = useState<string | null>(null);
   const [handoverFormsModalOpen, setHandoverFormsModalOpen] = useState(false);
   const [handoverEditorOpen, setHandoverEditorOpen] = useState(false);
@@ -151,13 +151,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const parsed = parseFloat(value);
     return Number.isFinite(parsed) ? parsed : 0;
   }, []);
-
-  const getDeliveryRowQty = useCallback((row: any) => {
-    const length = Math.max(0, toNumber(row?.length));
-    const width = Math.max(0, toNumber(row?.width));
-    const quantity = Math.max(0, toNumber(row?.quantity));
-    return length * width * quantity;
-  }, [toNumber]);
 
   const categoryLabelMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -755,7 +748,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         label: assigneeLabelFromIds(currentTask?.assignee_id, currentTask?.assignee_type),
       };
 
-      const normalizeForm = (rawForm: any, index: number): StageHandoverForm => {
+      const normalizeForm = (rawForm: any): StageHandoverForm => {
         const formId = String(rawForm?.id || buildHandoverFormId());
         const mergedFormGroups = mergeSavedGroups(withOrderGroups, rawForm?.groups || []).map((group) =>
           recalcHandoverGroup({
@@ -824,10 +817,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             wasteByProduct: {},
             updatedAt: new Date().toISOString(),
           }]
-      ).map((form: any, index: number) => normalizeForm(form, index));
+      ).map((form: any) => normalizeForm(form));
 
       const preferredFormId = String(currentHandover?.activeFormId || normalizedForms[0]?.id || '');
-      const activeForm = normalizedForms.find((form) => String(form.id) === preferredFormId) || normalizedForms[0];
+      const activeForm = normalizedForms.find((form: StageHandoverForm) => String(form.id) === preferredFormId) || normalizedForms[0];
       const sourceTotalsByProduct = toSourceTotals(withOrderGroups);
       const orderTotalsByProduct = toOrderTotals(withOrderGroups);
       const outgoingRows: StageHandoverFormListRow[] = (() => {

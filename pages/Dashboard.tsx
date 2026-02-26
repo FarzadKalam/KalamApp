@@ -15,6 +15,7 @@ import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { DASHBOARD_PERMISSION_KEY } from '../utils/permissions';
+import { BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -40,6 +41,7 @@ interface DashboardStats {
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [brandTitle, setBrandTitle] = useState(DEFAULT_BRANDING.brandName);
   const [stats, setStats] = useState<DashboardStats>({
     totalSales: 0,
     inProductionOrders: 0,
@@ -54,6 +56,18 @@ const Dashboard: React.FC = () => {
     totalProductionOrders: 0,
   });
   const [widgetPermissions, setWidgetPermissions] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const readBrandTitle = () => {
+      const value = document.documentElement.getAttribute('data-brand-title');
+      setBrandTitle(value?.trim() || DEFAULT_BRANDING.brandName);
+    };
+    readBrandTitle();
+    window.addEventListener(BRANDING_UPDATED_EVENT, readBrandTitle as EventListener);
+    return () => {
+      window.removeEventListener(BRANDING_UPDATED_EVENT, readBrandTitle as EventListener);
+    };
+  }, []);
 
   // Get today's Persian date
   const getTodayPersianDate = () => {
@@ -237,13 +251,13 @@ const Dashboard: React.FC = () => {
           time: inv.created_at,
           type: 'invoice',
           description: `فاکتور ${inv.name} ایجاد شد`,
-          color: '#c58f60',
+          color: 'rgb(var(--brand-500-rgb))',
         })),
         ...(productionOrders || []).slice(0, 3).filter(po => po.created_at).map(po => ({
           time: po.created_at,
           type: 'production',
           description: `سفارش تولید ${po.name} ایجاد شد`,
-          color: '#a67c52',
+          color: 'rgb(var(--brand-600-rgb))',
         })),
       ].sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 10);
 
@@ -463,7 +477,7 @@ const Dashboard: React.FC = () => {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <h1 className="text-3xl font-black text-leather-500 mb-2">
-                تولیدی چرم مهربانو
+                {brandTitle}
               </h1>
               <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                 <CalendarOutlined />
@@ -574,7 +588,7 @@ const Dashboard: React.FC = () => {
               value={stats.totalSales}
               formatter={(value) => formatPersianPrice(value as number)}
               suffix="تومان"
-              valueStyle={{ color: '#c58f60', fontSize: '1.5rem', fontWeight: 'bold' }}
+              valueStyle={{ color: 'rgb(var(--brand-500-rgb))', fontSize: '1.5rem', fontWeight: 'bold' }}
             />
             <div className="mt-2 text-green-600 text-sm flex items-center gap-1">
               <ArrowUpOutlined />

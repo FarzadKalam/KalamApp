@@ -292,7 +292,7 @@ export const getColumnSearchProps = (
         </div>
       ),
       filterIcon: (filtered: boolean) => (
-        <SearchOutlined style={{ color: filtered ? '#c58f60' : undefined }} />
+        <SearchOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />
       ),
       onFilter: (value: any, record: any) =>
         record[field.key]?.toString().toLowerCase().includes((value as string).toLowerCase()),
@@ -324,7 +324,7 @@ export const getColumnSearchProps = (
           </Space>
         </div>
       ),
-      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#c58f60' : undefined }} />,
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />,
       // نکته: فیلترینگ کلاینت‌ساید برای دمو (در عمل این باید سمت سرور انجام بشه)
       onFilter: (_value: any, _record: any) => true, 
     };
@@ -336,7 +336,7 @@ export const getColumnSearchProps = (
       filters: field.options?.map((opt: any) => ({ text: opt.label, value: opt.value })),
       filterSearch: true, // قابلیت سرچ در لیست دراپ‌داون
       onFilter: (value: any, record: any) => record[field.key] === value,
-      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#c58f60' : undefined }} />,
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />,
     };
   }
   

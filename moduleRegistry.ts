@@ -12,6 +12,10 @@ import { shelvesConfig } from './modules/shelvesConfig';
 import { stockTransfersConfig } from './modules/stockTransfersConfig';
 import { calculationFormulasModule } from './modules/calculationFormulasConfig';
 import { productionGroupOrdersModule } from './modules/productionGroupOrdersConfig';
+import { projectsModule } from './modules/projectsConfig';
+import { marketingLeadsModule } from './modules/marketingLeadsConfig';
+import { processTemplatesModule } from './modules/processTemplatesConfig';
+import { processRunsModule } from './modules/processRunsConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -26,6 +30,10 @@ export const MODULES: Record<string, ModuleDefinition> = {
   suppliers: supplierModule,
   invoices: invoicesConfig,
   purchase_invoices: purchaseInvoicesConfig,
+  projects: projectsModule,
+  marketing_leads: marketingLeadsModule,
+  process_templates: processTemplatesModule,
+  process_runs: processRunsModule,
   tasks: tasksModule,
   calculation_formulas: calculationFormulasModule,
 };
