@@ -104,10 +104,6 @@ create table if not exists public.company_settings (
 alter table public.company_settings
   add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
   add column if not exists company_name text,
-  add column if not exists company_full_name text,
-  add column if not exists trade_name text,
-  add column if not exists company_name_en text,
-  add column if not exists brand_palette_key text not null default 'executive_indigo',
   add column if not exists ceo_name text,
   add column if not exists national_id text,
   add column if not exists mobile text,
@@ -120,20 +116,6 @@ alter table public.company_settings
   add column if not exists updated_by uuid references auth.users(id) on delete set null,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'chk_company_settings_brand_palette_key'
-  ) then
-    alter table public.company_settings
-      add constraint chk_company_settings_brand_palette_key
-      check (brand_palette_key in ('executive_indigo', 'corporate_blue', 'deep_ocean'));
-  end if;
-end
-$$;
 
 create index if not exists idx_company_settings_org_id on public.company_settings(org_id);
 
@@ -1613,5 +1595,89 @@ insert into public.company_settings (org_id, company_name)
 select org.id, 'KalamApp'
 from org
 where not exists (select 1 from public.company_settings);
+
+commit;
+
+
+begin;
+
+-- 1) fix: function search_path warning
+create or replace function public.set_updated_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+-- 2) fix: current_org_id recursion risk
+create or replace function public.current_org_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p.org_id
+  from public.profiles p
+  where p.id = auth.uid()
+  limit 1
+$$;
+
+revoke all on function public.current_org_id() from public;
+grant execute on function public.current_org_id() to authenticated, service_role;
+
+-- 3) tighten open policies flagged by linter
+drop policy if exists p_organizations_auth_all on public.organizations;
+create policy p_organizations_auth_all
+on public.organizations
+for all to authenticated
+using (id = public.current_org_id())
+with check (id = public.current_org_id());
+
+drop policy if exists p_process_template_stages_auth_all on public.process_template_stages;
+create policy p_process_template_stages_auth_all
+on public.process_template_stages
+for all to authenticated
+using (
+  exists (
+    select 1
+    from public.process_templates t
+    where t.id = process_template_stages.template_id
+      and t.org_id = public.current_org_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.process_templates t
+    where t.id = process_template_stages.template_id
+      and t.org_id = public.current_org_id()
+  )
+);
+
+drop policy if exists p_process_run_stages_auth_all on public.process_run_stages;
+create policy p_process_run_stages_auth_all
+on public.process_run_stages
+for all to authenticated
+using (
+  exists (
+    select 1
+    from public.process_runs r
+    where r.id = process_run_stages.process_run_id
+      and r.org_id = public.current_org_id()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.process_runs r
+    where r.id = process_run_stages.process_run_id
+      and r.org_id = public.current_org_id()
+  )
+);
 
 commit;
