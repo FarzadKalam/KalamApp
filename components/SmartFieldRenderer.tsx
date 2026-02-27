@@ -20,6 +20,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
 import { MAP_TILE_ATTRIBUTION, MAP_TILE_URL } from '../utils/mapConfig';
+import { useCurrencyConfig } from '../utils/currency';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -57,6 +58,13 @@ const formatNumericForInput = (raw: any, withGrouping = false): string => {
   const grouped = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const output = decimalPart !== undefined ? `${sign}${grouped}.${decimalPart}` : `${sign}${grouped}`;
   return toPersianNumber(output);
+};
+
+const resolveFormatterSourceValue = (inputValue: any, currentValue: any) => {
+  if (inputValue === '' && currentValue !== null && currentValue !== undefined && String(currentValue) !== '') {
+    return currentValue;
+  }
+  return inputValue ?? currentValue;
 };
 
 const NAVIGATION_KEYS = new Set([
@@ -137,12 +145,20 @@ const LocationPickerMap: React.FC<{
       center={center}
       zoom={value ? 12 : 5}
       minZoom={4}
-      maxZoom={18}
+      maxZoom={14}
       maxBounds={IRAN_BOUNDS}
       maxBoundsViscosity={1}
       style={{ width: '100%', height: 360, borderRadius: 12 }}
     >
-      <TileLayer url={MAP_TILE_URL} attribution={MAP_TILE_ATTRIBUTION} />
+      <TileLayer
+        url={MAP_TILE_URL}
+        attribution={MAP_TILE_ATTRIBUTION}
+        bounds={IRAN_BOUNDS}
+        noWrap
+        maxNativeZoom={14}
+        maxZoom={14}
+        detectRetina={false}
+      />
       <LocationMapEvents onPick={onChange} />
       <LocationMapCenter center={value} />
       {value && (
@@ -205,6 +221,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const fieldLabel = field?.labels?.fa || label || 'بدون نام';
   const fieldType = field?.type || type || FieldType.TEXT;
   const fieldKey = field?.key || 'unknown';
+  const { label: currencyLabel } = useCurrencyConfig();
   const isProcessStagesFieldKey = (
     fieldKey === 'execution_process_draft' ||
     fieldKey === 'marketing_process_draft' ||
@@ -497,11 +514,22 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           const isShelvesTarget = targetModule === 'shelves';
           const extraSelect = isShelvesTarget ? ', shelf_number' : '';
           try {
-            const { data, error } = await supabase
+            let { data, error } = await supabase
               .from(targetModule)
               .select(`id, ${targetField}, system_code${extraSelect}`)
               .limit(200);
-            if (error) throw error;
+            if (error) {
+              const errorCode = String((error as any)?.code || '').toUpperCase();
+              const errorText = String((error as any)?.message || (error as any)?.details || '').toLowerCase();
+              const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+              if (!isMissingColumn) throw error;
+              const fallback = await supabase
+                .from(targetModule)
+                .select(`id, ${targetField}${extraSelect}`)
+                .limit(200);
+              if (fallback.error) throw fallback.error;
+              data = fallback.data;
+            }
             relationMap[quickField.key] = (data || []).map((item: any) => ({
               label: item.system_code
                 ? `${item[targetField] || item.shelf_number || item.system_code || item.id} (${item.system_code})`
@@ -640,7 +668,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
         if (fieldType === FieldType.PRICE) {
           const formatted = value ? formatPersianPrice(value, true) : '۰';
-          return <span className="font-bold text-gray-700 dark:text-gray-300 text-xs persian-number">{formatted}</span>;
+          return (
+            <span className="font-bold text-gray-700 dark:text-gray-300 text-xs persian-number">
+              {formatted}
+              <span className="ms-1 text-[10px] opacity-70">{currencyLabel}</span>
+            </span>
+          );
         }
         if (fieldType === FieldType.DATE) {
           return <span className="font-mono persian-number">{formatPersian(value, 'DATE')}</span>;
@@ -719,7 +752,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 controls={false}
                 stringMode
                 inputMode="decimal"
-                formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
+                formatter={(val, info) => formatNumericForInput(resolveFormatterSourceValue(info?.input, val), true)}
                 parser={(val) => normalizeNumericString(val)}
                 onKeyDown={preventNonNumericKeyDown}
                 onPaste={preventNonNumericPaste}
@@ -1303,7 +1336,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
             disabled={isDisabled}
             stringMode
             inputMode="decimal"
-            formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
+            formatter={(val, info) => formatNumericForInput(resolveFormatterSourceValue(info?.input, val), true)}
             parser={(val) => normalizeNumericString(val)}
             onKeyDown={preventNonNumericKeyDown}
             onPaste={preventNonNumericPaste}

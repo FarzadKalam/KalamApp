@@ -17,6 +17,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/inventoryTransactions';
 import { MODULES } from '../moduleRegistry';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -275,8 +276,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const fetchAssignees = async () => {
     try {
       const { data: users } = await supabase.from('profiles').select('id, full_name');
-      const { data: roles } = await supabase.from('org_roles').select('id, title');
-      setAssignees({ users: users || [], roles: roles || [] });
+      const { data: roles } = await supabase.from('org_roles').select('*');
+      const normalizedRoles = (roles || []).map((role: any) => ({
+        ...role,
+        title: role?.title || role?.name || role?.id,
+      }));
+      setAssignees({ users: users || [], roles: normalizedRoles });
     } catch (e) {
       console.error('Error fetching assignees', e);
     }
@@ -406,7 +411,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       .update({ quantity: nextTotal })
       .eq('id', recordId);
     if (error) {
-      message.error(`خطا در بروزرسانی تعداد تولید: ${error.message}`);
+      message.error(toFaErrorMessage(error, 'خطا در بروزرسانی تعداد تولید'));
     }
   }, [recordId, isBom, isProductionOrder]);
 
@@ -935,7 +940,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setHandoverFormsModalOpen(true);
       setHandoverEditorOpen(false);
     } catch (error: any) {
-      message.error(error?.message || 'خطا در بارگذاری فرم تحویل');
+      message.error(toFaErrorMessage(error, 'خطا در بارگذاری فرم تحویل'));
     } finally {
       setHandoverLoading(false);
     }
@@ -1418,7 +1423,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       message.success(confirmSide ? 'تایید ثبت شد' : 'فرم تحویل ذخیره شد');
       return true;
     } catch (error: any) {
-      message.error(error?.message || 'خطا در ثبت فرم تحویل');
+      message.error(toFaErrorMessage(error, 'خطا در ثبت فرم تحویل'));
       return false;
     } finally {
       setHandoverLoading(false);
@@ -1573,7 +1578,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       lineForm.resetFields();
       fetchLines();
     } catch (error: any) {
-      message.error(`خطا: ${error.message}`);
+      message.error(toFaErrorMessage(error, 'خطا در ثبت اطلاعات'));
     }
   };
 
@@ -1669,7 +1674,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setDraftToCreate(null);
       await fetchTasks();
     } catch (error: any) {
-      message.error(`خطا: ${error.message}`);
+      message.error(toFaErrorMessage(error, 'خطا در ثبت اطلاعات'));
     }
   };
 
@@ -1699,7 +1704,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           : item
       )));
     } catch (err: any) {
-      message.error(err?.message || 'خطا در ثبت مقدار تولید شده');
+      message.error(toFaErrorMessage(err, 'خطا در ثبت مقدار تولید شده'));
     }
   };
 
@@ -2064,7 +2069,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       fetchLines();
       fetchTasks();
     } catch (error: any) {
-      message.error(`خطا در کپی خط: ${error.message}`);
+      message.error(toFaErrorMessage(error, 'خطا در کپی خط'));
     } finally {
       setLoading(false);
     }
@@ -2331,7 +2336,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         onCancel={() => setIsLineModalOpen(false)}
         footer={null}
         centered
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={lineForm} onFinish={handleAddLine} layout="vertical" className="pt-2">
           <div className="grid grid-cols-12 gap-3">
@@ -2364,7 +2369,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         zIndex={10001}
         width={480}
         centered
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-2">
           <div className="grid grid-cols-12 gap-3">
@@ -2451,7 +2456,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         zIndex={10001}
         width={420}
         centered
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={draftForm} onFinish={handleAddDraftStage} layout="vertical" className="pt-2">
           <div className="grid grid-cols-12 gap-3">

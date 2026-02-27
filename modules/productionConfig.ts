@@ -1,19 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
-
-const GRID_MATERIALS_BLOCK = {
-  id: 'grid_materials',
-  titles: { fa: 'مواد اولیه', en: 'Materials' },
-  type: BlockType.GRID_TABLE,
-  order: 1,
-  gridConfig: {
-    categories: [
-      { value: 'leather', label: 'چرم', specBlockId: 'leatherSpec' },
-      { value: 'lining', label: 'آستر', specBlockId: 'liningSpec' },
-      { value: 'accessory', label: 'خرجکار', specBlockId: 'kharjkarSpec' },
-      { value: 'fitting', label: 'یراق', specBlockId: 'yaraghSpec' },
-    ],
-  },
-};
+﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, FieldNature } from '../types';
 
 export const productionBomModule: ModuleDefinition = {
   id: 'production_boms',
@@ -25,25 +10,25 @@ export const productionBomModule: ModuleDefinition = {
     { key: 'name', labels: { fa: 'عنوان مدل', en: 'Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, isKey: true, validation: { required: true }, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Sys Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, isTableColumn: true },
     { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'فعال', value: 'active', color: 'green' }, { label: 'بایگانی', value: 'archived', color: 'gray' }], defaultValue: 'active' },
-    { 
-      key: 'product_category', 
-      labels: { fa: 'دسته بندی محصول', en: 'Product Category' }, 
-      type: FieldType.SELECT, 
-      location: FieldLocation.HEADER, 
-      order: 2.5, 
-      dynamicOptionsCategory: 'product_categories',
-      nature: FieldNature.STANDARD, 
+    {
+      key: 'product_category',
+      labels: { fa: 'دسته بندی کالا', en: 'Goods Category' },
+      type: FieldType.SELECT,
+      location: FieldLocation.HEADER,
+      order: 2.5,
+      dynamicOptionsCategory: 'product_goods_categories',
+      nature: FieldNature.STANDARD,
       validation: { required: false },
       isTableColumn: true,
-    },  
-    { 
-      key: 'production_stages', 
-      labels: { fa: 'مراحل تولید', en: 'Stages' }, 
+    },
+    {
+      key: 'production_stages',
+      labels: { fa: 'مراحل تولید', en: 'Stages' },
       type: FieldType.PROGRESS_STAGES,
-      location: FieldLocation.BLOCK, 
-      order: 9,  
+      location: FieldLocation.BLOCK,
+      order: 9,
       isTableColumn: true,
-      nature: FieldNature.STANDARD 
+      nature: FieldNature.STANDARD,
     },
     {
       key: 'production_stages_draft',
@@ -53,23 +38,11 @@ export const productionBomModule: ModuleDefinition = {
       order: 19,
       nature: FieldNature.STANDARD,
     },
-    {
-      key: 'grid_materials',
-      labels: { fa: 'مواد اولیه', en: 'Materials' },
-      type: FieldType.JSON,
-      location: FieldLocation.BLOCK,
-      order: 20,
-      nature: FieldNature.STANDARD,
-    },
   ],
-  blocks: [
-    GRID_MATERIALS_BLOCK
-  ],
+  blocks: [],
   relatedTabs: [],
   table: 'production_boms',
-  actionButtons: [
-    { id: 'create_production_order', label: 'ایجاد سفارش تولید', placement: 'header', variant: 'primary' }
-  ]
+  actionButtons: [{ id: 'create_production_order', label: 'ایجاد سفارش تولید', placement: 'header', variant: 'primary' }],
 };
 
 export const productionOrderModule: ModuleDefinition = {
@@ -93,14 +66,14 @@ export const productionOrderModule: ModuleDefinition = {
       validation: { required: false },
       isTableColumn: true,
     },
-    { 
-      key: 'product_category', 
-      labels: { fa: 'دسته بندی محصول', en: 'Product Category' }, 
-      type: FieldType.STATUS, 
-      location: FieldLocation.HEADER, 
-      order: 2.5, 
-      dynamicOptionsCategory: 'product_categories',
-      nature: FieldNature.STANDARD, 
+    {
+      key: 'product_category',
+      labels: { fa: 'دسته بندی کالا', en: 'Goods Category' },
+      type: FieldType.SELECT,
+      location: FieldLocation.HEADER,
+      order: 2.5,
+      dynamicOptionsCategory: 'product_goods_categories',
+      nature: FieldNature.STANDARD,
       validation: { required: false },
     },
     {
@@ -125,19 +98,18 @@ export const productionOrderModule: ModuleDefinition = {
     { key: 'quantity', labels: { fa: 'تعداد تولید', en: 'Production Qty' }, type: FieldType.STOCK, location: FieldLocation.HEADER, order: 3, validation: { required: true }, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'production_cost', labels: { fa: 'جمع کل (برآورد هزینه)', en: 'Estimated Cost' }, type: FieldType.PRICE, location: FieldLocation.HEADER, order: 3.5, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'در انتظار', value: 'pending', color: 'orange' }, { label: 'در حال تولید', value: 'in_progress', color: 'blue' }, { label: 'تکمیل شده', value: 'completed', color: 'green' }], defaultValue: 'pending', isTableColumn: true },
-    { key: 'production_started_at', labels: { fa: '\u0632\u0645\u0627\u0646 \u0634\u0631\u0648\u0639 \u062a\u0648\u0644\u06cc\u062f', en: 'Production Start Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'production_stopped_at', labels: { fa: '\u0632\u0645\u0627\u0646 \u062a\u0648\u0642\u0641 \u062a\u0648\u0644\u06cc\u062f', en: 'Production Stop Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'production_completed_at', labels: { fa: '\u0632\u0645\u0627\u0646 \u062a\u06a9\u0645\u06cc\u0644 \u062a\u0648\u0644\u06cc\u062f', en: 'Production Complete Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { 
-      key: 'production_stages', 
-      labels: { fa: 'مراحل تولید', en: 'Stages' }, 
+    { key: 'production_started_at', labels: { fa: 'زمان شروع تولید', en: 'Production Start Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'production_stopped_at', labels: { fa: 'زمان توقف تولید', en: 'Production Stop Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'production_completed_at', labels: { fa: 'زمان تکمیل تولید', en: 'Production Complete Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    {
+      key: 'production_stages',
+      labels: { fa: 'مراحل تولید', en: 'Stages' },
       type: FieldType.PROGRESS_STAGES,
-      location: FieldLocation.BLOCK, 
-      order: 10,  
+      location: FieldLocation.BLOCK,
+      order: 10,
       isTableColumn: true,
-      nature: FieldNature.STANDARD 
+      nature: FieldNature.STANDARD,
     },
-    
     {
       key: 'production_stages_draft',
       labels: { fa: 'پیش‌نویس مراحل تولید', en: 'Draft Stages' },
@@ -146,20 +118,8 @@ export const productionOrderModule: ModuleDefinition = {
       order: 19,
       nature: FieldNature.STANDARD,
     },
-    {
-      key: 'grid_materials',
-      labels: { fa: 'مواد اولیه', en: 'Materials' },
-      type: FieldType.JSON,
-      location: FieldLocation.BLOCK,
-      order: 20,
-      nature: FieldNature.STANDARD,
-    },
   ],
-  blocks: [
-    GRID_MATERIALS_BLOCK
-  ],
-  
+  blocks: [],
   relatedTabs: [],
-  table: 'production_orders'
+  table: 'production_orders',
 };
-

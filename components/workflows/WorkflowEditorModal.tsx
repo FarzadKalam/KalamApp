@@ -14,6 +14,7 @@ import {
   triggerTypeOptions,
 } from '../../utils/workflowTypes';
 import PersianDatePicker from '../PersianDatePicker';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 type WorkflowEditorModalProps = {
   open: boolean;
@@ -243,7 +244,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       onClose();
     } catch (err: any) {
       if (Array.isArray(err?.errorFields)) return;
-      message.error(`خطا در ذخیره گردش کار: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در ذخیره گردش کار'));
     } finally {
       setSubmitting(false);
     }
@@ -255,7 +256,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       onCancel={onClose}
       title={isEditMode ? 'ویرایش گردش کار' : 'ایجاد گردش کار جدید'}
       width={1120}
-      destroyOnClose
+      destroyOnHidden
       footer={[
         <Button key="cancel" onClick={onClose}>
           انصراف

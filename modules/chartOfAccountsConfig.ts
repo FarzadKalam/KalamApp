@@ -2,7 +2,7 @@
 
 export const chartOfAccountsConfig: ModuleDefinition = {
   id: 'chart_of_accounts',
-  titles: { fa: 'کدینگ حساب ها', en: 'Chart Of Accounts' },
+  titles: { fa: 'جدول حساب ها', en: 'Chart Of Accounts' },
   nature: ModuleNature.FINANCE,
   table: 'chart_of_accounts',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],

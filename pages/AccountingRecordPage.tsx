@@ -39,8 +39,10 @@ import {
   preventNonNumericPaste,
 } from '../utils/persianNumericInput';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
+type FieldOption = { value: string; label: string; color?: string };
 
 const isNumericField = (fieldType: FieldType) =>
   fieldType === FieldType.NUMBER ||
@@ -61,6 +63,7 @@ const CHEQUE_INLINE_FIELD_KEYS = new Set<string>([
   'payee_identifier',
   'account_holder_name',
 ]);
+const CHEQUE_DEFERRED_FIELD_KEYS = new Set<string>(['notes']);
 
 const AccountingRecordPage: React.FC = () => {
   const { moduleId, id } = useParams();
@@ -83,9 +86,21 @@ const AccountingRecordPage: React.FC = () => {
   const [canEdit, setCanEdit] = useState(true);
   const [canDelete, setCanDelete] = useState(true);
   const [fieldPerms, setFieldPerms] = useState<Record<string, boolean>>({});
-  const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ value: string; label: string }>>>({});
-  const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ value: string; label: string }>>>({});
+  const [relationOptions, setRelationOptions] = useState<Record<string, FieldOption[]>>({});
+  const [dynamicOptions, setDynamicOptions] = useState<Record<string, FieldOption[]>>({});
   const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [chequeBankOptions, setChequeBankOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [chequeBankMetaById, setChequeBankMetaById] = useState<
+    Record<
+      string,
+      {
+        bank_name: string | null;
+        branch_name: string | null;
+        account_holder_name: string | null;
+        account_number: string | null;
+      }
+    >
+  >({});
 
   const visibleFields = useMemo(() => {
     if (!moduleConfig) return [] as ModuleField[];
@@ -101,7 +116,14 @@ const AccountingRecordPage: React.FC = () => {
 
   const standardFields = useMemo(() => {
     if (!isChequeModule) return visibleFields;
-    return visibleFields.filter((field) => !CHEQUE_INLINE_FIELD_KEYS.has(field.key));
+    return visibleFields.filter(
+      (field) => !CHEQUE_INLINE_FIELD_KEYS.has(field.key) && !CHEQUE_DEFERRED_FIELD_KEYS.has(field.key)
+    );
+  }, [isChequeModule, visibleFields]);
+
+  const chequeNotesField = useMemo(() => {
+    if (!isChequeModule) return null;
+    return visibleFields.find((field) => field.key === 'notes') || null;
   }, [isChequeModule, visibleFields]);
 
   const headerFields = useMemo(
@@ -136,7 +158,7 @@ const AccountingRecordPage: React.FC = () => {
       if ((field as any).dynamicOptionsCategory) {
         return dynamicOptions[(field as any).dynamicOptionsCategory] || [];
       }
-      return (field.options || []) as Array<{ value: string; label: string; color?: string }>;
+      return (field.options || []) as FieldOption[];
     },
     [dynamicOptions, relationOptions]
   );
@@ -157,10 +179,31 @@ const AccountingRecordPage: React.FC = () => {
 
   const handleChequeInlineFieldChange = useCallback(
     (fieldKey: string, value: any) => {
-      setFormData((prev) => ({ ...prev, [fieldKey]: value }));
-      form.setFieldsValue({ [fieldKey]: value });
+      const patch: Record<string, any> = { [fieldKey]: value };
+
+      if (fieldKey === 'bank_account_id') {
+        const key = String(value || '').trim();
+        if (!key) {
+          patch.bank_account_id = null;
+        } else {
+          const bankMeta = chequeBankMetaById[key];
+          if (bankMeta) {
+            patch.bank_account_id = key;
+            patch.bank_name = bankMeta.bank_name || null;
+            patch.branch_name = bankMeta.branch_name || null;
+            patch.account_holder_name = bankMeta.account_holder_name || null;
+          }
+        }
+      }
+
+      if (fieldKey === 'cheque_type' && value !== 'issued') {
+        patch.bank_account_id = null;
+      }
+
+      setFormData((prev) => ({ ...prev, ...patch }));
+      form.setFieldsValue(patch);
     },
-    [form]
+    [chequeBankMetaById, form]
   );
 
   const loadRelationOptions = useCallback(async () => {
@@ -202,8 +245,8 @@ const AccountingRecordPage: React.FC = () => {
       })
     );
 
-    return pairs.reduce<Record<string, Array<{ value: string; label: string }>>>((acc, [key, value]) => {
-      acc[key] = value;
+    return pairs.reduce<Record<string, FieldOption[]>>((acc, [key, value]) => {
+      acc[key] = [...value];
       return acc;
     }, {});
   }, [id, moduleConfig, moduleId]);
@@ -230,8 +273,8 @@ const AccountingRecordPage: React.FC = () => {
       })
     );
 
-    return pairs.reduce<Record<string, Array<{ value: string; label: string }>>>((acc, [key, value]) => {
-      acc[key] = value;
+    return pairs.reduce<Record<string, FieldOption[]>>((acc, [key, value]) => {
+      acc[key] = [...value];
       return acc;
     }, {});
   }, [moduleConfig]);
@@ -254,15 +297,61 @@ const AccountingRecordPage: React.FC = () => {
         return;
       }
 
-      const [relOpts, dynOpts] = await Promise.all([loadRelationOptions(), loadDynamicOptions()]);
+      const [relOpts, dynOpts, bankAccountsRes] = await Promise.all([
+        loadRelationOptions(),
+        loadDynamicOptions(),
+        isChequeModule
+          ? supabase
+              .from('bank_accounts')
+              .select('id, bank_name, branch_name, account_holder_name, account_number')
+              .eq('is_active', true)
+              .limit(500)
+          : Promise.resolve({ data: [], error: null } as any),
+      ]);
       setRelationOptions(relOpts);
       setDynamicOptions(dynOpts);
 
+      if (isChequeModule) {
+        const rows = ((bankAccountsRes as any)?.data || []) as Array<Record<string, any>>;
+        const options = rows.map((row) => {
+          const bank = String(row.bank_name || '').trim();
+          const accountNo = String(row.account_number || '').trim();
+          const branch = String(row.branch_name || '').trim();
+          const accountText = accountNo ? `(${toPersianNumber(accountNo)})` : '';
+          const branchText = branch ? ` - ${branch}` : '';
+          return {
+            value: String(row.id),
+            label: `${bank || 'بانک'} ${accountText}${branchText}`.trim(),
+          };
+        });
+        const meta = rows.reduce<
+          Record<string, { bank_name: string | null; branch_name: string | null; account_holder_name: string | null; account_number: string | null }>
+        >((acc, row) => {
+          const key = String(row.id || '').trim();
+          if (!key) return acc;
+          acc[key] = {
+            bank_name: row.bank_name ? String(row.bank_name) : null,
+            branch_name: row.branch_name ? String(row.branch_name) : null,
+            account_holder_name: row.account_holder_name ? String(row.account_holder_name) : null,
+            account_number: row.account_number ? String(row.account_number) : null,
+          };
+          return acc;
+        }, {});
+        setChequeBankOptions(options);
+        setChequeBankMetaById(meta);
+      } else {
+        setChequeBankOptions([]);
+        setChequeBankMetaById({});
+      }
+
       if (isCreate) {
         const initialValues = ((location.state as any)?.initialValues || {}) as Record<string, any>;
+        const normalizedInitialValues = isChequeModule
+          ? { ...initialValues, due_date: initialValues.issue_date || initialValues.due_date || null }
+          : initialValues;
         setRecord(null);
-        setFormData(initialValues);
-        form.setFieldsValue(initialValues);
+        setFormData(normalizedInitialValues);
+        form.setFieldsValue(normalizedInitialValues);
         return;
       }
 
@@ -271,9 +360,12 @@ const AccountingRecordPage: React.FC = () => {
       const { data, error } = await supabase.from(moduleConfig.table).select('*').eq('id', id).single();
       if (error) throw error;
       const row = (data || {}) as Record<string, any>;
-      setRecord(row);
-      setFormData(row);
-      form.setFieldsValue(row);
+      const normalizedRow = isChequeModule
+        ? { ...row, due_date: row.issue_date || row.due_date || null }
+        : row;
+      setRecord(normalizedRow);
+      setFormData(normalizedRow);
+      form.setFieldsValue(normalizedRow);
 
       const userIds = Array.from(
         new Set(
@@ -294,11 +386,11 @@ const AccountingRecordPage: React.FC = () => {
         setUserNames({});
       }
     } catch (err: any) {
-      message.error(err?.message || 'خطا در دریافت اطلاعات');
+      message.error(toFaErrorMessage(err, 'خطا در دریافت اطلاعات'));
     } finally {
       setLoading(false);
     }
-  }, [form, id, loadDynamicOptions, loadRelationOptions, location.state, message, moduleConfig, moduleId, isCreate]);
+  }, [form, id, isChequeModule, loadDynamicOptions, loadRelationOptions, location.state, message, moduleConfig, moduleId, isCreate]);
 
   useEffect(() => {
     load();
@@ -407,9 +499,38 @@ const AccountingRecordPage: React.FC = () => {
         payload[field.key] = raw;
       });
 
+      if (isChequeModule) {
+        const issueDate =
+          values.issue_date ??
+          payload.issue_date ??
+          formData.issue_date ??
+          null;
+
+        payload.due_date = issueDate || null;
+
+        const chequeType = String(
+          values.cheque_type ??
+            payload.cheque_type ??
+            formData.cheque_type ??
+            ''
+        ).trim();
+
+        if (chequeType === 'issued') {
+          const bankAccountIdRaw = values.bank_account_id ?? formData.bank_account_id ?? null;
+          const bankAccountId = String(bankAccountIdRaw || '').trim();
+          payload.bank_account_id = bankAccountId || null;
+        } else {
+          payload.bank_account_id = null;
+        }
+
+        if (values.notes === undefined && formData.notes !== undefined) {
+          payload.notes = String(formData.notes || '').trim() || null;
+        }
+      }
+
       return payload;
     },
-    [visibleFields]
+    [formData, isChequeModule, visibleFields]
   );
 
   const handleSave = async () => {
@@ -420,9 +541,40 @@ const AccountingRecordPage: React.FC = () => {
     }
 
     try {
-      const values = await form.validateFields();
+      const validatedValues = await form.validateFields();
+      const formValues = form.getFieldsValue(true);
+      const mergedValues = { ...formData, ...formValues, ...validatedValues };
+
+      if (isChequeModule) {
+        const missingRequiredInline = chequeInlineFields.find((field) => {
+          if (field.validation?.required !== true) return false;
+          const raw = (mergedValues as any)[field.key];
+          if (
+            field.type === FieldType.PRICE ||
+            field.type === FieldType.NUMBER ||
+            field.type === FieldType.STOCK
+          ) {
+            return raw === null || raw === undefined || String(raw).trim() === '';
+          }
+          return String(raw ?? '').trim() === '';
+        });
+
+        if (missingRequiredInline) {
+          message.error(`${missingRequiredInline.labels?.fa || missingRequiredInline.key} الزامی است.`);
+          return;
+        }
+      }
+
+      if (isChequeModule && String(mergedValues.cheque_type || '') === 'issued') {
+        const bankAccountId = String(mergedValues.bank_account_id || '').trim();
+        if (!bankAccountId) {
+          message.error('برای چک پرداختی انتخاب بانک الزامی است.');
+          return;
+        }
+      }
+
       setSaving(true);
-      const payload = buildPayload(values);
+      const payload = buildPayload(mergedValues);
 
       if (isCreate) {
         const { data, error } = await supabase
@@ -437,13 +589,23 @@ const AccountingRecordPage: React.FC = () => {
       }
 
       if (!id) return;
-      const { error } = await supabase.from(moduleConfig.table).update(payload).eq('id', id);
+      const { data: updatedRows, error } = await supabase
+        .from(moduleConfig.table)
+        .update(payload)
+        .eq('id', id)
+        .select('id');
       if (error) throw error;
+      if (!updatedRows || updatedRows.length === 0) {
+        throw new Error('ویرایش ذخیره نشد. دسترسی یا رکورد را بررسی کنید.');
+      }
       message.success('تغییرات ذخیره شد');
       navigate(`/${moduleId}/${id}`);
     } catch (err: any) {
-      if (Array.isArray(err?.errorFields)) return;
-      message.error(err?.message || 'خطا در ذخیره');
+      if (Array.isArray(err?.errorFields)) {
+        message.error('لطفاً فیلدهای اجباری را کامل کنید.');
+        return;
+      }
+      message.error(toFaErrorMessage(err, 'خطا در ذخیره'));
     } finally {
       setSaving(false);
     }
@@ -462,7 +624,7 @@ const AccountingRecordPage: React.FC = () => {
       message.success('رکورد حذف شد');
       navigate(`/${moduleId}`);
     } catch (err: any) {
-      message.error(err?.message || 'خطا در حذف');
+      message.error(toFaErrorMessage(err, 'خطا در حذف'));
     } finally {
       setDeleting(false);
     }
@@ -621,16 +783,24 @@ const AccountingRecordPage: React.FC = () => {
                   name={field.key}
                   hidden
                   preserve
-                  rules={[
-                    {
-                      required: field.validation?.required === true,
-                      message: `${field.labels?.fa || field.key} الزامی است`,
-                    },
-                  ]}
                 >
                   <Input />
                 </Form.Item>
               ))}
+
+            {isChequeModule && (
+              <>
+                <Form.Item name="bank_account_id" hidden preserve>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="due_date" hidden preserve>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="notes" hidden preserve>
+                  <Input />
+                </Form.Item>
+              </>
+            )}
 
             {headerFields.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
@@ -787,15 +957,41 @@ const AccountingRecordPage: React.FC = () => {
             title="نمای چک"
             className="mb-4 rounded-xl border border-gray-200 dark:border-gray-800"
           >
-            <div className="mb-3 text-xs text-gray-500">
-              پیش نمایش ظاهری چک بر اساس اطلاعات ثبت شده
-            </div>
+            {isEditMode && (
+              <div className="mb-3 text-xs text-gray-500">
+                {'فیلدهای اصلی چک را مستقیم داخل همین قالب وارد کنید.'}
+              </div>
+            )}
             <ChequePreviewCard
               values={(isEditMode ? formData : record) || {}}
               editable={isEditMode}
               disabled={!canEdit}
               onFieldChange={handleChequeInlineFieldChange}
+              bankOptions={chequeBankOptions}
+              bankMetaById={chequeBankMetaById}
             />
+          </Card>
+        )}
+
+        {isChequeModule && chequeNotesField && (
+          <Card
+            size="small"
+            title={chequeNotesField.labels?.fa || 'توضیحات'}
+            className="mb-4 rounded-xl border border-gray-200 dark:border-gray-800"
+          >
+            {isEditMode ? (
+              <Input.TextArea
+                rows={4}
+                value={String(formData.notes ?? '')}
+                onChange={(e) => handleChequeInlineFieldChange('notes', e.target.value || null)}
+                disabled={!canEdit}
+                placeholder="توضیحات تکمیلی چک..."
+              />
+            ) : (
+              <div className="text-sm text-gray-700 dark:text-gray-200 whitespace-pre-wrap">
+                {String(record?.notes || '-')}
+              </div>
+            )}
           </Card>
         )}
 

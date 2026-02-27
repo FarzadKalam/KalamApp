@@ -19,6 +19,7 @@ export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'company', label: 'مشخصات شرکت' },
   { key: 'users', label: 'مدیریت کاربران' },
   { key: 'roles', label: 'چارت سازمانی' },
+  { key: 'module_settings', label: 'تنظیمات ماژول ها' },
   { key: 'formulas', label: 'فرمول های محاسباتی' },
   { key: 'connections', label: 'اتصالات' },
   { key: 'customer_leveling', label: 'تنظیمات سطح بندی' },
@@ -113,6 +114,11 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
 
   if (!fieldMap.has('assignee_id')) {
     ensureField(fieldMap, 'assignee_id', 'مسئول');
+  }
+
+  // Permission flag for opening module-level settings page.
+  if (!fieldMap.has('__module_settings')) {
+    ensureField(fieldMap, '__module_settings', 'تنظیمات ماژول');
   }
 
   return Array.from(fieldMap.entries()).map(([key, label]) => ({ key, label }));

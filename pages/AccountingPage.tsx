@@ -1,19 +1,17 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Col, Empty, Row, Spin, Statistic, Typography, Button } from 'antd';
 import {
-  BankOutlined,
-  CalendarOutlined,
   FileTextOutlined,
   NodeIndexOutlined,
+  BankOutlined,
   CreditCardOutlined,
   SettingOutlined,
-  WalletOutlined,
-  ApartmentOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { ACCOUNTING_PERMISSION_KEY } from '../utils/permissions';
+import { useCurrencyConfig } from '../utils/currency';
 
 const { Title, Text } = Typography;
 
@@ -35,6 +33,7 @@ const DEFAULT_STATS: AccountingStats = {
 
 const AccountingPage: React.FC = () => {
   const navigate = useNavigate();
+  const { label: currencyLabel } = useCurrencyConfig();
   const [loading, setLoading] = useState(true);
   const [canViewPage, setCanViewPage] = useState(true);
   const [sectionPerms, setSectionPerms] = useState<Record<string, boolean>>({});
@@ -171,8 +170,14 @@ const AccountingPage: React.FC = () => {
         path: '/journal_entries',
       },
       {
+        key: 'account_review',
+        title: 'مرور حساب ها',
+        icon: <NodeIndexOutlined />,
+        path: '/accounting/account-review',
+      },
+      {
         key: 'chart_of_accounts',
-        title: 'کدینگ حساب ها',
+        title: 'جدول حساب ها',
         icon: <NodeIndexOutlined />,
         path: '/chart_of_accounts',
       },
@@ -182,6 +187,12 @@ const AccountingPage: React.FC = () => {
         icon: <CreditCardOutlined />,
         path: '/cheques',
       },
+      {
+        key: 'cash_bank',
+        title: 'نقد و بانک',
+        icon: <BankOutlined />,
+        path: '/cash_bank',
+      },
     ],
     []
   );
@@ -189,34 +200,10 @@ const AccountingPage: React.FC = () => {
   const settingsLinks = useMemo(
     () => [
       {
-        key: 'fiscal_years',
-        title: 'سال های مالی',
-        icon: <CalendarOutlined />,
-        path: '/fiscal_years',
-      },
-      {
-        key: 'accounting_event_rules',
-        title: 'قواعد صدور سند',
+        key: 'accounting_settings',
+        title: 'تنظیمات حسابداری',
         icon: <SettingOutlined />,
-        path: '/accounting_event_rules',
-      },
-      {
-        key: 'cost_centers',
-        title: 'مراکز هزینه',
-        icon: <ApartmentOutlined />,
-        path: '/cost_centers',
-      },
-      {
-        key: 'cash_boxes',
-        title: 'صندوق ها',
-        icon: <WalletOutlined />,
-        path: '/cash_boxes',
-      },
-      {
-        key: 'bank_accounts',
-        title: 'حساب های بانکی',
-        icon: <BankOutlined />,
-        path: '/bank_accounts',
+        path: '/accounting/settings',
       },
     ],
     []
@@ -268,7 +255,7 @@ const AccountingPage: React.FC = () => {
                 <Statistic
                   title="جمع مانده دریافتنی مشتریان"
                   value={formatPersianPrice(stats.receivableBalance)}
-                  suffix="تومان"
+                  suffix={currencyLabel}
                 />
               </Card>
             </Col>
@@ -277,7 +264,7 @@ const AccountingPage: React.FC = () => {
                 <Statistic
                   title="جمع مانده پرداختنی تامین کنندگان"
                   value={formatPersianPrice(stats.payableBalance)}
-                  suffix="تومان"
+                  suffix={currencyLabel}
                 />
               </Card>
             </Col>

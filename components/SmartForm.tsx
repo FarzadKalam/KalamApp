@@ -21,16 +21,18 @@ interface SmartFormProps {
   module: ModuleDefinition;
   visible: boolean;
   onCancel: () => void;
-  onSave?: (values: any, meta?: { productInventory?: any[] }) => void;
+  onSave?: (values: any, meta?: { productInventory?: any[]; templateStagesPreview?: any[] }) => void;
   recordId?: string;
   title?: string;
   isBulkEdit?: boolean;
   initialValues?: Record<string, any>;
+  displayMode?: 'modal' | 'embedded';
 }
 
 const SmartForm: React.FC<SmartFormProps> = ({ 
   module, visible, onCancel, onSave, recordId, title, isBulkEdit = false,
-  initialValues: initialValuesProp
+  initialValues: initialValuesProp,
+  displayMode = 'modal'
 }) => {
   const initialValues = useMemo(() => initialValuesProp ?? {}, [initialValuesProp]);
   const requireInventoryShelf = initialValuesProp?.__requireInventoryShelf === true;
@@ -49,9 +51,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const bomConfirmOpenRef = useRef<string | null>(null);
   const [lastAppliedProcessTemplateId, setLastAppliedProcessTemplateId] = useState<string | null>(null);
   const processConfirmOpenRef = useRef<string | null>(null);
-  const processDraftFieldKey = module.id === 'projects'
-    ? 'execution_process_draft'
-    : (module.id === 'marketing_leads' ? 'marketing_process_draft' : null);
+  const processDraftFieldKey = useMemo(() => {
+    const hasProcessTemplateField = module.fields.some((f) => f.key === 'process_template_id');
+    if (!hasProcessTemplateField) return null;
+    const knownDraftKeys = ['execution_process_draft', 'marketing_process_draft', 'production_stages_draft'];
+    return knownDraftKeys.find((key) => module.fields.some((f) => f.key === key)) || null;
+  }, [module.fields]);
   const processPreviewFieldKey = module.id === 'process_templates'
     ? 'template_stages_preview'
     : (module.id === 'process_runs' ? 'run_stages_preview' : null);
@@ -68,8 +73,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   };
   
   const fetchAllRelationOptionsWrapper = async () => {
-    await fetchRelationOptions();
-    await loadDynamicOptions();
+    await Promise.all([fetchRelationOptions(), loadDynamicOptions()]);
   };
 
   useEffect(() => {
@@ -82,7 +86,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (visible) {
       if (recordId && !isBulkEdit) {
         // --- حالت ویرایش ---
-        fetchRecord();
+        const hasInitialProps = initialValues && Object.keys(initialValues).length > 0;
+        if (hasInitialProps) {
+          const assigneeCombo = buildAssigneeCombo(initialValues?.assignee_type, initialValues?.assignee_id);
+          const prefetchedValues = { ...initialValues, assignee_combo: assigneeCombo };
+          setFormData(prefetchedValues);
+          form.setFieldsValue(prefetchedValues);
+        }
+        fetchRecord(!hasInitialProps);
       } else {
         // --- حالت ایجاد رکورد جدید ---
         form.resetFields();
@@ -117,8 +128,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const fetchAssignees = async () => {
     try {
       const { data: users } = await supabase.from('profiles').select('id, full_name');
-      const { data: roles } = await supabase.from('org_roles').select('id, title');
-      setAssignees({ users: users || [], roles: roles || [] });
+      const { data: roles } = await supabase.from('org_roles').select('*');
+      const normalizedRoles = (roles || []).map((role: any) => ({
+        ...role,
+        title: role?.title || role?.name || role?.id,
+      }));
+      setAssignees({ users: users || [], roles: normalizedRoles });
     } catch (e) {
       console.warn('Could not fetch assignees', e);
     }
@@ -178,8 +193,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 .from(targetModule)
                 .select(`id, ${targetField}, system_code${extraSelect}`)
                 .limit(100);
+            if (error) throw error;
             
-            if (!error && data) {
+            if (data) {
                 options[key] = data.map((item: any) => ({
                     label: item.system_code
                       ? `${item[targetField] || item.shelf_number || item.system_code || item.id} (${item.system_code})`
@@ -347,8 +363,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
   };
 
   // --- 4. دریافت رکورد (در حالت ویرایش) ---
-  const fetchRecord = async () => {
-    setLoading(true);
+  const fetchRecord = async (withLoading = true) => {
+    if (withLoading) setLoading(true);
     try {
       const { data, error } = await supabase.from(module.table).select('*').eq('id', recordId).single();
       if (error) throw error;
@@ -399,7 +415,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     } catch (err: any) {
       message.error('خطا: ' + err.message);
     } finally {
-      setLoading(false);
+      if (withLoading) setLoading(false);
     }
   };
 
@@ -775,7 +791,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
 
       if (onSave) {
-        await onSave(values, { productInventory: productInventoryRows });
+        await onSave(values, {
+          productInventory: productInventoryRows,
+          templateStagesPreview,
+        });
       } else {
         const { data: authData } = await supabase.auth.getUser();
         const userId = authData?.user?.id || null;
@@ -1017,9 +1036,23 @@ const SmartForm: React.FC<SmartFormProps> = ({
     message.info('این عملیات هنوز پیاده‌سازی نشده است');
   };
 
+  if (!visible) return null;
+
   return (
-    <div className="fixed inset-0 bg-black/50 z-[1300] flex items-center justify-center p-3 md:p-4 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white dark:bg-[#1e1e1e] w-full max-w-5xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+    <div
+      className={
+        displayMode === 'modal'
+          ? 'fixed inset-0 bg-black/50 z-[1300] flex items-center justify-center p-3 md:p-4 backdrop-blur-sm animate-fadeIn'
+          : 'w-full animate-fadeIn'
+      }
+    >
+      <div
+        className={
+          displayMode === 'modal'
+            ? 'bg-white dark:bg-[#1e1e1e] w-full max-w-5xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden'
+            : 'bg-white dark:bg-[#1e1e1e] w-full rounded-3xl shadow-sm border border-gray-100 dark:border-gray-800 flex flex-col overflow-hidden'
+        }
+      >
         
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-white/5">
@@ -1046,7 +1079,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
           <Button shape="circle" icon={<CloseOutlined />} onClick={onCancel} className="border-none hover:bg-red-50 hover:text-red-500" />
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar scrollbar-wide" style={{ position: 'relative', zIndex: 0 }}>
+        <div
+          className={
+            displayMode === 'modal'
+              ? 'flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar scrollbar-wide'
+              : 'flex-1 p-4 md:p-6'
+          }
+          style={{ position: 'relative', zIndex: 0 }}
+        >
           {loading && !isBulkEdit ? (
             <div className="h-full flex items-center justify-center"><Spin size="large" /></div>
           ) : (
@@ -1163,8 +1203,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
                   return (
                     <div key={block.id} className="mb-6 animate-slideUp">
-                      <Divider orientation="left" className="!border-leather-200 !text-leather-600 !font-bold !text-sm">
-                        {block.icon && <i className={`mr-2 ${block.icon}`}></i>}
+                      <Divider orientation="right" className="!border-leather-200 !text-leather-600 !font-bold !text-sm !text-right">
+                        {block.icon && <i className={`ml-2 ${block.icon}`}></i>}
                         {block.titles.fa}
                       </Divider>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1319,6 +1359,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   <SummaryCard 
                     type={summaryConfigObj?.calculationType || SummaryCalculationType.SUM_ALL_ROWS} 
                     data={currentSummaryData} 
+                    onRefresh={() => setFormData((prev) => ({ ...(prev || {}) }))}
                   />
               )}
             </Form>

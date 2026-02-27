@@ -10,6 +10,7 @@ import {
   syncCustomerLevelsByInvoiceCustomers,
   type CustomerLevelingConfig,
 } from '../../utils/customerLeveling';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 const { Text } = Typography;
 
@@ -59,7 +60,7 @@ const CustomerLevelingTab: React.FC = () => {
       const fallback = normalizeLevelingConfig(getDefaultLevelingConfig());
       form.setFieldsValue(fallback);
       setBaselineConfig(fallback);
-      message.warning(err?.message || 'بارگذاری تنظیمات سطح‌بندی با مقدار پیش‌فرض انجام شد');
+      message.warning(toFaErrorMessage(err, 'بارگذاری تنظیمات سطح‌بندی با مقدار پیش‌فرض انجام شد'));
     }
   };
 
@@ -82,7 +83,7 @@ const CustomerLevelingTab: React.FC = () => {
       setBaselineConfig(config);
       message.success('تنظیمات سطح‌بندی ذخیره شد');
     } catch (err: any) {
-      message.error(err?.message || 'خطا در ذخیره تنظیمات');
+      message.error(toFaErrorMessage(err, 'خطا در ذخیره تنظیمات'));
     } finally {
       setLoading(false);
     }
@@ -99,7 +100,7 @@ const CustomerLevelingTab: React.FC = () => {
       });
       message.success('سطح مشتریان براساس تنظیمات جدید بروزرسانی شد');
     } catch (err: any) {
-      message.error(err?.message || 'خطا در بروزرسانی سطح مشتریان');
+      message.error(toFaErrorMessage(err, 'خطا در بروزرسانی سطح مشتریان'));
     } finally {
       setSyncing(false);
     }

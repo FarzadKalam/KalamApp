@@ -9,6 +9,7 @@ import {
   type PermissionMap,
 } from '../utils/permissions';
 import { generateNextJournalEntryNo } from '../utils/journalEntryNumbering';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type FiscalYearOption = {
   id: string;
@@ -70,7 +71,7 @@ const JournalEntryCreatePage: React.FC = () => {
           });
         }
       } catch (err: any) {
-        message.error(`خطا در دریافت اطلاعات اولیه: ${err?.message || 'نامشخص'}`);
+        message.error(toFaErrorMessage(err, 'خطا در دریافت اطلاعات اولیه'));
       } finally {
         if (active) setLoading(false);
       }
@@ -105,6 +106,9 @@ const JournalEntryCreatePage: React.FC = () => {
         fiscal_year_id: values?.fiscal_year_id || null,
         description: values?.description ? String(values.description).trim() : null,
         status: 'draft',
+        source_module: initialValuesFromState?.source_module || null,
+        source_table: initialValuesFromState?.source_table || null,
+        source_record_id: initialValuesFromState?.source_record_id || null,
       };
 
       const { data: inserted, error } = await supabase
@@ -118,7 +122,7 @@ const JournalEntryCreatePage: React.FC = () => {
       navigate(`/journal_entries/${inserted.id}`);
     } catch (err: any) {
       if (Array.isArray(err?.errorFields)) return;
-      message.error(`ایجاد سند ناموفق بود: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'ایجاد سند ناموفق بود'));
     } finally {
       setCreating(false);
     }

@@ -106,7 +106,7 @@ const TaskHandoverFormsModal: React.FC<TaskHandoverFormsModalProps> = ({
       onCancel={onClose}
       width="min(1080px, calc(100vw - 24px))"
       footer={null}
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { maxHeight: '74vh', overflowY: 'auto' } }}
     >
       <div className="space-y-4">

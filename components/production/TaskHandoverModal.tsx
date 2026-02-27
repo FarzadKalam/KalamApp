@@ -288,7 +288,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
       open={open}
       onCancel={onCancel}
       confirmLoading={loading}
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}
       footer={[
         <Button key="cancel" onClick={onCancel}>
@@ -760,7 +760,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
         okText={transferDialog?.mode === 'copy' ? 'کپی' : 'جابجایی'}
         cancelText="انصراف"
         okButtonProps={{ disabled: transferTargetGroupIndex === null }}
-        destroyOnClose
+        destroyOnHidden
       >
         <div className="space-y-2">
           <div className="text-xs text-gray-600">محصول مقصد را انتخاب کنید:</div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, message, Empty, Typography, Spin, Select } from 'antd';
+import { Table, Button, Space, message, Empty, Typography, Spin, Select, Checkbox, InputNumber } from 'antd';
 import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField } from '../types';
@@ -18,6 +18,7 @@ import { buildProductFilters, runProductsQuery } from './editableTable/productio
 import { MODULES } from '../moduleRegistry';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
+import { useCurrencyConfig } from '../utils/currency';
 
 const { Text } = Typography;
 
@@ -50,6 +51,9 @@ const toSafeNumber = (raw: any): number => {
   const parsed = parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const isServiceProduct = (productType: any) => String(productType || '').trim().toLowerCase() === 'service';
+const isManualSubUnit = (subUnit: any) => String(subUnit || '').trim() === 'عدد';
 
 interface EditableTableProps {
   block: any;
@@ -97,6 +101,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isInvoicePayments = moduleId === 'invoices' && block?.id === 'payments';
   const isPurchaseInvoicePayments = moduleId === 'purchase_invoices' && block?.id === 'payments';
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
+  const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
 
   const [isEditing, setIsEditing] = useState(mode === 'local' && !isReadOnly);
@@ -108,6 +113,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [expandedProducts, setExpandedProducts] = useState<Record<string, { loading: boolean; data: any[] }>>({});
   const [shelfOptionsByRow, setShelfOptionsByRow] = useState<Record<string, { loading: boolean; options: { label: string; value: string }[] }>>({});
   const [localDynamicOptions, setLocalDynamicOptions] = useState<Record<string, any[]>>({});
+  const [eligibleReceivedChequeOptions, setEligibleReceivedChequeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [rowReloadVersion, setRowReloadVersion] = useState<Record<string, number>>({});
   const [currentProductUnits, setCurrentProductUnits] = useState<{ mainUnit: string | null; subUnit: string | null }>({ mainUnit: null, subUnit: null });
   const [currentProductStock, setCurrentProductStock] = useState<number>(0);
@@ -130,6 +136,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   }, [data, tempData, isEditing, isAnyInvoiceItems, isShelfInventoryBlock, isProductStockMovements, userToggledCollapse]);
 
   const productsModule = MODULES['products'];
+  const { label: currencyLabel } = useCurrencyConfig();
   const editableAfterSelection = new Set(['buy_price', 'length', 'width', 'usage', 'waste_rate', 'main_unit']);
   const productFieldMap: Record<string, string> = {
     leather_colors: 'colors',
@@ -402,6 +409,67 @@ const EditableTable: React.FC<EditableTableProps> = ({
     });
   }, [isInvoiceItems, isEditing, tempData, data, shelfOptionsByRow]);
 
+  useEffect(() => {
+    if (!isPurchaseInvoicePayments) return;
+    let active = true;
+    const loadEligibleCheques = async () => {
+      try {
+        const { data: rows, error } = await supabase
+          .from('cheques')
+          .select('id, serial_no, sayad_id, amount, status, metadata')
+          .eq('cheque_type', 'received')
+          .eq('status', 'new')
+          .order('created_at', { ascending: false })
+          .limit(500);
+        if (error) throw error;
+
+        const options = (rows || [])
+          .filter((row: any) => {
+            const spent = Boolean((row?.metadata || {})?.spent_out);
+            return !spent;
+          })
+          .map((row: any) => {
+            const serial = String(row?.serial_no || '').trim() || 'بدون شماره';
+            const sayad = String(row?.sayad_id || '').trim();
+            const amount = toSafeNumber(row?.amount || 0);
+            const amountLabel = amount > 0 ? ` - ${toPersianNumber(amount.toLocaleString('en-US'))} ${currencyLabel}` : '';
+            const sayadLabel = sayad ? ` (${toPersianNumber(sayad)})` : '';
+            return {
+              value: String(row.id),
+              label: `${serial}${sayadLabel}${amountLabel}`,
+            };
+          });
+
+        if (active) setEligibleReceivedChequeOptions(options);
+      } catch (err) {
+        console.warn('Could not load eligible received cheques', err);
+        if (active) setEligibleReceivedChequeOptions([]);
+      }
+    };
+    loadEligibleCheques();
+    return () => {
+      active = false;
+    };
+  }, [isPurchaseInvoicePayments, isEditing, saving]);
+
+  const isGoodsInvoiceRow = (row: any) => !isServiceProduct(row?.product_type);
+  const hasDimensions = (row: any) => isGoodsInvoiceRow(row) && !!row?.use_dimensions;
+  const shouldAutoSubQuantity = (row: any) => !isManualSubUnit(row?.sub_unit);
+  const shouldShowStackedField = (key: string, row: any) => {
+    if (isAnyInvoiceItems) {
+      if (!isGoodsInvoiceRow(row) && ['use_dimensions', 'length', 'width', 'source_shelf_id'].includes(key)) {
+        return false;
+      }
+      if (['length', 'width'].includes(key) && !hasDimensions(row)) return false;
+    }
+    if (isAnyInvoicePayments) {
+      const paymentType = String(row?.payment_type || '').trim();
+      if (key === 'spent_cheque_id' && (paymentType !== 'cheque' || !row?.use_existing_received_cheque)) return false;
+      if (key === 'use_existing_received_cheque' && paymentType !== 'cheque') return false;
+    }
+    return true;
+  };
+
   const updateRow = (index: number, key: string, value: any) => {
     const source = isEditing ? tempData : data;
     const newData = [...source];
@@ -428,22 +496,51 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     }
 
-    if (isInvoiceItems && key === 'product_id') {
+    if (isAnyInvoiceItems && key === 'product_id') {
       newData[index]['source_shelf_id'] = null;
       const rowKey = String(row.key || row.id || index);
-      if (value) {
+      if (value && isInvoiceItems) {
         loadShelvesForRow(rowKey, String(value));
       }
     }
 
-    if (isAnyInvoiceItems && ['quantity', 'main_unit', 'sub_unit'].includes(key)) {
-      const qtyMain = toSafeNumber(newData[index]?.quantity);
-      const mainUnit = String(newData[index]?.main_unit || '');
-      const subUnit = String(newData[index]?.sub_unit || '');
-      const converted = mainUnit && subUnit
-        ? convertArea(qtyMain, mainUnit as any, subUnit as any)
-        : 0;
-      newData[index]['sub_quantity'] = Number.isFinite(converted) ? converted : 0;
+    if (isAnyInvoiceItems && ['use_dimensions', 'length', 'width'].includes(key)) {
+      const current = newData[index];
+      if (hasDimensions(current)) {
+        const lengthVal = toSafeNumber(current?.length);
+        const widthVal = toSafeNumber(current?.width);
+        current.quantity = lengthVal * widthVal;
+      }
+    }
+
+    if (isAnyInvoiceItems && ['quantity', 'main_unit', 'sub_unit', 'use_dimensions', 'length', 'width'].includes(key)) {
+      const current = newData[index];
+      if (hasDimensions(current)) {
+        const lengthVal = toSafeNumber(current?.length);
+        const widthVal = toSafeNumber(current?.width);
+        current.quantity = lengthVal * widthVal;
+      }
+      if (shouldAutoSubQuantity(current)) {
+        const qtyMain = toSafeNumber(current?.quantity);
+        const mainUnit = String(current?.main_unit || '');
+        const subUnit = String(current?.sub_unit || '');
+        const converted = mainUnit && subUnit
+          ? convertArea(qtyMain, mainUnit as any, subUnit as any)
+          : 0;
+        current.sub_quantity = Number.isFinite(converted) ? converted : 0;
+      }
+    }
+
+    if (isAnyInvoicePayments && key === 'payment_type') {
+      const paymentType = String(value || '').trim();
+      if (paymentType !== 'cheque') {
+        newData[index]['use_existing_received_cheque'] = false;
+        newData[index]['spent_cheque_id'] = null;
+      }
+    }
+
+    if (isPurchaseInvoicePayments && key === 'use_existing_received_cheque' && !value) {
+      newData[index]['spent_cheque_id'] = null;
     }
 
     if (key === 'selected_product_id' && !value) {
@@ -451,7 +548,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       newData[index]['selected_product_name'] = null;
     }
 
-    if (['length', 'width'].includes(key)) {
+    if (['length', 'width'].includes(key) && !isAnyInvoiceItems) {
       const lengthVal = parseFloat(newData[index]?.length);
       const widthVal = parseFloat(newData[index]?.width);
       if (Number.isFinite(lengthVal) && Number.isFinite(widthVal)) {
@@ -539,18 +636,31 @@ const EditableTable: React.FC<EditableTableProps> = ({
           });
 
           if (isAnyInvoiceItems && key === 'product_id') {
+            currentRow.product_type = record?.product_type || currentRow.product_type || 'goods';
             currentRow.main_unit = record?.main_unit || currentRow.main_unit || null;
             currentRow.sub_unit = record?.sub_unit || currentRow.sub_unit || null;
-            const qtyMain = toSafeNumber(currentRow?.quantity);
-            const mainUnit = String(currentRow?.main_unit || '');
-            const subUnit = String(currentRow?.sub_unit || '');
-            const converted = mainUnit && subUnit
-              ? convertArea(qtyMain, mainUnit as any, subUnit as any)
-              : 0;
-            currentRow.sub_quantity = Number.isFinite(converted) ? converted : 0;
+            if (isServiceProduct(currentRow.product_type)) {
+              currentRow.use_dimensions = false;
+              currentRow.length = null;
+              currentRow.width = null;
+              currentRow.source_shelf_id = null;
+            } else if (hasDimensions(currentRow)) {
+              const lengthVal = toSafeNumber(currentRow?.length);
+              const widthVal = toSafeNumber(currentRow?.width);
+              currentRow.quantity = lengthVal * widthVal;
+            }
+            if (shouldAutoSubQuantity(currentRow)) {
+              const qtyMain = toSafeNumber(currentRow?.quantity);
+              const mainUnit = String(currentRow?.main_unit || '');
+              const subUnit = String(currentRow?.sub_unit || '');
+              const converted = mainUnit && subUnit
+                ? convertArea(qtyMain, mainUnit as any, subUnit as any)
+                : 0;
+              currentRow.sub_quantity = Number.isFinite(converted) ? converted : 0;
+            }
           }
 
-          if (isInvoiceItems && key === 'product_id') {
+          if (isAnyInvoiceItems && key === 'product_id') {
             currentRow.source_shelf_id = null;
           }
 
@@ -593,6 +703,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (isAnyInvoiceItems) {
       numericDefaults.discount_type = 'amount';
       numericDefaults.vat_type = 'percent';
+      numericDefaults.use_dimensions = false;
+      numericDefaults.product_type = 'goods';
+    }
+    if (isPurchaseInvoicePayments) {
+      numericDefaults.use_existing_received_cheque = false;
     }
 
     const newRow = {
@@ -668,12 +783,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
     });
 
     if (isAnyInvoiceItems) {
-      const qtyMain = toSafeNumber(nextRow?.quantity);
-      const mainUnit = String(nextRow?.main_unit || '');
-      const subUnit = String(nextRow?.sub_unit || '');
-      if (mainUnit && subUnit) {
-        const converted = convertArea(qtyMain, mainUnit as any, subUnit as any);
-        nextRow.sub_quantity = Number.isFinite(converted) ? converted : 0;
+      if (hasDimensions(nextRow)) {
+        const lengthVal = toSafeNumber(nextRow?.length);
+        const widthVal = toSafeNumber(nextRow?.width);
+        nextRow.quantity = lengthVal * widthVal;
+      }
+      if (shouldAutoSubQuantity(nextRow)) {
+        const qtyMain = toSafeNumber(nextRow?.quantity);
+        const mainUnit = String(nextRow?.main_unit || '');
+        const subUnit = String(nextRow?.sub_unit || '');
+        if (mainUnit && subUnit) {
+          const converted = convertArea(qtyMain, mainUnit as any, subUnit as any);
+          nextRow.sub_quantity = Number.isFinite(converted) ? converted : 0;
+        }
       }
     }
 
@@ -700,6 +822,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (isAnyInvoiceItems) {
         if (!nextRow.discount_type) nextRow.discount_type = 'amount';
         if (!nextRow.vat_type) nextRow.vat_type = 'percent';
+        if (nextRow.use_dimensions === undefined) nextRow.use_dimensions = false;
+        if (!nextRow.product_type) nextRow.product_type = 'goods';
       }
       if (isProductStockMovements) {
         if (!nextRow.voucher_type) nextRow.voucher_type = 'incoming';
@@ -730,6 +854,174 @@ const EditableTable: React.FC<EditableTableProps> = ({
       supabase: supabase as any,
       customerIds: [invoiceRow?.customer_id],
     });
+  };
+
+  const syncPaymentRowsWithCheques = async (rows: any[]) => {
+    if (!isAnyInvoicePayments || !moduleId || !recordId) return rows;
+
+    const partyField = isInvoicePayments ? 'customer_id' : 'supplier_id';
+    const accountField = isInvoicePayments ? 'target_account' : 'source_account';
+
+    const { data: sourceHeader, error: sourceError } = await supabase
+      .from(moduleId)
+      .select(partyField)
+      .eq('id', recordId)
+      .maybeSingle();
+    if (sourceError) throw sourceError;
+
+    const partyId = sourceHeader?.[partyField] ? String(sourceHeader[partyField]) : null;
+    const partyType = isInvoicePayments ? 'customer' : 'supplier';
+    const nowIso = new Date().toISOString();
+
+    const bankIds = Array.from(
+      new Set(
+        rows
+          .map((row: any) => String(row?.[accountField] || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const bankMetaById = new Map<string, { bank_name: string | null; branch_name: string | null }>();
+    if (bankIds.length > 0) {
+      const { data: banks, error: banksError } = await supabase
+        .from('bank_accounts')
+        .select('id, bank_name, branch_name')
+        .in('id', bankIds);
+      if (banksError) throw banksError;
+      (banks || []).forEach((bank: any) => {
+        const id = String(bank?.id || '').trim();
+        if (!id) return;
+        bankMetaById.set(id, {
+          bank_name: bank?.bank_name ? String(bank.bank_name) : null,
+          branch_name: bank?.branch_name ? String(bank.branch_name) : null,
+        });
+      });
+    }
+
+    const spendChequeIds = Array.from(
+      new Set(
+        rows
+          .filter((row: any) => isPurchaseInvoicePayments && String(row?.payment_type || '') === 'cheque' && !!row?.use_existing_received_cheque)
+          .map((row: any) => String(row?.spent_cheque_id || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const spendChequeById = new Map<string, any>();
+    if (spendChequeIds.length > 0) {
+      const { data: spendCheques, error: spendChequesError } = await supabase
+        .from('cheques')
+        .select('id, cheque_type, status, metadata')
+        .in('id', spendChequeIds);
+      if (spendChequesError) throw spendChequesError;
+      (spendCheques || []).forEach((cheque: any) => {
+        spendChequeById.set(String(cheque.id), cheque);
+      });
+    }
+
+    const nextRows: any[] = [];
+    for (const row of rows) {
+      const nextRow = { ...row };
+      const paymentType = String(row?.payment_type || '').trim();
+      const accountId = String(row?.[accountField] || '').trim() || null;
+      const amount = Math.abs(toSafeNumber(row?.amount));
+      const issueDate = row?.date || null;
+      const dueDate = row?.date || null;
+      const bankMeta = accountId ? bankMetaById.get(accountId) : null;
+
+      if (paymentType !== 'cheque') {
+        nextRow.use_existing_received_cheque = false;
+        nextRow.spent_cheque_id = null;
+        nextRow.cheque_id = null;
+        nextRow._auto_cheque = false;
+        nextRows.push(nextRow);
+        continue;
+      }
+
+      if (isPurchaseInvoicePayments && !!row?.use_existing_received_cheque) {
+        const spendChequeId = String(row?.spent_cheque_id || '').trim();
+        if (!spendChequeId) {
+          throw new Error('برای خرج چک، انتخاب چک دریافتی الزامی است.');
+        }
+        const spendCheque = spendChequeById.get(spendChequeId);
+        if (!spendCheque) {
+          throw new Error('چک انتخاب شده یافت نشد.');
+        }
+        const metadata = (spendCheque?.metadata && typeof spendCheque.metadata === 'object') ? spendCheque.metadata : {};
+        const alreadySpentElsewhere =
+          metadata?.spent_out === true &&
+          String(metadata?.spent_out_source_record_id || '') !== String(recordId);
+        if (String(spendCheque?.cheque_type || '') !== 'received' || String(spendCheque?.status || '') !== 'new' || alreadySpentElsewhere) {
+          throw new Error('چک انتخاب شده قابل خرج کردن نیست.');
+        }
+        const updatedMetadata = {
+          ...metadata,
+          spent_out: true,
+          spent_out_at: nowIso,
+          spent_out_source_table: moduleId,
+          spent_out_source_record_id: recordId,
+        };
+        const { error: spendUpdateError } = await supabase
+          .from('cheques')
+          .update({ metadata: updatedMetadata, updated_at: nowIso })
+          .eq('id', spendChequeId);
+        if (spendUpdateError) throw spendUpdateError;
+
+        nextRow.cheque_id = spendChequeId;
+        nextRow._auto_cheque = false;
+        nextRows.push(nextRow);
+        continue;
+      }
+
+      const chequePayload = {
+        cheque_type: isInvoicePayments ? 'received' : 'issued',
+        status: 'new',
+        amount,
+        issue_date: issueDate,
+        due_date: dueDate,
+        party_type: partyType,
+        party_id: partyId,
+        bank_account_id: accountId,
+        bank_name: bankMeta?.bank_name || null,
+        branch_name: bankMeta?.branch_name || null,
+        notes: row?.description || null,
+        metadata: {
+          auto_generated_from: {
+            table: moduleId,
+            record_id: recordId,
+            block: block?.id,
+          },
+        },
+      };
+
+      const existingChequeId = String(row?.cheque_id || '').trim();
+      const shouldUpdateExisting = !!existingChequeId && !!row?._auto_cheque;
+      let linkedChequeId = existingChequeId || null;
+
+      if (shouldUpdateExisting) {
+        const { error: updateChequeError } = await supabase
+          .from('cheques')
+          .update(chequePayload)
+          .eq('id', existingChequeId);
+        if (updateChequeError) throw updateChequeError;
+      } else {
+        const { data: insertedCheque, error: insertChequeError } = await supabase
+          .from('cheques')
+          .insert(chequePayload)
+          .select('id')
+          .single();
+        if (insertChequeError) throw insertChequeError;
+        linkedChequeId = String(insertedCheque?.id || '').trim() || null;
+      }
+
+      nextRow.use_existing_received_cheque = false;
+      nextRow.spent_cheque_id = null;
+      nextRow.cheque_id = linkedChequeId;
+      nextRow._auto_cheque = true;
+      nextRows.push(nextRow);
+    }
+
+    return nextRows;
   };
 
   const handleSave = async () => {
@@ -986,10 +1278,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
         return;
       }
 
-      const dataToSave = tempData.map(({ key, ...rest }) => ({
+      let dataToSave = tempData.map(({ key, ...rest }) => ({
         ...rest,
         total_price: calculateRow(rest, block.rowCalculationType),
       }));
+
+      if (isAnyInvoicePayments) {
+        dataToSave = await syncPaymentRowsWithCheques(dataToSave);
+      }
 
       const updatePayload: any = { [block.id]: dataToSave };
       const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
@@ -1294,106 +1590,204 @@ const EditableTable: React.FC<EditableTableProps> = ({
       ]
     : [];
 
+  const getColumnOptions = (col: any, rowKey: string, record: any) => {
+    let options = col.options;
+    if (col.dynamicOptionsCategory) {
+      options = dynamicOptions[col.dynamicOptionsCategory] || localDynamicOptions[col.dynamicOptionsCategory];
+      if (Array.isArray(options)) options = dedupeOptionsByLabel(options);
+    }
+    if (isProductStockMovements && col.key === 'source' && Array.isArray(options) && !(record as any)?._readonly) {
+      const allowed = new Set(['opening_balance', 'inventory_count', 'waste']);
+      options = options.filter((opt: any) => allowed.has(String(opt?.value || '')));
+    }
+    if (col.type === FieldType.RELATION) {
+      const specificKey = `${block.id}_${col.key}`;
+      options = relationOptions[specificKey] || relationOptions[col.key] || [];
+      if (isPurchaseInvoicePayments && col.key === 'spent_cheque_id') {
+        const selectedId = String(record?.spent_cheque_id || '').trim();
+        const selectedFallback = (relationOptions[specificKey] || relationOptions[col.key] || [])
+          .find((opt: any) => String(opt?.value || '') === selectedId);
+        const existsInEligible = eligibleReceivedChequeOptions.some((opt) => String(opt.value) === selectedId);
+        options = existsInEligible || !selectedId
+          ? eligibleReceivedChequeOptions
+          : [...eligibleReceivedChequeOptions, selectedFallback || { value: selectedId, label: selectedId }];
+      }
+      if (isInvoiceItems && col.key === 'source_shelf_id') {
+        const shelvesState = shelfOptionsByRow[rowKey];
+        options = shelvesState?.options || [];
+      }
+    }
+    return options;
+  };
+
+  const getFieldConfigForColumn = (col: any, record: any): ModuleField => {
+    const readonlyWhen = col.readonlyWhen as { field?: string; equals?: unknown } | undefined;
+    const readonlyByCondition =
+      !!readonlyWhen?.field &&
+      Object.prototype.hasOwnProperty.call(record || {}, readonlyWhen.field) &&
+      (record as any)[readonlyWhen.field] === readonlyWhen.equals;
+
+    const dynamicReadonlyByInvoice =
+      (isAnyInvoiceItems && col.key === 'source_shelf_id' && (!record?.product_id || isServiceProduct(record?.product_type)))
+      || (isAnyInvoiceItems && col.key === 'quantity' && hasDimensions(record))
+      || (isAnyInvoiceItems && ['length', 'width'].includes(col.key) && !hasDimensions(record))
+      || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit));
+
+    const baseReadonly = Boolean(col.readonly)
+      && !(isAnyInvoiceItems && col.key === 'sub_quantity' && isManualSubUnit(record?.sub_unit));
+
+    return {
+      key: col.key,
+      type: col.type,
+      labels: { fa: col.title, en: col.key },
+      options: col.options,
+      relationConfig: col.relationConfig,
+      dynamicOptionsCategory: col.dynamicOptionsCategory,
+      readonly: baseReadonly
+        || (isProductStockMovements && (record as any)?._readonly)
+        || (isProductStockMovements && ['invoice_id', 'production_order_id', 'created_by_name', 'created_at', 'main_unit', 'sub_unit'].includes(col.key))
+        || (isProductStockMovements && col.key === 'source' && (record as any)?._readonly)
+        || (isProductStockMovements && col.key === 'from_shelf_id' && String((record as any)?.voucher_type || '') === 'incoming')
+        || (isProductStockMovements && col.key === 'to_shelf_id' && String((record as any)?.voucher_type || '') === 'outgoing')
+        || ((record as any)?._lockedFields || []).includes(col.key)
+        || (isProductionOrder && isBomItemBlock && (record as any)?.selected_product_id && !editableAfterSelection.has(col.key))
+        || readonlyByCondition
+        || dynamicReadonlyByInvoice,
+    };
+  };
+
+  const renderColumnEditor = (col: any, record: any, index: number, text?: any) => {
+    const rowKey = getRowKey(record);
+    const value = text !== undefined ? text : (record as any)?.[col.key];
+    const fieldConfig = getFieldConfigForColumn(col, record);
+    const options = getColumnOptions(col, rowKey, record);
+
+    if (fieldConfig.readonly) {
+      return (
+        <SmartFieldRenderer
+          field={fieldConfig}
+          value={value}
+          onChange={() => undefined}
+          forceEditMode={false}
+          options={options}
+          compactMode={true}
+          moduleId={moduleId}
+          recordId={recordId}
+        />
+      );
+    }
+
+    const handleChange = (val: any) => {
+      if (col.type === FieldType.RELATION) {
+        handleRelationChange(index, col.key, val, col.relationConfig);
+      } else {
+        updateRow(index, col.key, val);
+      }
+    };
+
+    const typeKey = col.key === 'discount' ? 'discount_type' : col.key === 'vat' ? 'vat_type' : null;
+    const typeValue = typeKey ? (record as any)[typeKey] : null;
+    const isMovementQty = isProductStockMovements && col.key === 'main_quantity' && !isEditing;
+    const movementType = String((record as any)?.voucher_type || '');
+    const movementColor = movementType === 'incoming' ? 'text-green-600' : movementType === 'outgoing' ? 'text-red-600' : 'text-blue-600';
+
+    if (isMovementQty) {
+      return <span className={`persian-number font-bold ${movementColor}`}>{toPersianNumber(value || 0)}</span>;
+    }
+
+    if (isAnyInvoiceItems && col.key === 'use_dimensions') {
+      const disabled = Boolean(fieldConfig.readonly) || isServiceProduct(record?.product_type);
+      if (disabled) {
+        return (
+          <SmartFieldRenderer
+            field={fieldConfig}
+            value={value}
+            onChange={() => undefined}
+            forceEditMode={false}
+            options={options}
+            compactMode={true}
+            moduleId={moduleId}
+            recordId={recordId}
+          />
+        );
+      }
+      return (
+        <div className="flex flex-col gap-1">
+          <Checkbox
+            checked={!!value}
+            disabled={disabled}
+            onChange={(event) => updateRow(index, 'use_dimensions', event.target.checked)}
+          />
+          {!!record?.use_dimensions && !isServiceProduct(record?.product_type) && (
+            <div className="grid grid-cols-2 gap-1">
+              <InputNumber
+                min={0}
+                controls={false}
+                placeholder="طول"
+                className="w-full min-w-[76px]"
+                value={record?.length ?? null}
+                disabled={disabled}
+                onChange={(val) => updateRow(index, 'length', val ?? 0)}
+              />
+              <InputNumber
+                min={0}
+                controls={false}
+                placeholder="عرض"
+                className="w-full min-w-[76px]"
+                value={record?.width ?? null}
+                disabled={disabled}
+                onChange={(val) => updateRow(index, 'width', val ?? 0)}
+              />
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-1 w-full min-w-0 max-w-full overflow-hidden">
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <SmartFieldRenderer
+            field={fieldConfig}
+            value={value}
+            onChange={handleChange}
+            forceEditMode={isEditing}
+            options={options}
+            compactMode={true}
+            moduleId={moduleId}
+            recordId={recordId}
+          />
+        </div>
+        {col.type === FieldType.PERCENTAGE_OR_AMOUNT && typeKey && (
+          <Button
+            size="small"
+            type="text"
+            onClick={() => {
+              const nextType = typeValue === 'percent' ? 'amount' : 'percent';
+              updateRow(index, typeKey, nextType);
+            }}
+            title={typeValue === 'percent' ? 'درصد' : 'مبلغ'}
+            className="px-1"
+          >
+            {typeValue === 'percent' ? '٪' : currencyLabel}
+          </Button>
+        )}
+      </div>
+    );
+  };
+
+  const tableVisibleColumns = isAnyInvoiceItems
+    ? visibleColumns.filter((col: any) => !['description', 'source_shelf_id', 'length', 'width'].includes(col.key))
+    : visibleColumns;
+
   const columns = [
     ...selectionColumns,
-    ...(visibleColumns.map((col: any) => ({
+    ...(tableVisibleColumns.map((col: any) => ({
       title: col.title,
       dataIndex: col.key,
       key: col.key,
       width: getColWidth(col),
-      render: (text: any, record: any, index: number) => {
-        const rowKey = getRowKey(record);
-
-        const readonlyWhen = col.readonlyWhen as { field?: string; equals?: unknown } | undefined;
-        const readonlyByCondition =
-          !!readonlyWhen?.field &&
-          Object.prototype.hasOwnProperty.call(record || {}, readonlyWhen.field) &&
-          (record as any)[readonlyWhen.field] === readonlyWhen.equals;
-
-        const fieldConfig: ModuleField = {
-          key: col.key,
-          type: col.type,
-          labels: { fa: col.title, en: col.key },
-          options: col.options,
-          relationConfig: col.relationConfig,
-          dynamicOptionsCategory: col.dynamicOptionsCategory,
-          readonly: col.readonly
-            || (isProductStockMovements && (record as any)?._readonly)
-            || (isProductStockMovements && ['invoice_id', 'production_order_id', 'created_by_name', 'created_at', 'main_unit', 'sub_unit'].includes(col.key))
-            || (isProductStockMovements && col.key === 'source' && (record as any)?._readonly)
-            || (isProductStockMovements && col.key === 'from_shelf_id' && String((record as any)?.voucher_type || '') === 'incoming')
-            || (isProductStockMovements && col.key === 'to_shelf_id' && String((record as any)?.voucher_type || '') === 'outgoing')
-            || ((record as any)?._lockedFields || []).includes(col.key)
-            || (isProductionOrder && isBomItemBlock && (record as any)?.selected_product_id && !editableAfterSelection.has(col.key))
-            || readonlyByCondition
-            || (isInvoiceItems && col.key === 'source_shelf_id' && !record?.product_id),
-        };
-
-        let options = col.options;
-        if (col.dynamicOptionsCategory) {
-          options = dynamicOptions[col.dynamicOptionsCategory] || localDynamicOptions[col.dynamicOptionsCategory];
-          if (Array.isArray(options)) options = dedupeOptionsByLabel(options);
-        }
-        if (isProductStockMovements && col.key === 'source' && Array.isArray(options) && !(record as any)?._readonly) {
-          const allowed = new Set(['opening_balance', 'inventory_count', 'waste']);
-          options = options.filter((opt: any) => allowed.has(String(opt?.value || '')));
-        }
-        if (col.type === FieldType.RELATION) {
-          const specificKey = `${block.id}_${col.key}`;
-          options = relationOptions[specificKey] || relationOptions[col.key] || [];
-          if (isInvoiceItems && col.key === 'source_shelf_id') {
-            const shelvesState = shelfOptionsByRow[rowKey];
-            options = shelvesState?.options || [];
-          }
-        }
-
-        const handleChange = (val: any) => {
-          if (col.type === FieldType.RELATION) {
-            handleRelationChange(index, col.key, val, col.relationConfig);
-          } else {
-            updateRow(index, col.key, val);
-          }
-        };
-
-        const typeKey = col.key === 'discount' ? 'discount_type' : col.key === 'vat' ? 'vat_type' : null;
-        const typeValue = typeKey ? (record as any)[typeKey] : null;
-        const isMovementQty = isProductStockMovements && col.key === 'main_quantity' && !isEditing;
-        const movementType = String((record as any)?.voucher_type || '');
-        const movementColor = movementType === 'incoming' ? 'text-green-600' : movementType === 'outgoing' ? 'text-red-600' : 'text-blue-600';
-
-        if (isMovementQty) {
-          return <span className={`persian-number font-bold ${movementColor}`}>{toPersianNumber(text || 0)}</span>;
-        }
-
-        return (
-          <div className="flex items-center gap-1 w-full min-w-0 max-w-full overflow-hidden">
-            <div className="flex-1 min-w-0 overflow-hidden">
-              <SmartFieldRenderer
-                field={fieldConfig}
-                value={text}
-                onChange={handleChange}
-                forceEditMode={isEditing}
-                options={options}
-                compactMode={true}
-              />
-            </div>
-            {col.type === FieldType.PERCENTAGE_OR_AMOUNT && typeKey && (
-              <Button
-                size="small"
-                type="text"
-                onClick={() => {
-                  const nextType = typeValue === 'percent' ? 'amount' : 'percent';
-                  updateRow(index, typeKey, nextType);
-                }}
-                title={typeValue === 'percent' ? 'درصد' : 'مبلغ'}
-                className="px-1"
-              >
-                {typeValue === 'percent' ? '٪' : (isAnyInvoiceItems ? 'تومان' : 'ریال')}
-              </Button>
-            )}
-          </div>
-        );
-      },
+      render: (text: any, record: any, index: number) => renderColumnEditor(col, record, index, text),
     })) || []),
     ...(isEditing
         ? [
@@ -1424,6 +1818,141 @@ const EditableTable: React.FC<EditableTableProps> = ({
         ]
       : []),
   ];
+
+  const sourceRows = isEditing ? tempData : data;
+  const invoiceSupplementaryColumns = isAnyInvoiceItems
+    ? (visibleColumns.filter((col: any) => ['source_shelf_id', 'description'].includes(col.key)))
+    : [];
+  const invoiceExpandedRowKeys = isAnyInvoiceItems
+    ? sourceRows.map((row: any, idx: number) => String(row?.key || row?.id || idx))
+    : [];
+  const stackedRowGroupA = ['attachment', 'payment_type', 'status', 'date', 'amount'];
+  const stackedRowGroupB = isInvoicePayments
+    ? ['target_account', 'responsible_id', 'description']
+    : ['source_account', 'use_existing_received_cheque', 'spent_cheque_id', 'responsible_id', 'description'];
+  const stackedColumnsByKey = new Map(visibleColumns.map((col: any) => [col.key, col]));
+
+  const renderStackedField = (row: any, rowIndex: number, key: string) => {
+    const col = stackedColumnsByKey.get(key);
+    if (!col) return null;
+    if (!shouldShowStackedField(key, row)) return null;
+    return (
+      <div key={`${getRowKey(row)}_${key}`} className="min-w-[170px] flex-1">
+        <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">{col.title}</div>
+        {renderColumnEditor(col, row, rowIndex)}
+      </div>
+    );
+  };
+
+  const renderStackedSummary = () => {
+    if (!useStackedInvoiceRows) return null;
+    if (isAnyInvoicePayments) {
+      const totalAmount = sourceRows.reduce((sum: number, row: any) => sum + (parseFloat(row?.amount) || 0), 0);
+      const totalReceived = sourceRows.reduce((sum: number, row: any) => (
+        String(row?.status || '') === 'received' ? sum + (parseFloat(row?.amount) || 0) : sum
+      ), 0);
+      return (
+        <div className="mt-4 rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs text-gray-700 dark:text-gray-100 bg-gray-50 dark:bg-[#171717] flex flex-wrap gap-4">
+          <span>جمع مبلغ: <span className="persian-number font-semibold">{toPersianNumber(totalAmount.toLocaleString('en-US'))}</span></span>
+          <span>جمع نهایی وضعیت انجام‌شده: <span className="persian-number font-semibold">{toPersianNumber(totalReceived.toLocaleString('en-US'))}</span></span>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const tableExpandable = isProductionOrder && isBomItemBlock
+    ? {
+        expandedRowKeys,
+        onExpandedRowsChange: (keys: readonly React.Key[]) => setExpandedRowKeys(keys as React.Key[]),
+        onExpand: (expanded: boolean, record: any) => {
+          if (expanded) {
+            const rowKey = getRowKey(record);
+            loadProductsForRow(rowKey, record, { resetPage: true });
+            if (record?.selected_product_id) {
+              loadShelvesForRow(rowKey, record.selected_product_id);
+            }
+          }
+        },
+        expandedRowRender: (record: any) => {
+          const rowKey = getRowKey(record);
+          const rowIndex = resolveRowIndex(rowKey);
+          const productsState = expandedProducts[rowKey];
+          const selectedProductId = record?.selected_product_id;
+
+          const filterColumns = (block.tableColumns || [])
+            .filter((col: any) => col.filterable)
+            .map((col: any) => col.key);
+          const productFieldKeys = (productsModule?.fields || []).map((f: any) => f.key) || [];
+          const specsColumns = filterColumns.filter((key: string) => productFieldKeys.includes(key));
+
+          const baseColumns = ['image_url', 'name', 'system_code'];
+          const tailColumns = ['stock', 'buy_price', 'sell_price'];
+          const orderedColumns = Array.from(new Set([...baseColumns, ...specsColumns, ...tailColumns]));
+          const resolvedColumns = orderedColumns.filter((key) => productFieldKeys.includes(key));
+          const fallbackColumns = resolvedColumns.length > 0 ? resolvedColumns : ['name'];
+
+          return (
+            <div className="bg-gray-50 dark:bg-[#121212] py-3 px-0 rounded-lg border border-gray-200 dark:border-gray-700">
+              {productsState?.loading ? (
+                <div className="py-6 flex items-center justify-center"><Spin /></div>
+              ) : (
+                <div className="smarttable-shell">
+                  <SmartTableRenderer
+                    key={`products-${rowKey}-${rowReloadVersion[rowKey] || 0}`}
+                    moduleConfig={productsModule}
+                    data={productsState?.data || []}
+                    loading={false}
+                    relationOptions={relationOptions}
+                    dynamicOptions={dynamicOptions}
+                    containerClassName="smarttable-shell-inner"
+                    tableLayout="auto"
+                    disableScroll={true}
+                    visibleColumns={fallbackColumns}
+                    pagination={{ pageSize: 5, position: ['bottomCenter'], size: 'small', showSizeChanger: false }}
+                    rowSelection={{
+                      type: 'radio',
+                      selectedRowKeys: selectedProductId ? [selectedProductId] : [],
+                      onChange: (_keys: any[], rows: any[]) => {
+                        const selected = rows?.[0];
+                        if (rowIndex < 0) return;
+                        applySelectedProduct(rowIndex, rowKey, selected);
+                      },
+                    }}
+                  />
+                </div>
+              )}
+
+            </div>
+          );
+        },
+      }
+    : isAnyInvoiceItems
+      ? {
+          expandedRowKeys: invoiceExpandedRowKeys,
+          showExpandColumn: false,
+          rowExpandable: () => true,
+          expandedRowRender: (record: any) => {
+            const rowKey = getRowKey(record);
+            const rowIndex = resolveRowIndex(rowKey);
+            return (
+              <div className="px-2 py-2 bg-gray-50 dark:bg-[#161616] border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {invoiceSupplementaryColumns.map((col: any) => (
+                    <div
+                      key={`${rowKey}_${col.key}`}
+                      className={col.key === 'description' ? 'max-w-[420px]' : col.key === 'source_shelf_id' ? 'max-w-[320px]' : ''}
+                    >
+                      <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">{col.title}</div>
+                      {renderColumnEditor(col, record, rowIndex)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          },
+        }
+      : undefined;
 
   if (loadingData) return <div className="p-10 text-center"><Spin /></div>;
 
@@ -1458,6 +1987,53 @@ const EditableTable: React.FC<EditableTableProps> = ({
       </div>
 
       {!isCollapsed && (
+        useStackedInvoiceRows ? (
+          <div className="space-y-3">
+            {sourceRows.length === 0 ? (
+              <Empty description="لیست خالی است" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              sourceRows.map((row: any, rowIndex: number) => (
+                <div
+                  key={row.key || row.id || `${block.id}_${rowIndex}`}
+                  className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-gradient-to-r from-white to-gray-50 dark:from-[#1c1c1c] dark:to-[#181818] p-3"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <Text className="text-xs text-gray-500 dark:text-gray-300">ردیف {toPersianNumber(rowIndex + 1)}</Text>
+                    {isEditing && (
+                      <Space size={0}>
+                        {block?.allowRowCopy ? (
+                          <Button
+                            type="text"
+                            icon={<CopyOutlined />}
+                            onClick={() => copyRow(rowIndex)}
+                            disabled={isProductStockMovements && row?._readonly}
+                          />
+                        ) : null}
+                        <Button
+                          danger
+                          type="text"
+                          icon={<DeleteOutlined />}
+                          onClick={() => removeRow(rowIndex)}
+                          disabled={isProductStockMovements && row?._readonly}
+                        />
+                      </Space>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    {stackedRowGroupA.map((key) => renderStackedField(row, rowIndex, key))}
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 flex flex-wrap gap-3">
+                    {stackedRowGroupB.map((key) => renderStackedField(row, rowIndex, key))}
+                  </div>
+                </div>
+              ))
+            )}
+            {(isEditing || mode === 'local') && !isReadOnly && (
+              <Button type="dashed" block icon={<PlusOutlined />} onClick={addRow}>افزودن ردیف جدید</Button>
+            )}
+            {renderStackedSummary()}
+          </div>
+        ) : (
         <Table
           dataSource={isEditing ? tempData : data}
           columns={columns}
@@ -1468,71 +2044,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           className="custom-erp-table font-medium editable-table-main"
           tableLayout="auto"
           scroll={{ x: 'max-content' }}
-          expandable={isProductionOrder && isBomItemBlock ? {
-            expandedRowKeys,
-            onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as React.Key[]),
-            onExpand: (expanded, record) => {
-              if (expanded) {
-                const rowKey = getRowKey(record);
-                loadProductsForRow(rowKey, record, { resetPage: true });
-                if (record?.selected_product_id) {
-                  loadShelvesForRow(rowKey, record.selected_product_id);
-                }
-              }
-            },
-            expandedRowRender: (record: any) => {
-              const rowKey = getRowKey(record);
-              const rowIndex = resolveRowIndex(rowKey);
-              const productsState = expandedProducts[rowKey];
-              const selectedProductId = record?.selected_product_id;
-
-              const filterColumns = (block.tableColumns || [])
-                .filter((col: any) => col.filterable)
-                .map((col: any) => col.key);
-              const productFieldKeys = (productsModule?.fields || []).map((f: any) => f.key) || [];
-              const specsColumns = filterColumns.filter((key: string) => productFieldKeys.includes(key));
-
-              const baseColumns = ['image_url', 'name', 'system_code'];
-              const tailColumns = ['stock', 'buy_price', 'sell_price'];
-              const orderedColumns = Array.from(new Set([...baseColumns, ...specsColumns, ...tailColumns]));
-              const resolvedColumns = orderedColumns.filter((key) => productFieldKeys.includes(key));
-              const fallbackColumns = resolvedColumns.length > 0 ? resolvedColumns : ['name'];
-
-              return (
-                <div className="bg-gray-50 dark:bg-[#121212] py-3 px-0 rounded-lg border border-gray-200 dark:border-gray-700">
-                  {productsState?.loading ? (
-                    <div className="py-6 flex items-center justify-center"><Spin /></div>
-                  ) : (
-                    <div className="smarttable-shell">
-                      <SmartTableRenderer
-                        key={`products-${rowKey}-${rowReloadVersion[rowKey] || 0}`}
-                        moduleConfig={productsModule}
-                        data={productsState?.data || []}
-                        loading={false}
-                        relationOptions={relationOptions}
-                        dynamicOptions={dynamicOptions}
-                        containerClassName="smarttable-shell-inner"
-                        tableLayout="auto"
-                        disableScroll={true}
-                        visibleColumns={fallbackColumns}
-                        pagination={{ pageSize: 5, position: ['bottomCenter'], size: 'small', showSizeChanger: false }}
-                        rowSelection={{
-                          type: 'radio',
-                          selectedRowKeys: selectedProductId ? [selectedProductId] : [],
-                          onChange: (_keys: any[], rows: any[]) => {
-                            const selected = rows?.[0];
-                            if (rowIndex < 0) return;
-                            applySelectedProduct(rowIndex, rowKey, selected);
-                          },
-                        }}
-                      />
-                    </div>
-                  )}
-
-                </div>
-              );
-            },
-          } : undefined}
+          expandable={tableExpandable as any}
           footer={(isEditing || mode === 'local') && !isReadOnly ? () => (
             <Button type="dashed" block icon={<PlusOutlined />} onClick={addRow}>افزودن ردیف جدید</Button>
           ) : undefined}
@@ -1590,7 +2102,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 return;
               }
 
-              if (col.showTotal || ['total_price', 'amount', 'quantity', 'usage', 'stock'].includes(col.key)) {
+              if (col.showTotal || ['total_price', 'amount', 'quantity', 'sub_quantity', 'unit_price', 'usage', 'stock'].includes(col.key)) {
                 let total = 0;
                 if (isAnyInvoiceItems && (col.key === 'discount' || col.key === 'vat')) {
                   total = pageData.reduce((prev: number, current: any) => {
@@ -1628,6 +2140,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             );
           }}
         />
+        )
       )}
       <style>{`
         .ant-table-expanded-row > td {

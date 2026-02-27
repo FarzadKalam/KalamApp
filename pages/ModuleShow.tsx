@@ -37,11 +37,13 @@ import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWork
 import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 import { canAccessAssignedRecord } from '../utils/permissions';
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from '../utils/recordCopy';
+import { useCurrencyConfig } from '../utils/currency';
 
 const ModuleShow: React.FC = () => {
   const { moduleId = 'products', id } = useParams();
   const navigate = useNavigate();
   const { message: msg, modal } = App.useApp();
+  const { label: currencyLabel } = useCurrencyConfig();
   const moduleConfig = MODULES[moduleId];
 
   const [data, setData] = useState<any>(null);
@@ -64,9 +66,13 @@ const ModuleShow: React.FC = () => {
   const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
   const bomCopyPromptRef = useRef<string | null>(null);
   const processTemplatePromptRef = useRef<string | null>(null);
-  const processDraftFieldKey = moduleId === 'projects'
-    ? 'execution_process_draft'
-    : (moduleId === 'marketing_leads' ? 'marketing_process_draft' : null);
+  const processDraftFieldKey = useMemo(() => {
+    if (!moduleConfig?.fields?.length) return null;
+    const hasProcessTemplateField = moduleConfig.fields.some((f: any) => String(f?.key || '') === 'process_template_id');
+    if (!hasProcessTemplateField) return null;
+    const knownDraftKeys = ['execution_process_draft', 'marketing_process_draft', 'production_stages_draft'];
+    return knownDraftKeys.find((key) => moduleConfig.fields.some((f: any) => String(f?.key || '') === key)) || null;
+  }, [moduleConfig?.fields]);
   const [productionModal, setProductionModal] = useState<'start' | 'stop' | 'complete' | null>(null);
   const [productionShelfOptions, setProductionShelfOptions] = useState<{ label: string; value: string }[]>([]);
   const [sourceShelfOptionsByProduct, setSourceShelfOptionsByProduct] = useState<Record<string, { label: string; value: string; stock?: number }[]>>({});
@@ -76,7 +82,7 @@ const ModuleShow: React.FC = () => {
   const [outputProductId, setOutputProductId] = useState<string | null>(null);
   const [outputShelfId, setOutputShelfId] = useState<string | null>(null);
   const [isCreateProductOpen, setIsCreateProductOpen] = useState(false);
-  const [outputProductType, setOutputProductType] = useState<'semi' | 'final' | null>(null);
+  const [outputProductType, setOutputProductType] = useState<'goods' | null>(null);
   const [outputMode, setOutputMode] = useState<'existing' | 'new'>('existing');
   const [productionQuantityPreview, setProductionQuantityPreview] = useState<number | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -626,9 +632,16 @@ const ModuleShow: React.FC = () => {
 
   const fetchBaseInfo = useCallback(async () => {
       const { data: users } = await supabase.from('profiles').select('id, full_name, avatar_url');
-      const { data: roles } = await supabase.from('org_roles').select('id, title');
+      const { data: roles } = await supabase.from('org_roles').select('*');
       if (users) setAllUsers(users);
-      if (roles) setAllRoles(roles);
+      if (roles) {
+        setAllRoles(
+          roles.map((role: any) => ({
+            ...role,
+            title: role?.title || role?.name || role?.id,
+          }))
+        );
+      }
   }, []);
 
   useEffect(() => {
@@ -1163,10 +1176,22 @@ const ModuleShow: React.FC = () => {
             try {
               const isShelvesTarget = dependsOnValue === 'shelves';
               const extraSelect = isShelvesTarget ? ', shelf_number' : '';
-              const { data: relData } = await supabase
+              let { data: relData, error: relError } = await supabase
                 .from(dependsOnValue)
                 .select(`id, ${targetField}, system_code${extraSelect}`)
                 .limit(200);
+              if (relError) {
+                const errorCode = String((relError as any)?.code || '').toUpperCase();
+                const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
+                const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+                if (!isMissingColumn) throw relError;
+                const fallback = await supabase
+                  .from(dependsOnValue)
+                  .select(`id, ${targetField}${extraSelect}`)
+                  .limit(200);
+                if (fallback.error) throw fallback.error;
+                relData = fallback.data;
+              }
               if (relData) {
                 const options = relData.map((i: any) => {
                   const baseLabel = i?.[targetField] || i?.shelf_number || i?.system_code || i?.id;
@@ -1196,7 +1221,21 @@ const ModuleShow: React.FC = () => {
               .select(`id, ${targetField}, system_code${extraSelect}${filterSelect}`)
               .limit(200);
             if (filter) query = query.match(filter);
-            const { data: relData } = await query;
+            let { data: relData, error: relError } = await query;
+            if (relError) {
+              const errorCode = String((relError as any)?.code || '').toUpperCase();
+              const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
+              const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+              if (!isMissingColumn) throw relError;
+              let fallbackQuery = supabase
+                .from(targetModule)
+                .select(`id, ${targetField}${extraSelect}${filterSelect}`)
+                .limit(200);
+              if (filter) fallbackQuery = fallbackQuery.match(filter);
+              const fallback = await fallbackQuery;
+              if (fallback.error) throw fallback.error;
+              relData = fallback.data;
+            }
             if (relData) {
               const options = relData.map((i: any) => {
                 const baseLabel = i?.[targetField] || i?.shelf_number || i?.system_code || i?.id;
@@ -1769,7 +1808,75 @@ const ModuleShow: React.FC = () => {
     return a === b;
   };
 
-  const handleSmartFormSave = useCallback(async (values: any) => {
+  const isUuid = useCallback((value: any) => (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(String(value || ''))
+  ), []);
+
+  const syncProcessTemplateStages = useCallback(async (templateId: string, rawStages: any[]) => {
+    const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
+      id: isUuid(stage?.id) ? String(stage.id) : null,
+      stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
+      sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+      wage: Number(stage?.wage || 0),
+      default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
+      default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
+    }));
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from('process_template_stages')
+      .select('id')
+      .eq('template_id', templateId);
+    if (existingError) throw existingError;
+
+    const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
+    const keptExistingIds = new Set(
+      nextStages
+        .map((stage) => stage.id)
+        .filter((stageId): stageId is string => Boolean(stageId && existingIds.has(stageId)))
+    );
+    const removeIds = Array.from(existingIds).filter((stageId) => !keptExistingIds.has(stageId));
+    if (removeIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('process_template_stages')
+        .delete()
+        .in('id', removeIds);
+      if (deleteError) throw deleteError;
+    }
+
+    for (const stage of nextStages) {
+      if (stage.id && existingIds.has(stage.id)) {
+        const { error: updateError } = await supabase
+          .from('process_template_stages')
+          .update({
+            stage_name: stage.stage_name,
+            sort_order: stage.sort_order,
+            wage: stage.wage,
+            default_assignee_id: stage.default_assignee_id,
+            default_assignee_role_id: stage.default_assignee_role_id,
+          })
+          .eq('id', stage.id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertError } = await supabase
+          .from('process_template_stages')
+          .insert({
+            template_id: templateId,
+            stage_name: stage.stage_name,
+            sort_order: stage.sort_order,
+            wage: stage.wage,
+            default_assignee_id: stage.default_assignee_id,
+            default_assignee_role_id: stage.default_assignee_role_id,
+          });
+        if (insertError) throw insertError;
+      }
+    }
+  }, [isUuid]);
+
+  const handleSmartFormSave = useCallback(async (
+    values: any,
+    meta?: { templateStagesPreview?: any[] }
+  ) => {
     try {
       if (!id) return;
       const previous = data || {};
@@ -1777,6 +1884,9 @@ const ModuleShow: React.FC = () => {
       const changedKeys = Object.keys(values).filter((k) => !areValuesEqual(values[k], previous[k]));
 
       await supabase.from(moduleId).update(values).eq('id', id);
+      if (moduleId === 'process_templates') {
+        await syncProcessTemplateStages(String(id), meta?.templateStagesPreview || []);
+      }
 
       if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
         const { data: authData } = await supabase.auth.getUser();
@@ -1814,7 +1924,7 @@ const ModuleShow: React.FC = () => {
     } catch (err: any) {
       msg.error(err.message);
     }
-  }, [data, fetchRecord, id, logFieldChange, moduleId, msg]);
+  }, [data, fetchRecord, id, logFieldChange, moduleId, msg, syncProcessTemplateStages]);
 
   const handleIssueAccountingEntry = useCallback(async () => {
     if (issueAccountingLoading) return;
@@ -1943,24 +2053,13 @@ const ModuleShow: React.FC = () => {
     };
 
     const productType = record?.product_type;
-    if (productType === 'raw') {
+    if (productType === 'goods') {
       addPart(getFieldValueLabel('category', record?.category));
-      const category = record?.category;
-      const specKeys = category === 'leather'
-        ? ['leather_type', 'leather_colors', 'leather_finish_1', 'leather_effect', 'leather_sort']
-        : category === 'lining'
-          ? ['lining_material', 'lining_color', 'lining_width']
-          : category === 'accessory'
-            ? ['acc_material']
-            : category === 'fitting'
-              ? ['fitting_type', 'fitting_colors', 'fitting_size']
-              : [];
-      specKeys.forEach(key => addPart(getFieldValueLabel(key, record?.[key])));
-    } else {
+    } else if (productType === 'service') {
       addPart(getFieldValueLabel('product_category', record?.product_category));
-      if (record?.related_bom) {
-        addPart(getFieldValueLabel('related_bom', record?.related_bom));
-      }
+    } else {
+      addPart(getFieldValueLabel('category', record?.category));
+      addPart(getFieldValueLabel('product_category', record?.product_category));
     }
     addPart(getFieldValueLabel('brand_name', record?.brand_name));
 
@@ -2022,7 +2121,7 @@ const ModuleShow: React.FC = () => {
     if (value === null || value === undefined) return '';
     if (Array.isArray(value)) return value.join('، ');
     if (field.type === FieldType.CHECKBOX) return value ? 'بله' : 'خیر';
-    if (field.type === FieldType.PRICE) return `${Number(value).toLocaleString()} ریال`;
+    if (field.type === FieldType.PRICE) return `${Number(value).toLocaleString()} ${currencyLabel}`;
     if (field.type === FieldType.PERCENTAGE) return `${value}%`;
     if (field.type === FieldType.DATE) {
       return formatPersian(value, 'DATE') || String(value);
@@ -2401,12 +2500,10 @@ const ModuleShow: React.FC = () => {
   const buildNewProductInitialValues = () => {
     return {
       name: data?.name || '',
-      product_type: outputProductType || 'final',
-      product_category: data?.product_category || null,
-      related_bom: data?.bom_id || null,
-      production_order_id: id || null,
-      grid_materials: data?.grid_materials || [],
-      product_inventory: [],
+      product_type: outputProductType || 'goods',
+      category: data?.product_category || null,
+      product_category: null,
+      auto_name_enabled: true,
     } as any;
   };
 
@@ -2857,6 +2954,7 @@ const ModuleShow: React.FC = () => {
           module={moduleConfig}
           visible={isEditDrawerOpen}
           recordId={id}
+          initialValues={data || {}}
           onSave={handleSmartFormSave}
           onCancel={() => {
             setIsEditDrawerOpen(false);
@@ -2913,7 +3011,7 @@ const ModuleShow: React.FC = () => {
             okText="توقف تولید"
             cancelText="انصراف"
             confirmLoading={statusLoading}
-            destroyOnClose
+            destroyOnHidden
           >
             <div className="text-sm text-gray-600 whitespace-pre-line">
               {PRODUCTION_MESSAGES.stopNotice}
@@ -2928,7 +3026,7 @@ const ModuleShow: React.FC = () => {
             okText={outputMode === 'existing' ? 'ثبت تکمیل' : undefined}
             cancelText="انصراف"
             confirmLoading={statusLoading}
-            destroyOnClose
+            destroyOnHidden
             footer={outputMode === 'existing' ? undefined : null}
           >
             <div className="space-y-4">
@@ -2971,8 +3069,7 @@ const ModuleShow: React.FC = () => {
                     setOutputProductId(null);
                   }}
                   options={[
-                    { label: 'بسته نیمه آماده', value: 'semi' },
-                    { label: 'محصول نهایی', value: 'final' },
+                    { label: 'کالا', value: 'goods' },
                   ]}
                   className="w-full"
                   getPopupContainer={() => document.body}

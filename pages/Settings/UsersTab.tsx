@@ -1,11 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Table, Button, Select, message, Switch, Avatar, Drawer, Form, Input, Upload } from 'antd';
 import { UserOutlined, PlusOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
-import { createClient } from '@supabase/supabase-js';
-import { supabase } from '../../supabaseClient';
+import { supabase, supabaseSignUpClient } from '../../supabaseClient';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
+const SYSTEM_ROLE_FA_LABELS: Record<string, string> = {
+  super_admin: 'مدیر ارشد',
+  admin: 'مدیر سیستم',
+  manager: 'مدیر',
+  viewer: 'مشاهده‌گر',
+};
 
 const UsersTab: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);
@@ -18,18 +23,6 @@ const UsersTab: React.FC = () => {
     const [editingUser, setEditingUser] = useState<any | null>(null);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
     const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
-    const authSignUpClient = useMemo(
-        () =>
-            createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
-                auth: {
-                    persistSession: false,
-                    autoRefreshToken: false,
-                    detectSessionInUrl: false,
-                },
-            }),
-        []
-    );
-
     useEffect(() => {
         fetchData();
         loadCurrentUser();
@@ -79,6 +72,11 @@ const UsersTab: React.FC = () => {
   };
 
     const canManageUsers = ['super_admin', 'admin', 'manager'].includes(String(currentUserRole || '').toLowerCase());
+    const getRoleDisplayTitle = (role: any) => {
+        const raw = String(role?.title || role?.name || '').trim();
+        const normalized = raw.toLowerCase();
+        return SYSTEM_ROLE_FA_LABELS[normalized] || raw || 'بدون عنوان';
+    };
     const canEditRecord = (record: any) => {
         if (!canManageUsers) return false;
         if (record?.role === 'super_admin' && String(currentUserRole || '').toLowerCase() !== 'super_admin') {
@@ -117,7 +115,7 @@ const UsersTab: React.FC = () => {
 
                 message.success('کاربر بروزرسانی شد');
             } else {
-                const { data: signUpData, error: signUpError } = await authSignUpClient.auth.signUp({
+                const { data: signUpData, error: signUpError } = await supabaseSignUpClient.auth.signUp({
                     email: values.email,
                     password: values.password,
                     options: {
@@ -222,7 +220,7 @@ const UsersTab: React.FC = () => {
                                 style={{ width: '100%', minWidth: 140 }}
                                 placeholder="انتخاب نقش"
                                 onChange={(val) => handleRoleChange(record.id, val)}
-                                options={roles.map(r => ({ label: r.title, value: r.id }))}
+                                options={roles.map(r => ({ label: getRoleDisplayTitle(r), value: r.id }))}
                                 className="custom-select"
                                 disabled={!canEditRecord(record)}
                             />
@@ -305,16 +303,16 @@ const UsersTab: React.FC = () => {
                 <Form.Item label="ایمیل" name="email" rules={[{ required: true, type: 'email' }]}><Input /></Form.Item>
                 <Form.Item label="شماره موبایل" name="mobile" rules={[{ required: true }]}><Input /></Form.Item>
                 <Form.Item label="جایگاه سازمانی" name="role_id" rules={[{ required: true }]}>
-                    <Select placeholder="انتخاب کنید" options={roles.map(r => ({ label: r.title, value: r.id }))} />
+                    <Select placeholder="انتخاب کنید" options={roles.map(r => ({ label: getRoleDisplayTitle(r), value: r.id }))} />
                 </Form.Item>
                                 <Form.Item label="نقش (متنی)" name="role" rules={[{ required: true }]}>
                                         <Select
                                             placeholder="انتخاب نقش"
                                             options={[
-                                                { label: 'super_admin', value: 'super_admin' },
-                                                { label: 'admin', value: 'admin' },
-                                                { label: 'manager', value: 'manager' },
-                                                { label: 'viewer', value: 'viewer' },
+                                                { label: 'مدیر ارشد', value: 'super_admin' },
+                                                { label: 'مدیر سیستم', value: 'admin' },
+                                                { label: 'مدیر', value: 'manager' },
+                                                { label: 'مشاهده‌گر', value: 'viewer' },
                                             ]}
                                         />
                                 </Form.Item>

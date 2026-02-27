@@ -6,6 +6,7 @@ export const ACCOUNTING_MINIMAL_MODULE_IDS = [
   'cash_boxes',
   'bank_accounts',
   'cheques',
+  'cash_bank_operations',
 ] as const;
 
 export const isAccountingMinimalModule = (moduleId?: string | null) => {

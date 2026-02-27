@@ -3,14 +3,76 @@ import { useForm } from "@refinedev/antd";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartForm from "../components/SmartForm";
-import { Button, Result, Spin } from "antd";
-import { ArrowRightOutlined, SaveOutlined } from "@ant-design/icons";
+import { Result, Spin } from "antd";
 import { supabase } from "../supabaseClient";
 import { applyInvoiceFinalizationInventory } from "../utils/invoiceInventoryWorkflow";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
+
+const isUuid = (value: any) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+
+const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) => {
+  const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
+    id: isUuid(stage?.id) ? String(stage.id) : null,
+    stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
+    sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+    wage: Number(stage?.wage || 0),
+    default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
+    default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
+  }));
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from("process_template_stages")
+    .select("id")
+    .eq("template_id", templateId);
+  if (existingError) throw existingError;
+
+  const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
+  const keptExistingIds = new Set(
+    nextStages
+      .map((stage) => stage.id)
+      .filter((id): id is string => Boolean(id && existingIds.has(id)))
+  );
+  const removeIds = Array.from(existingIds).filter((id) => !keptExistingIds.has(id));
+  if (removeIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("process_template_stages")
+      .delete()
+      .in("id", removeIds);
+    if (deleteError) throw deleteError;
+  }
+
+  for (const stage of nextStages) {
+    if (stage.id && existingIds.has(stage.id)) {
+      const { error: updateError } = await supabase
+        .from("process_template_stages")
+        .update({
+          stage_name: stage.stage_name,
+          sort_order: stage.sort_order,
+          wage: stage.wage,
+          default_assignee_id: stage.default_assignee_id,
+          default_assignee_role_id: stage.default_assignee_role_id,
+        })
+        .eq("id", stage.id);
+      if (updateError) throw updateError;
+    } else {
+      const { error: insertError } = await supabase
+        .from("process_template_stages")
+        .insert({
+          template_id: templateId,
+          stage_name: stage.stage_name,
+          sort_order: stage.sort_order,
+          wage: stage.wage,
+          default_assignee_id: stage.default_assignee_id,
+          default_assignee_role_id: stage.default_assignee_role_id,
+        });
+      if (insertError) throw insertError;
+    }
+  }
+};
 
 export const ModuleCreate = () => {
   const { moduleId } = useParams();
@@ -21,7 +83,7 @@ export const ModuleCreate = () => {
   const [canCreate, setCanCreate] = useState(true);
   const initialValuesFromState = (location.state as any)?.initialValues || {};
 
-  const { formProps, saveButtonProps, form } = useForm({
+  const { formProps } = useForm({
     action: "create",
     resource: moduleId,
     redirect: "list",
@@ -108,44 +170,38 @@ export const ModuleCreate = () => {
     );
   }
 
-  const isSubmitting = saveButtonProps.loading;
-
   return (
     <div className="p-4 md:p-6 max-w-[1200px] mx-auto animate-fadeIn">
-      <div className="flex justify-between items-center mb-6">
-        <div className="flex items-center gap-3">
-          <Button
-            icon={<ArrowRightOutlined />}
-            onClick={() => navigate(-1)}
-            type="text"
-            className="text-gray-500"
-          />
-          <div>
-            <h1 className="text-xl font-black text-gray-800 dark:text-white m-0">
-              افزودن {moduleConfig.titles.fa}
-            </h1>
-          </div>
-        </div>
 
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          loading={isSubmitting}
-          onClick={() => form.submit()}
-          className="bg-leather-600 hover:!bg-leather-500"
-        >
-          ذخیره
-        </Button>
-      </div>
-
-      <div className="bg-white dark:bg-[#1a1a1a] rounded-[1.5rem] p-6 shadow-sm border border-gray-100 dark:border-gray-800">
         <SmartForm
           module={moduleConfig}
           visible={true}
+          displayMode="embedded"
           initialValues={initialValuesFromState}
           onCancel={() => navigate(-1)}
-          onSave={async (values) => {
+          onSave={async (values, meta) => {
             try {
+              if (moduleId === "process_templates") {
+                const { data: inserted, error } = await supabase
+                  .from(moduleConfig.table)
+                  .insert(values)
+                  .select("*")
+                  .single();
+                if (error) throw error;
+                if (!inserted?.id) throw new Error("ثبت الگوی فرآیند ناموفق بود");
+
+                await syncProcessTemplateStages(String(inserted.id), meta?.templateStagesPreview || []);
+                if (moduleId) {
+                  await runWorkflowsForEvent({
+                    moduleId,
+                    event: "create",
+                    currentRecord: inserted as Record<string, any>,
+                  });
+                }
+                navigate(`/${moduleId}`);
+                return;
+              }
+
               if (moduleId === "invoices" || moduleId === "purchase_invoices") {
                 const { data: inserted, error } = await supabase
                   .from(moduleConfig.table)
@@ -210,7 +266,6 @@ export const ModuleCreate = () => {
             }
           }}
         />
-      </div>
     </div>
   );
 };

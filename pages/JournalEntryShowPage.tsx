@@ -28,6 +28,7 @@ import {
 } from '../utils/persianNumericInput';
 import { generateNextJournalEntryNo } from '../utils/journalEntryNumbering';
 import { MODULES } from '../moduleRegistry';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type Entry = {
   id: string;
@@ -110,6 +111,11 @@ type Draft = {
   treasury_ref: string | null;
 };
 
+const ENTRY_SELECT =
+  'id,entry_no,entry_date,description,fiscal_year_id,status,total_debit,total_credit,source_table,source_record_id,created_at,created_by,updated_by,posted_at,posted_by,updated_at';
+const LINE_SELECT =
+  'id,line_no,account_id,description,debit,credit,cost_center_id,party_type,party_id,metadata,chart_of_accounts:account_id(code,name),cost_centers:cost_center_id(code,name)';
+
 const parseNum = (v: any) => parseNumericInput(v);
 
 const normalizePartyType = (raw: any): PartyType => {
@@ -155,6 +161,17 @@ const sideValid = (d: any, c: any) => {
   };
 };
 
+const normalizeLineRecord = (row: any): Line => ({
+  ...row,
+  party_type: normalizePartyType(row?.party_type),
+  chart_of_accounts: Array.isArray(row?.chart_of_accounts)
+    ? (row.chart_of_accounts[0] || null)
+    : (row?.chart_of_accounts || null),
+  cost_centers: Array.isArray(row?.cost_centers)
+    ? (row.cost_centers[0] || null)
+    : (row?.cost_centers || null),
+});
+
 const JournalEntryShowPage: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -192,6 +209,9 @@ const JournalEntryShowPage: React.FC = () => {
 
   const isDraft = entry?.status === 'draft';
   const canEditDraft = canEdit && isDraft;
+  const isRealtimeEnabled = import.meta.env.DEV
+    ? import.meta.env.VITE_ENABLE_REALTIME === 'true'
+    : true;
   const canEditLines = lineEdit && isDraft;
 
   const tableRows = useMemo<LineTableRow[]>(() => {
@@ -438,6 +458,52 @@ const JournalEntryShowPage: React.FC = () => {
     return formatted ? toPersianNumber(formatted) : '-';
   }, []);
 
+  const refreshEntryLight = useCallback(async () => {
+    if (!id) return;
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select(ENTRY_SELECT)
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    const next = data as Entry;
+    setEntry(next);
+    form.setFieldsValue({
+      entry_no: next.entry_no || null,
+      entry_date: next.entry_date,
+      fiscal_year_id: next.fiscal_year_id,
+      description: next.description || null,
+    });
+  }, [form, id]);
+
+  const refreshLinesLight = useCallback(async () => {
+    if (!id) return;
+    const { data, error } = await supabase
+      .from('journal_lines')
+      .select(LINE_SELECT)
+      .eq('entry_id', id)
+      .order('line_no', { ascending: true });
+    if (error) throw error;
+    const nextLines = ((data || []) as any[]).map(normalizeLineRecord) as Line[];
+    setLines(nextLines);
+    setDrafts((prev) => {
+      const next: Record<string, Draft> = { ...prev };
+      nextLines.forEach((line) => {
+        next[line.id] = toDraft({
+          account_id: line.account_id,
+          description: line.description || null,
+          debit: line.debit,
+          credit: line.credit,
+          cost_center_id: line.cost_center_id || null,
+          party_type: normalizePartyType(line.party_type),
+          party_id: line.party_id || null,
+          metadata: line.metadata || null,
+        });
+      });
+      return next;
+    });
+  }, [id]);
+
   const loadPerms = useCallback(async () => {
     const perms = await fetchCurrentUserRolePermissions(supabase);
     const entryPerms = perms?.journal_entries || {};
@@ -471,12 +537,12 @@ const JournalEntryShowPage: React.FC = () => {
       ] = await Promise.all([
         supabase
           .from('journal_entries')
-          .select('id,entry_no,entry_date,description,fiscal_year_id,status,total_debit,total_credit,source_table,source_record_id,created_at,created_by,updated_by,posted_at,posted_by,updated_at')
+          .select(ENTRY_SELECT)
           .eq('id', id)
           .single(),
         supabase
           .from('journal_lines')
-          .select('id,line_no,account_id,description,debit,credit,cost_center_id,party_type,party_id,metadata,chart_of_accounts:account_id(code,name),cost_centers:cost_center_id(code,name)')
+          .select(LINE_SELECT)
           .eq('entry_id', id)
           .order('line_no', { ascending: true }),
         supabase
@@ -535,16 +601,7 @@ const JournalEntryShowPage: React.FC = () => {
       if (employeesRes.error) throw employeesRes.error;
 
       const currentEntry = entryRes.data as Entry;
-      const lineRows = ((linesRes.data || []) as any[]).map((row) => ({
-        ...row,
-        party_type: normalizePartyType(row?.party_type),
-        chart_of_accounts: Array.isArray(row?.chart_of_accounts)
-          ? (row.chart_of_accounts[0] || null)
-          : (row?.chart_of_accounts || null),
-        cost_centers: Array.isArray(row?.cost_centers)
-          ? (row.cost_centers[0] || null)
-          : (row?.cost_centers || null),
-      })) as Line[];
+      const lineRows = ((linesRes.data || []) as any[]).map(normalizeLineRecord) as Line[];
 
       const customerRows = (customersRes.data || []) as any[];
       const supplierRows = (suppliersRes.data || []) as any[];
@@ -666,7 +723,7 @@ const JournalEntryShowPage: React.FC = () => {
         description: currentEntry.description || null,
       });
     } catch (err: any) {
-      message.error(err?.message || 'خطا در دریافت سند');
+      message.error(toFaErrorMessage(err, 'خطا در دریافت سند'));
     } finally {
       setLoading(false);
     }
@@ -684,6 +741,40 @@ const JournalEntryShowPage: React.FC = () => {
     }
     load();
   }, [ready, canView, load]);
+
+  useEffect(() => {
+    if (!isRealtimeEnabled || !id || !ready || !canView) return;
+
+    const channel = supabase
+      .channel(`journal-entry-${id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'journal_lines', filter: `entry_id=eq.${id}` },
+        async () => {
+          try {
+            await Promise.all([refreshLinesLight(), refreshEntryLight()]);
+          } catch {
+            // no-op: UI keeps last known state
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'journal_entries', filter: `id=eq.${id}` },
+        async () => {
+          try {
+            await refreshEntryLight();
+          } catch {
+            // no-op: UI keeps last known state
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id, ready, canView, refreshLinesLight, refreshEntryLight, isRealtimeEnabled]);
 
   useEffect(() => {
     window.dispatchEvent(
@@ -726,7 +817,7 @@ const JournalEntryShowPage: React.FC = () => {
       message.success('اطلاعات سند ذخیره شد');
       load();
     } catch (err: any) {
-      if (!Array.isArray(err?.errorFields)) message.error(err?.message || 'خطا');
+      if (!Array.isArray(err?.errorFields)) message.error(toFaErrorMessage(err, 'خطا در ذخیره اطلاعات سند'));
     }
   };
 
@@ -749,7 +840,7 @@ const JournalEntryShowPage: React.FC = () => {
       message.success('سند ثبت نهایی شد');
       load();
     } catch (err: any) {
-      message.error(err?.message || 'خطا');
+      message.error(toFaErrorMessage(err, 'خطا در ثبت نهایی سند'));
     } finally {
       setStatusLoading(false);
     }
@@ -770,7 +861,7 @@ const JournalEntryShowPage: React.FC = () => {
           message.success('سند برگشتی شد');
           load();
         } catch (err: any) {
-          message.error(err?.message || 'خطا');
+          message.error(toFaErrorMessage(err, 'خطا در برگشتی کردن سند'));
         } finally {
           setStatusLoading(false);
         }
@@ -788,7 +879,7 @@ const JournalEntryShowPage: React.FC = () => {
       okButtonProps: { danger: true },
       onOk: async () => {
         const { error } = await supabase.from('journal_entries').delete().eq('id', entry.id);
-        if (error) message.error(error.message);
+        if (error) message.error(toFaErrorMessage(error, 'خطا در حذف سند'));
         else {
           message.success('حذف شد');
           navigate('/journal_entries');
@@ -910,25 +1001,31 @@ const JournalEntryShowPage: React.FC = () => {
 
     setSaveRowId(row.id);
     try {
+      let savedLine: Line | null = null;
       if (row.__isNew) {
         if (!entry?.id) return;
-        const { error } = await supabase.from('journal_lines').insert([
-          {
-            entry_id: entry.id,
-            line_no: row.line_no,
-            account_id: draft.account_id,
-            description: draft.description || null,
-            debit: side.debit,
-            credit: side.credit,
-            cost_center_id: draft.cost_center_id || null,
-            party_type: draft.party_type || null,
-            party_id: draft.party_id || null,
-            metadata,
-          },
-        ]);
+        const { data, error } = await supabase
+          .from('journal_lines')
+          .insert([
+            {
+              entry_id: entry.id,
+              line_no: row.line_no,
+              account_id: draft.account_id,
+              description: draft.description || null,
+              debit: side.debit,
+              credit: side.credit,
+              cost_center_id: draft.cost_center_id || null,
+              party_type: draft.party_type || null,
+              party_id: draft.party_id || null,
+              metadata,
+            },
+          ])
+          .select(LINE_SELECT)
+          .single();
         if (error) throw error;
+        savedLine = normalizeLineRecord(data);
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('journal_lines')
           .update({
             account_id: draft.account_id,
@@ -940,14 +1037,50 @@ const JournalEntryShowPage: React.FC = () => {
             party_id: draft.party_id || null,
             metadata,
           })
-          .eq('id', row.id);
+          .eq('id', row.id)
+          .select(LINE_SELECT)
+          .single();
         if (error) throw error;
+        savedLine = normalizeLineRecord(data);
       }
 
+      if (savedLine) {
+        setLines((prev) => {
+          const filtered = prev.filter((line) => line.id !== savedLine!.id);
+          return [...filtered, savedLine!].sort((a, b) => Number(a.line_no) - Number(b.line_no));
+        });
+
+        setDrafts((prev) => {
+          const next = { ...prev };
+          if (row.__isNew) delete next[row.id];
+          next[savedLine!.id] = toDraft({
+            account_id: savedLine!.account_id,
+            description: savedLine!.description || null,
+            debit: savedLine!.debit,
+            credit: savedLine!.credit,
+            cost_center_id: savedLine!.cost_center_id || null,
+            party_type: normalizePartyType(savedLine!.party_type),
+            party_id: savedLine!.party_id || null,
+            metadata: savedLine!.metadata || null,
+          });
+          return next;
+        });
+      }
+
+      if (row.__isNew) {
+        setNewRows((prev) => prev.filter((item) => item.id !== row.id));
+      }
+      setEditingRows((prev) => {
+        const next = { ...prev };
+        delete next[row.id];
+        return next;
+      });
+
+      await refreshEntryLight();
+
       message.success(row.__isNew ? 'ردیف جدید ثبت شد' : 'ردیف ذخیره شد');
-      await load();
     } catch (err: any) {
-      message.error(err?.message || 'خطا');
+      message.error(toFaErrorMessage(err, 'خطا در ذخیره ردیف سند'));
     } finally {
       setSaveRowId(null);
     }
@@ -969,11 +1102,22 @@ const JournalEntryShowPage: React.FC = () => {
       onOk: async () => {
         const { error } = await supabase.from('journal_lines').delete().eq('id', row.id);
         if (error) {
-          message.error(error.message);
+          message.error(toFaErrorMessage(error, 'خطا در حذف ردیف سند'));
           return;
         }
+        setLines((prev) => prev.filter((line) => line.id !== row.id));
+        setDrafts((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        setEditingRows((prev) => {
+          const next = { ...prev };
+          delete next[row.id];
+          return next;
+        });
+        await refreshEntryLight();
         message.success('حذف شد');
-        await load();
       },
     });
   };
@@ -1036,12 +1180,6 @@ const JournalEntryShowPage: React.FC = () => {
     );
   };
 
-  const getReadonlyTreasuryLabel = (row: LineTableRow) => {
-    const value = drafts[row.id]?.treasury_ref || resolveTreasuryRef(row.metadata);
-    if (!value) return '-';
-    return treasuryOptionByValue.get(String(value)) || '-';
-  };
-
   const getAccountSelectorValue = (draft: Draft): string | undefined => {
     const accountId = String(draft.account_id || '').trim();
     if (!accountId) return undefined;
@@ -1086,12 +1224,9 @@ const JournalEntryShowPage: React.FC = () => {
       render: (_: any, row) => {
         const editing = canEditLines && isRowEditing(row);
         const draft = drafts[row.id] || toDraft(row);
-        const treasuryOptions = draft.account_id
-          ? treasuryOptionsByAccount.get(String(draft.account_id)) || []
-          : [];
         return (
           <div className="rounded-xl border border-gray-100 dark:border-white/10 p-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
               <div>
                 <div className="text-[11px] text-gray-500 mb-1">حساب</div>
                 {editing ? (
@@ -1121,33 +1256,6 @@ const JournalEntryShowPage: React.FC = () => {
                   />
                 ) : (
                   renderReadonlyAccount(row)
-                )}
-              </div>
-
-              <div>
-                <div className="text-[11px] text-gray-500 mb-1">بانک/صندوق مرتبط</div>
-                {editing ? (
-                  <Select
-                    allowClear
-                    showSearch
-                    optionFilterProp="label"
-                    value={draft.treasury_ref || undefined}
-                    onChange={(value) =>
-                      upsertDraft(row.id, { treasury_ref: value || null }, toDraft(row))
-                    }
-                    options={treasuryOptions}
-                    disabled={!draft.account_id || treasuryOptions.length === 0}
-                    placeholder={
-                      !draft.account_id
-                        ? 'ابتدا حساب را انتخاب کنید'
-                        : treasuryOptions.length > 0
-                          ? 'انتخاب بانک/صندوق'
-                          : 'برای این حساب بانک/صندوقی لینک نشده'
-                    }
-                    style={{ width: '100%' }}
-                  />
-                ) : (
-                  <span>{getReadonlyTreasuryLabel(row)}</span>
                 )}
               </div>
 
@@ -1235,7 +1343,12 @@ const JournalEntryShowPage: React.FC = () => {
                     precision={2}
                     stringMode
                     value={draft.debit ?? 0}
-                    formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
+                    formatter={(val, info) =>
+                      formatNumericForInput(
+                        info?.userTyping ? (info?.input ?? val) : (val ?? info?.input),
+                        true
+                      )
+                    }
                     parser={(val) => normalizeNumericString(val)}
                     onChange={(v) => upsertDraft(row.id, { debit: parseNum(v) }, toDraft(row))}
                     onKeyDown={preventNonNumericKeyDown}
@@ -1262,7 +1375,12 @@ const JournalEntryShowPage: React.FC = () => {
                     precision={2}
                     stringMode
                     value={draft.credit ?? 0}
-                    formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
+                    formatter={(val, info) =>
+                      formatNumericForInput(
+                        info?.userTyping ? (info?.input ?? val) : (val ?? info?.input),
+                        true
+                      )
+                    }
                     parser={(val) => normalizeNumericString(val)}
                     onChange={(v) => upsertDraft(row.id, { credit: parseNum(v) }, toDraft(row))}
                     onKeyDown={preventNonNumericKeyDown}

@@ -61,13 +61,15 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         okText="چاپ"
         cancelText="انصراف"
         width={isMobile ? '95vw' : '1000px'}
-        destroyOnClose
+        destroyOnHidden
         centered={true}
         zIndex={1000}
-        bodyStyle={{ 
-          padding: '0',
-          maxHeight: '85vh',
-          overflow: 'hidden'
+        styles={{
+          body: {
+            padding: '0',
+            maxHeight: '85vh',
+            overflow: 'hidden',
+          },
         }}
         style={{ maxWidth: isMobile ? '95vw' : '1000px' }}
       >

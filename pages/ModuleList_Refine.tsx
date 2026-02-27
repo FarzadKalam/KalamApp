@@ -5,8 +5,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import { BlockType, FieldType, SavedView, ViewMode } from "../types";
-import { App, Badge, Button, Empty, Skeleton } from "antd";
-import { FileExcelOutlined, PlusOutlined } from "@ant-design/icons";
+import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
+import type { MenuProps } from "antd";
+import { EllipsisOutlined, FileExcelOutlined, PlusOutlined, SettingOutlined } from "@ant-design/icons";
 import ViewManager from "../components/ViewManager";
 import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
@@ -107,7 +108,6 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const [gridPageSize, setGridPageSize] = useState<number>(20); // ✅ Grid pagination
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean }>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -142,15 +142,6 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     return selectedRows.every((row: any) => String(row?.status || '') === 'pending');
   }, [resolvedModuleId, selectedRows]);
   const showContentSkeleton = loading && !hasQueryResult;
-
-  useEffect(() => {
-    if (isFullscreen) {
-      document.body.classList.add("overflow-hidden");
-    } else {
-      document.body.classList.remove("overflow-hidden");
-    }
-    return () => document.body.classList.remove("overflow-hidden");
-  }, [isFullscreen]);
 
   useEffect(() => {
     setViewMode(moduleConfig?.defaultViewMode || ViewMode.LIST);
@@ -209,7 +200,10 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       setCanOpenWorkflows(
         workflowPerms.view !== false && (workflowPerms?.fields?.module_list_button !== false)
       );
-    } catch (err) {
+    } catch (err: any) {
+      if (String(err?.name || '') === 'AbortError') {
+        return;
+      }
       console.warn('Could not fetch permissions:', err);
       setCanOpenWorkflows(true);
     }
@@ -232,6 +226,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const canViewModule = modulePermissions.view !== false;
   const canEditModule = modulePermissions.edit !== false;
   const canDeleteModule = modulePermissions.delete !== false;
+  const canOpenModuleSettings = canViewModule && fieldPermissions.__module_settings !== false;
 
   // ✅ Define field keys FIRST (before any useMemo/useEffect that uses them)
   const imageField = moduleConfig?.fields.find(f => f.type === FieldType.IMAGE)?.key;
@@ -269,9 +264,18 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
 
     const fetchOptions = async () => {
       try {
-        const [{ data: users }, { data: roles }] = await Promise.all([
+        const fetchRoles = async () => {
+          const primary = await supabase.from("org_roles").select("*");
+          if (primary.error) return [] as any[];
+          return (primary.data || []).map((row: any) => ({
+            ...row,
+            title: row?.title || row?.name || row?.id,
+          }));
+        };
+
+        const [{ data: users }, roles] = await Promise.all([
           supabase.from("profiles").select("id, full_name, avatar_url"),
-          supabase.from("org_roles").select("id, title"),
+          fetchRoles(),
         ]);
 
         if (!isActive) return;
@@ -350,13 +354,48 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
             }
             if (field.relationConfig) {
               const { targetModule, targetField, filter } = field.relationConfig;
-              const selectFields = ["id", "system_code"].concat(targetField ? [targetField] : []);
+              const selectFields =
+                targetModule === "profiles"
+                  ? ["id"].concat(targetField ? [targetField] : [])
+                  : ["id", "system_code"].concat(targetField ? [targetField] : []);
               if (targetModule === "shelves" && !selectFields.includes("shelf_number")) {
                 selectFields.push("shelf_number");
               }
-              let query = supabase.from(targetModule).select(selectFields.join(", "));
-              if (filter) Object.keys(filter).forEach((k) => (query = query.eq(k, filter[k])));
-              const { data: relData } = await query.limit(200);
+              const runQuery = async (fields: string[]) => {
+                let query = supabase.from(targetModule).select(fields.join(", "));
+                if (filter) Object.keys(filter).forEach((k) => (query = query.eq(k, filter[k])));
+                return query.limit(200);
+              };
+
+              let { data: relData, error: relError } = await runQuery(selectFields);
+              const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
+              const errorCode = String((relError as any)?.code || '').toUpperCase();
+              const hasColumnError = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+
+              if (relError && hasColumnError) {
+                const fallbackNoSystemCode = selectFields.filter((f) => f !== "system_code");
+                let fallback = await runQuery(fallbackNoSystemCode);
+
+                if (fallback.error && targetField) {
+                  const fallbackFieldErrorText = String((fallback.error as any)?.message || (fallback.error as any)?.details || '').toLowerCase();
+                  const missingTargetField =
+                    fallbackFieldErrorText.includes(String(targetField).toLowerCase()) ||
+                    String((fallback.error as any)?.code || '').toUpperCase() === '42703' ||
+                    String((fallback.error as any)?.code || '').toUpperCase() === 'PGRST204';
+
+                  if (missingTargetField) {
+                    const byName = await runQuery(["id", "name"]);
+                    if (!byName.error) {
+                      fallback = byName;
+                    } else {
+                      fallback = await runQuery(["id"]);
+                    }
+                  }
+                }
+
+                relData = fallback.data;
+              }
+
               const options = (relData || []).map((i: any) => {
                 const labelValue = (targetField ? (i as any)[targetField] : null) || i.shelf_number || i.system_code || i.id;
                 const sys = (i as any).system_code ? ` (${(i as any).system_code})` : "";
@@ -662,6 +701,64 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       document.body.removeChild(link);
   };
 
+  const moduleActionItems: MenuProps["items"] = useMemo(() => {
+    const items: MenuProps["items"] = [];
+
+    if (canOpenWorkflows) {
+      items.push({ key: "workflows", label: "گردش کارها" });
+    }
+    if (canEditModule) {
+      items.push({ key: "excel_import", icon: <FileExcelOutlined />, label: "وارد کردن از اکسل" });
+    }
+    if (canEditModule && resolvedModuleId === "products") {
+      items.push({ key: "bulk_create", icon: <PlusOutlined />, label: "افزودن گروهی" });
+    }
+    if (resolvedModuleId === "production_orders") {
+      items.push({ key: "group_orders", label: "سفارشات گروهی" });
+    }
+
+    if (canOpenModuleSettings && items.length > 0) {
+      items.push({ type: "divider" });
+    }
+
+    if (canOpenModuleSettings) {
+      items.push({
+        key: "module_settings",
+        icon: <SettingOutlined />,
+        label: `تنظیمات «${moduleConfig?.titles.fa || "ماژول"}»`,
+      });
+    }
+
+    return items;
+  }, [canOpenWorkflows, canEditModule, canOpenModuleSettings, resolvedModuleId, moduleConfig?.titles.fa]);
+  const hasModuleActionItems = Array.isArray(moduleActionItems) && moduleActionItems.length > 0;
+
+  const handleModuleActionClick: MenuProps["onClick"] = ({ key }) => {
+    if (key === "workflows") {
+      setIsWorkflowsModalOpen(true);
+      return;
+    }
+    if (key === "excel_import") {
+      setIsExcelImportModalOpen(true);
+      return;
+    }
+    if (key === "bulk_create") {
+      setIsBulkProductsModalOpen(true);
+      return;
+    }
+    if (key === "group_orders") {
+      navigate("/production_group_orders");
+      return;
+    }
+    if (key === "module_settings") {
+      if (!canOpenModuleSettings) {
+        msg.error('دسترسی به تنظیمات این ماژول ندارید.');
+        return;
+      }
+      navigate(`/settings?tab=module_settings&moduleId=${resolvedModuleId}`);
+    }
+  };
+
   if (!resolvedModuleId || !moduleConfig) return null;
   if (!canViewModule && !loading && accessibleData.length === 0) {
     return (
@@ -672,7 +769,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-[1800px] mx-auto animate-fadeIn pb-20 h-[calc(105vh-64px)] flex flex-col">
+    <div className="module-list-page box-border p-3 md:p-6 max-w-[1800px] mx-auto md:pb-20 pb-2 h-[calc(100%-5rem)] md:h-full min-h-0 flex flex-col overflow-hidden">
         <div className="flex flex-col gap-2 mb-4 shrink-0">
         {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -690,47 +787,27 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
 
             {selectedRowKeys.length === 0 && (
               <div className="flex items-center gap-2 shrink-0">
-                {canOpenWorkflows && (
-                  <Button
-                    onClick={() => setIsWorkflowsModalOpen(true)}
-                    className="rounded-xl"
-                  >
-                    گردش کارها
-                  </Button>
-                )}
-                {canEditModule && (
-                  <Button
-                    icon={<FileExcelOutlined />}
-                    onClick={() => setIsExcelImportModalOpen(true)}
-                    className="rounded-xl"
-                  >
-                    وارد کردن از اکسل
-                  </Button>
-                )}
-                {canEditModule && resolvedModuleId === 'products' && (
-                  <Button
-                    icon={<PlusOutlined />}
-                    onClick={() => setIsBulkProductsModalOpen(true)}
-                    className="rounded-xl"
-                  >
-                    افزودن گروهی
-                  </Button>
-                )}
-                {resolvedModuleId === 'production_orders' && (
-                  <Button
-                    onClick={() => navigate('/production_group_orders')}
-                    className="rounded-xl"
-                  >
-                    سفارشات گروهی
-                  </Button>
-                )}
                 {canEditModule && (
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
                     onClick={() => navigate(`/${resolvedModuleId}/create`)}
                     className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/30 shrink-0"
-                  >افزودن تکی</Button>
+                  >
+                    افزودن
+                  </Button>
+                )}
+                {hasModuleActionItems && (
+                  <Dropdown
+                    trigger={["click"]}
+                    menu={{
+                      items: moduleActionItems,
+                      onClick: handleModuleActionClick,
+                    }}
+                    placement="bottomLeft"
+                  >
+                    <Button icon={<EllipsisOutlined />} className="rounded-xl" />
+                  </Dropdown>
                 )}
               </div>
             )}
@@ -742,8 +819,6 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
           onRefresh={() => tableQueryResult.refetch()}
-          isFullscreen={isFullscreen}
-          toggleFullscreen={() => setIsFullscreen((prev) => !prev)}
           kanbanEnabled={availableGroupFields.length > 0}
           mapEnabled={mapEnabled}
           kanbanGroupBy={kanbanGroupBy}
@@ -783,7 +858,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
         />
         </div>
 
-         <div className="mb-4">
+         <div className="mb-3 shrink-0">
           <ViewManager 
             moduleId={resolvedModuleId} 
             currentView={currentView} 
@@ -792,8 +867,8 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           />
          </div>
 
-         <ViewWrapper isFullscreen={isFullscreen}>
-         <div className="flex-1 overflow-hidden relative rounded-[2rem]">
+         <ViewWrapper isFullscreen={false}>
+         <div className="flex-1 min-h-0 overflow-hidden relative rounded-[2rem]">
            {showContentSkeleton ? (
               <ModuleListContentSkeleton viewMode={viewMode} />
            ) : accessibleData.length === 0 ? (
@@ -809,7 +884,6 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                     data={enrichedData} 
                     loading={isRefreshing}
                     visibleColumns={visibleColumns.length > 0 ? visibleColumns : undefined}
-                    onChange={tableProps.onChange as any}
                     pagination={tableProps.pagination}
                     rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
                     onRow={(record: any) => ({ 

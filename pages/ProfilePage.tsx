@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
         Avatar, Button, Tag, Spin, Tabs, Descriptions, message, Drawer, Form, Input, Select, Switch, Upload
@@ -7,8 +7,7 @@ import {
     UserOutlined, ArrowRightOutlined, CheckCircleOutlined, 
     CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined
 } from '@ant-design/icons';
-import { supabase } from '../supabaseClient';
-import { createClient } from '@supabase/supabase-js';
+import { supabase, supabaseSignUpClient } from '../supabaseClient';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -30,18 +29,6 @@ const ProfilePage: React.FC = () => {
     const [form] = Form.useForm();
     const [submitting, setSubmitting] = useState(false);
     const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-    const authSignUpClient = useMemo(
-        () =>
-            createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
-                auth: {
-                    persistSession: false,
-                    autoRefreshToken: false,
-                    detectSessionInUrl: false,
-                },
-            }),
-        []
-    );
-
   useEffect(() => {
     fetchProfile();
         fetchRoles();
@@ -218,7 +205,7 @@ const ProfilePage: React.FC = () => {
             }
 
             if (drawerMode === 'create') {
-                const { data: signUpData, error: signUpError } = await authSignUpClient.auth.signUp({
+                const { data: signUpData, error: signUpError } = await supabaseSignUpClient.auth.signUp({
                     email: values.email,
                     password: values.password,
                     options: {

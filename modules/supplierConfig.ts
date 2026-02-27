@@ -37,7 +37,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'bank_account_number', labels: { fa: 'شماره کارت/حساب', en: 'Bank Account' }, type: FieldType.TEXT, blockId: 'financial_info' },
     { key: 'first_supply_date', labels: { fa: 'تاریخ شروع همکاری', en: 'Start Date' }, type: FieldType.DATE, blockId: 'financial_info' },
     { key: 'supply_count', labels: { fa: 'تعداد فاکتور خرید', en: 'Supply Count' }, type: FieldType.NUMBER, blockId: 'financial_info', readonly: true },
-    { key: 'total_paid', labels: { fa: 'جمع پرداختی‌ها (ریال)', en: 'Total Paid' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true },
+    { key: 'total_paid', labels: { fa: 'جمع پرداختی‌ها', en: 'Total Paid' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true },
   ],
   blocks: [
     {

@@ -35,6 +35,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   if (!module || !data) return null;
 
   const [externalTables, setExternalTables] = useState<Record<string, any[]>>({});
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
 
   const externalBlocks = useMemo(
     () => module.blocks?.filter((b: any) => b.type === 'table' && b.externalDataConfig) || [],
@@ -80,6 +81,30 @@ const TablesSection: React.FC<TablesSectionProps> = ({
 
   const summaryData = getSummaryData();
   const summaryConfig = module.blocks?.find((b: any) => b.summaryConfig)?.summaryConfig || {};
+  const refreshInvoiceSummary = useCallback(async () => {
+    if (!onDataUpdate || !data?.id || !['invoices', 'purchase_invoices'].includes(String(module?.id || ''))) return;
+    try {
+      setSummaryRefreshing(true);
+      const { data: latest, error } = await supabase
+        .from(module.id)
+        .select('invoiceItems,payments,total_invoice_amount,total_received_amount,remaining_balance,updated_at')
+        .eq('id', data.id)
+        .single();
+      if (error) throw error;
+      onDataUpdate({
+        invoiceItems: latest?.invoiceItems || [],
+        payments: latest?.payments || [],
+        total_invoice_amount: latest?.total_invoice_amount || 0,
+        total_received_amount: latest?.total_received_amount || 0,
+        remaining_balance: latest?.remaining_balance || 0,
+        updated_at: latest?.updated_at || null,
+      });
+    } catch (err) {
+      console.warn('Summary refresh failed:', err);
+    } finally {
+      setSummaryRefreshing(false);
+    }
+  }, [data?.id, module?.id, onDataUpdate]);
   const isProductionOrder = module.id === 'production_orders';
   const productionLocked = isProductionOrder && ['in_progress', 'completed'].includes(data?.status);
   const processStageFieldKeys = useMemo(() => new Set([
@@ -276,6 +301,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 (canViewField ? canViewField(`${block.id}.${fieldKey}`) !== false : true) &&
                 (canViewField ? canViewField(fieldKey) !== false : true)
               }
+              onSaveSuccess={(newData) => onDataUpdate?.({ [block.id]: newData })}
             />
           )}
         </div>
@@ -285,6 +311,8 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           <SummaryCard 
             type={summaryConfig.calculationType || SummaryCalculationType.SUM_ALL_ROWS} 
             data={summaryData} 
+            onRefresh={refreshInvoiceSummary}
+            refreshing={summaryRefreshing}
           />
       )}
     </div>

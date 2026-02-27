@@ -210,7 +210,7 @@ const saveIntegrationLevelingConfig = async (supabase: SupabaseClient, config: C
 
   const { error } = await supabase
     .from('integration_settings')
-    .upsert([payload], { onConflict: 'connection_type' });
+    .upsert([payload], { onConflict: 'org_id,connection_type' });
 
   if (error) throw error;
 };

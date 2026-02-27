@@ -207,16 +207,55 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
       setMentionOptions([...profileOptions, ...roleOptions]);
     };
 
+    const isMissingColumnError = (error: any, columnName: string) => {
+      const code = String(error?.code || '').toUpperCase();
+      if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
+      const messageText = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+      const col = columnName.toLowerCase();
+      return (
+        messageText.includes(`column "${col}"`) ||
+        messageText.includes(`${col} does not exist`) ||
+        (messageText.includes('schema cache') && messageText.includes(col))
+      );
+    };
+
+    const normalizeRoleRows = (rows: any[]) =>
+      (rows || []).map((row: any) => ({
+        id: row?.id,
+        title: String(row?.title || row?.name || row?.id || '').trim(),
+      }));
+
+    const fetchRoles = async () => {
+      const primary = await supabase
+        .from('org_roles')
+        .select('*')
+        .limit(200);
+      if (!primary.error) return normalizeRoleRows(primary.data || []);
+
+      if (isMissingColumnError(primary.error, 'title')) {
+        const byName = await supabase
+          .from('org_roles')
+          .select('*')
+          .limit(200);
+        if (!byName.error) return normalizeRoleRows(byName.data || []);
+
+        const idOnly = await supabase.from('org_roles').select('*').limit(200);
+        if (!idOnly.error) return normalizeRoleRows(idOnly.data || []);
+      }
+
+      return [] as Array<{ id: string; title: string }>;
+    };
+
     const loadProfiles = async () => {
       setMentionsLoading(true);
       try {
-        const [{ data: profiles, error: profilesError }, { data: roles, error: rolesError }] = await Promise.all([
+        const [{ data: profiles, error: profilesError }, roles] = await Promise.all([
           supabase.from('profiles').select('id, full_name').order('full_name', { ascending: true }).limit(200),
-          supabase.from('org_roles').select('id, title').order('title', { ascending: true }).limit(200),
+          fetchRoles(),
         ]);
 
-        if (profilesError || rolesError) {
-          console.error(profilesError || rolesError);
+        if (profilesError) {
+          console.error(profilesError);
         }
 
         buildMentions(profiles || [], roles || []);

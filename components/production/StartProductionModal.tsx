@@ -766,7 +766,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
       okText={transferDialog?.mode === 'copy' ? 'کپی' : 'جابجایی'}
       cancelText="انصراف"
       okButtonProps={{ disabled: transferTargetGroupIndex === null }}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="space-y-2">
         <div className="text-xs text-gray-600">محصول مقصد را انتخاب کنید:</div>
@@ -803,7 +803,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
         okText="شروع تولید"
         cancelText="انصراف"
         confirmLoading={loading}
-        destroyOnClose
+        destroyOnHidden
         styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}
       >
         {bodyContent}

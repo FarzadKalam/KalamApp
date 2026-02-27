@@ -3,6 +3,7 @@ import { Form, Input, Button, message, Upload, Select } from 'antd';
 import { SaveOutlined, UploadOutlined, CloudUploadOutlined, GlobalOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../../theme/brandTheme';
+import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCurrencyConfig } from '../../utils/currency';
 
 const CompanyTab: React.FC = () => {
   const [form] = Form.useForm();
@@ -30,6 +31,14 @@ const CompanyTab: React.FC = () => {
         trade_name: data.trade_name || data.company_name || '',
         company_name_en: data.company_name_en || '',
         palette_key: data.brand_palette_key || DEFAULT_BRANDING.paletteKey,
+        currency_code: normalizeCurrencyConfig({
+          code: data.currency_code,
+          label: data.currency_label,
+        }).code,
+      });
+      persistCurrencyConfig({
+        code: data.currency_code,
+        label: data.currency_label,
       });
       setRecordId(data.id);
       setLogoUrl(data.logo_url || null);
@@ -42,7 +51,9 @@ const CompanyTab: React.FC = () => {
       trade_name: DEFAULT_BRANDING.shortName,
       company_name_en: '',
       palette_key: DEFAULT_BRANDING.paletteKey,
+      currency_code: DEFAULT_CURRENCY.code,
     });
+    persistCurrencyConfig(DEFAULT_CURRENCY);
   };
 
   const handleUpload = async (file: File, type: 'logo' | 'icon') => {
@@ -74,6 +85,7 @@ const CompanyTab: React.FC = () => {
         trade_name,
         company_name_en,
         palette_key,
+        currency_code,
         ...rest
       } = values;
 
@@ -81,6 +93,7 @@ const CompanyTab: React.FC = () => {
       const tradeName = String(trade_name || '').trim() || fullName;
       const englishName = String(company_name_en || '').trim();
 
+      const currency = normalizeCurrencyConfig({ code: currency_code });
       const payload = {
         ...rest,
         company_name: fullName, // backward compatibility for existing parts
@@ -88,6 +101,8 @@ const CompanyTab: React.FC = () => {
         trade_name: tradeName,
         company_name_en: englishName || null,
         brand_palette_key: palette_key || DEFAULT_BRANDING.paletteKey,
+        currency_code: currency.code,
+        currency_label: currency.label,
         logo_url: logoUrl,
         icon_url: iconUrl,
       };
@@ -100,6 +115,7 @@ const CompanyTab: React.FC = () => {
       }
 
       window.dispatchEvent(new CustomEvent(BRANDING_UPDATED_EVENT));
+      persistCurrencyConfig(currency);
       message.success('تنظیمات شرکت ذخیره شد');
     } catch {
       message.error('خطا در ذخیره سازی');
@@ -157,6 +173,12 @@ const CompanyTab: React.FC = () => {
             }))}
           />
         </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">واحد پولی</span>} name="currency_code" rules={[{ required: true }]}>
+          <Select
+            className="dark:bg-white/5 dark:border-gray-700 dark:text-white"
+            options={CURRENCY_OPTIONS}
+          />
+        </Form.Item>
 
         <Form.Item label={<span className="dark:text-gray-300">نام مدیرعامل</span>} name="ceo_name">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
@@ -197,4 +219,3 @@ const CompanyTab: React.FC = () => {
 };
 
 export default CompanyTab;
-

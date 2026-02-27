@@ -97,6 +97,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
+  const canViewAccountingSettings =
+    canViewAccountingDashboard &&
+    rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.fields?.settings_links !== false;
 
   // Collapse sidebar on route change
   useEffect(() => {
@@ -160,7 +163,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
         { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
         { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
-        { key: '/cash_bank', label: 'نقد و بانک', disabled: true },
+        { key: '/cash_bank', label: 'نقد و بانک' },
       ]
     },
     {
@@ -170,13 +173,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       children: [
         { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
         { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
-        { key: '/chart_of_accounts', label: 'کدینگ حساب ها', disabled: !canViewModule('chart_of_accounts') },
+        {
+          key: '/accounting/account-review',
+          label: 'مرور حساب ها',
+          disabled: !canViewModule('journal_entries') || !canViewModule('chart_of_accounts'),
+        },
+        { key: '/chart_of_accounts', label: 'جدول حساب ها', disabled: !canViewModule('chart_of_accounts') },
         { key: '/cheques', label: 'چک ها', disabled: !canViewModule('cheques') },
-        { key: '/fiscal_years', label: 'سال های مالی', disabled: !canViewModule('fiscal_years') },
-        { key: '/accounting_event_rules', label: 'قواعد صدور سند', disabled: !canViewModule('accounting_event_rules') },
-        { key: '/cost_centers', label: 'مراکز هزینه', disabled: !canViewModule('cost_centers') },
-        { key: '/cash_boxes', label: 'صندوق ها', disabled: !canViewModule('cash_boxes') },
-        { key: '/bank_accounts', label: 'حساب های بانکی', disabled: !canViewModule('bank_accounts') },
+        { key: '/accounting/settings', label: 'تنظیمات حسابداری', disabled: !canViewAccountingSettings },
       ]
     },
     {
@@ -201,6 +205,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             { key: '/process_runs', label: 'اجرای فرآیندها' },
           ],
         },
+        { key: '/production_orders', label: 'سفارشات تولید' },
         { key: '/gallery', label: 'گالری فایل‌ها' },
       ]
     },
@@ -315,7 +320,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   };
 
   return (
-    <AntLayout className="min-h-screen bg-gray-100 dark:bg-dark-bg transition-colors duration-300">
+    <AntLayout className="h-screen overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300">
       
       {isMobile && !collapsed && (
         <div 
@@ -361,7 +366,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           />
         )}
 
-        <div style={{ height: 'calc(100vh - 64px)', overflowY: 'auto' }}>
+        <div className="h-[calc(100vh-64px)] overflow-y-auto">
             <Menu
             theme={isDarkMode ? 'dark' : 'light'}
             mode="inline"
@@ -379,7 +384,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       </Sider>
 
       <AntLayout 
-        className="bg-gray-100 dark:bg-dark-bg transition-all duration-300 min-h-screen flex flex-col"
+        className="bg-gray-100 dark:bg-dark-bg transition-all duration-300 h-screen overflow-hidden flex flex-col"
         style={{ 
           paddingRight: isMobile ? 0 : (collapsed ? 80 : 260), 
           width: '100%' 
@@ -506,7 +511,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           </div>
         )}
 
-        <Content className={`relative flex-1 ${isMobile && !isKeyboardVisible ? 'pb-20' : ''}`}>
+        <Content className={`layout-main-scroll relative flex-1 overflow-y-auto overflow-x-hidden ${isMobile && !isKeyboardVisible ? 'pb-20' : ''}`}>
           {children}
         </Content>
 

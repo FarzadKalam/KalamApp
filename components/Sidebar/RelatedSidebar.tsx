@@ -285,7 +285,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     open={isMobileMenuOpen}
                     onClose={() => setIsMobileMenuOpen(false)}
                     maskClosable
-                    bodyStyle={{ padding: '12px' }}
+                    styles={{ body: { padding: '12px' } }}
                     style={{ left: -16 }}
                     rootStyle={{ zIndex: 2100 }}
                 >

@@ -24,6 +24,7 @@ import { costCentersConfig } from './modules/costCentersConfig';
 import { cashBoxesConfig } from './modules/cashBoxesConfig';
 import { bankAccountsConfig } from './modules/bankAccountsConfig';
 import { chequesConfig } from './modules/chequesConfig';
+import { cashBankOperationsConfig } from './modules/cashBankOperationsConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -52,4 +53,5 @@ export const MODULES: Record<string, ModuleDefinition> = {
   cash_boxes: cashBoxesConfig,
   bank_accounts: bankAccountsConfig,
   cheques: chequesConfig,
+  cash_bank_operations: cashBankOperationsConfig,
 };

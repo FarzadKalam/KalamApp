@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined } from '@ant-design/icons';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
@@ -10,10 +10,13 @@ import ModuleListRefine from '../ModuleList_Refine';
 import { supabase } from '../../supabaseClient';
 import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
 import WorkflowsManager from '../../components/workflows/WorkflowsManager';
+import ModuleSettingsTab from './ModuleSettingsTab';
+import { useSearchParams } from 'react-router-dom';
 
 const SettingsPage: React.FC = () => {
   const [loadingPermissions, setLoadingPermissions] = useState(true);
   const [tabPermissions, setTabPermissions] = useState<Record<string, boolean>>({});
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     let active = true;
@@ -61,6 +64,7 @@ const SettingsPage: React.FC = () => {
               company: false,
               users: false,
               roles: false,
+              module_settings: false,
               formulas: false,
               connections: false,
               customer_leveling: false,
@@ -71,6 +75,7 @@ const SettingsPage: React.FC = () => {
               company: fields.company !== false,
               users: fields.users !== false,
               roles: fields.roles !== false,
+              module_settings: fields.module_settings !== false,
               formulas: fields.formulas !== false,
               connections: fields.connections !== false,
               customer_leveling: fields.customer_leveling !== false,
@@ -96,6 +101,9 @@ const SettingsPage: React.FC = () => {
     };
   }, []);
 
+  const requestedTab = searchParams.get('tab');
+  const requestedModuleId = searchParams.get('moduleId') || undefined;
+
   const baseItems = useMemo(
     () => [
       {
@@ -112,6 +120,11 @@ const SettingsPage: React.FC = () => {
         key: 'roles',
         label: <span className="flex items-center gap-2 text-base"><ClusterOutlined /> چارت سازمانی</span>,
         children: <RolesTab />,
+      },
+      {
+        key: 'module_settings',
+        label: <span className="flex items-center gap-2 text-base"><SettingOutlined /> تنظیمات ماژول‌ها</span>,
+        children: <ModuleSettingsTab initialModuleId={requestedModuleId} />,
       },
       {
         key: 'formulas',
@@ -134,13 +147,30 @@ const SettingsPage: React.FC = () => {
         children: <WorkflowsManager inline defaultModuleId={null} context="settings" />,
       },
     ],
-    []
+    [requestedModuleId]
   );
 
   const items = useMemo(() => {
     if (Object.keys(tabPermissions).length === 0) return baseItems;
     return baseItems.filter((item) => tabPermissions[item.key] !== false);
   }, [baseItems, tabPermissions]);
+
+  const activeTabKey = useMemo(() => {
+    if (items.length === 0) return undefined;
+    if (requestedTab && items.some((item) => item.key === requestedTab)) {
+      return requestedTab;
+    }
+    return items[0]?.key;
+  }, [items, requestedTab]);
+
+  const handleTabChange = (tabKey: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', tabKey);
+    if (tabKey !== 'module_settings') {
+      next.delete('moduleId');
+    }
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <div className="p-4 md:p-8 max-w-[1600px] mx-auto animate-fadeIn">
@@ -154,7 +184,13 @@ const SettingsPage: React.FC = () => {
             <Empty description="دسترسی به تب های تنظیمات ندارید" />
           </div>
         ) : (
-          <Tabs defaultActiveKey={items[0]?.key || 'company'} items={items} size="large" className="dark:text-gray-200" />
+          <Tabs
+            activeKey={activeTabKey}
+            onChange={handleTabChange}
+            items={items}
+            size="large"
+            className="dark:text-gray-200"
+          />
         )}
       </div>
       <style>{`

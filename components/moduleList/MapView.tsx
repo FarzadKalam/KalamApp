@@ -103,12 +103,20 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
         center={IRAN_CENTER}
         zoom={5}
         minZoom={4}
-        maxZoom={18}
+        maxZoom={14}
         maxBounds={IRAN_BOUNDS}
         maxBoundsViscosity={1}
         style={{ width: '100%', height: '100%' }}
       >
-        <TileLayer url={MAP_TILE_URL} attribution={MAP_TILE_ATTRIBUTION} />
+        <TileLayer
+          url={MAP_TILE_URL}
+          attribution={MAP_TILE_ATTRIBUTION}
+          bounds={IRAN_BOUNDS}
+          noWrap
+          maxNativeZoom={14}
+          maxZoom={14}
+          detectRetina={false}
+        />
         <FitBoundsToPoints points={points} />
 
         {points.map((point) => (

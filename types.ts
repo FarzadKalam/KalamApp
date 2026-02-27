@@ -84,7 +84,8 @@ export enum BlockType {
   DEFAULT = 'default',
   FIELD_GROUP = 'field_group',
   TABLE = 'table',
-  GRID_TABLE = 'grid_table'
+  GRID_TABLE = 'grid_table',
+  STAGES = 'stages'
 }
 
 export enum UserRole {

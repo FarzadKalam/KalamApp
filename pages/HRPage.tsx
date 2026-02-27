@@ -25,6 +25,7 @@ import { supabase } from '../supabaseClient';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { isTaskDoneStatus, normalizeTaskStatus } from '../utils/taskCompletion';
 import { MODULES } from '../moduleRegistry';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type TaskRecord = {
   id: string;
@@ -556,7 +557,7 @@ const HRPage: React.FC = () => {
         return normalizedProfiles.map((profile) => profile.id);
       });
     } catch (err: any) {
-      message.error(`خطا در دریافت داده‌های منابع انسانی: ${err?.message || err}`);
+      message.error(toFaErrorMessage(err as any, 'خطا در دریافت داده‌های منابع انسانی'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -641,7 +642,7 @@ const HRPage: React.FC = () => {
       setConfigModalOpen(false);
       await fetchData(true);
     } catch (err: any) {
-      message.error(`ذخیره تنظیمات ناموفق بود: ${err?.message || err}`);
+      message.error(toFaErrorMessage(err as any, 'ذخیره تنظیمات ناموفق بود'));
     } finally {
       setSavingProfileConfig(false);
     }

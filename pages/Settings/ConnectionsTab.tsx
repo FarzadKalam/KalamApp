@@ -14,6 +14,7 @@ import {
 import { SaveOutlined, SendOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { sendSmsViaGateway } from '../../utils/smsGateway';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 type ConnectionType = 'sms' | 'email' | 'site';
 
@@ -188,7 +189,7 @@ const ConnectionsTab: React.FC = () => {
       form.setFieldsValue(nextValues);
       setTableMissing(false);
     } catch (err: any) {
-      message.error(`خطا در دریافت تنظیمات اتصالات: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در دریافت تنظیمات اتصالات'));
       form.setFieldsValue(DEFAULT_VALUES);
     } finally {
       setLoading(false);
@@ -261,7 +262,7 @@ const ConnectionsTab: React.FC = () => {
 
       const { data, error } = await supabase
         .from('integration_settings')
-        .upsert(sanitizedRows, { onConflict: 'connection_type' })
+        .upsert(sanitizedRows, { onConflict: 'org_id,connection_type' })
         .select('id, connection_type');
 
       if (error) throw error;
@@ -283,7 +284,7 @@ const ConnectionsTab: React.FC = () => {
         message.error('جدول integration_settings هنوز در دیتابیس ایجاد نشده است.');
         return;
       }
-      message.error(`خطا در ذخیره تنظیمات اتصالات: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در ذخیره تنظیمات اتصالات'));
     } finally {
       setSaving(false);
     }
@@ -348,7 +349,7 @@ const ConnectionsTab: React.FC = () => {
       });
       message.success('پیامک تست ارسال شد (درخواست ثبت شد).');
     } catch (err: any) {
-      message.error(`خطا در ارسال پیامک تست: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در ارسال پیامک تست'));
     } finally {
       setSmsTesting(false);
     }

@@ -1,9 +1,9 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Table, Tag, Avatar, Input, Button, Space, Popover } from 'antd';
+import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover } from 'antd';
 import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSingleOptionLabel } from '../utils/optionHelpers';
-import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
+import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -56,6 +56,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 }) => {
   const searchInput = useRef<InputRef>(null);
   const [scrollHeight, setScrollHeight] = useState<number>(500);
+  const [columnFilters, setColumnFilters] = useState<Record<string, React.Key[] | null>>({});
 
   // ✅ Responsive scroll height
   useEffect(() => {
@@ -75,7 +76,51 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     return () => window.removeEventListener('resize', updateScrollHeight);
   }, []);
 
-  if (!moduleConfig || !moduleConfig.fields) return null;
+  useEffect(() => {
+    setColumnFilters({});
+  }, [moduleConfig?.id]);
+
+  const normalizeDigits = (value: string | number | null | undefined) => {
+    if (value === null || value === undefined) return '';
+    return String(value)
+      .trim()
+      .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+  };
+
+  const parseRangeValue = (
+    raw: React.Key | undefined
+  ): { from?: string | number; to?: string | number } => {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
+    } catch {
+      return {};
+    }
+    return {};
+  };
+
+  const toComparableTime = (raw: any): number | null => {
+    const normalized = normalizeDigits(raw);
+    if (!normalized) return null;
+    const match = normalized.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    return (hh * 60) + mm;
+  };
+
+  const toComparableDate = (raw: any, withTime: boolean): number | null => {
+    const normalized = normalizeDigits(raw);
+    if (!normalized) return null;
+    const asIso = normalized.includes('/') ? normalized.replace(/\//g, '-') : normalized;
+    const value = withTime ? asIso.replace(' ', 'T') : `${asIso}T00:00:00`;
+    const ts = new Date(value).getTime();
+    return Number.isNaN(ts) ? null : ts;
+  };
 
   // --- لاجیک جستجوی ستونی (بهینه شده) ---
   const handleSearch = (_selectedKeys: string[], confirm: (param?: FilterConfirmProps) => void) => {
@@ -86,6 +131,20 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     clearFilters();
     confirm();
   };
+
+  const handleTableChange = (
+    paginationValue: any,
+    nextFilters: Record<string, React.Key[] | null>,
+    sorter: any,
+    extra: any
+  ) => {
+    setColumnFilters(nextFilters || {});
+    if (onChange && extra?.action !== 'filter') {
+      onChange(paginationValue, nextFilters, sorter);
+    }
+  };
+
+  if (!moduleConfig || !moduleConfig.fields) return null;
 
   const getColumnSearchProps = (dataIndex: string, title: string): ColumnType<any> => ({
     filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters, close }) => (
@@ -132,6 +191,134 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           setTimeout(() => searchInput.current?.select(), 100);
         }
       },
+    },
+  });
+
+  const getRangeFilterProps = (
+    dataIndex: string,
+    title: string,
+    kind: 'PRICE' | 'DATE' | 'TIME' | 'DATETIME'
+  ): ColumnType<any> => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters, close }) => {
+      const range = parseRangeValue(selectedKeys[0]);
+      const updateRange = (next: { from?: string | number; to?: string | number }) => {
+        if (
+          (next.from === undefined || next.from === '' || next.from === null) &&
+          (next.to === undefined || next.to === '' || next.to === null)
+        ) {
+          setSelectedKeys([]);
+          return;
+        }
+        setSelectedKeys([JSON.stringify(next)]);
+      };
+
+      return (
+        <div style={{ padding: 8, minWidth: 240 }} onKeyDown={(e) => e.stopPropagation()}>
+          <div className="mb-2 text-xs text-gray-500">{`فیلتر ${title}`}</div>
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            {kind === 'PRICE' ? (
+              <>
+                <InputNumber
+                  className="w-full"
+                  controls={false}
+                  placeholder="از مبلغ"
+                  value={range.from as number | undefined}
+                  formatter={(value) => {
+                    if (value === undefined || value === null || value === '') return '';
+                    const normalized = fromPersianNumber(String(value));
+                    if (Number.isNaN(normalized)) return '';
+                    return toPersianNumber(normalized.toLocaleString('en-US'));
+                  }}
+                  parser={(value) => normalizeDigits(value || '').replace(/,/g, '')}
+                  onChange={(val) => updateRange({ ...range, from: val ?? undefined })}
+                />
+                <InputNumber
+                  className="w-full"
+                  controls={false}
+                  placeholder="تا مبلغ"
+                  value={range.to as number | undefined}
+                  formatter={(value) => {
+                    if (value === undefined || value === null || value === '') return '';
+                    const normalized = fromPersianNumber(String(value));
+                    if (Number.isNaN(normalized)) return '';
+                    return toPersianNumber(normalized.toLocaleString('en-US'));
+                  }}
+                  parser={(value) => normalizeDigits(value || '').replace(/,/g, '')}
+                  onChange={(val) => updateRange({ ...range, to: val ?? undefined })}
+                />
+              </>
+            ) : (
+              <>
+                <Input
+                  placeholder={kind === 'TIME' ? 'از زمان (HH:mm)' : 'از تاریخ'}
+                  value={range.from as string | undefined}
+                  onChange={(e) => updateRange({ ...range, from: e.target.value || undefined })}
+                />
+                <Input
+                  placeholder={kind === 'TIME' ? 'تا زمان (HH:mm)' : 'تا تاریخ'}
+                  value={range.to as string | undefined}
+                  onChange={(e) => updateRange({ ...range, to: e.target.value || undefined })}
+                />
+              </>
+            )}
+          </Space>
+          <Space className="mt-3">
+            <Button type="primary" size="small" onClick={() => confirm()}>
+              اعمال
+            </Button>
+            <Button
+              size="small"
+              onClick={() => {
+                if (clearFilters) {
+                  clearFilters();
+                }
+                confirm();
+              }}
+            >
+              حذف
+            </Button>
+            <Button type="link" size="small" onClick={() => close()}>
+              بستن
+            </Button>
+          </Space>
+        </div>
+      );
+    },
+    filterIcon: (filtered: boolean) => (
+      <SearchOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />
+    ),
+    onFilter: (rawValue, record) => {
+      const { from, to } = parseRangeValue(rawValue as React.Key);
+      const recordValue = record[dataIndex];
+
+      if (kind === 'PRICE') {
+        const minVal = from !== undefined ? fromPersianNumber(String(from)) : null;
+        const maxVal = to !== undefined ? fromPersianNumber(String(to)) : null;
+        const current = Number(recordValue);
+        if (Number.isNaN(current)) return false;
+        if (minVal !== null && current < minVal) return false;
+        if (maxVal !== null && current > maxVal) return false;
+        return true;
+      }
+
+      if (kind === 'TIME') {
+        const minTime = from ? toComparableTime(from) : null;
+        const maxTime = to ? toComparableTime(to) : null;
+        const current = toComparableTime(recordValue);
+        if (current === null) return false;
+        if (minTime !== null && current < minTime) return false;
+        if (maxTime !== null && current > maxTime) return false;
+        return true;
+      }
+
+      const withTime = kind === 'DATETIME';
+      const minDate = from ? toComparableDate(from, withTime) : null;
+      const maxDate = to ? toComparableDate(to, withTime) : null;
+      const currentDate = toComparableDate(recordValue, withTime);
+      if (currentDate === null) return false;
+      if (minDate !== null && currentDate < minDate) return false;
+      if (maxDate !== null && currentDate > maxDate) return false;
+      return true;
     },
   });
 
@@ -198,9 +385,36 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     tableFields = [keyField, ...otherFields];
   }
 
+  const resolveFieldFilterOptions = (field: any) => {
+    let options: { text: string; value: string | number }[] = [];
+    if (field.options) {
+      options = field.options.map((o: any) => ({ text: o.label, value: o.value }));
+    } else if ((field as any).dynamicOptionsCategory) {
+      const category = (field as any).dynamicOptionsCategory;
+      const dynopts = dynamicOptions[category] || [];
+      options = dynopts.map((o: any) => ({ text: o.label, value: o.value }));
+    } else if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
+      const relopts =
+        relationOptions[field.key] ||
+        relationOptions[(field as any).relationConfig?.targetModule] ||
+        relationOptions.profiles ||
+        [];
+      options = relopts.map((o: any) => ({ text: o.label, value: o.value }));
+    }
+    return options.length > 0 ? options : undefined;
+  };
+
   const columns: ColumnsType<any> = tableFields.map(field => {
     const isSearchable = field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
     const isTagField = field.type === FieldType.TAGS;
+    const hasChoiceFilter =
+      !isTagField &&
+      (field.type === FieldType.STATUS ||
+        field.type === FieldType.SELECT ||
+        field.type === FieldType.MULTI_SELECT ||
+        field.type === FieldType.RELATION ||
+        field.type === FieldType.USER);
+    const choiceOptions = hasChoiceFilter ? resolveFieldFilterOptions(field) : undefined;
 
     const formatPersianDate = (val: any, kind: 'DATE' | 'TIME' | 'DATETIME') => {
       if (!val) return null;
@@ -240,34 +454,24 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       title: <span className="text-[11px] text-gray-500">{field.labels.fa}</span>,
       dataIndex: field.key,
       key: field.key,
-      width: field.key === 'id' ? 60 : isTagField ? 140 : undefined,
+      width: field.key === 'id' ? 60 : isTagField ? 110 : undefined,
+      filteredValue: columnFilters[field.key] ?? null,
       
       ...(isSearchable ? getColumnSearchProps(field.key, field.labels.fa) : {}),
       ...(isTagField ? getTagFilterProps(field.key, field.labels.fa) : {}),
+      ...(field.type === FieldType.PRICE ? getRangeFilterProps(field.key, field.labels.fa, 'PRICE') : {}),
+      ...(field.type === FieldType.DATE ? getRangeFilterProps(field.key, field.labels.fa, 'DATE') : {}),
+      ...(field.type === FieldType.TIME ? getRangeFilterProps(field.key, field.labels.fa, 'TIME') : {}),
+      ...(field.type === FieldType.DATETIME ? getRangeFilterProps(field.key, field.labels.fa, 'DATETIME') : {}),
 
-      filters: !isTagField && (field.type === FieldType.STATUS || field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT || field.type === FieldType.RELATION || field.type === FieldType.USER)
-          ? (() => {
-              let options: any[] = [];
-              if (field.options) {
-                options = field.options.map(o => ({ text: o.label, value: o.value }));
-              } else if ((field as any).dynamicOptionsCategory) {
-                const category = (field as any).dynamicOptionsCategory;
-                const dynopts = dynamicOptions[category] || [];
-                options = dynopts.map(o => ({ text: o.label, value: o.value }));
-              } else if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
-                const rellopts = relationOptions[field.key] || relationOptions[(field as any).relationConfig?.targetModule] || relationOptions['profiles'] || [];
-                options = rellopts.map(o => ({ text: o.label, value: o.value }));
-              }
-              return options.length > 0 ? options : undefined;
-            })()
-          : undefined,
-      onFilter: !isTagField && (field.type === FieldType.STATUS || field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT || field.type === FieldType.RELATION || field.type === FieldType.USER)
+      filters: hasChoiceFilter ? choiceOptions : undefined,
+      onFilter: hasChoiceFilter
           ? (value, record) => {
               const recordValue = record[field.key];
               if (field.type === FieldType.MULTI_SELECT && Array.isArray(recordValue)) {
-                return recordValue.includes(value);
+                return recordValue.map((item: any) => String(item)).includes(String(value));
               }
-              return recordValue === value;
+              return String(recordValue ?? '') === String(value ?? '');
             }
           : undefined,
 
@@ -475,7 +679,64 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       return <span className="text-[10px] text-gray-400">نامشخص</span>;
     }
     });
-    }
+  }
+
+  const activeFilterBubbles = (() => {
+    const fieldsMap = new Map(tableFields.map((field: any) => [field.key, field]));
+    const bubbles: Array<{ id: string; fieldKey: string; rawValue: string; label: string }> = [];
+
+    Object.entries(columnFilters).forEach(([fieldKey, values]) => {
+      if (!Array.isArray(values) || values.length === 0) return;
+      const field: any = fieldsMap.get(fieldKey);
+      const fieldLabel = field?.labels?.fa || fieldKey;
+      const options = field ? resolveFieldFilterOptions(field) || [] : [];
+
+      values.forEach((raw) => {
+        if (raw === undefined || raw === null || raw === '') return;
+        const rawValue = String(raw);
+        let valueLabel = rawValue;
+
+        if (
+          field?.type === FieldType.PRICE ||
+          field?.type === FieldType.DATE ||
+          field?.type === FieldType.TIME ||
+          field?.type === FieldType.DATETIME
+        ) {
+          const range = parseRangeValue(raw);
+          const from = range.from !== undefined && range.from !== '' ? String(range.from) : '...';
+          const to = range.to !== undefined && range.to !== '' ? String(range.to) : '...';
+          if (field?.type === FieldType.PRICE) {
+            const fromNum = from !== '...' ? fromPersianNumber(from).toLocaleString('en-US') : from;
+            const toNum = to !== '...' ? fromPersianNumber(to).toLocaleString('en-US') : to;
+            valueLabel = `${toPersianNumber(fromNum)} تا ${toPersianNumber(toNum)}`;
+          } else {
+            valueLabel = `${from} تا ${to}`;
+          }
+        } else if (options.length > 0) {
+          const selected = options.find((opt) => String(opt.value) === rawValue);
+          if (selected) valueLabel = String(selected.text);
+        }
+
+        bubbles.push({
+          id: `${fieldKey}:${rawValue}`,
+          fieldKey,
+          rawValue,
+          label: `${fieldLabel}: ${valueLabel}`,
+        });
+      });
+    });
+
+    return bubbles;
+  })();
+
+  const removeFilterBubble = (fieldKey: string, rawValue: string) => {
+    setColumnFilters((prev) => {
+      const current = prev[fieldKey];
+      if (!Array.isArray(current)) return prev;
+      const nextValues = current.filter((item) => String(item) !== rawValue);
+      return { ...prev, [fieldKey]: nextValues.length > 0 ? nextValues : null };
+    });
+  };
 
   const tablePagination =
     pagination === false
@@ -488,11 +749,37 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           pageSizeOptions: [10, 20, 50, 100],
           showTotal: (total: number, range: [number, number]) =>
             `${toPersianNumber(range[0])}-${toPersianNumber(range[1])} از ${toPersianNumber(total)}`,
+          itemRender: (page: number, type: string, originalElement: React.ReactNode) => {
+            if (type === 'page') {
+              return <span className="persian-number">{toPersianNumber(page)}</span>;
+            }
+            return originalElement;
+          },
           ...(pagination || {}),
         };
 
   return (
     <div className={["custom-erp-table", containerClassName].filter(Boolean).join(' ')}>
+      {activeFilterBubbles.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+          {activeFilterBubbles.map((bubble) => (
+            <Tag
+              key={bubble.id}
+              closable
+              className="rounded-full px-2 py-0.5 text-[11px]"
+              onClose={(e) => {
+                e.preventDefault();
+                removeFilterBubble(bubble.fieldKey, bubble.rawValue);
+              }}
+            >
+              {bubble.label}
+            </Tag>
+          ))}
+          <Button type="link" size="small" onClick={() => setColumnFilters({})}>
+            حذف همه فیلترها
+          </Button>
+        </div>
+      )}
       <Table 
           columns={columns} 
           dataSource={data} 
@@ -501,7 +788,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           size="small" 
           tableLayout={tableLayout}
           pagination={tablePagination} 
-          onChange={onChange}
+          onChange={handleTableChange}
           scroll={disableScroll ? undefined : { x: scrollX ?? 'max-content', y: scrollHeight }}
           // 🔥 اتصال انتخاب گروهی
           rowSelection={rowSelection ? {

@@ -1,11 +1,9 @@
-import React from "react";
+﻿import React from "react";
 import { Button, Input, Segmented, Tooltip } from "antd";
 import {
   AppstoreOutlined,
   ColumnWidthOutlined,
-  CompressOutlined,
   EnvironmentOutlined,
-  ExpandOutlined,
   ReloadOutlined,
   TableOutlined,
 } from "@ant-design/icons";
@@ -17,8 +15,6 @@ interface ToolbarProps {
   searchTerm: string;
   onSearchChange: (value: string) => void;
   onRefresh: () => void;
-  isFullscreen: boolean;
-  toggleFullscreen: () => void;
   kanbanEnabled?: boolean;
   mapEnabled?: boolean;
   kanbanGroupBy: string | null;
@@ -32,8 +28,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
   searchTerm,
   onSearchChange,
   onRefresh,
-  isFullscreen,
-  toggleFullscreen,
   kanbanEnabled = false,
   mapEnabled = false,
   kanbanGroupBy,
@@ -67,13 +61,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
             value={viewMode}
             onChange={(val) => setViewMode(val as ViewMode)}
           />
-
-          <Tooltip title={isFullscreen ? "خروج از تمام صفحه" : "تمام صفحه"}>
-            <Button
-              icon={isFullscreen ? <CompressOutlined /> : <ExpandOutlined />}
-              onClick={toggleFullscreen}
-            />
-          </Tooltip>
         </div>
 
         {viewMode === ViewMode.KANBAN && kanbanEnabled && (

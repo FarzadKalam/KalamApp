@@ -19,12 +19,19 @@ import {
 } from '../../utils/permissions';
 
 const { Panel } = Collapse;
+const SYSTEM_ROLE_FA_LABELS: Record<string, string> = {
+  super_admin: 'مدیر ارشد',
+  admin: 'مدیر سیستم',
+  manager: 'مدیر',
+  viewer: 'مشاهده‌گر',
+};
 
 const RolesTab: React.FC = () => {
   const [roles, setRoles] = useState<any[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<PermissionMap>({});
   const [newRoleName, setNewRoleName] = useState('');
+  const [selectedRoleTitle, setSelectedRoleTitle] = useState('');
   const [loading, setLoading] = useState(false);
 
   const defaultPermissions = useMemo(() => buildDefaultPermissions(MODULES), []);
@@ -37,7 +44,14 @@ const RolesTab: React.FC = () => {
     if (!selectedRoleId) return;
     const role = roles.find((r) => r.id === selectedRoleId);
     setPermissions(mergePermissionsWithDefaults(role?.permissions || {}, defaultPermissions));
+    setSelectedRoleTitle(String(role?.title || ''));
   }, [selectedRoleId, roles, defaultPermissions]);
+
+  const getRoleDisplayTitle = (role: any) => {
+    const rawTitle = String(role?.title || '').trim();
+    const normalized = rawTitle.toLowerCase();
+    return SYSTEM_ROLE_FA_LABELS[normalized] || rawTitle || 'بدون عنوان';
+  };
 
   const fetchRoles = async () => {
     const { data } = await supabase.from('org_roles').select('*').order('created_at');
@@ -65,6 +79,28 @@ const RolesTab: React.FC = () => {
     } else {
       message.error('خطا: ممکن است کاربرانی به این نقش متصل باشند.');
     }
+  };
+
+  const handleUpdateRoleTitle = async () => {
+    if (!selectedRoleId) return;
+    const nextTitle = String(selectedRoleTitle || '').trim();
+    if (!nextTitle) {
+      message.error('عنوان نقش نمی‌تواند خالی باشد');
+      return;
+    }
+
+    const { error } = await supabase
+      .from('org_roles')
+      .update({ title: nextTitle })
+      .eq('id', selectedRoleId);
+
+    if (error) {
+      message.error(error.message || 'خطا در بروزرسانی عنوان نقش');
+      return;
+    }
+
+    message.success('عنوان نقش بروزرسانی شد');
+    setRoles((prev) => prev.map((r) => (r.id === selectedRoleId ? { ...r, title: nextTitle } : r)));
   };
 
   const handlePermissionChange = (
@@ -121,7 +157,7 @@ const RolesTab: React.FC = () => {
   const treeData = roles.map((role) => ({
     title: (
       <div className="flex justify-between items-center w-full pr-2 text-gray-700 dark:text-gray-300">
-        <span>{role.title}</span>
+        <span>{getRoleDisplayTitle(role)}</span>
         <Button
           type="text"
           size="small"
@@ -208,7 +244,9 @@ const RolesTab: React.FC = () => {
               <h3 className="text-lg font-bold m-0 flex items-center gap-2 text-gray-800 dark:text-white">
                 <LockOutlined className="text-leather-600" />
                 دسترسی های جایگاه:
-                <span className="text-leather-600">{roles.find((r) => r.id === selectedRoleId)?.title}</span>
+                <span className="text-leather-600">
+                  {getRoleDisplayTitle(roles.find((r) => r.id === selectedRoleId))}
+                </span>
               </h3>
               <Button
                 type="primary"
@@ -218,6 +256,18 @@ const RolesTab: React.FC = () => {
                 className="bg-green-600 border-none"
               >
                 ذخیره دسترسی ها
+              </Button>
+            </div>
+
+            <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+              <Input
+                value={selectedRoleTitle}
+                onChange={(e) => setSelectedRoleTitle(e.target.value)}
+                placeholder="عنوان نمایشی نقش (فارسی)"
+                className="dark:bg-[#303030] dark:border-gray-700 dark:text-white"
+              />
+              <Button onClick={handleUpdateRoleTitle} icon={<TeamOutlined />}>
+                ذخیره عنوان
               </Button>
             </div>
 

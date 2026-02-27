@@ -88,6 +88,21 @@ const isMissingColumnError = (error: any, columnName: string) => {
   );
 };
 
+const normalizeRoleRows = (rows: any[]) =>
+  (rows || []).map((row: any) => ({
+    id: row?.id,
+    title: String(row?.title || row?.name || row?.id || '').trim(),
+  }));
+
+const shouldPauseNotesPolling = (error: any) => {
+  if (!error) return false;
+  const status = Number(error?.status || 0);
+  if (status >= 500) return true;
+  const code = String(error?.code || '').toUpperCase();
+  if (code === 'PGRST301' || code === 'PGRST302') return true;
+  return false;
+};
+
 const moduleHasAssigneeField = (moduleConfig: any) => {
   const headerFields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
   if (headerFields.some((f: any) => String(f?.key || '') === 'assignee_id')) return true;
@@ -136,6 +151,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const prevTasksRef = useRef<Set<string>>(new Set());
   const prevResponsibilitiesRef = useRef<Set<string>>(new Set());
   const notificationsReadyRef = useRef(false);
+  const notesPollingPausedRef = useRef(false);
+  const notesPollingPauseLoggedRef = useRef(false);
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -184,9 +201,31 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
   useEffect(() => {
     const loadMentions = async () => {
-      const [{ data: profiles }, { data: roles }] = await Promise.all([
+      const fetchRoles = async () => {
+        const primary = await supabase
+          .from('org_roles')
+          .select('*')
+          .limit(200);
+
+        if (!primary.error) return normalizeRoleRows(primary.data || []);
+
+        if (isMissingColumnError(primary.error, 'title')) {
+          const byName = await supabase
+            .from('org_roles')
+            .select('*')
+            .limit(200);
+          if (!byName.error) return normalizeRoleRows(byName.data || []);
+
+          const idOnly = await supabase.from('org_roles').select('*').limit(200);
+          if (!idOnly.error) return normalizeRoleRows(idOnly.data || []);
+        }
+
+        return [] as Array<{ id: string; title: string }>;
+      };
+
+      const [{ data: profiles }, roles] = await Promise.all([
         supabase.from('profiles').select('id, full_name').order('full_name', { ascending: true }).limit(200),
-        supabase.from('org_roles').select('id, title').order('title', { ascending: true }).limit(200),
+        fetchRoles(),
       ]);
       const opts = [
         ...(profiles || []).map((p: any) => ({ label: `عضو: ${p.full_name || p.id}`, value: `user:${p.id}` })),
@@ -331,10 +370,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
   const fetchNotes = async () => {
     if (!profile.id) return [];
+    if (notesPollingPausedRef.current) return [];
     const userId = profile.id;
     const roleId = profile.role_id;
 
-    const [{ data: mentionedUser }, { data: mentionedRole }] = await Promise.all([
+    const [{ data: mentionedUser, error: mentionedUserError }, { data: mentionedRole, error: mentionedRoleError }] = await Promise.all([
       supabase
         .from('notes')
         .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
@@ -350,23 +390,48 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             .limit(40)
         : Promise.resolve({ data: [] as any[] }),
     ]);
+    const firstError = mentionedUserError || mentionedRoleError;
+    if (shouldPauseNotesPolling(firstError)) {
+      notesPollingPausedRef.current = true;
+      if (!notesPollingPauseLoggedRef.current) {
+        notesPollingPauseLoggedRef.current = true;
+        console.warn('Notes polling paused due to backend error.', firstError);
+      }
+      return [];
+    }
 
-    const { data: myNotes } = await supabase
+    const { data: myNotes, error: myNotesError } = await supabase
       .from('notes')
       .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
       .eq('author_id', userId)
       .order('created_at', { ascending: false })
       .limit(40);
+    if (shouldPauseNotesPolling(myNotesError)) {
+      notesPollingPausedRef.current = true;
+      if (!notesPollingPauseLoggedRef.current) {
+        notesPollingPauseLoggedRef.current = true;
+        console.warn('Notes polling paused due to backend error.', myNotesError);
+      }
+      return [];
+    }
     const myNoteIds = (myNotes || []).map((n: any) => n.id);
 
     let replyNotes: any[] = [];
     if (myNoteIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('notes')
         .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
         .in('reply_to', myNoteIds)
         .order('created_at', { ascending: false })
         .limit(40);
+      if (shouldPauseNotesPolling(error)) {
+        notesPollingPausedRef.current = true;
+        if (!notesPollingPauseLoggedRef.current) {
+          notesPollingPauseLoggedRef.current = true;
+          console.warn('Notes polling paused due to backend error.', error);
+        }
+        return [];
+      }
       replyNotes = data || [];
     }
 
@@ -380,13 +445,21 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const assignedNotes: any[] = [];
     await Promise.all(
       Object.entries(grouped).map(async ([moduleId, ids]) => {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('notes')
           .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
           .eq('module_id', moduleId)
           .in('record_id', ids)
           .order('created_at', { ascending: false })
           .limit(40);
+        if (shouldPauseNotesPolling(error)) {
+          notesPollingPausedRef.current = true;
+          if (!notesPollingPauseLoggedRef.current) {
+            notesPollingPauseLoggedRef.current = true;
+            console.warn('Notes polling paused due to backend error.', error);
+          }
+          return;
+        }
         if (data?.length) assignedNotes.push(...data);
       })
     );
@@ -457,7 +530,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       setAssigneeNameMap(map);
     }
     if (roleIds.length) {
-      const { data: roles } = await supabase.from('org_roles').select('id, title').in('id', roleIds);
+      const { data: roles } = await supabase.from('org_roles').select('*').in('id', roleIds);
       const map: Record<string, string> = {};
       (roles || []).forEach((r: any) => { map[r.id] = r.title || r.id; });
       setRoleNameMap(map);
@@ -510,7 +583,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       setAssigneeNameMap((prev) => ({ ...prev, ...map }));
     }
     if (roleIds.length) {
-      const { data: roles } = await supabase.from('org_roles').select('id, title').in('id', roleIds);
+      const { data: roles } = await supabase.from('org_roles').select('*').in('id', roleIds);
       const map: Record<string, string> = {};
       (roles || []).forEach((r: any) => { map[r.id] = r.title || r.id; });
       setRoleNameMap((prev) => ({ ...prev, ...map }));
@@ -528,16 +601,32 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     setLoadingNotes(true);
     setLoadingTasks(true);
     setLoadingResponsibilities(true);
+    const safeFetch = async <T,>(loader: () => Promise<T>, type: 'notes' | 'tasks' | 'responsibilities', fallback: T) => {
+      try {
+        return await loader();
+      } catch (error) {
+        if (type === 'notes') {
+          notesPollingPausedRef.current = true;
+          if (!notesPollingPauseLoggedRef.current) {
+            notesPollingPauseLoggedRef.current = true;
+            console.warn('Notes polling paused due to network/CORS error.', error);
+          }
+        } else {
+          console.warn(`Failed to fetch ${type}:`, error);
+        }
+        return fallback;
+      }
+    };
     const [notesData, tasksData, responsibilitiesData] = await Promise.all([
-      fetchNotes(),
-      fetchTasks(
+      safeFetch(() => fetchNotes(), 'notes', [] as any[]),
+      safeFetch(() => fetchTasks(
         statusFilter.length
           ? statusFilter
           : statusOptions
               .map((o: any) => String(o.value))
               .filter((val: string) => val !== 'done' && val !== 'canceled')
-      ),
-      fetchResponsibilities(),
+      ), 'tasks', [] as any[]),
+      safeFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]),
     ]);
     setNotes(notesData);
     setTasks(tasksData);
@@ -588,6 +677,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const handleManualRefresh = async () => {
     setRefreshing(true);
     try {
+      notesPollingPausedRef.current = false;
+      notesPollingPauseLoggedRef.current = false;
       await refreshAll(true);
     } finally {
       setRefreshing(false);
@@ -1153,7 +1244,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           height="90vh"
           open={open}
           onClose={handleClose}
-          bodyStyle={{ padding: 16 }}
+          styles={{ body: { padding: 16 } }}
           headerStyle={{ background: '#8b5a2b' }}
           closeIcon={<CloseOutlined className="text-white" />}
         >
@@ -1176,7 +1267,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           width={900}
           open={open}
           onClose={handleClose}
-          bodyStyle={{ padding: 0 }}
+          styles={{ body: { padding: 0 } }}
           headerStyle={{ background: '#8b5a2b' }}
           closeIcon={<CloseOutlined className="text-white" />}
         >

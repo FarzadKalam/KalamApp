@@ -24,8 +24,11 @@ import { ModuleCreate } from "./pages/ModuleCreate";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import AccountingPage from "./pages/AccountingPage";
+import AccountingAccountReviewPage from "./pages/AccountingAccountReviewPage";
+import AccountingSettingsPage from "./pages/AccountingSettingsPage";
 import ChartOfAccountsTreePage from "./pages/ChartOfAccountsTreePage";
 import AccountingRecordPage from "./pages/AccountingRecordPage";
+import CashBankPage from "./pages/CashBankPage";
 import JournalEntryCreatePage from "./pages/JournalEntryCreatePage";
 import JournalEntryShowPage from "./pages/JournalEntryShowPage";
 import InquiryForm from "./pages/InquiryForm";
@@ -44,6 +47,7 @@ import {
   type BrandingSettingsPayload,
 } from "./theme/brandTheme";
 import { isAccountingMinimalModule } from "./utils/accountingModules";
+import { normalizeCurrencyConfig, persistCurrencyConfig } from "./utils/currency";
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
@@ -106,8 +110,14 @@ function App() {
         app_title: String(rawBranding?.app_title || companyFullName || tradeName || DEFAULT_BRANDING.appTitle),
         short_name: String(rawBranding?.short_name || tradeName || companyFullName || DEFAULT_BRANDING.shortName),
       });
+      const currency = normalizeCurrencyConfig({
+        code: String(companyRow.currency_code || '').trim().toUpperCase() as any,
+        label: String(companyRow.currency_label || '').trim(),
+      });
+      persistCurrencyConfig(currency);
       setBranding(merged);
     } catch {
+      persistCurrencyConfig(null);
       setBranding(DEFAULT_BRANDING);
     }
   }, []);
@@ -163,8 +173,11 @@ function App() {
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
+    if (pathname.startsWith("/accounting/settings")) return "تنظیمات حسابداری";
+    if (pathname.startsWith("/accounting/account-review")) return "مرور حساب ها";
+    if (pathname.startsWith("/cash_bank")) return "نقد و بانک";
     if (pathname === "/accounting" || pathname.startsWith("/accounting/")) return "حسابداری";
-    if (pathname === "/chart_of_accounts") return "کدینگ حساب ها";
+    if (pathname === "/chart_of_accounts") return "جدول حساب ها";
     if (pathname.startsWith("/journal_entries/create")) return "ایجاد سند حسابداری";
     if (/^\/journal_entries\/[^/]+$/.test(pathname)) return "سند حسابداری";
     if (/^\/journal_entries\/[^/]+\/edit$/.test(pathname)) return "سند حسابداری";
@@ -292,6 +305,9 @@ function App() {
                 <Route path="/hr/:employeeId" element={<HRPage />} />
                 <Route path="/gallery" element={<FilesGalleryPage />} />
                 <Route path="/accounting" element={<AccountingPage />} />
+                <Route path="/cash_bank" element={<CashBankPage />} />
+                <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
+                <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
                 <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
                 <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
                 <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />

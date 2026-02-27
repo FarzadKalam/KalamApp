@@ -102,18 +102,18 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
   const { message: msg } = App.useApp();
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [productType, setProductType] = useState<string>('raw');
+  const [productType, setProductType] = useState<string>('goods');
   const [rawCategory, setRawCategory] = useState<string>('');
   const [productCategory, setProductCategory] = useState<string>('');
   const [sharedValues, setSharedValues] = useState<Record<string, unknown>>({});
   const [rows, setRows] = useState<BulkRow[]>([]);
   const [relationOptions, setRelationOptions] = useState<Record<string, RelationOption[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, DynamicOption[]>>({});
-  const [productCategoryOptions, setProductCategoryOptions] = useState<DynamicOption[]>([]);
   const initializedRef = useRef(false);
 
   const productTypeField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'product_type'), []);
   const rawCategoryField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'category'), []);
+  const serviceCategoryField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'product_category'), []);
   const brandField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'brand_name'), []);
   const nameField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'name'), []);
   const manualCodeField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'manual_code'), []);
@@ -149,14 +149,10 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
   const refreshOptions = useCallback(async () => {
     setLoading(true);
     try {
-      const [productCategoriesRes] = await Promise.all([
-        supabase.from('dynamic_options').select('label,value').eq('category', 'product_categories').eq('is_active', true).order('display_order', { ascending: true }),
-      ]);
-      if (productCategoriesRes.error) throw productCategoriesRes.error;
-      setProductCategoryOptions((productCategoriesRes.data || []) as DynamicOption[]);
-
       const dynCats = new Set<string>();
       [...sharedFields, ...rowFields].forEach((f) => { if (f.dynamicOptionsCategory) dynCats.add(f.dynamicOptionsCategory); });
+      if (rawCategoryField?.dynamicOptionsCategory) dynCats.add(rawCategoryField.dynamicOptionsCategory);
+      if (serviceCategoryField?.dynamicOptionsCategory) dynCats.add(serviceCategoryField.dynamicOptionsCategory);
       const dynMap: Record<string, DynamicOption[]> = {};
       for (const cat of Array.from(dynCats)) {
         const { data, error } = await supabase.from('dynamic_options').select('label,value').eq('category', cat).eq('is_active', true).order('display_order', { ascending: true });
@@ -185,7 +181,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
     } finally {
       setLoading(false);
     }
-  }, [msg, rowFields, sharedFields]);
+  }, [msg, rawCategoryField?.dynamicOptionsCategory, rowFields, serviceCategoryField?.dynamicOptionsCategory, sharedFields]);
 
   useEffect(() => {
     if (!open) {
@@ -194,8 +190,8 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
     }
     if (initializedRef.current) return;
     initializedRef.current = true;
-    const defaultType = String(productTypeField?.defaultValue || productTypeField?.options?.[0]?.value || 'raw');
-    const defaultRaw = String(rawCategoryField?.options?.[0]?.value || '');
+    const defaultType = String(productTypeField?.defaultValue || productTypeField?.options?.[0]?.value || 'goods');
+    const defaultRaw = '';
     const sharedDefaults: Record<string, unknown> = {};
     sharedFields.forEach((f) => {
       if (f.defaultValue !== undefined) sharedDefaults[f.key] = f.defaultValue;
@@ -222,22 +218,26 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
 
   const buildName = useCallback((row: BulkRow, index: number) => {
     const parts: string[] = [];
-    const rawLabel = rawCategoryField?.options?.find((o) => String(o.value) === rawCategory)?.label || rawCategory;
-    const prodLabel = productCategoryOptions.find((o) => o.value === productCategory)?.label || productCategory;
-    if (productType === 'raw' && rawLabel) parts.push(rawLabel);
-    if (productType !== 'raw' && prodLabel) parts.push(prodLabel);
+    const rawLabel = rawCategoryField?.dynamicOptionsCategory
+      ? (dynamicOptions[rawCategoryField.dynamicOptionsCategory] || []).find((o) => o.value === rawCategory)?.label || rawCategory
+      : rawCategory;
+    const serviceLabel = serviceCategoryField?.dynamicOptionsCategory
+      ? (dynamicOptions[serviceCategoryField.dynamicOptionsCategory] || []).find((o) => o.value === productCategory)?.label || productCategory
+      : productCategory;
+    if (productType === 'goods' && rawLabel) parts.push(rawLabel);
+    if (productType === 'service' && serviceLabel) parts.push(serviceLabel);
     rowFields.forEach((f) => { const label = resolveLabel(f, row[f.key]); if (label) parts.push(label); });
     if (brandField) {
       const brandLabel = resolveLabel(brandField, sharedValues.brand_name);
       if (brandLabel) parts.push(brandLabel);
     }
     return parts.join(' ').replace(/\s+/g, ' ').trim() || `محصول جدید ${index + 1}`;
-  }, [brandField, productCategory, productCategoryOptions, productType, rawCategory, rawCategoryField?.options, resolveLabel, rowFields, sharedValues.brand_name]);
+  }, [brandField, dynamicOptions, productCategory, productType, rawCategory, rawCategoryField?.dynamicOptionsCategory, resolveLabel, rowFields, serviceCategoryField?.dynamicOptionsCategory, sharedValues.brand_name]);
 
   const validate = useCallback(() => {
     if (!rows.length) return 'حداقل یک ردیف لازم است.';
-    if (productType === 'raw' && !rawCategory) return 'دسته‌بندی مواد اولیه انتخاب نشده است.';
-    if (productType !== 'raw' && !productCategory) return 'دسته‌بندی محصول انتخاب نشده است.';
+    if (productType === 'goods' && !rawCategory) return 'دسته‌بندی کالا انتخاب نشده است.';
+    if (productType === 'service' && !productCategory) return 'دسته‌بندی خدمات انتخاب نشده است.';
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
       for (const field of rowFields) {
@@ -264,8 +264,8 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       for (let i = 0; i < rows.length; i += 1) {
         const row = rows[i];
         const payload: Record<string, unknown> = { product_type: productType };
-        payload.category = productType === 'raw' ? rawCategory : null;
-        payload.product_category = productType === 'raw' ? null : productCategory;
+        payload.category = productType === 'goods' ? rawCategory : null;
+        payload.product_category = productType === 'service' ? productCategory : null;
         sharedFields.forEach((f) => { const v = norm(sharedValues[f.key]); if (v !== undefined) payload[f.key] = v; });
         rowFields.forEach((f) => { const v = norm(row[f.key]); if (v !== undefined) payload[f.key] = v; });
         payload.manual_code = norm(row.manual_code);
@@ -332,7 +332,20 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
   }), [tableColumns]);
 
   const typeOptions = useMemo(() => (productTypeField?.options || []).map((o) => ({ label: o.label, value: String(o.value) })), [productTypeField?.options]);
-  const rawOptions = useMemo(() => (rawCategoryField?.options || []).map((o) => ({ label: o.label, value: String(o.value) })), [rawCategoryField?.options]);
+  const rawOptions = useMemo(
+    () =>
+      rawCategoryField?.dynamicOptionsCategory
+        ? (dynamicOptions[rawCategoryField.dynamicOptionsCategory] || []).map((o) => ({ label: o.label, value: String(o.value) }))
+        : [],
+    [dynamicOptions, rawCategoryField?.dynamicOptionsCategory]
+  );
+  const serviceOptions = useMemo(
+    () =>
+      serviceCategoryField?.dynamicOptionsCategory
+        ? (dynamicOptions[serviceCategoryField.dynamicOptionsCategory] || []).map((o) => ({ label: o.label, value: String(o.value) }))
+        : [],
+    [dynamicOptions, serviceCategoryField?.dynamicOptionsCategory]
+  );
 
   return (
     <Modal
@@ -345,7 +358,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       confirmLoading={saving}
       width={1320}
       zIndex={2600}
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { maxHeight: '74vh', overflowY: 'auto', paddingTop: 12 } }}
     >
       <div className="space-y-4">
@@ -361,9 +374,9 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
               dropdownStyle={{ zIndex: 3000 }}
             />
           </div>
-          {productType === 'raw' ? (
+          {productType === 'goods' ? (
             <div>
-              <div className="text-xs text-gray-500 mb-1">دسته‌بندی مواد اولیه</div>
+              <div className="text-xs text-gray-500 mb-1">دسته‌بندی کالا</div>
               <Select
                 value={rawCategory || undefined}
                 options={rawOptions}
@@ -375,10 +388,10 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
             </div>
           ) : (
             <div>
-              <div className="text-xs text-gray-500 mb-1">دسته‌بندی محصول</div>
+              <div className="text-xs text-gray-500 mb-1">دسته‌بندی خدمات</div>
               <Select
                 value={productCategory || undefined}
-                options={productCategoryOptions}
+                options={serviceOptions}
                 onChange={(v) => setProductCategory(String(v))}
                 className="w-full"
                 showSearch

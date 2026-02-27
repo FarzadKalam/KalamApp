@@ -6,6 +6,7 @@ import { supabase } from '../../supabaseClient';
 import WorkflowEditorModal from './WorkflowEditorModal';
 import { WorkflowRecord } from '../../utils/workflowTypes';
 import { WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 type WorkflowsManagerProps = {
   inline?: boolean;
@@ -115,7 +116,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       if (error) throw error;
       setRecords((data || []) as WorkflowRecord[]);
     } catch (err: any) {
-      message.error(`خطا در دریافت گردش کارها: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در دریافت گردش کارها'));
     } finally {
       setLoading(false);
     }
@@ -145,7 +146,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       if (error) throw error;
       setRecords((prev) => prev.map((item) => (item.id === record.id ? { ...item, is_active: checked } : item)));
     } catch (err: any) {
-      message.error(`خطا در تغییر وضعیت: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در تغییر وضعیت'));
     }
   };
 
@@ -157,7 +158,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       message.success('گردش کار حذف شد.');
       fetchRecords();
     } catch (err: any) {
-      message.error(`خطا در حذف گردش کار: ${err?.message || 'نامشخص'}`);
+      message.error(toFaErrorMessage(err, 'خطا در حذف گردش کار'));
     }
   };
 
@@ -317,7 +318,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       }
       footer={null}
       width={1200}
-      destroyOnClose={false}
+      destroyOnHidden={false}
     >
       {content}
     </Modal>

@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Empty, Input, Segmented, Spin, Tag, Tree, Tooltip } from 'antd';
+import { App, Button, Card, Empty, Input, Popconfirm, Segmented, Space, Spin, Table, Tag, Tree, Tooltip } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import {
+  BankOutlined,
+  DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   NodeIndexOutlined,
@@ -9,11 +11,13 @@ import {
   ReloadOutlined,
   ShrinkOutlined,
   ExpandOutlined,
+  WalletOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
-import { toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type AccountRow = {
   id: string;
@@ -33,6 +37,8 @@ type CashBoxLink = {
   code: string | null;
   name: string;
   account_id: string | null;
+  opening_balance: number | null;
+  is_active: boolean;
 };
 
 type BankAccountLink = {
@@ -41,6 +47,8 @@ type BankAccountLink = {
   bank_name: string | null;
   account_number: string | null;
   account_id: string | null;
+  opening_balance: number | null;
+  is_active: boolean;
 };
 
 type StatusFilter = 'active' | 'all' | 'inactive';
@@ -89,17 +97,31 @@ const ChartOfAccountsTreePage: React.FC = () => {
 
   const [canView, setCanView] = useState(true);
   const [canEdit, setCanEdit] = useState(true);
+  const [canViewCashBoxes, setCanViewCashBoxes] = useState(true);
+  const [canEditCashBoxes, setCanEditCashBoxes] = useState(true);
+  const [canDeleteCashBoxes, setCanDeleteCashBoxes] = useState(true);
+  const [canViewBankAccounts, setCanViewBankAccounts] = useState(true);
+  const [canEditBankAccounts, setCanEditBankAccounts] = useState(true);
+  const [canDeleteBankAccounts, setCanDeleteBankAccounts] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const permissions = await fetchCurrentUserRolePermissions(supabase);
       const modulePerms = permissions?.chart_of_accounts || {};
+      const cashPerms = permissions?.cash_boxes || {};
+      const bankPerms = permissions?.bank_accounts || {};
 
       const allowView = modulePerms.view !== false;
       const allowEdit = modulePerms.edit !== false;
       setCanView(allowView);
       setCanEdit(allowEdit);
+      setCanViewCashBoxes(cashPerms.view !== false);
+      setCanEditCashBoxes(cashPerms.edit !== false);
+      setCanDeleteCashBoxes(cashPerms.delete !== false);
+      setCanViewBankAccounts(bankPerms.view !== false);
+      setCanEditBankAccounts(bankPerms.edit !== false);
+      setCanDeleteBankAccounts(bankPerms.delete !== false);
 
       if (!allowView) {
         setRows([]);
@@ -116,15 +138,11 @@ const ChartOfAccountsTreePage: React.FC = () => {
           .order('code', { ascending: true }),
         supabase
           .from('cash_boxes')
-          .select('id,code,name,account_id')
-          .eq('is_active', true)
-          .not('account_id', 'is', null)
+          .select('id,code,name,account_id,opening_balance,is_active')
           .order('name', { ascending: true }),
         supabase
           .from('bank_accounts')
-          .select('id,code,bank_name,account_number,account_id')
-          .eq('is_active', true)
-          .not('account_id', 'is', null)
+          .select('id,code,bank_name,account_number,account_id,opening_balance,is_active')
           .order('bank_name', { ascending: true }),
       ]);
 
@@ -143,7 +161,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
       });
       setExpandedKeys(Array.from(parentIds));
     } catch (err: any) {
-      message.error(err?.message || 'خطا در دریافت کدینگ حساب ها');
+      message.error(toFaErrorMessage(err, 'خطا در دریافت جدول حساب ها'));
     } finally {
       setLoading(false);
     }
@@ -156,7 +174,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent('erp:breadcrumb', {
-        detail: { moduleTitle: 'کدینگ حساب ها', moduleId: 'chart_of_accounts', recordName: 'نمایش درختی' },
+        detail: { moduleTitle: 'جدول حساب ها', moduleId: 'chart_of_accounts', recordName: 'نمایش درختی' },
       })
     );
     return () => {
@@ -174,7 +192,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
     const map = new Map<string, string[]>();
     cashLinks.forEach((box) => {
       const accountId = String(box.account_id || '').trim();
-      if (!accountId) return;
+      if (!accountId || box.is_active === false) return;
       const label = `${box.code ? `[${toPersianNumber(box.code)}] ` : ''}${box.name}`;
       const current = map.get(accountId) || [];
       current.push(label);
@@ -187,7 +205,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
     const map = new Map<string, string[]>();
     bankLinks.forEach((bank) => {
       const accountId = String(bank.account_id || '').trim();
-      if (!accountId) return;
+      if (!accountId || bank.is_active === false) return;
       const label = `${bank.code ? `[${toPersianNumber(bank.code)}] ` : ''}${bank.bank_name || 'بانک'}${
         bank.account_number ? ` (${toPersianNumber(bank.account_number)})` : ''
       }`;
@@ -197,6 +215,36 @@ const ChartOfAccountsTreePage: React.FC = () => {
     });
     return map;
   }, [bankLinks]);
+
+  const accountNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    rows.forEach((row) => {
+      map.set(row.id, `[${toPersianNumber(row.code)}] ${row.name}`);
+    });
+    return map;
+  }, [rows]);
+
+  const handleDeleteCashBox = useCallback(async (id: string) => {
+    try {
+      const { error } = await supabase.from('cash_boxes').delete().eq('id', id);
+      if (error) throw error;
+      message.success('صندوق با موفقیت حذف شد');
+      load();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در حذف صندوق'));
+    }
+  }, [load, message]);
+
+  const handleDeleteBankAccount = useCallback(async (id: string) => {
+    try {
+      const { error } = await supabase.from('bank_accounts').delete().eq('id', id);
+      if (error) throw error;
+      message.success('حساب بانکی با موفقیت حذف شد');
+      load();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در حذف حساب بانکی'));
+    }
+  }, [load, message]);
 
   const visibleRows = useMemo(() => {
     if (!rows.length) return [];
@@ -374,6 +422,163 @@ const ChartOfAccountsTreePage: React.FC = () => {
     setExpandedKeys(parentKeys);
   }, [searchTerm, parentKeys]);
 
+  const cashColumns = useMemo(
+    () => [
+      {
+        title: 'کد',
+        dataIndex: 'code',
+        width: 110,
+        render: (value: string | null) => (
+          <span className="persian-number">{toPersianNumber(value || '-')}</span>
+        ),
+      },
+      {
+        title: 'نام صندوق',
+        dataIndex: 'name',
+        render: (value: string) => value || '-',
+      },
+      {
+        title: 'حساب متناظر',
+        dataIndex: 'account_id',
+        render: (value: string | null) => (value ? accountNameById.get(value) || '-' : '-'),
+      },
+      {
+        title: 'موجودی اول دوره',
+        dataIndex: 'opening_balance',
+        width: 170,
+        render: (value: number | null) => (
+          <span className="persian-number">{formatPersianPrice(Number(value || 0))}</span>
+        ),
+      },
+      {
+        title: 'وضعیت',
+        dataIndex: 'is_active',
+        width: 90,
+        render: (value: boolean) => (value === false ? <Tag>غیرفعال</Tag> : <Tag color="green">فعال</Tag>),
+      },
+      {
+        title: 'عملیات',
+        key: 'actions',
+        width: 130,
+        render: (_: unknown, row: CashBoxLink) => (
+          <Space size={2}>
+            <Tooltip title="ویرایش">
+              <Button
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                disabled={!canEditCashBoxes}
+                onClick={() => navigate(`/cash_boxes/${row.id}/edit`)}
+              />
+            </Tooltip>
+            <Popconfirm
+              title="حذف صندوق"
+              description="این صندوق حذف شود؟"
+              okText="حذف"
+              cancelText="انصراف"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleDeleteCashBox(row.id)}
+              disabled={!canDeleteCashBoxes}
+            >
+              <Tooltip title="حذف">
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDeleteCashBoxes} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ],
+    [
+      accountNameById,
+      canDeleteCashBoxes,
+      canEditCashBoxes,
+      handleDeleteCashBox,
+      navigate,
+    ]
+  );
+
+  const bankColumns = useMemo(
+    () => [
+      {
+        title: 'کد',
+        dataIndex: 'code',
+        width: 110,
+        render: (value: string | null) => (
+          <span className="persian-number">{toPersianNumber(value || '-')}</span>
+        ),
+      },
+      {
+        title: 'بانک',
+        dataIndex: 'bank_name',
+        render: (value: string | null) => value || '-',
+      },
+      {
+        title: 'شماره حساب',
+        dataIndex: 'account_number',
+        render: (value: string | null) => (
+          <span className="persian-number">{toPersianNumber(value || '-')}</span>
+        ),
+      },
+      {
+        title: 'حساب متناظر',
+        dataIndex: 'account_id',
+        render: (value: string | null) => (value ? accountNameById.get(value) || '-' : '-'),
+      },
+      {
+        title: 'موجودی اول دوره',
+        dataIndex: 'opening_balance',
+        width: 170,
+        render: (value: number | null) => (
+          <span className="persian-number">{formatPersianPrice(Number(value || 0))}</span>
+        ),
+      },
+      {
+        title: 'وضعیت',
+        dataIndex: 'is_active',
+        width: 90,
+        render: (value: boolean) => (value === false ? <Tag>غیرفعال</Tag> : <Tag color="green">فعال</Tag>),
+      },
+      {
+        title: 'عملیات',
+        key: 'actions',
+        width: 130,
+        render: (_: unknown, row: BankAccountLink) => (
+          <Space size={2}>
+            <Tooltip title="ویرایش">
+              <Button
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                disabled={!canEditBankAccounts}
+                onClick={() => navigate(`/bank_accounts/${row.id}/edit`)}
+              />
+            </Tooltip>
+            <Popconfirm
+              title="حذف حساب بانکی"
+              description="این حساب بانکی حذف شود؟"
+              okText="حذف"
+              cancelText="انصراف"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleDeleteBankAccount(row.id)}
+              disabled={!canDeleteBankAccounts}
+            >
+              <Tooltip title="حذف">
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDeleteBankAccounts} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ],
+    [
+      accountNameById,
+      canDeleteBankAccounts,
+      canEditBankAccounts,
+      handleDeleteBankAccount,
+      navigate,
+    ]
+  );
+
   const totalCount = visibleRows.length;
 
   if (loading) {
@@ -387,7 +592,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
   if (!canView) {
     return (
       <div className="h-[70vh] flex items-center justify-center">
-        <Empty description="دسترسی مشاهده کدینگ حساب ها ندارید" />
+        <Empty description="دسترسی مشاهده جدول حساب ها ندارید" />
       </div>
     );
   }
@@ -399,7 +604,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
           <div className="flex items-center gap-2">
             <NodeIndexOutlined className="text-lg text-leather-700" />
             <h1 className="text-xl md:text-2xl font-black m-0 text-gray-800 dark:text-white">
-              کدینگ حساب ها (درختی)
+              جدول حساب ها (درختی)
             </h1>
             <Tag className="persian-number">{toPersianNumber(totalCount)} حساب</Tag>
           </div>
@@ -455,6 +660,76 @@ const ChartOfAccountsTreePage: React.FC = () => {
               expandedKeys={expandedKeys}
               onExpand={(keys) => setExpandedKeys(keys)}
             />
+          </div>
+        )}
+
+        {(canViewCashBoxes || canViewBankAccounts) && (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-6">
+            {canViewCashBoxes && (
+              <Card
+                size="small"
+                title={(
+                  <span className="flex items-center gap-2">
+                    <WalletOutlined />
+                    مدیریت صندوق ها
+                  </span>
+                )}
+                extra={(
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    disabled={!canEditCashBoxes}
+                    onClick={() => navigate('/cash_boxes/create')}
+                    className="bg-leather-600 border-none"
+                  >
+                    صندوق جدید
+                  </Button>
+                )}
+              >
+                <Table
+                  size="small"
+                  rowKey="id"
+                  columns={cashColumns as any}
+                  dataSource={cashLinks}
+                  pagination={{ pageSize: 6, showSizeChanger: false }}
+                  locale={{ emptyText: 'صندوقی ثبت نشده است' }}
+                  scroll={{ x: 620 }}
+                />
+              </Card>
+            )}
+
+            {canViewBankAccounts && (
+              <Card
+                size="small"
+                title={(
+                  <span className="flex items-center gap-2">
+                    <BankOutlined />
+                    مدیریت حساب های بانکی
+                  </span>
+                )}
+                extra={(
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    disabled={!canEditBankAccounts}
+                    onClick={() => navigate('/bank_accounts/create')}
+                    className="bg-leather-600 border-none"
+                  >
+                    حساب بانکی جدید
+                  </Button>
+                )}
+              >
+                <Table
+                  size="small"
+                  rowKey="id"
+                  columns={bankColumns as any}
+                  dataSource={bankLinks}
+                  pagination={{ pageSize: 6, showSizeChanger: false }}
+                  locale={{ emptyText: 'حساب بانکی ثبت نشده است' }}
+                  scroll={{ x: 760 }}
+                />
+              </Card>
+            )}
           </div>
         )}
       </Card>

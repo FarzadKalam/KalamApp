@@ -50,8 +50,8 @@ export const customerModule: ModuleDefinition = {
     { key: 'first_purchase_date', labels: { fa: 'تاریخ اولین خرید', en: 'First Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'last_purchase_date', labels: { fa: 'تاریخ آخرین خرید', en: 'Last Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'purchase_count', labels: { fa: 'تعداد دفعات خرید', en: 'Count' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
-    { key: 'total_spend', labels: { fa: 'جمع کل خرید (تومان)', en: 'Total Spend' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
-    { key: 'total_paid_amount', labels: { fa: 'جمع کل پرداختی (تومان)', en: 'Total Paid Amount' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
+    { key: 'total_spend', labels: { fa: 'جمع کل خرید', en: 'Total Spend' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
+    { key: 'total_paid_amount', labels: { fa: 'جمع کل پرداختی', en: 'Total Paid Amount' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
   ],
   blocks: [
     {
