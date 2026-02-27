@@ -1,0 +1,63 @@
+﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+
+export const costCentersConfig: ModuleDefinition = {
+  id: 'cost_centers',
+  titles: { fa: 'مراکز هزینه', en: 'Cost Centers' },
+  nature: ModuleNature.FINANCE,
+  table: 'cost_centers',
+  supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
+  defaultViewMode: ViewMode.LIST,
+  fields: [
+    {
+      key: 'code',
+      labels: { fa: 'کد', en: 'Code' },
+      type: FieldType.TEXT,
+      location: FieldLocation.HEADER,
+      order: 1,
+      validation: { required: true },
+      isTableColumn: true,
+      isKey: true,
+      nature: FieldNature.PREDEFINED,
+    },
+    {
+      key: 'name',
+      labels: { fa: 'نام مرکز هزینه', en: 'Name' },
+      type: FieldType.TEXT,
+      location: FieldLocation.HEADER,
+      order: 2,
+      validation: { required: true },
+      isTableColumn: true,
+      nature: FieldNature.PREDEFINED,
+    },
+    {
+      key: 'parent_id',
+      labels: { fa: 'مرکز هزینه والد', en: 'Parent' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'base',
+      order: 1,
+      nature: FieldNature.STANDARD,
+      relationConfig: { targetModule: 'cost_centers', targetField: 'name' },
+    },
+    {
+      key: 'is_active',
+      labels: { fa: 'فعال', en: 'Is Active' },
+      type: FieldType.CHECKBOX,
+      location: FieldLocation.BLOCK,
+      blockId: 'base',
+      order: 2,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
+  ],
+  blocks: [
+    {
+      id: 'base',
+      titles: { fa: 'اطلاعات مرکز هزینه', en: 'Info' },
+      type: BlockType.FIELD_GROUP,
+      order: 1,
+      icon: 'ApartmentOutlined',
+    },
+  ],
+  relatedTabs: [],
+};

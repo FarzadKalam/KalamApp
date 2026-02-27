@@ -54,7 +54,7 @@ export const warehousesConfig: ModuleDefinition = {
     {
       key: 'location',
       labels: { fa: 'موقعیت', en: 'Location' },
-      type: FieldType.TEXT,
+      type: FieldType.LOCATION,
       location: FieldLocation.BLOCK,
       blockId: 'baseInfo',
       order: 2,

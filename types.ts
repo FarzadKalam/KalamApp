@@ -25,6 +25,7 @@ export enum SummaryCalculationType {
 export enum ViewMode {
   LIST = 'list',
   GRID = 'grid',
+  MAP = 'map',
   KANBAN = 'kanban',
   TIMELINE = 'timeline',
   CALENDAR = 'calendar',

@@ -17,6 +17,7 @@ import { fetchShelfOptions, updateProductStock } from './editableTable/inventory
 import { buildProductFilters, runProductsQuery } from './editableTable/productionOrderHelpers';
 import { MODULES } from '../moduleRegistry';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
+import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 
 const { Text } = Typography;
 
@@ -993,6 +994,20 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const updatePayload: any = { [block.id]: dataToSave };
       const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
       if (error) throw error;
+
+      if (
+        (moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
+        (block?.id === 'payments' || block?.id === 'invoiceItems')
+      ) {
+        const accountingSync = await syncInvoiceAccountingEntries({
+          supabase: supabase as any,
+          moduleId,
+          recordId,
+        });
+        if (accountingSync.errors.length > 0) {
+          console.warn('Invoice accounting sync warnings:', accountingSync.errors);
+        }
+      }
 
       const oldValue = data.map(({ key, ...rest }) => rest);
       await insertChangelog(supabase, moduleId, recordId, block, oldValue, dataToSave);

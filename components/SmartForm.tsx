@@ -47,6 +47,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [lastAppliedBomId, setLastAppliedBomId] = useState<string | null>(null);
   const bomConfirmOpenRef = useRef<string | null>(null);
+  const [lastAppliedProcessTemplateId, setLastAppliedProcessTemplateId] = useState<string | null>(null);
+  const processConfirmOpenRef = useRef<string | null>(null);
+  const processDraftFieldKey = module.id === 'projects'
+    ? 'execution_process_draft'
+    : (module.id === 'marketing_leads' ? 'marketing_process_draft' : null);
+  const processPreviewFieldKey = module.id === 'process_templates'
+    ? 'template_stages_preview'
+    : (module.id === 'process_runs' ? 'run_stages_preview' : null);
 
   const buildAssigneeCombo = (assigneeType?: string | null, assigneeId?: string | null) => {
     if (!assigneeType || !assigneeId) return null;
@@ -80,6 +88,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         form.resetFields();
         setFormData({}); // اول خالی کن
         setLastAppliedBomId(null);
+        setLastAppliedProcessTemplateId(null);
 
         // 1. استخراج مقادیر پیش‌فرض از کانفیگ
         const defaults: Record<string, any> = {};
@@ -344,11 +353,48 @@ const SmartForm: React.FC<SmartFormProps> = ({
       const { data, error } = await supabase.from(module.table).select('*').eq('id', recordId).single();
       if (error) throw error;
       if (data) {
+        let nextValues: any = { ...data };
+        if (module.id === 'process_templates') {
+          const { data: templateStages } = await supabase
+            .from('process_template_stages')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+            .eq('template_id', recordId)
+            .order('sort_order', { ascending: true });
+          nextValues.template_stages_preview = (templateStages || []).map((stage: any, index: number) => ({
+            id: stage.id || `${recordId}_${index + 1}`,
+            name: stage.stage_name || `مرحله ${index + 1}`,
+            sort_order: stage.sort_order || ((index + 1) * 10),
+            wage: stage.wage || 0,
+            default_assignee_id: stage.default_assignee_id || null,
+            default_assignee_role_id: stage.default_assignee_role_id || null,
+            template_stage_id: stage.id || null,
+          }));
+        }
+        if (module.id === 'process_runs') {
+          const { data: runStages } = await supabase
+            .from('process_run_stages')
+            .select('id, stage_name, sort_order, status, wage, assignee_user_id, assignee_role_id, task_id')
+            .eq('process_run_id', recordId)
+            .order('sort_order', { ascending: true });
+          nextValues.run_stages_preview = (runStages || []).map((stage: any, index: number) => ({
+            id: stage.id || `${recordId}_${index + 1}`,
+            name: stage.stage_name || `مرحله ${index + 1}`,
+            sort_order: stage.sort_order || ((index + 1) * 10),
+            status: stage.status || 'todo',
+            wage: stage.wage || 0,
+            assignee_id: stage.assignee_user_id || null,
+            assignee_role_id: stage.assignee_role_id || null,
+            assignee_type: stage.assignee_role_id ? 'role' : (stage.assignee_user_id ? 'user' : null),
+            process_run_stage_id: stage.id || null,
+            task_id: stage.task_id || null,
+          }));
+        }
         const assigneeCombo = buildAssigneeCombo(data?.assignee_type, data?.assignee_id);
-        const nextValues = { ...data, assignee_combo: assigneeCombo };
+        nextValues = { ...nextValues, assignee_combo: assigneeCombo };
         form.setFieldsValue(nextValues);
         setFormData(nextValues);
         setInitialRecord(data);
+        setLastAppliedProcessTemplateId(data?.process_template_id || null);
       }
     } catch (err: any) {
       message.error('خطا: ' + err.message);
@@ -416,6 +462,79 @@ const SmartForm: React.FC<SmartFormProps> = ({
   }, [module.id, watchedValues?.bom_id, lastAppliedBomId, initialValuesProp]);
 
   useEffect(() => {
+    if (!processDraftFieldKey) return;
+    const processTemplateId = (watchedValues?.process_template_id || formData?.process_template_id) as string | undefined;
+    if (!processTemplateId || processTemplateId === lastAppliedProcessTemplateId) return;
+
+    const applyProcessTemplate = async () => {
+      setLoading(true);
+      try {
+        const { data: stages, error } = await supabase
+          .from('process_template_stages')
+          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+          .eq('template_id', processTemplateId)
+          .order('sort_order', { ascending: true });
+        if (error) throw error;
+
+        const mappedDraft = (stages || []).map((stage: any, index: number) => ({
+          id: stage.id || `${processTemplateId}_${index + 1}`,
+          name: stage.stage_name || `مرحله ${index + 1}`,
+          sort_order: stage.sort_order || ((index + 1) * 10),
+          wage: stage.wage || 0,
+          default_assignee_id: stage.default_assignee_id || null,
+          default_assignee_role_id: stage.default_assignee_role_id || null,
+          template_stage_id: stage.id || null,
+        }));
+
+        const payload: Record<string, any> = {
+          [processDraftFieldKey]: mappedDraft,
+        };
+        form.setFieldsValue(payload);
+        setFormData((prev: any) => ({ ...prev, ...payload, process_template_id: processTemplateId }));
+        setLastAppliedProcessTemplateId(processTemplateId);
+        message.success('مراحل فرآیند از الگو بارگذاری شد');
+      } catch (err: any) {
+        console.error(err);
+        message.error('بارگذاری مراحل فرآیند ناموفق بود');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const currentValues = watchedValues || formData;
+    const currentDraft = Array.isArray((currentValues as any)?.[processDraftFieldKey])
+      ? (currentValues as any)[processDraftFieldKey]
+      : [];
+
+    if (currentDraft.length === 0) {
+      applyProcessTemplate();
+      return;
+    }
+    if (!recordId) {
+      setLastAppliedProcessTemplateId(processTemplateId);
+      return;
+    }
+
+    if (processConfirmOpenRef.current === processTemplateId) return;
+    processConfirmOpenRef.current = processTemplateId;
+
+    Modal.confirm({
+      title: 'کپی مراحل از الگوی فرآیند',
+      content: 'مراحل پیش‌نویس فعلی با مراحل الگوی جدید جایگزین شوند؟',
+      okText: 'بله، جایگزین کن',
+      cancelText: 'خیر',
+      onOk: async () => {
+        await applyProcessTemplate();
+        processConfirmOpenRef.current = null;
+      },
+      onCancel: () => {
+        setLastAppliedProcessTemplateId(processTemplateId);
+        processConfirmOpenRef.current = null;
+      },
+    });
+  }, [module.id, processDraftFieldKey, watchedValues?.process_template_id, lastAppliedProcessTemplateId, formData, recordId]);
+
+  useEffect(() => {
     if (module.id !== 'products') return;
     const currentValues = watchedValues || formData;
     if (!currentValues?.auto_name_enabled) return;
@@ -464,6 +583,69 @@ const SmartForm: React.FC<SmartFormProps> = ({
           return calculateSummary(currentData, module.blocks || [], {});
       }
       return null;
+  };
+
+  const isUuid = (value: any) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+
+  const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) => {
+    const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
+      id: isUuid(stage?.id) ? String(stage.id) : null,
+      stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
+      sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+      wage: Number(stage?.wage || 0),
+      default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
+      default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
+    }));
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from('process_template_stages')
+      .select('id')
+      .eq('template_id', templateId);
+    if (existingError) throw existingError;
+
+    const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
+    const keptExistingIds = new Set(
+      nextStages
+        .map((stage) => stage.id)
+        .filter((id): id is string => Boolean(id && existingIds.has(id)))
+    );
+    const removeIds = Array.from(existingIds).filter((id) => !keptExistingIds.has(id));
+    if (removeIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('process_template_stages')
+        .delete()
+        .in('id', removeIds);
+      if (deleteError) throw deleteError;
+    }
+
+    for (const stage of nextStages) {
+      if (stage.id && existingIds.has(stage.id)) {
+        const { error: updateError } = await supabase
+          .from('process_template_stages')
+          .update({
+            stage_name: stage.stage_name,
+            sort_order: stage.sort_order,
+            wage: stage.wage,
+            default_assignee_id: stage.default_assignee_id,
+            default_assignee_role_id: stage.default_assignee_role_id,
+          })
+          .eq('id', stage.id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertError } = await supabase
+          .from('process_template_stages')
+          .insert({
+            template_id: templateId,
+            stage_name: stage.stage_name,
+            sort_order: stage.sort_order,
+            wage: stage.wage,
+            default_assignee_id: stage.default_assignee_id,
+            default_assignee_role_id: stage.default_assignee_role_id,
+          });
+        if (insertError) throw insertError;
+      }
+    }
   };
 
   // --- ذخیره نهایی ---
@@ -551,6 +733,27 @@ const SmartForm: React.FC<SmartFormProps> = ({
           values.production_stages_draft = formData?.production_stages_draft || [];
         }
       }
+      if (module.id === 'projects') {
+        if (values.execution_process_draft === undefined) {
+          values.execution_process_draft = formData?.execution_process_draft || [];
+        }
+      }
+      if (module.id === 'marketing_leads') {
+        if (values.marketing_process_draft === undefined) {
+          values.marketing_process_draft = formData?.marketing_process_draft || [];
+        }
+      }
+      const templateStagesPreview = module.id === 'process_templates'
+        ? (Array.isArray(values.template_stages_preview)
+          ? values.template_stages_preview
+          : (Array.isArray(formData?.template_stages_preview) ? formData.template_stages_preview : []))
+        : [];
+      if (values.template_stages_preview !== undefined) {
+        delete values.template_stages_preview;
+      }
+      if (values.run_stages_preview !== undefined) {
+        delete values.run_stages_preview;
+      }
       const summaryData = getSummaryData(formData);
       const summaryBlock = module.blocks?.find(b => b.summaryConfig);
 
@@ -579,6 +782,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
         if (recordId) {
           await supabase.from(module.table).update(values).eq('id', recordId);
+          if (module.id === 'process_templates') {
+            await syncProcessTemplateStages(recordId, templateStagesPreview);
+          }
 
           if (module.id === 'invoices' || module.id === 'purchase_invoices') {
             await applyInvoiceFinalizationInventory({
@@ -638,6 +844,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (error) throw error;
 
           if (inserted?.id) {
+            if (module.id === 'process_templates') {
+              await syncProcessTemplateStages(inserted.id, templateStagesPreview);
+            }
             if (module.id === 'invoices' || module.id === 'purchase_invoices') {
               await applyInvoiceFinalizationInventory({
                 supabase: supabase as any,
@@ -947,7 +1156,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 if (block.type === BlockType.FIELD_GROUP || block.type === BlockType.DEFAULT) {
                   const blockFields = module.fields
                     .filter(f => f.blockId === block.id)
-                    .filter(f => f.nature !== 'system') // 👈 این خط اضافه شد: حذف کامل فیلدهای سیستمی از گرید
+                    .filter((f) => f.nature !== 'system' || f.key === processPreviewFieldKey)
                     .filter(f => canViewField(f.key))
                     .filter(f => f.key !== 'assignee_id' && f.key !== 'assignee_type')
                     .sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -970,18 +1179,27 @@ const SmartForm: React.FC<SmartFormProps> = ({
                            if (field.dynamicOptionsCategory) options = dynamicOptions[field.dynamicOptionsCategory];
                            if (field.type === FieldType.RELATION) options = relationOptions[field.key];
                            return (
-                             <SmartFieldRenderer 
+                             <div
                                key={field.key}
-                               field={field}
-                               value={fieldValue}
-                               recordId={recordId}
-                               onChange={(val) => {
-                                 if (!isReadOnly) { form.setFieldValue(field.key, val); setFormData({ ...form.getFieldsValue(), [field.key]: val }); }
-                               }}
-                               forceEditMode={true} options={options}
-                               moduleId={module.id}
-                               allValues={formData}
-                             />
+                               className={(field.key === 'execution_process_draft' ||
+                                 field.key === 'marketing_process_draft' ||
+                                 field.key === 'template_stages_preview' ||
+                                 field.key === 'run_stages_preview')
+                                 ? 'md:col-span-2 lg:col-span-3'
+                                 : ''}
+                             >
+                               <SmartFieldRenderer 
+                                 field={field}
+                                 value={fieldValue}
+                                 recordId={recordId}
+                                 onChange={(val) => {
+                                   if (!isReadOnly) { form.setFieldValue(field.key, val); setFormData({ ...form.getFieldsValue(), [field.key]: val }); }
+                                 }}
+                                 forceEditMode={true} options={options}
+                                 moduleId={module.id}
+                                 allValues={formData}
+                               />
+                             </div>
                            );
                         })}
                       </div>

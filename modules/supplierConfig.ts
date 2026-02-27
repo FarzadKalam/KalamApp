@@ -32,7 +32,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'province', labels: { fa: 'استان', en: 'Province' }, type: FieldType.SELECT, blockId: 'contact_info', dynamicOptionsCategory: 'provinces' },
     { key: 'city', labels: { fa: 'شهر', en: 'City' }, type: FieldType.SELECT, blockId: 'contact_info', dynamicOptionsCategory: 'cities' },
     { key: 'address', labels: { fa: 'آدرس انبار/دفتر', en: 'Address' }, type: FieldType.LONG_TEXT, blockId: 'contact_info' },
-    { key: 'location', labels: { fa: 'لوکیشن', en: 'Location' }, type: FieldType.TEXT, blockId: 'contact_info' },
+    { key: 'location', labels: { fa: 'لوکیشن', en: 'Location' }, type: FieldType.LOCATION, blockId: 'contact_info' },
 
     { key: 'bank_account_number', labels: { fa: 'شماره کارت/حساب', en: 'Bank Account' }, type: FieldType.TEXT, blockId: 'financial_info' },
     { key: 'first_supply_date', labels: { fa: 'تاریخ شروع همکاری', en: 'Start Date' }, type: FieldType.DATE, blockId: 'financial_info' },

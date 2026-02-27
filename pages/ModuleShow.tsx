@@ -34,6 +34,7 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
+import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 import { canAccessAssignedRecord } from '../utils/permissions';
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from '../utils/recordCopy';
 
@@ -60,7 +61,12 @@ const ModuleShow: React.FC = () => {
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean }>({});
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [autoSyncedBomId, setAutoSyncedBomId] = useState<string | null>(null);
+  const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
   const bomCopyPromptRef = useRef<string | null>(null);
+  const processTemplatePromptRef = useRef<string | null>(null);
+  const processDraftFieldKey = moduleId === 'projects'
+    ? 'execution_process_draft'
+    : (moduleId === 'marketing_leads' ? 'marketing_process_draft' : null);
   const [productionModal, setProductionModal] = useState<'start' | 'stop' | 'complete' | null>(null);
   const [productionShelfOptions, setProductionShelfOptions] = useState<{ label: string; value: string }[]>([]);
   const [sourceShelfOptionsByProduct, setSourceShelfOptionsByProduct] = useState<Record<string, { label: string; value: string; stock?: number }[]>>({});
@@ -74,8 +80,10 @@ const ModuleShow: React.FC = () => {
   const [outputMode, setOutputMode] = useState<'existing' | 'new'>('existing');
   const [productionQuantityPreview, setProductionQuantityPreview] = useState<number | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [issueAccountingLoading, setIssueAccountingLoading] = useState(false);
   const [stockMovementQuickAddSignal, setStockMovementQuickAddSignal] = useState(0);
   const startDraftStorageKey = useMemo(() => (id ? `production-start-draft:${id}` : null), [id]);
+  const [canIssueAccountingEntry, setCanIssueAccountingEntry] = useState(true);
     const fetchProductionQuantity = useCallback(async () => {
       if (moduleId !== 'production_orders' || !id) return null;
       const { data: lines } = await supabase
@@ -88,6 +96,11 @@ const ModuleShow: React.FC = () => {
       }, 0);
       return total;
     }, [moduleId, id]);
+
+  useEffect(() => {
+    setAutoSyncedBomId(null);
+    setAutoSyncedProcessTemplateId(null);
+  }, [id, moduleId]);
 
   const readOrderQuantity = useCallback((record: any, override?: number | null) => {
     const raw = override ?? record?.quantity ?? record?.production_qty ?? record?.production_quantity ?? record?.qty ?? record?.count ?? 0;
@@ -691,6 +704,47 @@ const ModuleShow: React.FC = () => {
             }
           }
         }
+        if (moduleId === 'process_templates') {
+          const { data: templateStages } = await supabase
+            .from('process_template_stages')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+            .eq('template_id', id)
+            .order('sort_order', { ascending: true });
+          nextRecord = {
+            ...nextRecord,
+            template_stages_preview: (templateStages || []).map((stage: any, index: number) => ({
+              id: stage.id || `${id}_${index + 1}`,
+              name: stage.stage_name || `مرحله ${index + 1}`,
+              sort_order: stage.sort_order || ((index + 1) * 10),
+              wage: stage.wage || 0,
+              default_assignee_id: stage.default_assignee_id || null,
+              default_assignee_role_id: stage.default_assignee_role_id || null,
+              template_stage_id: stage.id || null,
+            })),
+          };
+        }
+        if (moduleId === 'process_runs') {
+          const { data: runStages } = await supabase
+            .from('process_run_stages')
+            .select('id, stage_name, sort_order, status, wage, assignee_user_id, assignee_role_id, task_id')
+            .eq('process_run_id', id)
+            .order('sort_order', { ascending: true });
+          nextRecord = {
+            ...nextRecord,
+            run_stages_preview: (runStages || []).map((stage: any, index: number) => ({
+              id: stage.id || `${id}_${index + 1}`,
+              name: stage.stage_name || `مرحله ${index + 1}`,
+              sort_order: stage.sort_order || ((index + 1) * 10),
+              status: stage.status || 'todo',
+              wage: stage.wage || 0,
+              assignee_id: stage.assignee_user_id || null,
+              assignee_role_id: stage.assignee_role_id || null,
+              assignee_type: stage.assignee_role_id ? 'role' : (stage.assignee_user_id ? 'user' : null),
+              process_run_stage_id: stage.id || null,
+              task_id: stage.task_id || null,
+            })),
+          };
+        }
         setData(nextRecord);
     } catch (err: any) {
         console.error(err);
@@ -1019,6 +1073,7 @@ const ModuleShow: React.FC = () => {
         .single();
 
       const modulePerms = role?.permissions?.[moduleId] || {};
+      const journalPerms = role?.permissions?.journal_entries || {};
       const perms = modulePerms.fields || {};
       setFieldPermissions(perms);
       setModulePermissions({
@@ -1026,8 +1081,10 @@ const ModuleShow: React.FC = () => {
         edit: modulePerms.edit,
         delete: modulePerms.delete
       });
+      setCanIssueAccountingEntry(journalPerms.view !== false && journalPerms.edit !== false);
     } catch (err) {
       console.warn('Could not fetch field permissions:', err);
+      setCanIssueAccountingEntry(true);
     }
   }, [moduleId]);
 
@@ -1211,6 +1268,45 @@ const ModuleShow: React.FC = () => {
   }, [moduleId, data, autoSyncedBomId]);
 
   useEffect(() => {
+    if (!processDraftFieldKey || !data?.process_template_id || !data?.id) return;
+    if (autoSyncedProcessTemplateId === data.process_template_id) return;
+
+    const currentDraft = (data as any)?.[processDraftFieldKey];
+    const isDraftEmpty = !Array.isArray(currentDraft) || currentDraft.length === 0;
+    if (!isDraftEmpty) return;
+
+    const syncFromProcessTemplate = async () => {
+      try {
+        const { data: stages, error } = await supabase
+          .from('process_template_stages')
+          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+          .eq('template_id', data.process_template_id)
+          .order('sort_order', { ascending: true });
+        if (error) throw error;
+
+        const mappedDraft = (stages || []).map((stage: any, index: number) => ({
+          id: stage.id || `${data.process_template_id}_${index + 1}`,
+          name: stage.stage_name || `مرحله ${index + 1}`,
+          sort_order: stage.sort_order || ((index + 1) * 10),
+          wage: stage.wage || 0,
+          default_assignee_id: stage.default_assignee_id || null,
+          default_assignee_role_id: stage.default_assignee_role_id || null,
+          template_stage_id: stage.id || null,
+        }));
+
+        const patch = { [processDraftFieldKey]: mappedDraft } as any;
+        await supabase.from(moduleId).update(patch).eq('id', data.id);
+        setData((prev: any) => ({ ...prev, ...patch }));
+        setAutoSyncedProcessTemplateId(data.process_template_id);
+      } catch (err) {
+        console.warn('Auto sync from process template failed', err);
+      }
+    };
+
+    syncFromProcessTemplate();
+  }, [moduleId, data, processDraftFieldKey, autoSyncedProcessTemplateId]);
+
+  useEffect(() => {
     if (!moduleConfig) return;
     const recordName = getRecordTitle(data, moduleConfig, { fallback: '' });
     window.dispatchEvent(new CustomEvent('erp:breadcrumb', {
@@ -1343,6 +1439,57 @@ const ModuleShow: React.FC = () => {
         }
       });
     }, [id, moduleId, msg, modal]);
+
+  const handleProcessTemplateChange = useCallback(async (templateId: string) => {
+    if (!templateId || !processDraftFieldKey || !id) return;
+    if (processTemplatePromptRef.current === templateId) return;
+    processTemplatePromptRef.current = templateId;
+
+    modal.confirm({
+      title: 'کپی مراحل از الگوی فرآیند',
+      content: 'مراحل پیش‌نویس فرآیند با الگوی انتخاب‌شده جایگزین شود؟',
+      okText: 'بله، جایگزین کن',
+      cancelText: 'خیر',
+      onCancel: () => {
+        processTemplatePromptRef.current = null;
+      },
+      onOk: async () => {
+        try {
+          const { data: stages, error } = await supabase
+            .from('process_template_stages')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+            .eq('template_id', templateId)
+            .order('sort_order', { ascending: true });
+          if (error) throw error;
+
+          const mappedDraft = (stages || []).map((stage: any, index: number) => ({
+            id: stage.id || `${templateId}_${index + 1}`,
+            name: stage.stage_name || `مرحله ${index + 1}`,
+            sort_order: stage.sort_order || ((index + 1) * 10),
+            wage: stage.wage || 0,
+            default_assignee_id: stage.default_assignee_id || null,
+            default_assignee_role_id: stage.default_assignee_role_id || null,
+            template_stage_id: stage.id || null,
+          }));
+
+          const patch: Record<string, any> = {
+            process_template_id: templateId,
+            [processDraftFieldKey]: mappedDraft,
+          };
+          const { error: updateError } = await supabase.from(moduleId).update(patch).eq('id', id);
+          if (updateError) throw updateError;
+
+          setData((prev: any) => ({ ...(prev || {}), ...patch }));
+          setAutoSyncedProcessTemplateId(templateId);
+          msg.success('مراحل فرآیند بارگذاری شد');
+        } catch (e: any) {
+          msg.error('خطا در بارگذاری مراحل فرآیند: ' + (e?.message || e));
+        } finally {
+          processTemplatePromptRef.current = null;
+        }
+      },
+    });
+  }, [id, moduleId, msg, modal, processDraftFieldKey]);
 
   const handleDelete = () => {
     modal.confirm({ title: 'حذف رکورد', okType: 'danger', onOk: async () => { await supabase.from(moduleId).delete().eq('id', id); navigate(`/${moduleId}`); } });
@@ -1585,6 +1732,18 @@ const ModuleShow: React.FC = () => {
           invoiceItems: data?.invoiceItems || [],
           userId,
         });
+        const accountingSync = await syncInvoiceAccountingEntries({
+          supabase: supabase as any,
+          moduleId,
+          recordId: id || '',
+          recordData: {
+            ...(data || {}),
+            [key]: newValue,
+          },
+        });
+        if (accountingSync.errors.length > 0) {
+          console.warn('Invoice accounting sync warnings:', accountingSync.errors);
+        }
       }
       setData((prev: any) => ({ ...prev, [key]: newValue }));
       await insertChangelog({
@@ -1631,6 +1790,18 @@ const ModuleShow: React.FC = () => {
           invoiceItems: values?.invoiceItems ?? previous?.invoiceItems ?? [],
           userId,
         });
+        const accountingSync = await syncInvoiceAccountingEntries({
+          supabase: supabase as any,
+          moduleId,
+          recordId: id,
+          recordData: {
+            ...previous,
+            ...values,
+          },
+        });
+        if (accountingSync.errors.length > 0) {
+          console.warn('Invoice accounting sync warnings:', accountingSync.errors);
+        }
       }
 
       for (const key of changedKeys) {
@@ -1644,6 +1815,60 @@ const ModuleShow: React.FC = () => {
       msg.error(err.message);
     }
   }, [data, fetchRecord, id, logFieldChange, moduleId, msg]);
+
+  const handleIssueAccountingEntry = useCallback(async () => {
+    if (issueAccountingLoading) return;
+    if (!id) return;
+    if (moduleId !== 'invoices' && moduleId !== 'purchase_invoices') return;
+    if (!canIssueAccountingEntry) {
+      msg.error('دسترسی صدور سند حسابداری ندارید.');
+      return;
+    }
+
+    const normalizedStatus = String(data?.status || '').trim().toLowerCase();
+    if (!['final', 'settled', 'completed'].includes(normalizedStatus)) {
+      msg.warning('برای صدور سند، ابتدا وضعیت فاکتور را روی نهایی/تسویه/تکمیل قرار دهید.');
+      return;
+    }
+
+    const eventLabelMap: Record<string, string> = {
+      sales_invoice_finalized: 'سند فروش',
+      purchase_invoice_finalized: 'سند خرید',
+      sales_payment_received: 'سند دریافت وجه',
+      purchase_payment_paid: 'سند پرداخت وجه',
+    };
+
+    setIssueAccountingLoading(true);
+    try {
+      const accountingSync = await syncInvoiceAccountingEntries({
+        supabase: supabase as any,
+        moduleId,
+        recordId: id,
+        includePayments: true,
+      });
+
+      if (accountingSync.errors.length > 0) {
+        console.warn('Manual invoice accounting sync warnings:', accountingSync.errors);
+      }
+
+      if (accountingSync.createdEventKeys.length > 0) {
+        const label = accountingSync.createdEventKeys
+          .map((key) => eventLabelMap[key] || key)
+          .join('، ');
+        msg.success(`صدور سند انجام شد: ${label}`);
+      } else if (accountingSync.errors.length === 0) {
+        msg.info('سندی صادر نشد (قبلا صادر شده یا قواعد حسابداری کامل نیست).');
+      } else {
+        msg.warning('صدور سند با خطا/نقص در قواعد حسابداری مواجه شد. جزئیات در کنسول ثبت شد.');
+      }
+
+      await fetchRecord();
+    } catch (error: any) {
+      msg.error(error?.message || 'خطا در صدور سند حسابداری');
+    } finally {
+      setIssueAccountingLoading(false);
+    }
+  }, [canIssueAccountingEntry, data?.status, fetchRecord, id, issueAccountingLoading, moduleId, msg]);
 
   const startEdit = (key: string, value: any) => {
     if (!canEditModule) return;
@@ -2317,9 +2542,15 @@ const ModuleShow: React.FC = () => {
     if (!canViewField(field.key)) return null;
     const isEditing = editingFields[field.key];
     const value = data[field.key];
-    const compactMode = field.type === FieldType.PROGRESS_STAGES ? false : true;
+    const isProcessDraftField = (
+      field.key === 'execution_process_draft' ||
+      field.key === 'marketing_process_draft' ||
+      field.key === 'template_stages_preview' ||
+      field.key === 'run_stages_preview'
+    );
+    const compactMode = (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) ? false : true;
 
-    if (field.type === FieldType.PROGRESS_STAGES) {
+    if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {
       let options = field.options;
       if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
       else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
@@ -2329,8 +2560,22 @@ const ModuleShow: React.FC = () => {
           <SmartFieldRenderer
             field={field}
             value={value}
-            onChange={() => undefined}
-            forceEditMode={true}
+            onChange={(nextValue) => {
+              if (!isProcessDraftField || !id || !canEditModule) return;
+              if (field.key === 'template_stages_preview' || field.key === 'run_stages_preview') return;
+              const patch = { [field.key]: nextValue } as Record<string, any>;
+              setData((prev: any) => ({ ...(prev || {}), ...patch }));
+              void supabase
+                .from(moduleId)
+                .update(patch)
+                .eq('id', id)
+                .then(({ error }) => {
+                  if (error) {
+                    msg.error('ذخیره مراحل فرآیند ناموفق بود');
+                  }
+                });
+            }}
+            forceEditMode={canEditModule}
             compactMode={false}
             options={options}
             recordId={id}
@@ -2367,8 +2612,16 @@ const ModuleShow: React.FC = () => {
                 const shouldHandleBom =
                   (field.key === 'related_bom' && val && val !== data?.related_bom) ||
                   (moduleId === 'production_orders' && field.key === 'bom_id' && val && val !== data?.bom_id);
+                const shouldHandleProcessTemplate =
+                  !!processDraftFieldKey &&
+                  field.key === 'process_template_id' &&
+                  val &&
+                  val !== data?.process_template_id;
                 if (shouldHandleBom) {
                   setTimeout(() => handleRelatedBomChange(val), 100);
+                }
+                if (shouldHandleProcessTemplate) {
+                  setTimeout(() => handleProcessTemplateChange(val), 100);
                 }
               }}
               forceEditMode={true}
@@ -2456,6 +2709,14 @@ const ModuleShow: React.FC = () => {
       label: 'افزودن حواله',
       variant: 'default',
       onClick: () => handleHeaderAction('quick_stock_movement')
+    });
+  }
+  if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && canIssueAccountingEntry) {
+    headerActions.push({
+      id: 'issue_accounting_entry',
+      label: issueAccountingLoading ? 'در حال صدور...' : 'صدور سند',
+      variant: 'primary',
+      onClick: handleIssueAccountingEntry,
     });
   }
   if (moduleId === 'production_orders') {

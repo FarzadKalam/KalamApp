@@ -59,6 +59,12 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   const visibleFieldGroups = (fieldGroups || []).filter((block: any) =>
     canViewField ? canViewField(String(block.id)) !== false : true
   );
+  const processStageFieldKeys = new Set([
+    'execution_process_draft',
+    'marketing_process_draft',
+    'template_stages_preview',
+    'run_stages_preview',
+  ]);
   if (visibleFieldGroups.length === 0) return null;
 
   const renderBlockContent = (block: any) => (
@@ -67,9 +73,13 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
         {moduleConfig.fields
           .filter((f: any) => f.blockId === block.id)
           .filter((f: any) => f.type !== FieldType.PROGRESS_STAGES)
+          .filter((f: any) => !processStageFieldKeys.has(String(f?.key || '')))
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
           .map((f: any) => (!f.logic || checkVisibility(f.logic)) && (
-            <div key={f.key} className="flex flex-col gap-1">
+            <div
+              key={f.key}
+              className="flex flex-col gap-1"
+            >
               <span className="text-xs text-gray-400">{f.labels.fa}</span>
               {renderSmartField(f)}
             </div>

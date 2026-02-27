@@ -128,7 +128,7 @@ The backend relies on Supabase. Key tables include:
   * `org_roles`: Role-Based Access Control (RBAC) definitions.
   * `tags` & `record_tags`: Universal tagging.
   * `saved_views`: Stores user-defined filters for `ModuleList`.
-  * `company_settings`: Global settings (Logo, organization names, brand palette key).
+  * `company_settings`: Global settings (logo, `company_full_name`, `trade_name`, `company_name_en`, `brand_palette_key`).
 
 **Security:** Row Level Security (RLS) is enabled. Currently set to allow authenticated access, but ready for granular policies.
 

@@ -67,7 +67,7 @@ create table if not exists public.company_settings (
   trade_name text,
   company_name_en text,
   brand_palette_key text not null default 'executive_indigo'
-    check (brand_palette_key in ('executive_indigo', 'corporate_blue', 'deep_ocean')),
+    check (brand_palette_key in ('executive_indigo', 'corporate_blue', 'deep_ocean', 'ruby_red', 'amber_navy')),
   ceo_name text,
   national_id text,
   mobile text,

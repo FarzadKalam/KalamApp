@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import EditableTable from '../EditableTable.tsx';
 import GridTable from '../GridTable';
 import SummaryCard from '../SummaryCard';
@@ -82,8 +82,94 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   const summaryConfig = module.blocks?.find((b: any) => b.summaryConfig)?.summaryConfig || {};
   const isProductionOrder = module.id === 'production_orders';
   const productionLocked = isProductionOrder && ['in_progress', 'completed'].includes(data?.status);
+  const processStageFieldKeys = useMemo(() => new Set([
+    'execution_process_draft',
+    'marketing_process_draft',
+    'template_stages_preview',
+    'run_stages_preview',
+  ]), []);
+  const isUuid = useCallback((value: any) => (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(String(value || ''))
+  ), []);
+  const syncProcessTemplateStages = useCallback(async (templateId: string, rawStages: any[]) => {
+    const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
+      id: isUuid(stage?.id) ? String(stage.id) : null,
+      stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
+      sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+      wage: Number(stage?.wage || 0),
+      default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
+      default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
+    }));
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from('process_template_stages')
+      .select('id')
+      .eq('template_id', templateId);
+    if (existingError) throw existingError;
+
+    const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
+    const keptExistingIds = new Set(
+      nextStages
+        .map((stage) => stage.id)
+        .filter((id): id is string => Boolean(id && existingIds.has(id)))
+    );
+    const removeIds = Array.from(existingIds).filter((id) => !keptExistingIds.has(id));
+    if (removeIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from('process_template_stages')
+        .delete()
+        .in('id', removeIds);
+      if (deleteError) throw deleteError;
+    }
+
+    for (const stage of nextStages) {
+      if (stage.id && existingIds.has(stage.id)) {
+        const { error: updateError } = await supabase
+          .from('process_template_stages')
+          .update({
+            stage_name: stage.stage_name,
+            sort_order: stage.sort_order,
+            wage: stage.wage,
+            default_assignee_id: stage.default_assignee_id,
+            default_assignee_role_id: stage.default_assignee_role_id,
+          })
+          .eq('id', stage.id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertError } = await supabase
+          .from('process_template_stages')
+          .insert({
+            template_id: templateId,
+            stage_name: stage.stage_name,
+            sort_order: stage.sort_order,
+            wage: stage.wage,
+            default_assignee_id: stage.default_assignee_id,
+            default_assignee_role_id: stage.default_assignee_role_id,
+          });
+        if (insertError) throw insertError;
+      }
+    }
+
+    const { data: refreshedRows, error: refreshError } = await supabase
+      .from('process_template_stages')
+      .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+      .eq('template_id', templateId)
+      .order('sort_order', { ascending: true });
+    if (refreshError) throw refreshError;
+
+    return (refreshedRows || []).map((stage: any, index: number) => ({
+      id: stage.id || `${templateId}_${index + 1}`,
+      name: stage.stage_name || `مرحله ${index + 1}`,
+      sort_order: stage.sort_order || ((index + 1) * 10),
+      wage: Number(stage.wage || 0),
+      default_assignee_id: stage.default_assignee_id || null,
+      default_assignee_role_id: stage.default_assignee_role_id || null,
+      template_stage_id: stage.id || null,
+    }));
+  }, [isUuid]);
   const progressFields = (module.fields || [])
-    .filter((f: any) => f.type === FieldType.PROGRESS_STAGES)
+    .filter((f: any) => f.type === FieldType.PROGRESS_STAGES || processStageFieldKeys.has(String(f?.key || '')))
     .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
     .filter((f: any) => (!f.logic || checkVisibility(f.logic)));
 
@@ -91,6 +177,44 @@ const TablesSection: React.FC<TablesSectionProps> = ({
     <div className="tables-section space-y-6 md:space-y-8">
 
       {progressFields.map((field: any) => (
+        (() => {
+          const fieldKey = String(field?.key || '');
+          const isProcessStagesField = processStageFieldKeys.has(fieldKey);
+          const isTemplatePreviewField = fieldKey === 'template_stages_preview';
+          const isRunPreviewField = fieldKey === 'run_stages_preview';
+          const stageDraftValue = isProcessStagesField
+            ? (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : [])
+            : (data?.production_stages_draft || []);
+          const handleDraftStagesChange = async (nextStages: any[]) => {
+            if (!onDataUpdate) return;
+            if (isTemplatePreviewField && module.id === 'process_templates' && data?.id) {
+              onDataUpdate({ template_stages_preview: nextStages });
+              try {
+                const refreshed = await syncProcessTemplateStages(String(data.id), nextStages);
+                onDataUpdate({ template_stages_preview: refreshed });
+              } catch (err) {
+                console.warn('Could not persist process template stages:', err);
+              }
+              return;
+            }
+            if (!isProcessStagesField) {
+              onDataUpdate({ production_stages_draft: nextStages });
+              return;
+            }
+            onDataUpdate({ [fieldKey]: nextStages });
+            if (!data?.id || isRunPreviewField) return;
+            try {
+              const { error } = await supabase
+                .from(module.id)
+                .update({ [fieldKey]: nextStages })
+                .eq('id', data.id);
+              if (error) throw error;
+            } catch (err) {
+              console.warn('Could not persist process draft stages from table section:', err);
+            }
+          };
+
+          return (
         <div key={field.key} className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
             <h3 className="text-sm md:text-lg font-bold mb-4 text-gray-700 dark:text-gray-200 flex items-center gap-2">
               <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>                {field.labels.fa}
@@ -98,13 +222,16 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             <ProductionStagesField 
               recordId={data.id} 
               moduleId={module.id}
-              readOnly={!canEditModule || productionLocked}
+              readOnly={!canEditModule || productionLocked || isRunPreviewField}
               compact={true}
-              onQuantityChange={(qty) => onDataUpdate?.({ quantity: qty })}
-              draftStages={data?.production_stages_draft || []}
+              onQuantityChange={isProductionOrder ? (qty) => onDataUpdate?.({ quantity: qty }) : undefined}
+              draftStages={stageDraftValue}
+              onDraftStagesChange={handleDraftStagesChange}
               showWageSummary={module.id === 'production_orders'}
             />
         </div>
+          );
+        })()
       ))}
 
       {module.blocks

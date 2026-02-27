@@ -28,7 +28,29 @@
   html, body, #root {
     font-family: 'Vazirmatn', system-ui, sans-serif;
     height: 100%;
+    direction: rtl;
+    scrollbar-gutter: stable;
+    background-color: #f9fafb;
   }
+
+  html.dark, .dark body, .dark #root {
+    background-color: rgb(var(--app-dark-bg-rgb));
+  }
+}
+
+/* Keep vertical scrollbars consistently on the left in RTL layout. */
+[class*="overflow-y-"]:not([dir="ltr"]),
+.ant-modal-wrap:not([dir="ltr"]),
+.ant-modal-body:not([dir="ltr"]),
+.ant-drawer-body:not([dir="ltr"]) {
+  direction: rtl;
+  scrollbar-gutter: stable;
+}
+
+/* Ant body lock compensation can create white gutters on modal open. */
+body.ant-scrolling-effect {
+  width: 100% !important;
+  padding-inline-end: 0 !important;
 }
 
 /* Ú©Ù„Ø§Ø³ Ú©Ù…Ú©ÛŒ Ø¨Ø±Ø§ÛŒ Ø§Ø¹Ø¯Ø§Ø¯ ÙØ§Ø±Ø³ÛŒ */

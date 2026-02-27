@@ -4,26 +4,22 @@ import type { InputRef } from 'antd';
 import { 
   DashboardOutlined, 
   SkinOutlined, 
-  ExperimentOutlined, 
-  ShopOutlined, 
   TeamOutlined, 
   SettingOutlined,
   SearchOutlined,
   UserOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
-  MenuUnfoldOutlined,
+  LeftOutlined,
+  RightOutlined,
   HomeOutlined,
   BankOutlined,
   FileTextOutlined,
   CheckSquareOutlined,
-  GoldOutlined,
   ExclamationCircleOutlined,
   MoonOutlined,
   ProjectOutlined,
-  RocketOutlined,
   NodeIndexOutlined,
-  PictureOutlined,
   SunOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -32,6 +28,11 @@ import { MODULES } from '../moduleRegistry';
 import QrScanPopover from './QrScanPopover';
 import NotificationsPopover from './NotificationsPopover';
 import { getRecordTitle } from '../utils/recordTitle';
+import {
+  ACCOUNTING_PERMISSION_KEY,
+  fetchCurrentUserRolePermissions,
+  type PermissionMap,
+} from '../utils/permissions';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -52,6 +53,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<Array<{ moduleId: string; moduleTitle: string; items: any[] }>>([]);
+  const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   
@@ -69,6 +71,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           .eq('id', user.id)
           .maybeSingle();
         setCurrentUserProfile(profile || null);
+
+        const rolePerms = await fetchCurrentUserRolePermissions(supabase);
+        setRolePermissions(rolePerms || {});
       }
     };
     getUser();
@@ -89,6 +94,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
+  const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
 
   // Collapse sidebar on route change
   useEffect(() => {
@@ -122,51 +130,80 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const menuItems = [
     { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
-    { key: '/products', icon: <SkinOutlined />, label: 'محصولات' },
-    { 
-      key: 'warehouses', 
-      icon: <GoldOutlined />, 
-      label: 'انبار',
+    {
+      key: 'resources',
+      icon: <SkinOutlined />,
+      label: 'منابع',
       children: [
+        { key: '/products', label: 'کالاها و خدمات' },
+        { key: '/customers', label: 'مشتریان' },
+        { key: '/suppliers', label: 'تامین کنندگان' },
         { key: '/warehouses', label: 'انبارها' },
-        { key: '/shelves', label: 'قفسه‌ها' },
-        { key: '/stock_transfers', label: 'تردد کالاها' }
+        { key: '/ooh_ads', label: 'تبلیغات محیطی', disabled: true },
       ]
     },
-    { 
-        key: 'production', 
-        icon: <ExperimentOutlined />, 
-        label: 'تولید',
-        children: [
-            { key: '/production_boms', label: 'شناسنامه‌های تولید (BOM)' },
-            { key: '/production_orders', label: 'سفارشات تولید' },
-        ] 
-    },
-    { key: '/suppliers', icon: <BankOutlined />, label: 'تامین کنندگان' },
     {
-      key: 'invoices',
-      icon: <FileTextOutlined />,
-      label: 'فاکتورها',
+      key: 'projects',
+      icon: <ProjectOutlined />,
+      label: 'پروژه‌ها',
       children: [
+        { key: '/projects', label: 'پروژه‌ها (فرآیندمحور)' },
+      ]
+    },
+    {
+      key: 'sales_and_purchase',
+      icon: <FileTextOutlined />,
+      label: 'خرید و فروش',
+      children: [
+        { key: '/marketing_leads', label: 'بازاریابی' },
         { key: '/invoices', label: 'فاکتورهای فروش' },
         { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
+        { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
+        { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
+        { key: '/cash_bank', label: 'نقد و بانک', disabled: true },
       ]
     },
-    { key: '/tasks', icon: <CheckSquareOutlined />, label: 'وظایف' },
-    { key: '/customers', icon: <ShopOutlined />, label: 'مشتریان' },
-    { key: '/projects', icon: <ProjectOutlined />, label: 'پروژه‌ها' },
-    { key: '/marketing_leads', icon: <RocketOutlined />, label: 'لیدهای بازاریابی' },
     {
-      key: 'processes',
-      icon: <NodeIndexOutlined />,
-      label: 'فرآیندها',
+      key: 'accounting',
+      icon: <BankOutlined />,
+      label: 'حسابداری',
       children: [
-        { key: '/process_templates', label: 'الگوهای فرآیند' },
-        { key: '/process_runs', label: 'اجرای فرآیندها' },
+        { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
+        { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
+        { key: '/chart_of_accounts', label: 'کدینگ حساب ها', disabled: !canViewModule('chart_of_accounts') },
+        { key: '/cheques', label: 'چک ها', disabled: !canViewModule('cheques') },
+        { key: '/fiscal_years', label: 'سال های مالی', disabled: !canViewModule('fiscal_years') },
+        { key: '/accounting_event_rules', label: 'قواعد صدور سند', disabled: !canViewModule('accounting_event_rules') },
+        { key: '/cost_centers', label: 'مراکز هزینه', disabled: !canViewModule('cost_centers') },
+        { key: '/cash_boxes', label: 'صندوق ها', disabled: !canViewModule('cash_boxes') },
+        { key: '/bank_accounts', label: 'حساب های بانکی', disabled: !canViewModule('bank_accounts') },
       ]
     },
-    { key: '/hr', icon: <TeamOutlined />, label: 'منابع انسانی' },
-    { key: '/gallery', icon: <PictureOutlined />, label: 'گالری فایل‌ها' },
+    {
+      key: 'hr',
+      icon: <TeamOutlined />,
+      label: 'منابع انسانی',
+      children: [
+        { key: '/tasks', label: 'وظایف' },
+        { key: '/hr', label: 'عملکرد کارکنان' },
+      ]
+    },
+    {
+      key: 'tools',
+      icon: <NodeIndexOutlined />,
+      label: 'ابزارها',
+      children: [
+        {
+          key: 'tools_processes',
+          label: 'فرآیندها',
+          children: [
+            { key: '/process_templates', label: 'الگوهای فرآیند' },
+            { key: '/process_runs', label: 'اجرای فرآیندها' },
+          ],
+        },
+        { key: '/gallery', label: 'گالری فایل‌ها' },
+      ]
+    },
     { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     
   ];
@@ -266,7 +303,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   };
 
   const mobileNavItems: MobileNavItem[] = [
-    { key: '/products', icon: <SkinOutlined />, label: 'محصولات' },
+    { key: '/products', icon: <SkinOutlined />, label: 'کالاها' },
     { key: '/production_orders', icon: <CheckSquareOutlined />, label: 'تولید' },
     { key: '/', icon: <HomeOutlined />, label: 'خانه', isCenter: true },
     { key: '/invoices', icon: <FileTextOutlined />, label: 'فاکتورها' },
@@ -293,7 +330,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         collapsed={collapsed}
         collapsedWidth={isMobile ? 0 : 80}
         zeroWidthTriggerStyle={{ display: 'none' }}
-        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1100] ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
+        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1100] overflow-visible ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
         style={{ 
           height: '100vh', 
           position: 'fixed', 
@@ -313,30 +350,32 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           {collapsed && !isMobile && <div className="text-leather-500 font-black text-2xl absolute">ک</div>}
         </div>
 
-        <div style={{ height: 'calc(100vh - 128px)', overflowY: 'auto' }}>
+        {!isMobile && (
+          <Button
+            type="text"
+            size="small"
+            icon={collapsed ? <LeftOutlined /> : <RightOutlined />}
+            onClick={toggleSidebar}
+            aria-label={collapsed ? 'باز کردن سایدبار' : 'بستن سایدبار'}
+            className="absolute -left-3 top-20 z-20 h-7 w-7 !min-w-0 !p-0 rounded-full border border-gray-200 dark:border-dark-border bg-white/95 dark:bg-dark-surface text-gray-500 dark:text-gray-300 shadow-sm hover:!text-leather-500 hover:!bg-white dark:hover:!bg-dark-surface"
+          />
+        )}
+
+        <div style={{ height: 'calc(100vh - 64px)', overflowY: 'auto' }}>
             <Menu
             theme={isDarkMode ? 'dark' : 'light'}
             mode="inline"
             selectedKeys={[location.pathname]}
             items={menuItems}
             onClick={({ key }) => { 
-                navigate(key); 
+                if (typeof key === 'string' && key.startsWith('/')) {
+                  navigate(key);
+                }
                 if (isMobile) setCollapsed(true); 
             }} 
             className="mt-4 border-none bg-transparent font-medium"
             />
         </div>
-
-        {!isMobile && (
-            <div className="absolute bottom-0 w-full h-16 border-t border-gray-200 dark:border-dark-border flex items-center justify-center bg-inherit">
-                <Button 
-                    type="text"
-                    icon={collapsed ? <MenuUnfoldOutlined className="text-xl" /> : <MenuFoldOutlined className="text-xl" />}
-                    onClick={toggleSidebar}
-                    className="w-full h-full text-gray-500 dark:text-gray-400 hover:text-leather-500 hover:bg-gray-50 dark:hover:bg-white/5 rounded-none transition-all"
-                />
-            </div>
-        )}
       </Sider>
 
       <AntLayout 

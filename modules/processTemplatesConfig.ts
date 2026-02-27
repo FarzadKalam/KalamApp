@@ -102,6 +102,16 @@ export const processTemplatesModule: ModuleDefinition = {
       order: 2,
       nature: FieldNature.STANDARD,
     },
+    {
+      key: 'template_stages_preview',
+      labels: { fa: 'مراحل الگو', en: 'Template Stages' },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: 'base_info',
+      order: 3,
+      readonly: true,
+      nature: FieldNature.SYSTEM,
+    },
   ],
   blocks: [
     {
@@ -113,3 +123,4 @@ export const processTemplatesModule: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
+

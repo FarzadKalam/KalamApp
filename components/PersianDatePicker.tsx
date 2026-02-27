@@ -96,7 +96,8 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         ? [<TimePicker key="time" position="bottom" hideSeconds />]
         : [],
     className: `rmdp-leather ${className || ''}`.trim(),
-    inputClass: "w-full persian-number rounded-lg border border-gray-300 px-3 py-2 focus:border-leather-500 focus:ring-1 focus:ring-leather-500",
+    inputClass:
+      "w-full h-8 persian-number rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-[#141414] px-3 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-400 focus:border-leather-500 focus:ring-1 focus:ring-leather-500 transition-colors",
     containerClassName: "w-full",
     disabled,
     placeholder,

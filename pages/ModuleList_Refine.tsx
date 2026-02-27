@@ -14,6 +14,7 @@ import Toolbar from "../components/moduleList/Toolbar";
 import BulkActionsBar from "../components/moduleList/BulkActionsBar";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
 import GridView from "../components/moduleList/GridView";
+import MapView from "../components/moduleList/MapView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
 import { canAccessAssignedRecord, WORKFLOWS_PERMISSION_KEY } from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
@@ -63,6 +64,14 @@ const ModuleListContentSkeleton: React.FC<{ viewMode: ViewMode }> = ({ viewMode 
             </div>
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (viewMode === ViewMode.MAP) {
+    return (
+      <div className="h-full min-h-[420px] rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <Skeleton.Image active className="!w-full !h-full" />
       </div>
     );
   }
@@ -166,6 +175,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       const { data: authData } = await supabase.auth.getUser();
       const user = authData?.user;
       if (!user) return;
+      setCurrentUserId(user.id);
 
       const { data: profile } = await supabase
         .from('profiles')
@@ -173,7 +183,14 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
         .eq('id', user.id)
         .single();
 
-      if (!profile?.role_id) return;
+      setCurrentUserRoleId(profile?.role_id || null);
+
+      if (!profile?.role_id) {
+        setModulePermissions({});
+        setFieldPermissions({});
+        setCanOpenWorkflows(true);
+        return;
+      }
 
       const { data: role } = await supabase
         .from('org_roles')
@@ -201,26 +218,6 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   useEffect(() => {
     fetchPermissions();
   }, [fetchPermissions]);
-
-  useEffect(() => {
-    const fetchCurrentUser = async () => {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        const user = authData?.user;
-        if (!user) return;
-        setCurrentUserId(user.id);
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role_id')
-          .eq('id', user.id)
-          .single();
-        setCurrentUserRoleId(profile?.role_id || null);
-      } catch (err) {
-        console.warn('Could not fetch current user role:', err);
-      }
-    };
-    fetchCurrentUser();
-  }, []);
 
   const canViewField = useCallback(
     (fieldKey: string) => {
@@ -342,9 +339,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
 
         const relOpts: Record<string, any[]> = {};
 
-        const { data: profileData } = await supabase.from("profiles").select("id, full_name");
-        if (!isActive) return;
-        const profileOptions = profileData?.map((p) => ({ label: p.full_name || p.id, value: p.id })) || [];
+        const profileOptions = (users || []).map((p: any) => ({ label: p.full_name || p.id, value: p.id }));
         relOpts["profiles"] = profileOptions;
         relOpts["assignee_id"] = profileOptions;
 
@@ -445,6 +440,11 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     ) || [];
   }, [moduleConfig]);
 
+  const mapEnabled = useMemo(() => {
+    if (!moduleConfig) return false;
+    return moduleConfig.fields.some((field) => field.type === FieldType.LOCATION || field.key === "location");
+  }, [moduleConfig]);
+
   useEffect(() => {
     if (viewMode !== ViewMode.KANBAN) return;
     if (kanbanGroupBy) return;
@@ -452,6 +452,12 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     const defaultField = availableGroupFields.find((f) => f.type === FieldType.STATUS) || availableGroupFields[0];
     setKanbanGroupBy(defaultField.key);
   }, [viewMode, kanbanGroupBy, availableGroupFields]);
+
+  useEffect(() => {
+    if (viewMode !== ViewMode.MAP) return;
+    if (mapEnabled) return;
+    setViewMode(moduleConfig?.defaultViewMode || ViewMode.LIST);
+  }, [viewMode, mapEnabled, moduleConfig?.defaultViewMode]);
 
   useEffect(() => {
     if (!searchTargetField) return;
@@ -739,6 +745,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           isFullscreen={isFullscreen}
           toggleFullscreen={() => setIsFullscreen((prev) => !prev)}
           kanbanEnabled={availableGroupFields.length > 0}
+          mapEnabled={mapEnabled}
           kanbanGroupBy={kanbanGroupBy}
           kanbanGroupOptions={availableGroupFields.map((f) => ({ label: f.labels.fa, value: f.key }))}
           onKanbanGroupChange={setKanbanGroupBy}
@@ -848,6 +855,16 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                     </Button>
                     </div>
                   )}
+               </div>
+               )}
+               {viewMode === ViewMode.MAP && moduleConfig && resolvedModuleId && (
+                <div className="h-full">
+                  <MapView
+                    data={enrichedData}
+                    moduleId={resolvedModuleId}
+                    moduleConfig={moduleConfig}
+                    navigate={navigate}
+                  />
                 </div>
                )}
                {viewMode === ViewMode.KANBAN && (

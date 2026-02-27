@@ -107,6 +107,16 @@ export const processRunsModule: ModuleDefinition = {
       nature: FieldNature.SYSTEM,
       isTableColumn: true,
     },
+    {
+      key: 'run_stages_preview',
+      labels: { fa: 'مراحل اجرا', en: 'Run Stages' },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: 'base_info',
+      order: 4,
+      readonly: true,
+      nature: FieldNature.SYSTEM,
+    },
   ],
   blocks: [
     {
@@ -118,3 +128,4 @@ export const processRunsModule: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
+

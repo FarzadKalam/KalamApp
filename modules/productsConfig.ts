@@ -484,7 +484,7 @@ export const BOM_TABLE_BLOCKS = {
 // ====== 4. تعریف ماژول ======
 export const productsConfig: ModuleDefinition = {
     id: 'products',
-    titles: { fa: 'محصولات', en: 'Products' },
+    titles: { fa: 'کالاها و خدمات', en: 'Products' },
     nature: ModuleNature.PRODUCT,
     table: 'products',
     supportedViewModes: [ViewMode.LIST, ViewMode.GRID],

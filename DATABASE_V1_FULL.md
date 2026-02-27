@@ -51,9 +51,11 @@ This migration creates/completes all current module tables and runtime support t
 2. `trade_name` (display/brand name)
 3. `company_name_en` (English name)
 4. `brand_palette_key` with allowed values:
-   - `executive_indigo`
-   - `corporate_blue`
-   - `deep_ocean`
+   - `executive_indigo` (ایندیگو مدیریتی)
+   - `corporate_blue` (آبی سازمانی)
+   - `deep_ocean` (اقیانوس عمیق)
+   - `ruby_red` (قرمز یاقوتی)
+   - `amber_navy` (زرد و سورمه‌ای)
 
 ## Runtime compatibility included
 

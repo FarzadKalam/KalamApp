@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Form, Input, InputNumber, Select, Switch, Upload, Image, Modal, App, Tag, Button } from 'antd';
 import { UploadOutlined, LoadingOutlined, QrcodeOutlined, PlusOutlined } from '@ant-design/icons';
+import { CircleMarker, MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { ModuleField, FieldType, FieldNature } from '../types';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { supabase } from '../supabaseClient';
@@ -17,6 +18,8 @@ import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
+import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
+import { MAP_TILE_ATTRIBUTION, MAP_TILE_URL } from '../utils/mapConfig';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -56,9 +59,101 @@ const formatNumericForInput = (raw: any, withGrouping = false): string => {
   return toPersianNumber(output);
 };
 
+const NAVIGATION_KEYS = new Set([
+  'Backspace',
+  'Delete',
+  'Tab',
+  'Enter',
+  'Escape',
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+]);
+
+const SHORTCUT_KEYS = new Set(['a', 'c', 'v', 'x', 'z', 'y']);
+const NUMERIC_CHAR_PATTERN = /^[0-9\u06F0-\u06F9\u0660-\u0669.,\u066b\u066c-]$/;
+
+const preventNonNumericKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  const key = String(event.key || '');
+  if (!key) return;
+
+  if (NAVIGATION_KEYS.has(key)) return;
+
+  const ctrlOrMeta = Boolean(event.ctrlKey || event.metaKey);
+  if (ctrlOrMeta && SHORTCUT_KEYS.has(key.toLowerCase())) return;
+  if (event.altKey) return;
+  if (key.length > 1) return;
+
+  if (!NUMERIC_CHAR_PATTERN.test(key)) {
+    event.preventDefault();
+  }
+};
+
+const preventNonNumericPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+  const raw = String(event.clipboardData?.getData('text') || '');
+  if (!raw.trim()) return;
+  const normalized = normalizeNumericString(raw);
+  if (!normalized) {
+    event.preventDefault();
+  }
+};
+
 const formatTextForInput = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
   return toPersianNumber(normalizeDigitsToEnglish(raw));
+};
+
+const LocationMapEvents: React.FC<{ onPick: (value: LocationLatLng) => void }> = ({ onPick }) => {
+  useMapEvents({
+    click(event) {
+      onPick({ lat: event.latlng.lat, lng: event.latlng.lng });
+    },
+  });
+  return null;
+};
+
+const LocationMapCenter: React.FC<{ center: LocationLatLng | null }> = ({ center }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!center) return;
+    map.setView([center.lat, center.lng], Math.max(map.getZoom(), 11), { animate: true });
+  }, [map, center]);
+
+  return null;
+};
+
+const LocationPickerMap: React.FC<{
+  value: LocationLatLng | null;
+  onChange: (value: LocationLatLng) => void;
+}> = ({ value, onChange }) => {
+  const center: [number, number] = value ? [value.lat, value.lng] : IRAN_CENTER;
+
+  return (
+    <MapContainer
+      center={center}
+      zoom={value ? 12 : 5}
+      minZoom={4}
+      maxZoom={18}
+      maxBounds={IRAN_BOUNDS}
+      maxBoundsViscosity={1}
+      style={{ width: '100%', height: 360, borderRadius: 12 }}
+    >
+      <TileLayer url={MAP_TILE_URL} attribution={MAP_TILE_ATTRIBUTION} />
+      <LocationMapEvents onPick={onChange} />
+      <LocationMapCenter center={value} />
+      {value && (
+        <CircleMarker
+          center={[value.lat, value.lng]}
+          radius={7}
+          pathOptions={{ color: '#b45309', fillColor: '#f59e0b', fillOpacity: 0.9, weight: 2 }}
+        />
+      )}
+    </MapContainer>
+  );
 };
 
 interface SmartFieldRendererProps {
@@ -95,6 +190,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [scannedCode, setScannedCode] = useState('');
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
   const [isGlobalImageGalleryOpen, setIsGlobalImageGalleryOpen] = useState(false);
+  const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
+  const [locationDraft, setLocationDraft] = useState<LocationLatLng | null>(null);
   const [globalImageGalleryItems, setGlobalImageGalleryItems] = useState<Array<{
     id: string;
     url: string;
@@ -108,9 +205,16 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const fieldLabel = field?.labels?.fa || label || 'بدون نام';
   const fieldType = field?.type || type || FieldType.TEXT;
   const fieldKey = field?.key || 'unknown';
+  const isProcessStagesFieldKey = (
+    fieldKey === 'execution_process_draft' ||
+    fieldKey === 'marketing_process_draft' ||
+    fieldKey === 'template_stages_preview' ||
+    fieldKey === 'run_stages_preview'
+  );
   const isRequired = field?.validation?.required || false;
   const fieldOptions = field?.options || options || [];
   const isReadonly = field?.readonly === true || field?.nature === FieldNature.SYSTEM;
+  const parsedLocation = useMemo(() => parseLocationValue(value), [value]);
   const relationConfigAny = field.relationConfig as any;
   const quickCreateTargetModuleId = relationConfigAny?.targetModule as string | undefined;
   const quickCreateTargetModule = quickCreateTargetModuleId ? MODULES[quickCreateTargetModuleId] : undefined;
@@ -179,7 +283,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       }
   }
 
-  if (!compactMode && forceEditMode && field?.nature === FieldNature.SYSTEM) {
+  if (!compactMode && forceEditMode && field?.nature === FieldNature.SYSTEM && !isProcessStagesFieldKey) {
       return <Input type="hidden" value={value} />;
   }
 
@@ -503,6 +607,30 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       );
     }
 
+    const isProcessDraftField = isProcessStagesFieldKey;
+    const isProcessModule = (
+      moduleId === 'projects' ||
+      moduleId === 'marketing_leads' ||
+      moduleId === 'process_templates' ||
+      moduleId === 'process_runs'
+    );
+    if (isProcessDraftField && isProcessModule) {
+      const nextDraftStages = Array.isArray(value)
+        ? value
+        : (Array.isArray((allValues as any)?.[fieldKey]) ? (allValues as any)[fieldKey] : []);
+      const allowTemplateStageEdit = moduleId === 'process_templates' && fieldKey === 'template_stages_preview';
+      return (
+        <ProductionStagesField
+          recordId={recordId}
+          moduleId={moduleId}
+          readOnly={!forceEditMode || (isReadonly && !allowTemplateStageEdit)}
+          compact={compactMode}
+          draftStages={nextDraftStages}
+          onDraftStagesChange={(stages) => onChange(stages)}
+        />
+      );
+    }
+
     if (!forceEditMode) {
         if (fieldType === FieldType.CHECKBOX) {
             return value ? <Tag color="green">بله</Tag> : <Tag color="red">خیر</Tag>;
@@ -593,6 +721,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 inputMode="decimal"
                 formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
                 parser={(val) => normalizeNumericString(val)}
+                onKeyDown={preventNonNumericKeyDown}
+                onPaste={preventNonNumericPaste}
             />
         );
       case FieldType.SELECT:
@@ -733,6 +863,43 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 </RelatedRecordPopover>
               )}
            </div>
+        );
+
+      case FieldType.LOCATION:
+        return (
+          <div className="flex flex-col gap-2">
+            <Input
+              {...commonProps}
+              placeholder={compactMode ? undefined : "مثال: 35.6892, 51.3890"}
+              value={formatTextForInput(value)}
+              onChange={(e) => onChange(normalizeDigitsToEnglish(e.target.value))}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="small"
+                onClick={() => {
+                  setLocationDraft(parsedLocation);
+                  setIsLocationPickerOpen(true);
+                }}
+                disabled={!forceEditMode || isReadonly}
+              >
+                انتخاب روی نقشه
+              </Button>
+              {!!value && (
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => onChange(null)}
+                  disabled={!forceEditMode || isReadonly}
+                >
+                  حذف موقعیت
+                </Button>
+              )}
+              {parsedLocation && (
+                <Tag color="blue">{formatLocationValue(parsedLocation, 5)}</Tag>
+              )}
+            </div>
+          </div>
         );
 
       case FieldType.DATE:
@@ -928,6 +1095,62 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     </Modal>
   );
 
+  const hasConfiguredTiles = Boolean(import.meta.env.VITE_MAP_TILE_URL);
+  const locationPickerModalNode = (
+    <Modal
+      title="انتخاب موقعیت روی نقشه"
+      open={isLocationPickerOpen}
+      onCancel={() => setIsLocationPickerOpen(false)}
+      width={900}
+      zIndex={12000}
+      destroyOnHidden
+      footer={[
+        <Button key="cancel" onClick={() => setIsLocationPickerOpen(false)}>
+          انصراف
+        </Button>,
+        <Button
+          key="clear"
+          onClick={() => {
+            setLocationDraft(null);
+            onChange(null);
+            setIsLocationPickerOpen(false);
+          }}
+          disabled={!forceEditMode || isReadonly}
+        >
+          پاک کردن
+        </Button>,
+        <Button
+          key="save"
+          type="primary"
+          onClick={() => {
+            if (!locationDraft) return;
+            onChange(formatLocationValue(locationDraft));
+            setIsLocationPickerOpen(false);
+          }}
+          disabled={!locationDraft || !forceEditMode || isReadonly}
+        >
+          ثبت موقعیت
+        </Button>,
+      ]}
+    >
+      {!hasConfiguredTiles && (
+        <div className="mb-3 text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-900 border border-yellow-300">
+          برای استفاده در محیط داخلی، مقدار `VITE_MAP_TILE_URL` را روی tile server خودتان تنظیم کنید.
+        </div>
+      )}
+      <div className="mb-2 text-xs text-gray-500">
+        با کلیک روی نقشه موقعیت ثبت می‌شود.
+      </div>
+      <LocationPickerMap value={locationDraft} onChange={setLocationDraft} />
+      <div className="mt-2 text-xs text-gray-500">
+        موقعیت انتخاب‌شده:
+        <span className="font-semibold mr-1">
+          {locationDraft ? formatLocationValue(locationDraft, 6) : "انتخاب نشده"}
+        </span>
+      </div>
+    </Modal>
+  );
+
   if (compactMode) {
       return (
         <div className="w-full">
@@ -963,6 +1186,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 />
             </Modal>
             {globalImageGalleryModalNode}
+            {locationPickerModalNode}
         </div>
       );
   }
@@ -1010,6 +1234,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             />
         </Modal>
         {globalImageGalleryModalNode}
+        {locationPickerModalNode}
     </>
   );
 };
@@ -1080,6 +1305,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
             inputMode="decimal"
             formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
             parser={(val) => normalizeNumericString(val)}
+            onKeyDown={preventNonNumericKeyDown}
+            onPaste={preventNonNumericPaste}
           />
         );
       case FieldType.SELECT:
@@ -1098,11 +1325,11 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       case FieldType.RELATION:
         return <Select {...baseSelectProps} options={relationOptions[field.key] || []} />;
       case FieldType.DATE:
-        return <Input placeholder="YYYY-MM-DD" disabled={isDisabled} />;
+        return <PersianDatePicker type="DATE" disabled={isDisabled} />;
       case FieldType.TIME:
-        return <Input placeholder="HH:mm" disabled={isDisabled} />;
+        return <PersianDatePicker type="TIME" disabled={isDisabled} />;
       case FieldType.DATETIME:
-        return <Input placeholder="YYYY-MM-DD HH:mm" disabled={isDisabled} />;
+        return <PersianDatePicker type="DATETIME" disabled={isDisabled} />;
       case FieldType.CHECKBOX:
         return <Switch disabled={isDisabled} />;
       default:

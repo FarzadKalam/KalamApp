@@ -16,6 +16,14 @@ import { projectsModule } from './modules/projectsConfig';
 import { marketingLeadsModule } from './modules/marketingLeadsConfig';
 import { processTemplatesModule } from './modules/processTemplatesConfig';
 import { processRunsModule } from './modules/processRunsConfig';
+import { fiscalYearsConfig } from './modules/fiscalYearsConfig';
+import { chartOfAccountsConfig } from './modules/chartOfAccountsConfig';
+import { journalEntriesConfig } from './modules/journalEntriesConfig';
+import { accountingEventRulesConfig } from './modules/accountingEventRulesConfig';
+import { costCentersConfig } from './modules/costCentersConfig';
+import { cashBoxesConfig } from './modules/cashBoxesConfig';
+import { bankAccountsConfig } from './modules/bankAccountsConfig';
+import { chequesConfig } from './modules/chequesConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -36,4 +44,12 @@ export const MODULES: Record<string, ModuleDefinition> = {
   process_runs: processRunsModule,
   tasks: tasksModule,
   calculation_formulas: calculationFormulasModule,
+  fiscal_years: fiscalYearsConfig,
+  chart_of_accounts: chartOfAccountsConfig,
+  journal_entries: journalEntriesConfig,
+  accounting_event_rules: accountingEventRulesConfig,
+  cost_centers: costCentersConfig,
+  cash_boxes: cashBoxesConfig,
+  bank_accounts: bankAccountsConfig,
+  cheques: chequesConfig,
 };

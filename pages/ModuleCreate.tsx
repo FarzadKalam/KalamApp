@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useForm } from "@refinedev/antd";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartForm from "../components/SmartForm";
 import { Button, Result, Spin } from "antd";
@@ -10,13 +10,16 @@ import { applyInvoiceFinalizationInventory } from "../utils/invoiceInventoryWork
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
+import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
 
 export const ModuleCreate = () => {
   const { moduleId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const moduleConfig = moduleId ? MODULES[moduleId] : null;
   const [permissionLoading, setPermissionLoading] = useState(true);
   const [canCreate, setCanCreate] = useState(true);
+  const initialValuesFromState = (location.state as any)?.initialValues || {};
 
   const { formProps, saveButtonProps, form } = useForm({
     action: "create",
@@ -139,6 +142,7 @@ export const ModuleCreate = () => {
         <SmartForm
           module={moduleConfig}
           visible={true}
+          initialValues={initialValuesFromState}
           onCancel={() => navigate(-1)}
           onSave={async (values) => {
             try {
@@ -162,6 +166,15 @@ export const ModuleCreate = () => {
                   invoiceItems: values?.invoiceItems ?? [],
                   userId,
                 });
+                const accountingSync = await syncInvoiceAccountingEntries({
+                  supabase: supabase as any,
+                  moduleId,
+                  recordId: inserted.id,
+                  recordData: inserted,
+                });
+                if (accountingSync.errors.length > 0) {
+                  console.warn("Invoice accounting sync warnings:", accountingSync.errors);
+                }
                 if (moduleId === "invoices") {
                   await syncCustomerLevelsByInvoiceCustomers({
                     supabase: supabase as any,

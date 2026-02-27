@@ -13,6 +13,7 @@ export const SETTINGS_PERMISSION_KEY = '__settings_tabs';
 export const DASHBOARD_PERMISSION_KEY = '__dashboard_widgets';
 export const WORKFLOWS_PERMISSION_KEY = '__workflows';
 export const FILES_PERMISSION_KEY = '__files_access';
+export const ACCOUNTING_PERMISSION_KEY = '__accounting';
 
 export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'company', label: 'مشخصات شرکت' },
@@ -46,6 +47,16 @@ export const WORKFLOWS_PERMISSION_FIELDS = [
 export const FILES_PERMISSION_FIELDS = [
   { key: 'gallery_page', label: 'گالری فایل‌ها' },
   { key: 'record_files_manager', label: 'مدیریت فایل‌ها' },
+];
+
+export const ACCOUNTING_PERMISSION_FIELDS = [
+  { key: 'dashboard_page', label: 'نمایش داشبورد حسابداری' },
+  { key: 'overview_cards', label: 'کارت های خلاصه مالی' },
+  { key: 'operation_links', label: 'لینک های عملیات ضروری' },
+  { key: 'settings_links', label: 'لینک های تنظیمات حسابداری' },
+  { key: 'journal_entry_lines_view', label: 'مشاهده ردیف های سند حسابداری' },
+  { key: 'journal_entry_lines_edit', label: 'ویرایش/ایجاد ردیف های سند حسابداری' },
+  { key: 'journal_entry_lines_delete', label: 'حذف ردیف های سند حسابداری' },
 ];
 
 const ensureField = (map: Map<string, string>, key: string, label: string) => {
@@ -164,6 +175,13 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     edit: true,
     delete: true,
     fields: createFieldsMap(FILES_PERMISSION_FIELDS),
+  };
+
+  defaults[ACCOUNTING_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    fields: createFieldsMap(ACCOUNTING_PERMISSION_FIELDS),
   };
 
   return defaults;

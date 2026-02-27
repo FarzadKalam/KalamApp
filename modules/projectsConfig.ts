@@ -196,7 +196,7 @@ export const projectsModule: ModuleDefinition = {
     {
       key: 'location',
       labels: { fa: 'موقعیت', en: 'Location' },
-      type: FieldType.TEXT,
+      type: FieldType.LOCATION,
       location: FieldLocation.BLOCK,
       blockId: 'base_info',
       order: 3,

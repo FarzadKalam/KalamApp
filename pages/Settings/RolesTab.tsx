@@ -13,6 +13,8 @@ import {
   DASHBOARD_WIDGET_PERMISSIONS,
   WORKFLOWS_PERMISSION_KEY,
   WORKFLOWS_PERMISSION_FIELDS,
+  ACCOUNTING_PERMISSION_KEY,
+  ACCOUNTING_PERMISSION_FIELDS,
   type PermissionMap,
 } from '../../utils/permissions';
 
@@ -375,6 +377,73 @@ const RolesTab: React.FC = () => {
                       WORKFLOWS_PERMISSION_KEY,
                       WORKFLOWS_PERMISSION_FIELDS,
                       getModulePerms(WORKFLOWS_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
+                  key={ACCOUNTING_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <span className="font-bold">حسابداری</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(ACCOUNTING_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              ACCOUNTING_PERMISSION_KEY,
+                              'view',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(ACCOUNTING_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(ACCOUNTING_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              ACCOUNTING_PERMISSION_KEY,
+                              'edit',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          ویرایش/ایجاد
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(ACCOUNTING_PERMISSION_KEY).delete !== false}
+                          disabled={getModulePerms(ACCOUNTING_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              ACCOUNTING_PERMISSION_KEY,
+                              'delete',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          حذف
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی بخش‌های حسابداری
+                    </Divider>
+                    {renderFieldSwitches(
+                      ACCOUNTING_PERMISSION_KEY,
+                      ACCOUNTING_PERMISSION_FIELDS,
+                      getModulePerms(ACCOUNTING_PERMISSION_KEY).view === false
                     )}
                   </div>
                 </Panel>

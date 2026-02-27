@@ -4,6 +4,7 @@ import {
   AppstoreOutlined,
   ColumnWidthOutlined,
   CompressOutlined,
+  EnvironmentOutlined,
   ExpandOutlined,
   ReloadOutlined,
   TableOutlined,
@@ -19,6 +20,7 @@ interface ToolbarProps {
   isFullscreen: boolean;
   toggleFullscreen: () => void;
   kanbanEnabled?: boolean;
+  mapEnabled?: boolean;
   kanbanGroupBy: string | null;
   kanbanGroupOptions: { label: string; value: string }[];
   onKanbanGroupChange: (value: string) => void;
@@ -33,6 +35,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   isFullscreen,
   toggleFullscreen,
   kanbanEnabled = false,
+  mapEnabled = false,
   kanbanGroupBy,
   kanbanGroupOptions,
   onKanbanGroupChange,
@@ -58,6 +61,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
             options={[
               { label: "جدول", value: ViewMode.LIST, icon: <TableOutlined /> },
               { label: "گرید", value: ViewMode.GRID, icon: <AppstoreOutlined /> },
+              ...(mapEnabled ? [{ label: "نقشه", value: ViewMode.MAP, icon: <EnvironmentOutlined /> }] : []),
               ...(kanbanEnabled ? [{ label: "کانبان", value: ViewMode.KANBAN, icon: <ColumnWidthOutlined /> }] : []),
             ]}
             value={viewMode}

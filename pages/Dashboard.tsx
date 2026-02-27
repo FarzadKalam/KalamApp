@@ -175,13 +175,19 @@ const Dashboard: React.FC = () => {
         .from('products')
         .select('*');
 
-      // Fetch recent changelogs from tasks table
-      const { data: changelogTasks } = await supabase
+      // Fetch recent changelog-like items from tasks table without relying on optional `task_type` column.
+      const { data: rawChangeTasks } = await supabase
         .from('tasks')
-        .select('id, task_type, name, created_at, recurrence_info')
-        .ilike('task_type', 'log|%')
+        .select('id, name, created_at, recurrence_info')
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(60);
+
+      const changelogTasks = (rawChangeTasks || [])
+        .filter((task: any) => {
+          const meta = task?.recurrence_info || {};
+          return !!(meta?.module_id && meta?.field_key) || meta?.old_value !== undefined || meta?.new_value !== undefined;
+        })
+        .slice(0, 10);
 
       // Calculate total sales
       const totalSales = invoices?.reduce((sum, inv) => sum + (inv.total_invoice_amount || 0), 0) || 0;

@@ -54,6 +54,28 @@ export const BRAND_PALETTE_PRESETS = {
       darkBorder: '#30456D',
     },
   },
+  ruby_red: {
+    label: 'قرمز یاقوتی',
+    palette: {
+      primary: '#DC2626',
+      secondary: '#7F1D1D',
+      accentPink: '#FB7185',
+      darkBg: '#140B0E',
+      darkSurface: '#221117',
+      darkBorder: '#4A1D28',
+    },
+  },
+  amber_navy: {
+    label: 'زرد و سورمه‌ای',
+    palette: {
+      primary: '#F59E0B',
+      secondary: '#0F172A',
+      accentPink: '#EC4899',
+      darkBg: '#0B1324',
+      darkSurface: '#162036',
+      darkBorder: '#33415C',
+    },
+  },
 } as const;
 
 export type BrandingPaletteKey = keyof typeof BRAND_PALETTE_PRESETS;

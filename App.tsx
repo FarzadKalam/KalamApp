@@ -4,7 +4,7 @@ import { notificationProvider, ErrorComponent } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
-import { BrowserRouter, Route, Routes, Outlet } from "react-router-dom";
+import { BrowserRouter, Route, Routes, Outlet, useParams } from "react-router-dom";
 import { ConfigProvider, App as AntdApp, theme as antdTheme } from "antd";
 import faIR from "antd/locale/fa_IR";
 import ProfilePage from "./pages/ProfilePage";
@@ -23,6 +23,11 @@ import "./App.css";
 import { ModuleCreate } from "./pages/ModuleCreate";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import AccountingPage from "./pages/AccountingPage";
+import ChartOfAccountsTreePage from "./pages/ChartOfAccountsTreePage";
+import AccountingRecordPage from "./pages/AccountingRecordPage";
+import JournalEntryCreatePage from "./pages/JournalEntryCreatePage";
+import JournalEntryShowPage from "./pages/JournalEntryShowPage";
 import InquiryForm from "./pages/InquiryForm";
 import ProductionGroupOrdersList from "./pages/ProductionGroupOrdersList";
 import ProductionGroupOrderWizard from "./pages/ProductionGroupOrderWizard";
@@ -38,6 +43,7 @@ import {
   mergeBrandingConfig,
   type BrandingSettingsPayload,
 } from "./theme/brandTheme";
+import { isAccountingMinimalModule } from "./utils/accountingModules";
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
@@ -157,6 +163,11 @@ function App() {
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
+    if (pathname === "/accounting" || pathname.startsWith("/accounting/")) return "حسابداری";
+    if (pathname === "/chart_of_accounts") return "کدینگ حساب ها";
+    if (pathname.startsWith("/journal_entries/create")) return "ایجاد سند حسابداری";
+    if (/^\/journal_entries\/[^/]+$/.test(pathname)) return "سند حسابداری";
+    if (/^\/journal_entries\/[^/]+\/edit$/.test(pathname)) return "سند حسابداری";
     return null;
   };
 
@@ -193,6 +204,36 @@ function App() {
     }
 
     return branding.appTitle;
+  };
+
+  const ModuleListRouteResolver: React.FC = () => {
+    const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === "chart_of_accounts") {
+      return <ChartOfAccountsTreePage />;
+    }
+    return <ModuleListRefine />;
+  };
+
+  const ModuleCreateRouteResolver: React.FC = () => {
+    const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === "journal_entries") {
+      return <JournalEntryCreatePage />;
+    }
+    if (isAccountingMinimalModule(routeModuleId)) {
+      return <AccountingRecordPage />;
+    }
+    return <ModuleCreate />;
+  };
+
+  const ModuleShowRouteResolver: React.FC = () => {
+    const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === "journal_entries") {
+      return <JournalEntryShowPage />;
+    }
+    if (isAccountingMinimalModule(routeModuleId)) {
+      return <AccountingRecordPage />;
+    }
+    return <ModuleShow />;
   };
 
   return (
@@ -250,12 +291,17 @@ function App() {
                 <Route path="/hr" element={<HRPage />} />
                 <Route path="/hr/:employeeId" element={<HRPage />} />
                 <Route path="/gallery" element={<FilesGalleryPage />} />
+                <Route path="/accounting" element={<AccountingPage />} />
+                <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
+                <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
+                <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
+                <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
                 
                 <Route path="/:moduleId">
-                  <Route index element={<ModuleListRefine />} />
-                  <Route path="create" element={<ModuleCreate />} />
-                  <Route path=":id" element={<ModuleShow />} />
-                  <Route path=":id/edit" element={<ModuleShow />} />
+                  <Route index element={<ModuleListRouteResolver />} />
+                  <Route path="create" element={<ModuleCreateRouteResolver />} />
+                  <Route path=":id" element={<ModuleShowRouteResolver />} />
+                  <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
                 </Route>
 
                 <Route path="/settings" element={<SettingsPage />} />
