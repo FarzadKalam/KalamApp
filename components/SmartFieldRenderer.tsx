@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Form, Input, InputNumber, Select, Switch, Upload, Image, Modal, App, Tag, Button } from 'antd';
 import { UploadOutlined, LoadingOutlined, QrcodeOutlined, PlusOutlined } from '@ant-design/icons';
-import { CircleMarker, MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import maplibregl from 'maplibre-gl';
 import { ModuleField, FieldType, FieldNature } from '../types';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { supabase } from '../supabaseClient';
@@ -19,7 +19,8 @@ import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
-import { MAP_TILE_ATTRIBUTION, MAP_TILE_URL } from '../utils/mapConfig';
+import { buildMapStyle, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL } from '../utils/mapConfig';
+import { createThemeMapPinElement } from '../utils/mapPin';
 import { useCurrencyConfig } from '../utils/currency';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
@@ -114,62 +115,107 @@ const formatTextForInput = (raw: any): string => {
   return toPersianNumber(normalizeDigitsToEnglish(raw));
 };
 
-const LocationMapEvents: React.FC<{ onPick: (value: LocationLatLng) => void }> = ({ onPick }) => {
-  useMapEvents({
-    click(event) {
-      onPick({ lat: event.latlng.lat, lng: event.latlng.lng });
-    },
-  });
-  return null;
-};
-
-const LocationMapCenter: React.FC<{ center: LocationLatLng | null }> = ({ center }) => {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!center) return;
-    map.setView([center.lat, center.lng], Math.max(map.getZoom(), 11), { animate: true });
-  }, [map, center]);
-
-  return null;
-};
-
 const LocationPickerMap: React.FC<{
   value: LocationLatLng | null;
   onChange: (value: LocationLatLng) => void;
 }> = ({ value, onChange }) => {
-  const center: [number, number] = value ? [value.lat, value.lng] : IRAN_CENTER;
+  const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const mapRef = React.useRef<maplibregl.Map | null>(null);
+  const markerRef = React.useRef<maplibregl.Marker | null>(null);
+  const mapMaxZoom = Math.max(MAP_MAX_ZOOM, 18);
 
-  return (
-    <MapContainer
-      center={center}
-      zoom={value ? 12 : 5}
-      minZoom={4}
-      maxZoom={14}
-      maxBounds={IRAN_BOUNDS}
-      maxBoundsViscosity={1}
-      style={{ width: '100%', height: 360, borderRadius: 12 }}
-    >
-      <TileLayer
-        url={MAP_TILE_URL}
-        attribution={MAP_TILE_ATTRIBUTION}
-        bounds={IRAN_BOUNDS}
-        noWrap
-        maxNativeZoom={14}
-        maxZoom={14}
-        detectRetina={false}
-      />
-      <LocationMapEvents onPick={onChange} />
-      <LocationMapCenter center={value} />
-      {value && (
-        <CircleMarker
-          center={[value.lat, value.lng]}
-          radius={7}
-          pathOptions={{ color: '#b45309', fillColor: '#f59e0b', fillOpacity: 0.9, weight: 2 }}
-        />
-      )}
-    </MapContainer>
-  );
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    const [[minLat, minLng], [maxLat, maxLng]] = IRAN_BOUNDS;
+    const center: [number, number] = value ? [value.lng, value.lat] : [IRAN_CENTER[1], IRAN_CENTER[0]];
+    const useRemoteStyle = Boolean(MAP_STYLE_URL);
+    const rasterFallbackStyle = buildRasterStyle();
+    let fallbackApplied = false;
+
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: buildMapStyle() as any,
+      center,
+      zoom: value ? 12 : 5,
+      minZoom: 4,
+      maxZoom: mapMaxZoom,
+      maxBounds: [
+        [minLng, minLat],
+        [maxLng, maxLat],
+      ],
+      attributionControl: true,
+    });
+
+    mapRef.current = map;
+    map.on('load', () => {
+      map.resize();
+      window.requestAnimationFrame(() => map.resize());
+      window.setTimeout(() => map.resize(), 220);
+    });
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+    map.addControl(
+      new maplibregl.GeolocateControl({
+        positionOptions: { enableHighAccuracy: true },
+        trackUserLocation: false,
+        showUserHeading: false,
+      }),
+      'top-left'
+    );
+    map.on('error', (event: any) => {
+      if (!useRemoteStyle || fallbackApplied) return;
+      const message = String(event?.error?.message || event?.error || '').toLowerCase();
+      if (!message) return;
+
+      const shouldFallback =
+        message.includes('failed to fetch') ||
+        message.includes('ajaxerror') ||
+        message.includes('connection') ||
+        message.includes('timeout') ||
+        message.includes('err_connection');
+
+      if (!shouldFallback) return;
+
+      fallbackApplied = true;
+      map.setStyle(rasterFallbackStyle as any, { diff: false } as any);
+    });
+    map.on('click', (event) => {
+      onChange({ lat: event.lngLat.lat, lng: event.lngLat.lng });
+    });
+
+    return () => {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [mapMaxZoom, onChange]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!value) {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      return;
+    }
+
+    const lngLat: [number, number] = [value.lng, value.lat];
+    map.easeTo({ center: lngLat, zoom: Math.max(map.getZoom(), 11), duration: 400 });
+
+    if (!markerRef.current) {
+      const markerElement = createThemeMapPinElement({ interactive: false, size: 'md' });
+      markerRef.current = new maplibregl.Marker({ element: markerElement, anchor: 'bottom' })
+        .setLngLat(lngLat)
+        .addTo(map);
+      return;
+    }
+
+    markerRef.current.setLngLat(lngLat);
+  }, [value]);
+
+  return <div ref={mapContainerRef} style={{ width: '100%', height: 360, borderRadius: 12 }} />;
 };
 
 interface SmartFieldRendererProps {
@@ -523,12 +569,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               const errorText = String((error as any)?.message || (error as any)?.details || '').toLowerCase();
               const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
               if (!isMissingColumn) throw error;
-              const fallback = await supabase
+              const fallback: any = await supabase
                 .from(targetModule)
                 .select(`id, ${targetField}${extraSelect}`)
                 .limit(200);
               if (fallback.error) throw fallback.error;
-              data = fallback.data;
+              data = fallback.data as any[];
             }
             relationMap[quickField.key] = (data || []).map((item: any) => ({
               label: item.system_code
@@ -638,6 +684,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     const isProcessDraftField = isProcessStagesFieldKey;
     const isProcessModule = (
       moduleId === 'projects' ||
+      moduleId === 'invoices' ||
+      moduleId === 'purchase_invoices' ||
+      moduleId === 'customers' ||
       moduleId === 'marketing_leads' ||
       moduleId === 'process_templates' ||
       moduleId === 'process_runs'
@@ -1128,7 +1177,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     </Modal>
   );
 
-  const hasConfiguredTiles = Boolean(import.meta.env.VITE_MAP_TILE_URL);
+  const hasConfiguredTiles = Boolean(MAP_STYLE_URL || import.meta.env.VITE_MAP_TILE_URL);
   const locationPickerModalNode = (
     <Modal
       title="انتخاب موقعیت روی نقشه"
@@ -1168,7 +1217,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     >
       {!hasConfiguredTiles && (
         <div className="mb-3 text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-900 border border-yellow-300">
-          برای استفاده در محیط داخلی، مقدار `VITE_MAP_TILE_URL` را روی tile server خودتان تنظیم کنید.
+          برای استفاده در محیط داخلی، مقدار `VITE_MAP_STYLE_URL` را روی style.json سرور نقشه تنظیم کنید.
         </div>
       )}
       <div className="mb-2 text-xs text-gray-500">

@@ -1,4 +1,5 @@
 import { safeJalaliFormat } from './persianNumberFormatter';
+import { readCurrencyConfig } from './currency';
 
 const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const MONTH_NAMES = [
@@ -108,7 +109,8 @@ export const toPersianWords = (value: unknown): string => {
 export const amountToPersianRialWords = (value: unknown): string => {
   const parsed = parseInteger(value);
   if (parsed === null) return '-';
-  return `${toPersianWords(parsed)} ریال`;
+  const currencyLabel = readCurrencyConfig().label || 'ریال';
+  return `${toPersianWords(parsed)} ${currencyLabel}`;
 };
 
 export const jalaliDateToPersianWords = (value: unknown): string => {

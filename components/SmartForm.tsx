@@ -373,14 +373,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
         if (module.id === 'process_templates') {
           const { data: templateStages } = await supabase
             .from('process_template_stages')
-            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
             .eq('template_id', recordId)
             .order('sort_order', { ascending: true });
           nextValues.template_stages_preview = (templateStages || []).map((stage: any, index: number) => ({
+            ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
             id: stage.id || `${recordId}_${index + 1}`,
             name: stage.stage_name || `مرحله ${index + 1}`,
             sort_order: stage.sort_order || ((index + 1) * 10),
             wage: stage.wage || 0,
+            weight: Number(stage?.metadata?.weight || 0),
+            duration_value: Number(stage?.metadata?.duration_value || 0),
+            duration_unit: stage?.metadata?.duration_unit || 'day',
+            duration_from: stage?.metadata?.duration_from || 'project_start',
             default_assignee_id: stage.default_assignee_id || null,
             default_assignee_role_id: stage.default_assignee_role_id || null,
             template_stage_id: stage.id || null,
@@ -389,15 +394,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
         if (module.id === 'process_runs') {
           const { data: runStages } = await supabase
             .from('process_run_stages')
-            .select('id, stage_name, sort_order, status, wage, assignee_user_id, assignee_role_id, task_id')
+            .select('id, stage_name, sort_order, status, wage, assignee_user_id, assignee_role_id, task_id, metadata')
             .eq('process_run_id', recordId)
             .order('sort_order', { ascending: true });
           nextValues.run_stages_preview = (runStages || []).map((stage: any, index: number) => ({
+            ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
             id: stage.id || `${recordId}_${index + 1}`,
             name: stage.stage_name || `مرحله ${index + 1}`,
             sort_order: stage.sort_order || ((index + 1) * 10),
             status: stage.status || 'todo',
             wage: stage.wage || 0,
+            weight: Number(stage?.metadata?.weight || 0),
+            duration_value: Number(stage?.metadata?.duration_value || 0),
+            duration_unit: stage?.metadata?.duration_unit || 'day',
+            duration_from: stage?.metadata?.duration_from || 'project_start',
             assignee_id: stage.assignee_user_id || null,
             assignee_role_id: stage.assignee_role_id || null,
             assignee_type: stage.assignee_role_id ? 'role' : (stage.assignee_user_id ? 'user' : null),
@@ -487,17 +497,22 @@ const SmartForm: React.FC<SmartFormProps> = ({
       try {
         const { data: stages, error } = await supabase
           .from('process_template_stages')
-          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
           .eq('template_id', processTemplateId)
           .order('sort_order', { ascending: true });
         if (error) throw error;
 
         const mappedDraft = (stages || []).map((stage: any, index: number) => ({
+          ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
           id: stage.id || `${processTemplateId}_${index + 1}`,
           name: stage.stage_name || `مرحله ${index + 1}`,
           sort_order: stage.sort_order || ((index + 1) * 10),
           wage: stage.wage || 0,
-          default_assignee_id: stage.default_assignee_id || null,
+            weight: Number(stage?.metadata?.weight || 0),
+            duration_value: Number(stage?.metadata?.duration_value || 0),
+            duration_unit: stage?.metadata?.duration_unit || 'day',
+            duration_from: stage?.metadata?.duration_from || 'project_start',
+            default_assignee_id: stage.default_assignee_id || null,
           default_assignee_role_id: stage.default_assignee_role_id || null,
           template_stage_id: stage.id || null,
         }));
@@ -610,6 +625,15 @@ const SmartForm: React.FC<SmartFormProps> = ({
       stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
       sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
       wage: Number(stage?.wage || 0),
+      metadata: {
+        ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+        weight: Number(stage?.weight || stage?.metadata?.weight || 0),
+        duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
+        duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+        duration_from: String(stage?.duration_from || stage?.metadata?.duration_from || 'project_start') === 'previous_stage_end'
+          ? 'previous_stage_end'
+          : 'project_start',
+      },
       default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
       default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
     }));
@@ -643,6 +667,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             stage_name: stage.stage_name,
             sort_order: stage.sort_order,
             wage: stage.wage,
+            metadata: stage.metadata,
             default_assignee_id: stage.default_assignee_id,
             default_assignee_role_id: stage.default_assignee_role_id,
           })
@@ -656,6 +681,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             stage_name: stage.stage_name,
             sort_order: stage.sort_order,
             wage: stage.wage,
+            metadata: stage.metadata,
             default_assignee_id: stage.default_assignee_id,
             default_assignee_role_id: stage.default_assignee_role_id,
           });
@@ -749,15 +775,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
           values.production_stages_draft = formData?.production_stages_draft || [];
         }
       }
-      if (module.id === 'projects') {
-        if (values.execution_process_draft === undefined) {
-          values.execution_process_draft = formData?.execution_process_draft || [];
-        }
-      }
-      if (module.id === 'marketing_leads') {
-        if (values.marketing_process_draft === undefined) {
-          values.marketing_process_draft = formData?.marketing_process_draft || [];
-        }
+      if (processDraftFieldKey && values[processDraftFieldKey] === undefined) {
+        values[processDraftFieldKey] = formData?.[processDraftFieldKey] || [];
       }
       const templateStagesPreview = module.id === 'process_templates'
         ? (Array.isArray(values.template_stages_preview)
@@ -1223,6 +1242,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                key={field.key}
                                className={(field.key === 'execution_process_draft' ||
                                  field.key === 'marketing_process_draft' ||
+                                 field.key === 'process_template_id' ||
                                  field.key === 'template_stages_preview' ||
                                  field.key === 'run_stages_preview')
                                  ? 'md:col-span-2 lg:col-span-3'
@@ -1359,7 +1379,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   <SummaryCard 
                     type={summaryConfigObj?.calculationType || SummaryCalculationType.SUM_ALL_ROWS} 
                     data={currentSummaryData} 
-                    onRefresh={() => setFormData((prev) => ({ ...(prev || {}) }))}
+                    onRefresh={() => setFormData((prev: Record<string, any>) => ({ ...(prev || {}) }))}
                   />
               )}
             </Form>
@@ -1379,3 +1399,4 @@ const SmartForm: React.FC<SmartFormProps> = ({
 };
 
 export default SmartForm;
+

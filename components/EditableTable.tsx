@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, message, Empty, Typography, Spin, Select, Checkbox, InputNumber } from 'antd';
-import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined } from '@ant-design/icons';
+import { Table, Button, Space, message, Empty, Typography, Spin, Select, InputNumber, Popover, Input } from 'antd';
+import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField } from '../types';
 import { calculateRow } from '../utils/calculations';
@@ -19,6 +19,7 @@ import { MODULES } from '../moduleRegistry';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 import { useCurrencyConfig } from '../utils/currency';
+import PersianDatePicker from './PersianDatePicker';
 
 const { Text } = Typography;
 
@@ -115,6 +116,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [localDynamicOptions, setLocalDynamicOptions] = useState<Record<string, any[]>>({});
   const [eligibleReceivedChequeOptions, setEligibleReceivedChequeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [rowReloadVersion, setRowReloadVersion] = useState<Record<string, number>>({});
+  const [notePopoverRowKey, setNotePopoverRowKey] = useState<string | null>(null);
+  const [shelfPopoverRowKey, setShelfPopoverRowKey] = useState<string | null>(null);
+  const [dimensionsPopoverRowKey, setDimensionsPopoverRowKey] = useState<string | null>(null);
+  const [calendarPopoverRowKey, setCalendarPopoverRowKey] = useState<string | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
   const [currentProductUnits, setCurrentProductUnits] = useState<{ mainUnit: string | null; subUnit: string | null }>({ mainUnit: null, subUnit: null });
   const [currentProductStock, setCurrentProductStock] = useState<number>(0);
   const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -134,6 +142,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
     setIsCollapsed(empty);
   }, [data, tempData, isEditing, isAnyInvoiceItems, isShelfInventoryBlock, isProductStockMovements, userToggledCollapse]);
+
+  useEffect(() => {
+    const updateViewportFlag = () => setIsMobileViewport(window.innerWidth < 768);
+    updateViewportFlag();
+    window.addEventListener('resize', updateViewportFlag);
+    return () => window.removeEventListener('resize', updateViewportFlag);
+  }, []);
 
   const productsModule = MODULES['products'];
   const { label: currencyLabel } = useCurrencyConfig();
@@ -452,12 +467,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
     };
   }, [isPurchaseInvoicePayments, isEditing, saving]);
 
+  const AREA_AUTO_UNITS = new Set(['متر مربع', 'سانتیمتر مربع', 'میلیمتر مربع']);
+  const isDayUnit = (unit: any) => String(unit || '').trim() === 'روز';
+  const isAreaAutoUnit = (unit: any) => AREA_AUTO_UNITS.has(String(unit || '').trim());
   const isGoodsInvoiceRow = (row: any) => !isServiceProduct(row?.product_type);
-  const hasDimensions = (row: any) => isGoodsInvoiceRow(row) && !!row?.use_dimensions;
+  const hasDimensions = (row: any) =>
+    isGoodsInvoiceRow(row) &&
+    isAreaAutoUnit(row?.main_unit) &&
+    (toSafeNumber(row?.length) > 0 || toSafeNumber(row?.width) > 0);
   const shouldAutoSubQuantity = (row: any) => !isManualSubUnit(row?.sub_unit);
   const shouldShowStackedField = (key: string, row: any) => {
     if (isAnyInvoiceItems) {
-      if (!isGoodsInvoiceRow(row) && ['use_dimensions', 'length', 'width', 'source_shelf_id'].includes(key)) {
+      if (!isGoodsInvoiceRow(row) && ['length', 'width', 'source_shelf_id'].includes(key)) {
         return false;
       }
       if (['length', 'width'].includes(key) && !hasDimensions(row)) return false;
@@ -468,6 +489,91 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (key === 'use_existing_received_cheque' && paymentType !== 'cheque') return false;
     }
     return true;
+  };
+
+  const parseIsoDateAsUtc = (value?: string | null) => {
+    const raw = String(value || '').trim();
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!year || !month || !day) return null;
+    return Date.UTC(year, month - 1, day);
+  };
+
+  const calculateDateDiffDays = (startDate?: string | null, endDate?: string | null) => {
+    const startUtc = parseIsoDateAsUtc(startDate);
+    const endUtc = parseIsoDateAsUtc(endDate);
+    if (startUtc === null || endUtc === null) return null;
+    if (endUtc < startUtc) return 0;
+    return Math.floor((endUtc - startUtc) / (24 * 60 * 60 * 1000));
+  };
+
+  const applyInvoiceAutoQuantity = (row: any) => {
+    if (!isAnyInvoiceItems || !row) return;
+    if (isAreaAutoUnit(row?.main_unit) && isGoodsInvoiceRow(row)) {
+      const lengthVal = toSafeNumber(row?.length);
+      const widthVal = toSafeNumber(row?.width);
+      if (lengthVal > 0 || widthVal > 0) {
+        row.quantity = lengthVal * widthVal;
+      }
+      return;
+    }
+    if (isDayUnit(row?.main_unit)) {
+      const dayDiff = calculateDateDiffDays(row?.start_date, row?.end_date);
+      if (typeof dayDiff === 'number') row.quantity = dayDiff;
+    }
+  };
+
+  const applyRowUpdate = (nextRows: any[]) => {
+    if (isEditing) {
+      setTempData(nextRows);
+    } else {
+      setData(nextRows);
+    }
+    if (mode === 'local' && onChange) onChange(nextRows);
+  };
+
+  const updateInvoiceDimensions = (index: number, changes: { length?: number | null; width?: number | null }) => {
+    const source = isEditing ? tempData : data;
+    const nextRows = [...source];
+    const nextRow = { ...(nextRows[index] || {}), ...changes };
+
+    applyInvoiceAutoQuantity(nextRow);
+    if (shouldAutoSubQuantity(nextRow)) {
+      const qtyMain = toSafeNumber(nextRow?.quantity);
+      const mainUnit = String(nextRow?.main_unit || '');
+      const subUnit = String(nextRow?.sub_unit || '');
+      const converted = mainUnit && subUnit
+        ? convertArea(qtyMain, mainUnit as any, subUnit as any)
+        : 0;
+      nextRow.sub_quantity = Number.isFinite(converted) ? converted : 0;
+    }
+    nextRow.total_price = calculateRow(nextRow, block.rowCalculationType);
+
+    nextRows[index] = nextRow;
+    applyRowUpdate(nextRows);
+  };
+
+  const updateInvoiceDateRange = (index: number, changes: { start_date?: string | null; end_date?: string | null }) => {
+    const source = isEditing ? tempData : data;
+    const nextRows = [...source];
+    const nextRow = { ...(nextRows[index] || {}), ...changes };
+    applyInvoiceAutoQuantity(nextRow);
+    if (shouldAutoSubQuantity(nextRow)) {
+      const qtyMain = toSafeNumber(nextRow?.quantity);
+      const mainUnit = String(nextRow?.main_unit || '');
+      const subUnit = String(nextRow?.sub_unit || '');
+      const converted = mainUnit && subUnit
+        ? convertArea(qtyMain, mainUnit as any, subUnit as any)
+        : 0;
+      nextRow.sub_quantity = Number.isFinite(converted) ? converted : 0;
+    }
+    nextRow.total_price = calculateRow(nextRow, block.rowCalculationType);
+
+    nextRows[index] = nextRow;
+    applyRowUpdate(nextRows);
   };
 
   const updateRow = (index: number, key: string, value: any) => {
@@ -504,22 +610,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     }
 
-    if (isAnyInvoiceItems && ['use_dimensions', 'length', 'width'].includes(key)) {
+    if (isAnyInvoiceItems && ['length', 'width', 'start_date', 'end_date', 'main_unit'].includes(key)) {
       const current = newData[index];
-      if (hasDimensions(current)) {
-        const lengthVal = toSafeNumber(current?.length);
-        const widthVal = toSafeNumber(current?.width);
-        current.quantity = lengthVal * widthVal;
-      }
+      applyInvoiceAutoQuantity(current);
     }
 
-    if (isAnyInvoiceItems && ['quantity', 'main_unit', 'sub_unit', 'use_dimensions', 'length', 'width'].includes(key)) {
+    if (isAnyInvoiceItems && ['quantity', 'main_unit', 'sub_unit', 'length', 'width', 'start_date', 'end_date'].includes(key)) {
       const current = newData[index];
-      if (hasDimensions(current)) {
-        const lengthVal = toSafeNumber(current?.length);
-        const widthVal = toSafeNumber(current?.width);
-        current.quantity = lengthVal * widthVal;
-      }
+      applyInvoiceAutoQuantity(current);
       if (shouldAutoSubQuantity(current)) {
         const qtyMain = toSafeNumber(current?.quantity);
         const mainUnit = String(current?.main_unit || '');
@@ -640,15 +738,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
             currentRow.main_unit = record?.main_unit || currentRow.main_unit || null;
             currentRow.sub_unit = record?.sub_unit || currentRow.sub_unit || null;
             if (isServiceProduct(currentRow.product_type)) {
-              currentRow.use_dimensions = false;
               currentRow.length = null;
               currentRow.width = null;
               currentRow.source_shelf_id = null;
-            } else if (hasDimensions(currentRow)) {
-              const lengthVal = toSafeNumber(currentRow?.length);
-              const widthVal = toSafeNumber(currentRow?.width);
-              currentRow.quantity = lengthVal * widthVal;
             }
+            applyInvoiceAutoQuantity(currentRow);
             if (shouldAutoSubQuantity(currentRow)) {
               const qtyMain = toSafeNumber(currentRow?.quantity);
               const mainUnit = String(currentRow?.main_unit || '');
@@ -703,7 +797,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (isAnyInvoiceItems) {
       numericDefaults.discount_type = 'amount';
       numericDefaults.vat_type = 'percent';
-      numericDefaults.use_dimensions = false;
       numericDefaults.product_type = 'goods';
     }
     if (isPurchaseInvoicePayments) {
@@ -783,11 +876,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     });
 
     if (isAnyInvoiceItems) {
-      if (hasDimensions(nextRow)) {
-        const lengthVal = toSafeNumber(nextRow?.length);
-        const widthVal = toSafeNumber(nextRow?.width);
-        nextRow.quantity = lengthVal * widthVal;
-      }
+      applyInvoiceAutoQuantity(nextRow);
       if (shouldAutoSubQuantity(nextRow)) {
         const qtyMain = toSafeNumber(nextRow?.quantity);
         const mainUnit = String(nextRow?.main_unit || '');
@@ -822,7 +911,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (isAnyInvoiceItems) {
         if (!nextRow.discount_type) nextRow.discount_type = 'amount';
         if (!nextRow.vat_type) nextRow.vat_type = 'percent';
-        if (nextRow.use_dimensions === undefined) nextRow.use_dimensions = false;
         if (!nextRow.product_type) nextRow.product_type = 'goods';
       }
       if (isProductStockMovements) {
@@ -869,7 +957,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       .maybeSingle();
     if (sourceError) throw sourceError;
 
-    const partyId = sourceHeader?.[partyField] ? String(sourceHeader[partyField]) : null;
+    const sourceHeaderRecord = sourceHeader as Record<string, any> | null;
+    const partyId = sourceHeaderRecord?.[partyField] ? String(sourceHeaderRecord[partyField]) : null;
     const partyType = isInvoicePayments ? 'customer' : 'supplier';
     const nowIso = new Date().toISOString();
 
@@ -1661,7 +1750,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const value = text !== undefined ? text : (record as any)?.[col.key];
     const fieldConfig = getFieldConfigForColumn(col, record);
     const options = getColumnOptions(col, rowKey, record);
-
     if (fieldConfig.readonly) {
       return (
         <SmartFieldRenderer
@@ -1676,7 +1764,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
         />
       );
     }
-
     const handleChange = (val: any) => {
       if (col.type === FieldType.RELATION) {
         handleRelationChange(index, col.key, val, col.relationConfig);
@@ -1684,66 +1771,45 @@ const EditableTable: React.FC<EditableTableProps> = ({
         updateRow(index, col.key, val);
       }
     };
-
     const typeKey = col.key === 'discount' ? 'discount_type' : col.key === 'vat' ? 'vat_type' : null;
     const typeValue = typeKey ? (record as any)[typeKey] : null;
     const isMovementQty = isProductStockMovements && col.key === 'main_quantity' && !isEditing;
     const movementType = String((record as any)?.voucher_type || '');
     const movementColor = movementType === 'incoming' ? 'text-green-600' : movementType === 'outgoing' ? 'text-red-600' : 'text-blue-600';
-
     if (isMovementQty) {
       return <span className={`persian-number font-bold ${movementColor}`}>{toPersianNumber(value || 0)}</span>;
     }
-
-    if (isAnyInvoiceItems && col.key === 'use_dimensions') {
-      const disabled = Boolean(fieldConfig.readonly) || isServiceProduct(record?.product_type);
-      if (disabled) {
-        return (
-          <SmartFieldRenderer
-            field={fieldConfig}
-            value={value}
-            onChange={() => undefined}
-            forceEditMode={false}
-            options={options}
-            compactMode={true}
-            moduleId={moduleId}
-            recordId={recordId}
-          />
-        );
-      }
-      return (
-        <div className="flex flex-col gap-1">
-          <Checkbox
-            checked={!!value}
-            disabled={disabled}
-            onChange={(event) => updateRow(index, 'use_dimensions', event.target.checked)}
-          />
-          {!!record?.use_dimensions && !isServiceProduct(record?.product_type) && (
-            <div className="grid grid-cols-2 gap-1">
-              <InputNumber
-                min={0}
-                controls={false}
-                placeholder="طول"
-                className="w-full min-w-[76px]"
-                value={record?.length ?? null}
-                disabled={disabled}
-                onChange={(val) => updateRow(index, 'length', val ?? 0)}
-              />
-              <InputNumber
-                min={0}
-                controls={false}
-                placeholder="عرض"
-                className="w-full min-w-[76px]"
-                value={record?.width ?? null}
-                disabled={disabled}
-                onChange={(val) => updateRow(index, 'width', val ?? 0)}
-              />
-            </div>
-          )}
-        </div>
-      );
-    }
-
+    const noteRowKey = getRowKey(record);
+    const noteOpen = notePopoverRowKey === noteRowKey;
+    const shelfOpen = shelfPopoverRowKey === noteRowKey;
+    const dimensionsOpen = dimensionsPopoverRowKey === noteRowKey;
+    const calendarOpen = calendarPopoverRowKey === noteRowKey;
+    const popoverPlacement = isMobileViewport ? 'bottom' : 'leftTop';
+    const popoverOverlayStyle = { maxWidth: '92vw' } as React.CSSProperties;
+    const canEditNote = !isReadOnly && (isEditing || mode === 'local');
+    const noteValue = String(record?.description || '');
+    const showInvoiceNote = isAnyInvoiceItems && col.key === 'product_id';
+    const sourceShelfColumn = visibleColumns.find((c: any) => c.key === 'source_shelf_id');
+    const showInvoiceShelf = isAnyInvoiceItems && col.key === 'product_id' && !!sourceShelfColumn;
+    const shelfOptions = sourceShelfColumn ? getColumnOptions(sourceShelfColumn, noteRowKey, record) : [];
+    const shelfValue = record?.source_shelf_id || null;
+    const canEditShelf =
+      showInvoiceShelf &&
+      !isReadOnly &&
+      isEditing &&
+      !isServiceProduct(record?.product_type) &&
+      !!record?.product_id;
+    const showInvoiceDimensions = isAnyInvoiceItems && col.key === 'product_id';
+    const canEditDimensions = !isReadOnly && isEditing && !isServiceProduct(record?.product_type);
+    const lengthValue = record?.length ?? null;
+    const widthValue = record?.width ?? null;
+    const hasDimensionsValue = toSafeNumber(lengthValue) > 0 || toSafeNumber(widthValue) > 0;
+    const showInvoiceCalendar = isAnyInvoiceItems && col.key === 'product_id';
+    const canEditCalendar = !isReadOnly && isEditing;
+    const startDateValue = record?.start_date || null;
+    const endDateValue = record?.end_date || null;
+    const hasCalendarValue = Boolean(startDateValue || endDateValue);
+    const dateDiffDays = calculateDateDiffDays(startDateValue, endDateValue);
     return (
       <div className="flex items-center gap-1 w-full min-w-0 max-w-full overflow-hidden">
         <div className="flex-1 min-w-0 overflow-hidden">
@@ -1758,6 +1824,239 @@ const EditableTable: React.FC<EditableTableProps> = ({
             recordId={recordId}
           />
         </div>
+        {showInvoiceNote && (
+          <Popover
+            trigger="click"
+            placement={popoverPlacement}
+            overlayStyle={popoverOverlayStyle}
+            open={noteOpen}
+            onOpenChange={(open) => setNotePopoverRowKey(open ? noteRowKey : null)}
+            content={(
+              <div style={{ width: 'min(88vw, 320px)' }}>
+                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">??????? ????</div>
+                <Input.TextArea
+                  autoSize={{ minRows: 3, maxRows: 6 }}
+                  value={noteValue}
+                  disabled={!canEditNote}
+                  onChange={(event) => updateRow(index, 'description', event.target.value)}
+                  placeholder="??????? ??? ??? ??????..."
+                />
+                <div className="mt-2 flex justify-end">
+                  <Space size={2}>
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-emerald-600"
+                      icon={<CheckOutlined />}
+                      onClick={() => setNotePopoverRowKey(null)}
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-gray-500"
+                      icon={<CloseOutlined />}
+                      onClick={() => setNotePopoverRowKey(null)}
+                    />
+                  </Space>
+                </div>
+              </div>
+            )}
+          >
+            <Button
+              size="small"
+              type="text"
+              className={noteValue.trim() ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
+              icon={<FileTextOutlined />}
+              title={noteValue.trim() ? '?????? ??????? ????' : '?????? ??????? ????'}
+            />
+          </Popover>
+        )}
+        {showInvoiceShelf && (
+          <Popover
+            trigger="click"
+            placement={popoverPlacement}
+            overlayStyle={popoverOverlayStyle}
+            open={shelfOpen}
+            onOpenChange={(open) => {
+              if (open && isInvoiceItems && record?.product_id) {
+                const shelvesState = shelfOptionsByRow[noteRowKey];
+                if (!shelvesState?.loading && !(shelvesState?.options || []).length) {
+                  loadShelvesForRow(noteRowKey, String(record.product_id));
+                }
+              }
+              setShelfPopoverRowKey(open ? noteRowKey : null);
+            }}
+            content={(
+              <div style={{ width: 'min(88vw, 320px)' }}>
+                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">??? ??????</div>
+                <Select
+                  className="w-full"
+                  placeholder={record?.product_id ? '?????? ????' : '????? ????? ?? ?????? ????'}
+                  value={shelfValue}
+                  options={shelfOptions}
+                  onChange={(val) => updateRow(index, 'source_shelf_id', val || null)}
+                  showSearch
+                  optionFilterProp="label"
+                  allowClear
+                  disabled={!canEditShelf}
+                  getPopupContainer={() => document.body}
+                />
+                <div className="mt-2 flex justify-end">
+                  <Space size={2}>
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-emerald-600"
+                      icon={<CheckOutlined />}
+                      onClick={() => setShelfPopoverRowKey(null)}
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-gray-500"
+                      icon={<CloseOutlined />}
+                      onClick={() => setShelfPopoverRowKey(null)}
+                    />
+                  </Space>
+                </div>
+              </div>
+            )}
+          >
+            <Button
+              size="small"
+              type="text"
+              className={shelfValue ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
+              icon={<EnvironmentOutlined />}
+              title={shelfValue ? '?????? ??? ??????' : '?????? ??? ??????'}
+            />
+          </Popover>
+        )}
+        {showInvoiceDimensions && (
+          <Popover
+            trigger="click"
+            placement={popoverPlacement}
+            overlayStyle={popoverOverlayStyle}
+            open={dimensionsOpen}
+            onOpenChange={(open) => setDimensionsPopoverRowKey(open ? noteRowKey : null)}
+            content={(
+              <div style={{ width: 'min(88vw, 320px)' }} className="space-y-2">
+                <div className="text-xs text-gray-500 dark:text-gray-300">????? (??? ? ???)</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <InputNumber
+                    min={0}
+                    controls={false}
+                    className="w-full"
+                    placeholder="???"
+                    value={lengthValue}
+                    disabled={!canEditDimensions}
+                    onChange={(val) => updateInvoiceDimensions(index, { length: val ?? null })}
+                  />
+                  <InputNumber
+                    min={0}
+                    controls={false}
+                    className="w-full"
+                    placeholder="???"
+                    value={widthValue}
+                    disabled={!canEditDimensions}
+                    onChange={(val) => updateInvoiceDimensions(index, { width: val ?? null })}
+                  />
+                </div>
+                {!canEditDimensions && (
+                  <div className="text-[11px] text-gray-500 dark:text-gray-300">
+                    ???: {toPersianNumber(lengthValue ?? 0)} | ???: {toPersianNumber(widthValue ?? 0)}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <Space size={2}>
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-emerald-600"
+                      icon={<CheckOutlined />}
+                      onClick={() => setDimensionsPopoverRowKey(null)}
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-gray-500"
+                      icon={<CloseOutlined />}
+                      onClick={() => setDimensionsPopoverRowKey(null)}
+                    />
+                  </Space>
+                </div>
+              </div>
+            )}
+          >
+            <Button
+              size="small"
+              type="text"
+              className={hasDimensionsValue ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
+              icon={<AppstoreOutlined />}
+              title={hasDimensionsValue ? '?????? ?????' : '??? ?????'}
+            />
+          </Popover>
+        )}
+        {showInvoiceCalendar && (
+          <Popover
+            trigger="click"
+            placement={popoverPlacement}
+            overlayStyle={popoverOverlayStyle}
+            open={calendarOpen}
+            onOpenChange={(open) => setCalendarPopoverRowKey(open ? noteRowKey : null)}
+            content={(
+              <div style={{ width: 'min(88vw, 320px)' }} className="space-y-2">
+                <div className="text-xs text-gray-500 dark:text-gray-300">???? ?????</div>
+                <div>
+                  <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">????? ????</div>
+                  <PersianDatePicker
+                    type="DATE"
+                    value={startDateValue}
+                    disabled={!canEditCalendar}
+                    onChange={(val) => updateInvoiceDateRange(index, { start_date: val })}
+                  />
+                </div>
+                <div>
+                  <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">????? ?????</div>
+                  <PersianDatePicker
+                    type="DATE"
+                    value={endDateValue}
+                    disabled={!canEditCalendar}
+                    onChange={(val) => updateInvoiceDateRange(index, { end_date: val })}
+                  />
+                </div>
+                <div className="text-[11px] text-gray-500 dark:text-gray-300">
+                  ??????: {typeof dateDiffDays === 'number' ? toPersianNumber(dateDiffDays) : '-'} ???
+                </div>
+                <div className="flex justify-end">
+                  <Space size={2}>
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-emerald-600"
+                      icon={<CheckOutlined />}
+                      onClick={() => setCalendarPopoverRowKey(null)}
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-gray-500"
+                      icon={<CloseOutlined />}
+                      onClick={() => setCalendarPopoverRowKey(null)}
+                    />
+                  </Space>
+                </div>
+              </div>
+            )}
+          >
+            <Button
+              size="small"
+              type="text"
+              className={hasCalendarValue ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
+              icon={<CalendarOutlined />}
+              title={hasCalendarValue ? '?????? ???? ?????' : '??? ???? ?????'}
+            />
+          </Popover>
+        )}
         {col.type === FieldType.PERCENTAGE_OR_AMOUNT && typeKey && (
           <Button
             size="small"
@@ -1766,18 +2065,17 @@ const EditableTable: React.FC<EditableTableProps> = ({
               const nextType = typeValue === 'percent' ? 'amount' : 'percent';
               updateRow(index, typeKey, nextType);
             }}
-            title={typeValue === 'percent' ? 'درصد' : 'مبلغ'}
+            title={typeValue === 'percent' ? '????' : '????'}
             className="px-1"
           >
-            {typeValue === 'percent' ? '٪' : currencyLabel}
+            {typeValue === 'percent' ? '%' : currencyLabel}
           </Button>
         )}
       </div>
     );
   };
-
   const tableVisibleColumns = isAnyInvoiceItems
-    ? visibleColumns.filter((col: any) => !['description', 'source_shelf_id', 'length', 'width'].includes(col.key))
+    ? visibleColumns.filter((col: any) => !['description', 'source_shelf_id', 'length', 'width', 'use_dimensions'].includes(col.key))
     : visibleColumns;
 
   const columns = [
@@ -1786,6 +2084,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       title: col.title,
       dataIndex: col.key,
       key: col.key,
+      type: col.type,
       width: getColWidth(col),
       render: (text: any, record: any, index: number) => renderColumnEditor(col, record, index, text),
     })) || []),
@@ -1820,17 +2119,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
   ];
 
   const sourceRows = isEditing ? tempData : data;
-  const invoiceSupplementaryColumns = isAnyInvoiceItems
-    ? (visibleColumns.filter((col: any) => ['source_shelf_id', 'description'].includes(col.key)))
-    : [];
-  const invoiceExpandedRowKeys = isAnyInvoiceItems
-    ? sourceRows.map((row: any, idx: number) => String(row?.key || row?.id || idx))
-    : [];
   const stackedRowGroupA = ['attachment', 'payment_type', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
     ? ['target_account', 'responsible_id', 'description']
     : ['source_account', 'use_existing_received_cheque', 'spent_cheque_id', 'responsible_id', 'description'];
-  const stackedColumnsByKey = new Map(visibleColumns.map((col: any) => [col.key, col]));
+  const stackedColumnsByKey = new Map<string, any>(visibleColumns.map((col: any) => [col.key, col]));
 
   const renderStackedField = (row: any, rowIndex: number, key: string) => {
     const col = stackedColumnsByKey.get(key);
@@ -1927,32 +2220,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           );
         },
       }
-    : isAnyInvoiceItems
-      ? {
-          expandedRowKeys: invoiceExpandedRowKeys,
-          showExpandColumn: false,
-          rowExpandable: () => true,
-          expandedRowRender: (record: any) => {
-            const rowKey = getRowKey(record);
-            const rowIndex = resolveRowIndex(rowKey);
-            return (
-              <div className="px-2 py-2 bg-gray-50 dark:bg-[#161616] border border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {invoiceSupplementaryColumns.map((col: any) => (
-                    <div
-                      key={`${rowKey}_${col.key}`}
-                      className={col.key === 'description' ? 'max-w-[420px]' : col.key === 'source_shelf_id' ? 'max-w-[320px]' : ''}
-                    >
-                      <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">{col.title}</div>
-                      {renderColumnEditor(col, record, rowIndex)}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          },
-        }
-      : undefined;
+    : undefined;
 
   if (loadingData) return <div className="p-10 text-center"><Spin /></div>;
 
@@ -2064,7 +2332,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               }, 0);
               return (
                 <Table.Summary fixed>
-                  <Table.Summary.Row className="bg-gray-50 dark:bg-gray-800 font-bold">
+                  <Table.Summary.Row className="font-bold bg-[rgba(var(--brand-50-rgb),0.65)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]">
                     <Table.Summary.Cell index={0} colSpan={columns.length}>
                       <div className="flex flex-wrap gap-4 text-xs md:text-sm">
                         <span>جمع ورود: <span className="text-green-600 persian-number">{toPersianNumber(incoming)}</span></span>
@@ -2095,7 +2363,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               if (index === 0) {
                 cells.push(
                   <Table.Summary.Cell index={cellIndex} key={`label_${index}`}>
-                    جمع:
+                    <span className="text-[rgb(var(--brand-700-rgb))] dark:text-gray-200">جمع:</span>
                   </Table.Summary.Cell>
                 );
                 cellIndex += 1;
@@ -2104,6 +2372,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
               if (col.showTotal || ['total_price', 'amount', 'quantity', 'sub_quantity', 'unit_price', 'usage', 'stock'].includes(col.key)) {
                 let total = 0;
+                const isPriceTotal =
+                  col.type === FieldType.PRICE ||
+                  ['total_price', 'amount', 'unit_price', 'discount', 'vat'].includes(String(col.key || ''));
                 if (isAnyInvoiceItems && (col.key === 'discount' || col.key === 'vat')) {
                   total = pageData.reduce((prev: number, current: any) => {
                     const amounts = getInvoiceAmounts(current);
@@ -2118,8 +2389,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 }
                 cells.push(
                   <Table.Summary.Cell index={cellIndex} key={`total_${index}`}>
-                    <Text type="success" className="persian-number">
+                    <Text className="persian-number !text-[rgb(var(--brand-600-rgb))] dark:!text-leather-300">
                       {toPersianNumber(total.toLocaleString('en-US'))}
+                      {isPriceTotal ? <span className="ms-1 text-[10px] opacity-80">{currencyLabel}</span> : null}
                     </Text>
                   </Table.Summary.Cell>
                 );
@@ -2133,7 +2405,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
             return (
               <Table.Summary fixed>
-                <Table.Summary.Row className="bg-gray-50 dark:bg-gray-800 font-bold">
+                <Table.Summary.Row className="font-bold bg-[rgba(var(--brand-50-rgb),0.65)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]">
                   {cells}
                 </Table.Summary.Row>
               </Table.Summary>
@@ -2221,3 +2493,5 @@ const EditableTable: React.FC<EditableTableProps> = ({
 };
 
 export default EditableTable;
+
+

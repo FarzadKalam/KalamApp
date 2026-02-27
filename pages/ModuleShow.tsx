@@ -720,16 +720,21 @@ const ModuleShow: React.FC = () => {
         if (moduleId === 'process_templates') {
           const { data: templateStages } = await supabase
             .from('process_template_stages')
-            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
             .eq('template_id', id)
             .order('sort_order', { ascending: true });
           nextRecord = {
             ...nextRecord,
             template_stages_preview: (templateStages || []).map((stage: any, index: number) => ({
+              ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
               id: stage.id || `${id}_${index + 1}`,
               name: stage.stage_name || `مرحله ${index + 1}`,
               sort_order: stage.sort_order || ((index + 1) * 10),
               wage: stage.wage || 0,
+              weight: Number(stage?.metadata?.weight || 0),
+              duration_value: Number(stage?.metadata?.duration_value || 0),
+              duration_unit: stage?.metadata?.duration_unit || 'day',
+              duration_from: stage?.metadata?.duration_from || 'project_start',
               default_assignee_id: stage.default_assignee_id || null,
               default_assignee_role_id: stage.default_assignee_role_id || null,
               template_stage_id: stage.id || null,
@@ -739,17 +744,22 @@ const ModuleShow: React.FC = () => {
         if (moduleId === 'process_runs') {
           const { data: runStages } = await supabase
             .from('process_run_stages')
-            .select('id, stage_name, sort_order, status, wage, assignee_user_id, assignee_role_id, task_id')
+            .select('id, stage_name, sort_order, status, wage, assignee_user_id, assignee_role_id, task_id, metadata')
             .eq('process_run_id', id)
             .order('sort_order', { ascending: true });
           nextRecord = {
             ...nextRecord,
             run_stages_preview: (runStages || []).map((stage: any, index: number) => ({
+              ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
               id: stage.id || `${id}_${index + 1}`,
               name: stage.stage_name || `مرحله ${index + 1}`,
               sort_order: stage.sort_order || ((index + 1) * 10),
               status: stage.status || 'todo',
               wage: stage.wage || 0,
+              weight: Number(stage?.metadata?.weight || 0),
+              duration_value: Number(stage?.metadata?.duration_value || 0),
+              duration_unit: stage?.metadata?.duration_unit || 'day',
+              duration_from: stage?.metadata?.duration_from || 'project_start',
               assignee_id: stage.assignee_user_id || null,
               assignee_role_id: stage.assignee_role_id || null,
               assignee_type: stage.assignee_role_id ? 'role' : (stage.assignee_user_id ? 'user' : null),
@@ -1185,12 +1195,12 @@ const ModuleShow: React.FC = () => {
                 const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
                 const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
                 if (!isMissingColumn) throw relError;
-                const fallback = await supabase
+                const fallback: any = await supabase
                   .from(dependsOnValue)
                   .select(`id, ${targetField}${extraSelect}`)
                   .limit(200);
                 if (fallback.error) throw fallback.error;
-                relData = fallback.data;
+                relData = fallback.data as any[];
               }
               if (relData) {
                 const options = relData.map((i: any) => {
@@ -1232,9 +1242,9 @@ const ModuleShow: React.FC = () => {
                 .select(`id, ${targetField}${extraSelect}${filterSelect}`)
                 .limit(200);
               if (filter) fallbackQuery = fallbackQuery.match(filter);
-              const fallback = await fallbackQuery;
+              const fallback: any = await fallbackQuery;
               if (fallback.error) throw fallback.error;
-              relData = fallback.data;
+              relData = fallback.data as any[];
             }
             if (relData) {
               const options = relData.map((i: any) => {
@@ -1318,17 +1328,22 @@ const ModuleShow: React.FC = () => {
       try {
         const { data: stages, error } = await supabase
           .from('process_template_stages')
-          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
           .eq('template_id', data.process_template_id)
           .order('sort_order', { ascending: true });
         if (error) throw error;
 
         const mappedDraft = (stages || []).map((stage: any, index: number) => ({
+            ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
           id: stage.id || `${data.process_template_id}_${index + 1}`,
           name: stage.stage_name || `مرحله ${index + 1}`,
           sort_order: stage.sort_order || ((index + 1) * 10),
           wage: stage.wage || 0,
-          default_assignee_id: stage.default_assignee_id || null,
+              weight: Number(stage?.metadata?.weight || 0),
+              duration_value: Number(stage?.metadata?.duration_value || 0),
+              duration_unit: stage?.metadata?.duration_unit || 'day',
+              duration_from: stage?.metadata?.duration_from || 'project_start',
+              default_assignee_id: stage.default_assignee_id || null,
           default_assignee_role_id: stage.default_assignee_role_id || null,
           template_stage_id: stage.id || null,
         }));
@@ -1496,17 +1511,22 @@ const ModuleShow: React.FC = () => {
         try {
           const { data: stages, error } = await supabase
             .from('process_template_stages')
-            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
             .eq('template_id', templateId)
             .order('sort_order', { ascending: true });
           if (error) throw error;
 
           const mappedDraft = (stages || []).map((stage: any, index: number) => ({
+            ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
             id: stage.id || `${templateId}_${index + 1}`,
             name: stage.stage_name || `مرحله ${index + 1}`,
             sort_order: stage.sort_order || ((index + 1) * 10),
             wage: stage.wage || 0,
-            default_assignee_id: stage.default_assignee_id || null,
+              weight: Number(stage?.metadata?.weight || 0),
+              duration_value: Number(stage?.metadata?.duration_value || 0),
+              duration_unit: stage?.metadata?.duration_unit || 'day',
+              duration_from: stage?.metadata?.duration_from || 'project_start',
+              default_assignee_id: stage.default_assignee_id || null,
             default_assignee_role_id: stage.default_assignee_role_id || null,
             template_stage_id: stage.id || null,
           }));
@@ -1819,6 +1839,15 @@ const ModuleShow: React.FC = () => {
       stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
       sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
       wage: Number(stage?.wage || 0),
+      metadata: {
+        ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+        weight: Number(stage?.weight || stage?.metadata?.weight || 0),
+        duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
+        duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+        duration_from: String(stage?.duration_from || stage?.metadata?.duration_from || 'project_start') === 'previous_stage_end'
+          ? 'previous_stage_end'
+          : 'project_start',
+      },
       default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
       default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
     }));
@@ -1852,6 +1881,7 @@ const ModuleShow: React.FC = () => {
             stage_name: stage.stage_name,
             sort_order: stage.sort_order,
             wage: stage.wage,
+            metadata: stage.metadata,
             default_assignee_id: stage.default_assignee_id,
             default_assignee_role_id: stage.default_assignee_role_id,
           })
@@ -1865,6 +1895,7 @@ const ModuleShow: React.FC = () => {
             stage_name: stage.stage_name,
             sort_order: stage.sort_order,
             wage: stage.wage,
+            metadata: stage.metadata,
             default_assignee_id: stage.default_assignee_id,
             default_assignee_role_id: stage.default_assignee_role_id,
           });
@@ -2944,6 +2975,7 @@ const ModuleShow: React.FC = () => {
         relationOptions={relationOptions}
         dynamicOptions={dynamicOptions}
         checkVisibility={checkVisibility}
+        renderSmartField={renderSmartField}
         canViewField={canViewField}
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
@@ -3194,5 +3226,6 @@ const ModuleShow: React.FC = () => {
 };
 
 export default ModuleShow;
+
 
 

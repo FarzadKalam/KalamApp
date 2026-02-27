@@ -441,7 +441,6 @@ const CashBankPage: React.FC = () => {
         key: 'sourceLabel',
         width: 180,
         filters: sourceFilters,
-        onFilter: (v, r) => String(r.sourceLabel) === String(v),
         ...textFilter('جستجو در منبع', (record) => record.sourceLabel),
       },
       {
@@ -450,7 +449,6 @@ const CashBankPage: React.FC = () => {
         key: 'paymentType',
         width: 130,
         filters: paymentTypeFilters,
-        onFilter: (v, r) => String(r.paymentType) === String(v),
         ...textFilter('جستجو در روش', (record) => PAYMENT_TYPE_LABEL[record.paymentType] || record.paymentType),
         render: (v: string) => PAYMENT_TYPE_LABEL[v] || v || '-',
       },
@@ -460,7 +458,6 @@ const CashBankPage: React.FC = () => {
         key: 'status',
         width: 130,
         filters: statusFilters,
-        onFilter: (v, r) => String(r.status) === String(v),
         ...textFilter('جستجو در وضعیت', (record) => STATUS_LABEL[record.status] || record.status),
         render: (v: string) => <Tag color={statusColor(v)}>{STATUS_LABEL[v] || v || '-'}</Tag>,
       },
@@ -603,3 +600,4 @@ const CashBankPage: React.FC = () => {
 };
 
 export default CashBankPage;
+

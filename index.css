@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -22,7 +22,7 @@
 }
 
 /* =========================================
-   1. ØªÙ†Ø¸ÛŒÙ…Ø§Øª Ù¾Ø§ÛŒÙ‡ Ùˆ ÙÙˆÙ†Øª (Global Font)
+   1. تنظیمات پایه و فونت (Global Font)
    ========================================= */
 @layer base {
   html, body, #root {
@@ -36,6 +36,22 @@
   html.dark, .dark body, .dark #root {
     background-color: rgb(var(--app-dark-bg-rgb));
   }
+}
+
+/* Improve readability on dark palettes for elements missing explicit dark text classes. */
+.dark .text-gray-900:not([class*="dark:text-"]),
+.dark .text-gray-800:not([class*="dark:text-"]),
+.dark .text-gray-700:not([class*="dark:text-"]) {
+  color: rgb(229 231 235);
+}
+
+.dark .text-gray-600:not([class*="dark:text-"]),
+.dark .text-gray-500:not([class*="dark:text-"]) {
+  color: rgb(203 213 225);
+}
+
+.dark .text-gray-400:not([class*="dark:text-"]) {
+  color: rgb(148 163 184);
 }
 
 /* Keep vertical scrollbars consistently on the left in RTL layout. */
@@ -59,14 +75,14 @@ body.ant-scrolling-effect {
   padding-inline-end: 0 !important;
 }
 
-/* Ú©Ù„Ø§Ø³ Ú©Ù…Ú©ÛŒ Ø¨Ø±Ø§ÛŒ Ø§Ø¹Ø¯Ø§Ø¯ ÙØ§Ø±Ø³ÛŒ */
+/* کلاس کمکی برای اعداد فارسی */
 .persian-number {
   font-family: 'Vazirmatn', system-ui, sans-serif;
   font-weight: 600;
   font-feature-settings: "ss01";
 }
 
-/* Ø§Ø¹Ù…Ø§Ù„ ÙÙˆÙ†Øª ÙˆØ²ÛŒØ± Ø±ÙˆÛŒ ØªÙ…Ø§Ù… Ú©Ø§Ù…Ù¾ÙˆÙ†Ù†Øªâ€ŒÙ‡Ø§ÛŒ Ant Design */
+/* اعمال فونت وزیر روی تمام کامپوننت‌های Ant Design */
 .ant-btn, 
 .ant-input, 
 .ant-input-number,
@@ -88,7 +104,7 @@ body.ant-scrolling-effect {
 }
 
 /* =========================================
-   2. Ø§Ø³Ú©Ø±ÙˆÙ„â€ŒØ¨Ø§Ø± Ø³ÙØ§Ø±Ø´ÛŒ (Custom Scrollbar)
+   2. اسکرول‌بار سفارشی (Custom Scrollbar)
    ========================================= */
 ::-webkit-scrollbar {
   width: 12px;
@@ -112,13 +128,13 @@ body.ant-scrolling-effect {
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--brand-500-rgb)); /* Ø±Ù†Ú¯ Ù†Ø§Ø±Ù†Ø¬ÛŒ Ú†Ø±Ù… */
+  background: rgb(var(--brand-500-rgb)); /* رنگ نارنجی چرم */
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 /* =========================================
-   3. Ø§Ø³ØªØ§ÛŒÙ„â€ŒÙ‡Ø§ÛŒ Ø¬Ø¯ÙˆÙ„ (Table & Pagination)
+   3. استایل‌های جدول (Table & Pagination)
    ========================================= */
 .ant-table-wrapper .ant-table-pagination.ant-pagination {
   margin: 16px 0 !important;
@@ -140,62 +156,62 @@ body.ant-scrolling-effect {
 }
 
 /* =========================================
-   4. Ø§Ø³ØªØ§ÛŒÙ„â€ŒÙ‡Ø§ÛŒ ØªÙ‚ÙˆÛŒÙ… Ùˆ ØªØ§ÛŒÙ…â€ŒÙ¾ÛŒÚ©Ø± (Date & Time Picker)
+   4. استایل‌های تقویم و تایم‌پیکر (Date & Time Picker)
    ========================================= */
 
-/* Ù…ØªØºÛŒØ±Ù‡Ø§ÛŒ Ø±Ù†Ú¯ÛŒ ØªÙ‚ÙˆÛŒÙ… */
-/* 1. Ø±Ø§Ø³Øªâ€ŒÚ†ÛŒÙ† Ú©Ø±Ø¯Ù† ØªÙ‚ÙˆÛŒÙ… (Ø­Ù„ Ù…Ø´Ú©Ù„ Ø¬Ø§Ø¨Ø¬Ø§ÛŒÛŒ Ø´Ù†Ø¨Ù‡ Ùˆ Ø¬Ù…Ø¹Ù‡) */
+/* متغیرهای رنگی تقویم */
+/* 1. راست‌چین کردن تقویم (حل مشکل جابجایی شنبه و جمعه) */
 .ant-picker-dropdown {
   direction: rtl;
 }
 
-/* 2. ÙÙˆÙ†Øª Ùˆ Ø§Ø¹Ø¯Ø§Ø¯ ÙØ§Ø±Ø³ÛŒ Ø¨Ø±Ø§ÛŒ ØªÙ…Ø§Ù… Ø¨Ø®Ø´â€ŒÙ‡Ø§ÛŒ ØªÙ‚ÙˆÛŒÙ… */
+/* 2. فونت و اعداد فارسی برای تمام بخش‌های تقویم */
 .ant-picker-content th,
 .ant-picker-content td,
 .ant-picker-header,
 .ant-picker-header button,
 .ant-picker-time-panel-column {
   font-family: 'Vazirmatn', sans-serif !important;
-  font-feature-settings: "ss01"; /* Ø§Ø¹Ø¯Ø§Ø¯ ÙØ§Ø±Ø³ÛŒ */
+  font-feature-settings: "ss01"; /* اعداد فارسی */
 }
 
-/* 3. ØªÙ†Ø¸ÛŒÙ… Ø±Ù†Ú¯â€ŒØ¨Ù†Ø¯ÛŒ Ø±ÙˆØ²Ù‡Ø§ÛŒ Ù‡ÙØªÙ‡ (ÙÙ‚Ø· Ø¯Ø± Ù¾Ù†Ù„ ØªØ§Ø±ÛŒØ®) */
-/* Ø§Ø¨ØªØ¯Ø§ Ø±Ù†Ú¯ Ù‡Ù…Ù‡ Ø±Ø§ Ø¹Ø§Ø¯ÛŒ Ù…ÛŒâ€ŒÚ©Ù†ÛŒÙ… */
+/* 3. تنظیم رنگ‌بندی روزهای هفته (فقط در پنل تاریخ) */
+/* ابتدا رنگ همه را عادی می‌کنیم */
 .ant-picker-date-panel .ant-picker-content th {
-  color: #6b7280 !important; /* Ø·ÙˆØ³ÛŒ */
+  color: #6b7280 !important; /* طوسی */
 }
 
-/* ÙÙ‚Ø· Ø³ØªÙˆÙ† Ø¢Ø®Ø± (Ø¬Ù…Ø¹Ù‡) Ø±Ø§ Ù‚Ø±Ù…Ø² Ù…ÛŒâ€ŒÚ©Ù†ÛŒÙ… */
-/* nth-child(7) ÛŒØ¹Ù†ÛŒ Ø³ØªÙˆÙ† Ù‡ÙØªÙ… (Ø¬Ù…Ø¹Ù‡ Ø¯Ø± Ø­Ø§Ù„Øª RTL) */
+/* فقط ستون آخر (جمعه) را قرمز می‌کنیم */
+/* nth-child(7) یعنی ستون هفتم (جمعه در حالت RTL) */
 .ant-picker-date-panel .ant-picker-content th:nth-child(7) {
-  color: #ef4444 !important; /* Ù‚Ø±Ù…Ø² */
+  color: #ef4444 !important; /* قرمز */
 }
 .ant-picker-date-panel .ant-picker-cell:nth-child(7) .ant-picker-cell-inner {
   color: #ef4444 !important;
 }
-/* Ø§Ú¯Ø± Ø¬Ù…Ø¹Ù‡ Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ø¯ØŒ Ù…ØªÙ†Ø´ Ø³ÙÛŒØ¯ Ø´ÙˆØ¯ */
+/* اگر جمعه انتخاب شد، متنش سفید شود */
 .ant-picker-date-panel .ant-picker-cell-selected:nth-child(7) .ant-picker-cell-inner {
   color: white !important;
 }
 
-/* Ø®Ù†Ø«ÛŒ Ú©Ø±Ø¯Ù† Ø±Ù†Ú¯ Ø¯Ø± Ù¾Ù†Ù„ Ù…Ø§Ù‡â€ŒÙ‡Ø§ (Ø­Ù„ Ù…Ø´Ú©Ù„ Ù‚Ø±Ù…Ø² Ø´Ø¯Ù† Ù…Ø§Ù‡â€ŒÙ‡Ø§ÛŒ Ø³Ù…Øª Ú†Ù¾) */
+/* خنثی کردن رنگ در پنل ماه‌ها (حل مشکل قرمز شدن ماه‌های سمت چپ) */
 .ant-picker-month-panel .ant-picker-cell-inner {
   color: inherit !important;
 }
 
-/* 4. Ø§Ø³ØªØ§ÛŒÙ„ Ù¾Ù†Ù„ Ø³Ø§Ø¹Øª (Time Picker) */
+/* 4. استایل پنل ساعت (Time Picker) */
 .ant-picker-time-panel-column {
   width: auto !important;
   min-width: 50px;
-  border-left: 1px solid #f0f0f0; /* Ø®Ø· Ø¬Ø¯Ø§Ú©Ù†Ù†Ø¯Ù‡ */
+  border-left: 1px solid #f0f0f0; /* خط جداکننده */
 }
 .ant-picker-time-panel-cell-inner {
   font-family: 'Vazirmatn', sans-serif !important;
-  font-feature-settings: "ss01" !important; /* Ø§Ø¹Ø¯Ø§Ø¯ ÙØ§Ø±Ø³ÛŒ */
+  font-feature-settings: "ss01" !important; /* اعداد فارسی */
   font-variant-numeric: normal !important;
-  direction: ltr; /* Ø¬Ù‡Øª LTR Ø¨Ø±Ø§ÛŒ Ø§ÛŒÙ†Ú©Ù‡ Ø³Ø§Ø¹Øª Ø¨Ø±Ø¹Ú©Ø³ Ù†Ø´ÙˆØ¯ (12:30) */
+  direction: ltr; /* جهت LTR برای اینکه ساعت برعکس نشود (12:30) */
   text-align: center;
-  font-size: 14px !important; /* Ø³Ø§ÛŒØ² Ù†Ø±Ù…Ø§Ù„ */
+  font-size: 14px !important; /* سایز نرمال */
 }
 .ant-picker-time-panel-column > li,
 .ant-picker-time-panel-column > li * {
@@ -204,7 +220,7 @@ body.ant-scrolling-effect {
   font-variant-numeric: normal !important;
 }
 
-/* 5. Ø§Ø³ØªØ§ÛŒÙ„ Ù‡Ø¯Ø± (Ø³Ø§Ù„ 1404) */
+/* 5. استایل هدر (سال 1404) */
 .ant-picker-header-view {
   font-weight: bold;
 }
@@ -212,7 +228,7 @@ body.ant-scrolling-effect {
   font-feature-settings: "ss01";
 }
 
-/* Ø§Ø³Ú©Ø±ÙˆÙ„â€ŒØ¨Ø§Ø± Ù¾Ù‡Ù†â€ŒØªØ± Ø¨Ø±Ø§ÛŒ ØµÙØ­Ø§Øª Ùˆ Ù…ÙˆØ¯Ø§Ù„â€ŒÙ‡Ø§ÛŒ Ø§ØµÙ„ÛŒ */
+/* اسکرول‌بار پهن‌تر برای صفحات و مودال‌های اصلی */
 .scrollbar-wide {
   scrollbar-width: auto;
   scrollbar-color: #b8b8b8 rgba(0, 0, 0, 0.08);
@@ -273,10 +289,10 @@ body.ant-scrolling-effect {
 }
 
 /* =========================================
-   5. Ø§Ø³ØªØ§ÛŒÙ„â€ŒÙ‡Ø§ÛŒ Ú†Ø§Ù¾ (Print Styles)
+   5. استایل‌های چاپ (Print Styles)
    ========================================= */
 
-/* Ú©Ù†ØªÛŒÙ†Ø± Ù¾Ø±ÛŒÙ†Øª */
+/* کنتینر پرینت */
 #print-root {
   display: none !important;
   position: static !important;
@@ -289,7 +305,7 @@ body.ant-scrolling-effect {
   display: block !important;
 }
 
-/* Ú©Ø§Ø±Øª Ú†Ø§Ù¾ */
+/* کارت چاپ */
 .print-card {
   width: 105mm;
   height: 148mm;
@@ -329,7 +345,7 @@ body.ant-scrolling-effect {
     overflow: visible !important;
   }
 
-  /* âœ… ØªÙ†Ø¸ÛŒÙ… ØµÙØ­Ù‡ */
+  /* ✅ تنظیم صفحه */
   @page {
     margin: 0;
     padding: 0;
@@ -340,13 +356,13 @@ body.ant-scrolling-effect {
     size: A5;
   }
 
-  /* âœ… Ù…Ø®ÙÛŒ Ú©Ø±Ø¯Ù† ØªÙ…Ø§Ù… Ø¹Ù†Ø§ØµØ± Ø¨Ù‡ Ø¬Ø² print-root */
+  /* ✅ مخفی کردن تمام عناصر به جز print-root */
   body > *:not(#print-root) {
     display: none !important;
     visibility: hidden !important;
   }
 
-  /* âœ… Ù†Ù…Ø§ÛŒØ´ print-root */
+  /* ✅ نمایش print-root */
   #print-root {
     display: block !important;
     position: static !important;
@@ -361,7 +377,7 @@ body.ant-scrolling-effect {
     overflow: visible !important;
   }
 
-  /* âœ… Ù†Ù…Ø§ÛŒØ´ ØªÙ…Ø§Ù… ÙØ±Ø²Ù†Ø¯Ø§Ù† print-root */
+  /* ✅ نمایش تمام فرزندان print-root */
   #print-root,
   #print-root * {
     visibility: visible !important;
@@ -370,7 +386,7 @@ body.ant-scrolling-effect {
     color: #111827 !important;
   }
 
-  /* âœ… Ú©Ø§Ø±Øª Ú†Ø§Ù¾ Ø¨Ø±Ø§ÛŒ Ù¾Ø±ÛŒÙ†Øª */
+  /* ✅ کارت چاپ برای پرینت */
   #print-root .print-card {
     width: 105mm !important;
     height: 148mm !important;
@@ -384,13 +400,13 @@ body.ant-scrolling-effect {
     background: white !important;
   }
 
-  /* âœ… ÙØ§Ú©ØªÙˆØ± A5 Ø¨Ø±Ø§ÛŒ Ù¾Ø±ÛŒÙ†Øª */
+  /* ✅ فاکتور A5 برای پرینت */
   #print-root .print-card[style*="width: 148mm"] {
     width: 148mm !important;
     height: 210mm !important;
   }
 
-  /* âœ… Ø¬Ø¯Ø§ÙˆÙ„ Ø¨Ø±Ø§ÛŒ Ù¾Ø±ÛŒÙ†Øª */
+  /* ✅ جداول برای پرینت */
   #print-root table {
     border-collapse: collapse;
     width: 100%;
@@ -404,7 +420,7 @@ body.ant-scrolling-effect {
     color: #111827 !important;
   }
 
-  /* âœ… Ù…Ø®ÙÛŒ Ú©Ø±Ø¯Ù† Modal Ùˆ Drawer */
+  /* ✅ مخفی کردن Modal و Drawer */
   .ant-modal,
   .ant-modal-wrap,
   .ant-drawer,
@@ -415,7 +431,7 @@ body.ant-scrolling-effect {
   }
 }
 
-/* Ø§Ø³ØªØ§ÛŒÙ„ Ù…Ø¹Ù…ÙˆÙ„ÛŒ Ú©Ø§Ø±Øª */
+/* استایل معمولی کارت */
 .print-header {
   display: flex;
   justify-content: space-between;
@@ -461,7 +477,7 @@ body.ant-scrolling-effect {
 }
 
 /* =========================================
-   Ø§Ø³ØªØ§ÛŒÙ„â€ŒÙ‡Ø§ÛŒ ÙØ§Ú©ØªÙˆØ± Ù¾Ø±ÛŒÙ†Øª
+   استایل‌های فاکتور پرینت
    ========================================= */
 
 .invoice-print-card {
@@ -574,7 +590,7 @@ body.ant-scrolling-effect {
 }
 
 @media (max-width: 768px) {
-  /* Print Modal Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* Print Modal موبایل */
   .print-modal-responsive {
     width: 98vw !important;
     height: 95vh !important;
@@ -585,7 +601,7 @@ body.ant-scrolling-effect {
     padding: 0;
   }
   
-  /* Invoice Print Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* Invoice Print موبایل */
   .invoice-print-card {
     width: 100% !important;
     height: auto !important;
@@ -600,7 +616,7 @@ body.ant-scrolling-effect {
     margin: 0 auto;
   }
   
-  /* ÙØ±Ù… ÙØ§Ú©ØªÙˆØ± */
+  /* فرم فاکتور */
   .smart-form {
     padding: 8px !important;
   }
@@ -618,7 +634,7 @@ body.ant-scrolling-effect {
     height: auto !important;
   }
   
-  /* Ø¬Ø¯Ø§ÙˆÙ„ Ø¯Ø§Ø®Ù„ ÙØ§Ú©ØªÙˆØ± */
+  /* جداول داخل فاکتور */
   .invoice-editable-table {
     font-size: 11px !important;
   }
@@ -637,7 +653,7 @@ body.ant-scrolling-effect {
     font-weight: 700;
   }
   
-  /* Summary Card Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* Summary Card موبایل */
   .summary-card {
     padding: 8px !important;
   }
@@ -651,7 +667,7 @@ body.ant-scrolling-effect {
   }
 
   
-  /* Grid Layout Ø¨Ø±Ø§ÛŒ ÙÛŒÙ„Ø¯Ù‡Ø§ */
+  /* Grid Layout برای فیلدها */
   .field-groups-tabs .ant-row {
     gutter: [8, 8] !important;
   }
@@ -662,7 +678,7 @@ body.ant-scrolling-effect {
 }
 
 @media (max-width: 480px) {
-  /* Ù…ÙˆØ¨Ø§ÛŒÙ„ Ú©ÙˆÚ†Ú© */
+  /* موبایل کوچک */
   .print-modal-responsive .ant-modal {
     margin: 0 !important;
     border-radius: 0 !important;
@@ -708,7 +724,7 @@ body.ant-scrolling-effect {
     font-size: 9px !important;
   }
   
-  /* Button Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* Button موبایل */
   .hero-section .ant-button {
     padding: 4px 12px !important;
     font-size: 12px !important;
@@ -736,7 +752,7 @@ body.ant-scrolling-effect {
 }
 
 @media (max-width: 768px) {
-  /* Ù‡ÛŒØ¯Ø± Ø§Ú©Ø´Ù† */
+  /* هیدر اکشن */
   .ant-breadcrumb {
     font-size: 12px !important;
   }
@@ -745,7 +761,7 @@ body.ant-scrolling-effect {
     font-size: 12px !important;
   }
   
-  /* HeroSection Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* HeroSection موبایل */
   .hero-section-container {
     padding: 12px !important;
   }
@@ -770,7 +786,7 @@ body.ant-scrolling-effect {
     margin: 8px 0 !important;
   }
   
-  /* FieldGroupsTabs Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* FieldGroupsTabs موبایل */
   .field-groups-tabs {
     padding: 12px !important;
   }
@@ -788,7 +804,7 @@ body.ant-scrolling-effect {
     padding: 12px 0 !important;
   }
   
-  /* TablesSection Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* TablesSection موبایل */
   .tables-section {
     padding: 12px !important;
   }
@@ -816,12 +832,12 @@ body.ant-scrolling-effect {
     font-weight: 700;
   }
   
-  /* Drawer Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* Drawer موبایل */
   .ant-drawer-body {
     padding: 12px !important;
   }
   
-  /* Button Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* Button موبایل */
   .ant-button {
     padding: 4px 12px !important;
     font-size: 12px !important;
@@ -833,14 +849,14 @@ body.ant-scrolling-effect {
     font-size: 14px !important;
   }
   
-  /* Ù…Ø³Ø§ÙØ§Øª Ú©Ù„ÛŒ */
+  /* مسافات کلی */
   main > div {
     padding: 8px !important;
   }
 }
 
 @media (max-width: 480px) {
-  /* Ù…ÙˆØ¨Ø§ÛŒÙ„ Ø¨Ø³ÛŒØ§Ø± Ú©ÙˆÚ†Ú© */
+  /* موبایل بسیار کوچک */
   .ant-layout-sider:not(.app-main-sider) {
     display: none !important;
   }
@@ -891,12 +907,12 @@ body.ant-scrolling-effect {
     font-size: 9px !important;
   }
   
-  /* QR Ú©ÙˆÚˆ Ù…ÙˆØ¨Ø§ÛŒÙ„ */
+  /* QR کوڈ موبایل */
   .ant-popover-inner {
     padding: 8px !important;
   }
   
-  /* Breadcrumb Ø¨Ù‡ØªØ± Ø¨Ø±Ø§ÛŒ Ù…ÙˆØ¨Ø§ÛŒÙ„ Ú©ÙˆÚ†Ú© */
+  /* Breadcrumb بهتر برای موبایل کوچک */
   .ant-breadcrumb-item {
     display: none;
   }
@@ -949,5 +965,151 @@ body.ant-scrolling-effect {
     padding: 4px 10px !important;
     font-size: 11px !important;
   }
+}
+
+/* =========================================
+   Map Popup Theme
+   ========================================= */
+.kalam-map-floating-popup-host {
+  position: fixed;
+  z-index: 6000;
+  pointer-events: none;
+  direction: rtl;
+}
+
+.kalam-map-floating-popup {
+  pointer-events: auto;
+  position: relative;
+  border-radius: 14px;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.2);
+  background: #ffffff;
+  box-shadow: 0 12px 26px -16px rgba(var(--brand-700-rgb), 0.65);
+  font-family: 'Vazirmatn', system-ui, sans-serif;
+}
+
+.kalam-map-floating-popup__close {
+  position: absolute;
+  top: 6px;
+  left: 7px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  font-size: 18px;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  color: rgba(var(--brand-700-rgb), 0.7);
+}
+
+.kalam-map-floating-popup__close:hover {
+  color: rgb(var(--brand-600-rgb));
+  background: rgba(var(--brand-100-rgb), 0.65);
+}
+
+.kalam-map-popup__content {
+  min-width: 250px;
+  max-width: 300px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.kalam-map-popup__title-wrap {
+  display: grid;
+  gap: 3px;
+  padding-inline-end: 16px;
+}
+
+.kalam-map-popup__title {
+  font-size: 13px;
+  font-weight: 800;
+  color: rgb(var(--brand-700-rgb));
+}
+
+.kalam-map-popup__subtitle {
+  font-size: 11px;
+  color: rgba(var(--brand-700-rgb), 0.58);
+}
+
+.kalam-map-popup__details {
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.16);
+  background: rgba(var(--brand-50-rgb), 0.7);
+}
+
+.kalam-map-popup__row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.kalam-map-popup__key {
+  font-size: 11px;
+  color: rgba(var(--brand-700-rgb), 0.68);
+}
+
+.kalam-map-popup__value {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgb(var(--brand-700-rgb));
+  text-align: left;
+}
+
+.kalam-map-popup__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 9px;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.32);
+  background: rgb(var(--brand-600-rgb));
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 7px 10px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.kalam-map-popup__action:hover {
+  color: #ffffff;
+  border-color: rgba(var(--brand-500-rgb), 0.4);
+  background: rgb(var(--brand-500-rgb));
+}
+
+.kalam-map-popup__action-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.dark .kalam-map-floating-popup {
+  background: rgb(var(--app-dark-surface-rgb));
+  border-color: rgba(var(--brand-300-rgb), 0.35);
+  box-shadow: 0 14px 30px -16px rgba(0, 0, 0, 0.8);
+}
+
+.dark .kalam-map-floating-popup__close {
+  color: rgb(148 163 184);
+}
+
+.dark .kalam-map-popup__title,
+.dark .kalam-map-popup__value {
+  color: rgb(229 231 235);
+}
+
+.dark .kalam-map-popup__subtitle,
+.dark .kalam-map-popup__key {
+  color: rgb(156 163 175);
+}
+
+.dark .kalam-map-popup__details {
+  background: rgba(var(--app-dark-bg-rgb), 0.4);
+  border-color: rgba(var(--brand-300-rgb), 0.25);
 }
 

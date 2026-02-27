@@ -11,7 +11,7 @@ type PickerType = "DATE" | "TIME" | "DATETIME";
 
 interface PersianDatePickerProps {
   value?: string | null;
-  onChange: (val: string | null) => void;
+  onChange?: (val: string | null) => void;
   type: PickerType;
   className?: string;
   disabled?: boolean;
@@ -26,6 +26,8 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   disabled,
   placeholder,
 }) => {
+  const safeOnChange = onChange ?? (() => {});
+
   const pickerValue = useMemo(() => {
     if (!value) return null;
     try {
@@ -61,23 +63,23 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
 
   const handleChange = (date: DateObject | null) => {
     if (!date) {
-      onChange(null);
+      safeOnChange(null);
       return;
     }
 
     const greg = date.convert(gregorian, gregorian_en);
 
     if (type === "DATE") {
-      onChange(greg.format("YYYY-MM-DD"));
+      safeOnChange(greg.format("YYYY-MM-DD"));
       return;
     }
 
     if (type === "TIME") {
-      onChange(greg.format("HH:mm"));
+      safeOnChange(greg.format("HH:mm"));
       return;
     }
 
-    onChange(greg.toDate().toISOString());
+    safeOnChange(greg.toDate().toISOString());
   };
 
   const format =
@@ -97,12 +99,18 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         : [],
     className: `rmdp-leather ${className || ''}`.trim(),
     inputClass:
-      "w-full h-8 persian-number rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-[#141414] px-3 text-sm text-gray-800 dark:text-gray-200 placeholder:text-gray-400 focus:border-leather-500 focus:ring-1 focus:ring-leather-500 transition-colors",
+      "kalam-rmdp-input w-full h-8 persian-number",
     containerClassName: "w-full",
     disabled,
     placeholder,
-    mapDays: ({ date }: any) => {
-      if (date?.weekDay?.index === 6) {
+    mapDays: ({ date, today }: any) => {
+      const isToday =
+        Boolean(today) &&
+        date?.year === today?.year &&
+        date?.monthIndex === today?.monthIndex &&
+        date?.day === today?.day;
+
+      if (date?.weekDay?.index === 6 && !isToday) {
         return {
           style: {
             backgroundColor: 'rgb(var(--brand-500-rgb))',

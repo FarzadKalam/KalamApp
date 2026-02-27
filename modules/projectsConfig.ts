@@ -164,34 +164,14 @@ export const projectsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
-      key: 'process_run_id',
-      labels: { fa: 'فرآیند اجرایی', en: 'Execution Run' },
-      type: FieldType.RELATION,
-      location: FieldLocation.BLOCK,
-      blockId: 'process',
-      order: 2,
-      relationConfig: { targetModule: 'process_runs', targetField: 'process_name' },
-      nature: FieldNature.STANDARD,
-      readonly: true,
-    },
-    {
       key: 'execution_process_draft',
-      labels: { fa: 'پیش‌نویس فرآیند اجرا', en: 'Execution Draft' },
-      type: FieldType.JSON,
-      location: FieldLocation.BLOCK,
-      blockId: 'process',
-      order: 3,
-      nature: FieldNature.STANDARD,
-    },
-    {
-      key: 'execution_process',
       labels: { fa: 'فرآیند اجرا', en: 'Execution Process' },
       type: FieldType.JSON,
       location: FieldLocation.BLOCK,
       blockId: 'process',
-      order: 4,
+      order: 2,
+      isTableColumn: true,
       nature: FieldNature.STANDARD,
-      readonly: true,
     },
     {
       key: 'location',
@@ -265,3 +245,4 @@ export const projectsModule: ModuleDefinition = {
     },
   ],
 };
+

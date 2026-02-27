@@ -21,7 +21,6 @@ import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../u
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import {
   formatNumericForInput,
-  normalizeNumericString,
   parseNumericInput,
   preventNonNumericKeyDown,
   preventNonNumericPaste,
@@ -109,6 +108,18 @@ type Draft = {
   party_type: PartyType;
   party_id: string | null;
   treasury_ref: string | null;
+};
+type AccountSelectOption = {
+  value: string;
+  label: string;
+  accountId: string;
+  treasuryRef: string | null;
+  searchText: string;
+  accountTypeColor: string;
+  accountTypeLabel: string;
+  accountLevelLabel: string;
+  natureLabel: string;
+  treasuryLabel: string | null;
 };
 
 const ENTRY_SELECT =
@@ -373,8 +384,8 @@ const JournalEntryShowPage: React.FC = () => {
   );
 
   const accountSelectOptions = useMemo(
-    () =>
-      accounts.flatMap((account) => {
+    (): AccountSelectOption[] =>
+      accounts.flatMap((account): AccountSelectOption[] => {
         const typeMeta = accountTypeMeta[account.account_type];
         const levelText = accountLevelLabel[account.account_level];
         const natureText = natureLabel[account.nature];
@@ -403,13 +414,13 @@ const JournalEntryShowPage: React.FC = () => {
           value: `acc:${account.id}|${treasury.value}`,
           label: plainLabel,
           accountId: account.id,
-          treasuryRef: treasury.value,
+          treasuryRef: treasury.value ? String(treasury.value) : null,
           searchText: `${baseSearch} ${treasury.label}`,
           accountTypeColor: typeMeta.color,
           accountTypeLabel: typeMeta.label,
           accountLevelLabel: levelText,
           natureLabel: natureText,
-          treasuryLabel: treasury.label,
+          treasuryLabel: treasury.label ? String(treasury.label) : null,
         }));
       }),
     [accountLevelLabel, accountTypeMeta, accounts, natureLabel, treasuryOptionsByAccount]
@@ -975,7 +986,7 @@ const JournalEntryShowPage: React.FC = () => {
     });
   };
 
-  const saveRow = async (row: LineTableRow) => {
+  const saveRow = async (row: LineTableRow): Promise<void> => {
     if (!canEditLines) return;
     const draft = drafts[row.id];
     if (!draft) return;
@@ -984,17 +995,28 @@ const JournalEntryShowPage: React.FC = () => {
     const treasuryOptions = draft.account_id
       ? treasuryOptionsByAccount.get(String(draft.account_id)) || []
       : [];
-    if (!draft.account_id) return message.error('حساب الزامی است');
-    if (!side.ok) return message.error('فقط یکی از بدهکار یا بستانکار باید مقدار داشته باشد');
-    if (draft.party_type && !draft.party_id) return message.error('برای طرف حساب، انتخاب شخص/مشتری/تامین کننده الزامی است');
+    if (!draft.account_id) {
+      message.error('حساب الزامی است');
+      return;
+    }
+    if (!side.ok) {
+      message.error('فقط یکی از بدهکار یا بستانکار باید مقدار داشته باشد');
+      return;
+    }
+    if (draft.party_type && !draft.party_id) {
+      message.error('برای طرف حساب، انتخاب شخص/مشتری/تامین کننده الزامی است');
+      return;
+    }
     if (treasuryOptions.length > 0 && !draft.treasury_ref) {
-      return message.error('برای این حساب، انتخاب بانک/صندوق الزامی است');
+      message.error('برای این حساب، انتخاب بانک/صندوق الزامی است');
+      return;
     }
     if (
       draft.treasury_ref &&
       !treasuryOptions.some((option) => String(option.value) === String(draft.treasury_ref))
     ) {
-      return message.error('بانک/صندوق انتخاب شده با حساب جاری همخوانی ندارد');
+      message.error('بانک/صندوق انتخاب شده با حساب جاری همخوانی ندارد');
+      return;
     }
 
     const metadata = buildLineMetadata(row.metadata || null, draft.treasury_ref);
@@ -1349,7 +1371,7 @@ const JournalEntryShowPage: React.FC = () => {
                         true
                       )
                     }
-                    parser={(val) => normalizeNumericString(val)}
+                    parser={(val) => parseNum(val)}
                     onChange={(v) => upsertDraft(row.id, { debit: parseNum(v) }, toDraft(row))}
                     onKeyDown={preventNonNumericKeyDown}
                     onPaste={preventNonNumericPaste}
@@ -1381,7 +1403,7 @@ const JournalEntryShowPage: React.FC = () => {
                         true
                       )
                     }
-                    parser={(val) => normalizeNumericString(val)}
+                    parser={(val) => parseNum(val)}
                     onChange={(v) => upsertDraft(row.id, { credit: parseNum(v) }, toDraft(row))}
                     onKeyDown={preventNonNumericKeyDown}
                     onPaste={preventNonNumericPaste}

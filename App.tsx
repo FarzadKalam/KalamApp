@@ -44,10 +44,13 @@ import {
   THEME_STORAGE_KEY,
   applyBrandCssVariables,
   mergeBrandingConfig,
+  type BrandingConfig,
   type BrandingSettingsPayload,
 } from "./theme/brandTheme";
 import { isAccountingMinimalModule } from "./utils/accountingModules";
 import { normalizeCurrencyConfig, persistCurrencyConfig } from "./utils/currency";
+
+const BRANDING_CACHE_KEY = 'erp:branding-cache';
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
@@ -57,9 +60,29 @@ const getInitialDarkMode = () => {
   return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
 };
 
+const getInitialBranding = (): BrandingConfig => {
+  if (typeof window === "undefined") return DEFAULT_BRANDING;
+  try {
+    const raw = window.localStorage.getItem(BRANDING_CACHE_KEY);
+    if (!raw) return DEFAULT_BRANDING;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return DEFAULT_BRANDING;
+    const snapshot = parsed as Partial<BrandingConfig>;
+    const paletteKey = String(snapshot.paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload['palette_key'];
+    return mergeBrandingConfig(DEFAULT_BRANDING, {
+      brand_name: String(snapshot.brandName || DEFAULT_BRANDING.brandName),
+      short_name: String(snapshot.shortName || DEFAULT_BRANDING.shortName),
+      app_title: String(snapshot.appTitle || DEFAULT_BRANDING.appTitle),
+      palette_key: paletteKey,
+    });
+  } catch {
+    return DEFAULT_BRANDING;
+  }
+};
+
 function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
-  const [branding, setBranding] = useState(DEFAULT_BRANDING);
+  const [branding, setBranding] = useState<BrandingConfig>(getInitialBranding);
 
   useEffect(() => {
     document.body.style.fontFamily = 'Vazirmatn, sans-serif';
@@ -115,6 +138,7 @@ function App() {
         label: String(companyRow.currency_label || '').trim(),
       });
       persistCurrencyConfig(currency);
+      window.localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify(merged));
       setBranding(merged);
     } catch {
       persistCurrencyConfig(null);

@@ -14,6 +14,7 @@ interface TablesSectionProps {
   relationOptions: Record<string, any[]>;
   dynamicOptions: Record<string, any[]>;
   checkVisibility: (logic: any) => boolean;
+  renderSmartField?: (field: any, isHeader?: boolean) => React.ReactNode;
   canViewField?: (fieldKey: string) => boolean;
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
@@ -28,6 +29,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   relationOptions,
   dynamicOptions,
   checkVisibility,
+  renderSmartField,
   canViewField,
   canEditModule = true,
   onDataUpdate,
@@ -123,6 +125,13 @@ const TablesSection: React.FC<TablesSectionProps> = ({
       stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
       sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
       wage: Number(stage?.wage || 0),
+      metadata: {
+        ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+        weight: Number(stage?.weight || stage?.metadata?.weight || 0),
+        duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
+        duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+        duration_from: String(stage?.duration_from || stage?.metadata?.duration_from || 'project_start') === 'previous_stage_end' ? 'previous_stage_end' : 'project_start',
+      },
       default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
       default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
     }));
@@ -156,6 +165,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             stage_name: stage.stage_name,
             sort_order: stage.sort_order,
             wage: stage.wage,
+            metadata: stage.metadata,
             default_assignee_id: stage.default_assignee_id,
             default_assignee_role_id: stage.default_assignee_role_id,
           })
@@ -169,6 +179,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             stage_name: stage.stage_name,
             sort_order: stage.sort_order,
             wage: stage.wage,
+            metadata: stage.metadata,
             default_assignee_id: stage.default_assignee_id,
             default_assignee_role_id: stage.default_assignee_role_id,
           });
@@ -178,16 +189,21 @@ const TablesSection: React.FC<TablesSectionProps> = ({
 
     const { data: refreshedRows, error: refreshError } = await supabase
       .from('process_template_stages')
-      .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id')
+      .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
       .eq('template_id', templateId)
       .order('sort_order', { ascending: true });
     if (refreshError) throw refreshError;
 
     return (refreshedRows || []).map((stage: any, index: number) => ({
+      ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
       id: stage.id || `${templateId}_${index + 1}`,
       name: stage.stage_name || `مرحله ${index + 1}`,
       sort_order: stage.sort_order || ((index + 1) * 10),
       wage: Number(stage.wage || 0),
+      weight: Number(stage?.metadata?.weight || 0),
+      duration_value: Number(stage?.metadata?.duration_value || 0),
+      duration_unit: stage?.metadata?.duration_unit || 'day',
+      duration_from: stage?.metadata?.duration_from || 'project_start',
       default_assignee_id: stage.default_assignee_id || null,
       default_assignee_role_id: stage.default_assignee_role_id || null,
       template_stage_id: stage.id || null,
@@ -207,6 +223,13 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           const isProcessStagesField = processStageFieldKeys.has(fieldKey);
           const isTemplatePreviewField = fieldKey === 'template_stages_preview';
           const isRunPreviewField = fieldKey === 'run_stages_preview';
+          const processTemplateField = (module.fields || []).find((candidate: any) => (
+            String(candidate?.key || '') === 'process_template_id'
+            && String(candidate?.blockId || '') === String(field?.blockId || '')
+          ));
+          const canShowProcessTemplateField = !!processTemplateField
+            && (!canViewField || canViewField(String(processTemplateField.key)) !== false)
+            && (!processTemplateField.logic || checkVisibility(processTemplateField.logic));
           const stageDraftValue = isProcessStagesField
             ? (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : [])
             : (data?.production_stages_draft || []);
@@ -244,6 +267,12 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             <h3 className="text-sm md:text-lg font-bold mb-4 text-gray-700 dark:text-gray-200 flex items-center gap-2">
               <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>                {field.labels.fa}
             </h3>
+            {canShowProcessTemplateField && renderSmartField && (
+              <div className="mb-4">
+                <div className="text-xs text-gray-400 mb-1">{processTemplateField.labels?.fa || 'الگوی فرآیند اجرا'}</div>
+                {renderSmartField(processTemplateField)}
+              </div>
+            )}
             <ProductionStagesField 
               recordId={data.id} 
               moduleId={module.id}
@@ -320,3 +349,4 @@ const TablesSection: React.FC<TablesSectionProps> = ({
 };
 
 export default TablesSection;
+

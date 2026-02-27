@@ -11,7 +11,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import type { InputRef } from 'antd';
 import type { ColumnType, ColumnsType } from 'antd/es/table';
-import type { FilterConfirmProps } from 'antd/es/table/interface';
+import type { FilterConfirmProps, FilterValue } from 'antd/es/table/interface';
 import ProductionStagesField from './ProductionStagesField';
 import RelatedRecordPopover from './RelatedRecordPopover';
 
@@ -56,7 +56,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 }) => {
   const searchInput = useRef<InputRef>(null);
   const [scrollHeight, setScrollHeight] = useState<number>(500);
-  const [columnFilters, setColumnFilters] = useState<Record<string, React.Key[] | null>>({});
+  const [columnFilters, setColumnFilters] = useState<Record<string, FilterValue | null>>({});
 
   // ✅ Responsive scroll height
   useEffect(() => {
@@ -88,7 +88,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   };
 
   const parseRangeValue = (
-    raw: React.Key | undefined
+    raw: React.Key | boolean | undefined
   ): { from?: string | number; to?: string | number } => {
     if (!raw) return {};
     try {
@@ -134,7 +134,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   const handleTableChange = (
     paginationValue: any,
-    nextFilters: Record<string, React.Key[] | null>,
+    nextFilters: Record<string, FilterValue | null>,
     sorter: any,
     extra: any
   ) => {
@@ -224,12 +224,16 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                   placeholder="از مبلغ"
                   value={range.from as number | undefined}
                   formatter={(value) => {
-                    if (value === undefined || value === null || value === '') return '';
+                    if (value === undefined || value === null) return '';
                     const normalized = fromPersianNumber(String(value));
                     if (Number.isNaN(normalized)) return '';
                     return toPersianNumber(normalized.toLocaleString('en-US'));
                   }}
-                  parser={(value) => normalizeDigits(value || '').replace(/,/g, '')}
+                  parser={(value) => {
+                    const normalized = normalizeDigits(value || '').replace(/,/g, '');
+                    const parsed = Number(normalized);
+                    return Number.isFinite(parsed) ? parsed : 0;
+                  }}
                   onChange={(val) => updateRange({ ...range, from: val ?? undefined })}
                 />
                 <InputNumber
@@ -238,12 +242,16 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                   placeholder="تا مبلغ"
                   value={range.to as number | undefined}
                   formatter={(value) => {
-                    if (value === undefined || value === null || value === '') return '';
+                    if (value === undefined || value === null) return '';
                     const normalized = fromPersianNumber(String(value));
                     if (Number.isNaN(normalized)) return '';
                     return toPersianNumber(normalized.toLocaleString('en-US'));
                   }}
-                  parser={(value) => normalizeDigits(value || '').replace(/,/g, '')}
+                  parser={(value) => {
+                    const normalized = normalizeDigits(value || '').replace(/,/g, '');
+                    const parsed = Number(normalized);
+                    return Number.isFinite(parsed) ? parsed : 0;
+                  }}
                   onChange={(val) => updateRange({ ...range, to: val ?? undefined })}
                 />
               </>
@@ -531,21 +539,31 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
               </RelatedRecordPopover>
             );
         }
-        if (field.type === FieldType.PROGRESS_STAGES) {
-             return (
-               <div style={{ minWidth: 200 }}>
-                 <ProductionStagesField 
-                    recordId={record.id} 
-                    moduleId={moduleConfig?.id}
-                    readOnly={true} 
-                    compact={true}
-                    lazyLoad={true}
-                    draftStages={record?.production_stages_draft || []}
-                    showWageSummary={false}
-                 />
-               </div>
-             );
-          }
+        const isProcessStagesCell = (
+          field.type === FieldType.PROGRESS_STAGES
+          || ['execution_process_draft', 'marketing_process_draft', 'production_stages_draft'].includes(String(field.key || ''))
+        );
+        if (isProcessStagesCell) {
+          const draftKey = field.type === FieldType.PROGRESS_STAGES
+            ? (moduleConfig?.id === 'production_orders' || moduleConfig?.id === 'production_boms'
+              ? 'production_stages_draft'
+              : String(field.key || 'production_stages_draft'))
+            : String(field.key || 'production_stages_draft');
+          const draftStages = Array.isArray(record?.[draftKey]) ? record[draftKey] : [];
+          return (
+            <div style={{ minWidth: 200 }}>
+              <ProductionStagesField
+                recordId={record.id}
+                moduleId={moduleConfig?.id}
+                readOnly={true}
+                compact={true}
+                lazyLoad={true}
+                draftStages={draftStages}
+                showWageSummary={false}
+              />
+            </div>
+          );
+        }
           
         if (field.type === FieldType.TAGS) {
             if (!Array.isArray(value) || value.length === 0) return '-';

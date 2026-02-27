@@ -133,34 +133,13 @@ export const marketingLeadsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
-      key: 'process_run_id',
+      key: 'marketing_process_draft',
       labels: { fa: 'فرآیند بازاریابی', en: 'Marketing Process' },
-      type: FieldType.RELATION,
+      type: FieldType.JSON,
       location: FieldLocation.BLOCK,
       blockId: 'process',
       order: 2,
-      relationConfig: { targetModule: 'process_runs', targetField: 'process_name' },
       nature: FieldNature.STANDARD,
-      readonly: true,
-    },
-    {
-      key: 'marketing_process_draft',
-      labels: { fa: 'پیش‌نویس فرآیند بازاریابی', en: 'Marketing Draft' },
-      type: FieldType.JSON,
-      location: FieldLocation.BLOCK,
-      blockId: 'process',
-      order: 3,
-      nature: FieldNature.STANDARD,
-    },
-    {
-      key: 'marketing_process',
-      labels: { fa: 'فرآیند بازاریابی', en: 'Marketing Process' },
-      type: FieldType.JSON,
-      location: FieldLocation.BLOCK,
-      blockId: 'process',
-      order: 4,
-      nature: FieldNature.STANDARD,
-      readonly: true,
     },
     {
       key: 'location',
@@ -212,3 +191,4 @@ export const marketingLeadsModule: ModuleDefinition = {
     },
   ],
 };
+

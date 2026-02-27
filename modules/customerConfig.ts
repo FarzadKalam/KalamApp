@@ -1,4 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType } from '../types';
 
 export const customerModule: ModuleDefinition = {
   id: 'customers',
@@ -47,6 +47,20 @@ export const customerModule: ModuleDefinition = {
     { key: 'instagram_id', labels: { fa: 'آیدی اینستاگرام', en: 'Instagram' }, type: FieldType.TEXT, blockId: 'contact_info' },
     { key: 'telegram_id', labels: { fa: 'آیدی تلگرام', en: 'Telegram' }, type: FieldType.TEXT, blockId: 'contact_info' },
 
+    {
+      key: 'process_template_id',
+      labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' },
+      type: FieldType.RELATION,
+      blockId: 'process_info',
+      relationConfig: { targetModule: 'process_templates', targetField: 'name' },
+    },
+    {
+      key: 'execution_process_draft',
+      labels: { fa: 'فرآیند اجرا', en: 'Execution Process' },
+      type: FieldType.JSON,
+      blockId: 'process_info',
+    },
+
     { key: 'first_purchase_date', labels: { fa: 'تاریخ اولین خرید', en: 'First Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'last_purchase_date', labels: { fa: 'تاریخ آخرین خرید', en: 'Last Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'purchase_count', labels: { fa: 'تعداد دفعات خرید', en: 'Count' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
@@ -60,6 +74,10 @@ export const customerModule: ModuleDefinition = {
     },
     {
       id: 'contact_info', titles: { fa: 'اطلاعات تماس', en: 'Contact Info' }, type: BlockType.FIELD_GROUP,
+      order: 0
+    },
+    {
+      id: 'process_info', titles: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: BlockType.FIELD_GROUP,
       order: 0
     },
     {

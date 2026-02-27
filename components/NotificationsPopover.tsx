@@ -388,7 +388,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             .contains('mention_role_ids', [roleId])
             .order('created_at', { ascending: false })
             .limit(40)
-        : Promise.resolve({ data: [] as any[] }),
+        : Promise.resolve({ data: [] as any[], error: null }),
     ]);
     const firstError = mentionedUserError || mentionedRoleError;
     if (shouldPauseNotesPolling(firstError)) {
@@ -491,7 +491,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
     let query = supabase
       .from('tasks')
-      .select('id, name, status, priority, produced_qty, created_at, due_date, assignee_id, assignee_type, production_line_id, related_to_module, related_product, related_customer, related_supplier, related_production_order, related_invoice')
+      .select('id, name, status, priority, produced_qty, created_at, due_date, assignee_id, assignee_type, production_line_id, related_to_module, related_product, related_customer, related_supplier, related_production_order, related_invoice, purchase_invoice_id, project_id, marketing_lead_id')
       .in('status', queryStatuses.length ? queryStatuses : fallbackStatuses)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -518,7 +518,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const relatedPairs: { module_id: string; record_id: string }[] = [];
     tasksList.forEach((task) => {
       const moduleId = task.related_to_module;
-      const recordId = task.related_product || task.related_customer || task.related_supplier || task.related_production_order || task.related_invoice;
+      const recordId =
+        task.related_product
+        || task.related_customer
+        || task.related_supplier
+        || task.related_production_order
+        || task.related_invoice
+        || task.purchase_invoice_id
+        || task.project_id
+        || task.marketing_lead_id;
       if (moduleId && recordId) relatedPairs.push({ module_id: moduleId, record_id: recordId });
     });
     const assigneeIds = Array.from(new Set(tasksList.map((t: any) => t.assignee_id).filter(Boolean)));
@@ -719,6 +727,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const tasksCount = tasks.filter((t: any) => !seenTaskIds.has(String(t.id))).length;
   const responsibilitiesCount = responsibilities.filter((r: any) => !seenResponsibilityIds.has(String(r.id))).length;
   const totalCount = notesCount + tasksCount + responsibilitiesCount;
+  const badgeColor = 'rgb(var(--brand-500-rgb))';
+  const drawerHeaderStyle: React.CSSProperties = {
+    background: 'linear-gradient(135deg, rgb(var(--brand-700-rgb)) 0%, rgb(var(--brand-500-rgb)) 100%)',
+    borderBottom: '1px solid rgba(var(--brand-300-rgb), 0.35)',
+    color: '#fff',
+  };
+  const desktopDrawerBodyStyle: React.CSSProperties = {
+    padding: 0,
+  };
+  const mobileDrawerBodyStyle: React.CSSProperties = {
+    padding: 16,
+  };
 
   const handleClose = () => {
     setSeenNoteIds((prev) => new Set([...prev, ...notes.map((n: any) => String(n.id))]));
@@ -771,8 +791,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                   <div
                     className={`w-[92%] rounded-2xl px-3 py-2 border shadow-sm ${
                       isMine
-                        ? 'bg-[#f7efe6] border-[#e7d7c6] rounded-br-sm'
-                        : 'bg-white dark:bg-white/5 border-gray-200 dark:border-gray-700 rounded-bl-sm'
+                        ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-br-sm'
+                        : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-bl-sm'
                     }`}
                   >
                     <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
@@ -780,7 +800,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                       <span>{safeJalaliFormat(note.created_at, 'YYYY/MM/DD HH:mm')}</span>
                     </div>
                     {replyTarget && (
-                      <div className="text-[11px] text-gray-500 bg-gray-50 dark:bg-white/10 rounded-lg p-2 mb-2">
+                      <div className="text-[11px] text-gray-600 dark:text-gray-300 bg-[rgba(var(--brand-50-rgb),0.85)] dark:bg-[rgba(var(--brand-700-rgb),0.22)] rounded-lg p-2 mb-2">
                         پاسخ به: {replyTarget.content || ''}
                       </div>
                     )}
@@ -864,7 +884,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             </Button>
           )}
         </div>
-        <div className="border-t border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-[#1f1f1f] px-4 py-3">
+        <div className="border-t border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.25)] bg-[rgba(var(--brand-50-rgb),0.72)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)] px-4 py-3">
           <div className="flex items-center gap-2 mb-2">
             <Select
               placeholder="ماژول"
@@ -890,7 +910,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             <QrScanPopover
               label=""
               buttonProps={{ type: 'default', shape: 'circle', size: 'small' }}
-              buttonClassName="text-gray-500 hover:text-leather-500"
+              buttonClassName="text-[rgba(var(--brand-700-rgb),0.85)] dark:text-[rgba(var(--brand-300-rgb),0.9)] hover:text-leather-500"
               onScan={({ moduleId, recordId }) => {
                 if (moduleId && recordId) {
                   setNoteModuleId(moduleId);
@@ -921,7 +941,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               dropdownStyle={{ zIndex: 3000, minWidth: 240 }}
             />
             {noteReplyTo && (
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+              <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
                 <MessageOutlined />
                 <span>پاسخ به یادداشت انتخاب شده</span>
                 <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setNoteReplyTo(null)} />
@@ -993,19 +1013,42 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             dataSource={data}
             renderItem={(task: any) => {
               const moduleId = task.related_to_module;
-              const recordId = task.related_product || task.related_customer || task.related_supplier || task.related_production_order || task.related_invoice;
+              const recordId =
+                task.related_product
+                || task.related_customer
+                || task.related_supplier
+                || task.related_production_order
+                || task.related_invoice
+                || task.purchase_invoice_id
+                || task.project_id
+                || task.marketing_lead_id;
               const recordKey = moduleId && recordId ? `${moduleId}:${recordId}` : null;
               const recordTitle = recordKey ? recordTitleMap[recordKey] : null;
-              const statusColor = task.status === 'done' ? 'border-green-300' : task.status === 'canceled' ? 'border-red-300' : task.status === 'review' ? 'border-orange-300' : 'border-gray-200';
+              const statusColor = task.status === 'done' ? 'border-green-300' : task.status === 'canceled' ? 'border-red-300' : task.status === 'review' ? 'border-orange-300' : 'border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)]';
               const isProductionTask = (
                 String(task?.related_to_module || '') === 'production_orders'
                 && task?.related_production_order
                 && task?.production_line_id
               );
+              const processRecordKeyByModule: Record<string, string> = {
+                projects: 'project_id',
+                customers: 'related_customer',
+                invoices: 'related_invoice',
+                purchase_invoices: 'purchase_invoice_id',
+                marketing_leads: 'marketing_lead_id',
+              };
+              const relatedProcessModuleId = String(task?.related_to_module || '');
+              const relatedProcessRecordKey = processRecordKeyByModule[relatedProcessModuleId];
+              const relatedProcessRecordId = relatedProcessRecordKey ? task?.[relatedProcessRecordKey] : null;
+              const isExecutionProcessTask = (
+                !isProductionTask
+                && !!relatedProcessRecordId
+                && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedProcessModuleId)
+              );
               const canEditProducedQty = !['todo', 'pending'].includes(String(task?.status || '').toLowerCase());
               return (
                 <div className="mb-2">
-                  <div className={`bg-white dark:bg-white/5 border ${statusColor} dark:border-gray-700 rounded-xl p-3`}>
+                  <div className={`bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border ${statusColor} rounded-xl p-3`}>
                   <div className="flex items-center justify-between">
                     <Link to={`/tasks/${task.id}`} className="font-bold text-gray-800 dark:text-gray-200" onClick={handleClose}>{task.name}</Link>
                     <Select
@@ -1021,19 +1064,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                   </div>
                   <div className="flex flex-wrap gap-2 mt-2">
                     {task.priority && (
-                      <span className="text-[11px] bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                      <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                         {resolveOptionLabel(task.priority, priorityOptions) || task.priority}
                       </span>
                     )}
                     {task.due_date && (
-                      <span className="text-[11px] bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                      <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                         موعد: {safeJalaliFormat(task.due_date, 'YYYY/MM/DD HH:mm')}
                       </span>
                     )}
                   </div>
                   {isProductionTask && (
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-gray-600">مقدار تولید شده:</span>
+                      <span className="text-[11px] text-gray-600 dark:text-gray-300">مقدار تولید شده:</span>
                       <InputNumber
                         size="small"
                         min={0}
@@ -1060,7 +1103,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                     </span>
                   </div>
                   {isProductionTask && (
-                    <div className="mt-3 rounded-lg border border-[#d6c2ab] bg-[#faf5ef] p-2">
+                    <div className="mt-3 rounded-lg border border-[rgba(var(--brand-300-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.32)] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] p-2">
                       <ProductionStagesField
                         recordId={String(task.related_production_order)}
                         moduleId="production_orders"
@@ -1068,6 +1111,17 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                         compact
                         lazyLoad
                         onlyLineId={String(task.production_line_id)}
+                      />
+                    </div>
+                  )}
+                  {isExecutionProcessTask && (
+                    <div className="mt-3 rounded-lg border border-[rgba(var(--brand-300-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.32)] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] p-2">
+                      <ProductionStagesField
+                        recordId={String(relatedProcessRecordId)}
+                        moduleId={relatedProcessModuleId}
+                        readOnly
+                        compact
+                        lazyLoad
                       />
                     </div>
                   )}
@@ -1115,19 +1169,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               const createdByLabel = createdById ? (createdByNameMap[createdById] || createdById) : null;
               return (
                 <div className="mb-2">
-                  <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-gray-700 rounded-xl p-3">
+                  <div className="bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-xl p-3">
                     <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
                     <Link to={`/${item.module_id}/${item.id}`} className="text-sm text-gray-800 dark:text-gray-200" onClick={handleClose}>
                       {title}
                     </Link>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {categoryLabel && (
-                        <span className="text-[11px] bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                           {categoryLabel}
                         </span>
                       )}
                       {statusLabel && (
-                        <span className="text-[11px] bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                           {statusLabel}
                         </span>
                       )}
@@ -1162,26 +1216,26 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const contentDesktop = (
     <div className="w-[880px] max-w-[90vw] h-[90vh] p-4">
       <div className="grid grid-cols-3 gap-4 h-full min-h-0">
-      <div className="flex flex-col border border-gray-200 dark:border-gray-700 rounded-2xl bg-white/60 dark:bg-white/5 h-full overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-white/90 dark:bg-[#1f1f1f]">
-          <div className="font-bold text-gray-700">یادداشت‌ها</div>
-          <Badge count={formatBadgeCount(notesCount)} color="#ef4444" />
+      <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-[rgba(var(--brand-100-rgb),0.85)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] border-b border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+          <div className="font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">یادداشت‌ها</div>
+          <Badge count={formatBadgeCount(notesCount)} color={badgeColor} />
         </div>
         {renderNotes()}
       </div>
-      <div className="flex flex-col border border-gray-200 dark:border-gray-700 rounded-2xl bg-white/60 dark:bg-white/5 h-full overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-white/90 dark:bg-[#1f1f1f]">
-          <div className="font-bold text-gray-700">وظایف من</div>
-          <Badge count={formatBadgeCount(tasksCount)} color="#ef4444" />
+      <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-[rgba(var(--brand-100-rgb),0.85)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] border-b border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+          <div className="font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">وظایف من</div>
+          <Badge count={formatBadgeCount(tasksCount)} color={badgeColor} />
         </div>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
           {renderTasks()}
         </div>
       </div>
-      <div className="flex flex-col border border-gray-200 dark:border-gray-700 rounded-2xl bg-white/60 dark:bg-white/5 h-full overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-white/90 dark:bg-[#1f1f1f]">
-          <div className="font-bold text-gray-700">مسئولیت‌های من</div>
-          <Badge count={formatBadgeCount(responsibilitiesCount)} color="#ef4444" />
+      <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-[rgba(var(--brand-100-rgb),0.85)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] border-b border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+          <div className="font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">مسئولیت‌های من</div>
+          <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor} />
         </div>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
           {renderResponsibilities()}
@@ -1198,17 +1252,17 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         items={[
           {
             key: 'notes',
-            label: <Badge count={formatBadgeCount(notesCount)} color="#ef4444">یادداشت‌ها</Badge>,
+            label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}>یادداشت‌ها</Badge>,
             children: <div className="h-[calc(90vh-56px)] flex flex-col">{renderNotes()}</div>,
           },
           {
             key: 'tasks',
-            label: <Badge count={formatBadgeCount(tasksCount)} color="#ef4444">وظایف من</Badge>,
+            label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>وظایف من</Badge>,
             children: <div className="h-[calc(90vh-56px)] flex flex-col overflow-hidden">{renderTasks()}</div>,
           },
           {
             key: 'resp',
-            label: <Badge count={formatBadgeCount(responsibilitiesCount)} color="#ef4444">مسئولیت‌های من</Badge>,
+            label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
             children: <div className="h-[calc(90vh-56px)] flex flex-col overflow-hidden">{renderResponsibilities()}</div>,
           },
         ]}
@@ -1218,7 +1272,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
   return (
     <>
-      <Badge count={formatBadgeCount(totalCount)} size="small" color="rgb(var(--brand-500-rgb))">
+      <Badge count={formatBadgeCount(totalCount)} size="small" color={badgeColor}>
         <Button
           type="text"
           shape="circle"
@@ -1244,8 +1298,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           height="90vh"
           open={open}
           onClose={handleClose}
-          styles={{ body: { padding: 16 } }}
-          headerStyle={{ background: '#8b5a2b' }}
+          styles={{ body: mobileDrawerBodyStyle, header: drawerHeaderStyle }}
           closeIcon={<CloseOutlined className="text-white" />}
         >
           {contentMobile}
@@ -1267,8 +1320,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           width={900}
           open={open}
           onClose={handleClose}
-          styles={{ body: { padding: 0 } }}
-          headerStyle={{ background: '#8b5a2b' }}
+          styles={{ body: desktopDrawerBodyStyle, header: drawerHeaderStyle }}
           closeIcon={<CloseOutlined className="text-white" />}
         >
           {contentDesktop}

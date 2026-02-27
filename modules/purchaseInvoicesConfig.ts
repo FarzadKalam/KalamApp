@@ -72,8 +72,8 @@ const BLOCKS = {
         relationConfig: { targetModule: 'shelves', targetField: 'name' },
       },
       { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 170 },
-      { key: 'length', title: 'طول', type: FieldType.NUMBER, width: 130 },
-      { key: 'width', title: 'عرض', type: FieldType.NUMBER, width: 130 },
+      { key: 'length', title: 'طول', type: FieldType.NUMBER, width: 108 },
+      { key: 'width', title: 'عرض', type: FieldType.NUMBER, width: 108 },
     ],
   },
 
@@ -153,6 +153,14 @@ const BLOCKS = {
       },
     },
   },
+
+  process: {
+    id: 'process',
+    titles: { fa: 'فرآیند اجرا', en: 'Execution Process' },
+    icon: 'DeploymentUnitOutlined',
+    order: 3.5,
+    type: BlockType.FIELD_GROUP,
+  },
 };
 
 export const purchaseInvoicesConfig: ModuleDefinition = {
@@ -204,7 +212,25 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       ],
       nature: FieldNature.STANDARD,
     },
-
+    {
+      key: 'process_template_id',
+      labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'process',
+      order: 1,
+      relationConfig: { targetModule: 'process_templates', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'execution_process_draft',
+      labels: { fa: 'فرآیند اجرا', en: 'Execution Process' },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: 'process',
+      order: 2,
+      nature: FieldNature.STANDARD,
+    },
     { key: 'total_invoice_amount', labels: { fa: 'مبلغ کل فاکتور', en: 'Total Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'total_received_amount', labels: { fa: 'مبلغ پرداخت شده', en: 'Paid Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'remaining_balance', labels: { fa: 'مانده بدهی', en: 'Remaining Balance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
@@ -212,7 +238,9 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
   blocks: [
     BLOCKS.invoiceItems,
     BLOCKS.payments,
+    BLOCKS.process,
     BLOCKS.summary,
   ],
   relatedTabs: [],
 };
+

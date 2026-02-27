@@ -68,6 +68,9 @@ create table if not exists public.company_settings (
   company_name_en text,
   brand_palette_key text not null default 'executive_indigo'
     check (brand_palette_key in ('executive_indigo', 'corporate_blue', 'deep_ocean', 'ruby_red', 'amber_navy')),
+  currency_code text not null default 'IRT'
+    check (currency_code in ('IRT', 'IRR', 'USD', 'EUR')),
+  currency_label text not null default 'تومان',
   ceo_name text,
   national_id text,
   mobile text,
@@ -76,6 +79,7 @@ create table if not exists public.company_settings (
   website text,
   email text,
   logo_url text,
+  icon_url text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   updated_by uuid references auth.users(id) on delete set null

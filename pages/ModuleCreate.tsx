@@ -20,6 +20,13 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
     stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
     sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
     wage: Number(stage?.wage || 0),
+    metadata: {
+      ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+      weight: Number(stage?.weight || stage?.metadata?.weight || 0),
+      duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
+      duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+      duration_from: String(stage?.duration_from || stage?.metadata?.duration_from || 'project_start') === 'previous_stage_end' ? 'previous_stage_end' : 'project_start',
+    },
     default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
     default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
   }));
@@ -53,6 +60,7 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
           stage_name: stage.stage_name,
           sort_order: stage.sort_order,
           wage: stage.wage,
+          metadata: stage.metadata,
           default_assignee_id: stage.default_assignee_id,
           default_assignee_role_id: stage.default_assignee_role_id,
         })
@@ -66,6 +74,7 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
           stage_name: stage.stage_name,
           sort_order: stage.sort_order,
           wage: stage.wage,
+          metadata: stage.metadata,
           default_assignee_id: stage.default_assignee_id,
           default_assignee_role_id: stage.default_assignee_role_id,
         });
@@ -269,3 +278,4 @@ export const ModuleCreate = () => {
     </div>
   );
 };
+

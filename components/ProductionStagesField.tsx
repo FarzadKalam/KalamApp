@@ -108,6 +108,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [handoverLoading, setHandoverLoading] = useState(false);
   const [productionShelfOptions, setProductionShelfOptions] = useState<{ label: string; value: string }[]>([]);
   const [openTaskPopoverId, setOpenTaskPopoverId] = useState<string | null>(null);
+  const [processTemplateOptions, setProcessTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [processTemplateOptionsLoading, setProcessTemplateOptionsLoading] = useState(false);
+  const [appendProcessModalOpen, setAppendProcessModalOpen] = useState(false);
+  const [appendProcessTemplateId, setAppendProcessTemplateId] = useState<string | null>(null);
 
   const onQuantityChangeRef = useRef<((qty: number) => void) | undefined>();
 
@@ -119,11 +123,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     () => (Array.isArray(draftStages) ? draftStages : []),
     [draftStages]
   );
-  const isProcessRecordModule = moduleId === 'projects' || moduleId === 'marketing_leads';
+  const isProcessRecordModule = (
+    moduleId === 'projects'
+    || moduleId === 'marketing_leads'
+    || moduleId === 'customers'
+    || moduleId === 'invoices'
+    || moduleId === 'purchase_invoices'
+  );
   const isProcessPreviewModule = moduleId === 'process_templates' || moduleId === 'process_runs';
   const isProcessModule = isProcessRecordModule || isProcessPreviewModule;
   const isProductionOrder = moduleId === 'production_orders';
   const supportsHandover = isProductionOrder;
+  const processTaskModules = useMemo(
+    () => new Set(['projects', 'marketing_leads', 'customers', 'invoices', 'purchase_invoices']),
+    []
+  );
   const processLineId = useMemo(
     () => `process-line:${String(moduleId || 'unknown')}:${String(recordId || 'draft')}`,
     [moduleId, recordId]
@@ -135,6 +149,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       : moduleId === 'process_runs'
         ? 'مراحل اجرای فرآیند'
         : 'فرآیند اجرا';
+  const buildProcessGroupId = useCallback(
+    () => `process_group_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    []
+  );
 
   useEffect(() => {
     setDraftLocal((prev) => (prev === normalizedDraftStages ? prev : normalizedDraftStages));
@@ -372,6 +390,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           query = query.eq('project_id', recordId);
         } else if (moduleId === 'marketing_leads') {
           query = query.eq('marketing_lead_id', recordId);
+        } else if (moduleId === 'customers') {
+          query = query.eq('related_customer', recordId);
+        } else if (moduleId === 'invoices') {
+          query = query.eq('related_invoice', recordId);
+        } else if (moduleId === 'purchase_invoices') {
+          query = query.eq('purchase_invoice_id', recordId);
         }
       } else {
         query = query.eq('related_production_order', recordId);
@@ -429,6 +453,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         status: stage?.status || 'todo',
         sort_order: stage?.sort_order || ((index + 1) * 10),
         wage: stage?.wage || 0,
+        weight: stage?.weight || 0,
         assignee_id: stage?.assignee_id || null,
         assignee_role_id: stage?.assignee_role_id || null,
         assignee_type: stage?.assignee_type || null,
@@ -1605,6 +1630,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       name: draftStage?.name || '',
       sort_order: draftStage?.sort_order || ((tasks.length + 1) * 10),
       wage: draftStage?.wage || 0,
+      weight: draftStage?.weight || 0,
       production_shelf_id: null,
       assignee_combo: assigneeCombo,
     };
@@ -1639,6 +1665,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         assignee_type: assigneeType,
         due_date: values.due_date || null,
         wage: values.wage || null,
+        weight: values.weight || 0,
         sort_order: values.sort_order || ((tasks.length + 1) * 10),
         created_by: user?.id,
       };
@@ -1656,6 +1683,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         payload.production_shelf_id = null;
         if (moduleId === 'projects') payload.project_id = recordId;
         if (moduleId === 'marketing_leads') payload.marketing_lead_id = recordId;
+        if (moduleId === 'customers') payload.related_customer = recordId;
+        if (moduleId === 'invoices') payload.related_invoice = recordId;
+        if (moduleId === 'purchase_invoices') payload.purchase_invoice_id = recordId;
       }
 
       const { error } = await supabase.from('tasks').insert(payload);
@@ -1734,6 +1764,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
     return 'تعیین نشده';
   };
+
+  const getDraftAssigneeLabel = useCallback((stage: any) => {
+    const roleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
+    const userId = stage?.default_assignee_id ? String(stage.default_assignee_id) : null;
+    if (roleId) {
+      const role = assignees.roles.find((item: any) => String(item?.id) === roleId);
+      return role?.title || 'تعیین نشده';
+    }
+    if (userId) {
+      const user = assignees.users.find((item: any) => String(item?.id) === userId);
+      return user?.full_name || 'تعیین نشده';
+    }
+    return 'تعیین نشده';
+  }, [assignees.roles, assignees.users]);
+
+  const formatDraftDuration = useCallback((stage: any) => {
+    const durationValue = Number(stage?.duration_value || 0);
+    const durationUnit = String(stage?.duration_unit || 'day') === 'hour' ? 'ساعت' : 'روز';
+    const durationFrom = String(stage?.duration_from || 'project_start') === 'previous_stage_end'
+      ? 'اتمام مرحله قبلی'
+      : 'شروع پروژه';
+    if (!durationValue) return `از ${durationFrom}`;
+    return `${toPersianNumber(durationValue)} ${durationUnit} بعد از ${durationFrom}`;
+  }, []);
 
   const isTaskAssignedToCurrentUser = useCallback((task: any) => {
     if (!task || !currentUser.id) return false;
@@ -1834,12 +1888,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       <div className="space-y-3 mb-3">
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-500">وضعیت:</span>
+          {(() => {
+            const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
+            return (
           <Select
             size="small"
             value={task.status}
             onChange={(val) => handleStatusChange(task.id, val)}
             className="w-36"
-            disabled={readOnly}
+            disabled={!canEditTaskStatus}
             getPopupContainer={() => document.body}
             dropdownStyle={{ zIndex: 10050 }}
             options={[
@@ -1849,6 +1906,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               { value: 'done', label: 'تکمیل شده' },
             ]}
           />
+            );
+          })()}
         </div>
         {isProductionOrder && (
           <div className="flex items-center justify-between gap-2">
@@ -1885,6 +1944,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <div className="flex items-center gap-2">
               <span className="text-amber-700">💰</span>
               <span>دستمزد: {toPersianNumber(Number(task.wage || 0).toLocaleString('en-US'))} تومان</span>
+            </div>
+          )}
+          {task.weight !== undefined && task.weight !== null && (
+            <div className="flex items-center gap-2">
+              <span className="text-amber-700">وزن:</span>
+              <span>{toPersianNumber(task.weight)}</span>
             </div>
           )}
           {task.due_date && (
@@ -1941,12 +2006,408 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   };
 
+  const loadProcessTemplateOptions = useCallback(async () => {
+    if (!moduleId || !isProcessRecordModule) {
+      setProcessTemplateOptions([]);
+      return;
+    }
+    try {
+      setProcessTemplateOptionsLoading(true);
+      const targetModule = String(moduleId);
+      let rows: any[] = [];
+
+      const primary = await supabase
+        .from('process_templates')
+        .select('id,name,module_id,is_active')
+        .order('name', { ascending: true });
+      if (!primary.error) {
+        rows = primary.data || [];
+      } else {
+        const fallback = await supabase
+          .from('process_templates')
+          .select('id,name,module_id')
+          .order('name', { ascending: true });
+        if (fallback.error) throw fallback.error;
+        rows = fallback.data || [];
+      }
+
+      const activeRows = rows.filter((row: any) => row?.is_active !== false);
+      const scopedRows = activeRows.filter((row: any) => {
+        const rowModule = String(row?.module_id || '').trim();
+        return !rowModule || rowModule === targetModule;
+      });
+      const sourceRows = scopedRows.length > 0 ? scopedRows : activeRows;
+
+      setProcessTemplateOptions(
+        sourceRows
+          .filter((row: any) => row?.id)
+          .map((row: any) => ({
+            value: String(row.id),
+            label: String(row?.name || row?.id),
+          }))
+      );
+    } catch (err) {
+      console.warn('Could not load process template options', err);
+      setProcessTemplateOptions([]);
+    } finally {
+      setProcessTemplateOptionsLoading(false);
+    }
+  }, [isProcessRecordModule, moduleId]);
+
+  useEffect(() => {
+    if (!isProcessRecordModule || readOnly) return;
+    void loadProcessTemplateOptions();
+  }, [isProcessRecordModule, loadProcessTemplateOptions, readOnly]);
+
+  const handleOpenAppendProcessModal = useCallback(async () => {
+    if (!isProcessRecordModule || readOnly) return;
+    setAppendProcessTemplateId(null);
+    setAppendProcessModalOpen(true);
+    await loadProcessTemplateOptions();
+  }, [isProcessRecordModule, loadProcessTemplateOptions, readOnly]);
+
+  const handleAppendProcessTemplate = useCallback(async () => {
+    if (!appendProcessTemplateId) {
+      message.warning('الگوی فرآیند را انتخاب کنید');
+      return;
+    }
+    try {
+      setLoading(true);
+      const selectedTemplate = processTemplateOptions.find((opt) => String(opt.value) === String(appendProcessTemplateId));
+      const { data: stages, error } = await supabase
+        .from('process_template_stages')
+        .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+        .eq('template_id', appendProcessTemplateId)
+        .order('sort_order', { ascending: true });
+      if (error) throw error;
+
+      const incomingStages = Array.isArray(stages) ? stages : [];
+      if (incomingStages.length === 0) {
+        message.info('این الگو مرحله‌ای برای افزودن ندارد');
+        return;
+      }
+
+      const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
+      const maxSortOrder = existing.reduce((maxValue: number, stage: any) => {
+        const n = Number(stage?.sort_order || 0);
+        return n > maxValue ? n : maxValue;
+      }, 0);
+      let cursor = maxSortOrder > 0 ? maxSortOrder + 10 : ((existing.length + 1) * 10);
+      const nextGroupId = buildProcessGroupId();
+      const existingGroupCount = new Set(
+        existing
+          .map((stage: any) => String(stage?.process_group_id || stage?.source_template_id || '').trim())
+          .filter(Boolean)
+      ).size;
+      const fallbackGroupName = `فرآیند ${toPersianNumber(
+        existingGroupCount + 1
+      )}`;
+      const nextGroupName = String(selectedTemplate?.label || fallbackGroupName).trim() || fallbackGroupName;
+
+      const appendedStages = incomingStages.map((stage: any, index: number) => {
+        const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
+        const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
+
+        const row = {
+          id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+          name: stageName,
+          sort_order: cursor,
+          wage: Number(stage?.wage || 0),
+          weight: Number(metadata?.weight || 0),
+          default_assignee_id: stage?.default_assignee_id || null,
+          default_assignee_role_id: stage?.default_assignee_role_id || null,
+          duration_value: Number(metadata?.duration_value || 0),
+          duration_unit: String(metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+          duration_from: String(metadata?.duration_from || 'project_start') === 'previous_stage_end'
+            ? 'previous_stage_end'
+            : 'project_start',
+          source_template_id: appendProcessTemplateId,
+          source_template_name: selectedTemplate?.label || null,
+          process_group_id: nextGroupId,
+          process_group_name: nextGroupName,
+        };
+        cursor += 10;
+        return row;
+      });
+
+      const nextStages = [...existing, ...appendedStages].sort(
+        (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
+      );
+      await saveDraftStages(nextStages);
+      setAppendProcessModalOpen(false);
+      setAppendProcessTemplateId(null);
+      message.success(`${toPersianNumber(appendedStages.length)} مرحله در نوار فرآیند جدید اضافه شد`);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'افزودن فرآیند دیگر ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [appendProcessTemplateId, buildProcessGroupId, draftLocal, processTemplateOptions, saveDraftStages]);
+
+  const handleApplyTemplateToGroup = useCallback(async (groupId: string, templateId: string) => {
+    const normalizedGroupId = String(groupId || '').trim();
+    const normalizedTemplateId = String(templateId || '').trim();
+    if (!normalizedGroupId || !normalizedTemplateId) return;
+    try {
+      setLoading(true);
+      const selectedTemplate = processTemplateOptions.find((opt) => String(opt.value) === normalizedTemplateId);
+      const { data: stages, error } = await supabase
+        .from('process_template_stages')
+        .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+        .eq('template_id', normalizedTemplateId)
+        .order('sort_order', { ascending: true });
+      if (error) throw error;
+
+      const incomingStages = Array.isArray(stages) ? stages : [];
+      if (incomingStages.length === 0) {
+        message.info('این الگو مرحله‌ای برای افزودن ندارد');
+        return;
+      }
+
+      const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
+      const isCurrentGroupStage = (stage: any) => {
+        const stageGroupId = String(stage?.process_group_id || stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
+        return stageGroupId === normalizedGroupId;
+      };
+      const currentGroupStages = existing.filter(isCurrentGroupStage);
+      const otherStages = existing.filter((stage: any) => !isCurrentGroupStage(stage));
+
+      const currentGroupMinSort = currentGroupStages.reduce((minValue: number, stage: any) => {
+        const current = Number(stage?.sort_order || 0);
+        if (!Number.isFinite(current) || current <= 0) return minValue;
+        return current < minValue ? current : minValue;
+      }, Number.POSITIVE_INFINITY);
+      const maxSortOrder = otherStages.reduce((maxValue: number, stage: any) => {
+        const n = Number(stage?.sort_order || 0);
+        return n > maxValue ? n : maxValue;
+      }, 0);
+      let cursor = Number.isFinite(currentGroupMinSort)
+        ? currentGroupMinSort
+        : (maxSortOrder > 0 ? maxSortOrder + 10 : ((existing.length + 1) * 10));
+
+      const fallbackGroupName = String(currentGroupStages[0]?.process_group_name || currentGroupStages[0]?.source_template_name || '').trim();
+      const nextGroupName = String(selectedTemplate?.label || fallbackGroupName || `فرآیند ${toPersianNumber(1)}`).trim();
+      const replacedStages = incomingStages.map((stage: any, index: number) => {
+        const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
+        const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
+        const row = {
+          id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+          name: stageName,
+          sort_order: cursor,
+          wage: Number(stage?.wage || 0),
+          weight: Number(metadata?.weight || 0),
+          default_assignee_id: stage?.default_assignee_id || null,
+          default_assignee_role_id: stage?.default_assignee_role_id || null,
+          duration_value: Number(metadata?.duration_value || 0),
+          duration_unit: String(metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+          duration_from: String(metadata?.duration_from || 'project_start') === 'previous_stage_end'
+            ? 'previous_stage_end'
+            : 'project_start',
+          source_template_id: normalizedTemplateId,
+          source_template_name: selectedTemplate?.label || null,
+          process_group_id: normalizedGroupId,
+          process_group_name: nextGroupName,
+        };
+        cursor += 10;
+        return row;
+      });
+
+      const nextStages = [...otherStages, ...replacedStages].sort(
+        (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
+      );
+      await saveDraftStages(nextStages);
+      message.success('الگوی فرآیند این ردیف بروزرسانی شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'بروزرسانی الگوی فرآیند ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [draftLocal, processTemplateOptions, saveDraftStages]);
+
+  const parseStageAssignee = useCallback((stage: any) => {
+    const defaultRoleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
+    const defaultUserId = stage?.default_assignee_id ? String(stage.default_assignee_id) : null;
+    if (defaultRoleId) {
+      return { assigneeType: 'role', assigneeId: defaultRoleId };
+    }
+    if (defaultUserId) {
+      return { assigneeType: 'user', assigneeId: defaultUserId };
+    }
+    return { assigneeType: null, assigneeId: null };
+  }, []);
+
+  const getProcessBaseDate = useCallback(async () => {
+    if (!recordId || !moduleId) return new Date();
+    const startFieldByModule: Record<string, string | null> = {
+      projects: 'start_date',
+      invoices: 'invoice_date',
+      purchase_invoices: 'invoice_date',
+      customers: null,
+      marketing_leads: null,
+    };
+    const startField = startFieldByModule[String(moduleId)] ?? null;
+    const selectExpr = startField ? `${startField},created_at` : 'created_at';
+    const { data: recordRow } = await supabase
+      .from(String(moduleId))
+      .select(selectExpr)
+      .eq('id', recordId)
+      .maybeSingle();
+    const startRaw = startField ? recordRow?.[startField] : null;
+    const baseValue = startRaw || recordRow?.created_at || new Date().toISOString();
+    const parsed = new Date(baseValue);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  }, [moduleId, recordId]);
+
+  const computeStageDueAt = useCallback((
+    stage: any,
+    baseDate: Date,
+    previousDueAt: Date | null
+  ) => {
+    const rawValue = Number(stage?.duration_value ?? stage?.lead_time_value ?? 0);
+    const durationValue = Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
+    const durationUnit = String(stage?.duration_unit || stage?.lead_time_unit || 'day') === 'hour' ? 'hour' : 'day';
+    const durationFrom = String(stage?.duration_from || stage?.due_anchor || 'project_start') === 'previous_stage_end'
+      ? 'previous_stage_end'
+      : 'project_start';
+    const anchorDate = (durationFrom === 'previous_stage_end' && previousDueAt)
+      ? previousDueAt
+      : baseDate;
+    if (durationValue <= 0) {
+      return previousDueAt && durationFrom === 'previous_stage_end' ? previousDueAt : null;
+    }
+    const offsetMs = durationUnit === 'hour'
+      ? durationValue * 60 * 60 * 1000
+      : durationValue * 24 * 60 * 60 * 1000;
+    const dueAt = new Date(anchorDate.getTime() + offsetMs);
+    return Number.isNaN(dueAt.getTime()) ? null : dueAt;
+  }, []);
+
+  const handleAutoAssignProcess = useCallback(async (targetGroupId?: string | null) => {
+    if (!isProcessRecordModule || !recordId || !moduleId) return;
+    const normalizedTargetGroupId = String(targetGroupId || '').trim();
+    const stageRows = (Array.isArray(draftLocal) ? draftLocal : [])
+      .filter((stage: any) => {
+        const hasName = String(stage?.name || stage?.title || '').trim() !== '';
+        if (!hasName) return false;
+        if (!normalizedTargetGroupId) return true;
+        const groupId = String(stage?.process_group_id || stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
+        return groupId === normalizedTargetGroupId;
+      })
+      .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+    if (!stageRows.length) {
+      message.warning('مرحله‌ای برای ارجاع وجود ندارد');
+      return;
+    }
+    try {
+      setLoading(true);
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const baseDate = await getProcessBaseDate();
+      const dueByName = new Map<string, string | null>();
+      let previousDueAt: Date | null = null;
+      stageRows.forEach((stage: any) => {
+        const normalizedName = String(stage?.name || stage?.title || '').trim().toLowerCase();
+        if (!normalizedName) return;
+        const dueAt = computeStageDueAt(stage, baseDate, previousDueAt);
+        if (dueAt) previousDueAt = dueAt;
+        dueByName.set(normalizedName, dueAt ? dueAt.toISOString() : null);
+      });
+
+      const buildStageTaskKey = (nameValue: any, sortOrderValue: any) => {
+        const normalizedName = String(nameValue || '').trim().toLowerCase();
+        const normalizedSort = Number(sortOrderValue || 0);
+        return `${normalizedName}::${normalizedSort}`;
+      };
+
+      const existingByStageKey = new Set(
+        (Array.isArray(tasks) ? tasks : [])
+          .filter((task: any) => processTaskModules.has(String(task?.related_to_module || '')))
+          .map((task: any) => buildStageTaskKey(task?.name || task?.title || '', task?.sort_order))
+          .filter(Boolean)
+      );
+
+      const payload = stageRows
+        .filter((stage: any) => {
+          const stageName = String(stage?.name || stage?.title || '').trim();
+          const stageKey = buildStageTaskKey(stageName, stage?.sort_order);
+          if (!stageName || existingByStageKey.has(stageKey)) return false;
+          existingByStageKey.add(stageKey);
+          return true;
+        })
+        .map((stage: any, index: number) => {
+          const stageName = String(stage?.name || stage?.title || `مرحله ${index + 1}`).trim();
+          const normalized = stageName.toLowerCase();
+          const assignee = parseStageAssignee(stage);
+          const taskRow: any = {
+            name: stageName,
+            status: 'todo',
+            related_to_module: moduleId,
+            production_line_id: null,
+            production_shelf_id: null,
+            produced_qty: 0,
+            assignee_type: assignee.assigneeType,
+            assignee_id: assignee.assigneeType === 'user' ? assignee.assigneeId : null,
+            assignee_role_id: assignee.assigneeType === 'role' ? assignee.assigneeId : null,
+            wage: Number(stage?.wage || 0),
+            weight: Number(stage?.weight || 0),
+            sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+            due_date: dueByName.get(normalized) || null,
+            created_by: userId,
+          };
+          if (moduleId === 'projects') taskRow.project_id = recordId;
+          if (moduleId === 'marketing_leads') taskRow.marketing_lead_id = recordId;
+          if (moduleId === 'customers') taskRow.related_customer = recordId;
+          if (moduleId === 'invoices') taskRow.related_invoice = recordId;
+          if (moduleId === 'purchase_invoices') taskRow.purchase_invoice_id = recordId;
+          return taskRow;
+        });
+
+      if (!payload.length) {
+        message.info('برای همه مراحل وظیفه ثبت شده است');
+        return;
+      }
+      const { error } = await supabase.from('tasks').insert(payload);
+      if (error) throw error;
+      await fetchTasks();
+      message.success(`${toPersianNumber(payload.length)} وظیفه ایجاد شد`);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ارجاع خودکار فرآیند ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    computeStageDueAt,
+    draftLocal,
+    fetchTasks,
+    getProcessBaseDate,
+    isProcessRecordModule,
+    moduleId,
+    parseStageAssignee,
+    processTaskModules,
+    recordId,
+    tasks,
+  ]);
+
   const handleAddDraftStage = async (values: any) => {
+    const assigneeRaw = String(values?.default_assignee_combo || '');
+    const assigneeType = assigneeRaw.startsWith('role:') ? 'role' : (assigneeRaw.startsWith('user:') ? 'user' : null);
+    const assigneeId = assigneeType ? assigneeRaw.split(':')[1] : null;
     let next = [...draftLocal];
     if (editingDraft?.id) {
       next = next.map((stage: any) =>
         stage.id === editingDraft.id
-          ? { ...stage, name: values.name, sort_order: values.sort_order || stage.sort_order }
+          ? {
+              ...stage,
+              name: values.name,
+              sort_order: values.sort_order || stage.sort_order,
+              wage: Number(values?.wage || 0),
+              weight: Number(values?.weight || 0),
+              default_assignee_id: assigneeType === 'user' ? assigneeId : null,
+              default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+              duration_value: Number(values?.duration_value || 0),
+              duration_unit: values?.duration_unit || 'day',
+              duration_from: values?.duration_from || 'project_start',
+            }
           : stage
       );
     } else {
@@ -1954,6 +2415,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         id: Date.now(),
         name: values.name,
         sort_order: values.sort_order || ((draftLocal.length + 1) * 10),
+        wage: Number(values?.wage || 0),
+        weight: Number(values?.weight || 0),
+        default_assignee_id: assigneeType === 'user' ? assigneeId : null,
+        default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+        duration_value: Number(values?.duration_value || 0),
+        duration_unit: values?.duration_unit || 'day',
+        duration_from: values?.duration_from || 'project_start',
       });
     }
     await saveDraftStages(next);
@@ -1979,14 +2447,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   useEffect(() => {
     if (!isDraftModalOpen) return;
     if (editingDraft) {
+      const assigneeCombo = editingDraft?.default_assignee_role_id
+        ? `role:${String(editingDraft.default_assignee_role_id)}`
+        : (editingDraft?.default_assignee_id ? `user:${String(editingDraft.default_assignee_id)}` : undefined);
       draftForm.setFieldsValue({
         name: editingDraft.name,
         sort_order: editingDraft.sort_order,
+        wage: editingDraft.wage || 0,
+        weight: editingDraft.weight || 0,
+        default_assignee_combo: assigneeCombo,
+        duration_value: editingDraft.duration_value || 0,
+        duration_unit: editingDraft.duration_unit || 'day',
+        duration_from: editingDraft.duration_from || 'project_start',
       });
     } else {
-      draftForm.resetFields();
+      draftForm.setFieldsValue({
+        sort_order: (draftLocal.length + 1) * 10,
+        wage: 0,
+        weight: 0,
+        duration_value: 0,
+        duration_unit: 'day',
+        duration_from: 'project_start',
+      });
     }
-  }, [isDraftModalOpen, editingDraft, draftForm]);
+  }, [isDraftModalOpen, editingDraft, draftForm, draftLocal.length]);
 
   const normalizeStageName = (val: any) => String(val || '').trim().toLowerCase();
   const draftSegments = draftList.map((stage: any) => ({
@@ -1995,16 +2479,56 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     label: stage.name || stage.title || 'مرحله',
   }));
 
-  const getLineSegments = (lineTasks: any[]) => {
+  const processDraftGroups = useMemo(() => {
+    if (!isProcessRecordModule) return [] as Array<{ id: string; label: string; stages: any[] }>;
+    const sorted = [...draftSegments].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+    const groups = new Map<string, { id: string; label: string; stages: any[]; firstSort: number; firstIndex: number }>();
+    sorted.forEach((stage: any, index: number) => {
+      const fallbackGroupId = String(stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
+      const groupId = String(stage?.process_group_id || fallbackGroupId).trim() || 'default_process_group';
+      const fallbackLabel = String(stage?.source_template_name || '').trim();
+      const groupLabel = String(stage?.process_group_name || fallbackLabel).trim();
+      const sortOrder = Number(stage?.sort_order || 0);
+      if (!groups.has(groupId)) {
+        groups.set(groupId, {
+          id: groupId,
+          label: groupLabel,
+          stages: [stage],
+          firstSort: Number.isFinite(sortOrder) ? sortOrder : 0,
+          firstIndex: index,
+        });
+        return;
+      }
+      const current = groups.get(groupId)!;
+      current.stages.push(stage);
+      if (Number.isFinite(sortOrder) && sortOrder < current.firstSort) current.firstSort = sortOrder;
+    });
+    return Array.from(groups.values())
+      .sort((a, b) => (a.firstSort - b.firstSort) || (a.firstIndex - b.firstIndex))
+      .map((group) => ({
+        id: group.id,
+        label: group.label,
+        templateId: String(group.stages?.[0]?.source_template_id || '').trim() || null,
+        templateName: String(group.stages?.[0]?.source_template_name || '').trim() || null,
+        stages: group.stages.sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)),
+      }));
+  }, [draftSegments, isProcessRecordModule]);
+
+  const getLineSegments = (lineTasks: any[], activeDraftSegments: any[] = draftSegments) => {
     const normalizedTasks = (lineTasks || []).map((task: any) => ({
       ...task,
       type: 'task',
       _normalizedName: normalizeStageName(task.name || task.title),
+      _normalizedKey: `${normalizeStageName(task.name || task.title)}::${Number(task?.sort_order || 0)}`,
     }));
 
-    const lineDrafts = draftSegments.filter((draft: any) => {
+    const lineDrafts = activeDraftSegments.filter((draft: any) => {
       const normalizedDraft = normalizeStageName(draft.label);
-      const matched = normalizedTasks.some((t: any) => t._normalizedName && t._normalizedName === normalizedDraft);
+      const normalizedDraftKey = `${normalizedDraft}::${Number(draft?.sort_order || 0)}`;
+      const matched = normalizedTasks.some((t: any) =>
+        (t._normalizedName && t._normalizedName === normalizedDraft)
+        && (t._normalizedKey === normalizedDraftKey || Number(draft?.sort_order || 0) <= 0)
+      );
       return !matched;
     });
 
@@ -2015,6 +2539,51 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     });
 
     return merged;
+  };
+
+  const getProcessLineGroups = (lineTasks: any[]) => {
+    const baseGroups = processDraftGroups.length > 0
+      ? processDraftGroups
+      : [{ id: 'default_process_group', label: '', stages: [] as any[] }];
+    const sortedTasks = [...(lineTasks || [])].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+    const usedTaskIds = new Set<string>();
+    const groups = baseGroups.map((group) => {
+      const stageNameSet = new Set(group.stages.map((stage: any) => normalizeStageName(stage?.label)));
+      const stageSortSet = new Set(
+        group.stages
+          .map((stage: any) => Number(stage?.sort_order || 0))
+          .filter((value: number) => Number.isFinite(value) && value > 0)
+      );
+      const scopedTasks = sortedTasks.filter((task: any) => {
+        const taskId = String(task?.id || '');
+        if (taskId && usedTaskIds.has(taskId)) return false;
+        const normalizedTaskName = normalizeStageName(task?.name || task?.title);
+        const taskSort = Number(task?.sort_order || 0);
+        const bySort = stageSortSet.size > 0 && Number.isFinite(taskSort) && stageSortSet.has(taskSort);
+        const byName = normalizedTaskName && stageNameSet.has(normalizedTaskName);
+        if (!bySort && !byName) return false;
+        if (taskId) usedTaskIds.add(taskId);
+        return true;
+      });
+      return {
+        ...group,
+        tasks: scopedTasks,
+      };
+    });
+
+    const remainingTasks = sortedTasks.filter((task: any) => !usedTaskIds.has(String(task?.id || '')));
+    if (remainingTasks.length > 0) {
+      if (!groups.length) {
+        groups.push({ id: 'default_process_group', label: '', stages: [], tasks: remainingTasks });
+      } else {
+        groups[0] = { ...groups[0], tasks: [...groups[0].tasks, ...remainingTasks] };
+      }
+    }
+
+    return groups.map((group) => ({
+      ...group,
+      lineSegments: getLineSegments(group.tasks, group.stages),
+    }));
   };
 
   const handleCopyLine = async (line: any) => {
@@ -2058,6 +2627,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           assignee_type: task.assignee_type ?? null,
           due_date: task.due_date ?? null,
           wage: task.wage ?? null,
+          weight: task.weight ?? 0,
           sort_order: task.sort_order ?? null,
           created_by: userId,
         }));
@@ -2101,6 +2671,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     <div className="space-y-2 text-xs">
                       <div className="font-bold text-gray-700">{stage.label}</div>
                       <div>ترتیب: {toPersianNumber(stage.sort_order || '-')}</div>
+                      <div>دستمزد: {toPersianNumber(Number(stage.wage || 0).toLocaleString('en-US'))} تومان</div>
+                      <div>وزن: {toPersianNumber(stage.weight || 0)}</div>
+                      <div>مسئول: {getDraftAssigneeLabel(stage)}</div>
+                      <div>زمان انجام: {formatDraftDuration(stage)}</div>
                       {!readOnly && (
                         <div className="flex gap-2">
                           <Button size="small" onClick={() => { setEditingDraft(stage); setIsDraftModalOpen(true); }}>ویرایش</Button>
@@ -2152,65 +2726,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const canEditQuantity = isProductionOrder && !readOnly && (!orderStatus || orderStatus === 'pending');
         const showInlineQty = isProductionOrder && (!compact || canEditQuantity);
         const lineSegments = getLineSegments(lineTasks);
-        return (
-          <div key={line.id} className="space-y-2">
-              <div className="flex items-center gap-3 text-xs text-gray-600">
-                <span className="font-bold">
-                  {isProcessModule
-                    ? processTitle
-                    : `خط ${toPersianNumber(line.line_no)}${compact ? `: ${toPersianNumber(line.quantity || 0)} عدد` : ''}`}
-                </span>
-                {showInlineQty && (
-                  <div className="flex items-center gap-2">
-                    <span>تعداد تولید:</span>
-                    <InputNumber
-                      min={0}
-                      className="w-24"
-                      value={line.quantity}
-                      onChange={(val) => handleLineQuantityChange(line.id, Number(val) || 0)}
-                      disabled={!canEditQuantity}
-                    />
-                  </div>
-                )}
-                {!readOnly && isProductionOrder && (
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CopyOutlined />}
-                    onClick={() => handleCopyLine(line)}
-                    className="text-amber-700 hover:!text-amber-600"
-                  >
-                    کپی خط
-                  </Button>
-                )}
-              </div>
+        const processLineGroups = isProcessRecordModule ? getProcessLineGroups(lineTasks) : [];
 
-            <div className="w-full flex items-center gap-2">
-              {!readOnly && !!recordId && (
-                <Tooltip title="افزودن مرحله جدید">
-                  <Button
-                    type="dashed"
-                    shape="circle"
-                    icon={<PlusOutlined />}
-                    size={compact ? 'small' : 'middle'}
-                    onClick={() => {
-                      openTaskModal(line.id);
-                    }}
-                    className="flex-shrink-0 border-amber-300 text-amber-700 hover:!border-amber-600 hover:!text-amber-600 hover:!bg-amber-50"
-                  />
-                </Tooltip>
-              )}
-
-              <div className={`relative flex-1 flex bg-gray-100 dark:bg-gray-800 rounded-lg overflow-visible border border-gray-200 dark:border-gray-700 ${compact ? 'h-5' : 'h-9'}`}>
-                {lineSegments.map((segment: any, index: number) => (
-                  segment.type === 'task' ? (
-                    (() => {
-                      const isAssignedToCurrent = isTaskAssignedToCurrentUser(segment);
-                      const isHighlightedTask = isAssignedToCurrent;
-                      const segmentColor = getStatusColor(segment.status);
-                      return (
+        const renderSegmentsBar = (segments: any[], barKey: string) => (
+          <div className={`relative flex-1 flex bg-gray-100 dark:bg-gray-800 rounded-lg overflow-visible border border-gray-200 dark:border-gray-700 ${compact ? 'h-5' : 'h-9'}`}>
+            {segments.map((segment: any, index: number) => (
+              segment.type === 'task' ? (
+                (() => {
+                  const isAssignedToCurrent = isTaskAssignedToCurrentUser(segment);
+                  const isHighlightedTask = isAssignedToCurrent;
+                  const segmentColor = getStatusColor(segment.status);
+                  return (
                     <Popover
-                      key={segment.id}
+                      key={`${barKey}-task-${segment.id}`}
                       content={renderPopupContent(segment)}
                       trigger={compact ? 'hover' : 'click'}
                       open={compact ? undefined : openTaskPopoverId === String(segment.id)}
@@ -2222,7 +2750,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       title={null}
                     >
                       <div
-                        className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === lineSegments.length - 1 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
+                        className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === segments.length - 1 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
                         style={{
                           flex: 1,
                           backgroundColor: segmentColor,
@@ -2243,56 +2771,188 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         </div>
                       </div>
                     </Popover>
-                      );
-                    })()
-                  ) : (
-                    <Popover
-                      key={`draft-${segment.id}-${index}`}
-                      content={
-                        <div className="space-y-2 text-xs">
-                          <div className="font-bold text-gray-700">{segment.label}</div>
-                          <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
-                          {!readOnly && (
-                            <div className="flex items-center gap-2">
-                              {recordId && (
-                                <Button size="small" type="primary" onClick={() => openTaskModal(line.id, segment)}>ایجاد وظیفه</Button>
-                              )}
-                              <Button
-                                size="small"
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={() => handleRemoveDraftStage(segment.id)}
-                              >
-                                حذف
-                              </Button>
-                            </div>
+                  );
+                })()
+              ) : (
+                <Popover
+                  key={`${barKey}-draft-${segment.id}-${index}`}
+                  content={
+                    <div className="space-y-2 text-xs">
+                      <div className="font-bold text-gray-700">{segment.label}</div>
+                      <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
+                      <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
+                      <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
+                      <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
+                      <div>زمان انجام: {formatDraftDuration(segment)}</div>
+                      {!readOnly && (
+                        <div className="flex items-center gap-2">
+                          {recordId && (
+                            <Button size="small" type="primary" onClick={() => openTaskModal(line.id, segment)}>ایجاد وظیفه</Button>
                           )}
+                          <Button
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => handleRemoveDraftStage(segment.id)}
+                          >
+                            حذف
+                          </Button>
                         </div>
-                      }
-                      trigger={compact ? 'hover' : 'click'}
-                      overlayStyle={{ zIndex: 10000 }}
-                      title={null}
-                    >
-                      <div
-                        className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === lineSegments.length - 1 ? 'rounded-l-lg' : ''}`}
-                        style={{ flex: 1, border: '1px dashed #d1d5db', backgroundColor: 'transparent' }}
-                      >
-                        <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
-                          <span className={`text-gray-600 font-medium truncate w-full text-center ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                            {segment.label}
-                          </span>
+                      )}
+                    </div>
+                  }
+                  trigger={compact ? 'hover' : 'click'}
+                  overlayStyle={{ zIndex: 10000 }}
+                  title={null}
+                >
+                  <div
+                    className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === segments.length - 1 ? 'rounded-l-lg' : ''}`}
+                    style={{ flex: 1, border: '1px dashed #d1d5db', backgroundColor: 'transparent' }}
+                  >
+                    <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
+                      <span className={`text-gray-600 font-medium truncate w-full text-center ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
+                        {segment.label}
+                      </span>
+                    </div>
+                  </div>
+                </Popover>
+              )
+            ))}
+            {segments.length === 0 && (
+              <div className="w-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-xs bg-gray-50 dark:bg-gray-900 h-full">
+                {compact ? <span className="opacity-50">-</span> : (isProcessModule ? 'بدون مرحله فرآیند' : 'بدون مرحله تولید')}
+              </div>
+            )}
+          </div>
+        );
+
+        return (
+          <div key={line.id} className="space-y-2">
+            <div className="flex items-center gap-3 text-xs text-gray-600">
+              {(!(isProcessRecordModule && readOnly && compact)) && (
+                <span className="font-bold">
+                  {isProcessModule
+                    ? processTitle
+                    : `خط ${toPersianNumber(line.line_no)}${compact ? `: ${toPersianNumber(line.quantity || 0)} عدد` : ''}`}
+                </span>
+              )}
+              {showInlineQty && (
+                <div className="flex items-center gap-2">
+                  <span>تعداد تولید:</span>
+                  <InputNumber
+                    min={0}
+                    className="w-24"
+                    value={line.quantity}
+                    onChange={(val) => handleLineQuantityChange(line.id, Number(val) || 0)}
+                    disabled={!canEditQuantity}
+                  />
+                </div>
+              )}
+              {!readOnly && isProductionOrder && (
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CopyOutlined />}
+                  onClick={() => handleCopyLine(line)}
+                  className="text-amber-700 hover:!text-amber-600"
+                >
+                  کپی خط
+                </Button>
+              )}
+            </div>
+
+            {isProcessRecordModule ? (
+              <>
+                <div className="space-y-2">
+                  {(processLineGroups.length > 0 ? processLineGroups : [{ id: 'default_process_group', label: '', templateId: null, lineSegments: [] }]).map((group: any, groupIndex: number) => (
+                    <div key={`${line.id}-${group.id}-${groupIndex}`} className="space-y-1">
+                      {String(group?.label || '').trim() !== '' && (
+                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                          {group?.label}
                         </div>
+                      )}
+                      {!readOnly && !!recordId && (
+                        <div className="flex flex-wrap items-end gap-2">
+                          <div className="min-w-[220px] flex-1 max-w-[360px]">
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">
+                              الگوی فرآیند اجرا
+                            </div>
+                            <Select
+                              value={group?.templateId || undefined}
+                              onChange={(val) => {
+                                if (!val) return;
+                                void handleApplyTemplateToGroup(String(group?.id || ''), String(val));
+                              }}
+                              options={processTemplateOptions}
+                              showSearch
+                              optionFilterProp="label"
+                              loading={processTemplateOptionsLoading}
+                              className="w-full"
+                              placeholder="انتخاب الگوی فرآیند"
+                            />
+                          </div>
+                          <Tooltip title="افزودن مرحله جدید">
+                            <Button
+                              type="dashed"
+                              shape="circle"
+                              icon={<PlusOutlined />}
+                              size={compact ? 'small' : 'middle'}
+                              onClick={() => {
+                                openTaskModal(line.id);
+                              }}
+                              className="flex-shrink-0 border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                            />
+                          </Tooltip>
+                          <Button
+                            size={compact ? 'small' : 'middle'}
+                            onClick={() => { void handleAutoAssignProcess(String(group?.id || '')); }}
+                            className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                            disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
+                          >
+                            ارجاع خودکار فرآیند
+                          </Button>
+                        </div>
+                      )}
+                      <div className="w-full flex items-center gap-2">
+                        {renderSegmentsBar(group?.lineSegments || [], `${line.id}-${group.id}-${groupIndex}`)}
                       </div>
-                    </Popover>
-                  )
-                ))}
-                {lineSegments.length === 0 && (
-                  <div className="w-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-xs bg-gray-50 dark:bg-gray-900 h-full">
-                    {compact ? <span className="opacity-50">-</span> : (isProcessModule ? 'بدون مرحله فرآیند' : 'بدون مرحله تولید')}
+                    </div>
+                  ))}
+                </div>
+                {!readOnly && !!recordId && (
+                  <div className="flex justify-start">
+                    <Button
+                      size={compact ? 'small' : 'middle'}
+                      onClick={() => { void handleOpenAppendProcessModal(); }}
+                      className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                    >
+                      افزودن فرآیند جدید
+                    </Button>
                   </div>
                 )}
+              </>
+            ) : (
+              <div className="w-full flex items-center gap-2">
+                {!readOnly && !!recordId && (
+                  <div className="flex items-center gap-2">
+                    <Tooltip title="افزودن مرحله جدید">
+                      <Button
+                        type="dashed"
+                        shape="circle"
+                        icon={<PlusOutlined />}
+                        size={compact ? 'small' : 'middle'}
+                        onClick={() => {
+                          openTaskModal(line.id);
+                        }}
+                        className="flex-shrink-0 border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                      />
+                    </Tooltip>
+                  </div>
+                )}
+                {renderSegmentsBar(lineSegments, String(line.id))}
               </div>
-            </div>
+            )}
+
             {showWageSummary && (
               <div className="text-xs text-gray-500">
                 دستمزد این خط: {toPersianNumber(((lineTasks.reduce((acc, t) => acc + (parseFloat(t.wage) || 0), 0)) * (parseFloat(line.quantity) || 0)).toLocaleString('en-US'))} تومان
@@ -2389,6 +3049,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <InputNumber className="w-full" min={0} />
               </Form.Item>
             </div>
+            <div className="col-span-6">
+              <Form.Item name="weight" label="وزن">
+                <InputNumber className="w-full" min={0} />
+              </Form.Item>
+            </div>
 
             <div className="col-span-12">
               <Form.Item name="assignee_combo" label="مسئول انجام">
@@ -2470,6 +3135,69 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <InputNumber className="w-full" min={1} />
               </Form.Item>
             </div>
+
+            {isProcessModule && (
+              <>
+                <div className="col-span-6">
+                  <Form.Item name="wage" label="دستمزد">
+                    <InputNumber className="w-full" min={0} />
+                  </Form.Item>
+                </div>
+                <div className="col-span-6">
+                  <Form.Item name="weight" label="وزن">
+                    <InputNumber className="w-full" min={0} />
+                  </Form.Item>
+                </div>
+                <div className="col-span-12">
+                  <Form.Item name="default_assignee_combo" label="مسئول انجام پیش‌فرض">
+                    <Select placeholder="انتخاب کنید..." allowClear showSearch optionFilterProp="label">
+                      <Select.OptGroup label="کاربران">
+                        {assignees.users.map(u => (
+                          <Select.Option key={`draft-user-${u.id}`} value={`user:${u.id}`} label={u.full_name}>
+                            <Space><UserOutlined /> {u.full_name}</Space>
+                          </Select.Option>
+                        ))}
+                      </Select.OptGroup>
+                      <Select.OptGroup label="تیم‌ها">
+                        {assignees.roles.map(r => (
+                          <Select.Option key={`draft-role-${r.id}`} value={`role:${r.id}`} label={r.title}>
+                            <Space><TeamOutlined /> {r.title}</Space>
+                          </Select.Option>
+                        ))}
+                      </Select.OptGroup>
+                    </Select>
+                  </Form.Item>
+                </div>
+                <div className="col-span-12">
+                  <div className="text-xs text-gray-500 mb-1">زمان انجام</div>
+                </div>
+                <div className="col-span-5">
+                  <Form.Item name="duration_from" label="بعد از">
+                    <Select
+                      options={[
+                        { label: 'شروع پروژه', value: 'project_start' },
+                        { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
+                      ]}
+                    />
+                  </Form.Item>
+                </div>
+                <div className="col-span-4">
+                  <Form.Item name="duration_value" label="مقدار">
+                    <InputNumber className="w-full" min={0} />
+                  </Form.Item>
+                </div>
+                <div className="col-span-3">
+                  <Form.Item name="duration_unit" label="واحد">
+                    <Select
+                      options={[
+                        { label: 'روز', value: 'day' },
+                        { label: 'ساعت', value: 'hour' },
+                      ]}
+                    />
+                  </Form.Item>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="flex justify-end gap-2 mt-4 border-t pt-4">
@@ -2479,6 +3207,37 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </Button>
           </div>
         </Form>
+      </Modal>
+
+      <Modal
+        title="افزودن فرآیند جدید"
+        open={appendProcessModalOpen}
+        onCancel={() => {
+          setAppendProcessModalOpen(false);
+          setAppendProcessTemplateId(null);
+        }}
+        onOk={() => { void handleAppendProcessTemplate(); }}
+        okText="افزودن"
+        cancelText="انصراف"
+        okButtonProps={{ loading }}
+        destroyOnHidden
+      >
+        <div className="space-y-3 pt-2">
+          <div className="text-xs text-gray-500">
+            یک الگو انتخاب کنید تا یک نوار فرآیند جدید ساخته شود.
+          </div>
+          <Select
+            value={appendProcessTemplateId || undefined}
+            onChange={(val) => setAppendProcessTemplateId(val)}
+            options={processTemplateOptions}
+            placeholder="انتخاب الگوی فرآیند"
+            showSearch
+            optionFilterProp="label"
+            loading={processTemplateOptionsLoading}
+            className="w-full"
+            allowClear
+          />
+        </div>
       </Modal>
 
       {supportsHandover && (

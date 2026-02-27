@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { productionBomModule } from '../../modules/productionConfig';
 import { BlockType } from '../../types';
 import EditableTable from '../EditableTable';
+import { useCurrencyConfig } from '../../utils/currency';
 
 interface BomStructureRendererProps {
   bomData: any;
@@ -23,6 +24,7 @@ const BomStructureRenderer: React.FC<BomStructureRendererProps> = ({
     canViewField,
     readOnly 
 }) => {
+  const { label: currencyLabel } = useCurrencyConfig();
 
   // محاسبه جمع کل شناسنامه تولید
   const calculateGrandTotal = () => {
@@ -84,7 +86,7 @@ const BomStructureRenderer: React.FC<BomStructureRendererProps> = ({
             </div>
             <div className="flex flex-col items-end">
                 <div className="text-3xl font-black font-mono tracking-tight text-white drop-shadow-md">
-                    {calculateGrandTotal().toLocaleString()} <span className="text-sm font-sans font-normal opacity-70">تومان</span>
+                    {calculateGrandTotal().toLocaleString()} <span className="text-sm font-sans font-normal opacity-70">{currencyLabel}</span>
                 </div>
             </div>
         </div>

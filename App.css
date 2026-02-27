@@ -3,34 +3,209 @@
 /* React Multi Date Picker - Brand Theme */
 .rmdp-leather .rmdp-wrapper,
 .rmdp-leather .rmdp-calendar {
-	border-radius: 12px;
-	border: 1px solid #e5e7eb;
-	box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  border: 1px solid #d9d9d9;
+  background-color: #ffffff;
+  color: rgba(0, 0, 0, 0.88);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+html.dark .rmdp-leather .rmdp-wrapper,
+html.dark .rmdp-leather .rmdp-calendar {
+  border-color: #434343;
+  background-color: #141414;
+  color: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+}
+
+.kalam-rmdp-input {
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background-color: #ffffff;
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 14px;
+  line-height: 1.5714285714285714;
+  padding: 0 11px;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s, color 0.2s;
+}
+
+.kalam-rmdp-input::placeholder {
+  color: rgba(0, 0, 0, 0.35);
+}
+
+.kalam-rmdp-input:hover {
+  border-color: rgba(var(--brand-400-rgb), 0.9);
+}
+
+.kalam-rmdp-input:focus {
+  outline: none;
+  border-color: rgb(var(--brand-500-rgb));
+  box-shadow: 0 0 0 2px rgba(var(--brand-500-rgb), 0.14);
+}
+
+.kalam-rmdp-input:disabled {
+  color: rgba(0, 0, 0, 0.25);
+  background-color: rgba(0, 0, 0, 0.04);
+  cursor: not-allowed;
+}
+
+html.dark .kalam-rmdp-input {
+  border-color: #434343;
+  background-color: #141414;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html.dark .kalam-rmdp-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .kalam-rmdp-input:hover {
+  border-color: rgba(var(--brand-300-rgb), 0.65);
+}
+
+html.dark .kalam-rmdp-input:disabled {
+  color: rgba(255, 255, 255, 0.35);
+  background-color: #1f1f1f;
+  border-color: #303030;
+}
+
+.rmdp-leather .rmdp-day .sd {
+  border: 1.5px solid transparent;
+  border-radius: 999px;
 }
 
 .rmdp-leather .rmdp-day.rmdp-selected .sd {
-    background-color: rgb(var(--brand-600-rgb)) !important;
-    color: #fff !important;
+  background-color: rgb(var(--brand-600-rgb)) !important;
+  color: #fff !important;
 }
-.rmdp-leather .rmdp-day.rmdp-today .sd {
-    background-color: rgb(var(--brand-300-rgb)) !important;
-    color: #fff !important;
+
+.rmdp-leather .rmdp-day.rmdp-today:not(.rmdp-selected) .sd {
+  background-color: transparent !important;
+  border-color: rgb(var(--brand-500-rgb)) !important;
+  color: rgb(var(--brand-600-rgb)) !important;
 }
+
+html.dark .rmdp-leather .rmdp-day.rmdp-today:not(.rmdp-selected) .sd {
+  border-color: rgb(var(--brand-300-rgb)) !important;
+  color: rgb(var(--brand-300-rgb)) !important;
+}
+
 .rmdp-leather .rmdp-day.rmdp-range .sd {
-	background-color: rgb(var(--brand-500-rgb)) !important;
-	color: #fff !important;
+  background-color: rgb(var(--brand-500-rgb)) !important;
+  color: #fff !important;
 }
 
 .rmdp-leather .rmdp-header-values,
-.rmdp-leather .rmdp-week-day {
-	color: rgb(var(--brand-600-rgb));
+.rmdp-leather .rmdp-week-day,
+.rmdp-leather .rmdp-day:not(.rmdp-deactive):not(.rmdp-disabled) span {
+  color: rgba(0, 0, 0, 0.88);
+  font-weight: 500;
+}
+
+html.dark .rmdp-leather .rmdp-header-values,
+html.dark .rmdp-leather .rmdp-week-day,
+html.dark .rmdp-leather .rmdp-day:not(.rmdp-deactive):not(.rmdp-disabled) span {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.rmdp-leather .rmdp-day.rmdp-deactive,
+.rmdp-leather .rmdp-day.rmdp-disabled {
+  color: #9ca3af;
+}
+
+html.dark .rmdp-leather .rmdp-day.rmdp-deactive,
+html.dark .rmdp-leather .rmdp-day.rmdp-disabled {
+  color: #6b7280;
 }
 
 .rmdp-leather .rmdp-arrow {
-	border: solid rgb(var(--brand-700-rgb));
-	border-width: 0 2px 2px 0;
+  border: solid rgb(var(--brand-700-rgb));
+  border-width: 0 2px 2px 0;
 }
 
 .rmdp-leather .rmdp-arrow-container:hover {
-	background-color: rgba(var(--brand-500-rgb), 0.1);
+  background-color: rgba(var(--brand-500-rgb), 0.1);
+}
+
+html.dark .rmdp-leather .rmdp-arrow {
+  border-color: rgb(var(--brand-300-rgb));
+}
+
+html.dark .rmdp-leather .rmdp-arrow-container:hover {
+  background-color: rgba(var(--brand-300-rgb), 0.18);
+}
+
+.rmdp-leather .rmdp-time-picker {
+  border-top: 1px solid #f0f0f0;
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+html.dark .rmdp-leather .rmdp-time-picker {
+  border-top-color: #303030;
+}
+
+.rmdp-leather .rmdp-time-picker div input {
+  min-width: 34px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background-color: #ffffff;
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 4px 6px;
+}
+
+.rmdp-leather .rmdp-time-picker div input:focus {
+  outline: none;
+  border-color: rgb(var(--brand-500-rgb));
+  box-shadow: 0 0 0 2px rgba(var(--brand-500-rgb), 0.14);
+}
+
+html.dark .rmdp-leather .rmdp-time-picker div input {
+  border-color: #434343;
+  background-color: #141414;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.rmdp-leather .rmdp-time-picker div .rmdp-am {
+  color: rgba(0, 0, 0, 0.72);
+  font-weight: 600;
+}
+
+html.dark .rmdp-leather .rmdp-time-picker div .rmdp-am {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.rmdp-container .rmdp-leather.ep-arrow[direction="top"] {
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.rmdp-container .rmdp-leather.ep-arrow[direction="bottom"] {
+  border-top: 1px solid #d9d9d9;
+}
+
+.rmdp-container .rmdp-leather.ep-arrow[direction="left"] {
+  border-right: 1px solid #d9d9d9;
+}
+
+.rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
+  border-left: 1px solid #d9d9d9;
+}
+
+html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="top"] {
+  border-bottom-color: #434343;
+}
+
+html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="bottom"] {
+  border-top-color: #434343;
+}
+
+html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="left"] {
+  border-right-color: #434343;
+}
+
+html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
+  border-left-color: #434343;
 }

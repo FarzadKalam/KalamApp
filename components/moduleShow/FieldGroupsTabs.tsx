@@ -65,6 +65,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
     'template_stages_preview',
     'run_stages_preview',
   ]);
+  const processTemplateFieldKeys = new Set(['process_template_id']);
   if (visibleFieldGroups.length === 0) return null;
 
   const renderBlockContent = (block: any) => (
@@ -74,6 +75,17 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           .filter((f: any) => f.blockId === block.id)
           .filter((f: any) => f.type !== FieldType.PROGRESS_STAGES)
           .filter((f: any) => !processStageFieldKeys.has(String(f?.key || '')))
+          .filter((f: any) => {
+            if (!processTemplateFieldKeys.has(String(f?.key || ''))) return true;
+            const hasProcessBarsInSameBlock = (moduleConfig?.fields || []).some((candidate: any) => (
+              String(candidate?.blockId || '') === String(block.id)
+              && (
+                candidate?.type === FieldType.PROGRESS_STAGES
+                || processStageFieldKeys.has(String(candidate?.key || ''))
+              )
+            ));
+            return !hasProcessBarsInSameBlock;
+          })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
           .map((f: any) => (!f.logic || checkVisibility(f.logic)) && (
             <div

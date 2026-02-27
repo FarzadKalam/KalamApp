@@ -36,6 +36,8 @@ export const processTemplatesModule: ModuleDefinition = {
       options: [
         { label: 'سفارشات تولید', value: 'production_orders' },
         { label: 'پروژه‌ها', value: 'projects' },
+        { label: 'فاکتورهای فروش', value: 'invoices' },
+        { label: 'فاکتورهای خرید', value: 'purchase_invoices' },
         { label: 'لیدهای بازاریابی', value: 'marketing_leads' },
         { label: 'مشتریان', value: 'customers' },
       ],
@@ -123,4 +125,6 @@ export const processTemplatesModule: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
+
+
 

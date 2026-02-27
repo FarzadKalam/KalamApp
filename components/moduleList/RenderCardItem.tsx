@@ -46,11 +46,27 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const imageUrl = imageField ? item[imageField] : null;
   const title = getRecordTitle(item, moduleConfig, { fallback: "-" });
   const isTasks = moduleId === 'tasks';
+  const processRecordKeyByModule: Record<string, string> = {
+    projects: 'project_id',
+    customers: 'related_customer',
+    invoices: 'related_invoice',
+    purchase_invoices: 'purchase_invoice_id',
+    marketing_leads: 'marketing_lead_id',
+  };
   const isProductionTask = (
     isTasks
     && String(item?.related_to_module || '') === 'production_orders'
     && item?.related_production_order
     && item?.production_line_id
+  );
+  const relatedProcessModuleId = String(item?.related_to_module || '');
+  const relatedProcessRecordKey = processRecordKeyByModule[relatedProcessModuleId];
+  const relatedProcessRecordId = relatedProcessRecordKey ? item?.[relatedProcessRecordKey] : null;
+  const isExecutionProcessTask = (
+    isTasks
+    && !isProductionTask
+    && !!relatedProcessRecordId
+    && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedProcessModuleId)
   );
 
   const statusFieldConfig = moduleConfig?.fields.find(
@@ -71,13 +87,31 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const categoryAllowed = canViewField ? canViewField(categoryFieldConfig?.key || 'related_to_module') !== false : true;
   const relatedRelationFields = isTasks
     ? (moduleConfig?.fields || []).filter(
-        (f: any) => f?.type === FieldType.RELATION && String(f?.key || '').startsWith('related_')
+        (f: any) => (
+          f?.type === FieldType.RELATION
+          && (
+            String(f?.key || '').startsWith('related_')
+            || ['project_id', 'marketing_lead_id', 'purchase_invoice_id'].includes(String(f?.key || ''))
+          )
+        )
       )
     : [];
+  const fallbackRelationKeyByModule: Record<string, string> = {
+    projects: 'project_id',
+    marketing_leads: 'marketing_lead_id',
+    purchase_invoices: 'purchase_invoice_id',
+  };
+  const fallbackRelationKey = fallbackRelationKeyByModule[String(item?.related_to_module || '')];
+  const fallbackRelationRecordId = fallbackRelationKey ? item?.[fallbackRelationKey] : null;
   const selectedRelationField = isTasks
     ? (
         relatedRelationFields.find((f: any) => f?.relationConfig?.targetModule === item?.related_to_module && item?.[f.key])
         || relatedRelationFields.find((f: any) => item?.[f.key])
+        || (
+          fallbackRelationKey && fallbackRelationRecordId
+            ? { key: fallbackRelationKey, relationConfig: { targetModule: item?.related_to_module } }
+            : null
+        )
       )
     : null;
   const relatedRecordId = selectedRelationField ? item?.[selectedRelationField.key] : null;
@@ -354,7 +388,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 
       {isProductionTask && (
         <div
-          className={`${minimal ? 'mt-2' : 'mt-3'} rounded-lg border border-[#d6c2ab] bg-[#faf5ef] p-2`}
+          className={`${minimal ? 'mt-2' : 'mt-3'} rounded-lg border border-[#d6c2ab] bg-[#faf5ef] dark:border-[#4b3a2b] dark:bg-[#2b241e] p-2`}
           onClick={(e) => e.stopPropagation()}
         >
           <ProductionStagesField
@@ -364,6 +398,20 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             compact
             lazyLoad
             onlyLineId={String(item.production_line_id)}
+          />
+        </div>
+      )}
+      {isExecutionProcessTask && (
+        <div
+          className={`${minimal ? 'mt-2' : 'mt-3'} rounded-lg border border-[#d6c2ab] bg-[#faf5ef] dark:border-[#4b3a2b] dark:bg-[#2b241e] p-2`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ProductionStagesField
+            recordId={String(relatedProcessRecordId)}
+            moduleId={relatedProcessModuleId}
+            readOnly
+            compact
+            lazyLoad
           />
         </div>
       )}

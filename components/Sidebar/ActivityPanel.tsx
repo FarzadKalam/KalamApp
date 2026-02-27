@@ -42,7 +42,10 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
     customers: 'related_customer',
     suppliers: 'related_supplier',
     production_orders: 'related_production_order',
-    invoices: 'related_invoice'
+    invoices: 'related_invoice',
+    purchase_invoices: 'purchase_invoice_id',
+    projects: 'project_id',
+    marketing_leads: 'marketing_lead_id',
   }), []);
 
   const tasksModuleConfig = MODULES['tasks'];
