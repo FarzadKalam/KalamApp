@@ -63,8 +63,40 @@ jobs:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
+          set -euo pipefail
+          HOST="${SERVER_HOST:-}"
+          PORT="${SERVER_PORT:-22}"
+
+          if [ -z "$HOST" ]; then
+            echo "::error::SERVER_HOST secret is empty."
+            exit 1
+          fi
+
+          if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+            echo "::error::SERVER_PORT must be numeric."
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
-          ssh-keyscan -p "$SERVER_PORT" "$SERVER_HOST" >> ~/.ssh/known_hosts
+          touch ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/known_hosts
+
+          for attempt in 1 2 3; do
+            if ssh-keyscan -T 15 -p "$PORT" "$HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+              sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+              echo "SSH host key added for $HOST:$PORT"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "ssh-keyscan failed (attempt $attempt). Retrying..."
+              sleep 3
+            fi
+          done
+
+          echo "::error::Could not fetch SSH host key from $HOST:$PORT. Check SERVER_HOST/SERVER_PORT and firewall/public reachability from GitHub Actions."
+          exit 1
 
       - name: Upload bundle
         env:
