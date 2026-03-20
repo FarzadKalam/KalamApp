@@ -21,8 +21,13 @@ export const fromPersianNumber = (persianNum: string): number => {
 
 export const formatPersianPrice = (num: any, withComma = true): string => {
   if (num === null || num === undefined || num === '') return '';
-  const number = Number(num);
-  if (isNaN(number)) return String(num);
+  const toEnglishDigits = (input: string) =>
+    input
+      .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+  const normalized = toEnglishDigits(String(num)).replace(/,/g, '').trim();
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) return toPersianNumber(String(num));
   const str = withComma ? number.toLocaleString('en-US') : String(number);
   return toPersianNumber(str);
 };

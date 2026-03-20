@@ -2,6 +2,7 @@ export interface PrintTemplate {
   id: string;
   title: string;
   description: string;
+  isSystem?: boolean;
 }
 
 export const getAvailableTemplates = (moduleId: string): PrintTemplate[] => {

@@ -56,9 +56,6 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
       || null;
     return String(matched?.label || directLabel || taskShelfId);
   }, [data?.production_shelf, data?.production_shelf_id, data?.production_shelf_label, data?.production_shelf_name, relationOptions, taskShelfId]);
-  const visibleFieldGroups = (fieldGroups || []).filter((block: any) =>
-    canViewField ? canViewField(String(block.id)) !== false : true
-  );
   const processStageFieldKeys = new Set([
     'execution_process_draft',
     'marketing_process_draft',
@@ -66,6 +63,36 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
     'run_stages_preview',
   ]);
   const processTemplateFieldKeys = new Set(['process_template_id']);
+  const visibleFieldGroups = useMemo(() => (
+    (fieldGroups || [])
+      .filter((block: any) => (canViewField ? canViewField(String(block.id)) !== false : true))
+      .filter((block: any) => {
+        const hasVisibleField = (moduleConfig.fields || [])
+          .filter((f: any) => String(f?.blockId || '') === String(block.id))
+          .filter((f: any) => f.type !== FieldType.PROGRESS_STAGES)
+          .filter((f: any) => !processStageFieldKeys.has(String(f?.key || '')))
+          .filter((f: any) => {
+            if (!processTemplateFieldKeys.has(String(f?.key || ''))) return true;
+            const hasProcessBarsInSameBlock = (moduleConfig?.fields || []).some((candidate: any) => (
+              String(candidate?.blockId || '') === String(block.id)
+              && (
+                candidate?.type === FieldType.PROGRESS_STAGES
+                || processStageFieldKeys.has(String(candidate?.key || ''))
+              )
+            ));
+            return !hasProcessBarsInSameBlock;
+          })
+          .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .some((f: any) => (!f.logic || checkVisibility(f.logic)));
+
+        const hasBlockTable =
+          !!block.tableColumns
+          || (moduleId === 'products' && block.id === 'product_inventory')
+          || (moduleId === 'shelves' && block.id === 'shelf_inventory')
+          || (moduleId === 'tasks' && block.id === 'task_shelf_inventory');
+        return hasVisibleField || hasBlockTable;
+      })
+  ), [canViewField, checkVisibility, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys]);
   if (visibleFieldGroups.length === 0) return null;
 
   const renderBlockContent = (block: any) => (

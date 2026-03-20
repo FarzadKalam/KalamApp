@@ -185,7 +185,7 @@ begin
   ) then
     alter table public.integration_settings
       add constraint integration_settings_connection_type_check
-      check (connection_type in ('sms', 'email', 'site'));
+      check (connection_type in ('sms', 'email', 'site', 'module_settings', 'print_templates'));
   end if;
 end $$;
 

@@ -23,7 +23,7 @@ begin
 
   alter table public.integration_settings
     add constraint integration_settings_connection_type_check
-    check (connection_type in ('sms', 'email', 'site', 'module_settings'));
+    check (connection_type in ('sms', 'email', 'site', 'module_settings', 'print_templates'));
 end $$;
 
 -- remove global uniqueness (cross-org conflict) and replace with per-org uniqueness

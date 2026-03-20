@@ -4,8 +4,8 @@ import {
   AppstoreOutlined,
   ClockCircleOutlined,
   EditOutlined,
+  FileImageOutlined,
   HistoryOutlined,
-  LoadingOutlined,
   SafetyCertificateOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
@@ -68,8 +68,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   const location = useLocation();
   const imageField = moduleConfig?.fields?.find((f: any) => f.type === FieldType.IMAGE);
   const canShowImage = !!imageField && (canViewField ? canViewField(imageField.key) !== false : true);
-  const supportsFilesGallery = moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'production_boms';
-  const canOpenFilesGallery = supportsFilesGallery && canViewFilesManager;
+  const canOpenFilesGallery = Boolean(canShowImage && data?.id && moduleId && canViewFilesManager);
 
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const shouldOpenGalleryFromQuery = queryParams.get('gallery') === '1';
@@ -131,7 +130,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
               />
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2">
-                <LoadingOutlined className="text-3xl opacity-20" />
+                <FileImageOutlined className="text-3xl opacity-30" />
                 <span className="text-xs">بدون تصویر</span>
               </div>
             )}
@@ -236,7 +235,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 </div>
                 <div className="flex flex-col">
                   <span className="opacity-70">ایجاد کننده</span>
-                  <span className="font-bold text-gray-700 dark:text-gray-300">{getUserName(data.created_by)}</span>
+                  <span className="font-bold text-gray-700 dark:text-gray-300">{data?.created_by_name || getUserName(data.created_by)}</span>
                 </div>
               </div>
 
@@ -258,7 +257,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 </div>
                 <div className="flex flex-col">
                   <span className="opacity-70">آخرین ویرایشگر</span>
-                  <span className="font-bold text-gray-700 dark:text-gray-300">{getUserName(data.updated_by)}</span>
+                  <span className="font-bold text-gray-700 dark:text-gray-300">{data?.updated_by_name || getUserName(data.updated_by)}</span>
                 </div>
               </div>
 

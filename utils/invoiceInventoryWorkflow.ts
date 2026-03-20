@@ -62,10 +62,12 @@ export const applyInvoiceFinalizationInventory = async ({
 
   rows.forEach((item: any, index: number) => {
     const productId = item?.product_id ? String(item.product_id) : '';
+    const productType = String(item?.product_type || '').trim().toLowerCase();
     const shelfIdRaw = item?.source_shelf_id || item?.shelf_id || item?.selected_shelf_id || null;
     const shelfId = shelfIdRaw ? String(shelfIdRaw) : '';
     const qty = Math.abs(toNumber(item?.quantity ?? item?.qty ?? item?.count));
 
+    if (productType === 'service') return;
     if (!productId || qty <= 0) return;
     if (!shelfId) {
       throw new Error(`در ردیف ${index + 1} قفسه انتخاب نشده است.`);
@@ -117,4 +119,3 @@ export const applyInvoiceFinalizationInventory = async ({
   await syncMultipleProductsStock(supabase, affectedProductIds);
   return { applied: true, affectedProducts: Array.from(new Set(affectedProductIds)) };
 };
-

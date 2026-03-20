@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
@@ -11,6 +11,7 @@ import { supabase } from '../../supabaseClient';
 import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
 import WorkflowsManager from '../../components/workflows/WorkflowsManager';
 import ModuleSettingsTab from './ModuleSettingsTab';
+import PrintTemplatesTab from './PrintTemplatesTab';
 import { useSearchParams } from 'react-router-dom';
 
 const SettingsPage: React.FC = () => {
@@ -69,6 +70,7 @@ const SettingsPage: React.FC = () => {
               connections: false,
               customer_leveling: false,
               workflows: false,
+              print_templates: false,
             });
           } else {
             setTabPermissions({
@@ -79,6 +81,7 @@ const SettingsPage: React.FC = () => {
               formulas: fields.formulas !== false,
               connections: fields.connections !== false,
               customer_leveling: fields.customer_leveling !== false,
+              print_templates: fields.print_templates !== false,
               workflows:
                 fields.workflows !== false &&
                 workflowsPerms.view !== false &&
@@ -140,6 +143,11 @@ const SettingsPage: React.FC = () => {
         key: 'customer_leveling',
         label: <span className="flex items-center gap-2 text-base"><RiseOutlined /> تنظیمات سطح بندی</span>,
         children: <CustomerLevelingTab />,
+      },
+      {
+        key: 'print_templates',
+        label: <span className="flex items-center gap-2 text-base"><FileTextOutlined /> قالب‌های پرینت</span>,
+        children: <PrintTemplatesTab />,
       },
       {
         key: 'workflows',

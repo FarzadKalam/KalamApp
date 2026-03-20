@@ -1109,6 +1109,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                         moduleId="production_orders"
                         readOnly
                         compact
+                        allowReportEditInReadOnly
                         lazyLoad
                         onlyLineId={String(task.production_line_id)}
                       />
@@ -1121,6 +1122,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                         moduleId={relatedProcessModuleId}
                         readOnly
                         compact
+                        allowReportEditInReadOnly
                         lazyLoad
                       />
                     </div>

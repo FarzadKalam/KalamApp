@@ -33,14 +33,106 @@ export const printStyles = `
   .print-table td { border: 1px solid #e5e7eb; padding: 4px 6px; vertical-align: top; }
   .print-label { width: 36%; background: #f8fafc; font-weight: 700; color: #374151; }
   .print-value { color: #111827; word-break: break-word; }
+
+  .invoice-custom-print-shell .print-template-page,
+  .invoice-custom-print-shell .print-template-page * {
+    font-family: inherit;
+  }
+  .invoice-custom-print-shell .print-template-page,
+  .invoice-custom-print-shell .print-template-body-inner,
+  .invoice-custom-print-shell .print-template-header-inner,
+  .invoice-custom-print-shell .print-template-footer-inner {
+    line-height: 1.9;
+    font-size: 14px;
+  }
+  .invoice-custom-print-shell .print-template-page p {
+    margin: 0 0 8px 0;
+  }
+  .invoice-custom-print-shell .print-template-page h2 {
+    margin: 0 0 10px 0;
+    font-size: 20px;
+    line-height: 1.8;
+  }
+  .invoice-custom-print-shell .print-template-body-measure {
+    width: 100%;
+    box-sizing: border-box;
+    line-height: 1.9;
+    font-size: 14px;
+  }
+  .invoice-custom-print-shell table {
+    --table-border-color: #d1d5db;
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    width: 100%;
+    max-width: 100%;
+  }
+  .invoice-custom-print-shell table,
+  .invoice-custom-print-shell th,
+  .invoice-custom-print-shell td {
+    border-color: var(--table-border-color, #d1d5db);
+    box-sizing: border-box !important;
+  }
+  .invoice-custom-print-shell th,
+  .invoice-custom-print-shell td {
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
   
   #print-root { display: none; }
   @media print {
-    @page { size: A6; margin: 6mm; }
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    body * { visibility: hidden; }
-    #print-root, #print-root * { visibility: visible; }
-    #print-root { display: block; position: fixed; left: 0; top: 0; width: 105mm; height: 148mm; }
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #fff !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body.print-mode #root {
+      display: none !important;
+    }
+    body.print-mode > *:not(#print-root) {
+      display: none !important;
+    }
+    body.print-mode #print-root {
+      display: block !important;
+      position: static !important;
+      width: auto !important;
+      height: auto !important;
+      overflow: visible !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #fff !important;
+    }
+    body.print-mode #print-root .invoice-custom-print-shell {
+      width: auto !important;
+      min-height: auto !important;
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: visible !important;
+    }
+    body.print-mode #print-root .print-template-page {
+      break-after: page !important;
+      page-break-after: always !important;
+      break-inside: avoid !important;
+      page-break-inside: avoid !important;
+      margin: 0 !important;
+    }
+    body.print-mode #print-root .print-template-page:last-child {
+      break-after: auto !important;
+      page-break-after: auto !important;
+    }
+    body.print-mode #print-root * {
+      visibility: visible !important;
+    }
+    .invoice-custom-print-shell,
+    .invoice-custom-print-shell * {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .invoice-custom-print-shell .print-template-page-counter { color: #334155 !important; }
+    .invoice-custom-print-shell .print-template-body-measure { display: none !important; }
     .print-card { border: none; box-shadow: none; border-radius: 0; }
   }
 `;

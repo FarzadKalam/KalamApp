@@ -1,10 +1,11 @@
 ﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space } from 'antd';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox } from 'antd';
 import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
+import DynamicSelectField from './DynamicSelectField';
 import TaskHandoverModal, { type StageHandoverConfirm, type StageHandoverGroup, type StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import TaskHandoverFormsModal, {
   type StageHandoverFormListRow,
@@ -24,6 +25,7 @@ interface ProductionStagesFieldProps {
   moduleId?: string;
   readOnly?: boolean;
   compact?: boolean;
+  allowReportEditInReadOnly?: boolean;
   lazyLoad?: boolean;
   onlyLineId?: string | null;
   onQuantityChange?: (qty: number) => void;
@@ -76,7 +78,7 @@ type StageHandoverForm = {
   updatedAt?: string | null;
 };
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, readOnly = false, compact = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false }) => {
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, readOnly = false, compact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false }) => {
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
@@ -112,6 +114,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [processTemplateOptionsLoading, setProcessTemplateOptionsLoading] = useState(false);
   const [appendProcessModalOpen, setAppendProcessModalOpen] = useState(false);
   const [appendProcessTemplateId, setAppendProcessTemplateId] = useState<string | null>(null);
+  const [showEmptyProcessDetails, setShowEmptyProcessDetails] = useState(false);
+  const [activeProcessGroupMeta, setActiveProcessGroupMeta] = useState<{
+    id: string;
+    label: string | null;
+    templateId: string | null;
+    templateName: string | null;
+  } | null>(null);
+  const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
+  const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
 
   const onQuantityChangeRef = useRef<((qty: number) => void) | undefined>();
 
@@ -148,11 +160,41 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       ? 'مراحل الگوی فرآیند'
       : moduleId === 'process_runs'
         ? 'مراحل اجرای فرآیند'
-        : 'فرآیند اجرا';
+        : 'فرآیندها';
   const buildProcessGroupId = useCallback(
     () => `process_group_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
     []
   );
+  const getStageProcessGroupMeta = useCallback((stage: any) => {
+    const fallbackGroupId = String(stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
+    const groupId = String(stage?.process_group_id || fallbackGroupId).trim() || 'default_process_group';
+    const groupLabel = String(stage?.process_group_name || stage?.source_template_name || '').trim() || null;
+    const templateId = String(stage?.source_template_id || '').trim() || null;
+    const templateName = String(stage?.source_template_name || '').trim() || null;
+    return { groupId, groupLabel, templateId, templateName };
+  }, []);
+  const getTaskProcessGroupMeta = useCallback((task: any) => {
+    const rawRecurrence = task?.recurrence_info;
+    let recurrence: any = {};
+    if (rawRecurrence && typeof rawRecurrence === 'object') {
+      recurrence = rawRecurrence;
+    } else if (typeof rawRecurrence === 'string') {
+      try {
+        const parsed = JSON.parse(rawRecurrence);
+        recurrence = parsed && typeof parsed === 'object' ? parsed : {};
+      } catch {
+        recurrence = {};
+      }
+    }
+    const processMeta = recurrence?.process_group && typeof recurrence.process_group === 'object'
+      ? recurrence.process_group
+      : {};
+    const groupId = String(processMeta?.id || '').trim() || null;
+    const groupLabel = String(processMeta?.name || '').trim() || null;
+    const templateId = String(processMeta?.template_id || '').trim() || null;
+    const templateName = String(processMeta?.template_name || '').trim() || null;
+    return { groupId, groupLabel, templateId, templateName };
+  }, []);
 
   useEffect(() => {
     setDraftLocal((prev) => (prev === normalizedDraftStages ? prev : normalizedDraftStages));
@@ -273,6 +315,196 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return {};
     }
   }, []);
+  const parseAssigneeComboValue = useCallback((raw: any) => {
+    const rawValue = String(raw || '').trim();
+    if (!rawValue) {
+      return { assigneeType: null as 'user' | 'role' | null, assigneeId: null as string | null };
+    }
+    if (rawValue.includes(':')) {
+      const [type, id] = rawValue.split(':');
+      return {
+        assigneeType: type === 'role' ? 'role' : 'user',
+        assigneeId: id ? String(id) : null,
+      };
+    }
+    return { assigneeType: 'user' as const, assigneeId: rawValue };
+  }, []);
+  const normalizeDueDateValue = useCallback((value: any) => {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    if (typeof value?.toDate === 'function') {
+      const dateObj = value.toDate();
+      if (dateObj instanceof Date && !Number.isNaN(dateObj.getTime())) return dateObj.toISOString();
+    }
+    if (typeof value?.format === 'function') {
+      try {
+        const formatted = value.format('YYYY-MM-DD HH:mm:ss');
+        return formatted || null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }, []);
+  const getTaskOptionalFieldFallback = useCallback((task: any) => {
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    return {
+      taskType: String(task?.task_type || recurrence?.task_type || '').trim() || null,
+      taskReport: String(task?.task_report || recurrence?.task_report || '').trim() || '',
+    };
+  }, [parseRecurrenceInfo]);
+  const isMissingColumnError = useCallback((error: any, columnName: string) => {
+    const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+    if (!text) return false;
+    const needle = columnName.toLowerCase();
+    return text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
+  }, []);
+  const extractMissingColumnNames = useCallback((error: any): string[] => {
+    const text = [error?.message, error?.details, error?.hint]
+      .map((part) => String(part || '').trim())
+      .filter(Boolean)
+      .join('\n');
+    if (!text) return [];
+    const sanitize = (raw: string) => String(raw || '')
+      .replace(/["'`]/g, '')
+      .trim()
+      .replace(/^public\./i, '')
+      .replace(/^tasks\./i, '')
+      .trim();
+    const patterns = [
+      /could not find the ['"]([^'"]+)['"] column/gi,
+      /column ["']([^"']+)["']/gi,
+      /column\s+([a-zA-Z0-9_.]+)\s+does not exist/gi,
+      /record\s+["'][^"']+["']\s+has no field\s+["']([^"']+)["']/gi,
+      /has no field\s+["']([^"']+)["']/gi,
+      /unknown field\s+["']([^"']+)["']/gi,
+    ];
+    const found = new Set<string>();
+    patterns.forEach((pattern) => {
+      let match = pattern.exec(text);
+      while (match) {
+        const normalized = sanitize(match?.[1] || '');
+        if (normalized) found.add(normalized);
+        match = pattern.exec(text);
+      }
+    });
+    return Array.from(found);
+  }, []);
+  const removeColumnsFromRows = useCallback((rows: any[], columns: string[]) => {
+    if (!Array.isArray(rows) || !columns.length) return rows;
+    return rows.map((row) => {
+      const next = { ...row };
+      columns.forEach((columnName) => {
+        delete next[columnName];
+      });
+      return next;
+    });
+  }, []);
+  const insertTasksWithFallback = useCallback(async (rows: any[]) => {
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    let payload = rows.map((row) => ({ ...row }));
+    const optionalColumns = [
+      'assignee_id',
+      'assignee_type',
+      'assignee_role_id',
+      'due_date',
+      'description',
+      'task_type',
+      'task_report',
+      'wage',
+      'weight',
+      'sort_order',
+      'created_by',
+      'produced_qty',
+      'related_to_module',
+      'related_production_order',
+      'related_invoice',
+      'related_customer',
+      'project_id',
+      'purchase_invoice_id',
+      'marketing_lead_id',
+      'production_line_id',
+      'production_shelf_id',
+      'recurrence_info',
+    ];
+    const fkConstraintColumns: Array<{ constraint: string; column: string }> = [
+      { constraint: 'tasks_project_id_fkey', column: 'project_id' },
+      { constraint: 'tasks_purchase_invoice_id_fkey', column: 'purchase_invoice_id' },
+      { constraint: 'tasks_marketing_lead_id_fkey', column: 'marketing_lead_id' },
+      { constraint: 'tasks_assignee_role_id_fkey', column: 'assignee_role_id' },
+      { constraint: 'tasks_production_line_id_fkey', column: 'production_line_id' },
+      { constraint: 'tasks_production_shelf_id_fkey', column: 'production_shelf_id' },
+    ];
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const { error } = await supabase.from('tasks').insert(payload);
+      if (!error) return;
+      const payloadColumns = Array.from(new Set(payload.flatMap((row) => Object.keys(row || {}))));
+      const removable = optionalColumns.filter((columnName) =>
+        payloadColumns.includes(columnName) && isMissingColumnError(error, columnName)
+      );
+      const missingColumns = extractMissingColumnNames(error)
+        .filter((columnName) => payloadColumns.includes(columnName));
+      const errorText = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+      const fkRemovable = fkConstraintColumns
+        .filter((item) => errorText.includes(item.constraint))
+        .map((item) => item.column)
+        .filter((columnName) => payloadColumns.includes(columnName));
+      let merged = Array.from(new Set([...removable, ...missingColumns, ...fkRemovable]));
+      if (!merged.length && (errorText.includes('column') || errorText.includes('schema cache'))) {
+        const fallbackColumn = optionalColumns.find((columnName) => payloadColumns.includes(columnName));
+        if (fallbackColumn) merged = [fallbackColumn];
+      }
+      if (!merged.length) throw error;
+      payload = removeColumnsFromRows(payload, merged);
+    }
+  }, [extractMissingColumnNames, isMissingColumnError, removeColumnsFromRows]);
+  const updateTaskWithFallback = useCallback(async (taskId: string, patch: Record<string, any>) => {
+    let payload = { ...patch };
+    const optionalColumns = [
+      'assignee_id',
+      'assignee_type',
+      'assignee_role_id',
+      'due_date',
+      'description',
+      'task_type',
+      'task_report',
+      'wage',
+      'weight',
+      'sort_order',
+      'created_by',
+      'produced_qty',
+      'related_to_module',
+      'related_production_order',
+      'related_invoice',
+      'related_customer',
+      'project_id',
+      'purchase_invoice_id',
+      'marketing_lead_id',
+      'production_line_id',
+      'production_shelf_id',
+      'recurrence_info',
+    ];
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const { error } = await supabase.from('tasks').update(payload).eq('id', taskId);
+      if (!error) return;
+      const removable = optionalColumns.filter((columnName) =>
+        Object.prototype.hasOwnProperty.call(payload, columnName) && isMissingColumnError(error, columnName)
+      );
+      const missingColumns = extractMissingColumnNames(error)
+        .filter((columnName) => Object.prototype.hasOwnProperty.call(payload, columnName));
+      if (missingColumns.length) {
+        missingColumns.forEach((columnName) => {
+          delete payload[columnName];
+        });
+        continue;
+      }
+      if (!removable.length) throw error;
+      removable.forEach((columnName) => {
+        delete payload[columnName];
+      });
+    }
+  }, [extractMissingColumnNames, isMissingColumnError]);
 
   const getHandoverFromTask = useCallback((task: any) => {
     const recurrence = parseRecurrenceInfo(task?.recurrence_info);
@@ -304,6 +536,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       console.error('Error fetching assignees', e);
     }
   };
+  const fetchTaskTypeOptions = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('dynamic_options')
+        .select('label, value, is_active')
+        .eq('category', 'task_type')
+        .order('label', { ascending: true });
+      if (error) throw error;
+      const options = (data || [])
+        .filter((row: any) => row?.is_active !== false)
+        .map((row: any) => ({
+          label: String(row?.label || row?.value || ''),
+          value: String(row?.value || row?.label || ''),
+        }))
+        .filter((row) => row.label && row.value);
+      setTaskTypeOptions(options);
+    } catch (error) {
+      console.warn('Could not fetch task type options', error);
+      setTaskTypeOptions([]);
+    }
+  }, []);
 
   const fetchCurrentUser = useCallback(async () => {
     try {
@@ -420,11 +673,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     fetchLines();
     fetchTasks();
     fetchAssignees();
+    fetchTaskTypeOptions();
     fetchCurrentUser();
     if (supportsHandover) {
       fetchProductionShelves();
     }
-  }, [recordId, isDraftOnlyModule, isProcessModule, processLineId, supportsHandover, isReadyToLoad, fetchCurrentUser, fetchProductionShelves]);
+  }, [recordId, isDraftOnlyModule, isProcessModule, processLineId, supportsHandover, isReadyToLoad, fetchCurrentUser, fetchProductionShelves, fetchTaskTypeOptions]);
 
   const syncOrderQuantity = useCallback(async (nextLines: any[]) => {
     if (!recordId || isBom || !isProductionOrder) return;
@@ -1618,9 +1872,31 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   };
 
-  const openTaskModal = (lineId: string, draftStage?: any) => {
+  const openTaskModal = (
+    lineId: string,
+    draftStage?: any,
+    processGroupMeta?: { id: string; label?: string | null; templateId?: string | null; templateName?: string | null }
+  ) => {
     setActiveLineId(lineId);
     setDraftToCreate(draftStage || null);
+    if (processGroupMeta?.id) {
+      setActiveProcessGroupMeta({
+        id: String(processGroupMeta.id),
+        label: processGroupMeta.label || null,
+        templateId: processGroupMeta.templateId || null,
+        templateName: processGroupMeta.templateName || null,
+      });
+    } else if (draftStage) {
+      const stageMeta = getStageProcessGroupMeta(draftStage);
+      setActiveProcessGroupMeta({
+        id: stageMeta.groupId,
+        label: stageMeta.groupLabel,
+        templateId: stageMeta.templateId,
+        templateName: stageMeta.templateName,
+      });
+    } else {
+      setActiveProcessGroupMeta(null);
+    }
     const defaultRoleId = draftStage?.default_assignee_role_id ? String(draftStage.default_assignee_role_id) : null;
     const defaultUserId = draftStage?.default_assignee_id ? String(draftStage.default_assignee_id) : null;
     const assigneeCombo = defaultRoleId
@@ -1631,6 +1907,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       sort_order: draftStage?.sort_order || ((tasks.length + 1) * 10),
       wage: draftStage?.wage || 0,
       weight: draftStage?.weight || 0,
+      description: draftStage?.description || '',
+      task_type: draftStage?.task_type || undefined,
+      duration_from: draftStage?.duration_from || 'project_start',
+      duration_value: Number(draftStage?.duration_value || 0),
+      duration_unit: draftStage?.duration_unit || 'day',
       production_shelf_id: null,
       assignee_combo: assigneeCombo,
     };
@@ -1642,19 +1923,40 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!recordId || !activeLineId) return;
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      const { assigneeType, assigneeId } = parseAssigneeComboValue(values.assignee_combo);
+      let dueDate = normalizeDueDateValue(values.due_date);
+      const taskDescription = String(values?.description || '').trim() || null;
+      const taskType = String(values?.task_type || '').trim() || null;
+      const durationValue = Math.max(0, Number(values?.duration_value || 0));
+      const durationUnit = String(values?.duration_unit || 'day') === 'hour' ? 'hour' : 'day';
+      const durationFrom = String(values?.duration_from || 'project_start') === 'previous_stage_end'
+        ? 'previous_stage_end'
+        : 'project_start';
 
-      let assigneeId = null;
-      let assigneeType = null;
-
-      if (values.assignee_combo) {
-        if (values.assignee_combo.includes(':')) {
-          const [type, id] = values.assignee_combo.split(':');
-          assigneeType = type;
-          assigneeId = id;
-        } else {
-          assigneeType = 'user';
-          assigneeId = values.assignee_combo;
+      if (!dueDate && durationValue > 0) {
+        let previousDueAt: Date | null = null;
+        if (durationFrom === 'previous_stage_end') {
+          const currentSort = Number(values?.sort_order || draftToCreate?.sort_order || 0);
+          const sortedChain = getLineTaskChain(activeLineId)
+            .filter((task: any) => Number(task?.sort_order || 0) < currentSort && !!task?.due_date)
+            .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+          const previousTask = sortedChain.length > 0 ? sortedChain[sortedChain.length - 1] : null;
+          if (previousTask?.due_date) {
+            const parsedPrevious = new Date(previousTask.due_date);
+            if (!Number.isNaN(parsedPrevious.getTime())) previousDueAt = parsedPrevious;
+          }
         }
+        const baseDate = isProcessRecordModule ? await getProcessBaseDate() : new Date();
+        const computedDueAt = computeStageDueAt(
+          {
+            duration_value: durationValue,
+            duration_unit: durationUnit,
+            duration_from: durationFrom,
+          },
+          baseDate,
+          previousDueAt
+        );
+        dueDate = computedDueAt ? computedDueAt.toISOString() : null;
       }
 
       const payload: any = {
@@ -1663,7 +1965,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         assignee_id: assigneeType === 'user' ? assigneeId : null,
         assignee_role_id: assigneeType === 'role' ? assigneeId : null,
         assignee_type: assigneeType,
-        due_date: values.due_date || null,
+        due_date: dueDate,
+        description: taskDescription,
+        task_type: taskType,
         wage: values.wage || null,
         weight: values.weight || 0,
         sort_order: values.sort_order || ((tasks.length + 1) * 10),
@@ -1681,6 +1985,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         payload.related_to_module = moduleId;
         payload.production_line_id = null;
         payload.production_shelf_id = null;
+        const currentRecurrence = values?.recurrence_info && typeof values.recurrence_info === 'object'
+          ? values.recurrence_info
+          : {};
+        payload.recurrence_info = {
+          ...currentRecurrence,
+          ...(taskType ? { task_type: taskType } : {}),
+        };
+        if (activeProcessGroupMeta?.id) {
+          payload.recurrence_info = {
+            ...(payload.recurrence_info || {}),
+            process_group: {
+              id: activeProcessGroupMeta.id,
+              name: activeProcessGroupMeta.label || null,
+              template_id: activeProcessGroupMeta.templateId || null,
+              template_name: activeProcessGroupMeta.templateName || null,
+            },
+          };
+        }
         if (moduleId === 'projects') payload.project_id = recordId;
         if (moduleId === 'marketing_leads') payload.marketing_lead_id = recordId;
         if (moduleId === 'customers') payload.related_customer = recordId;
@@ -1688,8 +2010,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         if (moduleId === 'purchase_invoices') payload.purchase_invoice_id = recordId;
       }
 
-      const { error } = await supabase.from('tasks').insert(payload);
-      if (error) throw error;
+      await insertTasksWithFallback([payload]);
 
       message.success('مرحله جدید اضافه شد');
       if (draftToCreate?.id && isProcessRecordModule) {
@@ -1701,22 +2022,79 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setIsTaskModalOpen(false);
       taskForm.resetFields();
       setActiveLineId(null);
+      setActiveProcessGroupMeta(null);
       setDraftToCreate(null);
       await fetchTasks();
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'خطا در ثبت اطلاعات'));
+      const debugText = String(error?.message || error?.details || error?.hint || '').trim();
+      console.error('Task quick-create failed', error);
+      message.error(debugText ? `خطا در ثبت مرحله: ${debugText}` : toFaErrorMessage(error, 'خطا در ثبت اطلاعات'));
     }
   };
 
   const handleStatusChange = async (taskId: string, newStatus: string) => {
     try {
-      const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
-      if (error) throw error;
+      await updateTaskWithFallback(taskId, { status: newStatus });
       message.success('وضعیت بروزرسانی شد');
       const nextTasks = await fetchTasks();
       await maybeOpenHandoverByStatus(taskId, newStatus, nextTasks);
     } catch (err: any) {
-      message.error('خطا');
+      message.error(toFaErrorMessage(err, 'خطا در بروزرسانی وضعیت'));
+    }
+  };
+  const handleTaskAssigneeChange = async (task: any, assigneeCombo?: string) => {
+    if (!task?.id) return;
+    try {
+      const { assigneeType, assigneeId } = parseAssigneeComboValue(assigneeCombo);
+      const currentAssigneeType = task?.assignee_type ? String(task.assignee_type) : null;
+      const currentAssigneeId = task?.assignee_role_id
+        ? String(task.assignee_role_id)
+        : (task?.assignee_id ? String(task.assignee_id) : null);
+      if (assigneeType === currentAssigneeType && String(assigneeId || '') === String(currentAssigneeId || '')) return;
+      await updateTaskWithFallback(String(task.id), {
+        assignee_id: assigneeType === 'user' ? assigneeId : null,
+        assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+        assignee_type: assigneeType,
+      });
+      setTasks((prev) => prev.map((row: any) => (
+        String(row?.id) === String(task.id)
+          ? {
+              ...row,
+              assignee_id: assigneeType === 'user' ? assigneeId : null,
+              assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+              assignee_type: assigneeType,
+            }
+          : row
+      )));
+      message.success('مسئول بروزرسانی شد');
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'بروزرسانی مسئول ناموفق بود'));
+    }
+  };
+  const handleSaveTaskReport = async (task: any) => {
+    if (!task?.id) return;
+    const taskId = String(task.id);
+    const reportText = String((taskReportDrafts[taskId] ?? getTaskOptionalFieldFallback(task).taskReport) || '').trim();
+    try {
+      setSavingReportIds((prev) => ({ ...prev, [taskId]: true }));
+      const nextRecurrence = {
+        ...parseRecurrenceInfo(task?.recurrence_info),
+        task_report: reportText || null,
+      };
+      await updateTaskWithFallback(taskId, {
+        task_report: reportText || null,
+        recurrence_info: nextRecurrence,
+      });
+      setTasks((prev) => prev.map((row: any) => (
+        String(row?.id) === taskId
+          ? { ...row, task_report: reportText || null, recurrence_info: nextRecurrence }
+          : row
+      )));
+      message.success('گزارش وظیفه ثبت شد');
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'ثبت گزارش وظیفه ناموفق بود'));
+    } finally {
+      setSavingReportIds((prev) => ({ ...prev, [taskId]: false }));
     }
   };
 
@@ -1879,112 +2257,192 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }));
   }, [handoverForms]);
 
-  const renderPopupContent = (task: any) => (
-    <div className="w-72 p-1 font-['Vazirmatn']">
-      <div className="flex justify-between items-start mb-3 border-b border-gray-100 pb-2">
-        <h4 className="font-bold text-gray-800 m-0 text-sm line-clamp-2">{task.title || task.name}</h4>
-      </div>
+  const renderPopupContent = (task: any) => {
+    const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
+    const currentAssigneeCombo = task?.assignee_role_id
+      ? `role:${String(task.assignee_role_id)}`
+      : (task?.assignee_id ? `user:${String(task.assignee_id)}` : undefined);
+    const fallback = getTaskOptionalFieldFallback(task);
+    const taskTypeValue = String(task?.task_type || fallback.taskType || '').trim() || undefined;
+    const reportDraft = taskReportDrafts[String(task.id)] ?? fallback.taskReport;
+    const hasWage = task?.wage !== undefined && task?.wage !== null && Number(task.wage) !== 0;
+    const hasWeight = task?.weight !== undefined && task?.weight !== null && Number(task.weight) !== 0;
 
-      <div className="space-y-3 mb-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-500">وضعیت:</span>
-          {(() => {
-            const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
-            return (
-          <Select
-            size="small"
-            value={task.status}
-            onChange={(val) => handleStatusChange(task.id, val)}
-            className="w-36"
-            disabled={!canEditTaskStatus}
-            getPopupContainer={() => document.body}
-            dropdownStyle={{ zIndex: 10050 }}
-            options={[
-              { value: 'todo', label: 'انجام نشده' },
-              { value: 'in_progress', label: 'در حال انجام' },
-              { value: 'review', label: 'بازبینی' },
-              { value: 'done', label: 'تکمیل شده' },
-            ]}
-          />
-            );
-          })()}
+    return (
+      <div className="w-80 p-1 font-['Vazirmatn']">
+        <div className="flex justify-between items-start mb-3 border-b border-leather-100 pb-2">
+          <h4 className="font-bold text-leather-900 dark:text-gray-100 m-0 text-sm line-clamp-2">{task.title || task.name}</h4>
         </div>
-        {isProductionOrder && (
+
+        <div className="space-y-3 mb-3">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-gray-500">مقدار تولید شده:</span>
-            <InputNumber
+            <span className="text-xs text-gray-500">مسئول:</span>
+            <Select
               size="small"
-              min={0}
-              className="w-36 persian-number"
-              value={toNumber(task?.produced_qty)}
-              disabled={readOnly || String(task?.status || '').toLowerCase() === 'todo' || String(task?.status || '').toLowerCase() === 'pending'}
-              onChange={(val) => {
-                void handleProducedQtyChange(String(task.id), val);
-              }}
+              value={currentAssigneeCombo}
+              onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
+              className="w-44"
+              disabled={readOnly}
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              getPopupContainer={() => document.body}
+              dropdownStyle={{ zIndex: 10050 }}
+            >
+              <Select.OptGroup label="کاربران">
+                {assignees.users.map((u) => (
+                  <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.full_name}>
+                    <Space><UserOutlined /> {u.full_name}</Space>
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
+              <Select.OptGroup label="تیم‌ها">
+                {assignees.roles.map((r) => (
+                  <Select.Option key={`popup-role-${r.id}`} value={`role:${r.id}`} label={r.title}>
+                    <Space><TeamOutlined /> {r.title}</Space>
+                  </Select.Option>
+                ))}
+              </Select.OptGroup>
+            </Select>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-gray-500">وضعیت:</span>
+            <Select
+              size="small"
+              value={task.status}
+              onChange={(val) => { void handleStatusChange(task.id, val); }}
+              className="w-44"
+              disabled={!canEditTaskStatus}
+              getPopupContainer={() => document.body}
+              dropdownStyle={{ zIndex: 10050 }}
+              options={[
+                { value: 'todo', label: 'انجام نشده' },
+                { value: 'in_progress', label: 'در حال انجام' },
+                { value: 'review', label: 'بازبینی' },
+                { value: 'done', label: 'تکمیل شده' },
+              ]}
             />
           </div>
-        )}
 
-        <div className="bg-gray-50 dark:bg-[#111827] p-2 rounded-lg border border-gray-100 dark:border-gray-700 space-y-2 text-xs text-gray-600 dark:text-gray-300">
-          <div className="flex items-center gap-2">
-            <OrderedListOutlined className="text-amber-700" />
-            <span>ترتیب: {toPersianNumber(task.sort_order || '-')}</span>
+          <div className="space-y-1">
+            <span className="text-xs text-gray-500">نوع وظیفه:</span>
+            <div className="rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-2 py-1 text-xs text-gray-700 dark:text-gray-200">
+              {taskTypeValue || '-'}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            {task.assignee_type === 'role' ? <TeamOutlined className="text-amber-700" /> : <UserOutlined className="text-amber-700" />}
-            <span>مسئول: {getAssigneeLabel(task)}</span>
+
+          {isProductionOrder && (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-gray-500">مقدار تولید شده:</span>
+              <InputNumber
+                size="small"
+                min={0}
+                className="w-44 persian-number"
+                value={toNumber(task?.produced_qty)}
+                disabled={readOnly || String(task?.status || '').toLowerCase() === 'todo' || String(task?.status || '').toLowerCase() === 'pending'}
+                onChange={(val) => {
+                  void handleProducedQtyChange(String(task.id), val);
+                }}
+              />
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <span className="text-xs text-gray-500">توضیحات وظیفه:</span>
+            <div className="rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-2 py-2 text-xs leading-6 text-gray-700 dark:text-gray-200 min-h-[54px] whitespace-pre-wrap break-words">
+              {String(task?.description || '').trim() || '-'}
+            </div>
           </div>
-          {isProductionOrder && task.production_shelf_id && (
+
+          <div className="bg-leather-50/70 dark:bg-[#111827] p-2 rounded-lg border border-leather-100 dark:border-gray-700 space-y-2 text-xs text-gray-700 dark:text-gray-300">
             <div className="flex items-center gap-2">
-              <span className="text-amber-700">قفسه:</span>
-              <span>{getShelfLabel(task.production_shelf_id)}</span>
+              <OrderedListOutlined className="text-leather-700" />
+              <span>ترتیب: {toPersianNumber(task.sort_order || '-')}</span>
             </div>
-          )}
-          {task.wage !== undefined && task.wage !== null && (
             <div className="flex items-center gap-2">
-              <span className="text-amber-700">💰</span>
-              <span>دستمزد: {toPersianNumber(Number(task.wage || 0).toLocaleString('en-US'))} تومان</span>
+              {task.assignee_type === 'role' ? <TeamOutlined className="text-leather-700" /> : <UserOutlined className="text-leather-700" />}
+              <span>مسئول: {getAssigneeLabel(task)}</span>
             </div>
-          )}
-          {task.weight !== undefined && task.weight !== null && (
-            <div className="flex items-center gap-2">
-              <span className="text-amber-700">وزن:</span>
-              <span>{toPersianNumber(task.weight)}</span>
+            {isProductionOrder && task.production_shelf_id && (
+              <div className="flex items-center gap-2">
+                <span className="text-leather-700">قفسه:</span>
+                <span>{getShelfLabel(task.production_shelf_id)}</span>
+              </div>
+            )}
+            {hasWage && (
+              <div className="flex items-center gap-2">
+                <span className="text-leather-700">💰</span>
+                <span>دستمزد: {toPersianNumber(Number(task.wage || 0).toLocaleString('en-US'))} تومان</span>
+              </div>
+            )}
+            {hasWeight && (
+              <div className="flex items-center gap-2">
+                <span className="text-leather-700">وزن:</span>
+                <span>{toPersianNumber(task.weight)}</span>
+              </div>
+            )}
+            {task.due_date && (
+              <div className="flex items-center gap-2">
+                <ClockCircleOutlined className="text-leather-700" />
+                <span>موعد: {renderDate(task.due_date)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <span className="text-xs text-gray-500">گزارش وظیفه:</span>
+            <Input.TextArea
+              value={reportDraft}
+              placeholder="متن گزارش را بنویسید..."
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              disabled={readOnly && !allowReportEditInReadOnly}
+              onChange={(event) => {
+                const taskId = String(task.id);
+                const value = event.target.value;
+                setTaskReportDrafts((prev) => ({ ...prev, [taskId]: value }));
+              }}
+            />
+            <div className="flex items-center justify-between">
+              <Checkbox
+                disabled={(readOnly && !allowReportEditInReadOnly) || savingReportIds[String(task.id)]}
+                onChange={(event) => {
+                  if (!event.target.checked) return;
+                  void handleSaveTaskReport(task);
+                }}
+              >
+                ثبت گزارش
+              </Checkbox>
+              {savingReportIds[String(task.id)] && <span className="text-[11px] text-gray-500">در حال ثبت...</span>}
             </div>
+          </div>
+        </div>
+
+        <div className="flex justify-between pt-2 border-t border-leather-100">
+          {supportsHandover ? (
+            <Button
+              size="small"
+              type="link"
+              className="text-xs text-leather-700 hover:text-leather-600 px-0"
+              onClick={() => {
+                setOpenTaskPopoverId(null);
+                void openTaskHandoverModal(task);
+              }}
+            >
+              فرم‌های تحویل کالا
+            </Button>
+          ) : (
+            <span />
           )}
-          {task.due_date && (
-            <div className="flex items-center gap-2">
-              <ClockCircleOutlined className="text-amber-700" />
-              <span>موعد: {renderDate(task.due_date)}</span>
-            </div>
-          )}
+          <Link to={`/tasks/${task.id}`} target="_blank">
+            <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-leather-700 hover:text-leather-600">
+              جزئیات کامل
+            </Button>
+          </Link>
         </div>
       </div>
-
-      <div className="flex justify-between pt-2 border-t border-gray-100">
-        {supportsHandover ? (
-          <Button
-            size="small"
-            type="link"
-            className="text-xs text-leather-700 hover:text-leather-600 px-0"
-            onClick={() => {
-              setOpenTaskPopoverId(null);
-              void openTaskHandoverModal(task);
-            }}
-          >
-            فرم‌های تحویل کالا
-          </Button>
-        ) : (
-          <span />
-        )}
-        <Link to={`/tasks/${task.id}`} target="_blank">
-          <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-amber-700 hover:text-amber-600">
-            جزئیات کامل
-          </Button>
-        </Link>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const draftList = Array.isArray(draftLocal) ? draftLocal : [];
   const totalWage = lines.reduce((sum, line) => {
@@ -2066,6 +2524,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     await loadProcessTemplateOptions();
   }, [isProcessRecordModule, loadProcessTemplateOptions, readOnly]);
 
+  useEffect(() => {
+    if (!isProcessRecordModule || readOnly || !recordId || !moduleId || typeof window === 'undefined') return;
+    const handler = (event: Event) => {
+      const customEvent = event as CustomEvent<{ moduleId?: string; recordId?: string }>;
+      const targetModuleId = String(customEvent?.detail?.moduleId || '');
+      const targetRecordId = String(customEvent?.detail?.recordId || '');
+      if (targetModuleId !== String(moduleId) || targetRecordId !== String(recordId)) return;
+      setShowEmptyProcessDetails(true);
+      void handleOpenAppendProcessModal();
+    };
+    window.addEventListener('kalamapp:open-process-append', handler as EventListener);
+    return () => {
+      window.removeEventListener('kalamapp:open-process-append', handler as EventListener);
+    };
+  }, [handleOpenAppendProcessModal, isProcessRecordModule, moduleId, readOnly, recordId]);
+
   const handleAppendProcessTemplate = useCallback(async () => {
     if (!appendProcessTemplateId) {
       message.warning('الگوی فرآیند را انتخاب کنید');
@@ -2111,6 +2585,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const row = {
           id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
           name: stageName,
+          description: String(metadata?.description || '').trim() || null,
+          task_type: String(metadata?.task_type || '').trim() || null,
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -2143,6 +2619,55 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setLoading(false);
     }
   }, [appendProcessTemplateId, buildProcessGroupId, draftLocal, processTemplateOptions, saveDraftStages]);
+
+  const handleCreateRawProcessGroup = useCallback(async () => {
+    if (!isProcessRecordModule) return;
+    try {
+      setLoading(true);
+      const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
+      const maxSortOrder = existing.reduce((maxValue: number, stage: any) => {
+        const n = Number(stage?.sort_order || 0);
+        return n > maxValue ? n : maxValue;
+      }, 0);
+      const nextGroupId = buildProcessGroupId();
+      const existingGroupCount = new Set(
+        existing
+          .map((stage: any) => String(stage?.process_group_id || stage?.source_template_id || '').trim())
+          .filter(Boolean)
+      ).size;
+      const nextGroupName = `فرآیند ${toPersianNumber(existingGroupCount + 1)}`;
+      const nextStages = [
+        ...existing,
+        {
+          id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          name: 'مرحله 1',
+          description: null,
+          task_type: null,
+          sort_order: maxSortOrder > 0 ? maxSortOrder + 10 : ((existing.length + 1) * 10),
+          wage: 0,
+          weight: 0,
+          default_assignee_id: null,
+          default_assignee_role_id: null,
+          duration_value: 0,
+          duration_unit: 'day',
+          duration_from: 'project_start',
+          source_template_id: null,
+          source_template_name: null,
+          process_group_id: nextGroupId,
+          process_group_name: nextGroupName,
+        },
+      ];
+      await saveDraftStages(nextStages);
+      setShowEmptyProcessDetails(true);
+      setAppendProcessModalOpen(false);
+      setAppendProcessTemplateId(null);
+      message.success('فرآیند خام ایجاد شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ایجاد فرآیند خام ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [buildProcessGroupId, draftLocal, isProcessRecordModule, saveDraftStages]);
 
   const handleApplyTemplateToGroup = useCallback(async (groupId: string, templateId: string) => {
     const normalizedGroupId = String(groupId || '').trim();
@@ -2193,6 +2718,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const row = {
           id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
           name: stageName,
+          description: String(metadata?.description || '').trim() || null,
+          task_type: String(metadata?.task_type || '').trim() || null,
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -2224,6 +2751,68 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, [draftLocal, processTemplateOptions, saveDraftStages]);
 
+  const handleCopyProcessGroup = useCallback(async (groupId: string) => {
+    const normalizedGroupId = String(groupId || '').trim();
+    if (!normalizedGroupId) return;
+    try {
+      setLoading(true);
+      const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
+      const sourceStages = existing
+        .filter((stage: any) => getStageProcessGroupMeta(stage).groupId === normalizedGroupId)
+        .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+      if (!sourceStages.length) {
+        message.info('مرحله‌ای برای کپی وجود ندارد');
+        return;
+      }
+      const maxSortOrder = existing.reduce((maxValue: number, stage: any) => {
+        const n = Number(stage?.sort_order || 0);
+        return n > maxValue ? n : maxValue;
+      }, 0);
+      const nextGroupId = buildProcessGroupId();
+      const firstMeta = getStageProcessGroupMeta(sourceStages[0]);
+      const baseName = String(firstMeta.groupLabel || firstMeta.templateName || 'فرآیند').trim() || 'فرآیند';
+      const nextGroupName = `${baseName} (کپی)`;
+      let cursor = maxSortOrder > 0 ? maxSortOrder + 10 : ((existing.length + 1) * 10);
+      const copiedStages = sourceStages.map((stage: any, index: number) => {
+        const next = {
+          ...stage,
+          id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+          sort_order: cursor,
+          process_group_id: nextGroupId,
+          process_group_name: nextGroupName,
+        };
+        cursor += 10;
+        return next;
+      });
+      const nextStages = [...existing, ...copiedStages].sort(
+        (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
+      );
+      await saveDraftStages(nextStages);
+      message.success('کپی فرآیند انجام شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'کپی فرآیند ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [buildProcessGroupId, draftLocal, getStageProcessGroupMeta, saveDraftStages]);
+
+  const handleDeleteProcessGroup = useCallback(async (groupId: string) => {
+    const normalizedGroupId = String(groupId || '').trim();
+    if (!normalizedGroupId) return;
+    try {
+      setLoading(true);
+      const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
+      const nextStages = existing.filter((stage: any) => getStageProcessGroupMeta(stage).groupId !== normalizedGroupId);
+      if (nextStages.length === existing.length) return;
+      await saveDraftStages(nextStages);
+      message.success('فرآیند حذف شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'حذف فرآیند ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [draftLocal, getStageProcessGroupMeta, saveDraftStages]);
+
   const parseStageAssignee = useCallback((stage: any) => {
     const defaultRoleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
     const defaultUserId = stage?.default_assignee_id ? String(stage.default_assignee_id) : null;
@@ -2252,8 +2841,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       .select(selectExpr)
       .eq('id', recordId)
       .maybeSingle();
-    const startRaw = startField ? recordRow?.[startField] : null;
-    const baseValue = startRaw || recordRow?.created_at || new Date().toISOString();
+    const recordData: any = (recordRow && typeof recordRow === 'object') ? recordRow : {};
+    const startRaw = startField ? recordData?.[startField] : null;
+    const baseValue = startRaw || recordData?.created_at || new Date().toISOString();
     const parsed = new Date(baseValue);
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   }, [moduleId, recordId]);
@@ -2290,8 +2880,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const hasName = String(stage?.name || stage?.title || '').trim() !== '';
         if (!hasName) return false;
         if (!normalizedTargetGroupId) return true;
-        const groupId = String(stage?.process_group_id || stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
-        return groupId === normalizedTargetGroupId;
+        return getStageProcessGroupMeta(stage).groupId === normalizedTargetGroupId;
       })
       .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
     if (!stageRows.length) {
@@ -2303,33 +2892,45 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
       const baseDate = await getProcessBaseDate();
-      const dueByName = new Map<string, string | null>();
+      const dueByStageKey = new Map<string, string | null>();
       let previousDueAt: Date | null = null;
+      const buildStageTaskKey = (groupIdValue: any, nameValue: any, sortOrderValue: any) => {
+        const normalizedGroupId = String(groupIdValue || 'default_process_group').trim() || 'default_process_group';
+        const normalizedName = String(nameValue || '').trim().toLowerCase();
+        const normalizedSort = Number(sortOrderValue || 0);
+        return `${normalizedGroupId}::${normalizedName}::${normalizedSort}`;
+      };
       stageRows.forEach((stage: any) => {
         const normalizedName = String(stage?.name || stage?.title || '').trim().toLowerCase();
         if (!normalizedName) return;
+        const { groupId } = getStageProcessGroupMeta(stage);
         const dueAt = computeStageDueAt(stage, baseDate, previousDueAt);
         if (dueAt) previousDueAt = dueAt;
-        dueByName.set(normalizedName, dueAt ? dueAt.toISOString() : null);
+        dueByStageKey.set(
+          buildStageTaskKey(groupId, normalizedName, stage?.sort_order),
+          dueAt ? dueAt.toISOString() : null
+        );
       });
-
-      const buildStageTaskKey = (nameValue: any, sortOrderValue: any) => {
-        const normalizedName = String(nameValue || '').trim().toLowerCase();
-        const normalizedSort = Number(sortOrderValue || 0);
-        return `${normalizedName}::${normalizedSort}`;
-      };
 
       const existingByStageKey = new Set(
         (Array.isArray(tasks) ? tasks : [])
           .filter((task: any) => processTaskModules.has(String(task?.related_to_module || '')))
-          .map((task: any) => buildStageTaskKey(task?.name || task?.title || '', task?.sort_order))
+          .map((task: any) => {
+            const taskMeta = getTaskProcessGroupMeta(task);
+            return buildStageTaskKey(
+              taskMeta.groupId || 'default_process_group',
+              task?.name || task?.title || '',
+              task?.sort_order
+            );
+          })
           .filter(Boolean)
       );
 
       const payload = stageRows
         .filter((stage: any) => {
           const stageName = String(stage?.name || stage?.title || '').trim();
-          const stageKey = buildStageTaskKey(stageName, stage?.sort_order);
+          const stageMeta = getStageProcessGroupMeta(stage);
+          const stageKey = buildStageTaskKey(stageMeta.groupId, stageName, stage?.sort_order);
           if (!stageName || existingByStageKey.has(stageKey)) return false;
           existingByStageKey.add(stageKey);
           return true;
@@ -2337,7 +2938,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .map((stage: any, index: number) => {
           const stageName = String(stage?.name || stage?.title || `مرحله ${index + 1}`).trim();
           const normalized = stageName.toLowerCase();
+          const stageMeta = getStageProcessGroupMeta(stage);
           const assignee = parseStageAssignee(stage);
+          const recurrenceBase = stage?.recurrence_info && typeof stage.recurrence_info === 'object'
+            ? stage.recurrence_info
+            : {};
+          const stageTaskType = String(stage?.task_type || '').trim() || null;
+          const stageDescription = String(stage?.description || '').trim() || null;
           const taskRow: any = {
             name: stageName,
             status: 'todo',
@@ -2345,14 +2952,26 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             production_line_id: null,
             production_shelf_id: null,
             produced_qty: 0,
+            description: stageDescription,
+            task_type: stageTaskType,
             assignee_type: assignee.assigneeType,
             assignee_id: assignee.assigneeType === 'user' ? assignee.assigneeId : null,
             assignee_role_id: assignee.assigneeType === 'role' ? assignee.assigneeId : null,
             wage: Number(stage?.wage || 0),
             weight: Number(stage?.weight || 0),
             sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-            due_date: dueByName.get(normalized) || null,
+            due_date: dueByStageKey.get(buildStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null,
             created_by: userId,
+            recurrence_info: {
+              ...recurrenceBase,
+              ...(stageTaskType ? { task_type: stageTaskType } : {}),
+              process_group: {
+                id: stageMeta.groupId,
+                name: stageMeta.groupLabel,
+                template_id: stageMeta.templateId,
+                template_name: stageMeta.templateName,
+              },
+            },
           };
           if (moduleId === 'projects') taskRow.project_id = recordId;
           if (moduleId === 'marketing_leads') taskRow.marketing_lead_id = recordId;
@@ -2366,8 +2985,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         message.info('برای همه مراحل وظیفه ثبت شده است');
         return;
       }
-      const { error } = await supabase.from('tasks').insert(payload);
-      if (error) throw error;
+      await insertTasksWithFallback(payload);
       await fetchTasks();
       message.success(`${toPersianNumber(payload.length)} وظیفه ایجاد شد`);
     } catch (error: any) {
@@ -2379,7 +2997,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     computeStageDueAt,
     draftLocal,
     fetchTasks,
+    getStageProcessGroupMeta,
+    getTaskProcessGroupMeta,
     getProcessBaseDate,
+    insertTasksWithFallback,
     isProcessRecordModule,
     moduleId,
     parseStageAssignee,
@@ -2399,6 +3020,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ? {
               ...stage,
               name: values.name,
+              description: String(values?.description || '').trim() || null,
+              task_type: String(values?.task_type || '').trim() || null,
               sort_order: values.sort_order || stage.sort_order,
               wage: Number(values?.wage || 0),
               weight: Number(values?.weight || 0),
@@ -2414,6 +3037,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       next.push({
         id: Date.now(),
         name: values.name,
+        description: String(values?.description || '').trim() || null,
+        task_type: String(values?.task_type || '').trim() || null,
         sort_order: values.sort_order || ((draftLocal.length + 1) * 10),
         wage: Number(values?.wage || 0),
         weight: Number(values?.weight || 0),
@@ -2452,6 +3077,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         : (editingDraft?.default_assignee_id ? `user:${String(editingDraft.default_assignee_id)}` : undefined);
       draftForm.setFieldsValue({
         name: editingDraft.name,
+        description: editingDraft.description || '',
+        task_type: editingDraft.task_type || undefined,
         sort_order: editingDraft.sort_order,
         wage: editingDraft.wage || 0,
         weight: editingDraft.weight || 0,
@@ -2462,6 +3089,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
     } else {
       draftForm.setFieldsValue({
+        description: '',
+        task_type: undefined,
         sort_order: (draftLocal.length + 1) * 10,
         wage: 0,
         weight: 0,
@@ -2480,14 +3109,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }));
 
   const processDraftGroups = useMemo(() => {
-    if (!isProcessRecordModule) return [] as Array<{ id: string; label: string; stages: any[] }>;
+    if (!isProcessRecordModule) return [] as Array<{ id: string; label: string; templateId: string | null; templateName: string | null; stages: any[] }>;
     const sorted = [...draftSegments].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
     const groups = new Map<string, { id: string; label: string; stages: any[]; firstSort: number; firstIndex: number }>();
     sorted.forEach((stage: any, index: number) => {
-      const fallbackGroupId = String(stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
-      const groupId = String(stage?.process_group_id || fallbackGroupId).trim() || 'default_process_group';
-      const fallbackLabel = String(stage?.source_template_name || '').trim();
-      const groupLabel = String(stage?.process_group_name || fallbackLabel).trim();
+      const stageMeta = getStageProcessGroupMeta(stage);
+      const groupId = stageMeta.groupId;
+      const groupLabel = String(stageMeta.groupLabel || '').trim();
       const sortOrder = Number(stage?.sort_order || 0);
       if (!groups.has(groupId)) {
         groups.set(groupId, {
@@ -2512,7 +3140,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         templateName: String(group.stages?.[0]?.source_template_name || '').trim() || null,
         stages: group.stages.sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)),
       }));
-  }, [draftSegments, isProcessRecordModule]);
+  }, [draftSegments, getStageProcessGroupMeta, isProcessRecordModule]);
+
+  useEffect(() => {
+    if (processDraftGroups.length > 0) {
+      setShowEmptyProcessDetails(true);
+    } else if (tasks.length === 0) {
+      setShowEmptyProcessDetails(false);
+    }
+  }, [processDraftGroups.length, tasks.length]);
 
   const getLineSegments = (lineTasks: any[], activeDraftSegments: any[] = draftSegments) => {
     const normalizedTasks = (lineTasks || []).map((task: any) => ({
@@ -2544,7 +3180,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const getProcessLineGroups = (lineTasks: any[]) => {
     const baseGroups = processDraftGroups.length > 0
       ? processDraftGroups
-      : [{ id: 'default_process_group', label: '', stages: [] as any[] }];
+      : [{ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [] as any[] }];
     const sortedTasks = [...(lineTasks || [])].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
     const usedTaskIds = new Set<string>();
     const groups = baseGroups.map((group) => {
@@ -2557,6 +3193,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const scopedTasks = sortedTasks.filter((task: any) => {
         const taskId = String(task?.id || '');
         if (taskId && usedTaskIds.has(taskId)) return false;
+        const taskMeta = getTaskProcessGroupMeta(task);
+        if (taskMeta.groupId) {
+          if (taskMeta.groupId !== String(group.id)) return false;
+          if (taskId) usedTaskIds.add(taskId);
+          return true;
+        }
         const normalizedTaskName = normalizeStageName(task?.name || task?.title);
         const taskSort = Number(task?.sort_order || 0);
         const bySort = stageSortSet.size > 0 && Number.isFinite(taskSort) && stageSortSet.has(taskSort);
@@ -2567,6 +3209,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
       return {
         ...group,
+        templateId: group.templateId || scopedTasks.map((task: any) => getTaskProcessGroupMeta(task).templateId).find(Boolean) || null,
+        templateName: group.templateName || scopedTasks.map((task: any) => getTaskProcessGroupMeta(task).templateName).find(Boolean) || null,
         tasks: scopedTasks,
       };
     });
@@ -2574,7 +3218,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const remainingTasks = sortedTasks.filter((task: any) => !usedTaskIds.has(String(task?.id || '')));
     if (remainingTasks.length > 0) {
       if (!groups.length) {
-        groups.push({ id: 'default_process_group', label: '', stages: [], tasks: remainingTasks });
+        groups.push({ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: remainingTasks });
       } else {
         groups[0] = { ...groups[0], tasks: [...groups[0].tasks, ...remainingTasks] };
       }
@@ -2668,12 +3312,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Popover
                   key={stage.id || index}
                   content={
-                    <div className="space-y-2 text-xs">
-                      <div className="font-bold text-gray-700">{stage.label}</div>
+                    <div className="space-y-2 text-xs p-1">
+                      <div className="font-bold text-leather-900 dark:text-gray-100">{stage.label}</div>
                       <div>ترتیب: {toPersianNumber(stage.sort_order || '-')}</div>
                       <div>دستمزد: {toPersianNumber(Number(stage.wage || 0).toLocaleString('en-US'))} تومان</div>
                       <div>وزن: {toPersianNumber(stage.weight || 0)}</div>
                       <div>مسئول: {getDraftAssigneeLabel(stage)}</div>
+                      {String(stage?.task_type || '').trim() && <div>نوع وظیفه: {stage.task_type}</div>}
+                      {String(stage?.description || '').trim() && <div>توضیحات: {stage.description}</div>}
                       <div>زمان انجام: {formatDraftDuration(stage)}</div>
                       {!readOnly && (
                         <div className="flex gap-2">
@@ -2727,6 +3373,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const showInlineQty = isProductionOrder && (!compact || canEditQuantity);
         const lineSegments = getLineSegments(lineTasks);
         const processLineGroups = isProcessRecordModule ? getProcessLineGroups(lineTasks) : [];
+        const normalizedProcessLineGroups = processLineGroups.length > 0
+          ? processLineGroups
+          : [{ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: [], lineSegments: [] as any[] }];
+        const isProcessEmptyState = isProcessRecordModule
+          && normalizedProcessLineGroups.length === 1
+          && (!Array.isArray(normalizedProcessLineGroups[0]?.stages) || normalizedProcessLineGroups[0].stages.length === 0)
+          && (!Array.isArray(normalizedProcessLineGroups[0]?.tasks) || normalizedProcessLineGroups[0].tasks.length === 0)
+          && (!Array.isArray(normalizedProcessLineGroups[0]?.lineSegments) || normalizedProcessLineGroups[0].lineSegments.length === 0);
 
         const renderSegmentsBar = (segments: any[], barKey: string) => (
           <div className={`relative flex-1 flex bg-gray-100 dark:bg-gray-800 rounded-lg overflow-visible border border-gray-200 dark:border-gray-700 ${compact ? 'h-5' : 'h-9'}`}>
@@ -2740,10 +3394,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     <Popover
                       key={`${barKey}-task-${segment.id}`}
                       content={renderPopupContent(segment)}
-                      trigger={compact ? 'hover' : 'click'}
-                      open={compact ? undefined : openTaskPopoverId === String(segment.id)}
+                      trigger={(compact && !(readOnly && allowReportEditInReadOnly)) ? 'hover' : 'click'}
+                      open={((compact && !(readOnly && allowReportEditInReadOnly)) ? undefined : (openTaskPopoverId === String(segment.id)))}
                       onOpenChange={(open) => {
-                        if (compact) return;
+                        if (compact && !(readOnly && allowReportEditInReadOnly)) return;
                         setOpenTaskPopoverId(open ? String(segment.id) : null);
                       }}
                       overlayStyle={{ zIndex: 10000 }}
@@ -2777,17 +3431,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Popover
                   key={`${barKey}-draft-${segment.id}-${index}`}
                   content={
-                    <div className="space-y-2 text-xs">
-                      <div className="font-bold text-gray-700">{segment.label}</div>
+                    <div className="space-y-2 text-xs p-1">
+                      <div className="font-bold text-leather-900 dark:text-gray-100">{segment.label}</div>
                       <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
                       <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
                       <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
                       <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
+                      {String(segment?.task_type || '').trim() && <div>نوع وظیفه: {segment.task_type}</div>}
+                      {String(segment?.description || '').trim() && <div>توضیحات: {segment.description}</div>}
                       <div>زمان انجام: {formatDraftDuration(segment)}</div>
                       {!readOnly && (
                         <div className="flex items-center gap-2">
                           {recordId && (
-                            <Button size="small" type="primary" onClick={() => openTaskModal(line.id, segment)}>ایجاد وظیفه</Button>
+                            <Button
+                              size="small"
+                              onClick={() => openTaskModal(line.id, segment)}
+                              className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                            >
+                              ایجاد وظیفه
+                            </Button>
                           )}
                           <Button
                             size="small"
@@ -2829,7 +3491,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         return (
           <div key={line.id} className="space-y-2">
             <div className="flex items-center gap-3 text-xs text-gray-600">
-              {(!(isProcessRecordModule && readOnly && compact)) && (
+              {(!(isProcessRecordModule && readOnly && compact)) && !isProcessRecordModule && (
                 <span className="font-bold">
                   {isProcessModule
                     ? processTitle
@@ -2863,67 +3525,123 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             {isProcessRecordModule ? (
               <>
-                <div className="space-y-2">
-                  {(processLineGroups.length > 0 ? processLineGroups : [{ id: 'default_process_group', label: '', templateId: null, lineSegments: [] }]).map((group: any, groupIndex: number) => (
-                    <div key={`${line.id}-${group.id}-${groupIndex}`} className="space-y-1">
-                      {String(group?.label || '').trim() !== '' && (
-                        <div className="text-[11px] text-gray-500 dark:text-gray-400">
-                          {group?.label}
-                        </div>
-                      )}
+                {isProcessEmptyState && !showEmptyProcessDetails ? (
+                  <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">فرآیندی ثبت نشده است</span>
+                    <div className="flex items-center gap-2">
                       {!readOnly && !!recordId && (
-                        <div className="flex flex-wrap items-end gap-2">
-                          <div className="min-w-[220px] flex-1 max-w-[360px]">
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">
-                              الگوی فرآیند اجرا
-                            </div>
-                            <Select
-                              value={group?.templateId || undefined}
-                              onChange={(val) => {
-                                if (!val) return;
-                                void handleApplyTemplateToGroup(String(group?.id || ''), String(val));
-                              }}
-                              options={processTemplateOptions}
-                              showSearch
-                              optionFilterProp="label"
-                              loading={processTemplateOptionsLoading}
-                              className="w-full"
-                              placeholder="انتخاب الگوی فرآیند"
-                            />
-                          </div>
-                          <Tooltip title="افزودن مرحله جدید">
-                            <Button
-                              type="dashed"
-                              shape="circle"
-                              icon={<PlusOutlined />}
-                              size={compact ? 'small' : 'middle'}
-                              onClick={() => {
-                                openTaskModal(line.id);
-                              }}
-                              className="flex-shrink-0 border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
-                            />
-                          </Tooltip>
-                          <Button
-                            size={compact ? 'small' : 'middle'}
-                            onClick={() => { void handleAutoAssignProcess(String(group?.id || '')); }}
-                            className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
-                            disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
-                          >
-                            ارجاع خودکار فرآیند
-                          </Button>
-                        </div>
+                        <Button
+                          size={compact ? 'small' : 'middle'}
+                          onClick={() => { void handleOpenAppendProcessModal(); }}
+                          className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                        >
+                          افزودن فرآیند
+                        </Button>
                       )}
-                      <div className="w-full flex items-center gap-2">
-                        {renderSegmentsBar(group?.lineSegments || [], `${line.id}-${group.id}-${groupIndex}`)}
-                      </div>
+                      <Button
+                        size={compact ? 'small' : 'middle'}
+                        onClick={() => setShowEmptyProcessDetails(true)}
+                      >
+                        نمایش جزئیات
+                      </Button>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {normalizedProcessLineGroups.map((group: any, groupIndex: number) => (
+                      <div key={`${line.id}-${group.id}-${groupIndex}`} className="space-y-1">
+                        {!readOnly && !!recordId && (
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div className="min-w-[220px] flex-1 max-w-[360px]">
+                              <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">
+                                الگوی فرآیند اجرا
+                              </div>
+                              <Select
+                                value={group?.templateId || undefined}
+                                onChange={(val) => {
+                                  if (!val) return;
+                                  void handleApplyTemplateToGroup(String(group?.id || ''), String(val));
+                                }}
+                                options={processTemplateOptions}
+                                showSearch
+                                optionFilterProp="label"
+                                loading={processTemplateOptionsLoading}
+                                className="w-full"
+                                placeholder="انتخاب الگوی فرآیند"
+                              />
+                            </div>
+                            <Button
+                              size={compact ? 'small' : 'middle'}
+                              onClick={() => { void handleAutoAssignProcess(String(group?.id || '')); }}
+                              className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                              disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
+                            >
+                              ارجاع خودکار فرآیند
+                            </Button>
+                            <Tooltip title="کپی فرآیند">
+                              <Button
+                                size={compact ? 'small' : 'middle'}
+                                icon={<CopyOutlined />}
+                                onClick={() => { void handleCopyProcessGroup(String(group?.id || '')); }}
+                                disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
+                              />
+                            </Tooltip>
+                            <Tooltip title="حذف فرآیند">
+                              <Button
+                                danger
+                                size={compact ? 'small' : 'middle'}
+                                icon={<DeleteOutlined />}
+                                onClick={() => {
+                                  Modal.confirm({
+                                    title: 'حذف فرآیند',
+                                    content: 'این فرآیند از پیش‌نویس حذف شود؟',
+                                    okText: 'حذف',
+                                    cancelText: 'انصراف',
+                                    okButtonProps: { danger: true },
+                                    onOk: async () => {
+                                      await handleDeleteProcessGroup(String(group?.id || ''));
+                                    },
+                                  });
+                                }}
+                                disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
+                              />
+                            </Tooltip>
+                          </div>
+                        )}
+                        <div className="w-full flex items-center gap-2">
+                          {renderSegmentsBar(group?.lineSegments || [], `${line.id}-${group.id}-${groupIndex}`)}
+                          {!readOnly && !!recordId && (
+                            <Tooltip title="افزودن مرحله جدید">
+                              <Button
+                                type="dashed"
+                                shape="circle"
+                                icon={<PlusOutlined />}
+                                size={compact ? 'small' : 'middle'}
+                                onClick={() => {
+                                  openTaskModal(line.id, undefined, {
+                                    id: String(group?.id || ''),
+                                    label: group?.label || null,
+                                    templateId: group?.templateId || null,
+                                    templateName: group?.templateName || null,
+                                  });
+                                }}
+                                className="flex-shrink-0 border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                              />
+                            </Tooltip>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {!readOnly && !!recordId && (
                   <div className="flex justify-start">
                     <Button
                       size={compact ? 'small' : 'middle'}
-                      onClick={() => { void handleOpenAppendProcessModal(); }}
+                      onClick={() => {
+                        setShowEmptyProcessDetails(true);
+                        void handleOpenAppendProcessModal();
+                      }}
                       className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
                     >
                       افزودن فرآیند جدید
@@ -3022,7 +3740,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
-        title={<div className="flex items-center gap-2 text-amber-800"><div className="bg-amber-50 p-1 rounded text-amber-600"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند' : 'افزودن مرحله تولید'}</div>}
+        title={<div className="flex items-center gap-2 text-leather-800"><div className="bg-leather-50 p-1 rounded text-leather-600"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند (وظیفه)' : 'افزودن مرحله تولید'}</div>}
         open={isTaskModalOpen}
         onCancel={() => setIsTaskModalOpen(false)}
         footer={null}
@@ -3056,6 +3774,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </div>
 
             <div className="col-span-12">
+              <Form.Item name="task_type" label="نوع وظیفه">
+                <DynamicSelectField
+                  value={taskForm.getFieldValue('task_type')}
+                  onChange={(val) => taskForm.setFieldValue('task_type', val)}
+                  options={taskTypeOptions}
+                  category="task_type"
+                  onOptionsUpdate={fetchTaskTypeOptions}
+                  placeholder="انتخاب نوع وظیفه"
+                  className="w-full"
+                  getPopupContainer={() => document.body}
+                />
+              </Form.Item>
+            </div>
+
+            <div className="col-span-12">
               <Form.Item name="assignee_combo" label="مسئول انجام">
                 <Select placeholder="انتخاب کنید..." allowClear showSearch optionFilterProp="label">
                   <Select.OptGroup label="کاربران">
@@ -3076,6 +3809,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </Form.Item>
             </div>
 
+            <div className="col-span-12">
+              <Form.Item name="description" label="توضیحات">
+                <Input.TextArea placeholder="توضیحات مرحله/وظیفه" autoSize={{ minRows: 2, maxRows: 4 }} />
+              </Form.Item>
+            </div>
+
             {isProductionOrder && (
               <div className="col-span-12">
                 <Form.Item name="production_shelf_id" label="قفسه مرحله">
@@ -3091,13 +3830,46 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </div>
             )}
 
+            {isProcessModule && (
+              <>
+                <div className="col-span-12">
+                  <div className="text-xs text-gray-500 mb-1">زمان انجام</div>
+                </div>
+                <div className="col-span-5">
+                  <Form.Item name="duration_from" label="بعد از">
+                    <Select
+                      options={[
+                        { label: 'شروع پروژه', value: 'project_start' },
+                        { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
+                      ]}
+                    />
+                  </Form.Item>
+                </div>
+                <div className="col-span-4">
+                  <Form.Item name="duration_value" label="مقدار">
+                    <InputNumber className="w-full" min={0} />
+                  </Form.Item>
+                </div>
+                <div className="col-span-3">
+                  <Form.Item name="duration_unit" label="واحد">
+                    <Select
+                      options={[
+                        { label: 'روز', value: 'day' },
+                        { label: 'ساعت', value: 'hour' },
+                      ]}
+                    />
+                  </Form.Item>
+                </div>
+              </>
+            )}
+
             <div className="col-span-12">
-              <Form.Item name="due_date" label="موعد انجام">
+              <Form.Item name="due_date" label="موعد انجام (دستی)">
                 <PersianDatePicker
                   type="DATETIME"
                   value={taskForm.getFieldValue('due_date')}
                   onChange={(val) => taskForm.setFieldValue('due_date', val)}
-                  placeholder="تاریخ و ساعت"
+                  placeholder="تاریخ و ساعت (اختیاری)"
                   className="w-full"
                 />
               </Form.Item>
@@ -3106,7 +3878,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
           <div className="flex justify-end gap-2 mt-4 border-t pt-4">
             <Button onClick={() => setIsTaskModalOpen(false)} className="rounded-lg">انصراف</Button>
-            <Button type="primary" htmlType="submit" loading={loading} className="rounded-lg bg-amber-700 hover:!bg-amber-600 border-none shadow-md">
+            <Button type="primary" htmlType="submit" loading={loading} className="rounded-lg bg-leather-600 hover:!bg-leather-500 border-none shadow-md">
               ثبت مرحله
             </Button>
           </div>
@@ -3146,6 +3918,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="col-span-6">
                   <Form.Item name="weight" label="وزن">
                     <InputNumber className="w-full" min={0} />
+                  </Form.Item>
+                </div>
+                <div className="col-span-12">
+                  <Form.Item name="task_type" label="نوع وظیفه">
+                    <DynamicSelectField
+                      value={draftForm.getFieldValue('task_type')}
+                      onChange={(val) => draftForm.setFieldValue('task_type', val)}
+                      options={taskTypeOptions}
+                      category="task_type"
+                      onOptionsUpdate={fetchTaskTypeOptions}
+                      placeholder="انتخاب نوع وظیفه"
+                      className="w-full"
+                      getPopupContainer={() => document.body}
+                    />
+                  </Form.Item>
+                </div>
+                <div className="col-span-12">
+                  <Form.Item name="description" label="توضیحات">
+                    <Input.TextArea placeholder="توضیحات مرحله پیش‌نویس" autoSize={{ minRows: 2, maxRows: 4 }} />
                   </Form.Item>
                 </div>
                 <div className="col-span-12">
@@ -3216,10 +4007,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           setAppendProcessModalOpen(false);
           setAppendProcessTemplateId(null);
         }}
-        onOk={() => { void handleAppendProcessTemplate(); }}
-        okText="افزودن"
-        cancelText="انصراف"
-        okButtonProps={{ loading }}
+        footer={[
+          <Button key="raw" onClick={() => { void handleCreateRawProcessGroup(); }} loading={loading}>
+            ایجاد فرآیند خام
+          </Button>,
+          <Button key="cancel" onClick={() => { setAppendProcessModalOpen(false); setAppendProcessTemplateId(null); }}>
+            انصراف
+          </Button>,
+          <Button
+            key="add"
+            type="primary"
+            className="bg-leather-600 hover:!bg-leather-500 border-none"
+            loading={loading}
+            onClick={() => { void handleAppendProcessTemplate(); }}
+            disabled={!appendProcessTemplateId}
+          >
+            افزودن از الگو
+          </Button>,
+        ]}
         destroyOnHidden
       >
         <div className="space-y-3 pt-2">

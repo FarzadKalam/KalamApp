@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, message, Empty, Typography, Spin, Select, InputNumber, Popover, Input } from 'antd';
-import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined } from '@ant-design/icons';
+import { Table, Button, Space, message, Empty, Typography, Spin, Select, InputNumber, Popover, Input, Modal } from 'antd';
+import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField } from '../types';
 import { calculateRow } from '../utils/calculations';
-import { toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { convertArea } from '../utils/unitConversions';
 import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/inventoryTransactions';
 import SmartFieldRenderer from './SmartFieldRenderer';
@@ -51,6 +51,15 @@ const toSafeNumber = (raw: any): number => {
   if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return 0;
   const parsed = parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const CHEQUE_STATUS_LABELS: Record<string, string> = {
+  new: 'جدید',
+  in_bank: 'در بانک',
+  cleared: 'وصول شده',
+  bounced: 'برگشتی',
+  returned: 'عودت شده',
+  canceled: 'ابطال شده',
 };
 
 const isServiceProduct = (productType: any) => String(productType || '').trim().toLowerCase() === 'service';
@@ -114,12 +123,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [expandedProducts, setExpandedProducts] = useState<Record<string, { loading: boolean; data: any[] }>>({});
   const [shelfOptionsByRow, setShelfOptionsByRow] = useState<Record<string, { loading: boolean; options: { label: string; value: string }[] }>>({});
   const [localDynamicOptions, setLocalDynamicOptions] = useState<Record<string, any[]>>({});
+  const [invoiceBillboardOptions, setInvoiceBillboardOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [eligibleReceivedChequeOptions, setEligibleReceivedChequeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [rowReloadVersion, setRowReloadVersion] = useState<Record<string, number>>({});
   const [notePopoverRowKey, setNotePopoverRowKey] = useState<string | null>(null);
   const [shelfPopoverRowKey, setShelfPopoverRowKey] = useState<string | null>(null);
   const [dimensionsPopoverRowKey, setDimensionsPopoverRowKey] = useState<string | null>(null);
   const [calendarPopoverRowKey, setCalendarPopoverRowKey] = useState<string | null>(null);
+  const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
@@ -157,6 +168,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
     leather_colors: 'colors',
     fitting_colors: 'colors',
     lining_width: 'lining_dims',
+  };
+  const mergeOptionsByValue = (primary: any[] = [], extra: any[] = []) => {
+    const map = new Map<string, any>();
+    [...primary, ...extra].forEach((item: any) => {
+      const value = String(item?.value || '').trim();
+      if (!value || map.has(value)) return;
+      map.set(value, item);
+    });
+    return Array.from(map.values());
   };
 
   // --- دریافت دیتای خارجی ---
@@ -431,7 +451,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       try {
         const { data: rows, error } = await supabase
           .from('cheques')
-          .select('id, serial_no, sayad_id, amount, status, metadata')
+          .select('id, serial_no, sayad_id, amount, due_date, status, metadata')
           .eq('cheque_type', 'received')
           .eq('status', 'new')
           .order('created_at', { ascending: false })
@@ -447,11 +467,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
             const serial = String(row?.serial_no || '').trim() || 'بدون شماره';
             const sayad = String(row?.sayad_id || '').trim();
             const amount = toSafeNumber(row?.amount || 0);
-            const amountLabel = amount > 0 ? ` - ${toPersianNumber(amount.toLocaleString('en-US'))} ${currencyLabel}` : '';
+            const dueDateRaw = String(row?.due_date || '').trim();
+            const dueDateLabel = dueDateRaw
+              ? toPersianNumber(safeJalaliFormat(dueDateRaw, 'YYYY/MM/DD') || dueDateRaw)
+              : '-';
+            const amountLabel = amount > 0 ? formatPersianPrice(amount) : '-';
             const sayadLabel = sayad ? ` (${toPersianNumber(sayad)})` : '';
             return {
               value: String(row.id),
-              label: `${serial}${sayadLabel}${amountLabel}`,
+              label: `${serial}${sayadLabel} (${dueDateLabel} - ${amountLabel})`,
             };
           });
 
@@ -466,6 +490,45 @@ const EditableTable: React.FC<EditableTableProps> = ({
       active = false;
     };
   }, [isPurchaseInvoicePayments, isEditing, saving]);
+
+  useEffect(() => {
+    if (!isAnyInvoiceItems) return;
+    let active = true;
+
+    const loadBillboardOptions = async () => {
+      try {
+        const { data: rows, error } = await supabase
+          .from('billboards')
+          .select('id, name, system_code')
+          .order('updated_at', { ascending: false })
+          .limit(3000);
+        if (error) throw error;
+
+        const options = (rows || [])
+          .map((row: any) => {
+            const id = String(row?.id || '').trim();
+            if (!id) return null;
+            const title = String(row?.name || '').trim() || id;
+            const code = String(row?.system_code || '').trim();
+            return {
+              value: id,
+              label: code ? `${code} - ${title} (تبلیغات محیطی)` : `${title} (تبلیغات محیطی)`,
+            };
+          })
+          .filter(Boolean) as Array<{ label: string; value: string }>;
+
+        if (active) setInvoiceBillboardOptions(options);
+      } catch (err) {
+        console.warn('Could not load billboard relation options', err);
+        if (active) setInvoiceBillboardOptions([]);
+      }
+    };
+
+    loadBillboardOptions();
+    return () => {
+      active = false;
+    };
+  }, [isAnyInvoiceItems]);
 
   const AREA_AUTO_UNITS = new Set(['متر مربع', 'سانتیمتر مربع', 'میلیمتر مربع']);
   const isDayUnit = (unit: any) => String(unit || '').trim() === 'روز';
@@ -487,6 +550,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const paymentType = String(row?.payment_type || '').trim();
       if (key === 'spent_cheque_id' && (paymentType !== 'cheque' || !row?.use_existing_received_cheque)) return false;
       if (key === 'use_existing_received_cheque' && paymentType !== 'cheque') return false;
+      if ((key === 'cheque_id' || key === 'cheque_status') && paymentType !== 'cheque') return false;
+      if (key === 'barter_id' && (paymentType !== 'barter' || isInvoicePayments)) return false;
     }
     return true;
   };
@@ -580,7 +645,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const source = isEditing ? tempData : data;
     const newData = [...source];
     newData[index] = { ...newData[index], [key]: value };
-    const row = newData[index] || {};
 
     if (isProductStockMovements) {
       if (key === 'voucher_type') {
@@ -604,10 +668,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     if (isAnyInvoiceItems && key === 'product_id') {
       newData[index]['source_shelf_id'] = null;
-      const rowKey = String(row.key || row.id || index);
-      if (value && isInvoiceItems) {
-        loadShelvesForRow(rowKey, String(value));
-      }
     }
 
     if (isAnyInvoiceItems && ['length', 'width', 'start_date', 'end_date', 'main_unit'].includes(key)) {
@@ -634,11 +694,45 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (paymentType !== 'cheque') {
         newData[index]['use_existing_received_cheque'] = false;
         newData[index]['spent_cheque_id'] = null;
+        newData[index]['cheque_id'] = null;
+        newData[index]['cheque_status'] = null;
+        newData[index]['cheque_serial_no'] = null;
+        newData[index]['cheque_sayad_id'] = null;
+        newData[index]['cheque_due_date'] = null;
+        newData[index]['cheque_account_holder_name'] = null;
+        newData[index]['cheque_bank_name'] = null;
+        newData[index]['cheque_image_url'] = null;
+      }
+      if (paymentType !== 'barter') {
+        newData[index]['barter_id'] = null;
+        newData[index]['barter_status'] = null;
+        newData[index]['barter_remaining_amount'] = null;
+        newData[index]['_barter_allocation_key'] = null;
       }
     }
 
     if (isPurchaseInvoicePayments && key === 'use_existing_received_cheque' && !value) {
       newData[index]['spent_cheque_id'] = null;
+    }
+
+    if (isAnyInvoicePayments && key === 'cheque_id') {
+      if (!value) {
+        newData[index]['cheque_status'] = null;
+        newData[index]['cheque_serial_no'] = null;
+        newData[index]['cheque_sayad_id'] = null;
+        newData[index]['cheque_due_date'] = null;
+        newData[index]['cheque_account_holder_name'] = null;
+        newData[index]['cheque_bank_name'] = null;
+        newData[index]['cheque_image_url'] = null;
+      } else if (isPurchaseInvoicePayments) {
+        newData[index]['use_existing_received_cheque'] = false;
+        newData[index]['spent_cheque_id'] = null;
+      }
+    }
+
+    if (isAnyInvoicePayments && key === 'barter_id' && !value) {
+      newData[index]['barter_status'] = null;
+      newData[index]['barter_remaining_amount'] = null;
     }
 
     if (key === 'selected_product_id' && !value) {
@@ -713,18 +807,55 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     if (value && relationConfig?.targetModule) {
       try {
-        const { data: record, error } = await supabase
-          .from(relationConfig.targetModule)
-          .select('*')
-          .eq('id', value)
-          .single();
+        let targetModule = relationConfig.targetModule as string;
+        let record: any = null;
+        let error: any = null;
+
+        if (isAnyInvoiceItems && key === 'product_id') {
+          const { data: productRecord, error: productError } = await supabase
+            .from('products')
+            .select('*')
+            .eq('id', value)
+            .maybeSingle();
+          if (productError) throw productError;
+          if (productRecord) {
+            targetModule = 'products';
+            record = productRecord;
+          } else {
+            const { data: billboardRecord, error: billboardError } = await supabase
+              .from('billboards')
+              .select('*')
+              .eq('id', value)
+              .maybeSingle();
+            if (billboardError) throw billboardError;
+            if (billboardRecord) {
+              targetModule = 'billboards';
+              record = billboardRecord;
+            }
+          }
+        } else {
+          const relationResult = await supabase
+            .from(relationConfig.targetModule)
+            .select('*')
+            .eq('id', value)
+            .single();
+          record = relationResult.data;
+          error = relationResult.error;
+        }
 
         if (!error && record) {
           const sourceRows = isEditing ? tempData : data;
           const newData = [...sourceRows];
           const currentRow = { ...newData[index], [key]: value };
+          const isBarterRelationSelection = isAnyInvoicePayments && key === 'barter_id';
 
           block.tableColumns?.forEach((col: any) => {
+            if (isBarterRelationSelection) {
+              return;
+            }
+            if (isAnyInvoicePayments && key === 'cheque_id' && col.key === 'status') {
+              return;
+            }
             if (record[col.key] !== undefined && col.key !== key) {
               currentRow[col.key] = record[col.key];
             }
@@ -734,10 +865,25 @@ const EditableTable: React.FC<EditableTableProps> = ({
           });
 
           if (isAnyInvoiceItems && key === 'product_id') {
-            currentRow.product_type = record?.product_type || currentRow.product_type || 'goods';
-            currentRow.main_unit = record?.main_unit || currentRow.main_unit || null;
-            currentRow.sub_unit = record?.sub_unit || currentRow.sub_unit || null;
-            if (isServiceProduct(currentRow.product_type)) {
+            if (targetModule === 'billboards') {
+              currentRow.product_type = 'service';
+              currentRow.main_unit = 'روز';
+              currentRow.sub_unit = 'عدد';
+              if (record?.daily_rent !== undefined && record?.daily_rent !== null && String(record.daily_rent).trim() !== '') {
+                currentRow.unit_price = record.daily_rent;
+              }
+              if (record?.width !== undefined && record?.width !== null && String(record.width).trim() !== '') {
+                currentRow.length = record.width;
+              }
+              if (record?.height !== undefined && record?.height !== null && String(record.height).trim() !== '') {
+                currentRow.width = record.height;
+              }
+            } else {
+              currentRow.product_type = record?.product_type || currentRow.product_type || 'goods';
+              currentRow.main_unit = record?.main_unit || currentRow.main_unit || null;
+              currentRow.sub_unit = record?.sub_unit || currentRow.sub_unit || null;
+            }
+            if (isServiceProduct(currentRow.product_type) && targetModule !== 'billboards') {
               currentRow.length = null;
               currentRow.width = null;
               currentRow.source_shelf_id = null;
@@ -754,6 +900,27 @@ const EditableTable: React.FC<EditableTableProps> = ({
             }
           }
 
+          if (isAnyInvoicePayments && key === 'cheque_id') {
+            currentRow.cheque_status = record?.status || currentRow.cheque_status || null;
+            currentRow.cheque_serial_no = record?.serial_no || null;
+            currentRow.cheque_sayad_id = record?.sayad_id || null;
+            currentRow.cheque_due_date = record?.due_date || null;
+            currentRow.cheque_account_holder_name = record?.account_holder_name || null;
+            currentRow.cheque_bank_name = record?.bank_name || null;
+            currentRow.cheque_image_url = record?.image_url || null;
+            if (record?.amount !== undefined && record?.amount !== null && String(record.amount).trim() !== '') {
+              currentRow.amount = record.amount;
+            }
+            if (!currentRow.attachment && record?.image_url) {
+              currentRow.attachment = record.image_url;
+            }
+          }
+
+          if (isAnyInvoicePayments && key === 'barter_id') {
+            currentRow.barter_status = record?.status || currentRow?.barter_status || null;
+            currentRow.barter_remaining_amount = record?.remaining_amount ?? currentRow?.barter_remaining_amount ?? null;
+          }
+
           if (isAnyInvoiceItems && key === 'product_id') {
             currentRow.source_shelf_id = null;
           }
@@ -765,7 +932,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           else setData(newData);
           if (mode === 'local' && onChange) onChange(newData);
 
-          if (isInvoiceItems && key === 'product_id' && value) {
+          if (isInvoiceItems && key === 'product_id' && value && targetModule === 'products' && !isServiceProduct(currentRow.product_type)) {
             const rowKey = String(currentRow.key || currentRow.id || index);
             loadShelvesForRow(rowKey, String(value));
           }
@@ -952,7 +1119,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const { data: sourceHeader, error: sourceError } = await supabase
       .from(moduleId)
-      .select(partyField)
+      .select(`${partyField}, name, system_code, invoice_date`)
       .eq('id', recordId)
       .maybeSingle();
     if (sourceError) throw sourceError;
@@ -961,6 +1128,26 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const partyId = sourceHeaderRecord?.[partyField] ? String(sourceHeaderRecord[partyField]) : null;
     const partyType = isInvoicePayments ? 'customer' : 'supplier';
     const nowIso = new Date().toISOString();
+    let partyBusinessName = '';
+    if (partyId) {
+      if (isInvoicePayments) {
+        const { data: customerInfo } = await supabase
+          .from('customers')
+          .select('business_name, first_name, last_name')
+          .eq('id', partyId)
+          .maybeSingle();
+        const businessName = String(customerInfo?.business_name || '').trim();
+        const personName = `${String(customerInfo?.first_name || '').trim()} ${String(customerInfo?.last_name || '').trim()}`.trim();
+        partyBusinessName = businessName || personName;
+      } else {
+        const { data: supplierInfo } = await supabase
+          .from('suppliers')
+          .select('business_name')
+          .eq('id', partyId)
+          .maybeSingle();
+        partyBusinessName = String(supplierInfo?.business_name || '').trim();
+      }
+    }
 
     const bankIds = Array.from(
       new Set(
@@ -987,41 +1174,661 @@ const EditableTable: React.FC<EditableTableProps> = ({
       });
     }
 
-    const spendChequeIds = Array.from(
+    const selectedChequeIds = Array.from(
       new Set(
         rows
-          .filter((row: any) => isPurchaseInvoicePayments && String(row?.payment_type || '') === 'cheque' && !!row?.use_existing_received_cheque)
-          .map((row: any) => String(row?.spent_cheque_id || '').trim())
-          .filter(Boolean)
+          .filter((row: any) => String(row?.payment_type || '') === 'cheque')
+          .flatMap((row: any) => {
+            const directChequeId = String(row?.cheque_id || '').trim();
+            const spentChequeId = String(row?.spent_cheque_id || '').trim();
+            return [directChequeId, spentChequeId].filter(Boolean);
+          })
       )
     );
 
-    const spendChequeById = new Map<string, any>();
-    if (spendChequeIds.length > 0) {
-      const { data: spendCheques, error: spendChequesError } = await supabase
+    const selectedChequeById = new Map<string, any>();
+    if (selectedChequeIds.length > 0) {
+      const { data: selectedCheques, error: selectedChequesError } = await supabase
         .from('cheques')
-        .select('id, cheque_type, status, metadata')
-        .in('id', spendChequeIds);
-      if (spendChequesError) throw spendChequesError;
-      (spendCheques || []).forEach((cheque: any) => {
-        spendChequeById.set(String(cheque.id), cheque);
+        .select('id, cheque_type, status, serial_no, sayad_id, due_date, bank_name, account_holder_name, image_url, metadata')
+        .in('id', selectedChequeIds);
+      if (selectedChequesError) throw selectedChequesError;
+      (selectedCheques || []).forEach((cheque: any) => {
+        selectedChequeById.set(String(cheque.id), cheque);
+      });
+    }
+
+    const selectedBarterIds = Array.from(
+      new Set(
+        rows
+          .flatMap((row: any) => {
+            const directBarterId = String(row?.barter_id || '').trim();
+            const syncedBarterId = String(row?._barter_synced_id || '').trim();
+            return [directBarterId, syncedBarterId].filter(Boolean);
+          })
+      )
+    );
+    const selectedBarterById = new Map<string, any>();
+    if (selectedBarterIds.length > 0) {
+      const { data: selectedBarters, error: selectedBartersError } = await supabase
+        .from('barters')
+        .select('id, name, status, initial_amount, spent_amount, remaining_amount, customer_id, supplier_id, employee_id, allocations, metadata')
+        .in('id', selectedBarterIds);
+      if (selectedBartersError) throw selectedBartersError;
+      (selectedBarters || []).forEach((barter: any) => {
+        selectedBarterById.set(String(barter.id), barter);
+      });
+    }
+
+    const applyBarterDelta = async (barterId: string, deltaSpend: number, metadataPatch?: Record<string, any>) => {
+      const resolvedId = String(barterId || '').trim();
+      if (!resolvedId) throw new Error('شناسه تهاتر نامعتبر است.');
+      const current = selectedBarterById.get(resolvedId);
+      if (!current) throw new Error('تهاتر انتخاب‌شده یافت نشد.');
+      const initialAmount = toSafeNumber(current?.initial_amount);
+      const spentAmount = toSafeNumber(current?.spent_amount);
+      const nextSpent = Math.max(0, spentAmount + deltaSpend);
+      if (nextSpent > initialAmount) {
+        throw new Error('مانده تهاتر برای این مبلغ کافی نیست.');
+      }
+      const nextRemaining = Math.max(0, initialAmount - nextSpent);
+      const nextStatus = nextRemaining <= 0 ? 'closed' : nextSpent > 0 ? 'partial' : 'open';
+      const nextMetadata = {
+        ...((current?.metadata && typeof current.metadata === 'object') ? current.metadata : {}),
+        ...(metadataPatch || {}),
+      };
+
+      const { error: updateError } = await supabase
+        .from('barters')
+        .update({
+          spent_amount: nextSpent,
+          remaining_amount: nextRemaining,
+          status: nextStatus,
+          metadata: nextMetadata,
+          updated_at: nowIso,
+        })
+        .eq('id', resolvedId);
+      if (updateError) throw updateError;
+
+      const nextRow = {
+        ...current,
+        spent_amount: nextSpent,
+        remaining_amount: nextRemaining,
+        status: nextStatus,
+        metadata: nextMetadata,
+      };
+      selectedBarterById.set(resolvedId, nextRow);
+      return nextRow;
+    };
+
+    const normalizeAllocationRows = (value: any) => {
+      if (!Array.isArray(value)) return [] as Record<string, any>[];
+      return value.filter((item) => item && typeof item === 'object');
+    };
+
+    const syncBarterAllocation = async (args: {
+      barterId: string | null;
+      allocationKey: string;
+      active: boolean;
+      operationType: 'receipt' | 'payment';
+      amount: number;
+      rowStatus: string;
+      rowDate: string | null;
+      description?: string | null;
+      attachmentUrl?: string | null;
+      expenseAccountId?: string | null;
+      customerId?: string | null;
+      supplierId?: string | null;
+      employeeId?: string | null;
+    }) => {
+      const resolvedBarterId = String(args.barterId || '').trim();
+      if (!resolvedBarterId) return;
+      const current = selectedBarterById.get(resolvedBarterId);
+      if (!current) return;
+
+      const currentAllocations = normalizeAllocationRows(current?.allocations);
+      const nextAllocations = [...currentAllocations];
+      const existingIndex = nextAllocations.findIndex((item) => String(item?.id || '') === args.allocationKey);
+
+      if (args.active) {
+        const allocationRow = {
+          ...(existingIndex >= 0 ? nextAllocations[existingIndex] : {}),
+          id: args.allocationKey,
+          date: args.rowDate || sourceHeaderRecord?.invoice_date || new Date().toISOString().slice(0, 10),
+          operation_type: args.operationType,
+          status: args.rowStatus || 'pending',
+          customer_id: args.customerId || null,
+          supplier_id: args.supplierId || null,
+          employee_id: args.employeeId || null,
+          expense_account_id: args.expenseAccountId || null,
+          source_invoice_id: isInvoicePayments ? recordId : null,
+          source_purchase_invoice_id: isPurchaseInvoicePayments ? recordId : null,
+          amount: Math.max(0, toSafeNumber(args.amount)),
+          description: args.description || null,
+          attachment_url: args.attachmentUrl || null,
+          source_table: moduleId,
+          source_record_id: recordId,
+          source_block_id: block?.id,
+          updated_at: nowIso,
+        };
+        if (existingIndex >= 0) nextAllocations[existingIndex] = allocationRow;
+        else nextAllocations.push(allocationRow);
+      } else if (existingIndex >= 0) {
+        nextAllocations.splice(existingIndex, 1);
+      }
+
+      if (JSON.stringify(nextAllocations) === JSON.stringify(currentAllocations)) return;
+
+      const { error: allocationUpdateError } = await supabase
+        .from('barters')
+        .update({
+          allocations: nextAllocations,
+          updated_at: nowIso,
+        })
+        .eq('id', resolvedBarterId);
+      if (allocationUpdateError) throw allocationUpdateError;
+
+      selectedBarterById.set(resolvedBarterId, {
+        ...current,
+        allocations: nextAllocations,
+      });
+    };
+
+    const selectedCashOperationIds = Array.from(
+      new Set(
+        rows
+          .map((row: any) => String(row?._cash_bank_operation_id || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const selectedCashOperationById = new Map<string, any>();
+    if (selectedCashOperationIds.length > 0) {
+      const { data: selectedOperations, error: selectedOperationsError } = await supabase
+        .from('cash_bank_operations')
+        .select('id, metadata')
+        .in('id', selectedCashOperationIds);
+      if (selectedOperationsError) throw selectedOperationsError;
+      (selectedOperations || []).forEach((operation: any) => {
+        selectedCashOperationById.set(String(operation.id), operation);
       });
     }
 
     const nextRows: any[] = [];
-    for (const row of rows) {
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex];
       const nextRow = { ...row };
       const paymentType = String(row?.payment_type || '').trim();
+      const rowStatusRaw = String(row?.status || '').trim();
+      const rowStatus = ['pending', 'received', 'returned', 'canceled'].includes(rowStatusRaw) ? rowStatusRaw : 'pending';
       const accountId = String(row?.[accountField] || '').trim() || null;
       const amount = Math.abs(toSafeNumber(row?.amount));
       const issueDate = row?.date || null;
-      const dueDate = row?.date || null;
+      const dueDate = row?.cheque_due_date || row?.date || null;
       const bankMeta = accountId ? bankMetaById.get(accountId) : null;
+      const syncedBarterId = String(row?._barter_synced_id || '').trim();
+      const syncedBarterAmount = Math.abs(toSafeNumber(row?._barter_synced_amount || 0));
+      const existingCashOperationId = String(row?._cash_bank_operation_id || '').trim();
+      const existingAllocationKey = String(row?._barter_allocation_key || '').trim();
+      const allocationKey = existingAllocationKey || `${String(recordId)}_${String(block?.id || 'payments')}_${rowIndex}`;
+
+      const syncCashBankBarterOperation = async (linkedBarterId?: string | null) => {
+        if (paymentType !== 'barter' || amount <= 0) {
+          if (existingCashOperationId) {
+            const { error: cancelOperationError } = await supabase
+              .from('cash_bank_operations')
+              .update({
+                status: 'canceled',
+                updated_at: nowIso,
+              })
+              .eq('id', existingCashOperationId);
+            if (cancelOperationError) throw cancelOperationError;
+          }
+          nextRow._cash_bank_operation_id = null;
+          return;
+        }
+
+        const operationPayload = {
+          operation_type: isInvoicePayments ? 'receipt' : 'payment',
+          payment_type: 'barter',
+          barter_id: linkedBarterId ? String(linkedBarterId) : null,
+          status: rowStatus,
+          operation_date: issueDate || sourceHeaderRecord?.invoice_date || new Date().toISOString().slice(0, 10),
+          amount,
+          sales_invoice_id: isInvoicePayments ? recordId : null,
+          purchase_invoice_id: isPurchaseInvoicePayments ? recordId : null,
+          customer_id: isInvoicePayments ? partyId : null,
+          supplier_id: isPurchaseInvoicePayments ? partyId : null,
+          description: row?.description || null,
+          attachment_url: row?.attachment || null,
+          metadata: {
+            ...(selectedCashOperationById.get(existingCashOperationId)?.metadata || {}),
+            source_table: moduleId,
+            source_record_id: recordId,
+            source_block_id: block?.id,
+            source_row_key: allocationKey,
+          },
+          updated_at: nowIso,
+        };
+
+        if (existingCashOperationId) {
+          const { error: updateOperationError } = await supabase
+            .from('cash_bank_operations')
+            .update(operationPayload)
+            .eq('id', existingCashOperationId);
+          if (updateOperationError) throw updateOperationError;
+          nextRow._cash_bank_operation_id = existingCashOperationId;
+          return;
+        }
+
+        const { data: insertedOperation, error: insertOperationError } = await supabase
+          .from('cash_bank_operations')
+          .insert(operationPayload)
+          .select('id')
+          .single();
+        if (insertOperationError) throw insertOperationError;
+        nextRow._cash_bank_operation_id = String(insertedOperation?.id || '').trim() || null;
+      };
+
+      if (isPurchaseInvoicePayments && paymentType !== 'barter' && syncedBarterId && syncedBarterAmount > 0) {
+        await applyBarterDelta(syncedBarterId, -syncedBarterAmount, {
+          last_spend_source_table: moduleId,
+          last_spend_source_record_id: recordId,
+          last_spend_rollback_at: nowIso,
+        });
+      }
+
+      if (paymentType !== 'barter') {
+        if (syncedBarterId) {
+          await syncBarterAllocation({
+            barterId: syncedBarterId,
+            allocationKey,
+            active: false,
+            operationType: isInvoicePayments ? 'receipt' : 'payment',
+            amount,
+            rowStatus,
+            rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+          });
+        }
+        await syncCashBankBarterOperation(null);
+        nextRow.barter_id = null;
+        nextRow.barter_status = null;
+        nextRow.barter_remaining_amount = null;
+        nextRow._barter_synced_id = null;
+        nextRow._barter_synced_amount = null;
+        nextRow._auto_barter = false;
+        nextRow._barter_allocation_key = null;
+      }
+
+      if (paymentType === 'barter') {
+        nextRow.use_existing_received_cheque = false;
+        nextRow.spent_cheque_id = null;
+        nextRow.cheque_id = null;
+        nextRow.cheque_status = null;
+        nextRow.cheque_serial_no = null;
+        nextRow.cheque_sayad_id = null;
+        nextRow.cheque_due_date = null;
+        nextRow.cheque_account_holder_name = null;
+        nextRow.cheque_bank_name = null;
+        nextRow.cheque_image_url = null;
+        nextRow._auto_cheque = false;
+
+        let selectedBarterId = String(row?.barter_id || syncedBarterId || '').trim();
+        const shouldCreateReceivedBarter = isInvoicePayments && rowStatus === 'received' && amount > 0;
+        const shouldApplyPurchaseSpend = isPurchaseInvoicePayments && rowStatus === 'received' && amount > 0;
+        nextRow._barter_allocation_key = allocationKey;
+
+        if (isInvoicePayments && !shouldCreateReceivedBarter) {
+          if (selectedBarterId) {
+            await syncBarterAllocation({
+              barterId: selectedBarterId,
+              allocationKey,
+              active: false,
+              operationType: 'receipt',
+              amount,
+              rowStatus,
+              rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+            });
+          }
+          if (selectedBarterId && !!row?._auto_barter) {
+            const currentAutoBarter = selectedBarterById.get(selectedBarterId);
+            const currentSpent = toSafeNumber(currentAutoBarter?.spent_amount);
+            if (currentSpent > 0.000001) {
+              throw new Error('این ردیف تهاتر قبلا مصرف شده است و امکان تغییر وضعیت از حالت دریافت‌شده وجود ندارد.');
+            }
+            if (currentSpent <= 0.000001) {
+              const { error: cancelAutoBarterError } = await supabase
+                .from('barters')
+                .update({
+                  status: 'canceled',
+                  updated_at: nowIso,
+                })
+                .eq('id', selectedBarterId);
+              if (cancelAutoBarterError) throw cancelAutoBarterError;
+            }
+          }
+          nextRow.barter_id = null;
+          nextRow.barter_status = null;
+          nextRow.barter_remaining_amount = null;
+          nextRow._barter_synced_id = null;
+          nextRow._barter_synced_amount = 0;
+          nextRow._auto_barter = false;
+          nextRow._barter_allocation_key = null;
+          await syncCashBankBarterOperation(null);
+          nextRows.push(nextRow);
+          continue;
+        }
+
+        if (isInvoicePayments && shouldCreateReceivedBarter && !selectedBarterId) {
+          const sourceName = String(sourceHeaderRecord?.name || sourceHeaderRecord?.system_code || '').trim();
+          const businessLabel = String(partyBusinessName || '').trim();
+          const autoName = businessLabel
+            ? `تهاتر خرید از ${businessLabel}`
+            : (sourceName ? `تهاتر خرید از ${sourceName}` : `تهاتر خرید از مشتری`);
+          const newBarterPayload = {
+            name: autoName,
+            barter_date: issueDate || sourceHeaderRecord?.invoice_date || null,
+            barter_type: 'incoming',
+            status: amount > 0 ? 'open' : 'closed',
+            initial_amount: amount,
+            spent_amount: 0,
+            remaining_amount: amount,
+            customer_id: partyType === 'customer' ? partyId : null,
+            supplier_id: partyType === 'supplier' ? partyId : null,
+            employee_id: row?.responsible_id || null,
+            source_invoice_id: isInvoicePayments ? recordId : null,
+            source_purchase_invoice_id: isPurchaseInvoicePayments ? recordId : null,
+            notes: row?.description || null,
+            attachment_url: row?.attachment || null,
+            metadata: {
+              auto_generated_from: {
+                table: moduleId,
+                record_id: recordId,
+                block: block?.id,
+              },
+            },
+          };
+          const { data: insertedBarter, error: insertBarterError } = await supabase
+            .from('barters')
+            .insert(newBarterPayload)
+            .select('id, name, status, initial_amount, spent_amount, remaining_amount, customer_id, supplier_id, employee_id, allocations, metadata')
+            .single();
+          if (insertBarterError) throw insertBarterError;
+          selectedBarterId = String(insertedBarter?.id || '').trim();
+          if (!selectedBarterId) throw new Error('تهاتر جدید ایجاد شد اما شناسه معتبر ندارد.');
+          selectedBarterById.set(selectedBarterId, insertedBarter);
+          nextRow._auto_barter = true;
+        }
+
+        if (isInvoicePayments) {
+          if (!selectedBarterId) {
+            throw new Error('برای ثبت دریافت تهاتر، شناسه تهاتر معتبر یافت نشد.');
+          }
+          const selectedBarter = selectedBarterById.get(selectedBarterId);
+          if (!selectedBarter) {
+            throw new Error('تهاتر انتخاب‌شده یافت نشد.');
+          }
+          const barterMetadata =
+            selectedBarter?.metadata && typeof selectedBarter.metadata === 'object'
+              ? { ...selectedBarter.metadata }
+              : {};
+          const autoSource = barterMetadata?.auto_generated_from || {};
+          const isAutoManaged =
+            !!row?._auto_barter ||
+            (String(autoSource?.table || '').trim() === String(moduleId) &&
+              String(autoSource?.record_id || '').trim() === String(recordId));
+          let syncedBarter = selectedBarter;
+
+          if (isAutoManaged) {
+            const currentSpent = toSafeNumber(selectedBarter?.spent_amount);
+            if (currentSpent > amount) {
+              throw new Error('مبلغ تهاتر نمی‌تواند کمتر از مصرف‌شده فعلی باشد.');
+            }
+            const nextInitialAmount = amount;
+            const nextRemaining = Math.max(0, nextInitialAmount - currentSpent);
+            const nextStatus = nextRemaining <= 0 ? 'closed' : currentSpent > 0 ? 'partial' : 'open';
+            const nextMetadata = {
+              ...barterMetadata,
+              auto_generated_from: {
+                table: moduleId,
+                record_id: recordId,
+                block: block?.id,
+              },
+            };
+            const { error: updateBarterError } = await supabase
+              .from('barters')
+              .update({
+                initial_amount: nextInitialAmount,
+                remaining_amount: nextRemaining,
+                status: nextStatus,
+                employee_id: row?.responsible_id || null,
+                metadata: nextMetadata,
+                updated_at: nowIso,
+              })
+              .eq('id', selectedBarterId);
+            if (updateBarterError) throw updateBarterError;
+            syncedBarter = {
+              ...selectedBarter,
+              initial_amount: nextInitialAmount,
+              remaining_amount: nextRemaining,
+              status: nextStatus,
+              metadata: nextMetadata,
+            };
+            selectedBarterById.set(selectedBarterId, syncedBarter);
+          }
+
+          nextRow.barter_id = selectedBarterId;
+          nextRow.barter_status = String(syncedBarter?.status || '');
+          nextRow.barter_remaining_amount = toSafeNumber(syncedBarter?.remaining_amount);
+          nextRow._barter_synced_id = selectedBarterId;
+          nextRow._barter_synced_amount = 0;
+          nextRow._barter_created_amount = amount;
+          nextRow._auto_barter = true;
+          await syncBarterAllocation({
+            barterId: selectedBarterId,
+            allocationKey,
+            active: true,
+            operationType: 'receipt',
+            amount,
+            rowStatus,
+            rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+            description: row?.description || null,
+            attachmentUrl: row?.attachment || null,
+            customerId: partyType === 'customer' ? partyId : null,
+            supplierId: null,
+            employeeId: null,
+          });
+          await syncCashBankBarterOperation(selectedBarterId);
+          nextRows.push(nextRow);
+          continue;
+        }
+
+        if (isPurchaseInvoicePayments) {
+          const previousBarterId = String(row?._barter_synced_id || '').trim();
+          const previousSpentAmount = Math.abs(toSafeNumber(row?._barter_synced_amount || 0));
+
+          if (!shouldApplyPurchaseSpend) {
+            if (previousBarterId && previousSpentAmount > 0) {
+              await applyBarterDelta(previousBarterId, -previousSpentAmount, {
+                last_spend_source_table: moduleId,
+                last_spend_source_record_id: recordId,
+                last_spend_rollback_at: nowIso,
+              });
+            }
+            if (previousBarterId) {
+              await syncBarterAllocation({
+                barterId: previousBarterId,
+                allocationKey,
+                active: false,
+                operationType: 'payment',
+                amount,
+                rowStatus,
+                rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+              });
+            }
+            if (selectedBarterId && selectedBarterId !== previousBarterId) {
+              await syncBarterAllocation({
+                barterId: selectedBarterId,
+                allocationKey,
+                active: false,
+                operationType: 'payment',
+                amount,
+                rowStatus,
+                rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+              });
+            }
+            if (selectedBarterId) {
+              const selectedBarter = selectedBarterById.get(selectedBarterId);
+              nextRow.barter_status = String(selectedBarter?.status || '');
+              nextRow.barter_remaining_amount = toSafeNumber(selectedBarter?.remaining_amount);
+            } else {
+              nextRow.barter_status = null;
+              nextRow.barter_remaining_amount = null;
+            }
+            nextRow.barter_id = selectedBarterId || null;
+            nextRow._barter_synced_id = selectedBarterId || null;
+            nextRow._barter_synced_amount = 0;
+            nextRow._auto_barter = false;
+            await syncCashBankBarterOperation(selectedBarterId || null);
+            nextRows.push(nextRow);
+            continue;
+          }
+
+          if (!selectedBarterId) {
+            throw new Error('برای پرداخت تهاتری، انتخاب تهاتر الزامی است.');
+          }
+          const selectedBarter = selectedBarterById.get(selectedBarterId);
+          if (!selectedBarter) {
+            throw new Error('تهاتر انتخاب‌شده یافت نشد.');
+          }
+
+          if (previousBarterId && previousBarterId !== selectedBarterId && previousSpentAmount > 0) {
+            await applyBarterDelta(previousBarterId, -previousSpentAmount, {
+              last_spend_source_table: moduleId,
+              last_spend_source_record_id: recordId,
+              last_spend_rollback_at: nowIso,
+            });
+            await syncBarterAllocation({
+              barterId: previousBarterId,
+              allocationKey,
+              active: false,
+              operationType: 'payment',
+              amount,
+              rowStatus,
+              rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+            });
+          }
+
+          const baselineSpent = previousBarterId === selectedBarterId ? previousSpentAmount : 0;
+          const spendDelta = amount - baselineSpent;
+          let syncedBarter = selectedBarter;
+          if (Math.abs(spendDelta) > 0.000001) {
+            syncedBarter = await applyBarterDelta(selectedBarterId, spendDelta, {
+              last_spend_source_table: moduleId,
+              last_spend_source_record_id: recordId,
+              last_spend_amount: amount,
+              last_spend_at: nowIso,
+            });
+          }
+
+          nextRow.barter_id = selectedBarterId;
+          nextRow.barter_status = String(syncedBarter?.status || '');
+          nextRow.barter_remaining_amount = toSafeNumber(syncedBarter?.remaining_amount);
+          nextRow._barter_synced_id = selectedBarterId;
+          nextRow._barter_synced_amount = amount;
+          nextRow._auto_barter = false;
+          await syncBarterAllocation({
+            barterId: selectedBarterId,
+            allocationKey,
+            active: true,
+            operationType: 'payment',
+            amount,
+            rowStatus,
+            rowDate: issueDate || sourceHeaderRecord?.invoice_date || null,
+            description: row?.description || null,
+            attachmentUrl: row?.attachment || null,
+            expenseAccountId: row?.expense_account_id ? String(row.expense_account_id) : null,
+            customerId: null,
+            supplierId: partyType === 'supplier' ? partyId : null,
+            employeeId: null,
+          });
+          await syncCashBankBarterOperation(selectedBarterId);
+          nextRows.push(nextRow);
+          continue;
+        }
+
+        await syncCashBankBarterOperation(selectedBarterId || null);
+        nextRows.push(nextRow);
+        continue;
+      }
 
       if (paymentType !== 'cheque') {
         nextRow.use_existing_received_cheque = false;
         nextRow.spent_cheque_id = null;
         nextRow.cheque_id = null;
+        nextRow.cheque_status = null;
+        nextRow.cheque_serial_no = null;
+        nextRow.cheque_sayad_id = null;
+        nextRow.cheque_due_date = null;
+        nextRow.cheque_account_holder_name = null;
+        nextRow.cheque_bank_name = null;
+        nextRow.cheque_image_url = null;
+        nextRow._auto_cheque = false;
+        nextRows.push(nextRow);
+        continue;
+      }
+
+      const selectedChequeId = String(row?.cheque_id || row?.spent_cheque_id || '').trim();
+      if (selectedChequeId) {
+        const selectedCheque = selectedChequeById.get(selectedChequeId);
+        if (!selectedCheque) {
+          throw new Error('چک انتخاب‌شده یافت نشد.');
+        }
+        if (isPurchaseInvoicePayments && !!row?.use_existing_received_cheque && String(selectedCheque?.cheque_type || '') !== 'received') {
+          throw new Error('چک انتخاب شده برای خرج چک معتبر نیست.');
+        }
+
+        const nextChequeStatus = String(row?.cheque_status || selectedCheque?.status || 'new').trim() || 'new';
+        const nextMetadata =
+          selectedCheque?.metadata && typeof selectedCheque.metadata === 'object'
+            ? { ...selectedCheque.metadata }
+            : {};
+        if (isPurchaseInvoicePayments && !!row?.use_existing_received_cheque) {
+          nextMetadata.spent_out = true;
+          nextMetadata.spent_out_at = nowIso;
+          nextMetadata.spent_out_source_table = moduleId;
+          nextMetadata.spent_out_source_record_id = recordId;
+        }
+        nextMetadata.linked_invoice_table = moduleId;
+        nextMetadata.linked_invoice_id = recordId;
+
+        const { error: selectedChequeUpdateError } = await supabase
+          .from('cheques')
+          .update({
+            status: nextChequeStatus,
+            metadata: nextMetadata,
+            due_date: selectedCheque?.due_date || dueDate || null,
+            bank_name: selectedCheque?.bank_name || bankMeta?.bank_name || null,
+            account_holder_name: selectedCheque?.account_holder_name || null,
+            updated_at: nowIso,
+          })
+          .eq('id', selectedChequeId);
+        if (selectedChequeUpdateError) throw selectedChequeUpdateError;
+
+        nextRow.cheque_id = selectedChequeId;
+        nextRow.spent_cheque_id = isPurchaseInvoicePayments && !!row?.use_existing_received_cheque ? selectedChequeId : null;
+        nextRow.cheque_status = nextChequeStatus;
+        nextRow.cheque_serial_no = selectedCheque?.serial_no || null;
+        nextRow.cheque_sayad_id = selectedCheque?.sayad_id || null;
+        nextRow.cheque_due_date = selectedCheque?.due_date || dueDate || null;
+        nextRow.cheque_account_holder_name = selectedCheque?.account_holder_name || null;
+        nextRow.cheque_bank_name = selectedCheque?.bank_name || bankMeta?.bank_name || null;
+        nextRow.cheque_image_url = selectedCheque?.image_url || null;
+        if (selectedCheque?.amount !== undefined && selectedCheque?.amount !== null && String(selectedCheque.amount).trim() !== '') {
+          nextRow.amount = selectedCheque.amount;
+        }
+        if (!nextRow.attachment && selectedCheque?.image_url) {
+          nextRow.attachment = selectedCheque.image_url;
+        }
         nextRow._auto_cheque = false;
         nextRows.push(nextRow);
         continue;
@@ -1032,7 +1839,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (!spendChequeId) {
           throw new Error('برای خرج چک، انتخاب چک دریافتی الزامی است.');
         }
-        const spendCheque = spendChequeById.get(spendChequeId);
+        const spendCheque = selectedChequeById.get(spendChequeId);
         if (!spendCheque) {
           throw new Error('چک انتخاب شده یافت نشد.');
         }
@@ -1057,6 +1864,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (spendUpdateError) throw spendUpdateError;
 
         nextRow.cheque_id = spendChequeId;
+        nextRow.cheque_status = String(spendCheque?.status || 'new');
+        nextRow.cheque_serial_no = spendCheque?.serial_no || null;
+        nextRow.cheque_sayad_id = spendCheque?.sayad_id || null;
+        nextRow.cheque_due_date = spendCheque?.due_date || dueDate || null;
+        nextRow.cheque_account_holder_name = spendCheque?.account_holder_name || null;
+        nextRow.cheque_bank_name = spendCheque?.bank_name || bankMeta?.bank_name || null;
+        nextRow.cheque_image_url = spendCheque?.image_url || null;
+        if (spendCheque?.amount !== undefined && spendCheque?.amount !== null && String(spendCheque.amount).trim() !== '') {
+          nextRow.amount = spendCheque.amount;
+        }
+        if (!nextRow.attachment && spendCheque?.image_url) {
+          nextRow.attachment = spendCheque.image_url;
+        }
         nextRow._auto_cheque = false;
         nextRows.push(nextRow);
         continue;
@@ -1064,7 +1884,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
       const chequePayload = {
         cheque_type: isInvoicePayments ? 'received' : 'issued',
-        status: 'new',
+        status: String(row?.cheque_status || 'new'),
         amount,
         issue_date: issueDate,
         due_date: dueDate,
@@ -1106,6 +1926,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       nextRow.use_existing_received_cheque = false;
       nextRow.spent_cheque_id = null;
       nextRow.cheque_id = linkedChequeId;
+      nextRow.cheque_status = chequePayload.status;
+      nextRow.cheque_due_date = dueDate;
+      nextRow.cheque_bank_name = bankMeta?.bank_name || null;
       nextRow._auto_cheque = true;
       nextRows.push(nextRow);
     }
@@ -1692,6 +2515,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (col.type === FieldType.RELATION) {
       const specificKey = `${block.id}_${col.key}`;
       options = relationOptions[specificKey] || relationOptions[col.key] || [];
+      if (isAnyInvoiceItems && col.key === 'product_id') {
+        options = mergeOptionsByValue(options, invoiceBillboardOptions);
+        const selectedId = String(record?.product_id || '').trim();
+        if (selectedId && !options.some((opt: any) => String(opt?.value || '') === selectedId)) {
+          options = [...options, { value: selectedId, label: selectedId }];
+        }
+      }
       if (isPurchaseInvoicePayments && col.key === 'spent_cheque_id') {
         const selectedId = String(record?.spent_cheque_id || '').trim();
         const selectedFallback = (relationOptions[specificKey] || relationOptions[col.key] || [])
@@ -1720,7 +2550,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
       (isAnyInvoiceItems && col.key === 'source_shelf_id' && (!record?.product_id || isServiceProduct(record?.product_type)))
       || (isAnyInvoiceItems && col.key === 'quantity' && hasDimensions(record))
       || (isAnyInvoiceItems && ['length', 'width'].includes(col.key) && !hasDimensions(record))
-      || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit));
+      || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit))
+      || (isAnyInvoicePayments
+        && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'))
+        && String((record as any)?.payment_type || '').trim() === 'barter');
 
     const baseReadonly = Boolean(col.readonly)
       && !(isAnyInvoiceItems && col.key === 'sub_quantity' && isManualSubUnit(record?.sub_unit));
@@ -1810,6 +2643,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const endDateValue = record?.end_date || null;
     const hasCalendarValue = Boolean(startDateValue || endDateValue);
     const dateDiffDays = calculateDateDiffDays(startDateValue, endDateValue);
+    const isPaymentAttachment = isAnyInvoicePayments && col.key === 'attachment';
+    const attachmentUrl = String(value || '').trim();
     return (
       <div className="flex items-center gap-1 w-full min-w-0 max-w-full overflow-hidden">
         <div className="flex-1 min-w-0 overflow-hidden">
@@ -1833,13 +2668,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
             onOpenChange={(open) => setNotePopoverRowKey(open ? noteRowKey : null)}
             content={(
               <div style={{ width: 'min(88vw, 320px)' }}>
-                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">??????? ????</div>
+                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">توضیحات ردیف</div>
                 <Input.TextArea
                   autoSize={{ minRows: 3, maxRows: 6 }}
                   value={noteValue}
                   disabled={!canEditNote}
                   onChange={(event) => updateRow(index, 'description', event.target.value)}
-                  placeholder="??????? ??? ??? ??????..."
+                  placeholder="توضیحات این ردیف کالا/خدمات را اینجا بنویسید..."
                 />
                 <div className="mt-2 flex justify-end">
                   <Space size={2}>
@@ -1867,7 +2702,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               type="text"
               className={noteValue.trim() ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
               icon={<FileTextOutlined />}
-              title={noteValue.trim() ? '?????? ??????? ????' : '?????? ??????? ????'}
+              title={noteValue.trim() ? 'توضیحات دارد' : 'توضیحات ندارد'}
             />
           </Popover>
         )}
@@ -1888,10 +2723,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
             }}
             content={(
               <div style={{ width: 'min(88vw, 320px)' }}>
-                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">??? ??????</div>
+                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">انتخاب محل برداشت</div>
                 <Select
                   className="w-full"
-                  placeholder={record?.product_id ? '?????? ????' : '????? ????? ?? ?????? ????'}
+                  placeholder={record?.product_id ? 'محل برداشت ثبت شده' : 'محل برداشت ثبت نشده'}
                   value={shelfValue}
                   options={shelfOptions}
                   onChange={(val) => updateRow(index, 'source_shelf_id', val || null)}
@@ -1927,7 +2762,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               type="text"
               className={shelfValue ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
               icon={<EnvironmentOutlined />}
-              title={shelfValue ? '?????? ??? ??????' : '?????? ??? ??????'}
+              title={shelfValue ? 'محل برداشت ثبت شده' : 'محل برداشت ثبت نشده'}
             />
           </Popover>
         )}
@@ -1940,13 +2775,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
             onOpenChange={(open) => setDimensionsPopoverRowKey(open ? noteRowKey : null)}
             content={(
               <div style={{ width: 'min(88vw, 320px)' }} className="space-y-2">
-                <div className="text-xs text-gray-500 dark:text-gray-300">????? (??? ? ???)</div>
+                <div className="text-xs text-gray-500 dark:text-gray-300">طول و عرض (محاسبه خودکار)</div>
                 <div className="grid grid-cols-2 gap-2">
                   <InputNumber
                     min={0}
                     controls={false}
                     className="w-full"
-                    placeholder="???"
+                    placeholder="طول"
                     value={lengthValue}
                     disabled={!canEditDimensions}
                     onChange={(val) => updateInvoiceDimensions(index, { length: val ?? null })}
@@ -1955,7 +2790,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     min={0}
                     controls={false}
                     className="w-full"
-                    placeholder="???"
+                    placeholder="عرض"
                     value={widthValue}
                     disabled={!canEditDimensions}
                     onChange={(val) => updateInvoiceDimensions(index, { width: val ?? null })}
@@ -1963,7 +2798,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 </div>
                 {!canEditDimensions && (
                   <div className="text-[11px] text-gray-500 dark:text-gray-300">
-                    ???: {toPersianNumber(lengthValue ?? 0)} | ???: {toPersianNumber(widthValue ?? 0)}
+                    طول: {toPersianNumber(lengthValue ?? 0)} | عرض: {toPersianNumber(widthValue ?? 0)}
                   </div>
                 )}
                 <div className="flex justify-end">
@@ -1992,7 +2827,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               type="text"
               className={hasDimensionsValue ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
               icon={<AppstoreOutlined />}
-              title={hasDimensionsValue ? '?????? ?????' : '??? ?????'}
+              title={hasDimensionsValue ? 'ابعاد ثبت شده' : 'ابعاد ثبت نشده'}
             />
           </Popover>
         )}
@@ -2005,9 +2840,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
             onOpenChange={(open) => setCalendarPopoverRowKey(open ? noteRowKey : null)}
             content={(
               <div style={{ width: 'min(88vw, 320px)' }} className="space-y-2">
-                <div className="text-xs text-gray-500 dark:text-gray-300">???? ?????</div>
+                <div className="text-xs text-gray-500 dark:text-gray-300">تعیین تاریخ</div>
                 <div>
-                  <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">????? ????</div>
+                  <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">تاریخ شروع</div>
                   <PersianDatePicker
                     type="DATE"
                     value={startDateValue}
@@ -2016,7 +2851,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   />
                 </div>
                 <div>
-                  <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">????? ?????</div>
+                  <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">تاریخ پایان</div>
                   <PersianDatePicker
                     type="DATE"
                     value={endDateValue}
@@ -2025,7 +2860,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   />
                 </div>
                 <div className="text-[11px] text-gray-500 dark:text-gray-300">
-                  ??????: {typeof dateDiffDays === 'number' ? toPersianNumber(dateDiffDays) : '-'} ???
+                  اختلاف: {typeof dateDiffDays === 'number' ? toPersianNumber(dateDiffDays) : '-'} روز
                 </div>
                 <div className="flex justify-end">
                   <Space size={2}>
@@ -2053,7 +2888,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               type="text"
               className={hasCalendarValue ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
               icon={<CalendarOutlined />}
-              title={hasCalendarValue ? '?????? ???? ?????' : '??? ???? ?????'}
+              title={hasCalendarValue ? 'تاریخ ثبت شده' : 'تاریخ ثبت نشده'}
             />
           </Popover>
         )}
@@ -2065,11 +2900,21 @@ const EditableTable: React.FC<EditableTableProps> = ({
               const nextType = typeValue === 'percent' ? 'amount' : 'percent';
               updateRow(index, typeKey, nextType);
             }}
-            title={typeValue === 'percent' ? '????' : '????'}
+            title={typeValue === 'percent' ? 'درصدی' : 'مبلغی'}
             className="px-1"
           >
             {typeValue === 'percent' ? '%' : currencyLabel}
           </Button>
+        )}
+        {isPaymentAttachment && attachmentUrl && (
+          <Button
+            size="small"
+            type="text"
+            icon={<EyeOutlined />}
+            title="نمایش پیوست"
+            className="text-blue-600"
+            onClick={() => setPreviewAttachmentUrl(attachmentUrl)}
+          />
         )}
       </div>
     );
@@ -2119,7 +2964,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   ];
 
   const sourceRows = isEditing ? tempData : data;
-  const stackedRowGroupA = ['attachment', 'payment_type', 'status', 'date', 'amount'];
+  const stackedRowGroupA = ['attachment', 'payment_type', 'cheque_id', 'barter_id', 'cheque_status', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
     ? ['target_account', 'responsible_id', 'description']
     : ['source_account', 'use_existing_received_cheque', 'spent_cheque_id', 'responsible_id', 'description'];
@@ -2133,6 +2978,49 @@ const EditableTable: React.FC<EditableTableProps> = ({
       <div key={`${getRowKey(row)}_${key}`} className="min-w-[170px] flex-1">
         <div className="text-[11px] mb-1 text-gray-500 dark:text-gray-300">{col.title}</div>
         {renderColumnEditor(col, row, rowIndex)}
+      </div>
+    );
+  };
+
+  const renderChequeMetaCard = (row: any) => {
+    if (!isAnyInvoicePayments) return null;
+    if (String(row?.payment_type || '') !== 'cheque') return null;
+    if (!row?.cheque_id && !row?.spent_cheque_id) return null;
+
+    const serialNo = String(row?.cheque_serial_no || '').trim();
+    const sayadId = String(row?.cheque_sayad_id || '').trim();
+    const dueDate = String(row?.cheque_due_date || '').trim();
+    const dueDateFa = dueDate ? (safeJalaliFormat(dueDate, 'YYYY/MM/DD') || dueDate) : '';
+    const accountHolder = String(row?.cheque_account_holder_name || '').trim();
+    const bankName = String(row?.cheque_bank_name || '').trim();
+    const chequeStatusKey = String(row?.cheque_status || '').trim();
+    const chequeStatusLabel = CHEQUE_STATUS_LABELS[chequeStatusKey] || chequeStatusKey || '-';
+    const imageUrl = String(row?.cheque_image_url || row?.attachment || '').trim();
+
+    return (
+      <div className="mt-3 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 bg-white/70 dark:bg-[#141414] px-3 py-2">
+        <div className="text-[11px] font-semibold text-gray-600 dark:text-gray-200 mb-2">مشخصات چک</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-gray-600 dark:text-gray-300">
+          <div>شماره چک: <span className="persian-number text-gray-800 dark:text-gray-100">{serialNo ? toPersianNumber(serialNo) : '-'}</span></div>
+          <div>شماره صیاد: <span className="persian-number text-gray-800 dark:text-gray-100">{sayadId ? toPersianNumber(sayadId) : '-'}</span></div>
+          <div>تاریخ سررسید: <span className="persian-number text-gray-800 dark:text-gray-100">{dueDateFa ? toPersianNumber(dueDateFa) : '-'}</span></div>
+          <div>نام صاحب حساب: <span className="text-gray-800 dark:text-gray-100">{accountHolder || '-'}</span></div>
+          <div>نام بانک: <span className="text-gray-800 dark:text-gray-100">{bankName || '-'}</span></div>
+          <div>وضعیت چک: <span className="text-gray-800 dark:text-gray-100">{chequeStatusLabel}</span></div>
+        </div>
+        {imageUrl ? (
+          <div className="mt-2">
+            <Button
+              size="small"
+              type="link"
+              className="!px-0"
+              icon={<EyeOutlined />}
+              onClick={() => setPreviewAttachmentUrl(imageUrl)}
+            >
+              مشاهده تصویر چک
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -2293,6 +3181,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 flex flex-wrap gap-3">
                     {stackedRowGroupB.map((key) => renderStackedField(row, rowIndex, key))}
                   </div>
+                  {renderChequeMetaCard(row)}
                 </div>
               ))
             )}
@@ -2414,6 +3303,78 @@ const EditableTable: React.FC<EditableTableProps> = ({
         />
         )
       )}
+      <Modal
+        open={!!previewAttachmentUrl}
+        title="پیش‌نمایش پیوست"
+        onCancel={() => setPreviewAttachmentUrl(null)}
+        footer={[
+          <Button
+            key="download"
+            icon={<DownloadOutlined />}
+            onClick={() => {
+              if (!previewAttachmentUrl) return;
+              const link = document.createElement('a');
+              link.href = previewAttachmentUrl;
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              link.download = `attachment-${Date.now()}.jpg`;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }}
+          >
+            دانلود
+          </Button>,
+          <Button
+            key="share"
+            icon={<ShareAltOutlined />}
+            onClick={async () => {
+              if (!previewAttachmentUrl) return;
+              const shareApi = typeof navigator !== 'undefined' ? (navigator as any).share : null;
+              if (typeof shareApi === 'function') {
+                try {
+                  await shareApi({ url: previewAttachmentUrl, title: 'پیوست' });
+                  return;
+                } catch {
+                  // fallback to opening in new tab
+                }
+              }
+              window.open(previewAttachmentUrl, '_blank', 'noopener,noreferrer');
+            }}
+          >
+            اشتراک‌گذاری
+          </Button>,
+          <Button
+            key="print"
+            icon={<PrinterOutlined />}
+            onClick={() => {
+              if (!previewAttachmentUrl) return;
+              const printWindow = window.open('', '_blank');
+              if (!printWindow) return;
+              printWindow.document.write(
+                `<html><head><title>Print</title></head><body style=\"margin:0;text-align:center;\"><img src=\"${previewAttachmentUrl}\" style=\"max-width:100%;height:auto;\"/></body></html>`
+              );
+              printWindow.document.close();
+              printWindow.focus();
+              printWindow.print();
+            }}
+          >
+            پرینت
+          </Button>,
+        ]}
+        width={760}
+        destroyOnClose
+      >
+        {previewAttachmentUrl ? (
+          <div className="flex justify-center">
+            <img
+              src={previewAttachmentUrl}
+              alt="Attachment"
+              className="max-h-[70vh] w-auto rounded-lg border border-gray-200"
+            />
+          </div>
+        ) : null}
+      </Modal>
       <style>{`
         .ant-table-expanded-row > td {
           padding-left: 0 !important;

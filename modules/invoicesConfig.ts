@@ -35,7 +35,6 @@ const BLOCKS = {
         width: 250,
         relationConfig: { targetModule: 'products', targetField: 'name' },
       },
-      { key: 'use_dimensions', title: 'طول×عرض', type: FieldType.CHECKBOX, width: 140 },
       { key: 'quantity', title: 'تعداد/مقدار', type: FieldType.NUMBER, width: 120 },
       {
         key: 'main_unit',
@@ -97,7 +96,31 @@ const BLOCKS = {
           { label: 'انتقال حساب', value: 'transfer' },
           { label: 'چک', value: 'cheque' },
           { label: 'آنلاین', value: 'online' },
+          { label: 'تهاتر', value: 'barter' },
+          { label: 'اعتباری', value: 'credit' },
         ],
+      },
+      {
+        key: 'cheque_id',
+        title: 'چک',
+        type: FieldType.RELATION,
+        width: 180,
+        relationConfig: {
+          targetModule: 'cheques',
+          targetField: 'serial_no',
+          quickCreateFieldKeys: ['serial_no', 'sayad_id', 'issue_date', 'due_date', 'amount', 'payee_name', 'account_holder_name', 'bank_name', 'image_url'],
+          quickCreateDefaults: { cheque_type: 'received', status: 'new' },
+        },
+      },
+      {
+        key: 'barter_id',
+        title: 'تهاتر',
+        type: FieldType.RELATION,
+        width: 180,
+        relationConfig: {
+          targetModule: 'barters',
+          targetField: 'name',
+        },
       },
       {
         key: 'status',
@@ -108,6 +131,20 @@ const BLOCKS = {
           { label: 'در انتظار', value: 'pending', color: 'orange' },
           { label: 'دریافت شده', value: 'received', color: 'green' },
           { label: 'عودت', value: 'returned', color: 'red' },
+        ],
+      },
+      {
+        key: 'cheque_status',
+        title: 'وضعیت چک',
+        type: FieldType.SELECT,
+        width: 130,
+        options: [
+          { label: 'جدید', value: 'new', color: 'blue' },
+          { label: 'در بانک', value: 'in_bank', color: 'orange' },
+          { label: 'وصول شده', value: 'cleared', color: 'green' },
+          { label: 'برگشتی', value: 'bounced', color: 'red' },
+          { label: 'عودت شده', value: 'returned', color: 'purple' },
+          { label: 'ابطال شده', value: 'canceled', color: 'default' },
         ],
       },
       {
@@ -157,13 +194,14 @@ const BLOCKS = {
 
 export const invoicesConfig: ModuleDefinition = {
   id: 'invoices',
-  titles: { fa: 'فاکتورهای فروش', en: 'Sales Invoices' },
+  titles: { fa: 'فاکتورهای فروش', faSingular: 'فاکتور فروش', en: 'Sales Invoices' },
   nature: ModuleNature.INVOICE,
   table: 'invoices',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
 
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
@@ -181,7 +219,6 @@ export const invoicesConfig: ModuleDefinition = {
         { label: 'تکمیل شده', value: 'completed', color: 'gray' },
       ],
     },
-
     {
       key: 'customer_id',
       labels: { fa: 'نام مشتری', en: 'Customer' },
@@ -204,6 +241,15 @@ export const invoicesConfig: ModuleDefinition = {
         { label: 'سایت', value: 'website' },
         { label: 'سوشال', value: 'social' },
       ],
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'description',
+      labels: { fa: 'توضیحات فاکتور', en: 'Invoice Description' },
+      type: FieldType.LONG_TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'baseInfo',
+      order: 7,
       nature: FieldNature.STANDARD,
     },
     {
@@ -231,6 +277,7 @@ export const invoicesConfig: ModuleDefinition = {
   ],
 
   blocks: [
+    BLOCKS.baseInfo,
     BLOCKS.invoiceItems,
     BLOCKS.payments,
     BLOCKS.process,
@@ -238,4 +285,3 @@ export const invoicesConfig: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
-

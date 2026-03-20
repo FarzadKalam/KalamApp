@@ -234,7 +234,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const statusField = moduleConfig?.fields.find(f => f.type === FieldType.STATUS)?.key;
   const categoryField = resolvedModuleId === 'tasks'
     ? 'related_to_module'
-    : moduleConfig?.fields.find(f => f.key === 'category' || f.key === 'product_category')?.key;
+    : moduleConfig?.fields.find(f => f.key === 'category' || f.key === 'product_category' || f.key === 'business_name')?.key;
 
   // ✅ Merge tags into allData
   const accessibleData = useMemo(() => {

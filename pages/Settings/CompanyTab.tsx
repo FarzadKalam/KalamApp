@@ -20,7 +20,7 @@ const CompanyTab: React.FC = () => {
     const { data } = await supabase
       .from('company_settings')
       .select('*')
-      .order('created_at', { ascending: true })
+      .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -59,7 +59,7 @@ const CompanyTab: React.FC = () => {
   const handleUpload = async (file: File, type: 'logo' | 'icon') => {
     try {
       const fileName = `company-${type}-${Date.now()}.${file.name.split('.').pop()}`;
-      const { error } = await supabase.storage.from('images').upload(fileName, file);
+      const { error } = await supabase.storage.from('images').upload(fileName, file, { upsert: true });
       if (error) throw error;
       const { data } = supabase.storage.from('images').getPublicUrl(fileName);
 
@@ -103,21 +103,33 @@ const CompanyTab: React.FC = () => {
         brand_palette_key: palette_key || DEFAULT_BRANDING.paletteKey,
         currency_code: currency.code,
         currency_label: currency.label,
-        logo_url: logoUrl,
-        icon_url: iconUrl,
+        logo_url: form.getFieldValue('logo_url') || logoUrl,
+        icon_url: form.getFieldValue('icon_url') || iconUrl,
       };
 
       if (recordId) {
-        await supabase.from('company_settings').update(payload).eq('id', recordId);
+        const { data: updated, error } = await supabase
+          .from('company_settings')
+          .update(payload)
+          .eq('id', recordId)
+          .select('id')
+          .maybeSingle();
+        if (error) throw error;
+        if (!updated?.id) {
+          throw new Error('UPDATE_NO_ROW');
+        }
       } else {
-        const { data } = await supabase.from('company_settings').insert([payload]).select().single();
+        const { data, error } = await supabase.from('company_settings').insert([payload]).select('id').single();
+        if (error) throw error;
         if (data?.id) setRecordId(String(data.id));
       }
 
       window.dispatchEvent(new CustomEvent(BRANDING_UPDATED_EVENT));
       persistCurrencyConfig(currency);
+      await fetchData();
       message.success('تنظیمات شرکت ذخیره شد');
-    } catch {
+    } catch (error: any) {
+      console.error('Company settings save failed', error);
       message.error('خطا در ذخیره سازی');
     } finally {
       setLoading(false);
@@ -186,6 +198,15 @@ const CompanyTab: React.FC = () => {
         <Form.Item label={<span className="dark:text-gray-300">شناسه ملی / کد اقتصادی</span>} name="national_id">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">شماره ثبت</span>} name="registration_number">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">کد اقتصادی</span>} name="economic_code">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">کد پستی</span>} name="postal_code">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">شماره همراه (رسمی)</span>} name="mobile">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
@@ -200,6 +221,12 @@ const CompanyTab: React.FC = () => {
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">آدرس پستی</span>} name="address" className="md:col-span-2">
           <Input.TextArea rows={3} className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
+        <Form.Item name="logo_url" hidden>
+          <Input />
+        </Form.Item>
+        <Form.Item name="icon_url" hidden>
+          <Input />
         </Form.Item>
 
         <div className="md:col-span-2 flex justify-end mt-4 sticky bottom-0 bg-white dark:bg-[#1a1a1a] py-4 border-t border-gray-100 dark:border-gray-800 z-10">

@@ -90,7 +90,7 @@ create index if not exists idx_company_settings_org_id on public.company_setting
 create table if not exists public.integration_settings (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references public.organizations(id) on delete set null,
-  connection_type text not null check (connection_type in ('sms','email','site')),
+  connection_type text not null check (connection_type in ('sms','email','site','module_settings','print_templates')),
   provider text,
   settings jsonb not null default '{}'::jsonb,
   is_active boolean not null default true,

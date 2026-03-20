@@ -28,6 +28,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldLocation, FieldNature, FieldType, ModuleField } from '../types';
 import PersianDatePicker from '../components/PersianDatePicker';
 import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
+import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
 import { isAccountingMinimalModule } from '../utils/accountingModules';
@@ -106,13 +107,32 @@ const AccountingRecordPage: React.FC = () => {
     if (!moduleConfig) return [] as ModuleField[];
     return (moduleConfig.fields || [])
       .filter((f) => fieldPerms[f.key] !== false)
+      .filter((f) => {
+        if (moduleId === 'cash_bank_operations') {
+          const paymentType = String(formData?.payment_type || '').trim();
+          if (f.key === 'cheque_id') return paymentType === 'cheque';
+          if (f.key === 'barter_id') return paymentType === 'barter';
+        }
+        return true;
+      })
       .sort(sortByOrder);
-  }, [moduleConfig, fieldPerms]);
+  }, [moduleConfig, fieldPerms, formData?.payment_type, moduleId]);
 
   const chequeInlineFields = useMemo(() => {
     if (!isChequeModule) return [] as ModuleField[];
     return visibleFields.filter((field) => CHEQUE_INLINE_FIELD_KEYS.has(field.key));
   }, [isChequeModule, visibleFields]);
+
+  useEffect(() => {
+    if (moduleId !== 'cash_bank_operations') return;
+    const paymentType = String(formData?.payment_type || '').trim();
+    const patch: Record<string, any> = {};
+    if (paymentType !== 'cheque' && formData?.cheque_id) patch.cheque_id = null;
+    if (paymentType !== 'barter' && formData?.barter_id) patch.barter_id = null;
+    if (!Object.keys(patch).length) return;
+    setFormData((prev) => ({ ...prev, ...patch }));
+    form.setFieldsValue(patch);
+  }, [form, formData?.barter_id, formData?.cheque_id, formData?.payment_type, moduleId]);
 
   const standardFields = useMemo(() => {
     if (!isChequeModule) return visibleFields;
@@ -221,6 +241,12 @@ const AccountingRecordPage: React.FC = () => {
         if (targetModule === 'chart_of_accounts' && targetField !== 'code') {
           selectExpr += ', code';
         }
+        if (targetModule === 'cheques') {
+          selectExpr += ', serial_no, due_date, amount';
+        }
+        if (targetModule === 'barters') {
+          selectExpr += ', remaining_amount, status';
+        }
 
         const { data, error } = await supabase
           .from(targetModule)
@@ -234,6 +260,21 @@ const AccountingRecordPage: React.FC = () => {
           const primaryLabel = String(row?.[targetField] || row?.name || row?.title || row?.id);
           if (targetModule === 'chart_of_accounts' && row?.code) {
             return { value: row.id, label: `[${toPersianNumber(row.code)}] ${primaryLabel}` };
+          }
+          if (targetModule === 'cheques') {
+            const serial = String(row?.serial_no || primaryLabel || 'بدون شماره').trim();
+            const dueDateRaw = String(row?.due_date || '').trim();
+            const dueDate = dueDateRaw ? toPersianNumber(safeJalaliFormat(dueDateRaw, 'YYYY/MM/DD') || dueDateRaw) : '-';
+            const amount = Number(row?.amount || 0);
+            const amountLabel = amount > 0 ? formatPersianPrice(amount) : '-';
+            return { value: row.id, label: `${serial} (${dueDate} - ${amountLabel})` };
+          }
+          if (targetModule === 'barters') {
+            const remaining = Number(row?.remaining_amount || 0);
+            return {
+              value: row.id,
+              label: `${primaryLabel} (مانده: ${formatPersianPrice(remaining)})`,
+            };
           }
           return { value: row.id, label: primaryLabel };
         });
@@ -445,6 +486,21 @@ const AccountingRecordPage: React.FC = () => {
         return option?.label || String(value);
       }
 
+      if (field.type === FieldType.IMAGE || field.type === FieldType.LINK) {
+        return (
+          <SmartFieldRenderer
+            field={field}
+            value={value}
+            onChange={() => undefined}
+            forceEditMode={false}
+            options={getFieldOptions(field)}
+            moduleId={moduleId}
+            recordId={id}
+            allValues={record || {}}
+          />
+        );
+      }
+
       if (field.type === FieldType.DATE) {
         return toPersianNumber(safeJalaliFormat(value, 'YYYY/MM/DD') || '-');
       }
@@ -463,7 +519,7 @@ const AccountingRecordPage: React.FC = () => {
 
       return toPersianNumber(String(value));
     },
-    [getFieldOptions]
+    [getFieldOptions, id, moduleId, record]
   );
 
   const buildPayload = useCallback(
@@ -647,7 +703,6 @@ const AccountingRecordPage: React.FC = () => {
         return <PersianDatePicker type="DATETIME" disabled={disabled} />;
       case FieldType.SELECT:
       case FieldType.STATUS:
-      case FieldType.RELATION:
         return (
           <Select
             showSearch
@@ -655,6 +710,89 @@ const AccountingRecordPage: React.FC = () => {
             allowClear
             disabled={disabled}
             options={options}
+          />
+        );
+      case FieldType.RELATION:
+        return (
+          <SmartFieldRenderer
+            field={field}
+            value={formData?.[field.key]}
+            onChange={(nextValue: any) => {
+              const basePatch: Record<string, any> = { [field.key]: nextValue };
+              const commitPatch = (patch: Record<string, any>) => {
+                const nextFormData = { ...formData, ...patch };
+                setFormData(nextFormData);
+                form.setFieldsValue(patch);
+              };
+
+              if (moduleId === 'cash_bank_operations' && field.key === 'cheque_id') {
+                if (!nextValue) {
+                  commitPatch({ ...basePatch, attachment_url: null });
+                  return;
+                }
+
+                (async () => {
+                  try {
+                    const extraPatch: Record<string, any> = {};
+                    const selectedOption = ((options as any[]) || []).find((opt: any) => String(opt?.value || '') === String(nextValue)) as any;
+                    if (
+                      selectedOption?.amount !== undefined &&
+                      selectedOption?.amount !== null &&
+                      String(selectedOption.amount).trim() !== ''
+                    ) {
+                      extraPatch.amount = Number(selectedOption.amount);
+                    }
+
+                    const { data: chequeRecord } = await supabase
+                      .from('cheques')
+                      .select('amount, image_url')
+                      .eq('id', nextValue)
+                      .maybeSingle();
+
+                    if (
+                      chequeRecord?.amount !== undefined &&
+                      chequeRecord?.amount !== null &&
+                      String(chequeRecord.amount).trim() !== ''
+                    ) {
+                      extraPatch.amount = Number(chequeRecord.amount);
+                    }
+                    if (chequeRecord?.image_url && !formData?.attachment_url) {
+                      extraPatch.attachment_url = chequeRecord.image_url;
+                    }
+
+                    commitPatch({ ...basePatch, ...extraPatch });
+                  } catch {
+                    commitPatch(basePatch);
+                  }
+                })();
+                return;
+              }
+
+              commitPatch(basePatch);
+            }}
+            forceEditMode={!disabled}
+            options={options}
+            moduleId={moduleId}
+            recordId={id}
+            allValues={formData}
+          />
+        );
+      case FieldType.IMAGE:
+      case FieldType.LINK:
+        return (
+          <SmartFieldRenderer
+            field={field}
+            value={formData?.[field.key]}
+            onChange={(nextValue: any) => {
+              const patch = { [field.key]: nextValue };
+              setFormData((prev) => ({ ...prev, ...patch }));
+              form.setFieldsValue(patch);
+            }}
+            forceEditMode={!disabled}
+            options={options}
+            moduleId={moduleId}
+            recordId={id}
+            allValues={formData}
           />
         );
       default:

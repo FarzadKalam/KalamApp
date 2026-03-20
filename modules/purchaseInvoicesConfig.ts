@@ -97,7 +97,31 @@ const BLOCKS = {
           { label: 'انتقال حساب', value: 'transfer' },
           { label: 'چک', value: 'cheque' },
           { label: 'آنلاین', value: 'online' },
+          { label: 'تهاتر', value: 'barter' },
+          { label: 'اعتباری', value: 'credit' },
         ],
+      },
+      {
+        key: 'cheque_id',
+        title: 'چک',
+        type: FieldType.RELATION,
+        width: 180,
+        relationConfig: {
+          targetModule: 'cheques',
+          targetField: 'serial_no',
+          quickCreateFieldKeys: ['serial_no', 'sayad_id', 'issue_date', 'due_date', 'amount', 'payee_name', 'account_holder_name', 'bank_name', 'image_url'],
+          quickCreateDefaults: { cheque_type: 'issued', status: 'new' },
+        },
+      },
+      {
+        key: 'barter_id',
+        title: 'تهاتر',
+        type: FieldType.RELATION,
+        width: 180,
+        relationConfig: {
+          targetModule: 'barters',
+          targetField: 'name',
+        },
       },
       {
         key: 'status',
@@ -108,6 +132,20 @@ const BLOCKS = {
           { label: 'در انتظار', value: 'pending', color: 'orange' },
           { label: 'پرداخت شده', value: 'received', color: 'green' },
           { label: 'برگشت خورده', value: 'returned', color: 'red' },
+        ],
+      },
+      {
+        key: 'cheque_status',
+        title: 'وضعیت چک',
+        type: FieldType.SELECT,
+        width: 130,
+        options: [
+          { label: 'جدید', value: 'new', color: 'blue' },
+          { label: 'در بانک', value: 'in_bank', color: 'orange' },
+          { label: 'وصول شده', value: 'cleared', color: 'green' },
+          { label: 'برگشتی', value: 'bounced', color: 'red' },
+          { label: 'عودت شده', value: 'returned', color: 'purple' },
+          { label: 'ابطال شده', value: 'canceled', color: 'default' },
         ],
       },
       {
@@ -165,12 +203,13 @@ const BLOCKS = {
 
 export const purchaseInvoicesConfig: ModuleDefinition = {
   id: 'purchase_invoices',
-  titles: { fa: 'فاکتورهای خرید', en: 'Purchase Invoices' },
+  titles: { fa: 'فاکتورهای خرید', faSingular: 'فاکتور خرید', en: 'Purchase Invoices' },
   nature: ModuleNature.INVOICE,
   table: 'purchase_invoices',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
@@ -243,4 +282,3 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
-

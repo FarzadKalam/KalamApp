@@ -19,9 +19,10 @@ import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
-import { buildMapStyle, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL } from '../utils/mapConfig';
+import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL } from '../utils/mapConfig';
 import { createThemeMapPinElement } from '../utils/mapPin';
 import { useCurrencyConfig } from '../utils/currency';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -136,6 +137,7 @@ const LocationPickerMap: React.FC<{
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: buildMapStyle() as any,
+      transformRequest: buildMapTransformRequest() as any,
       center,
       zoom: value ? 12 : 5,
       minZoom: 4,
@@ -144,7 +146,7 @@ const LocationPickerMap: React.FC<{
         [minLng, minLat],
         [maxLng, maxLat],
       ],
-      attributionControl: true,
+      attributionControl: {},
     });
 
     mapRef.current = map;
@@ -158,7 +160,6 @@ const LocationPickerMap: React.FC<{
       new maplibregl.GeolocateControl({
         positionOptions: { enableHighAccuracy: true },
         trackUserLocation: false,
-        showUserHeading: false,
       }),
       'top-left'
     );
@@ -172,7 +173,8 @@ const LocationPickerMap: React.FC<{
         message.includes('ajaxerror') ||
         message.includes('connection') ||
         message.includes('timeout') ||
-        message.includes('err_connection');
+        message.includes('err_connection') ||
+        message.includes('glyph');
 
       if (!shouldFallback) return;
 
@@ -261,7 +263,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     createdAt: string | null;
   }>>([]);
   const [globalImageGalleryLoading, setGlobalImageGalleryLoading] = useState(false);
-  const supportsFilesGallery = moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'production_boms';
+  const supportsFilesGallery = Boolean(moduleId && recordId);
   const canShowFilesGallery = supportsFilesGallery && canViewFilesManager;
 
   const fieldLabel = field?.labels?.fa || label || 'بدون نام';
@@ -281,6 +283,22 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const relationConfigAny = field.relationConfig as any;
   const quickCreateTargetModuleId = relationConfigAny?.targetModule as string | undefined;
   const quickCreateTargetModule = quickCreateTargetModuleId ? MODULES[quickCreateTargetModuleId] : undefined;
+  const configuredQuickCreateKeys = useMemo(
+    () =>
+      Array.isArray(relationConfigAny?.quickCreateFieldKeys)
+        ? relationConfigAny.quickCreateFieldKeys
+            .map((item: any) => String(item || '').trim())
+            .filter(Boolean)
+        : [],
+    [relationConfigAny?.quickCreateFieldKeys]
+  );
+  const configuredQuickCreateDefaults = useMemo(
+    () =>
+      relationConfigAny?.quickCreateDefaults && typeof relationConfigAny.quickCreateDefaults === 'object'
+        ? relationConfigAny.quickCreateDefaults
+        : {},
+    [relationConfigAny?.quickCreateDefaults]
+  );
   const quickCreateTargetField = useMemo(() => {
     const configured = relationConfigAny?.targetField;
     if (configured) return String(configured);
@@ -309,6 +327,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       .filter((f: any) => !['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(String(f?.key || '')))
       .filter((f: any) => !unsupported.has(String(f?.type || '')))
       .filter((f: any) => {
+        if (configuredQuickCreateKeys.length === 0) return true;
+        return configuredQuickCreateKeys.includes(String(f?.key || ''));
+      })
+      .filter((f: any) => {
         const isHeader = f?.location === 'header';
         const isRequiredField = f?.validation?.required === true;
         const isKeyField = f?.isKey === true;
@@ -336,7 +358,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     return Array.from(map.values()).sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0));
-  }, [quickCreateTargetField, quickCreateTargetModule]);
+  }, [configuredQuickCreateKeys, quickCreateTargetField, quickCreateTargetModule]);
 
   const fieldAny = field as any;
   if (fieldAny?.dependsOn && allValues) {
@@ -406,10 +428,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       const recordPath = recordId || 'draft';
       const filePath = `record_files/${modulePath}/${recordPath}/${fileName}`;
 
-      const { error: uploadError } = await supabase.storage.from('images').upload(filePath, file);
+      const { error: uploadError } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
       if (uploadError) throw uploadError;
 
-      const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(filePath);
+      const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
 
       if (recordId && moduleId) {
         const { error: fileInsertError } = await supabase
@@ -520,11 +542,14 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   useEffect(() => {
     if (!quickCreateOpen) return;
     const defaults: Record<string, any> = {};
+    Object.entries(configuredQuickCreateDefaults).forEach(([key, val]) => {
+      defaults[key] = val;
+    });
     quickCreateFields.forEach((f: any) => {
       if (f?.defaultValue !== undefined) defaults[f.key] = f.defaultValue;
     });
     quickCreateForm.setFieldsValue(defaults);
-  }, [quickCreateOpen, quickCreateFields, quickCreateForm]);
+  }, [configuredQuickCreateDefaults, quickCreateOpen, quickCreateFields, quickCreateForm]);
 
   useEffect(() => {
     if (!quickCreateOpen || quickCreateFields.length === 0) return;

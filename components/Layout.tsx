@@ -142,7 +142,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         { key: '/customers', label: 'مشتریان' },
         { key: '/suppliers', label: 'تامین کنندگان' },
         { key: '/warehouses', label: 'انبارها' },
-        { key: '/ooh_ads', label: 'تبلیغات محیطی', disabled: true },
+        { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
       ]
     },
     {
@@ -150,7 +150,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       icon: <ProjectOutlined />,
       label: 'پروژه‌ها',
       children: [
-        { key: '/projects', label: 'پروژه‌ها (فرآیندمحور)' },
+        { key: '/projects', label: 'پروژه‌ها' },
       ]
     },
     {
@@ -163,7 +163,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
         { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
         { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
-        { key: '/cash_bank', label: 'نقد و بانک' },
       ]
     },
     {
@@ -172,6 +171,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       label: 'حسابداری',
       children: [
         { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
+        { key: '/cash_bank', label: 'نقد و بانک' },
         { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
         {
           key: '/accounting/account-review',
@@ -180,6 +180,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         },
         { key: '/chart_of_accounts', label: 'جدول حساب ها', disabled: !canViewModule('chart_of_accounts') },
         { key: '/cheques', label: 'چک ها', disabled: !canViewModule('cheques') },
+        { key: '/barters', label: 'تهاترها', disabled: !canViewModule('barters') },
         { key: '/accounting/settings', label: 'تنظیمات حسابداری', disabled: !canViewAccountingSettings },
       ]
     },
@@ -298,6 +299,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       },
     ],
   };
+  const resolvedAvatarSrc = currentUserProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || undefined;
 
   type MobileNavItem = {
     key: string;
@@ -406,7 +408,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 onChange={(e) => setGlobalSearch(e.target.value)}
                 placeholder="جستجو در همه جا..."
                 className="bg-transparent border-none outline-none text-xs text-gray-700 dark:text-gray-200 w-full mr-2 placeholder-gray-400"
-                bordered={false}
+                variant="borderless"
               />
             </div>
 
@@ -477,11 +479,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 <div className="cursor-pointer transition-transform hover:scale-105">
                    <Avatar 
                      size="small" 
-                     src={currentUserProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "https://i.pravatar.cc/150?u=a1"} 
+                     src={resolvedAvatarSrc}
+                     icon={!resolvedAvatarSrc ? <UserOutlined /> : undefined}
                      className="border border-leather-500 shadow-lg" 
-                   >
-                     {(currentUserProfile?.full_name || currentUser?.email || '').toString().trim()[0]?.toUpperCase()}
-                   </Avatar>
+                   />
                 </div>
             </Dropdown>
           </div>
@@ -545,4 +546,3 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 };
 
 export default Layout;
-

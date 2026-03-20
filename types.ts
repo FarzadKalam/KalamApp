@@ -173,7 +173,14 @@ export interface ModuleField {
   logic?: any; 
   readonly?: boolean;
   isCalculated?: boolean;
-  relationConfig?: { targetModule: string; targetField?: string; filter?: Record<string, any>; dependsOn?: string; };  
+  relationConfig?: {
+    targetModule: string;
+    targetField?: string;
+    filter?: Record<string, any>;
+    dependsOn?: string;
+    quickCreateFieldKeys?: string[];
+    quickCreateDefaults?: Record<string, any>;
+  };
   defaultValue?: any;
 }
 
@@ -238,7 +245,7 @@ export interface RelatedTabConfig {
 
 export interface ModuleDefinition {
   id: string;
-  titles: { fa: string; en?: string };
+  titles: { fa: string; en?: string; faSingular?: string };
   nature?: ModuleNature;
   table: string;
   fields: ModuleField[];

@@ -396,6 +396,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             moduleId="production_orders"
             readOnly
             compact
+            allowReportEditInReadOnly
             lazyLoad
             onlyLineId={String(item.production_line_id)}
           />
@@ -411,6 +412,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             moduleId={relatedProcessModuleId}
             readOnly
             compact
+            allowReportEditInReadOnly
             lazyLoad
           />
         </div>

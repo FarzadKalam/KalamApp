@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Button, Spin, App, Avatar, Checkbox, Modal, Select } from 'antd';
+import { Button, Spin, App, Avatar, Checkbox, Modal, Select, Form, Input } from 'antd';
 import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -21,7 +21,7 @@ import PrintSection from '../components/moduleShow/PrintSection';
 import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece, type StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
-import { toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { convertArea } from '../utils/unitConversions';
 import QrScanPopover from '../components/QrScanPopover';
 import { PRODUCTION_MESSAGES } from '../utils/productionMessages';
@@ -38,6 +38,7 @@ import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 import { canAccessAssignedRecord } from '../utils/permissions';
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from '../utils/recordCopy';
 import { useCurrencyConfig } from '../utils/currency';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 
 const ModuleShow: React.FC = () => {
   const { moduleId = 'products', id } = useParams();
@@ -88,6 +89,11 @@ const ModuleShow: React.FC = () => {
   const [statusLoading, setStatusLoading] = useState(false);
   const [issueAccountingLoading, setIssueAccountingLoading] = useState(false);
   const [stockMovementQuickAddSignal, setStockMovementQuickAddSignal] = useState(0);
+  const [isQuickProjectModalOpen, setIsQuickProjectModalOpen] = useState(false);
+  const [quickProjectLoading, setQuickProjectLoading] = useState(false);
+  const [quickProjectCustomerOptions, setQuickProjectCustomerOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [quickProjectTemplateOptions, setQuickProjectTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [quickProjectForm] = Form.useForm();
   const startDraftStorageKey = useMemo(() => (id ? `production-start-draft:${id}` : null), [id]);
   const [canIssueAccountingEntry, setCanIssueAccountingEntry] = useState(true);
     const fetchProductionQuantity = useCallback(async () => {
@@ -684,9 +690,6 @@ const ModuleShow: React.FC = () => {
 
         if (error) throw error;
         
-        // لاگ برای اطمینان از اینکه دیتا واقعا از دیتابیس میاد
-        console.log('Record Data:', record); 
-
         const { data: tagsData } = await supabase
             .from('record_tags')
             .select('tags(id, title, color)')
@@ -770,8 +773,12 @@ const ModuleShow: React.FC = () => {
         }
         setData(nextRecord);
     } catch (err: any) {
-        console.error(err);
-        msg.error('خطا در دریافت اطلاعات: ' + err.message);
+        const abortLike = String(err?.name || '').toLowerCase() === 'aborterror'
+          || String(err?.message || '').toLowerCase().includes('signal is aborted');
+        if (!abortLike) {
+          console.error(err);
+          msg.error('خطا در دریافت رکورد: ' + (err?.message || 'نامشخص'));
+        }
     } finally {
         setLoading(false);
     }
@@ -1177,6 +1184,26 @@ const ModuleShow: React.FC = () => {
     });
 
     const relOpts: Record<string, any[]> = {};
+    const buildRelationOptionLabel = (targetModuleName: string, row: any, targetField: string) => {
+      const moduleName = String(targetModuleName || '').trim();
+      if (moduleName === 'cheques') {
+        const serial = String(row?.serial_no || row?.[targetField] || row?.system_code || row?.id || 'بدون شماره').trim();
+        const dueDateRaw = String(row?.due_date || '').trim();
+        const dueDate = dueDateRaw ? (safeJalaliFormat(dueDateRaw, 'YYYY/MM/DD') || dueDateRaw) : '';
+        const amount = Number(row?.amount || 0);
+        const dueLabel = dueDate ? toPersianNumber(dueDate) : '-';
+        const amountLabel = amount > 0 ? formatPersianPrice(amount) : '-';
+        return `${serial} (${dueLabel} - ${amountLabel})`;
+      }
+      if (moduleName === 'barters') {
+        const base = String(row?.[targetField] || row?.name || row?.system_code || row?.id || 'بدون عنوان').trim();
+        const remaining = Number(row?.remaining_amount || 0);
+        const remainingLabel = formatPersianPrice(remaining);
+        return `${base} (مانده: ${remainingLabel})`;
+      }
+      const baseLabel = row?.[targetField] || row?.shelf_number || row?.system_code || row?.id;
+      return row?.system_code ? `${baseLabel} (${row.system_code})` : baseLabel;
+    };
     for (const field of relFields) {
       if (field.relationConfig) {
         const targetField = field.relationConfig.targetField || 'name';
@@ -1185,10 +1212,14 @@ const ModuleShow: React.FC = () => {
           if (dependsOnValue) {
             try {
               const isShelvesTarget = dependsOnValue === 'shelves';
-              const extraSelect = isShelvesTarget ? ', shelf_number' : '';
+              const isChequeTarget = dependsOnValue === 'cheques';
+              const isBarterTarget = dependsOnValue === 'barters';
+              const skipSystemCodeModules = new Set(['process_templates', 'profiles', 'bank_accounts', 'cheques', 'barters']);
+              const includeSystemCode = !skipSystemCodeModules.has(String(dependsOnValue || ''));
+              const extraSelect = `${isShelvesTarget ? ', shelf_number' : ''}${isChequeTarget ? ', due_date, amount, serial_no' : ''}${isBarterTarget ? ', remaining_amount, status' : ''}`;
               let { data: relData, error: relError } = await supabase
                 .from(dependsOnValue)
-                .select(`id, ${targetField}, system_code${extraSelect}`)
+                .select(`id, ${targetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}`)
                 .limit(200);
               if (relError) {
                 const errorCode = String((relError as any)?.code || '').toUpperCase();
@@ -1204,13 +1235,16 @@ const ModuleShow: React.FC = () => {
               }
               if (relData) {
                 const options = relData.map((i: any) => {
-                  const baseLabel = i?.[targetField] || i?.shelf_number || i?.system_code || i?.id;
                   return {
-                    label: i.system_code ? `${baseLabel} (${i.system_code})` : baseLabel,
+                    label: buildRelationOptionLabel(String(dependsOnValue || ''), i, targetField),
                     value: i.id,
                     module: dependsOnValue,
-                    name: baseLabel,
-                    system_code: i.system_code
+                    name: i?.[targetField] || i?.name || i?.serial_no || i?.id,
+                    system_code: i.system_code,
+                    due_date: i?.due_date,
+                    amount: i?.amount,
+                    remaining_amount: i?.remaining_amount,
+                    status: i?.status,
                   };
                 });
                 relOpts[field.key] = options;
@@ -1223,12 +1257,16 @@ const ModuleShow: React.FC = () => {
           const { targetModule, filter } = field.relationConfig;
           try {
             const isShelvesTarget = targetModule === 'shelves';
-            const extraSelect = isShelvesTarget ? ', shelf_number' : '';
+            const isChequeTarget = targetModule === 'cheques';
+            const isBarterTarget = targetModule === 'barters';
+            const skipSystemCodeModules = new Set(['process_templates', 'profiles', 'bank_accounts', 'cheques', 'barters']);
+            const includeSystemCode = !skipSystemCodeModules.has(String(targetModule || ''));
+            const extraSelect = `${isShelvesTarget ? ', shelf_number' : ''}${isChequeTarget ? ', due_date, amount, serial_no' : ''}${isBarterTarget ? ', remaining_amount, status' : ''}`;
             const filterKeys = filter ? Object.keys(filter) : [];
             const filterSelect = filterKeys.length > 0 ? `, ${filterKeys.join(', ')}` : '';
             let query = supabase
               .from(targetModule)
-              .select(`id, ${targetField}, system_code${extraSelect}${filterSelect}`)
+              .select(`id, ${targetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}${filterSelect}`)
               .limit(200);
             if (filter) query = query.match(filter);
             let { data: relData, error: relError } = await query;
@@ -1248,12 +1286,15 @@ const ModuleShow: React.FC = () => {
             }
             if (relData) {
               const options = relData.map((i: any) => {
-                const baseLabel = i?.[targetField] || i?.shelf_number || i?.system_code || i?.id;
                 return {
-                  label: i.system_code ? `${baseLabel} (${i.system_code})` : baseLabel,
+                  label: buildRelationOptionLabel(String(targetModule || ''), i, targetField),
                   value: i.id,
-                  name: baseLabel,
-                  system_code: i.system_code
+                  name: i?.[targetField] || i?.name || i?.serial_no || i?.id,
+                  system_code: i.system_code,
+                  due_date: i?.due_date,
+                  amount: i?.amount,
+                  remaining_amount: i?.remaining_amount,
+                  status: i?.status,
                 };
               });
               relOpts[field.key] = options;
@@ -1584,6 +1625,165 @@ const ModuleShow: React.FC = () => {
     });
   }, [data, id, moduleConfig, modal, moduleId, msg, navigate]);
 
+  const isMissingColumnError = (error: any, columnName: string) => {
+    const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+    const needle = String(columnName || '').toLowerCase();
+    return !!text && !!needle && text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
+  };
+
+  const createProjectWithFallback = async (payload: Record<string, any>) => {
+    let currentPayload: Record<string, any> = { ...payload };
+    const optionalColumns = ['source_invoice_id', 'source_purchase_invoice_id'];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data: inserted, error } = await supabase
+        .from('projects')
+        .insert(currentPayload)
+        .select('id')
+        .single();
+      if (!error && inserted?.id) return String(inserted.id);
+      const removable = optionalColumns.filter((columnName) =>
+        Object.prototype.hasOwnProperty.call(currentPayload, columnName) && isMissingColumnError(error, columnName)
+      );
+      if (!removable.length) throw error || new Error('ایجاد پروژه ناموفق بود');
+      removable.forEach((columnName) => {
+        delete currentPayload[columnName];
+      });
+    }
+    throw new Error('ایجاد پروژه ناموفق بود');
+  };
+
+  const loadQuickProjectModalOptions = useCallback(async () => {
+    try {
+      const [{ data: customers }, { data: templates, error: templatesError }] = await Promise.all([
+        supabase
+          .from('customers')
+          .select('id,first_name,last_name,business_name,system_code')
+          .order('last_name', { ascending: true })
+          .limit(200),
+        supabase
+          .from('process_templates')
+          .select('id,name,module_id,is_active')
+          .order('name', { ascending: true }),
+      ]);
+      if (templatesError) throw templatesError;
+      const customerOptions = (customers || []).map((row: any) => ({
+        value: String(row.id),
+        label: `${String(row?.system_code || '').trim() ? `${row.system_code} - ` : ''}${String(
+          row?.business_name
+          || `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim()
+          || row?.id
+          || '-'
+        )}`,
+      }));
+      const scopedTemplates = (templates || []).filter((row: any) => {
+        const rowModule = String(row?.module_id || '').trim();
+        const isActive = row?.is_active !== false;
+        return isActive && (!rowModule || rowModule === 'projects');
+      });
+      const templateOptions = scopedTemplates.map((row: any) => ({
+        value: String(row.id),
+        label: String(row?.name || row?.id),
+      }));
+      setQuickProjectCustomerOptions(customerOptions);
+      setQuickProjectTemplateOptions(templateOptions);
+    } catch (error) {
+      console.warn('Could not load quick project modal options', error);
+      setQuickProjectCustomerOptions([]);
+      setQuickProjectTemplateOptions([]);
+    }
+  }, []);
+
+  const handleOpenQuickProjectModal = useCallback(async () => {
+    await loadQuickProjectModalOptions();
+    const baseTitle = String(getRecordTitle(data, moduleConfig, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
+    const suggestedName = `پروژه "${baseTitle || 'جدید'}"`;
+    const suggestedCustomerId = moduleId === 'invoices'
+      ? (data?.customer_id || null)
+      : (moduleId === 'tasks' ? (data?.related_customer || null) : null);
+    quickProjectForm.setFieldsValue({
+      name: suggestedName,
+      customer_id: suggestedCustomerId,
+      process_template_id: data?.process_template_id || undefined,
+    });
+    setIsQuickProjectModalOpen(true);
+  }, [data, loadQuickProjectModalOptions, moduleConfig, moduleId, quickProjectForm]);
+
+  const handleQuickProjectCreate = useCallback(async (values: any) => {
+    if (!id) return;
+    setQuickProjectLoading(true);
+    try {
+      const selectedTemplateId = String(values?.process_template_id || '').trim() || null;
+      const selectedTemplateLabel = quickProjectTemplateOptions.find((item) => String(item.value) === selectedTemplateId)?.label || null;
+      let executionDraft: any[] = [];
+      if (selectedTemplateId) {
+        const { data: stages, error: stagesError } = await supabase
+          .from('process_template_stages')
+          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+          .eq('template_id', selectedTemplateId)
+          .order('sort_order', { ascending: true });
+        if (stagesError) throw stagesError;
+        const groupId = `process_group_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        const groupLabel = String(selectedTemplateLabel || 'فرآیند ۱').trim() || 'فرآیند ۱';
+        executionDraft = (stages || []).map((stage: any, index: number) => {
+          const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
+          return {
+            ...(metadata || {}),
+            id: stage.id || `${selectedTemplateId}_${index + 1}`,
+            name: stage.stage_name || `مرحله ${index + 1}`,
+            sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+            wage: Number(stage?.wage || 0),
+            weight: Number(metadata?.weight || 0),
+            duration_value: Number(metadata?.duration_value || 0),
+            duration_unit: String(metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+            duration_from: String(metadata?.duration_from || 'project_start') === 'previous_stage_end' ? 'previous_stage_end' : 'project_start',
+            description: String(metadata?.description || '').trim() || null,
+            task_type: String(metadata?.task_type || '').trim() || null,
+            default_assignee_id: stage?.default_assignee_id || null,
+            default_assignee_role_id: stage?.default_assignee_role_id || null,
+            source_template_id: selectedTemplateId,
+            source_template_name: selectedTemplateLabel,
+            process_group_id: groupId,
+            process_group_name: groupLabel,
+            template_stage_id: stage.id || null,
+          };
+        });
+      }
+
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const payload: Record<string, any> = {
+        name: String(values?.name || '').trim(),
+        status: 'draft',
+        customer_id: values?.customer_id || null,
+        process_template_id: selectedTemplateId,
+        execution_process_draft: executionDraft,
+        source_invoice_id: moduleId === 'invoices' ? id : null,
+        source_purchase_invoice_id: moduleId === 'purchase_invoices' ? id : null,
+        created_by: userId,
+      };
+      if (!payload.name) {
+        msg.error('نام پروژه الزامی است');
+        return;
+      }
+      const projectId = await createProjectWithFallback(payload);
+
+      if (moduleId === 'invoices') {
+        await supabase.from('invoices').update({ project_id: projectId }).eq('id', id);
+      } else if (moduleId === 'purchase_invoices') {
+        await supabase.from('purchase_invoices').update({ project_id: projectId }).eq('id', id);
+      }
+
+      setIsQuickProjectModalOpen(false);
+      quickProjectForm.resetFields();
+      msg.success('پروژه ایجاد شد');
+      navigate(`/projects/${projectId}`);
+    } catch (error: any) {
+      msg.error(`ایجاد پروژه ناموفق بود: ${error?.message || error}`);
+    } finally {
+      setQuickProjectLoading(false);
+    }
+  }, [id, moduleId, msg, navigate, quickProjectForm, quickProjectTemplateOptions]);
+
   const handleHeaderAction = (actionId: string) => {
     if (actionId === 'create_production_order') {
       if (!MODULES['production_orders']) {
@@ -1596,6 +1796,24 @@ const ModuleShow: React.FC = () => {
     if (actionId === 'quick_stock_movement' && (moduleId === 'products' || moduleId === 'shelves')) {
       if (!canEditModule) return;
       setStockMovementQuickAddSignal((prev) => prev + 1);
+      return;
+    }
+    if (actionId === 'create_process') {
+      if (!processDraftFieldKey) {
+        msg.info('برای این ماژول فرآیند فعال نیست');
+        return;
+      }
+      const processSectionEl = document.getElementById(`process-section-${String(moduleId)}-${String(id || '')}`);
+      processSectionEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kalamapp:open-process-append', {
+          detail: { moduleId: String(moduleId), recordId: String(id || '') },
+        }));
+      }
+      return;
+    }
+    if (actionId === 'create_project') {
+      void handleOpenQuickProjectModal();
       return;
     }
     if (actionId === 'auto_name' && (moduleId === 'products' || moduleId === 'production_orders')) {
@@ -1651,18 +1869,49 @@ const ModuleShow: React.FC = () => {
   };
 
   const handleImageUpdate = useCallback(async (file: File) => {
+    if (!canEditModule) {
+      msg.warning('دسترسی ویرایش ندارید');
+      return false;
+    }
+    if (!id) {
+      msg.warning('ابتدا رکورد را ذخیره کنید');
+      return false;
+    }
     setUploadingImage(true);
     try {
-      const fileName = `${Math.random()}.${file.name.split('.').pop()}`;
-      const { error: upErr } = await supabase.storage.from('images').upload(fileName, file);
+      const ext = String(file.name.split('.').pop() || '').trim();
+      const baseName = String(file.name || 'image').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${baseName}${ext && !baseName.toLowerCase().endsWith(`.${ext.toLowerCase()}`) ? `.${ext}` : ''}`;
+      const filePath = `record_files/${moduleId}/${id}/${fileName}`;
+      const { error: upErr } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
       if (upErr) throw upErr;
-      const { data: urlData } = supabase.storage.from('images').getPublicUrl(fileName);
-      await supabase.from(moduleId).update({ image_url: urlData.publicUrl }).eq('id', id);
+      const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+      const { error: updateError } = await supabase
+        .from(moduleId)
+        .update({ image_url: urlData.publicUrl })
+        .eq('id', id);
+      if (updateError) throw updateError;
+      const { error: fileInsertError } = await supabase
+        .from('record_files')
+        .insert([
+          {
+            module_id: moduleId,
+            record_id: id,
+            file_url: urlData.publicUrl,
+            file_type: 'image',
+            file_name: file.name || null,
+            mime_type: file.type || null,
+            sort_order: 0,
+          },
+        ]);
+      if (fileInsertError) {
+        console.warn('Could not append uploaded image to record_files', fileInsertError);
+      }
       setData((prev: any) => ({ ...prev, image_url: urlData.publicUrl }));
       msg.success('تصویر بروزرسانی شد');
     } catch (e: any) { msg.error('خطا: ' + e.message); } finally { setUploadingImage(false); }
     return false;
-  }, [id, moduleId, msg]);
+  }, [canEditModule, id, moduleId, msg]);
 
 
   const getFieldLabel = useCallback(
@@ -1713,7 +1962,7 @@ const ModuleShow: React.FC = () => {
   );
 
   const handleMainImageChange = useCallback(async (url: string | null) => {
-    if (!canEditModule || !url) return;
+    if (!canEditModule) return;
     try {
       const { error } = await supabase.from(moduleId).update({ image_url: url }).eq('id', id);
       if (error) throw error;
@@ -2815,12 +3064,20 @@ const ModuleShow: React.FC = () => {
       variant: b.variant,
       onClick: () => handleHeaderAction(b.id)
     }));
-  if ((moduleId === 'products' || moduleId === 'production_orders') && canUseAction('auto_name')) {
+  if (canEditModule) {
     headerActions.push({
-      id: 'auto_name',
-      label: 'نامگذاری خودکار',
+      id: 'create_process',
+      label: 'ایجاد فرآیند',
       variant: 'primary',
-      onClick: () => handleHeaderAction('auto_name')
+      onClick: () => handleHeaderAction('create_process')
+    });
+  }
+  if (['products', 'invoices', 'purchase_invoices', 'tasks'].includes(String(moduleId)) && canEditModule) {
+    headerActions.push({
+      id: 'create_project',
+      label: 'ایجاد پروژه',
+      variant: 'default',
+      onClick: () => handleHeaderAction('create_project')
     });
   }
   if (moduleId === 'products' && canUseAction('quick_stock_movement')) {
@@ -2975,7 +3232,6 @@ const ModuleShow: React.FC = () => {
         relationOptions={relationOptions}
         dynamicOptions={dynamicOptions}
         checkVisibility={checkVisibility}
-        renderSmartField={renderSmartField}
         canViewField={canViewField}
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
@@ -3012,6 +3268,66 @@ const ModuleShow: React.FC = () => {
           onSave={handleCreateOrderFromBom}
         />
       )}
+
+      <Modal
+        title="ایجاد سریع پروژه"
+        open={isQuickProjectModalOpen}
+        onCancel={() => {
+          setIsQuickProjectModalOpen(false);
+          quickProjectForm.resetFields();
+        }}
+        footer={null}
+        destroyOnHidden
+      >
+        <Form form={quickProjectForm} layout="vertical" onFinish={handleQuickProjectCreate} className="pt-2">
+          <Form.Item
+            name="name"
+            label="نام پروژه"
+            rules={[{ required: true, message: 'نام پروژه الزامی است' }]}
+          >
+            <Input placeholder='مثال: پروژه "فاکتور فروش ۱۲۳"' />
+          </Form.Item>
+
+          <Form.Item name="customer_id" label="مشتری مرتبط">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={quickProjectCustomerOptions}
+              placeholder="انتخاب مشتری"
+              getPopupContainer={() => document.body}
+            />
+          </Form.Item>
+
+          <Form.Item name="process_template_id" label="الگوی فرآیند پروژه">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={quickProjectTemplateOptions}
+              placeholder="انتخاب الگو (اختیاری)"
+              getPopupContainer={() => document.body}
+            />
+          </Form.Item>
+
+          {(moduleId === 'invoices' || moduleId === 'purchase_invoices') && (
+            <div className="rounded-xl border border-leather-200 bg-leather-50 px-3 py-2 text-xs text-leather-700">
+              {moduleId === 'invoices'
+                ? 'این پروژه به‌صورت خودکار به فاکتور فروش جاری هم لینک می‌شود.'
+                : 'این پروژه به‌صورت خودکار به فاکتور خرید جاری هم لینک می‌شود.'}
+            </div>
+          )}
+
+          <div className="mt-4 flex justify-end gap-2 border-t pt-4">
+            <Button onClick={() => { setIsQuickProjectModalOpen(false); quickProjectForm.resetFields(); }}>
+              انصراف
+            </Button>
+            <Button type="primary" htmlType="submit" loading={quickProjectLoading} className="bg-leather-600 hover:!bg-leather-500 border-none">
+              ایجاد پروژه
+            </Button>
+          </div>
+        </Form>
+      </Modal>
 
       {moduleId === 'production_orders' && (
         <>
@@ -3205,9 +3521,12 @@ const ModuleShow: React.FC = () => {
         onSelectTemplate={printManager.setSelectedTemplateId}
         renderPrintCard={printManager.renderPrintCard}
         printMode={printManager.printMode}
-        printableFields={printableFields}
+        printableFields={printManager.printableFieldsForTemplate || printableFields}
         selectedPrintFields={printManager.selectedPrintFields}
         onTogglePrintField={printManager.handleTogglePrintField}
+        onRefreshPreview={printManager.refreshTemplates}
+        allowFieldSelectionTab={printManager.allowFieldSelectionTab}
+        previewMeta={printManager.previewMeta}
       />
 
       <style>{`
@@ -3226,6 +3545,7 @@ const ModuleShow: React.FC = () => {
 };
 
 export default ModuleShow;
+
 
 
 

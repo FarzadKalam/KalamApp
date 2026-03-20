@@ -14,6 +14,7 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import {
   detectRecordFilesTable,
   getRecordFilesTableAvailabilityCache,
@@ -218,9 +219,9 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!recordId) throw new Error('Record id is required');
     const storedFileName = buildStoredFileName(file, desiredName);
     const filePath = `record_files/${moduleId}/${recordId}/${storedFileName}`;
-    const { error } = await supabase.storage.from('images').upload(filePath, file);
+    const { error } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
     if (error) throw error;
-    return supabase.storage.from('images').getPublicUrl(filePath).data.publicUrl;
+    return fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath).data.publicUrl;
   };
 
   const uploadFile = async (file: File, desiredName: string) => {

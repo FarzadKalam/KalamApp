@@ -557,6 +557,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                 moduleId={moduleConfig?.id}
                 readOnly={true}
                 compact={true}
+                allowReportEditInReadOnly={true}
                 lazyLoad={true}
                 draftStages={draftStages}
                 showWageSummary={false}

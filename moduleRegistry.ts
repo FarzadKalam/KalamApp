@@ -1,5 +1,6 @@
 import { ModuleDefinition } from './types';
 import { productsConfig } from './modules/productsConfig';
+import { billboardConfig } from './modules/billboardsConfig';
 import { productBundlesConfig } from './modules/productBundlesConfig';
 import { productionBomModule, productionOrderModule } from './modules/productionConfig';
 import { customerModule } from './modules/customerConfig';
@@ -25,9 +26,11 @@ import { cashBoxesConfig } from './modules/cashBoxesConfig';
 import { bankAccountsConfig } from './modules/bankAccountsConfig';
 import { chequesConfig } from './modules/chequesConfig';
 import { cashBankOperationsConfig } from './modules/cashBankOperationsConfig';
+import { bartersConfig } from './modules/bartersConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
+  billboards: billboardConfig,
   product_bundles: productBundlesConfig,
   warehouses: warehousesConfig,
   shelves: shelvesConfig,
@@ -53,5 +56,6 @@ export const MODULES: Record<string, ModuleDefinition> = {
   cash_boxes: cashBoxesConfig,
   bank_accounts: bankAccountsConfig,
   cheques: chequesConfig,
+  barters: bartersConfig,
   cash_bank_operations: cashBankOperationsConfig,
 };

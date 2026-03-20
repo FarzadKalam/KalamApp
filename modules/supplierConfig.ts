@@ -11,6 +11,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'business_name', labels: { fa: 'نام تجاری/فروشگاه', en: 'Business Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, validation: { required: true }, isKey: true, isTableColumn: true },
     { key: 'last_name', labels: { fa: 'نام خانوادگی رابط', en: 'Contact Last Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, isTableColumn: true },
     { key: 'supply_type', labels: { fa: 'زمینه فعالیت', en: 'Type' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 4, dynamicOptionsCategory: 'supply_type', isTableColumn: true },
+    { key: 'is_customer', labels: { fa: 'این تامین‌کننده مشتری هم هست', en: 'Also Customer' }, type: FieldType.CHECKBOX, location: FieldLocation.HEADER, order: 4.5, isTableColumn: true },
     {
       key: 'rank', labels: { fa: 'درجه اعتبار', en: 'Rank' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 5,
       options: [

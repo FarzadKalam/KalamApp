@@ -70,6 +70,15 @@ export const chequesConfig: ModuleDefinition = {
       validation: { required: true },
     },
     {
+      key: 'due_date',
+      labels: { fa: 'تاریخ سررسید', en: 'Due Date' },
+      type: FieldType.DATE,
+      location: FieldLocation.HEADER,
+      order: 6,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
       key: 'amount',
       labels: { fa: 'مبلغ', en: 'Amount' },
       type: FieldType.PRICE,
@@ -89,7 +98,6 @@ export const chequesConfig: ModuleDefinition = {
       order: 2,
       isTableColumn: true,
       nature: FieldNature.STANDARD,
-      validation: { required: true },
     },
     {
       key: 'payee_identifier',

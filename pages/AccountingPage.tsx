@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Col, Empty, Row, Spin, Statistic, Typography, Button } from 'antd';
 import {
+  ApartmentOutlined,
   FileTextOutlined,
   NodeIndexOutlined,
   BankOutlined,
@@ -90,6 +91,7 @@ const AccountingPage: React.FC = () => {
           'cost_centers',
           'cash_boxes',
           'bank_accounts',
+          'barters',
         ];
 
         const modulePermMap = moduleIds.reduce<Record<string, boolean>>((acc, id) => {
@@ -192,6 +194,12 @@ const AccountingPage: React.FC = () => {
         title: 'نقد و بانک',
         icon: <BankOutlined />,
         path: '/cash_bank',
+      },
+      {
+        key: 'barters',
+        title: 'تهاترها',
+        icon: <ApartmentOutlined />,
+        path: '/barters',
       },
     ],
     []

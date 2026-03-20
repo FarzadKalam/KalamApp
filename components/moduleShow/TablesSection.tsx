@@ -14,7 +14,6 @@ interface TablesSectionProps {
   relationOptions: Record<string, any[]>;
   dynamicOptions: Record<string, any[]>;
   checkVisibility: (logic: any) => boolean;
-  renderSmartField?: (field: any, isHeader?: boolean) => React.ReactNode;
   canViewField?: (fieldKey: string) => boolean;
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
@@ -29,7 +28,6 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   relationOptions,
   dynamicOptions,
   checkVisibility,
-  renderSmartField,
   canViewField,
   canEditModule = true,
   onDataUpdate,
@@ -223,13 +221,9 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           const isProcessStagesField = processStageFieldKeys.has(fieldKey);
           const isTemplatePreviewField = fieldKey === 'template_stages_preview';
           const isRunPreviewField = fieldKey === 'run_stages_preview';
-          const processTemplateField = (module.fields || []).find((candidate: any) => (
-            String(candidate?.key || '') === 'process_template_id'
-            && String(candidate?.blockId || '') === String(field?.blockId || '')
-          ));
-          const canShowProcessTemplateField = !!processTemplateField
-            && (!canViewField || canViewField(String(processTemplateField.key)) !== false)
-            && (!processTemplateField.logic || checkVisibility(processTemplateField.logic));
+          const processSectionAnchorId = isProcessStagesField
+            ? `process-section-${String(module?.id || '')}-${String(data?.id || '')}`
+            : undefined;
           const stageDraftValue = isProcessStagesField
             ? (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : [])
             : (data?.production_stages_draft || []);
@@ -263,16 +257,10 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           };
 
           return (
-        <div key={field.key} className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
+        <div id={processSectionAnchorId} key={field.key} className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
             <h3 className="text-sm md:text-lg font-bold mb-4 text-gray-700 dark:text-gray-200 flex items-center gap-2">
               <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>                {field.labels.fa}
             </h3>
-            {canShowProcessTemplateField && renderSmartField && (
-              <div className="mb-4">
-                <div className="text-xs text-gray-400 mb-1">{processTemplateField.labels?.fa || 'الگوی فرآیند اجرا'}</div>
-                {renderSmartField(processTemplateField)}
-              </div>
-            )}
             <ProductionStagesField 
               recordId={data.id} 
               moduleId={module.id}
@@ -349,4 +337,3 @@ const TablesSection: React.FC<TablesSectionProps> = ({
 };
 
 export default TablesSection;
-

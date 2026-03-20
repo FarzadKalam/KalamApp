@@ -3,6 +3,8 @@ type MapPinSize = 'sm' | 'md';
 type CreateThemeMapPinOptions = {
   size?: MapPinSize;
   interactive?: boolean;
+  color?: string;
+  strokeColor?: string;
 };
 
 const SIZE_MAP: Record<MapPinSize, { width: number; height: number }> = {
@@ -14,6 +16,8 @@ export const createThemeMapPinElement = (options?: CreateThemeMapPinOptions): HT
   const size = options?.size || 'md';
   const interactive = options?.interactive !== false;
   const { width, height } = SIZE_MAP[size];
+  const pinColor = String(options?.color || 'rgb(var(--brand-600-rgb))');
+  const pinStrokeColor = String(options?.strokeColor || 'rgb(var(--brand-700-rgb))');
 
   const element = document.createElement('button');
   element.type = 'button';
@@ -33,9 +37,9 @@ export const createThemeMapPinElement = (options?: CreateThemeMapPinOptions): HT
 
   element.innerHTML = `
     <svg viewBox="0 0 24 30" width="${width}" height="${height}" aria-hidden="true" focusable="false" preserveAspectRatio="xMidYMid meet">
-      <path d="M12 1C6.48 1 2 5.48 2 11c0 7.57 8.95 17.78 9.33 18.21a.9.9 0 0 0 1.34 0C13.05 28.78 22 18.57 22 11c0-5.52-4.48-10-10-10z" fill="rgb(var(--brand-600-rgb))" stroke="rgb(var(--brand-700-rgb))" stroke-width="1.2" />
+      <path d="M12 1C6.48 1 2 5.48 2 11c0 7.57 8.95 17.78 9.33 18.21a.9.9 0 0 0 1.34 0C13.05 28.78 22 18.57 22 11c0-5.52-4.48-10-10-10z" fill="${pinColor}" stroke="${pinStrokeColor}" stroke-width="1.2" />
       <circle cx="12" cy="11" r="4.8" fill="#fff" />
-      <circle cx="12" cy="11" r="2.1" fill="rgb(var(--brand-600-rgb))" />
+      <circle cx="12" cy="11" r="2.1" fill="${pinColor}" />
     </svg>
   `;
 

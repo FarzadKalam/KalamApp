@@ -16,6 +16,7 @@ import ProductionStagesField from './ProductionStagesField';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
+import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -184,24 +185,39 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const fetchOptionsForField = async (targetModule?: string, targetField?: string, key?: string) => {
         // اگر پارامترهای ضروری موجود نیستند، کاری انجام نده
         if (!targetModule || !targetField || !key) return;
+        const skipSystemCode = new Set(['profiles', 'bank_accounts', 'cheques', 'barters', 'process_templates']);
+        const includeSystemCode = !skipSystemCode.has(targetModule);
 
         try {
             const isShelvesTarget = targetModule === 'shelves';
-            const extraSelect = isShelvesTarget ? ', shelf_number' : '';
+            const isChequeTarget = targetModule === 'cheques';
+            const isBarterTarget = targetModule === 'barters';
+            const extraSelect = `${isShelvesTarget ? ', shelf_number' : ''}${isChequeTarget ? ', due_date, amount, serial_no' : ''}${isBarterTarget ? ', remaining_amount, status' : ''}`;
             // تلاش برای گرفتن نام + کد سیستمی
             const { data, error } = await supabase
                 .from(targetModule)
-                .select(`id, ${targetField}, system_code${extraSelect}`)
+                .select(`id, ${targetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}`)
                 .limit(100);
             if (error) throw error;
             
             if (data) {
-                options[key] = data.map((item: any) => ({
-                    label: item.system_code
+                options[key] = data.map((item: any) => {
+                    const chequeLabel =
+                      `${String(item?.serial_no || item?.[targetField] || item?.system_code || item?.id || 'بدون شماره').trim()} (${String(item?.due_date || '').trim() ? toPersianNumber(safeJalaliFormat(item.due_date, 'YYYY/MM/DD') || item.due_date) : '-'} - ${Number(item?.amount || 0) > 0 ? formatPersianPrice(Number(item.amount)) : '-'})`;
+                    const barterLabel =
+                      `${String(item?.[targetField] || item?.name || item?.system_code || item?.id || 'بدون عنوان').trim()} (مانده: ${formatPersianPrice(Number(item?.remaining_amount || 0))})`;
+                    const defaultLabel = item.system_code
                       ? `${item[targetField] || item.shelf_number || item.system_code || item.id} (${item.system_code})`
-                      : (item[targetField] || item.shelf_number || item.system_code || item.id),
-                    value: item.id
-                }));
+                      : (item[targetField] || item.shelf_number || item.system_code || item.id);
+                    return {
+                      label: targetModule === 'cheques' ? chequeLabel : targetModule === 'barters' ? barterLabel : defaultLabel,
+                      value: item.id,
+                      due_date: item?.due_date,
+                      amount: item?.amount,
+                      remaining_amount: item?.remaining_amount,
+                      status: item?.status,
+                    };
+                });
                 return;
             }
         } catch (e) { /* اگر فیلد system_code نبود خطا نده */ }
@@ -627,6 +643,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
       wage: Number(stage?.wage || 0),
       metadata: {
         ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+        description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
+        task_type: String(stage?.task_type || stage?.metadata?.task_type || '').trim() || null,
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -1078,7 +1096,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-lg md:text-xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2">
               <span className="w-2 h-7 md:h-8 bg-leather-500 rounded-full inline-block"></span>
-              {title || (recordId ? `ویرایش ${module.titles.fa}` : `افزودن ${module.titles.fa} جدید`)}
+              {title || (recordId ? `ویرایش ${module.titles.faSingular || module.titles.fa}` : `افزودن ${module.titles.faSingular || module.titles.fa} جدید`)}
             </h2>
             {formActionButtons.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
@@ -1117,7 +1135,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     <span className="text-xs text-gray-400 shrink-0">مسئول:</span>
                     <Form.Item name="assignee_combo" noStyle>
                       <Select
-                        bordered={false}
+                        variant="borderless"
                         placeholder="انتخاب کنید"
                         className="min-w-[180px] font-bold text-gray-700 dark:text-gray-300"
                         dropdownStyle={{ minWidth: 200, zIndex: 4000 }}
@@ -1216,6 +1234,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   const blockFields = module.fields
                     .filter(f => f.blockId === block.id)
                     .filter((f) => f.nature !== 'system' || f.key === processPreviewFieldKey)
+                    .filter((f) => !(module.id === 'projects'
+                      || module.id === 'marketing_leads'
+                      || module.id === 'customers'
+                      || module.id === 'invoices'
+                      || module.id === 'purchase_invoices') || f.key !== 'process_template_id')
                     .filter(f => canViewField(f.key))
                     .filter(f => f.key !== 'assignee_id' && f.key !== 'assignee_type')
                     .sort((a, b) => (a.order || 0) - (b.order || 0));

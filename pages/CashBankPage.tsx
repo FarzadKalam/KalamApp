@@ -1,21 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Button, Card, Col, Grid, Input, Row, Space, Spin, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { BankOutlined, CreditCardOutlined, PlusOutlined, SearchOutlined, WalletOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, BankOutlined, CreditCardOutlined, PlusOutlined, SearchOutlined, WalletOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import RelatedRecordPopover from '../components/RelatedRecordPopover';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { useCurrencyConfig } from '../utils/currency';
 
 const { Title, Text } = Typography;
 
-type RowKind = 'sales_payment' | 'purchase_payment' | 'cash_bank_operation' | 'cheque';
+type RowKind = 'sales_payment' | 'purchase_payment' | 'cash_bank_operation' | 'cheque' | 'barter';
 
 type RowItem = {
   key: string;
   kind: RowKind;
-  rowType: 'receipt' | 'payment' | 'cheque';
+  rowType: 'receipt' | 'payment' | 'cheque' | 'barter';
   sourceLabel: string;
   sourceRecordId?: string;
   paymentType: string;
@@ -28,6 +29,10 @@ type RowItem = {
   chequeLabel: string;
   description: string;
   createdAt: string | null;
+  invoiceRelation?: { moduleId: string; recordId: string } | null;
+  personRelation?: { moduleId: string; recordId: string } | null;
+  bankRelation?: { moduleId: string; recordId: string } | null;
+  chequeRelation?: { moduleId: string; recordId: string } | null;
 };
 
 const PAYMENT_TYPE_LABEL: Record<string, string> = {
@@ -36,6 +41,7 @@ const PAYMENT_TYPE_LABEL: Record<string, string> = {
   transfer: 'انتقال',
   cheque: 'چک',
   online: 'آنلاین',
+  barter: 'تهاتر',
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -47,6 +53,9 @@ const STATUS_LABEL: Record<string, string> = {
   in_bank: 'در بانک',
   cleared: 'وصول شده',
   bounced: 'برگشتی',
+  open: 'باز',
+  partial: 'مصرف‌شده جزئی',
+  closed: 'بسته',
 };
 
 const statusColor = (status?: string) =>
@@ -59,6 +68,7 @@ const statusColor = (status?: string) =>
 const rowTag = (type: RowItem['rowType']) => {
   if (type === 'receipt') return { color: 'green', label: 'دریافت' };
   if (type === 'payment') return { color: 'red', label: 'پرداخت' };
+  if (type === 'barter') return { color: 'purple', label: 'تهاتر' };
   return { color: 'blue', label: 'چک' };
 };
 
@@ -73,12 +83,13 @@ const CashBankPage: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<RowItem[]>([]);
-  const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, openCheques: 0, chequesAmount: 0 });
+  const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
   const [banks, setBanks] = useState<any[]>([]);
   const [salesInvoices, setSalesInvoices] = useState<any[]>([]);
   const [purchaseInvoices, setPurchaseInvoices] = useState<any[]>([]);
   const [operations, setOperations] = useState<any[]>([]);
   const [cheques, setCheques] = useState<any[]>([]);
+  const [barters, setBarters] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
@@ -148,6 +159,7 @@ const CashBankPage: React.FC = () => {
         salesRes,
         purchaseRes,
         opsRes,
+        bartersRes,
         customersRes,
         suppliersRes,
         employeesRes,
@@ -164,6 +176,10 @@ const CashBankPage: React.FC = () => {
           .select('id, name, system_code, invoice_date, supplier_id, payments, created_at')
           .limit(3000),
         supabase.from('cash_bank_operations').select('*').limit(3000),
+        supabase
+          .from('barters')
+          .select('id, name, system_code, status, barter_type, barter_date, initial_amount, remaining_amount, customer_id, supplier_id, employee_id, source_invoice_id, source_purchase_invoice_id, notes, created_at')
+          .limit(3000),
         supabase.from('customers').select('id, first_name, last_name, business_name').limit(3000),
         supabase.from('suppliers').select('id, business_name').limit(3000),
         supabase.from('profiles').select('id, full_name').limit(3000),
@@ -176,6 +192,7 @@ const CashBankPage: React.FC = () => {
         salesRes.error ||
         purchaseRes.error ||
         opsRes.error ||
+        bartersRes.error ||
         customersRes.error ||
         suppliersRes.error ||
         employeesRes.error;
@@ -187,15 +204,21 @@ const CashBankPage: React.FC = () => {
       setSalesInvoices(salesRes.data || []);
       setPurchaseInvoices(purchaseRes.data || []);
       setOperations(opsRes.data || []);
+      setBarters(bartersRes.data || []);
       setCustomers(customersRes.data || []);
       setSuppliers(suppliersRes.data || []);
       setEmployees(employeesRes.data || []);
+
+      const barterRows = bartersRes.data || [];
+      const openBarterRows = barterRows.filter((b: any) => ['open', 'partial'].includes(String(b?.status || '')));
 
       setStats({
         bankAccounts: (banksRes.data || []).length,
         cashBoxes: (cashRes.data || []).length,
         openCheques: chequeRows.filter((c: any) => ['new', 'in_bank'].includes(String(c?.status || ''))).length,
         chequesAmount: chequeRows.reduce((sum: number, c: any) => sum + (Number(c?.amount) || 0), 0),
+        openBarters: openBarterRows.length,
+        bartersAmount: openBarterRows.reduce((sum: number, b: any) => sum + (Number(b?.remaining_amount) || 0), 0),
       });
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در دریافت اطلاعات'));
@@ -227,6 +250,10 @@ const CashBankPage: React.FC = () => {
           chequeLabel: chequeLabelById[String(p?.cheque_id || '')] || '-',
           description: String(p?.description || ''),
           createdAt: inv?.created_at || null,
+          invoiceRelation: inv?.id ? { moduleId: 'invoices', recordId: String(inv.id) } : null,
+          personRelation: inv?.customer_id ? { moduleId: 'customers', recordId: String(inv.customer_id) } : null,
+          bankRelation: p?.target_account ? { moduleId: 'bank_accounts', recordId: String(p.target_account) } : null,
+          chequeRelation: p?.cheque_id ? { moduleId: 'cheques', recordId: String(p.cheque_id) } : null,
         })
       )
     );
@@ -249,6 +276,10 @@ const CashBankPage: React.FC = () => {
           chequeLabel: chequeLabelById[String(p?.cheque_id || '')] || '-',
           description: String(p?.description || ''),
           createdAt: inv?.created_at || null,
+          invoiceRelation: inv?.id ? { moduleId: 'purchase_invoices', recordId: String(inv.id) } : null,
+          personRelation: inv?.supplier_id ? { moduleId: 'suppliers', recordId: String(inv.supplier_id) } : null,
+          bankRelation: p?.source_account ? { moduleId: 'bank_accounts', recordId: String(p.source_account) } : null,
+          chequeRelation: p?.cheque_id ? { moduleId: 'cheques', recordId: String(p.cheque_id) } : null,
         })
       )
     );
@@ -279,6 +310,20 @@ const CashBankPage: React.FC = () => {
       chequeLabel: chequeLabelById[String(op?.cheque_id || '')] || '-',
       description: String(op?.description || ''),
       createdAt: op?.created_at || null,
+      invoiceRelation: op?.sales_invoice_id
+        ? { moduleId: 'invoices', recordId: String(op.sales_invoice_id) }
+        : op?.purchase_invoice_id
+          ? { moduleId: 'purchase_invoices', recordId: String(op.purchase_invoice_id) }
+          : null,
+      personRelation: op?.customer_id
+        ? { moduleId: 'customers', recordId: String(op.customer_id) }
+        : op?.supplier_id
+          ? { moduleId: 'suppliers', recordId: String(op.supplier_id) }
+          : op?.employee_id
+            ? { moduleId: 'profiles', recordId: String(op.employee_id) }
+            : null,
+      bankRelation: op?.bank_account_id ? { moduleId: 'bank_accounts', recordId: String(op.bank_account_id) } : null,
+      chequeRelation: op?.cheque_id ? { moduleId: 'cheques', recordId: String(op.cheque_id) } : null,
     }));
 
     const fromCheques = (cheques || []).map((c: any): RowItem => ({
@@ -297,9 +342,64 @@ const CashBankPage: React.FC = () => {
       chequeLabel: chequeLabelById[String(c?.id || '')] || '-',
       description: String(c?.notes || ''),
       createdAt: c?.created_at || null,
+      invoiceRelation: null,
+      personRelation: c?.party_id && c?.party_type
+        ? {
+            moduleId: String(c.party_type) === 'customer'
+              ? 'customers'
+              : String(c.party_type) === 'supplier'
+                ? 'suppliers'
+                : 'profiles',
+            recordId: String(c.party_id),
+          }
+        : null,
+      bankRelation: c?.bank_account_id ? { moduleId: 'bank_accounts', recordId: String(c.bank_account_id) } : null,
+      chequeRelation: c?.id ? { moduleId: 'cheques', recordId: String(c.id) } : null,
     }));
 
-    const merged = [...fromSales, ...fromPurchase, ...fromOps, ...fromCheques];
+    const fromBarters = (barters || []).map((b: any): RowItem => ({
+      key: `barter_${b.id}`,
+      kind: 'barter',
+      rowType: 'barter',
+      sourceLabel: String(b?.barter_type || '') === 'outgoing' ? 'تهاتر پرداختی' : 'تهاتر دریافتی',
+      sourceRecordId: String(b.id),
+      paymentType: 'barter',
+      status: String(b?.status || ''),
+      date: b?.barter_date || null,
+      amount: Number(b?.remaining_amount || 0),
+      invoiceLabel: b?.source_invoice_id
+        ? String(salesById[String(b.source_invoice_id)]?.name || b.source_invoice_id)
+        : b?.source_purchase_invoice_id
+          ? String(purchaseById[String(b.source_purchase_invoice_id)]?.name || b.source_purchase_invoice_id)
+          : '-',
+      personLabel: b?.customer_id
+        ? resolvePartyLabel('customer', String(b.customer_id))
+        : b?.supplier_id
+          ? resolvePartyLabel('supplier', String(b.supplier_id))
+          : b?.employee_id
+            ? resolvePartyLabel('employee', String(b.employee_id))
+            : '-',
+      bankLabel: '-',
+      chequeLabel: '-',
+      description: String(b?.notes || ''),
+      createdAt: b?.created_at || null,
+      invoiceRelation: b?.source_invoice_id
+        ? { moduleId: 'invoices', recordId: String(b.source_invoice_id) }
+        : b?.source_purchase_invoice_id
+          ? { moduleId: 'purchase_invoices', recordId: String(b.source_purchase_invoice_id) }
+          : null,
+      personRelation: b?.customer_id
+        ? { moduleId: 'customers', recordId: String(b.customer_id) }
+        : b?.supplier_id
+          ? { moduleId: 'suppliers', recordId: String(b.supplier_id) }
+          : b?.employee_id
+            ? { moduleId: 'profiles', recordId: String(b.employee_id) }
+            : null,
+      bankRelation: null,
+      chequeRelation: null,
+    }));
+
+    const merged = [...fromSales, ...fromPurchase, ...fromOps, ...fromCheques, ...fromBarters];
     merged.sort((a, b) => new Date(b.date || b.createdAt || 0).getTime() - new Date(a.date || a.createdAt || 0).getTime());
     setRows(merged);
   }, [
@@ -307,6 +407,7 @@ const CashBankPage: React.FC = () => {
     purchaseInvoices,
     operations,
     cheques,
+    barters,
     bankLabelById,
     chequeLabelById,
     purchaseById,
@@ -385,6 +486,10 @@ const CashBankPage: React.FC = () => {
         navigate(`/cash_bank_operations/${row.sourceRecordId}`);
         return;
       }
+      if (row.kind === 'barter' && row.sourceRecordId) {
+        navigate(`/barters/${row.sourceRecordId}`);
+        return;
+      }
       navigate('/cash_bank_operations');
     },
     [navigate]
@@ -428,6 +533,7 @@ const CashBankPage: React.FC = () => {
           { text: 'دریافت', value: 'receipt' },
           { text: 'پرداخت', value: 'payment' },
           { text: 'چک', value: 'cheque' },
+          { text: 'تهاتر', value: 'barter' },
         ],
         onFilter: (v, r) => String(r.rowType) === String(v),
         render: (v: RowItem['rowType']) => {
@@ -486,6 +592,18 @@ const CashBankPage: React.FC = () => {
         key: 'invoiceLabel',
         width: 190,
         ...textFilter('جستجو در فاکتور', (record) => record.invoiceLabel),
+        render: (_: string, record: RowItem) => {
+          if (!record.invoiceRelation?.moduleId || !record.invoiceRelation?.recordId) return record.invoiceLabel || '-';
+          return (
+            <div onClick={(e) => e.stopPropagation()}>
+              <RelatedRecordPopover
+                moduleId={record.invoiceRelation.moduleId}
+                recordId={record.invoiceRelation.recordId}
+                label={record.invoiceLabel || '-'}
+              />
+            </div>
+          );
+        },
       },
       {
         title: 'شخص مرتبط',
@@ -493,6 +611,18 @@ const CashBankPage: React.FC = () => {
         key: 'personLabel',
         width: 190,
         ...textFilter('جستجو در شخص', (record) => record.personLabel),
+        render: (_: string, record: RowItem) => {
+          if (!record.personRelation?.moduleId || !record.personRelation?.recordId) return record.personLabel || '-';
+          return (
+            <div onClick={(e) => e.stopPropagation()}>
+              <RelatedRecordPopover
+                moduleId={record.personRelation.moduleId}
+                recordId={record.personRelation.recordId}
+                label={record.personLabel || '-'}
+              />
+            </div>
+          );
+        },
       },
       {
         title: 'حساب بانکی',
@@ -500,6 +630,18 @@ const CashBankPage: React.FC = () => {
         key: 'bankLabel',
         width: 190,
         ...textFilter('جستجو در حساب بانکی', (record) => record.bankLabel),
+        render: (_: string, record: RowItem) => {
+          if (!record.bankRelation?.moduleId || !record.bankRelation?.recordId) return record.bankLabel || '-';
+          return (
+            <div onClick={(e) => e.stopPropagation()}>
+              <RelatedRecordPopover
+                moduleId={record.bankRelation.moduleId}
+                recordId={record.bankRelation.recordId}
+                label={record.bankLabel || '-'}
+              />
+            </div>
+          );
+        },
       },
       {
         title: 'چک',
@@ -507,6 +649,18 @@ const CashBankPage: React.FC = () => {
         key: 'chequeLabel',
         width: 220,
         ...textFilter('جستجو در چک', (record) => record.chequeLabel),
+        render: (_: string, record: RowItem) => {
+          if (!record.chequeRelation?.moduleId || !record.chequeRelation?.recordId) return record.chequeLabel || '-';
+          return (
+            <div onClick={(e) => e.stopPropagation()}>
+              <RelatedRecordPopover
+                moduleId={record.chequeRelation.moduleId}
+                recordId={record.chequeRelation.recordId}
+                label={record.chequeLabel || '-'}
+              />
+            </div>
+          );
+        },
       },
       {
         title: 'توضیحات',
@@ -539,43 +693,58 @@ const CashBankPage: React.FC = () => {
         </div>
 
         <Row gutter={[12, 12]} className="mb-6">
-          <Col xs={12} lg={6}>
+          <Col xs={12} lg={4}>
             <Card>
               <Statistic title="حساب‌های بانکی فعال" value={toPersianNumber(stats.bankAccounts)} prefix={<BankOutlined />} />
             </Card>
           </Col>
-          <Col xs={12} lg={6}>
+          <Col xs={12} lg={4}>
             <Card>
               <Statistic title="صندوق‌ها" value={toPersianNumber(stats.cashBoxes)} prefix={<WalletOutlined />} />
             </Card>
           </Col>
-          <Col xs={12} lg={6}>
+          <Col xs={12} lg={4}>
             <Card>
               <Statistic title="چک‌های باز" value={toPersianNumber(stats.openCheques)} prefix={<CreditCardOutlined />} />
             </Card>
           </Col>
-          <Col xs={12} lg={6}>
+          <Col xs={12} lg={4}>
             <Card>
               <Statistic title="مبلغ چک‌های باز" value={formatPersianPrice(stats.chequesAmount)} suffix={currencyLabel} />
+            </Card>
+          </Col>
+          <Col xs={12} lg={4}>
+            <Card>
+              <Statistic title="تهاترهای باز" value={toPersianNumber(stats.openBarters)} prefix={<ApartmentOutlined />} />
+            </Card>
+          </Col>
+          <Col xs={12} lg={4}>
+            <Card>
+              <Statistic title="مانده تهاترهای باز" value={formatPersianPrice(stats.bartersAmount)} suffix={currencyLabel} />
             </Card>
           </Col>
         </Row>
 
         <Card title="عملیات">
           <Row gutter={[8, 8]} className="mb-3">
-            <Col xs={24} md={8}>
+            <Col xs={24} md={6}>
               <Button type="primary" block icon={<PlusOutlined />} onClick={() => goCreateOperation('receipt')}>
                 ثبت دریافت جدید
               </Button>
             </Col>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={6}>
               <Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('payment')}>
                 ثبت پرداخت جدید
               </Button>
             </Col>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={6}>
               <Button block icon={<PlusOutlined />} onClick={() => navigate('/cheques/create')}>
                 ثبت چک جدید
+              </Button>
+            </Col>
+            <Col xs={24} md={6}>
+              <Button block icon={<PlusOutlined />} onClick={() => navigate('/barters/create')}>
+                افزودن تهاتر جدید
               </Button>
             </Col>
           </Row>
