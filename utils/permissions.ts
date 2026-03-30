@@ -1,19 +1,34 @@
 ﻿import { BlockType, type ModuleDefinition } from '../types';
+import { getResolvedAssigneeId } from './assigneeValue';
+import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCache';
 
 export type ModulePermissionConfig = {
   view?: boolean;
   edit?: boolean;
   delete?: boolean;
+  record_scope?: 'all' | 'own' | 'team';
   fields?: Record<string, any>;
 };
 
 export type PermissionMap = Record<string, ModulePermissionConfig>;
+export type CurrentUserRoleContext = {
+  userId: string | null;
+  roleId: string | null;
+  permissions: PermissionMap | null;
+};
 
 export const SETTINGS_PERMISSION_KEY = '__settings_tabs';
 export const DASHBOARD_PERMISSION_KEY = '__dashboard_widgets';
 export const WORKFLOWS_PERMISSION_KEY = '__workflows';
 export const FILES_PERMISSION_KEY = '__files_access';
 export const ACCOUNTING_PERMISSION_KEY = '__accounting';
+export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
+export const READY_TEXTS_PERMISSION_FIELDS = [
+  { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
+  { key: '__ready_texts_add', label: 'متن‌های آماده: افزودن' },
+  { key: '__ready_texts_edit', label: 'متن‌های آماده: ویرایش' },
+  { key: '__ready_texts_delete', label: 'متن‌های آماده: حذف' },
+] as const;
 
 export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'company', label: 'مشخصات شرکت' },
@@ -28,16 +43,8 @@ export const SETTINGS_TAB_PERMISSIONS = [
 
 export const DASHBOARD_WIDGET_PERMISSIONS = [
   { key: 'quick_add', label: 'افزودن سریع' },
-  { key: 'kpi_total_sales', label: 'کارت مجموع فروش' },
-  { key: 'kpi_in_production', label: 'کارت سفارشات در حال تولید' },
-  { key: 'kpi_total_products', label: 'کارت تعداد محصولات' },
-  { key: 'kpi_monthly_growth', label: 'کارت رشد ماهانه' },
-  { key: 'chart_production_status', label: 'نمودار وضعیت سفارشات تولید' },
-  { key: 'chart_monthly_sales', label: 'نمودار فروش ماهانه' },
-  { key: 'table_latest_invoices', label: 'جدول آخرین فاکتورها' },
-  { key: 'table_latest_production_orders', label: 'جدول آخرین سفارشات تولید' },
-  { key: 'timeline_recent_activity', label: 'تایم لاین تغییرات اخیر' },
-  { key: 'top_selling_products', label: 'بخش پرفروش ترین محصولات' },
+  { key: 'summary_cards', label: 'کارت‌های آماری' },
+  { key: 'recent_lists', label: 'جدول‌های آخرین رکوردها' },
 ];
 
 export const WORKFLOWS_PERMISSION_FIELDS = [
@@ -54,11 +61,21 @@ export const ACCOUNTING_PERMISSION_FIELDS = [
   { key: 'dashboard_page', label: 'نمایش داشبورد حسابداری' },
   { key: 'overview_cards', label: 'کارت های خلاصه مالی' },
   { key: 'operation_links', label: 'لینک های عملیات ضروری' },
+  { key: 'reports_hub', label: 'گزارشات حسابداری' },
   { key: 'settings_links', label: 'لینک های تنظیمات حسابداری' },
   { key: 'journal_entry_lines_view', label: 'مشاهده ردیف های سند حسابداری' },
   { key: 'journal_entry_lines_edit', label: 'ویرایش/ایجاد ردیف های سند حسابداری' },
   { key: 'journal_entry_lines_delete', label: 'حذف ردیف های سند حسابداری' },
 ];
+
+export const MOBILE_FOOTER_DEFAULT_MODULES = ['products', 'production_orders', 'invoices', 'customers'] as const;
+export const PREFERRED_ROLE_MODULE_SLOT_KEYS = ['slot_1', 'slot_2', 'slot_3', 'slot_4'] as const;
+export const MOBILE_FOOTER_PERMISSION_FIELDS = [
+  { key: 'slot_1', label: 'ماژول پر استفاده اول' },
+  { key: 'slot_2', label: 'ماژول پر استفاده دوم' },
+  { key: 'slot_3', label: 'ماژول پر استفاده سوم' },
+  { key: 'slot_4', label: 'ماژول پر استفاده چهارم' },
+] as const;
 
 const ensureField = (map: Map<string, string>, key: string, label: string) => {
   if (!key) return;
@@ -121,6 +138,10 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
     ensureField(fieldMap, '__module_settings', 'تنظیمات ماژول');
   }
 
+  READY_TEXTS_PERMISSION_FIELDS.forEach((item) => {
+    ensureField(fieldMap, item.key, item.label);
+  });
+
   return Array.from(fieldMap.entries()).map(([key, label]) => ({ key, label }));
 };
 
@@ -136,6 +157,9 @@ const mergeModulePermission = (base: ModulePermissionConfig, incoming?: ModulePe
     view: incoming?.view ?? base.view ?? true,
     edit: incoming?.edit ?? base.edit ?? true,
     delete: incoming?.delete ?? base.delete ?? true,
+    record_scope:
+      incoming?.record_scope ??
+      (incoming?.view === false ? 'own' : (base.record_scope ?? 'all')),
     fields: {
       ...(base.fields || {}),
       ...(incoming?.fields || {}),
@@ -151,6 +175,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
       view: true,
       edit: true,
       delete: true,
+      record_scope: 'all',
       fields: createFieldsMap(collectModulePermissionFields(module)),
     };
   });
@@ -159,6 +184,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     view: true,
     edit: true,
     delete: true,
+    record_scope: 'all',
     fields: createFieldsMap(SETTINGS_TAB_PERMISSIONS),
   };
 
@@ -166,6 +192,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     view: true,
     edit: true,
     delete: true,
+    record_scope: 'all',
     fields: createFieldsMap(DASHBOARD_WIDGET_PERMISSIONS),
   };
 
@@ -173,6 +200,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     view: true,
     edit: true,
     delete: true,
+    record_scope: 'all',
     fields: createFieldsMap(WORKFLOWS_PERMISSION_FIELDS),
   };
 
@@ -180,6 +208,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     view: true,
     edit: true,
     delete: true,
+    record_scope: 'all',
     fields: createFieldsMap(FILES_PERMISSION_FIELDS),
   };
 
@@ -187,7 +216,21 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     view: true,
     edit: true,
     delete: true,
+    record_scope: 'all',
     fields: createFieldsMap(ACCOUNTING_PERMISSION_FIELDS),
+  };
+
+  defaults[MOBILE_FOOTER_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    record_scope: 'all',
+    fields: {
+      slot_1: MOBILE_FOOTER_DEFAULT_MODULES[0],
+      slot_2: MOBILE_FOOTER_DEFAULT_MODULES[1],
+      slot_3: MOBILE_FOOTER_DEFAULT_MODULES[2],
+      slot_4: MOBILE_FOOTER_DEFAULT_MODULES[3],
+    },
   };
 
   return defaults;
@@ -209,15 +252,125 @@ export const mergePermissionsWithDefaults = (
   return merged;
 };
 
+export const resolvePreferredRoleModuleIds = (
+  permissions: PermissionMap | null | undefined,
+  modules: Record<string, ModuleDefinition>,
+  limit = 4
+) => {
+  const fields = permissions?.[MOBILE_FOOTER_PERMISSION_KEY]?.fields || {};
+  const visibleModules = Object.keys(modules).filter((moduleId) => permissions?.[moduleId]?.view !== false);
+  const next: string[] = [];
+
+  const pushUnique = (moduleId: string) => {
+    if (!moduleId || !modules[moduleId] || !visibleModules.includes(moduleId) || next.includes(moduleId)) return;
+    next.push(moduleId);
+  };
+
+  PREFERRED_ROLE_MODULE_SLOT_KEYS
+    .map((key) => String(fields?.[key] || '').trim())
+    .filter(Boolean)
+    .forEach(pushUnique);
+
+  MOBILE_FOOTER_DEFAULT_MODULES.forEach((moduleId) => pushUnique(String(moduleId)));
+  visibleModules.forEach(pushUnique);
+
+  return next.slice(0, limit);
+};
+
 export const canAccessAssignedRecord = (
   record: any,
   currentUserId: string | null,
-  currentUserRoleId: string | null
+  currentUserRoleId: string | null,
+  recordScope: 'all' | 'own' | 'team' = 'all'
 ) => {
-  if (!record || !currentUserId) return false;
-  if (record?.assignee_type === 'user' && record?.assignee_id === currentUserId) return true;
-  if (record?.assignee_type === 'role' && currentUserRoleId && record?.assignee_id === currentUserRoleId) return true;
-  return false;
+  if (recordScope === 'all') return true;
+  if (!record) return false;
+  const resolvedAssigneeId = getResolvedAssigneeId(record);
+  if (recordScope === 'team') {
+    return !!currentUserRoleId && record?.assignee_type === 'role' && resolvedAssigneeId === currentUserRoleId;
+  }
+  return !!currentUserId && record?.assignee_type === 'user' && resolvedAssigneeId === currentUserId;
+};
+
+const EMPTY_CURRENT_USER_ROLE_CONTEXT: CurrentUserRoleContext = {
+  userId: null,
+  roleId: null,
+  permissions: null,
+};
+
+type CurrentUserRoleContextCacheStore = {
+  currentUserRoleContextCache: Map<string, CurrentUserRoleContext>;
+  currentUserRoleContextPromiseCache: Map<string, Promise<CurrentUserRoleContext>>;
+};
+
+const globalPermissionsCache = globalThis as typeof globalThis & {
+  __kalamPermissionsCacheStore?: CurrentUserRoleContextCacheStore;
+};
+
+const permissionsCacheStore = globalPermissionsCache.__kalamPermissionsCacheStore || {
+  currentUserRoleContextCache: new Map<string, CurrentUserRoleContext>(),
+  currentUserRoleContextPromiseCache: new Map<string, Promise<CurrentUserRoleContext>>(),
+};
+
+globalPermissionsCache.__kalamPermissionsCacheStore = permissionsCacheStore;
+
+const { currentUserRoleContextCache, currentUserRoleContextPromiseCache } = permissionsCacheStore;
+
+export const clearCurrentUserRoleContextCache = (userId?: string | null) => {
+  clearSessionBootstrapCache();
+  if (userId) {
+    const key = String(userId);
+    currentUserRoleContextCache.delete(key);
+    currentUserRoleContextPromiseCache.delete(key);
+    return;
+  }
+  currentUserRoleContextCache.clear();
+  currentUserRoleContextPromiseCache.clear();
+};
+
+export const fetchCurrentUserRoleContext = async (
+  supabaseClient: any,
+  options?: { force?: boolean }
+): Promise<CurrentUserRoleContext> => {
+  try {
+    const snapshot = await fetchSessionBootstrap(supabaseClient, options);
+    const user = snapshot.user;
+    if (!user?.id) return EMPTY_CURRENT_USER_ROLE_CONTEXT;
+
+    const cacheKey = String(user.id);
+    if (!options?.force) {
+      const cached = currentUserRoleContextCache.get(cacheKey);
+      if (cached) return cached;
+
+      const pending = currentUserRoleContextPromiseCache.get(cacheKey);
+      if (pending) return pending;
+    }
+
+    const pending = (async (): Promise<CurrentUserRoleContext> => {
+      if (!snapshot.roleId) {
+        const result = { userId: user.id, roleId: null, permissions: null };
+        currentUserRoleContextCache.set(cacheKey, result);
+        return result;
+      }
+
+      const result = {
+        userId: user.id,
+        roleId: snapshot.roleId,
+        permissions: (snapshot.permissions || null) as PermissionMap | null,
+      };
+      currentUserRoleContextCache.set(cacheKey, result);
+      return result;
+    })();
+
+    currentUserRoleContextPromiseCache.set(cacheKey, pending);
+    try {
+      return await pending;
+    } finally {
+      currentUserRoleContextPromiseCache.delete(cacheKey);
+    }
+  } catch {
+    return EMPTY_CURRENT_USER_ROLE_CONTEXT;
+  }
 };
 
 export const resolveFilesAccessPermissions = (permissions: PermissionMap | null | undefined) => {
@@ -242,26 +395,37 @@ export const resolveFilesAccessPermissions = (permissions: PermissionMap | null 
 
 export const fetchCurrentUserRolePermissions = async (supabaseClient: any): Promise<PermissionMap | null> => {
   try {
-    const { data: authData } = await supabaseClient.auth.getUser();
-    const user = authData?.user;
-    if (!user?.id) return null;
-
-    const { data: profile } = await supabaseClient
-      .from('profiles')
-      .select('role_id')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (!profile?.role_id) return null;
-
-    const { data: role } = await supabaseClient
-      .from('org_roles')
-      .select('permissions')
-      .eq('id', profile.role_id)
-      .maybeSingle();
-
-    return (role?.permissions || null) as PermissionMap | null;
+    const context = await fetchCurrentUserRoleContext(supabaseClient);
+    return context.permissions;
   } catch {
     return null;
   }
+};
+
+export const resolveReadyTextPermissions = (
+  permissions: PermissionMap | null | undefined,
+  moduleId?: string | null
+) => {
+  if (!moduleId) {
+    return {
+      canView: true,
+      canAdd: true,
+      canEdit: true,
+      canDelete: true,
+    };
+  }
+
+  const modPerm = permissions?.[moduleId] || {};
+  const fields = modPerm.fields || {};
+  const canViewRoot = modPerm.view !== false;
+  const canEditRoot = modPerm.edit !== false;
+  const canDeleteRoot = modPerm.delete !== false;
+
+  const canView = canViewRoot && fields.__ready_texts_view !== false;
+  return {
+    canView,
+    canAdd: canView && canEditRoot && fields.__ready_texts_add !== false,
+    canEdit: canView && canEditRoot && fields.__ready_texts_edit !== false,
+    canDelete: canView && canDeleteRoot && fields.__ready_texts_delete !== false,
+  };
 };

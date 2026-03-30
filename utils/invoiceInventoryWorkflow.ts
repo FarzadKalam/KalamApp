@@ -1,13 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { applyInventoryDeltas, syncMultipleProductsStock } from './inventoryTransactions';
+import { normalizeSalesPackageItems } from './salesCatalog';
 
 const toNumber = (value: any) => {
   const parsed = parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const isFinalStatus = (status: any) => {
+const isFinalStatus = (status: any, moduleId: string) => {
   const normalized = String(status || '').trim().toLowerCase();
+  if (moduleId === 'invoices') {
+    return normalized === 'final' || normalized === 'completed' || normalized === 'confirmed';
+  }
   return normalized === 'final' || normalized === 'completed';
 };
 
@@ -35,8 +39,8 @@ export const applyInvoiceFinalizationInventory = async ({
   userId,
 }: ApplyInvoiceFinalizationParams) => {
   if (!recordId) return { applied: false };
-  if (!isFinalStatus(nextStatus)) return { applied: false };
-  if (isFinalStatus(previousStatus)) return { applied: false };
+  if (!isFinalStatus(nextStatus, moduleId)) return { applied: false };
+  if (isFinalStatus(previousStatus, moduleId)) return { applied: false };
 
   const direction = getInvoiceDirection(moduleId);
   const transferType = direction === 'purchase' ? 'purchase_invoice' : 'sales_invoice';
@@ -60,18 +64,64 @@ export const applyInvoiceFinalizationInventory = async ({
   const transfersPayload: any[] = [];
   const affectedProductIds: string[] = [];
 
-  rows.forEach((item: any, index: number) => {
-    const productId = item?.product_id ? String(item.product_id) : '';
-    const productType = String(item?.product_type || '').trim().toLowerCase();
+  rows.forEach((item: any) => {
     const shelfIdRaw = item?.source_shelf_id || item?.shelf_id || item?.selected_shelf_id || null;
     const shelfId = shelfIdRaw ? String(shelfIdRaw) : '';
-    const qty = Math.abs(toNumber(item?.quantity ?? item?.qty ?? item?.count));
+    if (!shelfId) return;
+
+    const rowQty = Math.abs(toNumber(item?.quantity ?? item?.qty ?? item?.count)) || 1;
+    const packageItems = normalizeSalesPackageItems(item?.package_items);
+    if (packageItems.length > 0) {
+      packageItems.forEach((packageItem) => {
+        const productId = String(packageItem?.product_id || '').trim();
+        const productType = String(packageItem?.product_type || '').trim().toLowerCase();
+        const qty = Math.abs(toNumber(packageItem?.quantity)) * rowQty;
+
+        if (productType === 'service') return;
+        if (!productId || qty <= 0) return;
+
+        affectedProductIds.push(productId);
+
+        if (direction === 'purchase') {
+          deltas.push({ productId, shelfId, delta: qty });
+          transfersPayload.push({
+            transfer_type: transferType,
+            product_id: productId,
+            delivered_qty: qty,
+            required_qty: qty,
+            invoice_id: recordId,
+            production_order_id: null,
+            from_shelf_id: null,
+            to_shelf_id: shelfId,
+            sender_id: userId || null,
+            receiver_id: userId || null,
+          });
+          return;
+        }
+
+        deltas.push({ productId, shelfId, delta: -qty });
+        transfersPayload.push({
+          transfer_type: transferType,
+          product_id: productId,
+          delivered_qty: qty,
+          required_qty: qty,
+          invoice_id: recordId,
+          production_order_id: null,
+          from_shelf_id: shelfId,
+          to_shelf_id: null,
+          sender_id: userId || null,
+          receiver_id: userId || null,
+        });
+      });
+      return;
+    }
+
+    const productId = item?.product_id ? String(item.product_id) : '';
+    const productType = String(item?.product_type || '').trim().toLowerCase();
+    const qty = rowQty;
 
     if (productType === 'service') return;
     if (!productId || qty <= 0) return;
-    if (!shelfId) {
-      throw new Error(`در ردیف ${index + 1} قفسه انتخاب نشده است.`);
-    }
 
     affectedProductIds.push(productId);
 
@@ -109,7 +159,7 @@ export const applyInvoiceFinalizationInventory = async ({
 
   if (deltas.length === 0) return { applied: false };
 
-  await applyInventoryDeltas(supabase, deltas);
+  await applyInventoryDeltas(supabase, deltas, { allowNegative: direction === 'sale' });
 
   const { error: insertError } = await supabase
     .from('stock_transfers')

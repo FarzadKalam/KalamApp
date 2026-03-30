@@ -170,7 +170,7 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
         message.includes('connection') ||
         message.includes('timeout') ||
         message.includes('err_connection') ||
-        message.includes('glyph');
+        message.includes('style');
 
       if (!shouldFallback) return;
 

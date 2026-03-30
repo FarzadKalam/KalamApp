@@ -1,13 +1,60 @@
-# Deployment (GitHub Actions + Nginx)
+# Deployment
 
 This project is a Vite-built SPA. Production deployment is copying the built `dist/` output to the server.
+
+## Quick Start
+
+If you want deploy without GitHub, do only these steps:
+
+1. Create `.env.deploy` from `.env.deploy.example`
+2. Fill these 4 values:
+   - `DEPLOY_HOST`
+   - `DEPLOY_PORT`
+   - `DEPLOY_USER`
+   - `DEPLOY_PATH`
+3. Make sure your app envs like `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are already in `.env.local`
+4. Run:
+
+```powershell
+npm run deploy:prod
+```
+
+That is all. You do not need GitHub, GitHub Actions, or GitHub Secrets for this local deploy flow.
+
+## Local Deploy Without GitHub
+
+If GitHub Actions is blocked, you can deploy directly from your Windows machine to the server.
+
+1. Copy `.env.deploy.example` to `.env.deploy`
+2. Fill `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PORT`, `DEPLOY_PATH`
+3. Keep your build-time frontend envs such as `VITE_SUPABASE_URL` in `.env.local`
+4. Run:
+
+```powershell
+npm run deploy:prod
+```
+
+What it does:
+- runs the local build
+- packs `dist/`
+- uploads it with `scp`
+- creates a timestamped release on the server
+- points `current` to the new release
+- reloads `nginx` if the deploy user is allowed to do it
+
+For a one-click flow in VS Code, run the `Deploy KalamApp` task.
+
+## Legacy GitHub Actions Flow
+
+The sections below are only for the old GitHub Actions based workflow.
+If you are using `npm run deploy:prod`, you can ignore them.
 
 ## What You Get
 
 - CI on every push/PR: install, typecheck, build
 - CD on `main`: upload `dist/`, create a timestamped release, switch `current` symlink (atomic deploy), keep rollback history
 
-## GitHub Secrets (Required)
+## GitHub Secrets (Required Only For GitHub Actions)
 
 In your GitHub repo: Settings -> Secrets and variables -> Actions -> Repository secrets:
 

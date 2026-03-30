@@ -105,6 +105,14 @@ const TablesSection: React.FC<TablesSectionProps> = ({
       setSummaryRefreshing(false);
     }
   }, [data?.id, module?.id, onDataUpdate]);
+  const handleBlockSaveSuccess = useCallback((blockId: string, newData: any[]) => {
+    onDataUpdate?.({ [blockId]: newData });
+    const isInvoiceModule = ['invoices', 'purchase_invoices'].includes(String(module?.id || ''));
+    const isInvoiceFinancialBlock = blockId === 'invoiceItems' || blockId === 'payments';
+    if (isInvoiceModule && isInvoiceFinancialBlock) {
+      void refreshInvoiceSummary();
+    }
+  }, [module?.id, onDataUpdate, refreshInvoiceSummary]);
   const isProductionOrder = module.id === 'production_orders';
   const productionLocked = isProductionOrder && ['in_progress', 'completed'].includes(data?.status);
   const processStageFieldKeys = useMemo(() => new Set([
@@ -302,7 +310,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               orderQuantity={module.id === 'production_orders' ? (data?.quantity || 0) : 0}
               showDeliveredQtyColumn={module.id === 'production_orders' && ['in_progress', 'completed'].includes(String(data?.status || ''))}
               forceProductionOrderMode={module.id === 'products'}
-              onSaveSuccess={(newData) => onDataUpdate?.({ [block.id]: newData })}
+              onSaveSuccess={(newData) => handleBlockSaveSuccess(String(block.id), newData)}
             />
           ) : (
             <EditableTable
@@ -318,7 +326,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 (canViewField ? canViewField(`${block.id}.${fieldKey}`) !== false : true) &&
                 (canViewField ? canViewField(fieldKey) !== false : true)
               }
-              onSaveSuccess={(newData) => onDataUpdate?.({ [block.id]: newData })}
+              onSaveSuccess={(newData) => handleBlockSaveSuccess(String(block.id), newData)}
             />
           )}
         </div>

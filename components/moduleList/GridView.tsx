@@ -40,7 +40,7 @@ const GridView: React.FC<GridViewProps> = ({
   }
 
   return (
-    <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}>
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
       {data.map((item) => (
         <RenderCardItem
           key={item.id}

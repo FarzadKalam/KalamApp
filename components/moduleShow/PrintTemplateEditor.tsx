@@ -10,13 +10,14 @@ import {
   ExpandOutlined,
   MinusOutlined,
   PlusOutlined,
+  PictureOutlined,
   TableOutlined,
 } from '@ant-design/icons';
 import { Button, Divider, Tooltip } from 'antd';
 import { Extension } from '@tiptap/core';
 import { NodeSelection } from '@tiptap/pm/state';
 import { CellSelection } from '@tiptap/pm/tables';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
 import Paragraph from '@tiptap/extension-paragraph';
@@ -48,6 +49,189 @@ const mergeStyleParts = (...parts: Array<string | null | undefined>) =>
     .map((part) => String(part || '').trim())
     .filter(Boolean)
     .join(' ');
+
+const extractStyleValue = (styleText: unknown, propertyNames: string[]) => {
+  const raw = String(styleText || '').trim();
+  if (!raw) return '';
+  for (const propertyName of propertyNames) {
+    const match = raw.match(new RegExp(`(?:^|;)\\s*${propertyName}\\s*:\\s*([^;]+)`, 'i'));
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return '';
+};
+
+const setStyleProperty = (styleText: unknown, propertyName: string, value: string | null) => {
+  const normalizedName = String(propertyName || '').trim().toLowerCase();
+  const segments = String(styleText || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !part.toLowerCase().startsWith(`${normalizedName}:`));
+  if (value && String(value).trim()) {
+    segments.push(`${propertyName}: ${String(value).trim()}`);
+  }
+  return segments.join('; ');
+};
+
+const toPixelSize = (value: unknown, fallback: number) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (raw.endsWith('%')) return fallback;
+  const parsed = Number.parseFloat(raw.replace('px', '').trim());
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const getImageWidthValue = (attrs: Record<string, any>, fallback: number) => {
+  const directWidth = String(attrs.width || '').trim();
+  const styleWidth = extractStyleValue(attrs.inlineStyle, ['width', 'max-width']);
+  return toPixelSize(directWidth || styleWidth, fallback);
+};
+
+const getImageHeightValue = (attrs: Record<string, any>, width: number) => {
+  const directHeight = String(attrs.height || '').trim();
+  const styleHeight = extractStyleValue(attrs.inlineStyle, ['height', 'max-height']);
+  const raw = (directHeight || styleHeight || '').trim();
+  if (!raw || raw === 'auto') return null;
+  return toPixelSize(raw, Math.round(width * 0.6));
+};
+
+const extractVariableToken = (src: unknown) => {
+  const raw = String(src || '').trim();
+  const match = raw.match(/^{{\s*([^}]+)\s*}}$/);
+  return match ? String(match[1] || '').trim() : '';
+};
+
+const buildImageInlineStyle = (width: number, height: number | null) => {
+  const safeWidth = Math.max(32, Math.round(width));
+  const safeHeight = height && height > 0 ? Math.round(height) : null;
+  return [
+    'display:block',
+    `width:${safeWidth}px`,
+    `max-width:${safeWidth}px`,
+    safeHeight ? `height:${safeHeight}px` : 'height:auto',
+    safeHeight ? `max-height:${safeHeight}px` : '',
+    'object-fit:contain',
+    'border-radius:10px',
+  ]
+    .filter(Boolean)
+    .join(';');
+};
+
+const PrintImageNodeView: React.FC<any> = ({ node, selected, updateAttributes, editor, getPos }) => {
+  const attrs = (node?.attrs || {}) as Record<string, any>;
+  const variableToken = extractVariableToken(attrs.src);
+  const width = getImageWidthValue(attrs, 180);
+  const height = getImageHeightValue(attrs, width);
+  const isVariableImage = Boolean(variableToken);
+
+  const resizeStateRef = useRef<null | {
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number | null;
+    horizontal: -1 | 1;
+    vertical: -1 | 1;
+  }>(null);
+
+  const commitResize = (nextWidth: number, nextHeight: number | null) => {
+    updateAttributes({
+      width: `${Math.max(32, Math.round(nextWidth))}px`,
+      height: nextHeight && nextHeight > 0 ? `${Math.max(32, Math.round(nextHeight))}px` : 'auto',
+      inlineStyle: buildImageInlineStyle(nextWidth, nextHeight),
+    });
+  };
+
+  const startResize = (event: React.MouseEvent, horizontal: -1 | 1, vertical: -1 | 1) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!editor) return;
+
+    resizeStateRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: width,
+      startHeight: height,
+      horizontal,
+      vertical,
+    };
+
+    const handleMove = (moveEvent: MouseEvent) => {
+      const state = resizeStateRef.current;
+      if (!state) return;
+      const deltaX = (moveEvent.clientX - state.startX) * state.horizontal;
+      const deltaY = (moveEvent.clientY - state.startY) * state.vertical;
+      const nextWidth = Math.max(32, state.startWidth + deltaX);
+      const nextHeight = state.startHeight === null
+        ? null
+        : Math.max(32, state.startHeight + deltaY);
+      commitResize(nextWidth, nextHeight);
+    };
+
+    const handleUp = () => {
+      resizeStateRef.current = null;
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp, { once: true });
+  };
+
+  const selectNode = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!editor || typeof getPos !== 'function') return;
+    const pos = getPos();
+    if (typeof pos !== 'number') return;
+    const selection = NodeSelection.create(editor.state.doc, pos);
+    editor.view.dispatch(editor.state.tr.setSelection(selection));
+    editor.view.focus();
+  };
+
+  return (
+    <NodeViewWrapper
+      as="div"
+      className={`print-editor-image-node ${selected ? 'selected' : ''} ${isVariableImage ? 'variable-image' : ''}`}
+      style={{ width: `${width}px`, height: height ? `${height}px` : 'auto' }}
+      data-variable-token={variableToken || undefined}
+      onMouseDown={selectNode}
+      contentEditable={false}
+    >
+      {isVariableImage ? (
+        <div className="print-editor-image-placeholder">
+          <div className="print-editor-image-placeholder-icon">
+            <PictureOutlined />
+          </div>
+          <div className="print-editor-image-placeholder-label">{variableToken}</div>
+        </div>
+      ) : (
+        <img
+          src={String(attrs.src || '')}
+          alt={String(attrs.alt || 'image')}
+          title={String(attrs.title || '')}
+          draggable={false}
+          style={{
+            width: `${width}px`,
+            height: height ? `${height}px` : 'auto',
+            maxWidth: '100%',
+            display: 'block',
+            objectFit: 'contain',
+            borderRadius: 10,
+          }}
+        />
+      )}
+
+      {selected ? (
+        <>
+          <button type="button" className="print-editor-image-handle handle-nw" onMouseDown={(e) => startResize(e, -1, -1)} />
+          <button type="button" className="print-editor-image-handle handle-ne" onMouseDown={(e) => startResize(e, 1, -1)} />
+          <button type="button" className="print-editor-image-handle handle-sw" onMouseDown={(e) => startResize(e, -1, 1)} />
+          <button type="button" className="print-editor-image-handle handle-se" onMouseDown={(e) => startResize(e, 1, 1)} />
+        </>
+      ) : null}
+    </NodeViewWrapper>
+  );
+};
 
 const CustomTable = Table.extend({
   addAttributes() {
@@ -210,12 +394,22 @@ const CustomImage = Image.extend({
       ...this.parent?.(),
       width: {
         default: null,
-        parseHTML: (element) => element.getAttribute('width') || element.style.width || null,
+        parseHTML: (element) =>
+          element.getAttribute('width') ||
+          element.style.width ||
+          element.style.maxWidth ||
+          extractStyleValue(element.getAttribute('style') || '', ['width', 'max-width']) ||
+          null,
         renderHTML: () => ({}),
       },
       height: {
         default: null,
-        parseHTML: (element) => element.getAttribute('height') || element.style.height || null,
+        parseHTML: (element) =>
+          element.getAttribute('height') ||
+          element.style.height ||
+          element.style.maxHeight ||
+          extractStyleValue(element.getAttribute('style') || '', ['height', 'max-height']) ||
+          null,
         renderHTML: () => ({}),
       },
       inlineStyle: {
@@ -241,8 +435,13 @@ const CustomImage = Image.extend({
       alt: HTMLAttributes.alt,
       title: HTMLAttributes.title,
     };
+    if (width && /px$/i.test(width)) attrs.width = width.replace(/px$/i, '').trim();
+    if (height && /px$/i.test(height)) attrs.height = height.replace(/px$/i, '').trim();
     if (style) attrs.style = style;
     return ['img', attrs];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(PrintImageNodeView);
   },
 });
 
@@ -293,6 +492,30 @@ const getBrandPalette = () => {
   return Array.from(new Set(colors.length ? colors : fallback));
 };
 
+const normalizeColorForInput = (value: unknown, fallback = '#d1d5db') => {
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw;
+  if (/^#[0-9a-f]{3}$/i.test(raw)) {
+    const [r, g, b] = raw.slice(1).split('');
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  const rgbMatch = raw.match(/^rgb\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})\s*\)$/i);
+  if (rgbMatch) {
+    const toHex = (part: string) => Math.max(0, Math.min(255, Number(part))).toString(16).padStart(2, '0');
+    return `#${toHex(rgbMatch[1])}${toHex(rgbMatch[2])}${toHex(rgbMatch[3])}`;
+  }
+  if (typeof window !== 'undefined') {
+    const probe = document.createElement('div');
+    probe.style.color = raw;
+    document.body.appendChild(probe);
+    const computed = window.getComputedStyle(probe).color;
+    document.body.removeChild(probe);
+    if (computed && computed !== raw) return normalizeColorForInput(computed, fallback);
+  }
+  return fallback;
+};
+
 const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   value,
   onChange,
@@ -304,10 +527,101 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   const [cellColor, setCellColor] = useState('#fef3c7');
   const [tableBorderColor, setTableBorderColor] = useState('#d1d5db');
   const brandPalette = useMemo(() => getBrandPalette(), []);
+  const cellColorInput = useMemo(() => normalizeColorForInput(cellColor, '#fef3c7'), [cellColor]);
+  const tableBorderColorInput = useMemo(
+    () => normalizeColorForInput(tableBorderColor, '#d1d5db'),
+    [tableBorderColor]
+  );
   const cellDragSelectionRef = useRef<null | {
     table: HTMLTableElement;
     startCell: HTMLElement;
   }>(null);
+  const rowResizeStateRef = useRef<null | {
+    table: HTMLTableElement;
+    row: HTMLTableRowElement;
+    startY: number;
+    startHeight: number;
+  }>(null);
+
+  const resolveCellPos = (view: any, cell: HTMLElement) => {
+    const docSize = Math.max(0, view.state.doc.content.size);
+    const candidatePositions = [
+      view.posAtDOM(cell, 0),
+      Math.max(0, view.posAtDOM(cell, 0) - 1),
+      Math.max(0, view.posAtDOM(cell, 0) + 1),
+    ];
+    const isCellNodeName = (name: string) => name === 'tableCell' || name === 'tableHeader';
+
+    for (const candidate of candidatePositions) {
+      const safePos = Math.max(0, Math.min(candidate, docSize));
+      const $pos = view.state.doc.resolve(safePos);
+      for (let depth = $pos.depth; depth > 0; depth -= 1) {
+        const node = $pos.node(depth);
+        if (isCellNodeName(String(node?.type?.name || ''))) {
+          return $pos.before(depth);
+        }
+      }
+      const nextNodeName = String($pos.nodeAfter?.type?.name || '');
+      if (isCellNodeName(nextNodeName)) {
+        return safePos;
+      }
+    }
+
+    return null;
+  };
+
+  const createCellRangeSelection = (view: any, anchorCell: HTMLElement, headCell?: HTMLElement) => {
+    try {
+      const anchorPos = resolveCellPos(view, anchorCell);
+      const headPos = resolveCellPos(view, headCell || anchorCell);
+      if (anchorPos === null || headPos === null) return null;
+      return CellSelection.create(view.state.doc, anchorPos, headPos);
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const setEditorResizeCursor = (view: any, mode: 'row' | 'column' | null) => {
+    const root = view?.dom as HTMLElement | null;
+    if (!root) return;
+    root.classList.toggle('row-resize-cursor', mode === 'row');
+    root.classList.toggle('column-resize-cursor', mode === 'column');
+  };
+
+  const getCellResizeIntent = (cell: HTMLElement | null, event: MouseEvent) => {
+    if (!cell) return null;
+    const rect = cell.getBoundingClientRect();
+    const edgeThreshold = 5;
+    const leftDistance = Math.abs(event.clientX - rect.left);
+    const rightDistance = Math.abs(event.clientX - rect.right);
+    const topDistance = Math.abs(event.clientY - rect.top);
+    const bottomDistance = Math.abs(event.clientY - rect.bottom);
+    const horizontalDistance = Math.min(leftDistance, rightDistance);
+    const verticalDistance = Math.min(topDistance, bottomDistance);
+    if (horizontalDistance <= edgeThreshold && horizontalDistance <= verticalDistance) return 'column';
+    if (verticalDistance <= edgeThreshold) return 'row';
+    return null;
+  };
+
+  const applyRowHeight = (view: any, row: HTMLTableRowElement, nextHeight: number) => {
+    const safeHeight = Math.max(24, Math.round(nextHeight));
+    let tr = view.state.tr;
+    let changed = false;
+    Array.from(row.cells || []).forEach((cell) => {
+      const cellPos = resolveCellPos(view, cell as HTMLElement);
+      if (cellPos === null) return;
+      const cellNode = tr.doc.nodeAt(cellPos);
+      if (!cellNode) return;
+      const inlineStyle = setStyleProperty(cellNode.attrs?.inlineStyle, 'height', `${safeHeight}px`);
+      const nextAttrs = { ...cellNode.attrs, inlineStyle };
+      tr = tr.setNodeMarkup(cellPos, cellNode.type, nextAttrs);
+      changed = true;
+    });
+    if (changed) {
+      view.dispatch(tr);
+      view.focus();
+    }
+  };
 
   const selectTableRow = () => {
     if (!editor) return;
@@ -351,11 +665,8 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   const getSelectedImageWidth = () => {
     if (!editor || !editor.isActive('image')) return null;
     const attrs = editor.getAttributes('image') as Record<string, any>;
-    const widthRaw = String(attrs?.width || '').trim();
-    const styleRaw = String(attrs?.inlineStyle || '').trim();
-    const styleWidth = styleRaw.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
-    const parsed = Number.parseInt((widthRaw || styleWidth || '').replace('px', '').trim(), 10);
-    return Number.isFinite(parsed) ? parsed : null;
+    const parsed = getImageWidthValue(attrs, 0);
+    return parsed > 0 ? parsed : null;
   };
 
   const updateImageSizing = (next: { width?: string | null; height?: string | null; inlineStyle?: string | null }) => {
@@ -378,7 +689,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     updateImageSizing({
       width: `${nextWidth}px`,
       height: 'auto',
-      inlineStyle: `display:block;max-width:100%;width:${nextWidth}px;height:auto;object-fit:contain;`,
+      inlineStyle: buildImageInlineStyle(nextWidth, null),
     });
   };
 
@@ -430,38 +741,78 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           const table = target?.closest?.('table') as HTMLTableElement | null;
           if (!cell || !table) {
             cellDragSelectionRef.current = null;
+            rowResizeStateRef.current = null;
+            setEditorResizeCursor(view, null);
             return false;
           }
+          const resizeIntent = getCellResizeIntent(cell, mouseEvent);
+          if (resizeIntent === 'column') {
+            cellDragSelectionRef.current = null;
+            rowResizeStateRef.current = null;
+            setEditorResizeCursor(view, 'column');
+            return false;
+          }
+          if (resizeIntent === 'row') {
+            const row = cell.closest('tr') as HTMLTableRowElement | null;
+            if (!row) return false;
+            const startHeight = Math.max(24, Math.round(row.getBoundingClientRect().height || 0));
+            rowResizeStateRef.current = {
+              table,
+              row,
+              startY: mouseEvent.clientY,
+              startHeight,
+            };
+            setEditorResizeCursor(view, 'row');
+            const handleMove = (moveEvent: MouseEvent) => {
+              const resizeState = rowResizeStateRef.current;
+              if (!resizeState) return;
+              const deltaY = moveEvent.clientY - resizeState.startY;
+              applyRowHeight(view, resizeState.row, resizeState.startHeight + deltaY);
+            };
+            const handleUp = () => {
+              rowResizeStateRef.current = null;
+              setEditorResizeCursor(view, null);
+              window.removeEventListener('mousemove', handleMove);
+              window.removeEventListener('mouseup', handleUp);
+            };
+            window.addEventListener('mousemove', handleMove);
+            window.addEventListener('mouseup', handleUp, { once: true });
+            return true;
+          }
           cellDragSelectionRef.current = { table, startCell: cell };
-          const startPos = view.posAtDOM(cell, 0);
-          const $start = view.state.doc.resolve(
-            Math.min(startPos + 1, view.state.doc.content.size)
-          );
-          view.dispatch(view.state.tr.setSelection(new CellSelection($start, $start)));
+          const selection = createCellRangeSelection(view, cell, cell);
+          if (!selection) return false;
+          setEditorResizeCursor(view, null);
+          view.dispatch(view.state.tr.setSelection(selection));
           view.focus();
-          return false;
+          return true;
         },
         mousemove: (view: any, event: Event) => {
+          const target = (event as MouseEvent).target as HTMLElement | null;
+          const hoverCell = target?.closest?.('td,th') as HTMLElement | null;
+          const hoverIntent = getCellResizeIntent(hoverCell, event as MouseEvent);
+          setEditorResizeCursor(view, hoverIntent);
+          if (hoverIntent) return false;
           const dragState = cellDragSelectionRef.current;
           if (!dragState) return false;
-          const target = (event as MouseEvent).target as HTMLElement | null;
           const cell = target?.closest?.('td,th') as HTMLElement | null;
           const table = target?.closest?.('table') as HTMLTableElement | null;
           if (!cell || !table || table !== dragState.table) return false;
-          const startPos = view.posAtDOM(dragState.startCell, 0);
-          const endPos = view.posAtDOM(cell, 0);
-          const $start = view.state.doc.resolve(
-            Math.min(startPos + 1, view.state.doc.content.size)
-          );
-          const $end = view.state.doc.resolve(
-            Math.min(endPos + 1, view.state.doc.content.size)
-          );
-          view.dispatch(view.state.tr.setSelection(new CellSelection($start, $end)));
+          const selection = createCellRangeSelection(view, dragState.startCell, cell);
+          if (!selection) return false;
+          view.dispatch(view.state.tr.setSelection(selection));
           view.focus();
           return true;
         },
         mouseup: () => {
           cellDragSelectionRef.current = null;
+          rowResizeStateRef.current = null;
+          return false;
+        },
+        mouseleave: (view: any) => {
+          cellDragSelectionRef.current = null;
+          rowResizeStateRef.current = null;
+          setEditorResizeCursor(view, null);
           return false;
         },
       },
@@ -485,7 +836,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   useEffect(() => {
     if (!editor || !editor.isActive('table')) return;
     const attrs = editor.getAttributes('table') as Record<string, any>;
-    if (attrs.borderColor) setTableBorderColor(String(attrs.borderColor));
+    if (attrs.borderColor) setTableBorderColor(normalizeColorForInput(attrs.borderColor, '#d1d5db'));
   }, [editor, value]);
 
   useEffect(() => {
@@ -517,14 +868,14 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         {iconBtn('حذف جدول', <DeleteOutlined />, () => editor.chain().focus().deleteTable().run(), !editor)}
         <Divider type="vertical" />
         <label className="color-chip" title="رنگ کادر جدول">
-          <TableOutlined />
-          <input
-            type="color"
-            value={tableBorderColor}
-            onChange={(e) => {
-              const nextColor = e.target.value;
-              setTableBorderColor(nextColor);
-              editor.chain().focus().updateAttributes('table', { borderColor: nextColor }).run();
+            <TableOutlined />
+            <input
+              type="color"
+              value={tableBorderColorInput}
+              onChange={(e) => {
+                const nextColor = e.target.value;
+                setTableBorderColor(nextColor);
+                editor.chain().focus().updateAttributes('table', { borderColor: nextColor }).run();
             }}
           />
           <div className="color-chip-swatches">
@@ -539,20 +890,20 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
                   setTableBorderColor(color);
                   editor.chain().focus().updateAttributes('table', { borderColor: color }).run();
                 }}
-                title={color}
-              />
-            ))}
-          </div>
-        </label>
+                    title={color}
+                  />
+                ))}
+              </div>
+            </label>
         <label className="color-chip" title="رنگ سلول">
-          <BgColorsOutlined />
-          <input
-            type="color"
-            value={cellColor}
-            onChange={(e) => {
-              const nextColor = e.target.value;
-              setCellColor(nextColor);
-              editor.chain().focus().setCellAttribute('backgroundColor', nextColor).run();
+            <BgColorsOutlined />
+            <input
+              type="color"
+              value={cellColorInput}
+              onChange={(e) => {
+                const nextColor = e.target.value;
+                setCellColor(nextColor);
+                editor.chain().focus().setCellAttribute('backgroundColor', nextColor).run();
             }}
           />
           <div className="color-chip-swatches">
@@ -578,9 +929,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   const imageTools = editor?.isActive('image') ? (
     <BubbleMenu editor={editor} shouldShow={() => editor.isActive('image') && editor.isFocused}>
       <div className="table-bubble-menu">
-        {iconBtn('کوچک‌کردن تصویر', <MinusOutlined />, () => stepImageWidth(-12), !editor)}
-        {iconBtn('بزرگ‌کردن تصویر', <PlusOutlined />, () => stepImageWidth(12), !editor)}
-        {iconBtn('فیت داخل سلول', <CompressOutlined />, fitImageToCell, !editor)}
+        {iconBtn('\u06A9\u0648\u0686\u06A9\u200C\u06A9\u0631\u062F\u0646 \u062A\u0635\u0648\u06CC\u0631', <MinusOutlined />, () => stepImageWidth(-12), !editor)}
+        {iconBtn('\u0628\u0632\u0631\u06AF\u200C\u06A9\u0631\u062F\u0646 \u062A\u0635\u0648\u06CC\u0631', <PlusOutlined />, () => stepImageWidth(12), !editor)}
+        {iconBtn('\u0641\u06CC\u062A \u062F\u0627\u062E\u0644 \u0633\u0644\u0648\u0644', <CompressOutlined />, fitImageToCell, !editor)}
       </div>
     </BubbleMenu>
   ) : null;
@@ -642,6 +993,116 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           height: auto;
           display: block;
           object-fit: contain;
+          border-radius: 10px;
+          background: rgba(248, 250, 252, 0.92);
+          box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.26);
+        }
+        .print-editor-image-node {
+          position: relative;
+          display: inline-flex;
+          align-items: stretch;
+          justify-content: center;
+          max-width: 100%;
+          margin: 6px 0;
+          vertical-align: top;
+          direction: ltr;
+          flex: 0 0 auto;
+          overflow: visible;
+        }
+        .print-editor-image-node.variable-image {
+          min-width: 84px;
+          min-height: 84px;
+        }
+        .print-editor-image-node.selected {
+          outline: 2px solid rgba(var(--brand-500-rgb), 0.55);
+          outline-offset: 3px;
+          border-radius: 12px;
+        }
+        .print-editor-image-node img {
+          width: 100%;
+          max-width: 100%;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+        .print-editor-image-placeholder {
+          width: 100%;
+          min-height: 84px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 10px;
+          border: 1px dashed rgba(var(--brand-500-rgb), 0.5);
+          border-radius: 12px;
+          background: linear-gradient(180deg, rgba(var(--brand-500-rgb), 0.08), rgba(248,250,252,0.95));
+          color: #334155;
+          text-align: center;
+          box-sizing: border-box;
+        }
+        .dark .print-editor-image-placeholder {
+          background: linear-gradient(180deg, rgba(var(--brand-500-rgb), 0.12), rgba(15,23,42,0.92));
+          color: #e2e8f0;
+        }
+        .print-editor-image-placeholder-icon {
+          width: 28px;
+          height: 28px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          background: rgba(var(--brand-500-rgb), 0.14);
+          color: rgb(var(--brand-500-rgb));
+          font-size: 14px;
+        }
+        .print-editor-image-placeholder-label {
+          font-size: 12px;
+          line-height: 1.7;
+          word-break: break-word;
+          overflow-wrap: anywhere;
+          direction: ltr;
+        }
+        .print-editor-image-handle {
+          position: absolute;
+          width: 12px;
+          height: 12px;
+          border-radius: 4px;
+          border: 1px solid rgba(255,255,255,0.95);
+          background: rgb(var(--brand-500-rgb));
+          box-shadow: 0 2px 10px rgba(15,23,42,0.18);
+          padding: 0;
+          z-index: 2;
+        }
+        .print-editor-image-handle.handle-nw {
+          left: -6px;
+          top: -6px;
+          cursor: nwse-resize;
+        }
+        .print-editor-image-handle.handle-ne {
+          right: -6px;
+          top: -6px;
+          cursor: nesw-resize;
+        }
+        .print-editor-image-handle.handle-sw {
+          left: -6px;
+          bottom: -6px;
+          cursor: nesw-resize;
+        }
+        .print-editor-image-handle.handle-se {
+          right: -6px;
+          bottom: -6px;
+          cursor: nwse-resize;
+        }
+        .print-template-editor-content img.ProseMirror-selectednode {
+          outline: 2px solid rgba(var(--brand-500-rgb), 0.55);
+          outline-offset: 3px;
+          cursor: nwse-resize;
+          box-shadow:
+            0 0 0 1px rgba(var(--brand-500-rgb), 0.3),
+            -6px -6px 0 -2px #fff,
+            6px -6px 0 -2px #fff,
+            -6px 6px 0 -2px #fff,
+            6px 6px 0 -2px #fff;
         }
         .print-template-editor-content table {
           border-collapse: collapse;
@@ -675,6 +1136,14 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         }
         .print-template-editor-content.resize-cursor {
           cursor: col-resize;
+        }
+        .print-template-editor-content.column-resize-cursor,
+        .print-template-editor-content.column-resize-cursor * {
+          cursor: col-resize !important;
+        }
+        .print-template-editor-content.row-resize-cursor,
+        .print-template-editor-content.row-resize-cursor * {
+          cursor: row-resize !important;
         }
         .print-template-editor-content .grip-column,
         .print-template-editor-content .grip-row,
@@ -765,4 +1234,5 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
 };
 
 export default PrintTemplateEditor;
+
 

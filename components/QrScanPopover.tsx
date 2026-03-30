@@ -106,7 +106,7 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
       trigger="click"
       open={open}
       onOpenChange={setOpen}
-      getPopupContainer={() => document.body}
+      getPopupContainer={(node) => node?.parentElement || document.body}
       overlayStyle={{ zIndex: 6000 }}
       content={
         <div className="w-72">

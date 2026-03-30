@@ -3,6 +3,21 @@
 // ==========================================
 // این utilities برای تمام جاهایی استفاده می‌شوند که نیاز به نمایش برچسب‌های فارسی در جای value‌های انگلیسی داریم
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export const isUuidLikeValue = (value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+  return UUID_REGEX.test(String(value).trim());
+};
+
+export const getSafeOptionFallback = (value: unknown, fallback = '-'): string => {
+  if (value === null || value === undefined) return fallback;
+  const normalized = String(value).trim();
+  if (!normalized) return fallback;
+  return isUuidLikeValue(normalized) ? fallback : normalized;
+};
+
 /**
  * گرفتن برچسب برای یک مقدار بر اساس فیلد و options موجود
  * این تابع برای SELECT، MULTI_SELECT و RELATION کار می‌کند
@@ -38,7 +53,7 @@ export const getSingleOptionLabel = (
   // ابتدا از field.options جستجو کن (static options)
   if (field.options) {
     const opt = field.options.find((o: any) => o.value === value);
-    if (opt) return opt.label || value;
+    if (opt) return opt.label || getSafeOptionFallback(value);
   }
 
   // سپس از dynamicOptions جستجو کن
@@ -46,18 +61,18 @@ export const getSingleOptionLabel = (
     const category = (field as any).dynamicOptionsCategory;
     const dynopts = dynamicOptions[category] || [];
     const opt = dynopts.find((o: any) => o.value === value);
-    if (opt) return opt.label || value;
+    if (opt) return opt.label || getSafeOptionFallback(value);
   }
 
   // برای RELATION fields
   if (field.type === 'relation') {
     const rellopts = relationOptions[field.key] || [];
     const opt = rellopts.find((o: any) => o.value === value);
-    if (opt) return opt.label || value;
+    if (opt) return opt.label || getSafeOptionFallback(value);
   }
 
-  // اگر برچسب پیدا نشد، خود value را برگردان
-  return value;
+  // اگر برچسب پیدا نشد، UUID خام را به کاربر نشان نده
+  return getSafeOptionFallback(value);
 };
 
 /**

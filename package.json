@@ -1,12 +1,14 @@
 {
   "name": "kalamapp",
   "private": true,
-  "version": "1.9.5",
+  "version": "1.9.9.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:prod": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1",
+    "deploy:prod:skip-build": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1 -SkipBuild"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

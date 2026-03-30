@@ -20,6 +20,7 @@ interface FieldGroupsTabsProps {
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
   stockMovementQuickAddSignal?: number;
+  extraBlockContent?: Record<string, React.ReactNode>;
 }
 
 const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
@@ -36,6 +37,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   canEditModule = true,
   onDataUpdate,
   stockMovementQuickAddSignal = 0,
+  extraBlockContent,
 }) => {
   const handleStockUpdated = useCallback((stock: number) => {
     onDataUpdate?.({ stock });
@@ -117,7 +119,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           .map((f: any) => (!f.logic || checkVisibility(f.logic)) && (
             <div
               key={f.key}
-              className="flex flex-col gap-1"
+              className={f.type === FieldType.SUPER_LONG_TEXT ? 'flex flex-col gap-1 md:col-span-2 lg:col-span-3' : 'flex flex-col gap-1'}
             >
               <span className="text-xs text-gray-400">{f.labels.fa}</span>
               {renderSmartField(f)}
@@ -210,6 +212,11 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           </div>
         );
       })()}
+      {extraBlockContent?.[String(block.id)] ? (
+        <div className="mt-6">
+          {extraBlockContent[String(block.id)]}
+        </div>
+      ) : null}
     </div>
   );
 

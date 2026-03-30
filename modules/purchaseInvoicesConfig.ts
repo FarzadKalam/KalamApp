@@ -10,6 +10,7 @@ import {
   SummaryCalculationType,
 } from '../types';
 import { HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
+import { getTodayLocalDateValue } from '../utils/defaultValues';
 
 const BLOCKS = {
   baseInfo: {
@@ -18,6 +19,15 @@ const BLOCKS = {
     icon: 'FileTextOutlined',
     order: 1,
     type: BlockType.FIELD_GROUP,
+  },
+
+  legacyInfo: {
+    id: 'legacyInfo',
+    titles: { fa: 'اطلاعات سیستم قبلی', en: 'Legacy System Info' },
+    icon: 'DatabaseOutlined',
+    order: 1.1,
+    type: BlockType.FIELD_GROUP,
+    hideInCreateForm: true,
   },
 
   invoiceItems: {
@@ -32,8 +42,15 @@ const BLOCKS = {
         key: 'product_id',
         title: 'نام محصول',
         type: FieldType.RELATION,
-        width: 250,
-        relationConfig: { targetModule: 'products', targetField: 'name' },
+        width: 300,
+        relationConfig: {
+          targetModule: 'products',
+          targetField: 'name',
+          sourceModules: [
+            { targetModule: 'products', targetField: 'name' },
+            { targetModule: 'billboards', targetField: 'name', tagLabel: 'محیطی', tagColor: 'purple' },
+          ],
+        },
       },
       { key: 'use_dimensions', title: 'طول×عرض', type: FieldType.CHECKBOX, width: 140 },
       { key: 'quantity', title: 'تعداد/مقدار', type: FieldType.NUMBER, width: 120 },
@@ -43,6 +60,7 @@ const BLOCKS = {
         type: FieldType.SELECT,
         width: 110,
         options: HARD_CODED_UNIT_OPTIONS as any,
+        dynamicOptionsCategory: 'main_unit',
         readonly: true,
       },
       {
@@ -58,6 +76,7 @@ const BLOCKS = {
         type: FieldType.SELECT,
         width: 110,
         options: HARD_CODED_UNIT_OPTIONS as any,
+        dynamicOptionsCategory: 'main_unit',
         readonly: true,
       },
       { key: 'unit_price', title: 'قیمت واحد', type: FieldType.PRICE, width: 150 },
@@ -211,7 +230,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
   fields: [
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
-    { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED },
+    { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED, defaultValue: getTodayLocalDateValue },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     {
       key: 'status',
@@ -224,8 +243,12 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
         { label: 'پیش فاکتور', value: 'proforma', color: 'orange' },
         { label: 'فاکتور نهایی', value: 'final', color: 'green' },
         { label: 'تسویه شده', value: 'settled', color: 'purple' },
+        { label: 'لغو شده', value: 'canceled', color: 'red' },
         { label: 'تکمیل شده', value: 'completed', color: 'gray' },
       ],
+      validation: { required: true },
+      defaultValue: 'created',
+      isTableColumn: true,
     },
 
     {
@@ -237,19 +260,75 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       relationConfig: { targetModule: 'suppliers', targetField: 'business_name' },
       validation: { required: true },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
     },
     {
       key: 'purchase_source',
       labels: { fa: 'منبع خرید', en: 'Source' },
       type: FieldType.SELECT,
+      dynamicOptionsCategory: 'purchase_source',
       location: FieldLocation.HEADER,
       order: 6,
-      options: [
-        { label: 'تلفنی', value: 'phone' },
-        { label: 'حضوری', value: 'in_person' },
-        { label: 'سفارش تامین', value: 'supplier_order' },
-      ],
       nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'description',
+      labels: { fa: '\u062A\u0648\u0636\u06CC\u062D\u0627\u062A \u0641\u0627\u06A9\u062A\u0648\u0631 \u062E\u0631\u06CC\u062F', en: 'Purchase Invoice Description' },
+      type: FieldType.SUPER_LONG_TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'baseInfo',
+      order: 7,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'legacy_invoice_number',
+      labels: { fa: 'شماره فاکتور سیستم قبلی', en: 'Legacy Invoice Number' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'legacyInfo',
+      order: 1,
+      nature: FieldNature.STANDARD,
+      hideInCreateForm: true,
+    },
+    {
+      key: 'legacy_status',
+      labels: { fa: 'وضعیت سیستم قبلی', en: 'Legacy Status' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'legacyInfo',
+      order: 2,
+      nature: FieldNature.STANDARD,
+      hideInCreateForm: true,
+    },
+    {
+      key: 'legacy_accounting_status',
+      labels: { fa: 'وضعیت حسابداری قبلی', en: 'Legacy Accounting Status' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'legacyInfo',
+      order: 3,
+      nature: FieldNature.STANDARD,
+      hideInCreateForm: true,
+    },
+    {
+      key: 'legacy_source',
+      labels: { fa: 'منبع سیستم قبلی', en: 'Legacy Source' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'legacyInfo',
+      order: 4,
+      nature: FieldNature.STANDARD,
+      hideInCreateForm: true,
+    },
+    {
+      key: 'legacy_ready_text',
+      labels: { fa: 'متن آماده سیستم قبلی', en: 'Legacy Ready Text' },
+      type: FieldType.LONG_TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'legacyInfo',
+      order: 5,
+      nature: FieldNature.STANDARD,
+      hideInCreateForm: true,
     },
     {
       key: 'process_template_id',
@@ -275,6 +354,8 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
     { key: 'remaining_balance', labels: { fa: 'مانده بدهی', en: 'Remaining Balance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
   ],
   blocks: [
+    BLOCKS.baseInfo,
+    BLOCKS.legacyInfo,
     BLOCKS.invoiceItems,
     BLOCKS.payments,
     BLOCKS.process,

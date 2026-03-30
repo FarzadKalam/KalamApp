@@ -44,6 +44,12 @@ export const printStyles = `
   .invoice-custom-print-shell .print-template-footer-inner {
     line-height: 1.9;
     font-size: 14px;
+    direction: rtl;
+    text-align: right;
+  }
+  .invoice-custom-print-shell .print-template-page {
+    direction: rtl;
+    text-align: right;
   }
   .invoice-custom-print-shell .print-template-page p {
     margin: 0 0 8px 0;
@@ -78,6 +84,10 @@ export const printStyles = `
     word-break: break-word;
     overflow-wrap: anywhere;
   }
+  .invoice-custom-print-shell img {
+    display: block;
+    object-fit: contain;
+  }
   
   #print-root { display: none; }
   @media print {
@@ -105,7 +115,7 @@ export const printStyles = `
       background: #fff !important;
     }
     body.print-mode #print-root .invoice-custom-print-shell {
-      width: auto !important;
+      width: fit-content !important;
       min-height: auto !important;
       max-width: none !important;
       margin: 0 !important;

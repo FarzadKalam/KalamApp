@@ -56,6 +56,7 @@ const FilterBuilder: React.FC<FilterBuilderProps> = ({ module, filters, onChange
     switch (field.type) {
       case FieldType.TEXT:
       case FieldType.LONG_TEXT:
+      case FieldType.SUPER_LONG_TEXT:
         return [
           { label: 'شامل (متن)', value: 'contains' },
           { label: 'دقیقاً برابر', value: 'eq' },

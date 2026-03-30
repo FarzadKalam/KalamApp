@@ -1,41 +1,72 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { List, Input, Button, Checkbox, Timeline, message, Empty, Spin, Select, Tag } from 'antd';
-import { SendOutlined, PlusOutlined, DeleteOutlined, EditOutlined, CloseOutlined, MessageOutlined, CheckOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../supabaseClient';
-import { MODULES } from '../../moduleRegistry';
-import RelatedRecordCard from './RelatedRecordCard';
-import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import React, { useEffect, useMemo, useState } from 'react';
+import { App, Button, Empty, Form, List, Spin, Tag, Timeline } from 'antd';
 import DateObject from 'react-date-object';
-import persian from 'react-date-object/calendars/persian';
-import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
+import persian from 'react-date-object/calendars/persian';
+import persian_fa from 'react-date-object/locales/persian_fa';
+import { supabase } from '../../supabaseClient';
+import { MODULES } from '../../moduleRegistry';
+import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import SharedNoteCard from '../notes/SharedNoteCard';
+import SharedNoteComposer from '../notes/SharedNoteComposer';
+import { parseNoteContent, serializeNoteContent } from '../../utils/noteContent';
+import { uploadNoteAttachments } from '../../utils/noteAttachments';
+import { normalizeNoteScope } from '../../utils/noteScope';
+import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { RelationQuickCreateInline } from '../SmartFieldRenderer';
+import { attachTaskCompletionIfNeeded } from '../../utils/taskCompletion';
+import TaskSummaryCard from '../tasks/TaskSummaryCard';
+import {
+  buildRelationValueMap,
+  combineRelationValueMaps,
+  formatRecordDisplayValue,
+  parseMaybeJsonValue,
+  RelationValueMap,
+} from '../../utils/recordDisplayFormatter';
 
 interface ActivityPanelProps {
   moduleId: string;
   recordId: string;
-  view: 'notes' | 'tasks' | 'changelogs'; // <--- ورودی جدید برای تعیین نوع نمایش
-  recordName?: string; // <--- نام رکورد برای نمایش
+  view: 'notes' | 'tasks' | 'changelogs';
+  recordName?: string;
   mentionUsers?: any[];
   mentionRoles?: any[];
   moduleConfig?: any;
 }
 
-const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view, recordName = '', mentionUsers = [], mentionRoles = [], moduleConfig }) => {
-  const navigate = useNavigate();
+const ActivityPanel: React.FC<ActivityPanelProps> = ({
+  moduleId,
+  recordId,
+  view,
+  recordName = '',
+  mentionUsers = [],
+  mentionRoles = [],
+  moduleConfig,
+}) => {
+  const { message } = App.useApp();
   const [items, setItems] = useState<any[]>([]);
   const [newItem, setNewItem] = useState('');
   const [mentionValues, setMentionValues] = useState<string[]>([]);
   const [mentionOptions, setMentionOptions] = useState<{ label: string; value: string }[]>([]);
   const [mentionMap, setMentionMap] = useState<Record<string, { label: string; type: 'user' | 'team' }>>({});
   const [mentionsLoading, setMentionsLoading] = useState(false);
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [replyToId, setReplyToId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<{ id: string | null; full_name: string | null }>({ id: null, full_name: null });
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  const [quickTaskLoading, setQuickTaskLoading] = useState(false);
+  const [quickTaskDynamicOptions, setQuickTaskDynamicOptions] = useState<Record<string, any[]>>({});
+  const [assigneeNameMap, setAssigneeNameMap] = useState<Record<string, string>>({});
+  const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
+  const [changeRelationValueMap, setChangeRelationValueMap] = useState<RelationValueMap>({});
+  const [quickTaskForm] = Form.useForm();
 
   const taskRelationMap = useMemo<Record<string, string>>(() => ({
     products: 'related_product',
@@ -48,20 +79,26 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
     marketing_leads: 'marketing_lead_id',
   }), []);
 
-  const tasksModuleConfig = MODULES['tasks'];
+  const tasksModuleConfig = MODULES.tasks;
+  const statusOptions = tasksModuleConfig?.fields?.find((field: any) => field.key === 'status')?.options || [];
+  const priorityOptions = tasksModuleConfig?.fields?.find((field: any) => field.key === 'priority')?.options || [];
+  const quickTaskFields = useMemo(
+    () => (tasksModuleConfig?.fields || []).filter((field: any) => (
+      ['name', 'status', 'priority', 'task_type', 'due_date', 'description'].includes(String(field?.key || ''))
+    )),
+    [tasksModuleConfig],
+  );
 
-  const formatPersianDate = (val: unknown, format: string) => {
-    if (!val) return '-';
+  const formatPersianDate = (value: unknown, format: string) => {
+    if (!value) return '-';
     try {
-      const jsDate = new Date(val as any);
+      const jsDate = new Date(value as any);
       if (Number.isNaN(jsDate.getTime())) return '-';
       return new DateObject({
         date: jsDate,
         calendar: gregorian,
         locale: gregorian_en,
-      })
-        .convert(persian, persian_fa)
-        .format(format);
+      }).convert(persian, persian_fa).format(format);
     } catch {
       return '-';
     }
@@ -75,10 +112,10 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
   };
 
   const getActionColor = (action: string) => {
-    if (action === 'create') return 'green';
-    if (action === 'update') return 'blue';
-    if (action === 'delete') return 'red';
-    return 'gray';
+    if (action === 'create') return '#16a34a';
+    if (action === 'update') return 'rgb(var(--brand-500-rgb))';
+    if (action === 'delete') return '#dc2626';
+    return '#64748b';
   };
 
   const formatValue = (value: unknown) => {
@@ -93,28 +130,16 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
     return String(value);
   };
 
-  const parseMaybeJson = (value: any) => {
-    if (typeof value !== 'string') return value;
-    const trimmed = value.trim();
-    if (!trimmed) return value;
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return value;
-      }
-    }
-    return value;
-  };
+  const parseMaybeJson = (value: any) => parseMaybeJsonValue(value);
 
   const getFieldDef = (fieldKey?: string) => {
     if (!fieldKey) return null;
-    return moduleConfig?.fields?.find((f: any) => f.key === fieldKey) || null;
+    return moduleConfig?.fields?.find((field: any) => field.key === fieldKey) || null;
   };
 
   const resolveOptionLabel = (value: any, fieldDef: any) => {
     if (!fieldDef?.options?.length) return null;
-    const option = fieldDef.options.find((opt: any) => String(opt.value) === String(value));
+    const option = fieldDef.options.find((item: any) => String(item.value) === String(value));
     return option?.label || null;
   };
 
@@ -124,14 +149,14 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
 
     if (Array.isArray(value)) {
       return value
-        .map((v) => resolveOptionLabel(v, fieldDef) || formatChangeValue(v, fieldDef))
+        .map((item) => resolveOptionLabel(item, fieldDef) || formatChangeValue(item, fieldDef))
         .join(', ');
     }
 
     if (typeof value === 'object') {
-      const obj = value as any;
-      if (obj?.label) return obj.label;
-      if (obj?.value) return resolveOptionLabel(obj.value, fieldDef) || formatValue(obj.value);
+      const objectValue = value as any;
+      if (objectValue?.label) return objectValue.label;
+      if (objectValue?.value) return resolveOptionLabel(objectValue.value, fieldDef) || formatValue(objectValue.value);
       return formatValue(value);
     }
 
@@ -144,69 +169,81 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
     return resolveOptionLabel(value, fieldDef) || formatValue(value);
   };
 
-  const formatTableRows = (rows: any[], tableDef: any): string => {
-    if (!Array.isArray(rows) || !tableDef?.tableColumns?.length) return formatValue(rows);
-    const columns = tableDef.tableColumns;
-    const formatCell = (val: any, col: any): string => {
-      const colType = col?.type;
-      if (colType === 'price') return formatPersianPrice(val);
-      if (colType === 'number') return toPersianNumber(val);
-      if (colType === 'date') return safeJalaliFormat(val, 'YYYY/MM/DD');
-      if (colType === 'datetime') return safeJalaliFormat(val, 'YYYY/MM/DD HH:mm');
-      if (colType === 'time') return toPersianNumber(String(val));
-      if (Array.isArray(val)) return val.map((v) => formatCell(v, col)).join(', ');
-      return resolveOptionLabel(val, col) || formatValue(val);
-    };
+  const formatChangeDisplayValue = (rawValue: unknown, fieldDef: any): string => {
+    const value = parseMaybeJson(rawValue);
+    return formatRecordDisplayValue(value, fieldDef, changeRelationValueMap, 'خالی');
+  };
 
+  const formatChangeTableRows = (rows: any[], tableDef: any): string => {
+    if (!Array.isArray(rows) || !tableDef?.tableColumns?.length) return formatValue(rows);
     return rows
-      .map((row) => {
-        const parts = columns.map((col: any) => {
-          const val = row?.[col.key];
-          if (val === undefined || val === null || val === '') return null;
-          return `${col.title}: ${formatCell(val, col)}`;
-        }).filter(Boolean);
-        return parts.join(' | ');
-      })
+      .map((row) => tableDef.tableColumns
+        .map((column: any) => {
+          const value = row?.[column.key];
+          if (value === undefined || value === null || value === '') return null;
+          return `${column.title}: ${formatRecordDisplayValue(value, column, changeRelationValueMap, 'خالی')}`;
+        })
+        .filter(Boolean)
+        .join(' | '))
       .filter(Boolean)
-        .join('\n');
+      .join('\n');
+  };
+
+  const buildTaskInitialValues = () => {
+    const relationField = taskRelationMap[moduleId];
+    return {
+      related_to_module: moduleId,
+      ...(relationField ? { [relationField]: recordId } : {}),
+    };
   };
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [moduleId, recordId, view]);
+
+  useEffect(() => {
+    if (view !== 'notes') {
+      setMentionPickerOpen(false);
+      setPendingFiles([]);
+      setReplyToId(null);
+    }
+  }, [view]);
 
   useEffect(() => {
     const loadCurrentUser = async () => {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
-        if (!userId) return;
-        const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', userId).maybeSingle();
-        setCurrentUser({ id: userId, full_name: profile?.full_name || null });
+        const snapshot = await fetchSessionBootstrap(supabase);
+        setCurrentUser({
+          id: snapshot.user?.id ? String(snapshot.user.id) : null,
+          full_name: snapshot.profile?.full_name || null,
+        });
       } catch (err) {
         console.error(err);
       }
     };
-    loadCurrentUser();
+    void loadCurrentUser();
   }, []);
 
-  // لیست اعضا برای منشن (پروفایل‌ها)
   useEffect(() => {
     const buildMentions = (profiles: any[], roles: any[]) => {
-      const profileOptions = (profiles || []).map((p: any) => ({
-        label: `عضو: ${p.full_name || p.id}`,
-        value: `user:${p.id}`,
+      const profileOptions = (profiles || []).map((profile: any) => ({
+        label: `عضو: ${profile.full_name || profile.id}`,
+        value: `user:${profile.id}`,
       }));
-      const roleOptions = (roles || []).map((r: any) => ({
-        label: `تیم: ${r.title || r.id}`,
-        value: `role:${r.id}`,
+      const roleOptions = (roles || []).map((role: any) => ({
+        label: `تیم: ${role.title || role.id}`,
+        value: `role:${role.id}`,
       }));
 
-      const map: Record<string, { label: string; type: 'user' | 'team' }> = {};
-      (profiles || []).forEach((p: any) => { map[p.id] = { label: p.full_name || p.id, type: 'user' }; });
-      (roles || []).forEach((r: any) => { map[r.id] = { label: r.title || r.id, type: 'team' }; });
+      const nextMap: Record<string, { label: string; type: 'user' | 'team' }> = {};
+      (profiles || []).forEach((profile: any) => {
+        nextMap[profile.id] = { label: profile.full_name || profile.id, type: 'user' };
+      });
+      (roles || []).forEach((role: any) => {
+        nextMap[role.id] = { label: role.title || role.id, type: 'team' };
+      });
 
-      setMentionMap(map);
+      setMentionMap(nextMap);
       setMentionOptions([...profileOptions, ...roleOptions]);
     };
 
@@ -214,36 +251,28 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
       const code = String(error?.code || '').toUpperCase();
       if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
       const messageText = String(error?.message || error?.details || error?.hint || '').toLowerCase();
-      const col = columnName.toLowerCase();
+      const column = columnName.toLowerCase();
       return (
-        messageText.includes(`column "${col}"`) ||
-        messageText.includes(`${col} does not exist`) ||
-        (messageText.includes('schema cache') && messageText.includes(col))
+        messageText.includes(`column "${column}"`)
+        || messageText.includes(`${column} does not exist`)
+        || (messageText.includes('schema cache') && messageText.includes(column))
       );
     };
 
-    const normalizeRoleRows = (rows: any[]) =>
+    const normalizeRoleRows = (rows: any[]) => (
       (rows || []).map((row: any) => ({
         id: row?.id,
         title: String(row?.title || row?.name || row?.id || '').trim(),
-      }));
+      }))
+    );
 
     const fetchRoles = async () => {
-      const primary = await supabase
-        .from('org_roles')
-        .select('*')
-        .limit(200);
+      const primary = await supabase.from('org_roles').select('*').limit(200);
       if (!primary.error) return normalizeRoleRows(primary.data || []);
 
       if (isMissingColumnError(primary.error, 'title')) {
-        const byName = await supabase
-          .from('org_roles')
-          .select('*')
-          .limit(200);
+        const byName = await supabase.from('org_roles').select('*').limit(200);
         if (!byName.error) return normalizeRoleRows(byName.data || []);
-
-        const idOnly = await supabase.from('org_roles').select('*').limit(200);
-        if (!idOnly.error) return normalizeRoleRows(idOnly.data || []);
       }
 
       return [] as Array<{ id: string; title: string }>;
@@ -269,14 +298,144 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
         setMentionsLoading(false);
       }
     };
-    if (view === 'notes') {
-      if (mentionUsers.length || mentionRoles.length) {
-        buildMentions(mentionUsers, mentionRoles);
-      } else {
-        loadProfiles();
-      }
+
+    if (view !== 'notes') return;
+    if (mentionUsers.length || mentionRoles.length) {
+      buildMentions(mentionUsers, mentionRoles);
+      return;
     }
-  }, [view, mentionUsers, mentionRoles]);
+    void loadProfiles();
+  }, [mentionRoles, mentionUsers, view]);
+
+  useEffect(() => {
+    if (!quickTaskOpen) return;
+    quickTaskForm.setFieldsValue({
+      status: 'todo',
+      priority: 'medium',
+    });
+  }, [quickTaskForm, quickTaskOpen]);
+
+  useEffect(() => {
+    if (!quickTaskOpen) return;
+    let cancelled = false;
+
+    const loadQuickTaskOptions = async () => {
+      const nextDynamicOptions: Record<string, any[]> = {};
+      for (const field of quickTaskFields) {
+        if (!field?.dynamicOptionsCategory) continue;
+        try {
+          nextDynamicOptions[field.dynamicOptionsCategory] = await fetchDynamicOptionsByCategory(
+            supabase,
+            field.dynamicOptionsCategory,
+          );
+        } catch (err) {
+          console.warn('Failed loading quick task options', field.dynamicOptionsCategory, err);
+        }
+      }
+
+      if (!cancelled) {
+        setQuickTaskDynamicOptions(nextDynamicOptions);
+      }
+    };
+
+    void loadQuickTaskOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [quickTaskFields, quickTaskOpen]);
+
+  useEffect(() => {
+    if (view !== 'tasks') return;
+    let cancelled = false;
+
+    const loadAssigneeDirectory = async () => {
+      try {
+        const directory = await fetchAssigneeDirectory(supabase);
+        if (cancelled) return;
+        setAssigneeNameMap(
+          directory.users.reduce<Record<string, string>>((acc, user) => {
+            acc[user.id] = user.display_name || user.full_name || user.id;
+            return acc;
+          }, {}),
+        );
+        setRoleNameMap(
+          directory.roles.reduce<Record<string, string>>((acc, role) => {
+            acc[role.id] = role.title || role.id;
+            return acc;
+          }, {}),
+        );
+      } catch (err) {
+        console.warn('Failed loading assignee directory for activity panel', err);
+      }
+    };
+
+    void loadAssigneeDirectory();
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
+  useEffect(() => {
+    if (view !== 'changelogs' || !items.length) {
+      setChangeRelationValueMap({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const uniqueByKey = (fields: any[]) => {
+      const map = new Map<string, any>();
+      fields.forEach((field) => {
+        const key = String(field?.key || '').trim();
+        if (key && !map.has(key)) map.set(key, field);
+      });
+      return Array.from(map.values());
+    };
+
+    const loadChangelogRelations = async () => {
+      try {
+        const directFields: any[] = [];
+        const directRows: any[] = [];
+        const tableFields: any[] = [];
+        const tableRows: any[] = [];
+
+        items.forEach((log: any) => {
+          const fieldDef = getFieldDef(log.field_name);
+          if (fieldDef?.key) {
+            directFields.push(fieldDef);
+            directRows.push({ [fieldDef.key]: parseMaybeJson(log.old_value) });
+            directRows.push({ [fieldDef.key]: parseMaybeJson(log.new_value) });
+          }
+
+          const tableDef = moduleConfig?.blocks?.find((block: any) => String(block?.id || '') === String(log.field_name || ''));
+          if (!tableDef?.tableColumns?.length) return;
+
+          tableFields.push(...tableDef.tableColumns);
+          const oldRows = parseMaybeJson(log.old_value);
+          const newRows = parseMaybeJson(log.new_value);
+          if (Array.isArray(oldRows)) tableRows.push(...oldRows);
+          if (Array.isArray(newRows)) tableRows.push(...newRows);
+        });
+
+        const [directMap, tableMap] = await Promise.all([
+          buildRelationValueMap(supabase, uniqueByKey(directFields), directRows),
+          buildRelationValueMap(supabase, uniqueByKey(tableFields), tableRows),
+        ]);
+
+        if (!cancelled) {
+          setChangeRelationValueMap(combineRelationValueMaps(directMap, tableMap));
+        }
+      } catch (err) {
+        console.warn('Failed loading changelog relation labels', err);
+        if (!cancelled) setChangeRelationValueMap({});
+      }
+    };
+
+    void loadChangelogRelations();
+    return () => {
+      cancelled = true;
+    };
+  }, [items, moduleConfig, view]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -295,16 +454,16 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
         setItems(rows);
 
         const userIds = Array.from(new Set(rows.map((row: any) => row.user_id).filter(Boolean)));
-        if (userIds.length) {
-          const { data: profiles } = await supabase
-            .from('profiles')
-            .select('id, full_name')
-            .in('id', userIds);
-          const map: Record<string, string> = {};
-          (profiles || []).forEach((row: any) => {
-            map[row.id] = row.full_name || row.id;
+        if (userIds.length > 0) {
+          const directory = await fetchAssigneeDirectory(supabase);
+          const nextMap: Record<string, string> = {};
+          directory.users.forEach((row) => {
+            if (!userIds.includes(row.id)) return;
+            nextMap[row.id] = row.display_name || row.full_name || row.id;
           });
-          setAuthorNameMap(map);
+          setAuthorNameMap(nextMap);
+        } else {
+          setAuthorNameMap({});
         }
         return;
       }
@@ -323,16 +482,14 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
         setItems(notes);
 
         const authorIds = Array.from(new Set(notes.map((note: any) => note.author_id).filter(Boolean)));
-        if (authorIds.length) {
-          const { data: profiles } = await supabase
-            .from('profiles')
-            .select('id, full_name')
-            .in('id', authorIds);
-          const map: Record<string, string> = {};
-          (profiles || []).forEach((row: any) => {
-            map[row.id] = row.full_name || row.id;
+        if (authorIds.length > 0) {
+          const directory = await fetchAssigneeDirectory(supabase);
+          const nextMap: Record<string, string> = {};
+          directory.users.forEach((row) => {
+            if (!authorIds.includes(row.id)) return;
+            nextMap[row.id] = row.display_name || row.full_name || row.id;
           });
-          setAuthorNameMap(map);
+          setAuthorNameMap(nextMap);
         } else {
           setAuthorNameMap({});
         }
@@ -365,59 +522,46 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
   const parseMentionValues = (values: string[]) => {
     const mention_user_ids: string[] = [];
     const mention_role_ids: string[] = [];
-    (values || []).forEach((val) => {
-      if (val.startsWith('user:')) mention_user_ids.push(val.replace('user:', ''));
-      if (val.startsWith('role:')) mention_role_ids.push(val.replace('role:', ''));
+    (values || []).forEach((value) => {
+      if (value.startsWith('user:')) mention_user_ids.push(value.replace('user:', ''));
+      if (value.startsWith('role:')) mention_role_ids.push(value.replace('role:', ''));
     });
     return { mention_user_ids, mention_role_ids };
   };
 
   const handleSubmit = async () => {
-    if (!newItem.trim()) return;
+    if (view !== 'notes') return;
+    if (!newItem.trim() && pendingFiles.length === 0) return;
+
     setLoading(true);
     try {
-      const now = new Date().toISOString();
-
-      if (view === 'notes') {
-        const { mention_user_ids, mention_role_ids } = parseMentionValues(mentionValues);
-        const payload = {
-          module_id: moduleId,
-          record_id: recordId,
-          content: newItem,
-          reply_to: replyToId || null,
-          mention_user_ids,
-          mention_role_ids,
-          author_id: currentUser.id,
-          author_name: currentUser.full_name,
-          created_at: now,
-        } as any;
-
-        const { error } = await supabase.from('notes').insert([payload]);
-        if (error) throw error;
-
-        message.success('یادداشت ثبت شد');
-        setNewItem('');
-        setMentionValues([]);
-        setReplyToId(null);
-        fetchData();
-        return;
-      }
-
-      const relationField = taskRelationMap[moduleId];
+      const { mention_user_ids, mention_role_ids } = parseMentionValues(mentionValues);
+      const scope = normalizeNoteScope(moduleId, recordId);
+      const attachments = pendingFiles.length > 0
+        ? await uploadNoteAttachments(scope.hasLinkedRecord ? scope.module_id : null, scope.hasLinkedRecord ? scope.record_id : null, pendingFiles)
+        : [];
       const payload = {
-        name: newItem,
-        status: 'todo',
-        created_at: now,
-        related_to_module: moduleId,
-        ...(relationField ? { [relationField]: recordId } : {})
+        module_id: scope.module_id,
+        record_id: scope.record_id,
+        content: serializeNoteContent(newItem, attachments),
+        reply_to: replyToId || null,
+        mention_user_ids,
+        mention_role_ids,
+        author_id: currentUser.id,
+        author_name: currentUser.full_name,
+        created_at: new Date().toISOString(),
       } as any;
 
-      const { error } = await supabase.from('tasks').insert([payload]);
+      const { error } = await supabase.from('notes').insert([payload]);
       if (error) throw error;
 
-      message.success('وظیفه ایجاد شد');
+      message.success('یادداشت ثبت شد');
       setNewItem('');
-      fetchData();
+      setMentionValues([]);
+      setMentionPickerOpen(false);
+      setPendingFiles([]);
+      setReplyToId(null);
+      await fetchData();
     } catch (err: any) {
       console.error(err);
       message.error('ثبت با خطا مواجه شد');
@@ -428,38 +572,29 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
 
   const handleEdit = (item: any) => {
     setEditingId(item.id);
-    setEditingValue(item.content || '');
+    setEditingValue(parseNoteContent(item.content).text);
   };
 
   const handleSaveEdit = async () => {
     if (!editingId) return;
     try {
+      const sourceItem = items.find((item: any) => String(item?.id) === String(editingId));
+      const parsed = parseNoteContent(sourceItem?.content);
       const { error } = await supabase
         .from('notes')
-        .update({ content: editingValue, is_edited: true, edited_at: new Date().toISOString() })
+        .update({
+          content: serializeNoteContent(editingValue, parsed.attachments),
+          is_edited: true,
+          edited_at: new Date().toISOString(),
+        })
         .eq('id', editingId);
       if (error) throw error;
       setEditingId(null);
       setEditingValue('');
-      fetchData();
+      await fetchData();
     } catch (err: any) {
       console.error(err);
       message.error('ویرایش ناموفق بود');
-    }
-  };
-
-  const toggleTask = async (task: any) => {
-    try {
-      const nextStatus = task.status === 'completed' ? 'pending' : 'completed';
-      const { error } = await supabase
-        .from('tasks')
-        .update({ status: nextStatus })
-        .eq('id', task.id);
-      if (error) throw error;
-      fetchData();
-    } catch (err: any) {
-      console.error(err);
-      message.error('به‌روزرسانی وظیفه ناموفق بود');
     }
   };
 
@@ -469,222 +604,260 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({ moduleId, recordId, view,
       const { error } = await supabase.from(table).delete().eq('id', rowId);
       if (error) throw error;
       message.success('حذف شد');
-      fetchData();
+      await fetchData();
     } catch (err: any) {
       console.error(err);
       message.error('حذف با خطا مواجه شد');
     }
   };
 
-  if (loading && items.length === 0) return <div className="flex justify-center p-10"><Spin /></div>;
+  const handleQuickTaskCreate = async () => {
+    setQuickTaskLoading(true);
+    try {
+      await quickTaskForm.validateFields();
+      const values = quickTaskForm.getFieldsValue(true);
+      const { assignee_combo, ...persistedValues } = values;
+      const payload = attachTaskCompletionIfNeeded({
+        ...buildTaskInitialValues(),
+        ...persistedValues,
+      });
+
+      const { error } = await supabase.from('tasks').insert([payload]);
+      if (error) throw error;
+
+      message.success('فعالیت ثبت شد');
+      setQuickTaskOpen(false);
+      quickTaskForm.resetFields();
+      await fetchData();
+    } catch (err: any) {
+      if (Array.isArray(err?.errorFields)) return;
+      console.error(err);
+      message.error('ایجاد فعالیت ناموفق بود');
+    } finally {
+      setQuickTaskLoading(false);
+    }
+  };
+
+  if (loading && items.length === 0) {
+    return <div className="flex justify-center p-10"><Spin /></div>;
+  }
 
   return (
     <div className="h-full flex flex-col">
-      {/* عنوان بخش */}
       <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 mb-4">
         <div className="text-sm text-gray-600 dark:text-gray-400">
-          {view === 'notes' && 'یادداشت‌های'}
-          {view === 'tasks' && 'وظایف'}
+          {view === 'notes' && 'یادداشت‌ها'}
+          {view === 'tasks' && 'فعالیت ها'}
           {view === 'changelogs' && 'تاریخچه تغییرات'}
         </div>
-        {recordName && (
+        {recordName ? (
           <div className="text-xs text-gray-500 dark:text-gray-500 mt-1 truncate">
             {recordName}
           </div>
-        )}
+        ) : null}
       </div>
 
-      {/* فقط برای یادداشت و وظایف ورودی داریم */}
-        {view !== 'changelogs' && (
-          <div className="flex gap-2 mb-6">
-              {view === 'notes' ? (
-                  <div className="flex-1 flex flex-col gap-2">
-                    <Input.TextArea 
-                      placeholder="یادداشت جدید..." 
-                      value={newItem} 
-                      onChange={e => setNewItem(e.target.value)} 
-                      autoSize={{ minRows: 2, maxRows: 4 }} 
-                      className="rounded-lg border-gray-300"
-                    />
-                    <Select
-                      mode="multiple"
-                      allowClear
-                      showSearch
-                      placeholder="منشن عضو یا تیم (اختیاری)"
-                      value={mentionValues}
-                      onChange={(v) => setMentionValues(v || [])}
-                      options={mentionOptions}
-                      loading={mentionsLoading}
-                      optionFilterProp="label"
-                      filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
-                      notFoundContent={mentionsLoading ? 'در حال بارگذاری...' : 'موردی یافت نشد'}
-                      getPopupContainer={(node) => node.parentElement || document.body}
-                      dropdownStyle={{ zIndex: 3000, minWidth: 240 }}
-                      className="w-full"
-                    />
-                    {replyToId && (
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <MessageOutlined />
-                        <span>پاسخ به یادداشت انتخاب شده</span>
-                        <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setReplyToId(null)} />
-                      </div>
-                    )}
-                  </div>
-              ) : (
-                  <Input 
-                    placeholder="عنوان وظیفه..." 
-                    value={newItem} 
-                    onChange={e => setNewItem(e.target.value)} 
-                    onPressEnter={handleSubmit} 
-                    className="rounded-lg border-gray-300 h-10"
-                  />
-              )}
-              <Button type="primary" icon={view === 'notes' ? <SendOutlined /> : <PlusOutlined />} onClick={handleSubmit} className="h-auto rounded-lg" />
-              {view === 'tasks' && (
-                <Button
-                  type="default"
-                  className="h-auto rounded-lg"
-                  onClick={() => navigate('/tasks/create', { state: { initialValues: { [taskRelationMap[moduleId]]: recordId, related_to_module: moduleId } } })}
-                >
-                  افزودن وظیفه
-                </Button>
-              )}
-          </div>
-      )}
+      {view === 'notes' ? (
+        <div className="mb-6 overflow-hidden rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.52)] dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.52)]">
+          <SharedNoteComposer
+            value={newItem}
+            onChange={setNewItem}
+            onSubmit={handleSubmit}
+            mentionOptions={mentionOptions}
+            mentionValues={mentionValues}
+            onMentionChange={(values) => setMentionValues(values || [])}
+            mentionsLoading={mentionsLoading}
+            mentionPickerOpen={mentionPickerOpen}
+            onToggleMentionPicker={() => setMentionPickerOpen((prev) => !prev)}
+            attachments={pendingFiles}
+            onFilesSelected={(files) => {
+              setPendingFiles((prev) => {
+                const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
+                files.forEach((file) => {
+                  map.set(`${file.name}-${file.size}-${file.lastModified}`, file);
+                });
+                return Array.from(map.values());
+              });
+            }}
+            onRemoveAttachment={(fileName) => {
+              setPendingFiles((prev) => prev.filter((file) => file.name !== fileName));
+            }}
+            replyActive={Boolean(replyToId)}
+            onClearReply={() => setReplyToId(null)}
+            submitDisabled={!newItem.trim() && pendingFiles.length === 0}
+          />
+        </div>
+      ) : null}
+
+      {view === 'tasks' ? (
+        <div className="mb-5 flex justify-end">
+          <Button type="primary" onClick={() => setQuickTaskOpen(true)}>
+            افزودن سریع فعالیت
+          </Button>
+        </div>
+      ) : null}
 
       <div className="flex-1 overflow-y-auto pr-1">
-          {items.length === 0 ? (
-            <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-          ) : (
-            <>
-              {view === 'notes' && (
-                <List dataSource={items} renderItem={(item: any) => {
+        {items.length === 0 ? (
+          <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <>
+            {view === 'notes' ? (
+              <List
+                dataSource={items}
+                renderItem={(item: any) => {
+                  const parsedContent = parseNoteContent(item.content);
                   const authorName = item.author_name || authorNameMap[item.author_id] || 'کاربر سیستم';
-                  const isEditing = editingId === item.id;
                   const replyTarget = items.find((note) => note.id === item.reply_to);
+                  const replyAuthorName = replyTarget
+                    ? (replyTarget.author_name || authorNameMap[replyTarget.author_id] || 'کاربر سیستم')
+                    : null;
                   const mentionUsers = (item.mention_user_ids || []).map((id: string) => mentionMap[id]?.label || id);
                   const mentionRoles = (item.mention_role_ids || []).map((id: string) => mentionMap[id]?.label || id);
 
                   return (
-                    <div className="bg-white dark:bg-white/5 p-4 rounded-xl mb-3 border border-gray-100 dark:border-gray-700 shadow-sm">
-                      <div className="flex justify-between text-[10px] text-gray-400 mb-2">
-                        <span>{authorName}</span>
-                        <span>{formatPersianDate(item.created_at, 'YYYY/MM/DD HH:mm')}</span>
-                      </div>
-
-                      {replyTarget && (
-                        <div className="text-[11px] text-gray-500 bg-gray-50 rounded-lg p-2 mb-2">
-                          پاسخ به: {replyTarget.content || ''}
-                        </div>
-                      )}
-
-                      {isEditing ? (
-                        <div className="flex flex-col gap-2">
-                          <Input.TextArea
-                            value={editingValue}
-                            onChange={(e) => setEditingValue(e.target.value)}
-                            autoSize={{ minRows: 2, maxRows: 4 }}
-                          />
-                          <div className="flex gap-2">
-                            <Button type="primary" size="small" icon={<CheckOutlined />} onClick={handleSaveEdit}>ذخیره</Button>
-                            <Button size="small" icon={<CloseOutlined />} onClick={() => setEditingId(null)}>انصراف</Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">{item.content}</div>
-                      )}
-
-                      {(mentionUsers.length > 0 || mentionRoles.length > 0) && (
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {mentionUsers.map((label: string) => (
-                            <Tag key={label} color="blue" className="text-xs">@{label}</Tag>
-                          ))}
-                          {mentionRoles.map((label: string) => (
-                            <Tag key={label} color="purple" className="text-xs">@{label}</Tag>
-                          ))}
-                        </div>
-                      )}
-
-                      {item.is_edited && (
-                        <div className="text-[10px] text-gray-400 mt-1">ویرایش شده</div>
-                      )}
-
-                      <div className="flex items-center gap-2 mt-3">
-                        <Button type="text" size="small" icon={<MessageOutlined />} onClick={() => setReplyToId(item.id)}>پاسخ</Button>
-                        <Button type="text" size="small" icon={<EditOutlined />} onClick={() => handleEdit(item)}>ویرایش</Button>
-                        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={() => handleDelete(item.id)} />
-                      </div>
-                    </div>
-                  );
-                }} />
-              )}
-
-              {view === 'tasks' && (
-                <List dataSource={items} renderItem={(item: any) => (
-                  <div className="relative">
-                    <RelatedRecordCard
-                      moduleId="tasks"
-                      item={item}
-                      moduleConfig={tasksModuleConfig}
-                    />
-                    <div className="absolute top-3 right-3 flex items-center gap-2">
-                      <Checkbox checked={item.status === 'completed'} onChange={() => toggleTask(item)} />
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<DeleteOutlined />}
-                        danger
-                        onClick={() => handleDelete(item.id)}
+                    <div className="mb-3">
+                      <SharedNoteCard
+                        authorName={authorName}
+                        createdAtLabel={formatPersianDate(item.created_at, 'YYYY/MM/DD HH:mm')}
+                        text={parsedContent.text}
+                        attachments={parsedContent.attachments}
+                        mentionUsers={mentionUsers}
+                        mentionRoles={mentionRoles}
+                        replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
+                        replyAuthorName={replyAuthorName}
+                        isEditing={editingId === item.id}
+                        editingValue={editingValue}
+                        onEditingChange={setEditingValue}
+                        onSaveEdit={handleSaveEdit}
+                        onCancelEdit={() => {
+                          setEditingId(null);
+                          setEditingValue('');
+                        }}
+                        isEdited={Boolean(item.is_edited)}
+                        onReply={() => setReplyToId(item.id)}
+                        onEdit={() => handleEdit(item)}
+                        onDelete={() => handleDelete(item.id)}
                       />
                     </div>
-                  </div>
-                )} />
-              )}
+                  );
+                }}
+              />
+            ) : null}
 
-              {view === 'changelogs' && (
-                <Timeline
-                  items={items.map((log: any) => {
-                    const action = String(log.action || 'update');
-                    const fieldTitle = log.field_label || log.field_name;
-                    const fieldDef = getFieldDef(log.field_name);
-                    const tableDef = moduleConfig?.blocks?.find((b: any) => b.id === log.field_name);
-                    const actor = log.user_name || authorNameMap[log.user_id] || 'سیستم';
-                    const hasDiff = fieldTitle && (log.old_value !== null || log.new_value !== null);
-                    return {
-                      color: getActionColor(action),
-                      children: (
-                        <div className="text-xs pb-4 mt-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-gray-700">{actor}</span>
-                            <span className="text-gray-500">{getActionLabel(action)}</span>
+            {view === 'tasks' ? (
+              <List
+                dataSource={items}
+                renderItem={(item: any) => (
+                  <TaskSummaryCard
+                    task={item}
+                    statusOptions={statusOptions}
+                    priorityOptions={priorityOptions}
+                    assigneeNameMap={assigneeNameMap}
+                    roleNameMap={roleNameMap}
+                    recordTitle={recordName || null}
+                    onStatusChange={async (taskId, status) => {
+                      const nextPayload = attachTaskCompletionIfNeeded({ ...item, status });
+                      const { error } = await supabase
+                        .from('tasks')
+                        .update({ status: nextPayload.status, completed_at: nextPayload.completed_at || null })
+                        .eq('id', taskId);
+                      if (error) throw error;
+                      await fetchData();
+                    }}
+                    onProducedQtyChange={async (taskId, value) => {
+                      const nextProducedQty = Math.max(0, Number(value || 0));
+                      const { error } = await supabase
+                        .from('tasks')
+                        .update({ produced_qty: nextProducedQty })
+                        .eq('id', taskId);
+                      if (error) throw error;
+                      await fetchData();
+                    }}
+                  />
+                )}
+              />
+            ) : null}
+
+            {view === 'changelogs' ? (
+              <Timeline
+                items={items.map((log: any) => {
+                  const action = String(log.action || 'update');
+                  const fieldTitle = log.field_label || log.field_name;
+                  const fieldDef = getFieldDef(log.field_name);
+                  const tableDef = moduleConfig?.blocks?.find((block: any) => block.id === log.field_name);
+                  const actor = log.user_name || authorNameMap[log.user_id] || 'سیستم';
+                  const hasDiff = fieldTitle && (log.old_value !== null || log.new_value !== null);
+
+                  return {
+                    color: getActionColor(action),
+                    children: (
+                      <div className="pb-4 mt-1">
+                        <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.8)] p-3 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.75)]">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="font-bold text-gray-800 dark:text-gray-100">{actor}</span>
+                            <Tag
+                              className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[11px]"
+                              style={{
+                                backgroundColor: `${getActionColor(action)}18`,
+                                color: getActionColor(action),
+                              }}
+                            >
+                              {getActionLabel(action)}
+                            </Tag>
                             <span className="text-[10px] text-gray-400">{formatPersianDate(log.created_at, 'HH:mm - YYYY/MM/DD')}</span>
                           </div>
 
-                          {(log.record_title || recordName) && (
-                            <div className="text-[10px] text-gray-500 mb-2 truncate">
+                          {log.record_title || recordName ? (
+                            <div className="text-[11px] text-gray-500 mb-2 truncate">
                               {log.record_title || recordName}
                             </div>
-                          )}
+                          ) : null}
 
-                          {hasDiff && (
-                            <div className="bg-gray-50 p-2 rounded text-gray-600">
-                              تغییر <b>{fieldTitle}</b>:
-                              <div className="mt-1">
-                              <span className="text-red-400 line-through mr-1 whitespace-pre-wrap">{tableDef ? formatTableRows(parseMaybeJson(log.old_value) || [], tableDef) : formatChangeValue(log.old_value, fieldDef)}</span>
-                                <span className="text-gray-400 mx-1">←</span>
-                              <span className="text-green-600 font-bold whitespace-pre-wrap">{tableDef ? formatTableRows(parseMaybeJson(log.new_value) || [], tableDef) : formatChangeValue(log.new_value, fieldDef)}</span>
+                          {hasDiff ? (
+                            <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-white/80 p-3 text-[12px] text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-200">
+                              <div className="mb-2">
+                                تغییر <b>{fieldTitle}</b>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="rounded-lg bg-rose-50 px-2 py-1 text-rose-600 line-through whitespace-pre-wrap dark:bg-rose-500/10 dark:text-rose-300">
+                                  {tableDef ? formatChangeTableRows(parseMaybeJson(log.old_value) || [], tableDef) : formatChangeDisplayValue(log.old_value, fieldDef)}
+                                </div>
+                                <div className="text-center text-gray-400">↓</div>
+                                <div className="rounded-lg bg-emerald-50 px-2 py-1 font-bold text-emerald-700 whitespace-pre-wrap dark:bg-emerald-500/10 dark:text-emerald-300">
+                                  {tableDef ? formatChangeTableRows(parseMaybeJson(log.new_value) || [], tableDef) : formatChangeDisplayValue(log.new_value, fieldDef)}
+                                </div>
                               </div>
                             </div>
-                          )}
+                          ) : null}
                         </div>
-                      ),
-                    };
-                  })}
-                />
-              )}
-            </>
-          )}
+                      </div>
+                    ),
+                  };
+                })}
+              />
+            ) : null}
+          </>
+        )}
       </div>
+
+      {view === 'tasks' ? (
+        <RelationQuickCreateInline
+          open={quickTaskOpen}
+          label="فعالیت"
+          moduleId="tasks"
+          fields={quickTaskFields as any}
+          form={quickTaskForm}
+          loading={quickTaskLoading}
+          relationOptions={{}}
+          dynamicOptions={quickTaskDynamicOptions}
+          onCancel={() => {
+            setQuickTaskOpen(false);
+            quickTaskForm.resetFields();
+          }}
+          onOk={() => void handleQuickTaskCreate()}
+        />
+      ) : null}
     </div>
   );
 };

@@ -37,11 +37,13 @@ import {
   getSystemTemplateFieldOptions,
   getPrintTemplateVariables,
   loadPrintTemplatesStore,
+  materializeSystemTemplateForCopy,
   mergeTemplatesWithDefaults,
   savePrintTemplatesStore,
   type PrintTemplateVariableOption,
   type StoredPrintTemplate,
 } from '../../utils/printTemplates/store';
+import { buildListPrintableFields } from '../../utils/listPrintExport';
 
 const createTemplateId = () => `tpl_${Math.random().toString(36).slice(2, 10)}`;
 const nowIso = () => new Date().toISOString();
@@ -93,13 +95,23 @@ const PrintTemplatesTab: React.FC = () => {
   );
 
   const selectedTemplates = templatesByModule[selectedModuleId] || [];
+  const currentScope = systemFieldsEditingTemplate?.scope || editingTemplate?.scope || 'record';
   const variableOptions: PrintTemplateVariableOption[] = useMemo(
     () => getPrintTemplateVariables(selectedModuleId),
     [selectedModuleId]
   );
   const systemFieldOptions = useMemo(
-    () => getSystemTemplateFieldOptions(selectedModuleId),
-    [selectedModuleId]
+    () =>
+      currentScope === 'list'
+        ? buildListPrintableFields(MODULES[selectedModuleId])
+            .map((field) => ({
+              key: field.key,
+              label: field.label,
+              group: 'ستون‌های لیست',
+              kind: 'record' as const,
+            }))
+        : getSystemTemplateFieldOptions(selectedModuleId),
+    [currentScope, selectedModuleId]
   );
   const filteredSystemFieldOptions = useMemo(() => {
     const q = systemFieldsSearch.trim().toLowerCase();
@@ -245,6 +257,7 @@ const PrintTemplatesTab: React.FC = () => {
     setEditingTemplate({
       id: createTemplateId(),
       moduleId: selectedModuleId,
+      scope: 'record',
       title: `قالب جدید ${singularTitle}`.trim(),
       description: '',
       headerHtml: buildDefaultHeaderTemplateForModule(selectedModuleId),
@@ -351,7 +364,9 @@ const PrintTemplatesTab: React.FC = () => {
       template.isSystem === true
         ? buildDefaultTemplatesForModule(selectedModuleId).find((item) => item.id === template.id) || null
         : null;
-    const sourceTemplate = systemDefault || template;
+    const sourceTemplate = template.isSystem === true
+      ? materializeSystemTemplateForCopy(selectedModuleId, systemDefault || template)
+      : template;
     const normalizeTitle = (value: string) => value.trim().replace(/\s+/g, ' ');
     const baseTitle = normalizeTitle(`${sourceTemplate.title} (کپی)`);
     let nextTitle = baseTitle;
@@ -564,6 +579,9 @@ const PrintTemplatesTab: React.FC = () => {
                     <div className="flex items-center gap-2 flex-wrap">
                       <Typography.Text strong>{item.title}</Typography.Text>
                       {item.isSystem ? <Tag color="processing">سیستمی</Tag> : null}
+                      <Tag color={(item.scope || 'record') === 'list' ? 'gold' : 'cyan'}>
+                        {(item.scope || 'record') === 'list' ? 'جدولی' : 'رکوردی'}
+                      </Tag>
                       <Tag color={item.isActive ? 'green' : 'default'}>{item.isActive ? 'فعال' : 'غیرفعال'}</Tag>
                       <Tag>{item.paperSize || 'A4'}</Tag>
                       <Tag>{item.orientation === 'landscape' ? 'افقی' : 'عمودی'}</Tag>
@@ -587,7 +605,7 @@ const PrintTemplatesTab: React.FC = () => {
         onClose={() => setEditorOpen(false)}
         width="95vw"
         zIndex={2200}
-        destroyOnClose
+        destroyOnHidden
         extra={
           <Space>
             <Button onClick={() => setEditorOpen(false)}>بستن</Button>

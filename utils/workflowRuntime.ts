@@ -1,5 +1,15 @@
+import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
-import { WorkflowAction, WorkflowCondition, WorkflowRecord } from './workflowTypes';
+import { buildResolvedAssigneeCombo } from './assigneeValue';
+import { normalizeNoteScope } from './noteScope';
+import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
+import {
+  parseWorkflowRelatedFieldKey,
+  WORKFLOW_ASSIGNEE_FIELD_KEY,
+  WorkflowAction,
+  WorkflowCondition,
+  WorkflowRecord,
+} from './workflowTypes';
 import { sendSmsViaGateway } from './smsGateway';
 
 type WorkflowEvent = 'create' | 'upsert';
@@ -10,6 +20,14 @@ type RunWorkflowArgs = {
   currentRecord: Record<string, any>;
   previousRecord?: Record<string, any> | null;
 };
+
+type WorkflowEvaluationContext = {
+  moduleId: string;
+  relatedRecordCache: Map<string, Record<string, any> | null>;
+  tagsCache: Map<string, string[]>;
+};
+
+const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
 
 const toComparable = (value: any): any => {
   if (value === null || value === undefined) return value;
@@ -33,6 +51,16 @@ const asArray = (value: any): any[] => {
   return [value];
 };
 
+const normalizeListValues = (value: any) =>
+  asArray(value)
+    .map((item) => String(toComparable(item) ?? '').trim())
+    .filter(Boolean);
+
+const isEmptyValue = (value: any) => {
+  if (Array.isArray(value)) return value.length === 0;
+  return value === null || value === undefined || value === '';
+};
+
 const toEnglishDigits = (input: string) =>
   input
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
@@ -44,7 +72,6 @@ const normalizePhone = (value: any): string => {
   let digits = raw.replace(/[^\d]/g, '');
   if (!digits) return '';
 
-  // Iran mobile normalization: 09xxxxxxxxx
   if (digits.startsWith('0098')) {
     digits = `0${digits.slice(4)}`;
   } else if (digits.startsWith('98')) {
@@ -82,15 +109,117 @@ const isSameDate = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
-const evaluateCondition = (
+const renderTemplate = (template: string, record: Record<string, any>) => {
+  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
+    const fieldKey = String(key || '').trim();
+    const val = record?.[fieldKey];
+    return val === null || val === undefined ? '' : String(val);
+  });
+};
+
+const fetchRecordTags = async (
+  moduleId: string,
+  recordId: string,
+  context: WorkflowEvaluationContext
+) => {
+  const cacheKey = `${moduleId}:${recordId}`;
+  if (context.tagsCache.has(cacheKey)) {
+    return context.tagsCache.get(cacheKey) || [];
+  }
+
+  const { data, error } = await supabase
+    .from('record_tags')
+    .select('tag_id')
+    .eq('module_id', moduleId)
+    .eq('record_id', recordId);
+  if (error) throw error;
+
+  const tagIds = (data || [])
+    .map((row: any) => String(row?.tag_id || '').trim())
+    .filter(Boolean);
+
+  context.tagsCache.set(cacheKey, tagIds);
+  return tagIds;
+};
+
+const fetchRelatedRecord = async (
+  targetModuleId: string,
+  recordId: string,
+  context: WorkflowEvaluationContext
+) => {
+  const cacheKey = `${targetModuleId}:${recordId}`;
+  if (context.relatedRecordCache.has(cacheKey)) {
+    return context.relatedRecordCache.get(cacheKey) || null;
+  }
+
+  const { data, error } = await supabase
+    .from(getModuleTable(targetModuleId))
+    .select('*')
+    .eq('id', recordId)
+    .maybeSingle();
+  if (error) throw error;
+
+  const normalized = (data || null) as Record<string, any> | null;
+  context.relatedRecordCache.set(cacheKey, normalized);
+  return normalized;
+};
+
+const resolveConditionFieldValue = async (
+  fieldKey: string,
+  record: Record<string, any> | null | undefined,
+  moduleId: string,
+  context: WorkflowEvaluationContext
+): Promise<any> => {
+  if (!record) return null;
+
+  if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+    return buildResolvedAssigneeCombo(record);
+  }
+
+  if (fieldKey === 'tags') {
+    const recordId = String(record?.id || '').trim();
+    if (!recordId) return [];
+    return fetchRecordTags(moduleId, recordId, context);
+  }
+
+  const relatedFieldMeta = parseWorkflowRelatedFieldKey(fieldKey);
+  if (relatedFieldMeta) {
+    const relationId = String(record?.[relatedFieldMeta.relationFieldKey] || '').trim();
+    if (!relationId) {
+      return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
+    }
+
+    const relatedRecord = await fetchRelatedRecord(
+      relatedFieldMeta.targetModuleId,
+      relationId,
+      context
+    );
+    if (!relatedRecord) {
+      return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
+    }
+
+    if (relatedFieldMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+      return buildResolvedAssigneeCombo(relatedRecord);
+    }
+
+    if (relatedFieldMeta.targetFieldKey === 'tags') {
+      const relatedRecordId = String(relatedRecord?.id || '').trim();
+      if (!relatedRecordId) return [];
+      return fetchRecordTags(relatedFieldMeta.targetModuleId, relatedRecordId, context);
+    }
+
+    return relatedRecord?.[relatedFieldMeta.targetFieldKey];
+  }
+
+  return record?.[fieldKey];
+};
+
+const evaluateResolvedCondition = (
   condition: WorkflowCondition,
-  currentRecord: Record<string, any>,
-  previousRecord?: Record<string, any> | null
+  currentValue: any,
+  previousValue: any
 ): boolean => {
-  const field = String(condition?.field || '');
   const op = String(condition?.operator || 'eq');
-  const currentValue = currentRecord?.[field];
-  const previousValue = previousRecord?.[field];
   const expectedValue = condition?.value;
 
   const cv = toComparable(currentValue);
@@ -98,14 +227,26 @@ const evaluateCondition = (
   const ev = toComparable(expectedValue);
 
   switch (op) {
-    case 'eq':
+    case 'eq': {
+      if (Array.isArray(currentValue) || Array.isArray(expectedValue)) {
+        const currentList = normalizeListValues(currentValue);
+        const expectedList = normalizeListValues(expectedValue);
+        return JSON.stringify(currentList.sort()) === JSON.stringify(expectedList.sort());
+      }
       return String(cv ?? '') === String(ev ?? '');
+    }
     case 'neq':
-      return String(cv ?? '') !== String(ev ?? '');
-    case 'contains':
+      return !evaluateResolvedCondition({ ...condition, operator: 'eq' }, currentValue, previousValue);
+    case 'contains': {
+      if (Array.isArray(currentValue)) {
+        return normalizeListValues(currentValue).some((item) =>
+          item.toLowerCase().includes(String(ev ?? '').toLowerCase())
+        );
+      }
       return String(cv ?? '').toLowerCase().includes(String(ev ?? '').toLowerCase());
+    }
     case 'not_contains':
-      return !String(cv ?? '').toLowerCase().includes(String(ev ?? '').toLowerCase());
+      return !evaluateResolvedCondition({ ...condition, operator: 'contains' }, currentValue, previousValue);
     case 'starts_with':
       return String(cv ?? '').toLowerCase().startsWith(String(ev ?? '').toLowerCase());
     case 'ends_with':
@@ -119,27 +260,37 @@ const evaluateCondition = (
     case 'lte':
       return Number(cv) <= Number(ev);
     case 'in': {
-      const list = asArray(expectedValue).map((x) => String(toComparable(x)));
-      return list.includes(String(cv ?? ''));
+      const actualList = normalizeListValues(currentValue);
+      const expectedList = normalizeListValues(expectedValue);
+      if (actualList.length > 0) {
+        return actualList.some((item) => expectedList.includes(item));
+      }
+      return expectedList.includes(String(cv ?? ''));
     }
     case 'not_in': {
-      const list = asArray(expectedValue).map((x) => String(toComparable(x)));
-      return !list.includes(String(cv ?? ''));
+      const actualList = normalizeListValues(currentValue);
+      const expectedList = normalizeListValues(expectedValue);
+      if (actualList.length > 0) {
+        return !actualList.some((item) => expectedList.includes(item));
+      }
+      return !expectedList.includes(String(cv ?? ''));
     }
     case 'is_true':
       return !!currentValue === true;
     case 'is_false':
       return !!currentValue === false;
     case 'is_null':
-      return currentValue === null || currentValue === undefined || currentValue === '';
+      return isEmptyValue(currentValue);
     case 'not_null':
-      return !(currentValue === null || currentValue === undefined || currentValue === '');
+      return !isEmptyValue(currentValue);
     case 'changed':
-      return String(cv ?? '') !== String(pv ?? '');
+      return JSON.stringify(cv ?? null) !== JSON.stringify(pv ?? null);
     case 'changed_from':
-      return String(pv ?? '') === String(ev ?? '') && String(cv ?? '') !== String(pv ?? '');
+      return JSON.stringify(pv ?? null) === JSON.stringify(ev ?? null) &&
+        JSON.stringify(cv ?? null) !== JSON.stringify(pv ?? null);
     case 'changed_to':
-      return String(cv ?? '') === String(ev ?? '') && String(cv ?? '') !== String(pv ?? '');
+      return JSON.stringify(cv ?? null) === JSON.stringify(ev ?? null) &&
+        JSON.stringify(cv ?? null) !== JSON.stringify(pv ?? null);
     case 'is_today': {
       const d = parseDate(currentValue);
       if (!d) return false;
@@ -159,6 +310,10 @@ const evaluateCondition = (
       t.setDate(t.getDate() + 1);
       return isSameDate(d, t);
     }
+    case 'days_passed_eq': {
+      const diff = daysDiffFromNow(currentValue);
+      return diff !== null && Math.floor(diff) === Number(expectedValue || 0);
+    }
     case 'days_passed_gt': {
       const diff = daysDiffFromNow(currentValue);
       return diff !== null && diff > Number(expectedValue || 0);
@@ -166,6 +321,10 @@ const evaluateCondition = (
     case 'days_passed_lt': {
       const diff = daysDiffFromNow(currentValue);
       return diff !== null && diff < Number(expectedValue || 0);
+    }
+    case 'days_remaining_eq': {
+      const diff = daysDiffFromNow(currentValue);
+      return diff !== null && diff < 0 && Math.floor(Math.abs(diff)) === Number(expectedValue || 0);
     }
     case 'days_remaining_gt': {
       const diff = daysDiffFromNow(currentValue);
@@ -196,32 +355,63 @@ const evaluateCondition = (
   }
 };
 
-const evaluateWorkflow = (
-  workflow: WorkflowRecord,
+const evaluateCondition = async (
+  condition: WorkflowCondition,
   currentRecord: Record<string, any>,
-  previousRecord?: Record<string, any> | null
-): boolean => {
-  const all = Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [];
-  const any = Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [];
+  previousRecord: Record<string, any> | null | undefined,
+  moduleId: string,
+  context: WorkflowEvaluationContext
+) => {
+  const fieldKey = String(condition?.field || '').trim();
+  if (!fieldKey) return false;
 
-  const allPass = all.every((condition) =>
-    evaluateCondition(condition as WorkflowCondition, currentRecord, previousRecord)
-  );
-  const anyPass =
-    any.length === 0 ||
-    any.some((condition) =>
-      evaluateCondition(condition as WorkflowCondition, currentRecord, previousRecord)
-    );
+  const [currentValue, previousValue] = await Promise.all([
+    resolveConditionFieldValue(fieldKey, currentRecord, moduleId, context),
+    resolveConditionFieldValue(fieldKey, previousRecord || null, moduleId, context),
+  ]);
 
-  return allPass && anyPass;
+  return evaluateResolvedCondition(condition, currentValue, previousValue);
 };
 
-const renderTemplate = (template: string, record: Record<string, any>) => {
-  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
-    const fieldKey = String(key || '').trim();
-    const val = record?.[fieldKey];
-    return val === null || val === undefined ? '' : String(val);
-  });
+const evaluateWorkflow = async (
+  workflow: WorkflowRecord,
+  currentRecord: Record<string, any>,
+  previousRecord: Record<string, any> | null | undefined,
+  moduleId: string
+) => {
+  const all = Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [];
+  const any = Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [];
+  const context: WorkflowEvaluationContext = {
+    moduleId,
+    relatedRecordCache: new Map(),
+    tagsCache: new Map(),
+  };
+
+  for (const condition of all) {
+    const passed = await evaluateCondition(
+      condition as WorkflowCondition,
+      currentRecord,
+      previousRecord,
+      moduleId,
+      context
+    );
+    if (!passed) return false;
+  }
+
+  if (any.length === 0) return true;
+
+  for (const condition of any) {
+    const passed = await evaluateCondition(
+      condition as WorkflowCondition,
+      currentRecord,
+      previousRecord,
+      moduleId,
+      context
+    );
+    if (passed) return true;
+  }
+
+  return false;
 };
 
 const resolveSmsRequestUrl = (url: string) => {
@@ -348,12 +538,58 @@ const sendSms = async (to: string[], text: string) => {
   }
 };
 
+const getCurrentAuthUser = async () => {
+  const { data } = await supabase.auth.getUser();
+  return data?.user || null;
+};
+
+const resolveWorkflowOrgId = async (currentRecord: Record<string, any>) => {
+  const fromRecord = String(currentRecord?.org_id || '').trim();
+  if (fromRecord) return fromRecord;
+
+  const user = await getCurrentAuthUser();
+  if (!user?.id) return null;
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('org_id')
+    .eq('id', user.id)
+    .maybeSingle();
+  return String(profile?.org_id || '').trim() || null;
+};
+
+const loadProcessTemplateStages = async (templateId: string) => {
+  const { data, error } = await supabase
+    .from('process_template_stages')
+    .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+    .eq('template_id', templateId)
+    .order('sort_order', { ascending: true });
+  if (error) throw error;
+  return data || [];
+};
+
+const mapTemplateStagesToDraft = (templateId: string, stages: any[]) =>
+  (stages || []).map((stage: any, index: number) => ({
+    ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+    id: stage?.id || `${templateId}_${index + 1}`,
+    name: stage?.stage_name || `مرحله ${index + 1}`,
+    sort_order: stage?.sort_order || (index + 1) * 10,
+    wage: Number(stage?.wage || 0),
+    weight: Number(stage?.metadata?.weight || 0),
+    duration_value: Number(stage?.metadata?.duration_value || 0),
+    duration_unit: String(stage?.metadata?.duration_unit || 'day'),
+    duration_from: String(stage?.metadata?.duration_from || 'project_start'),
+    default_assignee_id: stage?.default_assignee_id || null,
+    default_assignee_role_id: stage?.default_assignee_role_id || null,
+    template_stage_id: stage?.id || null,
+  }));
+
 const executeAction = async (
   action: WorkflowAction,
   moduleId: string,
   currentRecord: Record<string, any>
 ) => {
   const config = action?.config || {};
+
   if (action.type === 'send_sms') {
     const messageText = renderTemplate(String(config.message || ''), currentRecord).trim();
     if (!messageText) return;
@@ -381,13 +617,154 @@ const executeAction = async (
     const noteText = renderTemplate(String(config.note_text || ''), currentRecord).trim();
     if (!noteText) return;
     const recordId = currentRecord?.id;
-    if (!recordId) return;
+    const scope = normalizeNoteScope(moduleId, recordId ? String(recordId) : null);
+    if (!scope.hasLinkedRecord) return;
     await supabase.from('notes').insert({
-      module_id: moduleId,
-      record_id: recordId,
+      module_id: scope.module_id,
+      record_id: scope.record_id,
       content: noteText,
     });
+    return;
   }
+
+  if (action.type === 'update_record') {
+    const fieldKey = String(config.field || '').trim();
+    if (!fieldKey || !currentRecord?.id) return;
+    const nextValue = config.value ?? null;
+    const patch = { [fieldKey]: nextValue, updated_at: new Date().toISOString() } as Record<string, any>;
+    const { error } = await supabase
+      .from(getModuleTable(moduleId))
+      .update(patch)
+      .eq('id', currentRecord.id);
+    if (error) throw error;
+    currentRecord[fieldKey] = nextValue;
+    return;
+  }
+
+  if (action.type === 'create_related_record') {
+    const targetModuleId = String(config.target_module_id || '').trim();
+    const relationFieldKey = String(config.relation_field_key || '').trim();
+    if (!targetModuleId || !relationFieldKey || !currentRecord?.id) return;
+
+    const user = await getCurrentAuthUser();
+    const payload: Record<string, any> = {
+      [relationFieldKey]: currentRecord.id,
+    };
+
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    if (orgId) payload.org_id = orgId;
+    if (user?.id) {
+      payload.created_by = user.id;
+      payload.updated_by = user.id;
+    }
+
+    const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
+    mappings.forEach((mapping: any) => {
+      const targetField = String(mapping?.field || '').trim();
+      if (!targetField) return;
+      if (mapping?.mode === 'from_source') {
+        const sourceField = String(mapping?.source_field || '').trim();
+        payload[targetField] = sourceField ? currentRecord?.[sourceField] ?? null : null;
+        return;
+      }
+      payload[targetField] = mapping?.value ?? null;
+    });
+
+    const { error } = await supabase.from(getModuleTable(targetModuleId)).insert(payload);
+    if (error) throw error;
+    return;
+  }
+
+  if (action.type === 'copy_process_template') {
+    const templateId = String(config.template_id || '').trim();
+    const draftFieldKey = resolveWorkflowProcessDraftFieldKey(moduleId);
+    if (!templateId || !draftFieldKey || !currentRecord?.id) return;
+
+    const stages = await loadProcessTemplateStages(templateId);
+    const patch = {
+      process_template_id: templateId,
+      [draftFieldKey]: mapTemplateStagesToDraft(templateId, stages),
+    } as Record<string, any>;
+
+    const { error } = await supabase
+      .from(getModuleTable(moduleId))
+      .update(patch)
+      .eq('id', currentRecord.id);
+    if (error) throw error;
+
+    Object.assign(currentRecord, patch);
+    return;
+  }
+
+  if (action.type === 'execute_process') {
+    const templateId = String(config.template_id || '').trim();
+    if (!templateId || !currentRecord?.id) return;
+
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    if (!orgId) {
+      throw new Error('org_id for process execution is missing');
+    }
+
+    const { error } = await supabase.rpc('create_process_run_from_template', {
+      p_org_id: orgId,
+      p_template_id: templateId,
+      p_module_id: moduleId,
+      p_record_id: currentRecord.id,
+      p_process_name: null,
+      p_copied_mode: 'auto',
+    });
+    if (error) throw error;
+  }
+};
+
+const hasWorkflowLogForRecord = async (
+  workflowId: string,
+  moduleId: string,
+  recordId: string
+) => {
+  const { data, error } = await supabase
+    .from('workflow_logs')
+    .select('id')
+    .eq('workflow_id', workflowId)
+    .eq('module_id', moduleId)
+    .eq('record_id', recordId)
+    .eq('status', 'success')
+    .limit(1);
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+};
+
+const logWorkflowRun = async ({
+  workflow,
+  moduleId,
+  currentRecord,
+  event,
+  status,
+  errorMessage,
+}: {
+  workflow: WorkflowRecord;
+  moduleId: string;
+  currentRecord: Record<string, any>;
+  event: WorkflowEvent;
+  status: 'success' | 'failed';
+  errorMessage?: string;
+}) => {
+  const orgId = await resolveWorkflowOrgId(currentRecord);
+  const recordId = String(currentRecord?.id || '').trim() || null;
+  await supabase.from('workflow_logs').insert({
+    workflow_id: workflow.id,
+    org_id: orgId,
+    run_type: 'event',
+    status,
+    module_id: moduleId,
+    record_id: recordId,
+    message: errorMessage || null,
+    details: {
+      event,
+      execution_mode: workflow.execution_mode || 'first_match',
+      action_count: Array.isArray(workflow.actions) ? workflow.actions.length : 0,
+    },
+  });
 };
 
 export const runWorkflowsForEvent = async ({
@@ -397,8 +774,7 @@ export const runWorkflowsForEvent = async ({
   previousRecord = null,
 }: RunWorkflowArgs) => {
   if (!moduleId || !currentRecord) return;
-  const triggerTypes =
-    event === 'create' ? ['on_create', 'on_upsert'] : ['on_upsert'];
+  const triggerTypes = event === 'create' ? ['on_create', 'on_upsert'] : ['on_upsert'];
 
   const { data, error } = await supabase
     .from('workflows')
@@ -415,20 +791,62 @@ export const runWorkflowsForEvent = async ({
   const workflows = (data || []) as WorkflowRecord[];
   for (const workflow of workflows) {
     try {
-      if (!evaluateWorkflow(workflow, currentRecord, previousRecord)) continue;
+      const matched = await evaluateWorkflow(workflow, currentRecord, previousRecord, moduleId);
+      if (!matched) continue;
+
+      const executionMode = String(workflow.execution_mode || 'first_match');
+      const recordId = String(currentRecord?.id || '').trim();
+      if (executionMode === 'first_match' && recordId) {
+        const alreadyExecuted = await hasWorkflowLogForRecord(workflow.id, moduleId, recordId);
+        if (alreadyExecuted) continue;
+      }
+
       const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+      const actionErrors: string[] = [];
       for (const action of actions) {
         try {
           await executeAction(action as WorkflowAction, moduleId, currentRecord);
         } catch (actionErr) {
+          actionErrors.push(
+            String((actionErr as any)?.message || (action as any)?.type || 'workflow action failed')
+          );
           console.error(
             `Workflow action failed (${workflow?.name || workflow?.id} / ${String((action as any)?.type || '-')})`,
             actionErr
           );
         }
       }
-    } catch (err) {
+
+      if (actionErrors.length > 0) {
+        throw new Error(actionErrors.join(' | '));
+      }
+
+      await logWorkflowRun({
+        workflow,
+        moduleId,
+        currentRecord,
+        event,
+        status: 'success',
+      });
+
+      await supabase
+        .from('workflows')
+        .update({ last_run_at: new Date().toISOString() })
+        .eq('id', workflow.id);
+    } catch (err: any) {
       console.error(`Workflow execution failed (${workflow?.name || workflow?.id}):`, err);
+      try {
+        await logWorkflowRun({
+          workflow,
+          moduleId,
+          currentRecord,
+          event,
+          status: 'failed',
+          errorMessage: String(err?.message || err || 'workflow execution failed'),
+        });
+      } catch (logErr) {
+        console.error('Workflow log insert failed:', logErr);
+      }
     }
   }
 };

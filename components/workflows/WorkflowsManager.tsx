@@ -120,7 +120,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [message, moduleFilter]);
+  }, [moduleFilter]);
 
   useEffect(() => {
     fetchPermissions();
@@ -290,15 +290,17 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
         />
       )}
 
-      <WorkflowEditorModal
-        open={editorOpen}
-        onClose={() => setEditorOpen(false)}
-        onSaved={() => fetchRecords()}
-        initialModuleId={defaultModuleId}
-        record={editingRecord}
-        canEdit={canEdit}
-        moduleOptions={moduleOptions}
-      />
+      {editorOpen ? (
+        <WorkflowEditorModal
+          open={editorOpen}
+          onClose={() => setEditorOpen(false)}
+          onSaved={() => fetchRecords()}
+          initialModuleId={defaultModuleId}
+          record={editingRecord}
+          canEdit={canEdit}
+          moduleOptions={moduleOptions}
+        />
+      ) : null}
     </div>
   );
 

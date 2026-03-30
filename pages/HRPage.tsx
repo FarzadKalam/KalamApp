@@ -8,6 +8,7 @@ import {
   DatePicker,
   Empty,
   Form,
+  Input,
   InputNumber,
   Modal,
   Row,
@@ -16,16 +17,25 @@ import {
   Spin,
   Table,
   Tag,
+  Tabs,
   Typography,
 } from 'antd';
-import { ArrowRightOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import {
+  ArrowRightOutlined,
+  ClockCircleOutlined,
+  HistoryOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
-import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, parseDateValue, safeJalaliFormat, toGregorianDateString, toPersianNumber } from '../utils/persianNumberFormatter';
 import { isTaskDoneStatus, normalizeTaskStatus } from '../utils/taskCompletion';
 import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import PersianDatePicker from '../components/PersianDatePicker';
 
 type TaskRecord = {
   id: string;
@@ -49,12 +59,18 @@ type TaskRecord = {
 type ProfileRecord = {
   id: string;
   full_name?: string | null;
+  related_profile_id?: string | null;
+  source_table?: 'employees' | 'profiles';
+  source_id?: string;
   role?: string | null;
   base_salary?: number | string | null;
   overtime_rate?: number | string | null;
   late_penalty_rate?: number | string | null;
   early_bonus_rate?: number | string | null;
   production_bonus_rate?: number | string | null;
+  insurance_subject?: boolean | null;
+  employee_insurance_rate?: number | string | null;
+  employer_insurance_rate?: number | string | null;
 };
 
 type TaskPerformanceCode =
@@ -118,6 +134,119 @@ type PayrollFormValues = {
   production_bonus_rate: number;
 };
 
+type HrSupportStats = {
+  attendance: {
+    total: number;
+    checkIns: number;
+    checkOuts: number;
+    leaveLogs: number;
+    missionLogs: number;
+  };
+  schedules: {
+    total: number;
+    active: number;
+    draft: number;
+    expired: number;
+  };
+  requests: {
+    leaveTotal: number;
+    leavePending: number;
+    overtimeTotal: number;
+    overtimePending: number;
+    missionTotal: number;
+    missionPending: number;
+  };
+};
+
+type AttendanceLogRecord = {
+  id: string;
+  assignee_id?: string | null;
+  employee_id?: string | null;
+  related_profile_id?: string | null;
+  log_type?: string | null;
+  occurred_at?: string | null;
+  source_type?: string | null;
+  location_text?: string | null;
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type WorkScheduleDashboardRow = {
+  id: string;
+  title?: string | null;
+  status?: string | null;
+  is_active?: boolean | null;
+  effective_from?: string | null;
+  effective_to?: string | null;
+  employee_id?: string | null;
+  weekly_plan?: unknown;
+  updated_at?: string | null;
+  created_at?: string | null;
+};
+
+type HrRequestRecord = {
+  key: string;
+  id: string;
+  moduleId: 'leave_requests' | 'overtime_requests' | 'mission_requests';
+  typeLabel: string;
+  employeeId: string | null;
+  status: string | null;
+  dateFrom: string | null;
+  dateTo: string | null;
+  notes: string | null;
+};
+
+type AttendanceComputedRow = {
+  key: string;
+  id: string;
+  employeeId: string | null;
+  employeeName: string;
+  logType: string;
+  occurredAt: string | null;
+  sourceType: string;
+  notes: string | null;
+  locationText: string | null;
+  scheduleTitle: string | null;
+  scheduledStart: string | null;
+  scheduledEnd: string | null;
+  lateMinutes: number;
+  earlyArrivalMinutes: number;
+  earlyLeaveMinutes: number;
+  overtimeStayMinutes: number;
+  deltaLabel: string;
+  deltaColor: string;
+};
+
+type AttendanceModalMode = 'create' | 'view' | 'edit';
+
+type AttendanceModalValues = {
+  employee_profile_id: string;
+  log_type: string;
+  occurred_at: string | null;
+  source_type: string;
+  location_text?: string;
+  notes?: string;
+};
+
+const EMPTY_HR_SUPPORT_STATS: HrSupportStats = {
+  attendance: { total: 0, checkIns: 0, checkOuts: 0, leaveLogs: 0, missionLogs: 0 },
+  schedules: { total: 0, active: 0, draft: 0, expired: 0 },
+  requests: { leaveTotal: 0, leavePending: 0, overtimeTotal: 0, overtimePending: 0, missionTotal: 0, missionPending: 0 },
+};
+
+const WEEKDAY_KEY_BY_DAY_INDEX: Record<number, 'sat' | 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri'> = {
+  0: 'sun',
+  1: 'mon',
+  2: 'tue',
+  3: 'wed',
+  4: 'thu',
+  5: 'fri',
+  6: 'sat',
+};
+
 const PERFORMANCE_TAG_META: Record<TaskPerformanceCode, { label: string; color: string }> = {
   early: { label: 'تعجیل', color: 'green' },
   on_time: { label: 'به موقع', color: 'blue' },
@@ -149,7 +278,7 @@ const RELATED_MODULE_FA: Record<string, string> = {
   suppliers: 'تامین کنندگان',
   invoices: 'فاکتورهای فروش',
   purchase_invoices: 'فاکتورهای خرید',
-  tasks: 'وظایف',
+  tasks: 'فعالیت ها',
 };
 
 const toNumber = (value: unknown): number => {
@@ -160,8 +289,8 @@ const toNumber = (value: unknown): number => {
 
 const parseDate = (value: string | null | undefined): dayjs.Dayjs | null => {
   if (!value) return null;
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed : null;
+  const parsed = parseDateValue(value);
+  return parsed && parsed.isValid() ? parsed : null;
 };
 
 const resolveDueDate = (task: TaskRecord): string | null => task.due_date || task.due_at || null;
@@ -174,8 +303,14 @@ const isInRange = (value: dayjs.Dayjs | null, start: dayjs.Dayjs, end: dayjs.Day
 
 const parseDateParam = (rawDate: string | null): Dayjs | null => {
   if (!rawDate) return null;
-  const parsed = dayjs(rawDate);
-  return parsed.isValid() ? parsed : null;
+  const parsed = parseDateValue(rawDate);
+  if (!parsed || !parsed.isValid()) return null;
+  const gregorian = toGregorianDateString(parsed, 'YYYY-MM-DD');
+  if (!gregorian) return null;
+  const year = Number(gregorian.slice(0, 4));
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
+  const normalized = dayjs(gregorian);
+  return normalized.isValid() ? normalized : null;
 };
 
 const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
@@ -291,6 +426,52 @@ const getProductionWageMultiplier = (
 
   return 1;
 };
+
+const normalizeSchedulePlan = (raw: any) => {
+  const emptyShift = { start: null as string | null, end: null as string | null };
+  const base = {
+    sat: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+    sun: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+    mon: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+    tue: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+    wed: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+    thu: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+    fri: { shift1: { ...emptyShift }, shift2: { ...emptyShift } },
+  };
+
+  if (!raw || typeof raw !== 'object') return base;
+
+  (Object.keys(base) as Array<keyof typeof base>).forEach((dayKey) => {
+    (['shift1', 'shift2'] as const).forEach((shiftKey) => {
+      base[dayKey][shiftKey] = {
+        start: typeof raw?.[dayKey]?.[shiftKey]?.start === 'string' ? raw[dayKey][shiftKey].start : null,
+        end: typeof raw?.[dayKey]?.[shiftKey]?.end === 'string' ? raw[dayKey][shiftKey].end : null,
+      };
+    });
+  });
+
+  return base;
+};
+
+const timeToMinutes = (value: string | null | undefined) => {
+  if (!value) return null;
+  const [hh, mm] = String(value).split(':').map(Number);
+  if ([hh, mm].some(Number.isNaN)) return null;
+  return (hh * 60) + mm;
+};
+
+const formatMinutesLabel = (minutes: number) => {
+  if (minutes <= 0) return '۰';
+  if (minutes < 60) return `${toPersianNumber(minutes)} دقیقه`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0
+    ? `${toPersianNumber(hours)} ساعت و ${toPersianNumber(rest)} دقیقه`
+    : `${toPersianNumber(hours)} ساعت`;
+};
+
+const renderDateTime = (value: string | null | undefined) => safeJalaliFormat(value, 'YYYY/MM/DD HH:mm') || '-';
+
 const buildSummaries = ({
   profiles,
   tasks,
@@ -319,7 +500,8 @@ const buildSummaries = ({
   });
 
   const rows = profiles.map((profile) => {
-    const assigneeTasks = tasksByAssignee.get(String(profile.id)) || [];
+    const assigneeLookupId = String(profile.related_profile_id || profile.id || '');
+    const assigneeTasks = tasksByAssignee.get(assigneeLookupId) || [];
     const detailRows: TaskDetailRow[] = assigneeTasks.map((task) => {
       const performance = evaluateTaskPerformance(task, now);
       const performanceMeta = PERFORMANCE_TAG_META[performance.code];
@@ -440,16 +622,41 @@ const HRPage: React.FC = () => {
   const [editingProfile, setEditingProfile] = useState<ProfileRecord | null>(null);
   const [savingProfileConfig, setSavingProfileConfig] = useState(false);
   const [configForm] = Form.useForm<PayrollFormValues>();
+  const [attendanceModalOpen, setAttendanceModalOpen] = useState(false);
+  const [attendanceModalMode, setAttendanceModalMode] = useState<AttendanceModalMode>('create');
+  const [attendanceModalRecord, setAttendanceModalRecord] = useState<AttendanceLogRecord | null>(null);
+  const [attendanceModalSaving, setAttendanceModalSaving] = useState(false);
+  const [attendanceForm] = Form.useForm<AttendanceModalValues>();
+  const [supportStats, setSupportStats] = useState<HrSupportStats>(EMPTY_HR_SUPPORT_STATS);
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceLogRecord[]>([]);
+  const [scheduleRows, setScheduleRows] = useState<WorkScheduleDashboardRow[]>([]);
+  const [requestRows, setRequestRows] = useState<HrRequestRecord[]>([]);
 
   const monthStart = useMemo(() => selectedRange[0].startOf('day'), [selectedRange]);
   const monthEnd = useMemo(() => selectedRange[1].endOf('day'), [selectedRange]);
-  const selectedRangeQuery = `from=${monthStart.format('YYYY-MM-DD')}&to=${monthEnd.format('YYYY-MM-DD')}`;
+  const selectedRangeQuery = useMemo(() => {
+    const from = toGregorianDateString(monthStart, 'YYYY-MM-DD');
+    const to = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+    return `from=${from || ''}&to=${to || ''}`;
+  }, [monthStart, monthEnd]);
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    const from = toGregorianDateString(monthStart, 'YYYY-MM-DD');
+    const to = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+    if (!from || !to) return;
+    const nextPath = employeeId ? `/hr/${employeeId}` : '/hr';
+    const nextUrl = `${nextPath}?from=${from}&to=${to}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    if (currentUrl !== nextUrl) {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
+  }, [employeeId, monthEnd, monthStart]);
 
   const onDateRangeChange = (values: [Dayjs | null, Dayjs | null] | null) => {
     if (!values || !values[0] || !values[1]) return;
@@ -461,7 +668,8 @@ const HRPage: React.FC = () => {
     else setLoading(true);
 
     try {
-      const [profilesResult, tasksResult] = await Promise.all([
+      const [employeesResult, profilesResult, tasksResult] = await Promise.all([
+        supabase.from('employees').select('*').order('full_name', { ascending: true }),
         supabase.from('profiles').select('*').order('full_name', { ascending: true }),
         supabase
           .from('tasks')
@@ -473,19 +681,47 @@ const HRPage: React.FC = () => {
           .limit(5000),
       ]);
 
+      if (employeesResult.error) throw employeesResult.error;
       if (profilesResult.error) throw profilesResult.error;
       if (tasksResult.error) throw tasksResult.error;
 
-      const normalizedProfiles = (profilesResult.data || []).map((row: any) => ({
+      const normalizedEmployees = (employeesResult.data || []).map((row: any) => ({
         id: String(row?.id),
         full_name: row?.full_name || null,
+        related_profile_id: row?.related_profile_id || null,
+        source_table: 'employees' as const,
+        source_id: String(row?.id),
+        role: row?.employment_type || null,
+        base_salary: row?.base_salary ?? 0,
+        overtime_rate: row?.overtime_rate ?? 0,
+        late_penalty_rate: row?.late_penalty_rate ?? 0,
+        early_bonus_rate: row?.early_bonus_rate ?? 0,
+        production_bonus_rate: row?.production_bonus_rate ?? 0,
+        insurance_subject: row?.insurance_subject ?? true,
+        employee_insurance_rate: row?.employee_insurance_rate ?? 7,
+        employer_insurance_rate: row?.employer_insurance_rate ?? 23,
+      })) as ProfileRecord[];
+
+      const normalizedProfilesFallback = (profilesResult.data || []).map((row: any) => ({
+        id: String(row?.id),
+        full_name: row?.full_name || null,
+        related_profile_id: row?.id || null,
+        source_table: 'profiles' as const,
+        source_id: String(row?.id),
         role: row?.role || null,
         base_salary: row?.base_salary ?? 0,
         overtime_rate: row?.overtime_rate ?? 0,
         late_penalty_rate: row?.late_penalty_rate ?? 0,
         early_bonus_rate: row?.early_bonus_rate ?? 0,
         production_bonus_rate: row?.production_bonus_rate ?? 0,
+        insurance_subject: row?.insurance_subject ?? true,
+        employee_insurance_rate: row?.employee_insurance_rate ?? 7,
+        employer_insurance_rate: row?.employer_insurance_rate ?? 23,
       })) as ProfileRecord[];
+
+      const normalizedProfiles = normalizedEmployees.length > 0
+        ? normalizedEmployees
+        : normalizedProfilesFallback;
 
       const normalizedTasks = (tasksResult.data || []).map((row: any) => ({
         id: String(row?.id),
@@ -508,6 +744,175 @@ const HRPage: React.FC = () => {
 
       setProfiles(normalizedProfiles);
       setTasks(normalizedTasks);
+
+      const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult] = await Promise.allSettled([
+        supabase
+          .from('attendance_logs')
+          .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, source_type, location_text, notes, created_by, updated_by, created_at, updated_at')
+          .gte('occurred_at', monthStart.toISOString())
+          .lte('occurred_at', monthEnd.toISOString())
+          .order('occurred_at', { ascending: false })
+          .limit(5000),
+        supabase
+          .from('work_schedules')
+          .select('id, title, status, is_active, effective_from, effective_to, employee_id, weekly_plan, created_at, updated_at')
+          .order('updated_at', { ascending: false })
+          .limit(2000),
+        supabase
+          .from('leave_requests')
+          .select('id, employee_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
+          .order('created_at', { ascending: false })
+          .limit(5000),
+        supabase
+          .from('overtime_requests')
+          .select('id, employee_id, status, work_date, start_time, end_time, total_minutes, notes, created_at, updated_at')
+          .order('created_at', { ascending: false })
+          .limit(5000),
+        supabase
+          .from('mission_requests')
+          .select('id, employee_id, status, start_date, end_date, destination, notes, created_at, updated_at')
+          .order('created_at', { ascending: false })
+          .limit(5000),
+      ]);
+
+      const nextSupportStats: HrSupportStats = { ...EMPTY_HR_SUPPORT_STATS };
+      let nextAttendanceRows: AttendanceLogRecord[] = [];
+      let nextScheduleRows: WorkScheduleDashboardRow[] = [];
+      const nextRequestRows: HrRequestRecord[] = [];
+
+      if (attendanceStatsResult.status === 'fulfilled' && !attendanceStatsResult.value.error) {
+        const rows = attendanceStatsResult.value.data || [];
+        nextAttendanceRows = rows.map((row: any) => ({
+          id: String(row?.id),
+          assignee_id: row?.assignee_id || null,
+          employee_id: row?.employee_id || null,
+          related_profile_id: row?.related_profile_id || null,
+          log_type: row?.log_type || null,
+          occurred_at: row?.occurred_at || null,
+          source_type: row?.source_type || null,
+          location_text: row?.location_text || null,
+          notes: row?.notes || null,
+          created_by: row?.created_by || null,
+          updated_by: row?.updated_by || null,
+          created_at: row?.created_at || null,
+          updated_at: row?.updated_at || null,
+        }));
+        nextSupportStats.attendance = {
+          total: rows.length,
+          checkIns: rows.filter((row: any) => row?.log_type === 'check_in').length,
+          checkOuts: rows.filter((row: any) => row?.log_type === 'check_out').length,
+          leaveLogs: rows.filter((row: any) => row?.log_type === 'leave').length,
+          missionLogs: rows.filter((row: any) => row?.log_type === 'mission').length,
+        };
+      }
+
+      if (schedulesStatsResult.status === 'fulfilled' && !schedulesStatsResult.value.error) {
+        const rows = (schedulesStatsResult.value.data || []).filter((row: any) => {
+          const from = parseDate(row?.effective_from || null);
+          const to = parseDate(row?.effective_to || null);
+          if (from && from.valueOf() > monthEnd.valueOf()) return false;
+          if (to && to.valueOf() < monthStart.valueOf()) return false;
+          return true;
+        });
+        nextScheduleRows = rows.map((row: any) => ({
+          id: String(row?.id),
+          title: row?.title || null,
+          status: row?.status || null,
+          is_active: row?.is_active ?? false,
+          effective_from: row?.effective_from || null,
+          effective_to: row?.effective_to || null,
+          employee_id: row?.employee_id || null,
+          weekly_plan: row?.weekly_plan ?? null,
+          created_at: row?.created_at || null,
+          updated_at: row?.updated_at || null,
+        }));
+        nextSupportStats.schedules = {
+          total: rows.length,
+          active: rows.filter((row: any) => row?.status === 'active' || row?.is_active === true).length,
+          draft: rows.filter((row: any) => row?.status === 'draft').length,
+          expired: rows.filter((row: any) => row?.status === 'expired').length,
+        };
+      }
+
+      if (leaveStatsResult.status === 'fulfilled' && !leaveStatsResult.value.error) {
+        const rows = (leaveStatsResult.value.data || []).filter((row: any) => {
+          const from = parseDate(row?.start_date || null);
+          const to = parseDate(row?.end_date || null);
+          if (from && from.valueOf() > monthEnd.valueOf()) return false;
+          if (to && to.valueOf() < monthStart.valueOf()) return false;
+          return true;
+        });
+        nextRequestRows.push(
+          ...rows.map((row: any) => ({
+            key: `leave_${String(row?.id)}`,
+            id: String(row?.id),
+            moduleId: 'leave_requests' as const,
+            typeLabel: 'مرخصی',
+            employeeId: row?.employee_id ? String(row.employee_id) : null,
+            status: row?.status || null,
+            dateFrom: row?.start_date || null,
+            dateTo: row?.end_date || null,
+            notes: row?.notes || null,
+          })),
+        );
+        nextSupportStats.requests.leaveTotal = rows.length;
+        nextSupportStats.requests.leavePending = rows.filter((row: any) => row?.status === 'pending').length;
+      }
+
+      if (overtimeStatsResult.status === 'fulfilled' && !overtimeStatsResult.value.error) {
+        const rows = (overtimeStatsResult.value.data || []).filter((row: any) => isInRange(parseDate(row?.work_date || null), monthStart, monthEnd));
+        nextRequestRows.push(
+          ...rows.map((row: any) => ({
+            key: `overtime_${String(row?.id)}`,
+            id: String(row?.id),
+            moduleId: 'overtime_requests' as const,
+            typeLabel: 'اضافه‌کاری',
+            employeeId: row?.employee_id ? String(row.employee_id) : null,
+            status: row?.status || null,
+            dateFrom: row?.work_date || null,
+            dateTo: null,
+            notes: row?.notes || null,
+          })),
+        );
+        nextSupportStats.requests.overtimeTotal = rows.length;
+        nextSupportStats.requests.overtimePending = rows.filter((row: any) => row?.status === 'pending').length;
+      }
+
+      if (missionStatsResult.status === 'fulfilled' && !missionStatsResult.value.error) {
+        const rows = (missionStatsResult.value.data || []).filter((row: any) => {
+          const from = parseDate(row?.start_date || null);
+          const to = parseDate(row?.end_date || null);
+          if (from && from.valueOf() > monthEnd.valueOf()) return false;
+          if (to && to.valueOf() < monthStart.valueOf()) return false;
+          return true;
+        });
+        nextRequestRows.push(
+          ...rows.map((row: any) => ({
+            key: `mission_${String(row?.id)}`,
+            id: String(row?.id),
+            moduleId: 'mission_requests' as const,
+            typeLabel: 'ماموریت',
+            employeeId: row?.employee_id ? String(row.employee_id) : null,
+            status: row?.status || null,
+            dateFrom: row?.start_date || null,
+            dateTo: row?.end_date || null,
+            notes: row?.notes || null,
+          })),
+        );
+        nextSupportStats.requests.missionTotal = rows.length;
+        nextSupportStats.requests.missionPending = rows.filter((row: any) => row?.status === 'pending').length;
+      }
+
+      setSupportStats(nextSupportStats);
+      setAttendanceRows(nextAttendanceRows);
+      setScheduleRows(nextScheduleRows);
+      setRequestRows(
+        nextRequestRows.sort((a, b) => {
+          const aDate = parseDate(a.dateFrom || a.dateTo || null)?.valueOf() || 0;
+          const bDate = parseDate(b.dateFrom || b.dateTo || null)?.valueOf() || 0;
+          return bDate - aDate;
+        }),
+      );
 
       const lineIds = Array.from(
         new Set(
@@ -562,7 +967,7 @@ const HRPage: React.FC = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [message, monthEnd]);
+  }, [message, monthEnd, monthStart]);
 
   useEffect(() => {
     fetchData();
@@ -597,6 +1002,175 @@ const HRPage: React.FC = () => {
     return allSummaries.find((row) => String(row.profile.id) === String(employeeId)) || null;
   }, [allSummaries, employeeId]);
 
+  const profileByRelatedId = useMemo(() => {
+    const entries = profiles
+      .filter((profile) => Boolean(profile.related_profile_id))
+      .map((profile) => [String(profile.related_profile_id), profile] as const);
+    return new Map(entries);
+  }, [profiles]);
+
+  const profileById = useMemo(() => {
+    return new Map(profiles.map((profile) => [String(profile.id), profile] as const));
+  }, [profiles]);
+
+  const attendanceEmployeeOptions = useMemo(
+    () =>
+      profiles.map((profile) => ({
+        label: profile.full_name || profile.id,
+        value: String(profile.id),
+      })),
+    [profiles],
+  );
+
+  const selectedEmployeeIdSet = useMemo(
+    () => new Set((selectedEmployeeIds.length ? selectedEmployeeIds : profiles.map((profile) => profile.id)).map((value) => String(value))),
+    [profiles, selectedEmployeeIds],
+  );
+
+  const computeScheduleForEmployee = useCallback(
+    (employeeId: string | null, targetDateIso: string | null) => {
+      if (!employeeId || !targetDateIso) {
+        return { title: null, start: null as string | null, end: null as string | null };
+      }
+
+      const targetDate = parseDate(targetDateIso);
+      if (!targetDate) {
+        return { title: null, start: null as string | null, end: null as string | null };
+      }
+
+      const candidates = scheduleRows
+        .filter((schedule) => {
+          const from = parseDate(schedule.effective_from || null);
+          const to = parseDate(schedule.effective_to || null);
+          if (from && targetDate.valueOf() < from.startOf('day').valueOf()) return false;
+          if (to && targetDate.valueOf() > to.endOf('day').valueOf()) return false;
+          return true;
+        })
+        .sort((a, b) => {
+          const aScore = a.status === 'active' || a.is_active ? 1 : 0;
+          const bScore = b.status === 'active' || b.is_active ? 1 : 0;
+          if (aScore !== bScore) return bScore - aScore;
+          const aUpdated = parseDate(a.updated_at || a.created_at || null)?.valueOf() || 0;
+          const bUpdated = parseDate(b.updated_at || b.created_at || null)?.valueOf() || 0;
+          return bUpdated - aUpdated;
+        });
+
+      const dayKey = WEEKDAY_KEY_BY_DAY_INDEX[targetDate.day()];
+      for (const schedule of candidates) {
+        const rawColumns = Array.isArray((schedule.weekly_plan as any)?.columns) ? (schedule.weekly_plan as any).columns : [];
+        const matchedColumn = rawColumns.find((column: any) => String(column?.employeeId || '') === String(employeeId));
+        if (!matchedColumn) continue;
+
+        const normalizedPlan = normalizeSchedulePlan(matchedColumn?.weeklyPlan);
+        const currentDayPlan = normalizedPlan?.[dayKey];
+        if (!currentDayPlan) continue;
+
+        const starts = [currentDayPlan.shift1.start, currentDayPlan.shift2.start].map(timeToMinutes).filter((value): value is number => value !== null);
+        const ends = [currentDayPlan.shift1.end, currentDayPlan.shift2.end].map(timeToMinutes).filter((value): value is number => value !== null);
+        const earliestStart = starts.length ? Math.min(...starts) : null;
+        const latestEnd = ends.length ? Math.max(...ends) : null;
+
+        const start =
+          earliestStart === null
+            ? null
+            : `${String(Math.floor(earliestStart / 60)).padStart(2, '0')}:${String(earliestStart % 60).padStart(2, '0')}`;
+        const end =
+          latestEnd === null
+            ? null
+            : `${String(Math.floor(latestEnd / 60)).padStart(2, '0')}:${String(latestEnd % 60).padStart(2, '0')}`;
+
+        return {
+          title: schedule.title || null,
+          start,
+          end,
+        };
+      }
+
+      return { title: null, start: null as string | null, end: null as string | null };
+    },
+    [scheduleRows],
+  );
+
+  const attendanceComputedRows = useMemo<AttendanceComputedRow[]>(() => {
+    return attendanceRows
+      .map((row) => {
+        const directEmployeeId = row.employee_id ? String(row.employee_id) : null;
+        const fromAssignee = row.assignee_id ? profileByRelatedId.get(String(row.assignee_id)) : undefined;
+        const fromRelated = row.related_profile_id ? profileByRelatedId.get(String(row.related_profile_id)) : undefined;
+        const employee = directEmployeeId
+          ? profileById.get(directEmployeeId) || null
+          : fromAssignee || fromRelated || null;
+        const employeeId = employee ? String(employee.id) : directEmployeeId;
+        const employeeName =
+          employee?.full_name ||
+          (row.assignee_id ? profileByRelatedId.get(String(row.assignee_id))?.full_name : null) ||
+          (row.assignee_id ? row.assignee_id : 'بدون کارمند');
+        const schedule = computeScheduleForEmployee(employeeId, row.occurred_at || null);
+        const actualTime = timeToMinutes(parseDate(row.occurred_at || null)?.format('HH:mm') || null);
+        const startMinutes = timeToMinutes(schedule.start);
+        const endMinutes = timeToMinutes(schedule.end);
+        const logType = String(row.log_type || '');
+        const lateMinutes = logType === 'check_in' && actualTime !== null && startMinutes !== null ? Math.max(actualTime - startMinutes, 0) : 0;
+        const earlyArrivalMinutes = logType === 'check_in' && actualTime !== null && startMinutes !== null ? Math.max(startMinutes - actualTime, 0) : 0;
+        const earlyLeaveMinutes = logType === 'check_out' && actualTime !== null && endMinutes !== null ? Math.max(endMinutes - actualTime, 0) : 0;
+        const overtimeStayMinutes = logType === 'check_out' && actualTime !== null && endMinutes !== null ? Math.max(actualTime - endMinutes, 0) : 0;
+
+        let deltaLabel = 'بدون اختلاف';
+        let deltaColor = 'default';
+        if (lateMinutes > 0) {
+          deltaLabel = `دیرکرد ${formatMinutesLabel(lateMinutes)}`;
+          deltaColor = 'red';
+        } else if (earlyArrivalMinutes > 0) {
+          deltaLabel = `تعجیل ورود ${formatMinutesLabel(earlyArrivalMinutes)}`;
+          deltaColor = 'green';
+        } else if (earlyLeaveMinutes > 0) {
+          deltaLabel = `تعجیل خروج ${formatMinutesLabel(earlyLeaveMinutes)}`;
+          deltaColor = 'orange';
+        } else if (overtimeStayMinutes > 0) {
+          deltaLabel = `ماندن اضافه ${formatMinutesLabel(overtimeStayMinutes)}`;
+          deltaColor = 'blue';
+        }
+
+        return {
+          key: row.id,
+          id: row.id,
+          employeeId: employeeId || null,
+          employeeName: String(employeeName || 'بدون کارمند'),
+          logType: logType || '-',
+          occurredAt: row.occurred_at || null,
+          sourceType: String(row.source_type || '-'),
+          notes: row.notes || null,
+          locationText: row.location_text || null,
+          scheduleTitle: schedule.title,
+          scheduledStart: schedule.start,
+          scheduledEnd: schedule.end,
+          lateMinutes,
+          earlyArrivalMinutes,
+          earlyLeaveMinutes,
+          overtimeStayMinutes,
+          deltaLabel,
+          deltaColor,
+        };
+      })
+      .filter((row) => !row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)));
+  }, [attendanceRows, computeScheduleForEmployee, profileById, profileByRelatedId, selectedEmployeeIdSet]);
+
+  const visibleScheduleRows = useMemo(() => {
+    return scheduleRows.filter((schedule) => {
+      const rawColumns = Array.isArray((schedule.weekly_plan as any)?.columns) ? (schedule.weekly_plan as any).columns : [];
+      const employeeIds = rawColumns.map((column: any) => String(column?.employeeId || '')).filter(Boolean);
+      if (!employeeIds.length && schedule.employee_id) {
+        employeeIds.push(String(schedule.employee_id));
+      }
+      if (!employeeIds.length) return true;
+      return employeeIds.some((value: string) => selectedEmployeeIdSet.has(String(value)));
+    });
+  }, [scheduleRows, selectedEmployeeIdSet]);
+
+  const visibleRequestRows = useMemo(() => {
+    return requestRows.filter((row) => !row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)));
+  }, [requestRows, selectedEmployeeIdSet]);
+
   const totals = useMemo(() => {
     return visibleSummaries.reduce(
       (acc, row) => ({
@@ -609,6 +1183,112 @@ const HRPage: React.FC = () => {
       { employees: 0, totalTasks: 0, done: 0, overdue: 0, payable: 0 },
     );
   }, [visibleSummaries]);
+
+  const insuranceTotals = useMemo(() => {
+    return visibleSummaries.reduce(
+      (acc, row) => {
+        if (row.profile.insurance_subject === false) return acc;
+        const employeeRate = toNumber(row.profile.employee_insurance_rate);
+        const employerRate = toNumber(row.profile.employer_insurance_rate);
+        const base = toNumber(row.baseSalary);
+        return {
+          employee: acc.employee + ((base * employeeRate) / 100),
+          employer: acc.employer + ((base * employerRate) / 100),
+        };
+      },
+      { employee: 0, employer: 0 },
+    );
+  }, [visibleSummaries]);
+
+  const attendanceInsights = useMemo(() => {
+    return attendanceComputedRows.reduce(
+      (acc, row) => ({
+        lateMinutes: acc.lateMinutes + row.lateMinutes,
+        earlyArrivalMinutes: acc.earlyArrivalMinutes + row.earlyArrivalMinutes,
+        earlyLeaveMinutes: acc.earlyLeaveMinutes + row.earlyLeaveMinutes,
+        overtimeStayMinutes: acc.overtimeStayMinutes + row.overtimeStayMinutes,
+      }),
+      { lateMinutes: 0, earlyArrivalMinutes: 0, earlyLeaveMinutes: 0, overtimeStayMinutes: 0 },
+    );
+  }, [attendanceComputedRows]);
+
+  const closeAttendanceModal = useCallback(() => {
+    setAttendanceModalOpen(false);
+    setAttendanceModalRecord(null);
+    setAttendanceModalMode('create');
+    attendanceForm.resetFields();
+  }, [attendanceForm]);
+
+  const openAttendanceModal = useCallback(
+    (mode: AttendanceModalMode, row?: AttendanceLogRecord | null) => {
+      const selectedProfileId = (() => {
+        if (row?.employee_id && profileById.has(String(row.employee_id))) return String(row.employee_id);
+        if (row?.assignee_id) {
+          const relatedProfile = profileByRelatedId.get(String(row.assignee_id));
+          if (relatedProfile) return String(relatedProfile.id);
+        }
+        if (row?.related_profile_id) {
+          const relatedProfile = profileByRelatedId.get(String(row.related_profile_id));
+          if (relatedProfile) return String(relatedProfile.id);
+        }
+        if (selectedEmployeeIds.length === 1) return String(selectedEmployeeIds[0]);
+        return profiles[0]?.id ? String(profiles[0].id) : '';
+      })();
+
+      setAttendanceModalMode(mode);
+      setAttendanceModalRecord(row || null);
+      attendanceForm.setFieldsValue({
+        employee_profile_id: selectedProfileId,
+        log_type: row?.log_type || 'check_in',
+        occurred_at: row?.occurred_at || new Date().toISOString(),
+        source_type: row?.source_type || 'manual',
+        location_text: row?.location_text || '',
+        notes: row?.notes || '',
+      });
+      setAttendanceModalOpen(true);
+    },
+    [attendanceForm, profileById, profileByRelatedId, profiles, selectedEmployeeIds],
+  );
+
+  const handleAttendanceModalSave = useCallback(async () => {
+    try {
+      const values = await attendanceForm.validateFields();
+      const selectedProfile = profileById.get(String(values.employee_profile_id || ''));
+      if (!selectedProfile) {
+        message.error('کارمند انتخاب‌شده معتبر نیست.');
+        return;
+      }
+
+      const relatedProfileId =
+        selectedProfile.related_profile_id ||
+        (selectedProfile.source_table === 'profiles' ? selectedProfile.id : null);
+      const payload = {
+        employee_id: selectedProfile.source_table === 'employees' ? selectedProfile.id : null,
+        related_profile_id: relatedProfileId,
+        assignee_id: relatedProfileId,
+        assignee_type: 'user',
+        log_type: values.log_type,
+        occurred_at: values.occurred_at,
+        source_type: values.source_type,
+        location_text: values.location_text || null,
+        notes: values.notes || null,
+      };
+
+      setAttendanceModalSaving(true);
+      const response = attendanceModalMode === 'create'
+        ? await supabase.from('attendance_logs').insert(payload).select('*').single()
+        : await supabase.from('attendance_logs').update(payload).eq('id', attendanceModalRecord?.id).select('*').single();
+      if (response.error) throw response.error;
+      message.success(attendanceModalMode === 'create' ? 'رکورد تردد ثبت شد.' : 'رکورد تردد به‌روزرسانی شد.');
+      closeAttendanceModal();
+      await fetchData(true);
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(toFaErrorMessage(err, 'ذخیره رکورد تردد ناموفق بود'));
+    } finally {
+      setAttendanceModalSaving(false);
+    }
+  }, [attendanceForm, attendanceModalMode, attendanceModalRecord?.id, closeAttendanceModal, fetchData, message, profileById]);
 
   const openConfigModal = (profile: ProfileRecord) => {
     setEditingProfile(profile);
@@ -627,8 +1307,10 @@ const HRPage: React.FC = () => {
     try {
       const values = await configForm.validateFields();
       setSavingProfileConfig(true);
+      const targetTable = editingProfile.source_table === 'profiles' ? 'profiles' : 'employees';
+      const targetId = editingProfile.source_id || editingProfile.id;
       const { error } = await supabase
-        .from('profiles')
+        .from(targetTable)
         .update({
           base_salary: toNumber(values.base_salary),
           overtime_rate: toNumber(values.overtime_rate),
@@ -636,7 +1318,7 @@ const HRPage: React.FC = () => {
           early_bonus_rate: toNumber(values.early_bonus_rate),
           production_bonus_rate: toNumber(values.production_bonus_rate),
         })
-        .eq('id', editingProfile.id);
+        .eq('id', targetId);
       if (error) throw error;
       message.success('تنظیمات حقوق ذخیره شد.');
       setConfigModalOpen(false);
@@ -710,7 +1392,7 @@ const HRPage: React.FC = () => {
         <div>تکمیل: {row.completedAt ? toPersianNumber(safeJalaliFormat(row.completedAt, 'YYYY/MM/DD HH:mm')) : '-'}</div>
         <div>زودتر: <span className="persian-number text-green-700">{toPersianNumber(row.earlyHours.toFixed(1))}</span> ساعت</div>
         <div>دیرتر: <span className="persian-number text-red-700">{toPersianNumber(row.lateHours.toFixed(1))}</span> ساعت</div>
-        <div>دستمزد وظیفه: <span className="persian-number">{formatPersianPrice(row.wageBase)} تومان</span></div>
+        <div>دستمزد فعالیت: <span className="persian-number">{formatPersianPrice(row.wageBase)} تومان</span></div>
         <div>ضریب تولید: <span className="persian-number">{toPersianNumber(row.wageMultiplier)}</span></div>
         <div className="font-bold text-gray-800">دستمزد نهایی: <span className="persian-number">{formatPersianPrice(row.wageFinal)} تومان</span></div>
       </div>
@@ -736,7 +1418,7 @@ const HRPage: React.FC = () => {
       ),
     },
     {
-      title: 'وظایف',
+      title: 'فعالیت ها',
       key: 'task_counts',
       render: (_: unknown, row: EmployeeSummaryRow) => (
         <Space size={4} wrap>
@@ -790,7 +1472,7 @@ const HRPage: React.FC = () => {
 
   const detailColumns = [
     {
-      title: 'وظیفه',
+      title: 'فعالیت',
       dataIndex: 'name',
       key: 'name',
       render: (_: string, row: TaskDetailRow) => (
@@ -846,7 +1528,7 @@ const HRPage: React.FC = () => {
       render: (val: number) => <span className="persian-number text-red-700">{toPersianNumber(val.toFixed(1))}</span>,
     },
     {
-      title: 'دستمزد وظیفه',
+      title: 'دستمزد فعالیت',
       dataIndex: 'wageBase',
       key: 'wageBase',
       render: (val: number) => <span className="persian-number">{formatPersianPrice(val)} تومان</span>,
@@ -861,6 +1543,252 @@ const HRPage: React.FC = () => {
       title: 'دستمزد نهایی',
       dataIndex: 'wageFinal',
       key: 'wageFinal',
+      render: (val: number) => <span className="persian-number font-bold">{formatPersianPrice(val)} تومان</span>,
+    },
+  ];
+
+  const attendanceColumns = [
+    {
+      title: 'کارمند',
+      dataIndex: 'employeeName',
+      key: 'employeeName',
+      render: (val: string) => <span className="font-medium text-leather-700">{val}</span>,
+    },
+    {
+      title: 'نوع',
+      dataIndex: 'logType',
+      key: 'logType',
+      render: (val: string) => {
+        const map: Record<string, { label: string; color: string }> = {
+          check_in: { label: 'ورود', color: 'green' },
+          check_out: { label: 'خروج', color: 'red' },
+          leave: { label: 'مرخصی', color: 'gold' },
+          mission: { label: 'ماموریت', color: 'blue' },
+        };
+        const meta = map[String(val || '')] || { label: val || '-', color: 'default' };
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
+    },
+    {
+      title: 'زمان ثبت',
+      dataIndex: 'occurredAt',
+      key: 'occurredAt',
+      render: (val: string | null) => <span>{val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD HH:mm')) : '-'}</span>,
+    },
+    {
+      title: 'برنامه حضور',
+      key: 'schedule',
+      render: (_: unknown, row: AttendanceComputedRow) => (
+        <div className="text-xs leading-6">
+          <div className="font-bold">{row.scheduleTitle || '-'}</div>
+          <div className="text-gray-500">
+            {row.scheduledStart || row.scheduledEnd ? `${toPersianNumber(row.scheduledStart || '--')} تا ${toPersianNumber(row.scheduledEnd || '--')}` : 'بدون برنامه'}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'اختلاف',
+      key: 'delta',
+      render: (_: unknown, row: AttendanceComputedRow) => <Tag color={row.deltaColor}>{row.deltaLabel}</Tag>,
+    },
+    {
+      title: 'جزئیات اختلاف',
+      key: 'delta_details',
+      render: (_: unknown, row: AttendanceComputedRow) => (
+        <div className="text-xs leading-6">
+          <div>دیرکرد: <span className="persian-number text-red-700">{formatMinutesLabel(row.lateMinutes)}</span></div>
+          <div>تعجیل ورود: <span className="persian-number text-green-700">{formatMinutesLabel(row.earlyArrivalMinutes)}</span></div>
+          <div>تعجیل خروج: <span className="persian-number text-orange-600">{formatMinutesLabel(row.earlyLeaveMinutes)}</span></div>
+          <div>اضافه‌ماندن: <span className="persian-number text-blue-700">{formatMinutesLabel(row.overtimeStayMinutes)}</span></div>
+        </div>
+      ),
+    },
+    {
+      title: 'منبع ثبت',
+      dataIndex: 'sourceType',
+      key: 'sourceType',
+      render: (val: string) => <Tag>{val || '-'}</Tag>,
+    },
+    {
+      title: 'یادداشت',
+      dataIndex: 'notes',
+      key: 'notes',
+      render: (val: string | null) => val || '-',
+    },
+    {
+      title: 'نمایش',
+      key: 'actions',
+      width: 140,
+      render: (_: unknown, row: AttendanceComputedRow) => (
+        <Space>
+          <Button
+            size="small"
+            onClick={(event) => {
+              event.stopPropagation();
+              const rawRow = attendanceRows.find((item) => String(item.id) === String(row.id)) || null;
+              openAttendanceModal('view', rawRow);
+            }}
+          >
+            مشاهده
+          </Button>
+          <Button
+            size="small"
+            onClick={(event) => {
+              event.stopPropagation();
+              const rawRow = attendanceRows.find((item) => String(item.id) === String(row.id)) || null;
+              openAttendanceModal('edit', rawRow);
+            }}
+          >
+            ویرایش
+          </Button>
+        </Space>
+      ),
+    },
+  ];
+
+  const scheduleListColumns = [
+    {
+      title: 'نام برنامه',
+      dataIndex: 'title',
+      key: 'title',
+      render: (_: string, row: WorkScheduleDashboardRow) => (
+        <button type="button" className="text-leather-700 font-bold hover:underline" onClick={() => navigate(`/work_schedules/${row.id}`)}>
+          {row.title || 'بدون عنوان'}
+        </button>
+      ),
+    },
+    {
+      title: 'وضعیت',
+      dataIndex: 'status',
+      key: 'status',
+      render: (val: string | null) => {
+        const meta: Record<string, { label: string; color: string }> = {
+          draft: { label: 'پیش‌نویس', color: 'orange' },
+          active: { label: 'فعال', color: 'green' },
+          expired: { label: 'منقضی', color: 'default' },
+        };
+        const item = meta[String(val || '')] || { label: val || '-', color: 'default' };
+        return <Tag color={item.color}>{item.label}</Tag>;
+      },
+    },
+    {
+      title: 'بازه',
+      key: 'range',
+      render: (_: unknown, row: WorkScheduleDashboardRow) => (
+        <span>
+          {row.effective_from ? toPersianNumber(safeJalaliFormat(row.effective_from, 'YYYY/MM/DD')) : '-'} تا {row.effective_to ? toPersianNumber(safeJalaliFormat(row.effective_to, 'YYYY/MM/DD')) : '-'}
+        </span>
+      ),
+    },
+    {
+      title: 'تعداد نیرو',
+      key: 'employees',
+      render: (_: unknown, row: WorkScheduleDashboardRow) => {
+        const rawColumns = Array.isArray((row.weekly_plan as any)?.columns) ? (row.weekly_plan as any).columns : [];
+        const employeeCount = new Set(rawColumns.map((column: any) => String(column?.employeeId || '')).filter(Boolean)).size || (row.employee_id ? 1 : 0);
+        return <span className="persian-number">{toPersianNumber(employeeCount)}</span>;
+      },
+    },
+    {
+      title: 'آخرین ویرایش',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      render: (val: string | null) => <span>{val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD HH:mm')) : '-'}</span>,
+    },
+  ];
+
+  const requestColumns = [
+    {
+      title: 'نوع',
+      dataIndex: 'typeLabel',
+      key: 'typeLabel',
+      render: (val: string) => <Tag>{val}</Tag>,
+    },
+    {
+      title: 'کارمند',
+      dataIndex: 'employeeId',
+      key: 'employeeId',
+      render: (val: string | null) => profileById.get(String(val || ''))?.full_name || '-',
+    },
+    {
+      title: 'وضعیت',
+      dataIndex: 'status',
+      key: 'status',
+      render: (val: string | null) => {
+        const meta: Record<string, { label: string; color: string }> = {
+          draft: { label: 'پیش‌نویس', color: 'default' },
+          pending: { label: 'در انتظار', color: 'orange' },
+          approved: { label: 'تایید شده', color: 'green' },
+          rejected: { label: 'رد شده', color: 'red' },
+          canceled: { label: 'لغو شده', color: 'default' },
+        };
+        const item = meta[String(val || '')] || { label: val || '-', color: 'default' };
+        return <Tag color={item.color}>{item.label}</Tag>;
+      },
+    },
+    {
+      title: 'بازه / تاریخ',
+      key: 'dates',
+      render: (_: unknown, row: HrRequestRecord) => (
+        <span>
+          {row.dateFrom ? toPersianNumber(safeJalaliFormat(row.dateFrom, 'YYYY/MM/DD')) : '-'}
+          {row.dateTo ? ` تا ${toPersianNumber(safeJalaliFormat(row.dateTo, 'YYYY/MM/DD'))}` : ''}
+        </span>
+      ),
+    },
+    {
+      title: 'توضیحات',
+      dataIndex: 'notes',
+      key: 'notes',
+      render: (val: string | null) => val || '-',
+    },
+    {
+      title: 'نمایش',
+      key: 'actions',
+      render: (_: unknown, row: HrRequestRecord) => (
+        <Button size="small" onClick={() => navigate(`/${row.moduleId}/${row.id}`)}>
+          مشاهده
+        </Button>
+      ),
+    },
+  ];
+
+  const payrollColumns = [
+    {
+      title: 'کارمند',
+      dataIndex: 'name',
+      key: 'name',
+      render: (val: string) => <span className="font-bold text-leather-700">{val}</span>,
+    },
+    {
+      title: 'حقوق پایه',
+      dataIndex: 'baseSalary',
+      key: 'baseSalary',
+      render: (val: number) => <span className="persian-number">{formatPersianPrice(val)} تومان</span>,
+    },
+    {
+      title: 'کارکرد',
+      dataIndex: 'taskWageTotal',
+      key: 'taskWageTotal',
+      render: (val: number) => <span className="persian-number">{formatPersianPrice(val)} تومان</span>,
+    },
+    {
+      title: 'مزایا',
+      dataIndex: 'bonusTotal',
+      key: 'bonusTotal',
+      render: (val: number) => <span className="persian-number text-green-700">{formatPersianPrice(val)} تومان</span>,
+    },
+    {
+      title: 'کسورات',
+      dataIndex: 'penaltyTotal',
+      key: 'penaltyTotal',
+      render: (val: number) => <span className="persian-number text-red-700">{formatPersianPrice(val)} تومان</span>,
+    },
+    {
+      title: 'خالص',
+      dataIndex: 'netPayable',
+      key: 'netPayable',
       render: (val: number) => <span className="persian-number font-bold">{formatPersianPrice(val)} تومان</span>,
     },
   ];
@@ -897,7 +1825,10 @@ const HRPage: React.FC = () => {
             value={selectedRange}
             onChange={onDateRangeChange}
             allowClear={false}
-            className="w-full"
+            className="w-full hr-range-picker persian-number"
+            format="YYYY/MM/DD"
+            inputReadOnly
+            placeholder={['از تاریخ', 'تا تاریخ']}
             classNames={{ popup: { root: 'hr-range-popup' } }}
           />
           <Button
@@ -920,6 +1851,235 @@ const HRPage: React.FC = () => {
     </div>
   ) : null;
 
+  const overviewTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">تعداد نیرو</div>
+            <div className="text-2xl font-black">{toPersianNumber(totals.employees)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">کل فعالیت های ماه</div>
+            <div className="text-2xl font-black">{toPersianNumber(totals.totalTasks)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">فعالیت های انجام‌شده</div>
+            <div className="text-2xl font-black text-green-700">{toPersianNumber(totals.done)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">جمع قابل پرداخت</div>
+            <div className="text-2xl font-black">{formatPersianPrice(totals.payable)} تومان</div>
+          </Card>
+        </Col>
+      </Row>
+
+      <Card>
+        {visibleSummaries.length === 0 ? (
+          <Empty description="برای این بازه داده‌ای یافت نشد." />
+        ) : (
+          isMobile ? (
+            <div>{visibleSummaries.map(renderSummaryMobileCard)}</div>
+          ) : (
+            <Table
+              rowKey="key"
+              columns={summaryColumns}
+              dataSource={visibleSummaries}
+              pagination={{ pageSize: 20, showSizeChanger: false }}
+              onRow={(row: EmployeeSummaryRow) => ({
+                onClick: () => goToEmployeeDetails(String(row.profile.id)),
+                style: { cursor: 'pointer' },
+              })}
+              scroll={{ x: 1100 }}
+            />
+          )
+        )}
+      </Card>
+    </>
+  );
+
+  const attendanceTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">کل رکوردهای تردد</div><div className="text-2xl font-black">{toPersianNumber(supportStats.attendance.total)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">ورودها</div><div className="text-2xl font-black text-green-700">{toPersianNumber(supportStats.attendance.checkIns)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">خروج‌ها</div><div className="text-2xl font-black text-red-700">{toPersianNumber(supportStats.attendance.checkOuts)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">ثبت مرخصی/ماموریت</div><div className="text-2xl font-black">{toPersianNumber(supportStats.attendance.leaveLogs + supportStats.attendance.missionLogs)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">جمع دیرکرد</div><div className="text-lg font-black text-red-700">{formatMinutesLabel(attendanceInsights.lateMinutes)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">تعجیل / اضافه‌ماندن</div><div className="text-sm font-black"><div className="text-green-700">{formatMinutesLabel(attendanceInsights.earlyArrivalMinutes + attendanceInsights.earlyLeaveMinutes)}</div><div className="text-blue-700">{formatMinutesLabel(attendanceInsights.overtimeStayMinutes)}</div></div></Card>
+        </Col>
+      </Row>
+      <Card className="mb-4">
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => navigate('/attendance_logs')}>مشاهده ترددها</Button>
+          <Button onClick={() => navigate('/work_schedules')}>برنامه حضور</Button>
+          <Button type="primary" onClick={() => openAttendanceModal('create')}>ثبت رکورد تردد</Button>
+        </div>
+        {attendanceComputedRows.length === 0 ? (
+          <Empty description="رکورد ترددی برای این بازه یافت نشد." />
+        ) : (
+          <Table
+            rowKey="key"
+            columns={attendanceColumns}
+            dataSource={attendanceComputedRows}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            scroll={{ x: 1600 }}
+            onRow={(row: AttendanceComputedRow) => ({
+              onClick: () => {
+                const rawRow = attendanceRows.find((item) => String(item.id) === String(row.id)) || null;
+                openAttendanceModal('view', rawRow);
+              },
+              style: { cursor: 'pointer' },
+            })}
+          />
+        )}
+      </Card>
+    </>
+  );
+
+  const schedulesTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">کل برنامه‌ها</div><div className="text-2xl font-black">{toPersianNumber(supportStats.schedules.total)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">فعال</div><div className="text-2xl font-black text-green-700">{toPersianNumber(supportStats.schedules.active)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">پیش‌نویس</div><div className="text-2xl font-black text-orange-600">{toPersianNumber(supportStats.schedules.draft)}</div></Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">منقضی</div><div className="text-2xl font-black text-gray-700">{toPersianNumber(supportStats.schedules.expired)}</div></Card>
+        </Col>
+      </Row>
+      <Card>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => navigate('/work_schedules')}>لیست برنامه‌های حضور</Button>
+          <Button type="primary" onClick={() => navigate('/work_schedules/create')}>ایجاد برنامه جدید</Button>
+        </div>
+        {visibleScheduleRows.length === 0 ? (
+          <Empty description="برنامه حضوری برای این بازه یافت نشد." />
+        ) : (
+          <Table
+            rowKey="id"
+            columns={scheduleListColumns}
+            dataSource={visibleScheduleRows}
+            pagination={{ pageSize: 12, showSizeChanger: false }}
+            scroll={{ x: 1100 }}
+          />
+        )}
+      </Card>
+    </>
+  );
+
+  const requestsTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">مرخصی‌ها</div>
+            <div className="text-lg font-black">{toPersianNumber(supportStats.requests.leaveTotal)}</div>
+            <div className="text-xs text-orange-600 mt-1">در انتظار: {toPersianNumber(supportStats.requests.leavePending)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">اضافه‌کاری‌ها</div>
+            <div className="text-lg font-black">{toPersianNumber(supportStats.requests.overtimeTotal)}</div>
+            <div className="text-xs text-orange-600 mt-1">در انتظار: {toPersianNumber(supportStats.requests.overtimePending)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">ماموریت‌ها</div>
+            <div className="text-lg font-black">{toPersianNumber(supportStats.requests.missionTotal)}</div>
+            <div className="text-xs text-orange-600 mt-1">در انتظار: {toPersianNumber(supportStats.requests.missionPending)}</div>
+          </Card>
+        </Col>
+      </Row>
+      <Card>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => navigate('/leave_requests')}>مرخصی‌ها</Button>
+          <Button onClick={() => navigate('/overtime_requests')}>اضافه‌کاری‌ها</Button>
+          <Button onClick={() => navigate('/mission_requests')}>ماموریت‌ها</Button>
+        </div>
+        {visibleRequestRows.length === 0 ? (
+          <Empty description="درخواستی برای این بازه یافت نشد." />
+        ) : (
+          <Table
+            rowKey="key"
+            columns={requestColumns}
+            dataSource={visibleRequestRows}
+            pagination={{ pageSize: 15, showSizeChanger: false }}
+            scroll={{ x: 1200 }}
+          />
+        )}
+      </Card>
+    </>
+  );
+
+  const payrollTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">جمع قابل پرداخت</div>
+            <div className="text-2xl font-black">{formatPersianPrice(totals.payable)} تومان</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">برآورد سهم بیمه کارمند</div>
+            <div className="text-2xl font-black">{formatPersianPrice(insuranceTotals.employee)} تومان</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">برآورد سهم بیمه کارفرما</div>
+            <div className="text-2xl font-black">{formatPersianPrice(insuranceTotals.employer)} تومان</div>
+          </Card>
+        </Col>
+      </Row>
+      <Card>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => navigate('/employees')}>تنظیمات حقوقی کارکنان</Button>
+          <Button type="primary" onClick={() => message.info('مرحله بعدی: ساخت اسنپ‌شات و ایجاد فیش حقوقی')}>
+            ایجاد فیش حقوقی
+          </Button>
+        </div>
+        {visibleSummaries.length === 0 ? (
+          <Empty description="داده‌ای برای محاسبه حقوق در این بازه یافت نشد." />
+        ) : (
+          <Table
+            rowKey="key"
+            columns={payrollColumns}
+            dataSource={visibleSummaries}
+            pagination={{ pageSize: 15, showSizeChanger: false }}
+            scroll={{ x: 1100 }}
+          />
+        )}
+      </Card>
+    </>
+  );
+
   return (
     <div className="p-3 md:p-6 max-w-[1700px] mx-auto pb-20 animate-fadeIn">
       {employeeId ? (
@@ -934,7 +2094,7 @@ const HRPage: React.FC = () => {
               <Row gutter={[12, 12]} className="mb-4">
                 <Col xs={24} md={6}>
                   <Card>
-                    <div className="text-xs text-gray-500 mb-1">تعداد وظایف</div>
+                    <div className="text-xs text-gray-500 mb-1">تعداد فعالیت ها</div>
                     <div className="text-2xl font-black">{toPersianNumber(selectedEmployeeSummary.totalTasks)}</div>
                   </Card>
                 </Col>
@@ -1007,7 +2167,10 @@ const HRPage: React.FC = () => {
                   value={selectedRange}
                   onChange={onDateRangeChange}
                   allowClear={false}
-                  className="w-full"
+                  className="w-full hr-range-picker persian-number"
+                  format="YYYY/MM/DD"
+                  inputReadOnly
+                  placeholder={['از تاریخ', 'تا تاریخ']}
                   classNames={{ popup: { root: 'hr-range-popup' } }}
                 />
                 <Select
@@ -1031,60 +2194,163 @@ const HRPage: React.FC = () => {
             </div>
           </div>
 
-          <Row gutter={[12, 12]} className="mb-4">
-            <Col xs={24} md={6}>
-              <Card>
-                <div className="text-xs text-gray-500 mb-1">تعداد نیرو</div>
-                <div className="text-2xl font-black">{toPersianNumber(totals.employees)}</div>
-              </Card>
-            </Col>
-            <Col xs={24} md={6}>
-              <Card>
-                <div className="text-xs text-gray-500 mb-1">کل وظایف ماه</div>
-                <div className="text-2xl font-black">{toPersianNumber(totals.totalTasks)}</div>
-              </Card>
-            </Col>
-            <Col xs={24} md={6}>
-              <Card>
-                <div className="text-xs text-gray-500 mb-1">وظایف انجام‌شده</div>
-                <div className="text-2xl font-black text-green-700">{toPersianNumber(totals.done)}</div>
-              </Card>
-            </Col>
-            <Col xs={24} md={6}>
-              <Card>
-                <div className="text-xs text-gray-500 mb-1">جمع قابل پرداخت</div>
-                <div className="text-2xl font-black">{formatPersianPrice(totals.payable)} تومان</div>
-              </Card>
-            </Col>
-          </Row>
-
-          <Card>
-            {visibleSummaries.length === 0 ? (
-              <Empty description="برای این بازه داده‌ای یافت نشد." />
-            ) : (
-              isMobile ? (
-                <div>{visibleSummaries.map(renderSummaryMobileCard)}</div>
-              ) : (
-                <Table
-                  rowKey="key"
-                  columns={summaryColumns}
-                  dataSource={visibleSummaries}
-                  pagination={{ pageSize: 20, showSizeChanger: false }}
-                  onRow={(row: EmployeeSummaryRow) => ({
-                    onClick: () => goToEmployeeDetails(String(row.profile.id)),
-                    style: { cursor: 'pointer' },
-                  })}
-                  scroll={{ x: 1100 }}
-                />
-              )
-            )}
-          </Card>
+          <Tabs
+            defaultActiveKey="overview"
+            items={[
+              { key: 'overview', label: 'کلی', children: overviewTabContent },
+              { key: 'attendance', label: 'تردد', children: attendanceTabContent },
+              { key: 'schedules', label: 'برنامه حضور', children: schedulesTabContent },
+              { key: 'requests', label: 'درخواست‌ها', children: requestsTabContent },
+              { key: 'payroll', label: 'حقوق و بیمه', children: payrollTabContent },
+            ]}
+          />
         </>
       )}
 
       <Modal
+        title={attendanceModalMode === 'create' ? 'افزودن سریع رکورد تردد' : attendanceModalMode === 'edit' ? 'ویرایش رکورد تردد' : 'نمایش رکورد تردد'}
+        open={attendanceModalOpen}
+        onCancel={closeAttendanceModal}
+        footer={null}
+        destroyOnHidden
+        width={760}
+      >
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#17191f]">
+            <Form form={attendanceForm} layout="vertical">
+              <Form.Item
+                name="employee_profile_id"
+                label="نام کارمند"
+                rules={[{ required: true, message: 'انتخاب کارمند الزامی است' }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  options={attendanceEmployeeOptions}
+                  disabled={attendanceModalMode === 'view'}
+                  placeholder="نام کارمند"
+                />
+              </Form.Item>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <Form.Item
+                  name="log_type"
+                  label="نوع ثبت"
+                  rules={[{ required: true, message: 'نوع ثبت الزامی است' }]}
+                >
+                  <Select
+                    disabled={attendanceModalMode === 'view'}
+                    options={[
+                      { label: 'ورود', value: 'check_in' },
+                      { label: 'خروج', value: 'check_out' },
+                      { label: 'مرخصی', value: 'leave' },
+                      { label: 'ماموریت', value: 'mission' },
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  name="source_type"
+                  label="منبع ثبت"
+                  rules={[{ required: true, message: 'منبع ثبت الزامی است' }]}
+                >
+                  <Select
+                    disabled={attendanceModalMode === 'view'}
+                    options={[
+                      { label: 'دستی', value: 'manual' },
+                      { label: 'وب فرم', value: 'web_form' },
+                      { label: 'QR', value: 'qr' },
+                      { label: 'سیستم', value: 'system' },
+                    ]}
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  name="occurred_at"
+                  label="زمان ثبت"
+                  rules={[{ required: true, message: 'زمان ثبت الزامی است' }]}
+                >
+                  <div>
+                    <PersianDatePicker type="DATETIME" disabled={attendanceModalMode === 'view'} placeholder="زمان ثبت" />
+                  </div>
+                </Form.Item>
+
+                <Form.Item name="location_text" label="موقعیت / آدرس">
+                  <Input disabled={attendanceModalMode === 'view'} />
+                </Form.Item>
+              </div>
+
+              <Form.Item name="notes" label="یادداشت">
+                <Input.TextArea rows={3} disabled={attendanceModalMode === 'view'} />
+              </Form.Item>
+            </Form>
+          </div>
+
+          {attendanceModalRecord && (
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/5">
+              <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <SafetyCertificateOutlined className="text-green-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">ایجادکننده</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">
+                      {attendanceModalRecord.created_by
+                        ? profileByRelatedId.get(String(attendanceModalRecord.created_by))?.full_name || profileById.get(String(attendanceModalRecord.created_by))?.full_name || attendanceModalRecord.created_by
+                        : '-'}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <ClockCircleOutlined className="text-blue-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">زمان ایجاد</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">{renderDateTime(attendanceModalRecord.created_at)}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <HistoryOutlined className="text-amber-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">آخرین ویرایشگر</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">
+                      {attendanceModalRecord.updated_by
+                        ? profileByRelatedId.get(String(attendanceModalRecord.updated_by))?.full_name || profileById.get(String(attendanceModalRecord.updated_by))?.full_name || attendanceModalRecord.updated_by
+                        : '-'}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <ClockCircleOutlined className="text-violet-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">زمان ویرایش</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">{renderDateTime(attendanceModalRecord.updated_at)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-3">
+            <Button onClick={closeAttendanceModal}>بستن</Button>
+            {attendanceModalMode === 'view' ? (
+              <Button
+                type="primary"
+                onClick={() => setAttendanceModalMode('edit')}
+              >
+                ویرایش
+              </Button>
+            ) : (
+              <Button type="primary" loading={attendanceModalSaving} onClick={handleAttendanceModalSave}>
+                {attendanceModalMode === 'create' ? 'ثبت' : 'ذخیره تغییرات'}
+              </Button>
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
         title={`تنظیم ضرایب حقوق - ${editingProfile?.full_name || editingProfile?.id || ''}`}
         open={configModalOpen}
+        forceRender
         onCancel={() => setConfigModalOpen(false)}
         onOk={handleSavePayrollConfig}
         confirmLoading={savingProfileConfig}
@@ -1101,7 +2367,7 @@ const HRPage: React.FC = () => {
           <Form.Item name="late_penalty_rate" label="جریمه هر ساعت دیرکرد">
             <InputNumber min={0} className="w-full" />
           </Form.Item>
-          <Form.Item name="early_bonus_rate" label="پاداش هر وظیفه با تعجیل">
+          <Form.Item name="early_bonus_rate" label="پاداش هر فعالیت با تعجیل">
             <InputNumber min={0} className="w-full" />
           </Form.Item>
           <Form.Item name="production_bonus_rate" label="پاداش به ازای هر واحد تولید">
@@ -1115,6 +2381,9 @@ const HRPage: React.FC = () => {
         }
         .hr-range-popup .ant-picker-panels {
           min-width: auto !important;
+        }
+        .hr-range-picker input {
+          font-family: Vazirmatn, sans-serif !important;
         }
       `}</style>
     </div>

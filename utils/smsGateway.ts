@@ -1,15 +1,19 @@
 import { supabase } from '../supabaseClient';
+import { getActiveChannelSettings } from './channelSettings';
 
 type SmsMode = 'rest' | 'soap';
 
 export type SmsSettings = {
-  mode?: SmsMode | string;
-  base_url?: string;
   username?: string;
   password?: string;
   api_key?: string;
   sender_number?: string;
   body_id?: string;
+  credit_url?: string;
+  otp_login_enabled?: boolean;
+  otp_delivery_mode?: 'sms_only' | 'sms_and_bale' | string;
+  mode?: SmsMode | string;
+  base_url?: string;
   is_flash?: boolean;
 };
 
@@ -62,14 +66,7 @@ const getErrorMessage = (value: any, fallback: string) => {
 };
 
 const getActiveSmsSettings = async (): Promise<SmsSettings> => {
-  const { data, error } = await supabase
-    .from('integration_settings')
-    .select('*')
-    .eq('connection_type', 'sms')
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (error) throw error;
+  const data = await getActiveChannelSettings('sms');
   if (!data) throw new Error('تنظیمات سامانه پیامک فعال نیست.');
 
   return (data.settings || {}) as SmsSettings;
@@ -110,12 +107,12 @@ const sendSmsDirect = async (to: string[], text: string, settings: SmsSettings) 
     let response: Response;
     if (useSoapRequest) {
       const body = new URLSearchParams({
-        username,
-        password,
-        to: recipient,
-        from: senderNumber,
-        text,
-        isflash: isFlash ? 'true' : 'false',
+        UserName: username,
+        PassWord: password || apiKey,
+        To: recipient,
+        From: senderNumber,
+        Text: text,
+        IsFlash: isFlash ? 'true' : 'false',
       });
       if (bodyId) body.set('bodyId', bodyId);
       response = await fetch(requestUrl, {
@@ -154,7 +151,7 @@ const sendSmsDirect = async (to: string[], text: string, settings: SmsSettings) 
 };
 
 const invokeSmsFunction = async (to: string[], text: string, overrideSettings?: SmsSettings) => {
-  const payload: Record<string, any> = { to, text };
+  const payload: Record<string, any> = { action: 'send', to, text };
   if (overrideSettings && Object.keys(overrideSettings).length > 0) {
     payload.overrideSettings = overrideSettings;
   }
@@ -164,6 +161,24 @@ const invokeSmsFunction = async (to: string[], text: string, overrideSettings?: 
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'ارسال پیامک ناموفق بود.'));
   }
+};
+
+export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) => {
+  const payload: Record<string, any> = { action: 'get_balance' };
+  if (overrideSettings && Object.keys(overrideSettings).length > 0) {
+    payload.overrideSettings = overrideSettings;
+  }
+
+  const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
+  if (error) throw new Error(getErrorMessage(error, 'خطا در دریافت اعتبار پیامک.'));
+  if (data && data.success === false) {
+    throw new Error(getErrorMessage(data, 'دریافت اعتبار پیامک ناموفق بود.'));
+  }
+
+  return {
+    balance: data?.balance,
+    raw: data?.raw,
+  };
 };
 
 export const sendSmsViaGateway = async ({

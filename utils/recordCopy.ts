@@ -14,6 +14,21 @@ const DEFAULT_OMIT_KEYS = new Set([
 type BuildCopyPayloadParams = {
   nameField?: string | null;
   copyIndex?: number;
+  moduleId?: string | null;
+};
+
+const MODULES_WITH_DRAFT_COPY_STATUS = new Set(['price_lists', 'product_bundles']);
+
+const cloneCopyValue = (value: any) => {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value) || (typeof value === 'object' && value.constructor === Object)) {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return value;
+    }
+  }
+  return value;
 };
 
 export const detectCopyNameField = (module?: ModuleDefinition | null): string | null => {
@@ -36,7 +51,7 @@ export const buildCopyPayload = (
     if (DEFAULT_OMIT_KEYS.has(key)) return;
     if (key.startsWith('__')) return;
     if (value === undefined) return;
-    payload[key] = value;
+    payload[key] = cloneCopyValue(value);
   });
 
   const nameField = params.nameField;
@@ -46,6 +61,10 @@ export const buildCopyPayload = (
       const suffix = copyIndex > 0 ? ` (کپی ${copyIndex + 1})` : ' (کپی)';
       payload[nameField] = `${baseName}${suffix}`;
     }
+  }
+
+  if (MODULES_WITH_DRAFT_COPY_STATUS.has(String(params.moduleId || '')) && 'status' in payload) {
+    payload.status = 'draft';
   }
 
   return payload;

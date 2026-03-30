@@ -30,6 +30,15 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
     const match = options.find((opt: any) => opt.value === value);
     return match?.name || match?.label || '';
   };
+  const getAnyRelationLabel = (value: any) => {
+    if (!value) return '';
+    for (const options of Object.values(relationOptions || {})) {
+      const match = Array.isArray(options) ? options.find((opt: any) => opt.value === value) : null;
+      const label = match?.name || match?.label || '';
+      if (label) return label;
+    }
+    return '';
+  };
   const customerLabel = getRelationLabel('customer_id', data.customer_id) || data.customer_name || data.customer_id || '-';
   
   const buyer = customer || data.customer || {};
@@ -54,11 +63,22 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
   const getInvoiceItemProductLabel = (item: any) => {
     if (!item) return '-';
     return (
-      item.selected_product_name
+      item.package_name
+      || item.package?.name
+      || getRelationLabel('invoiceItems_package_id', item.package_id)
+      || getRelationLabel('package_id', item.package_id)
+      || getAnyRelationLabel(item.package_id)
+      || item.package_id
+      ||
+      item.selected_billboard_name
+      || item.billboard_name
+      || item.billboard_title
+      || item.selected_product_name
       || item.product_name
       || item.product?.name
       || getRelationLabel('invoiceItems_product_id', item.product_id)
       || getRelationLabel('product_id', item.product_id)
+      || getAnyRelationLabel(item.product_id)
       || item.product_id
       || '-'
     );

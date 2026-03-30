@@ -1,31 +1,47 @@
 import React from 'react';
-import { Button, Space, Tag, Tooltip } from 'antd';
+import { Button, Dropdown, Space, Tag, Tooltip } from 'antd';
+import type { MenuProps } from 'antd';
 import { CopyOutlined, DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons';
 
 interface BulkActionsBarProps {
   selectedCount: number;
   onClear: () => void;
+  onSelectAll?: () => void;
   onDelete?: () => void;
   onExport?: () => void;
+  exportMenuItems?: MenuProps['items'];
   onEdit?: () => void;
   onCopy?: () => void;
+  selectAllDisabled?: boolean;
   primaryActionLabel?: string;
   onPrimaryAction?: () => void;
   primaryActionDisabled?: boolean;
   primaryActionTooltip?: string;
+  extraActions?: Array<{
+    key: string;
+    icon: React.ReactNode;
+    tooltip: string;
+    onClick: () => void;
+    disabled?: boolean;
+    danger?: boolean;
+  }>;
 }
 
 const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
   selectedCount,
   onClear,
+  onSelectAll,
   onDelete,
   onExport,
+  exportMenuItems,
   onEdit,
   onCopy,
+  selectAllDisabled = false,
   primaryActionLabel,
   onPrimaryAction,
   primaryActionDisabled = false,
   primaryActionTooltip,
+  extraActions = [],
 }) => {
   if (!selectedCount) return null;
 
@@ -49,6 +65,11 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
         <Button onClick={onClear} size="small" type="text" danger>
           لغو انتخاب
         </Button>
+        {onSelectAll && (
+          <Button onClick={onSelectAll} size="small" type="text" disabled={selectAllDisabled}>
+            انتخاب همه
+          </Button>
+        )}
         {primaryActionButton &&
           (primaryActionTooltip ? (
             <Tooltip title={primaryActionTooltip}>{primaryActionButton}</Tooltip>
@@ -58,6 +79,19 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
       </Space>
 
       <Space size="small">
+        {extraActions.map((action) => (
+          <Tooltip key={action.key} title={action.tooltip}>
+            <Button
+              type="text"
+              icon={action.icon}
+              size="small"
+              onClick={action.onClick}
+              disabled={action.disabled}
+              danger={action.danger}
+              aria-label={action.tooltip}
+            />
+          </Tooltip>
+        ))}
         {onEdit && (
           <Tooltip title="ویرایش گروهی">
             <Button type="text" icon={<EditOutlined />} size="small" onClick={onEdit} aria-label="ویرایش گروهی" />
@@ -68,11 +102,17 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
             <Button type="text" icon={<CopyOutlined />} size="small" onClick={onCopy} aria-label="کپی" />
           </Tooltip>
         )}
-        {onExport && (
+        {Array.isArray(exportMenuItems) && exportMenuItems.length > 0 ? (
+          <Tooltip title="خروجی">
+            <Dropdown trigger={['click']} menu={{ items: exportMenuItems }} placement="bottomLeft">
+              <Button type="text" icon={<ExportOutlined />} size="small" aria-label="خروجی" />
+            </Dropdown>
+          </Tooltip>
+        ) : onExport ? (
           <Tooltip title="خروجی">
             <Button type="text" icon={<ExportOutlined />} size="small" onClick={onExport} aria-label="خروجی" />
           </Tooltip>
-        )}
+        ) : null}
         {onDelete && (
           <Tooltip title="حذف">
             <Button danger type="text" icon={<DeleteOutlined />} size="small" onClick={onDelete} aria-label="حذف" />

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
-import { Button, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
+import { Alert, Button, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -18,6 +18,7 @@ import {
   createWorkflowId,
 } from '../../utils/workflowTypes';
 import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
+import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 
 interface WorkflowActionsBuilderProps {
   value: WorkflowAction[];
@@ -63,6 +64,9 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
       return { field: '', value: null };
     case 'create_related_record':
       return { target_module_id: '', relation_field_key: '', field_mappings: [] };
+    case 'copy_process_template':
+    case 'execute_process':
+      return { template_id: '' };
     default:
       return {};
   }
@@ -99,6 +103,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   disabled = false,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
+  const selectPopupStyles = { popup: { root: { zIndex: 12600 } } } as const;
+
+  const commonSelectProps = {
+    showSearch: true,
+    optionFilterProp: 'label' as const,
+    getPopupContainer: popupContainer,
+    popupMatchSelectWidth: false,
+    listHeight: 260,
+    virtual: false,
+    styles: selectPopupStyles,
+  };
 
   const updatableFieldOptions = useMemo(
     () =>
@@ -133,6 +149,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     });
   }, [moduleOptions, currentModuleId]);
+
+  const processTemplateOptions = relationOptions.process_template_id || [];
+  const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
 
   const addAction = () => {
     const type = actionTypeOptions[0]?.value || 'send_note';
@@ -234,8 +253,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ) {
       return (
         <Select
-          showSearch
-          optionFilterProp="label"
+          {...commonSelectProps}
           value={value}
           options={options}
           disabled={disabled}
@@ -299,10 +317,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
 
-    if (field.type === FieldType.LONG_TEXT) {
+    if (field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
       return (
         <Input.TextArea
-          rows={3}
+          rows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3}
           value={value}
           disabled={disabled}
           onChange={(e) => onValueChange(e.target.value)}
@@ -349,8 +367,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         <div className="text-xs text-gray-500 mb-2">انتخاب فیلد برای متغیر</div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <Select
-            showSearch
-            optionFilterProp="label"
+            {...commonSelectProps}
             value={config.variable_field}
             options={variableFieldOptions}
             disabled={disabled}
@@ -370,6 +387,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           />
           {targets.length > 1 ? (
             <Select
+              {...commonSelectProps}
               value={selectedTarget}
               options={targets.map((item) => ({ label: item.label, value: item.key }))}
               disabled={disabled}
@@ -524,9 +542,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         <div className="space-y-2">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Select
+              {...commonSelectProps}
               mode="multiple"
-              showSearch
-              optionFilterProp="label"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
               options={phoneFields}
@@ -534,6 +551,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder="فیلد(های) شماره مقصد"
             />
             <Select
+              {...commonSelectProps}
               mode="tags"
               value={Array.isArray(config.manual_numbers) ? config.manual_numbers : []}
               disabled={disabled}
@@ -563,9 +581,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         <div className="space-y-2">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Select
+              {...commonSelectProps}
               mode="multiple"
-              showSearch
-              optionFilterProp="label"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
               options={emailFields}
@@ -573,6 +590,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder="فیلد(های) ایمیل مقصد"
             />
             <Select
+              {...commonSelectProps}
               mode="tags"
               value={Array.isArray(config.manual_emails) ? config.manual_emails : []}
               disabled={disabled}
@@ -606,8 +624,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           <Select
-            showSearch
-            optionFilterProp="label"
+            {...commonSelectProps}
             value={config.field}
             disabled={disabled}
             options={updatableFieldOptions}
@@ -615,6 +632,36 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             placeholder="فیلد مقصد"
           />
           {renderUpdateValueInput(action)}
+        </div>
+      );
+    }
+
+    if (actionType === 'copy_process_template' || actionType === 'execute_process') {
+      if (!canUseProcessTemplateActions) {
+        return (
+          <Alert
+            type="warning"
+            showIcon
+            message="این ماژول از کپی یا اجرای خودکار فرآیند پشتیبانی نمی‌کند."
+          />
+        );
+      }
+
+      return (
+        <div className="space-y-2">
+          <Select
+            {...commonSelectProps}
+            value={config.template_id}
+            disabled={disabled}
+            options={processTemplateOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { template_id: nextVal })}
+            placeholder="الگوی فرآیند"
+          />
+          {processTemplateOptions.length === 0 ? (
+            <div className="text-xs text-gray-500">
+              هنوز الگوی فعالی برای این ماژول پیدا نشد.
+            </div>
+          ) : null}
         </div>
       );
     }
@@ -651,8 +698,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         <div className="space-y-2">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Select
-              showSearch
-              optionFilterProp="label"
+              {...commonSelectProps}
               value={config.target_module_id}
               disabled={disabled}
               options={relatedTargetModuleOptions}
@@ -677,8 +723,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder="ماژول مقصد"
             />
             <Select
-              showSearch
-              optionFilterProp="label"
+              {...commonSelectProps}
               value={config.relation_field_key}
               disabled={disabled || !targetModuleId}
               options={relationFields}
@@ -734,8 +779,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   >
                     <div className="md:col-span-4">
                       <Select
-                        showSearch
-                        optionFilterProp="label"
+                        {...commonSelectProps}
                         value={mapping.field}
                         disabled={disabled || !targetModuleId}
                         options={targetWritableOptions}
@@ -753,6 +797,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                     </div>
                     <div className="md:col-span-3">
                       <Select
+                        {...commonSelectProps}
                         value={mapping.mode}
                         disabled={disabled || !mapping.field}
                         options={[
@@ -774,8 +819,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                     <div className="md:col-span-4">
                       {mapping.mode === 'from_source' ? (
                         <Select
-                          showSearch
-                          optionFilterProp="label"
+                          {...commonSelectProps}
                           value={mapping.source_field}
                           disabled={disabled || !mapping.field}
                           options={variableFieldOptions}
@@ -838,6 +882,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               <span className="text-xs text-gray-400 w-6 text-center">{index + 1}</span>
               <div className="flex-1">
                 <Select
+                  {...commonSelectProps}
                   value={action.type}
                   disabled={disabled}
                   options={actionTypeOptions}

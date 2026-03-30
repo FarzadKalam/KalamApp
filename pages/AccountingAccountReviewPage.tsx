@@ -283,18 +283,25 @@ const AccountingAccountReviewPage: React.FC = () => {
         .select('account_id,debit,credit,journal_entries!inner(entry_date,status)')
         .in('account_id', selectedScopeAccountIds)
         .eq('journal_entries.status', 'posted')
-        .gte('journal_entries.entry_date', dateFrom)
         .lte('journal_entries.entry_date', dateTo);
 
       if (error) throw error;
 
-      const byAccount = new Map<string, { debit: number; credit: number }>();
+      const byAccount = new Map<string, { opening: number; debit: number; credit: number }>();
       (data || []).forEach((line: any) => {
         const accountId = String(line?.account_id || '').trim();
         if (!accountId) return;
-        const current = byAccount.get(accountId) || { debit: 0, credit: 0 };
-        current.debit += Number(line?.debit || 0);
-        current.credit += Number(line?.credit || 0);
+        const current = byAccount.get(accountId) || { opening: 0, debit: 0, credit: 0 };
+        const entry = Array.isArray(line?.journal_entries) ? line.journal_entries[0] : line?.journal_entries;
+        const entryDate = String(entry?.entry_date || '');
+        const debit = Number(line?.debit || 0);
+        const credit = Number(line?.credit || 0);
+        if (entryDate && entryDate < dateFrom) {
+          current.opening += debit - credit;
+        } else {
+          current.debit += debit;
+          current.credit += credit;
+        }
         byAccount.set(accountId, current);
       });
 
@@ -302,7 +309,7 @@ const AccountingAccountReviewPage: React.FC = () => {
       byAccount.forEach((value, accountId) => {
         const account = accountsById.get(accountId);
         if (!account) return;
-        const diff = value.debit - value.credit;
+        const diff = value.opening + value.debit - value.credit;
         result.push({
           key: account.id,
           account_id: account.id,
@@ -363,9 +370,8 @@ const AccountingAccountReviewPage: React.FC = () => {
     () => rows.reduce((sum, row) => sum + Number(row.credit_balance || 0), 0),
     [rows]
   );
-  const finalDiff = totalDebitTurnover - totalCreditTurnover;
-  const finalDebit = finalDiff > 0 ? finalDiff : 0;
-  const finalCredit = finalDiff < 0 ? Math.abs(finalDiff) : 0;
+  const finalDebit = totalDebitBalance;
+  const finalCredit = totalCreditBalance;
 
   const renderAccountOption = (option: any) => {
     const data = (option as any)?.data || {};

@@ -599,7 +599,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                                   options={HARD_CODED_UNIT_OPTIONS as any}
                                   onChange={(nextValue) => onDeliveryRowFieldChange(groupIndex, String(record.key), 'mainUnit', nextValue)}
                                   className="w-full"
-                                  getPopupContainer={() => document.body}
+                                  getPopupContainer={(node) => node?.parentElement || document.body}
                                 />
                               ),
                             },
@@ -614,7 +614,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                                   options={HARD_CODED_UNIT_OPTIONS as any}
                                   onChange={(nextValue) => onDeliveryRowFieldChange(groupIndex, String(record.key), 'subUnit', nextValue)}
                                   className="w-full"
-                                  getPopupContainer={() => document.body}
+                                  getPopupContainer={(node) => node?.parentElement || document.body}
                                 />
                               ),
                             },
@@ -688,7 +688,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                               showSearch
                               optionFilterProp="label"
                               className="w-full"
-                              getPopupContainer={() => document.body}
+                              getPopupContainer={(node) => node?.parentElement || document.body}
                             />
                             <QrScanPopover
                               label=""
@@ -710,7 +710,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                               showSearch
                               optionFilterProp="label"
                               className="w-full"
-                              getPopupContainer={() => document.body}
+                              getPopupContainer={(node) => node?.parentElement || document.body}
                             />
                             <QrScanPopover
                               label=""
@@ -775,7 +775,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
           value={transferTargetGroupIndex}
           onChange={(val) => setTransferTargetGroupIndex(val)}
           options={transferTargets}
-          getPopupContainer={() => document.body}
+          getPopupContainer={(node) => node?.parentElement || document.body}
         />
       </div>
     </Modal>

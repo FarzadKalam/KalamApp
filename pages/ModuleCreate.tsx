@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useForm } from "@refinedev/antd";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartForm from "../components/SmartForm";
@@ -10,9 +9,17 @@ import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
+import { fetchCurrentUserRoleContext } from "../utils/permissions";
+import { getCachedAuthUser } from "../utils/sessionCache";
+import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
+import { syncRecordTags } from "../utils/recordTags";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+
+const isStatementTimeoutError = (error: any) =>
+  String(error?.code || "").trim() === "57014"
+  || String(error?.message || "").toLowerCase().includes("statement timeout");
 
 const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) => {
   const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
@@ -92,14 +99,6 @@ export const ModuleCreate = () => {
   const [canCreate, setCanCreate] = useState(true);
   const initialValuesFromState = (location.state as any)?.initialValues || {};
 
-  const { formProps } = useForm({
-    action: "create",
-    resource: moduleId,
-    redirect: "list",
-    queryOptions: { enabled: false },
-    warnWhenUnsavedChanges: true,
-  });
-
   useEffect(() => {
     let active = true;
     const fetchCreatePermission = async () => {
@@ -108,9 +107,8 @@ export const ModuleCreate = () => {
         return;
       }
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const user = authData?.user;
-        if (!user) {
+        const context = await fetchCurrentUserRoleContext(supabase);
+        if (!context.userId) {
           if (active) {
             setCanCreate(false);
             setPermissionLoading(false);
@@ -118,27 +116,7 @@ export const ModuleCreate = () => {
           return;
         }
 
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("role_id")
-          .eq("id", user.id)
-          .maybeSingle();
-
-        if (!profile?.role_id) {
-          if (active) {
-            setCanCreate(true);
-            setPermissionLoading(false);
-          }
-          return;
-        }
-
-        const { data: role } = await supabase
-          .from("org_roles")
-          .select("permissions")
-          .eq("id", profile.role_id)
-          .maybeSingle();
-
-        const modulePerms = role?.permissions?.[moduleId] || {};
+        const modulePerms = context.permissions?.[moduleId] || {};
         if (active) {
           setCanCreate(modulePerms.edit !== false);
           setPermissionLoading(false);
@@ -180,7 +158,7 @@ export const ModuleCreate = () => {
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-[1200px] mx-auto animate-fadeIn">
+    <div className="p-4 md:p-6 max-w-[1560px] mx-auto animate-fadeIn">
 
         <SmartForm
           module={moduleConfig}
@@ -190,6 +168,7 @@ export const ModuleCreate = () => {
           onCancel={() => navigate(-1)}
           onSave={async (values, meta) => {
             try {
+              const selectedTags = Array.isArray(meta?.selectedTags) ? meta.selectedTags : [];
               if (moduleId === "process_templates") {
                 const { data: inserted, error } = await supabase
                   .from(moduleConfig.table)
@@ -199,6 +178,9 @@ export const ModuleCreate = () => {
                 if (error) throw error;
                 if (!inserted?.id) throw new Error("ثبت الگوی فرآیند ناموفق بود");
 
+                if (moduleId && selectedTags.length > 0) {
+                  await syncRecordTags(supabase, moduleId, String(inserted.id), selectedTags);
+                }
                 await syncProcessTemplateStages(String(inserted.id), meta?.templateStagesPreview || []);
                 if (moduleId) {
                   await runWorkflowsForEvent({
@@ -220,8 +202,11 @@ export const ModuleCreate = () => {
                 if (error) throw error;
                 if (!inserted?.id) throw new Error("ثبت فاکتور ناموفق بود");
 
-                const { data: authData } = await supabase.auth.getUser();
-                const userId = authData?.user?.id || null;
+                if (moduleId && selectedTags.length > 0) {
+                  await syncRecordTags(supabase, moduleId, String(inserted.id), selectedTags);
+                }
+                const authUser = await getCachedAuthUser(supabase);
+                const userId = authUser?.id || null;
                 await applyInvoiceFinalizationInventory({
                   supabase: supabase as any,
                   moduleId,
@@ -236,9 +221,10 @@ export const ModuleCreate = () => {
                   moduleId,
                   recordId: inserted.id,
                   recordData: inserted,
+                  includePayments: true,
                 });
                 if (accountingSync.errors.length > 0) {
-                  console.warn("Invoice accounting sync warnings:", accountingSync.errors);
+                  console.warn("هشدارهای همگام‌سازی سند حسابداری فاکتور:", accountingSync.errors);
                 }
                 if (moduleId === "invoices") {
                   await syncCustomerLevelsByInvoiceCustomers({
@@ -261,14 +247,85 @@ export const ModuleCreate = () => {
               const payload = moduleId === "tasks"
                 ? attachTaskCompletionIfNeeded(values)
                 : values;
+              if (moduleId && supportsSystemCode(moduleId) && !payload.system_code) {
+                payload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
+              }
+              const authUser = await getCachedAuthUser(supabase);
+              const userId = authUser?.id || null;
+              const withAuditFields = (recordPayload: Record<string, any>) => {
+                if (!userId) return { ...recordPayload };
+                return {
+                  ...recordPayload,
+                  created_by: recordPayload.created_by ?? userId,
+                  updated_by: recordPayload.updated_by ?? userId,
+                };
+              };
+              const isMissingAuditColumnError = (error: any) => {
+                const code = String(error?.code || "").toUpperCase();
+                const text = String(error?.message || error?.details || "").toLowerCase();
+                return (
+                  code === "42703"
+                  || code === "PGRST204"
+                  || text.includes("created_by")
+                  || text.includes("updated_by")
+                );
+              };
 
-              await formProps.onFinish?.(payload);
+              let insertResult = await supabase
+                .from(moduleConfig.table)
+                .insert(withAuditFields(payload))
+                .select("id")
+                .single();
+
+              if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+                insertResult = await supabase
+                  .from(moduleConfig.table)
+                  .insert(payload)
+                  .select("id")
+                  .single();
+              }
+              if (
+                insertResult.error
+                && moduleId
+                && supportsSystemCode(moduleId)
+                && !payload.system_code
+                && isStatementTimeoutError(insertResult.error)
+              ) {
+                const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
+                const payloadWithSystemCode = { ...payload, system_code: fallbackSystemCode };
+
+                insertResult = await supabase
+                  .from(moduleConfig.table)
+                  .insert(withAuditFields(payloadWithSystemCode))
+                  .select("id")
+                  .single();
+
+                if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+                  insertResult = await supabase
+                    .from(moduleConfig.table)
+                    .insert(payloadWithSystemCode)
+                    .select("id")
+                    .single();
+                }
+              }
+
+              if (insertResult.error) throw insertResult.error;
+              const insertedId = insertResult.data?.id ? String(insertResult.data.id) : "";
+              if (moduleId && insertedId && selectedTags.length > 0) {
+                await syncRecordTags(supabase, moduleId, insertedId, selectedTags);
+              }
+
               if (moduleId) {
                 await runWorkflowsForEvent({
                   moduleId,
                   event: "create",
-                  currentRecord: payload as Record<string, any>,
+                  currentRecord: { ...(payload as Record<string, any>), id: insertedId || undefined },
                 });
+              }
+              if (insertedId) {
+                navigate(`/${moduleId}/${insertedId}`);
+              } else {
+                navigate(`/${moduleId}`);
               }
             } catch (err: any) {
               throw err;

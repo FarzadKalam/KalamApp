@@ -24,13 +24,24 @@ import {
 import { FieldNature, FieldType, ModuleDefinition, ModuleField } from "../../types";
 import { supabase } from "../../supabaseClient";
 import { attachTaskCompletionIfNeeded } from "../../utils/taskCompletion";
+import { normalizePhoneForStorage } from "../../utils/phoneNumber";
+import { toGregorianDateString } from "../../utils/persianNumberFormatter";
+import { syncCustomerLevelsByInvoiceCustomers } from "../../utils/customerLeveling";
+import { getAssigneeLabel } from "../../utils/assigneeLabel";
+import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from "../../utils/assigneeSupport";
+import { supportsSystemCode } from "../../utils/systemCode";
+import { getPreferredRelationTargetField } from "../../utils/relationTargetField";
+import { toFaErrorMessage } from "../../utils/errorMessageFa";
 
 type DuplicateStrategy = "skip" | "overwrite" | "merge";
 type EncodingType = "utf-8" | "windows-1256";
+type ImportMode = "simple" | "grouped_invoice";
+type MappingTargetScope = "header" | "item";
 
 type MappingRow = {
   sourceColumn: string;
   sampleValue: string;
+  targetScope: MappingTargetScope;
   targetFieldKey: string | null;
   defaultValue: string;
 };
@@ -42,6 +53,38 @@ type ParsedSheet = {
 };
 
 type RelationLookupMap = Record<string, Map<string, string>>;
+type DynamicOptionLookupMap = Record<string, Map<string, string>>;
+
+type ImportRuntimeContext = {
+  relationLookups: RelationLookupMap;
+  dynamicOptionLookups: DynamicOptionLookupMap;
+};
+
+type QueryResult<T> = {
+  data: T | null;
+  error: unknown | null;
+};
+
+type ImportFieldDescriptor = {
+  key: string;
+  type: FieldType;
+  labels: { fa: string; en?: string };
+  options?: ModuleField["options"];
+  dynamicOptionsCategory?: ModuleField["dynamicOptionsCategory"];
+  relationConfig?: ModuleField["relationConfig"];
+  defaultValue?: ModuleField["defaultValue"];
+  validation?: ModuleField["validation"];
+  readonly?: boolean;
+  nature?: FieldNature;
+  scope: MappingTargetScope;
+};
+
+type GroupedRecord = {
+  key: string;
+  firstRow: Record<string, string>;
+  rows: Record<string, string>[];
+  sourceLines: number[];
+};
 
 interface ExcelImportWizardProps {
   open: boolean;
@@ -67,6 +110,7 @@ const DUPLICATE_OPTIONS = [
 const IMPORTABLE_TYPES = new Set<FieldType>([
   FieldType.TEXT,
   FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
   FieldType.NUMBER,
   FieldType.PRICE,
   FieldType.PERCENTAGE,
@@ -87,6 +131,29 @@ const IMPORTABLE_TYPES = new Set<FieldType>([
   FieldType.PERCENTAGE_OR_AMOUNT,
 ]);
 
+const GROUPED_INVOICE_SUMMARY_FIELD_KEYS = new Set([
+  "total_invoice_amount",
+  "total_received_amount",
+  "remaining_balance",
+]);
+const CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS = new Set([
+  "first_purchase_date",
+  "last_purchase_date",
+  "purchase_count",
+  "total_spend",
+  "total_paid_amount",
+  "acquaintance_days",
+  "cooperation_days",
+]);
+const DYNAMIC_OPTION_IMPORT_TYPES = new Set<FieldType>([
+  FieldType.SELECT,
+  FieldType.MULTI_SELECT,
+  FieldType.CHECKLIST,
+]);
+const RELATION_AUTOCREATE_TARGET_MODULES = new Set(["customers", "suppliers", "employees"]);
+
+const LEGACY_PREFIX_REGEX = /^(contacts|accounts|products)\s*::::\s*/i;
+
 const toEnglishDigits = (value: string): string =>
   value
     .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
@@ -100,6 +167,71 @@ const normalizeText = (value: unknown): string =>
     .replace(/[_-]+/g, " ");
 
 const normalizeKey = (value: unknown): string => normalizeText(value).replace(/\s+/g, "");
+const GENERIC_IMPORT_FIELD_ALIASES: Record<string, string> = {
+  [normalizeKey("نام مسئول")]: "assignee_id",
+  [normalizeKey("مسئول")]: "assignee_id",
+  [normalizeKey("نام بازاریاب")]: "assignee_id",
+  [normalizeKey("بازاریاب")]: "assignee_id",
+};
+
+const supportsAssigneeField = (moduleId: string): boolean => supportsGlobalAssignee(moduleId);
+const supportsAssigneeTypeField = (moduleId: string): boolean => supportsGlobalAssigneeType(moduleId);
+const isExplicitlyImportableReadonlyField = (moduleId: string, fieldKey: string): boolean =>
+  moduleId === "customers" && CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey);
+
+const buildAutoCustomerName = (values: Record<string, unknown>) => {
+  const normalize = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const businessName = normalize(values?.business_name);
+  const personType = normalize(values?.person_type).toLowerCase();
+
+  if (personType === "legal") {
+    const legalName = normalize(values?.legal_name);
+    if (legalName && businessName) return `${legalName} - ${businessName}`;
+    return legalName || businessName;
+  }
+
+  const realName = [values?.prefix, values?.first_name, values?.last_name]
+    .map((part) => normalize(part))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (realName && businessName) return `${realName} - ${businessName}`;
+  return realName || businessName;
+};
+
+const stripLegacyReferencePrefix = (value: unknown): string =>
+  String(value ?? "").trim().replace(LEGACY_PREFIX_REGEX, "").trim();
+
+const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope; key: string }> = {
+  [normalizeKey("شماره ی فاکتور")]: { scope: "header", key: "legacy_invoice_number" },
+  [normalizeKey("شماره فاکتور")]: { scope: "header", key: "legacy_invoice_number" },
+  [normalizeKey("موضوع")]: { scope: "header", key: "name" },
+  [normalizeKey("تاريخ فاکتور")]: { scope: "header", key: "invoice_date" },
+  [normalizeKey("تاریخ فاکتور")]: { scope: "header", key: "invoice_date" },
+  [normalizeKey("وضعیت فاکتور")]: { scope: "header", key: "legacy_status" },
+  [normalizeKey("وضعیت فاکتور حسابداری")]: { scope: "header", key: "legacy_accounting_status" },
+  [normalizeKey("نام مخاطب")]: { scope: "header", key: "customer_id" },
+  [normalizeKey("نام سازمان")]: { scope: "header", key: "customer_id" },
+  [normalizeKey("توضیحات")]: { scope: "header", key: "description" },
+  [normalizeKey("نمونه متن های توضیحات")]: { scope: "header", key: "legacy_ready_text" },
+  [normalizeKey("منبع")]: { scope: "header", key: "legacy_source" },
+  [normalizeKey("نام مسئول")]: { scope: "header", key: "assignee_id" },
+  [normalizeKey("بازاریاب")]: { scope: "header", key: "assignee_id" },
+  [normalizeKey("پیامک بعد از تایید ارسال شود؟")]: { scope: "header", key: "notify_customer" },
+  [normalizeKey("مجموع")]: { scope: "header", key: "total_invoice_amount" },
+  [normalizeKey("دریافت شده")]: { scope: "header", key: "total_received_amount" },
+  [normalizeKey("باقیمانده")]: { scope: "header", key: "remaining_balance" },
+  [normalizeKey("نام آیتم")]: { scope: "item", key: "product_id" },
+  [normalizeKey("مقدار / تعداد")]: { scope: "item", key: "quantity" },
+  [normalizeKey("مقدار/تعداد")]: { scope: "item", key: "quantity" },
+  [normalizeKey("لیست قیمت")]: { scope: "item", key: "unit_price" },
+  [normalizeKey("قیمت خالص")]: { scope: "item", key: "total_price" },
+  [normalizeKey("مالیات بر ارزش افزوده")]: { scope: "item", key: "vat" },
+  [normalizeKey("میزان تخفیف آیتم")]: { scope: "item", key: "discount" },
+  [normalizeKey("یادداشت آیتم")]: { scope: "item", key: "description" },
+};
 
 const splitByDelimiters = (value: string): string[] =>
   value
@@ -200,8 +332,58 @@ const resolveDate = (value: string): Date | null => {
     const dateInfo = new Date(utcValue * 1000);
     return Number.isNaN(dateInfo.getTime()) ? null : dateInfo;
   }
-  const dateInfo = new Date(value);
-  return Number.isNaN(dateInfo.getTime()) ? null : dateInfo;
+  return null;
+};
+
+const buildNormalizedSlashDate = (value: string): string | null => {
+  const normalized = toEnglishDigits(String(value || "").trim()).replace(/\./g, "/");
+  const match = normalized.match(
+    /^(\d{1,4})[\/-](\d{1,2})[\/-](\d{1,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (!match) return null;
+
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  const third = Number(match[3]);
+  const hh = match[4] ? String(match[4]).padStart(2, "0") : null;
+  const mm = match[5] ? String(match[5]).padStart(2, "0") : null;
+  const ss = match[6] ? String(match[6]).padStart(2, "0") : "00";
+
+  if (String(match[1]).length === 4) {
+    const base = `${String(first).padStart(4, "0")}-${String(second).padStart(2, "0")}-${String(third).padStart(2, "0")}`;
+    return hh && mm ? `${base} ${hh}:${mm}:${ss}` : base;
+  }
+
+  if (String(match[3]).length !== 4) return null;
+
+  let month = first;
+  let day = second;
+  if (first > 12 && second <= 12) {
+    month = second;
+    day = first;
+  }
+
+  const base = `${String(third).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return hh && mm ? `${base} ${hh}:${mm}:${ss}` : base;
+};
+
+const normalizeImportedDateValue = (value: string, fieldType: FieldType.DATE | FieldType.DATETIME): string => {
+  const raw = String(value || "").trim();
+  if (!raw) return raw;
+
+  const excelDate = resolveDate(raw);
+  if (excelDate) {
+    return fieldType === FieldType.DATETIME ? excelDate.toISOString() : excelDate.toISOString().slice(0, 10);
+  }
+
+  const normalizedSlash = buildNormalizedSlashDate(raw);
+  const normalized = normalizedSlash || raw;
+  const formatted = toGregorianDateString(
+    normalized,
+    fieldType === FieldType.DATETIME ? "YYYY-MM-DDTHH:mm:ss[Z]" : "YYYY-MM-DD",
+    fieldType === FieldType.DATE ? { setMidday: true } : undefined
+  );
+  return formatted || raw;
 };
 
 const parseBoolean = (value: string): boolean | null => {
@@ -219,9 +401,17 @@ const parseNumber = (value: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const guessTargetField = (sourceColumn: string, fields: ModuleField[]): string | null => {
+const guessTargetField = (
+  sourceColumn: string,
+  fields: Array<Pick<ImportFieldDescriptor, "key" | "labels">>
+): string | null => {
   const sourceKey = normalizeKey(sourceColumn);
   if (!sourceKey) return null;
+
+  const aliasedFieldKey = GENERIC_IMPORT_FIELD_ALIASES[sourceKey];
+  if (aliasedFieldKey && fields.some((field) => field.key === aliasedFieldKey)) {
+    return aliasedFieldKey;
+  }
 
   for (const field of fields) {
     if (normalizeKey(field.key) === sourceKey) return field.key;
@@ -241,7 +431,196 @@ const guessTargetField = (sourceColumn: string, fields: ModuleField[]): string |
   return null;
 };
 
-const encodeForLookup = (value: unknown): string => normalizeKey(value);
+const guessGroupedInvoiceTarget = (
+  sourceColumn: string,
+  headerFields: ImportFieldDescriptor[],
+  itemFields: ImportFieldDescriptor[]
+): { scope: MappingTargetScope; key: string | null } => {
+  const sourceKey = normalizeKey(sourceColumn);
+  const aliased = LEGACY_INVOICE_HEADER_ALIASES[sourceKey];
+  if (aliased) return aliased;
+
+  const guessedHeader = guessTargetField(sourceColumn, headerFields);
+  if (guessedHeader) return { scope: "header", key: guessedHeader };
+
+  const guessedItem = guessTargetField(sourceColumn, itemFields);
+  if (guessedItem) return { scope: "item", key: guessedItem };
+
+  return { scope: "header", key: null };
+};
+
+const encodeForLookup = (value: unknown): string => normalizeKey(stripLegacyReferencePrefix(value));
+
+const isProbablyDuplicateInsertError = (error: unknown): boolean => {
+  const code = String((error as any)?.code || "").toUpperCase();
+  const message = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
+  return code === "23505" || message.includes("duplicate key") || message.includes("unique constraint");
+};
+
+const getRelationLookupColumns = (targetModule: string, targetField: string): string[] => {
+  const columns = new Set<string>(["id", targetField]);
+  if (supportsSystemCode(targetModule)) {
+    columns.add("system_code");
+  }
+  if (targetModule === "customers") {
+    ["full_name", "prefix", "first_name", "last_name", "business_name", "legal_name", "mobile_1", "legacy_contact_code"].forEach((column) =>
+      columns.add(column)
+    );
+  }
+  if (targetModule === "products") {
+    ["name", "manual_code", "crm_code", "accounting_code"].forEach((column) => columns.add(column));
+  }
+  return Array.from(columns);
+};
+
+const getRelationLookupCandidates = (
+  targetModule: string,
+  row: Record<string, unknown>,
+  targetField: string
+): string[] => {
+  if (targetModule === "customers") {
+    return getCustomerLookupCandidates(row);
+  }
+  if (targetModule === "products") {
+    return getProductLookupCandidates(row, targetField);
+  }
+  return [row[targetField], row.system_code]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+};
+
+const buildRelationAutoCreatePayload = (
+  targetModule: string,
+  rawValue: string
+): Record<string, unknown> | null => {
+  const value = stripLegacyReferencePrefix(rawValue);
+  if (!value) return null;
+  if (targetModule === "customers") {
+    return { full_name: value, rank: "normal" };
+  }
+  if (targetModule === "suppliers") {
+    return { business_name: value };
+  }
+  if (targetModule === "employees") {
+    return { full_name: value };
+  }
+  return null;
+};
+
+const toImportField = (field: ModuleField, scope: MappingTargetScope): ImportFieldDescriptor => ({
+  key: field.key,
+  type: field.type,
+  labels: field.labels,
+  options: field.options,
+  dynamicOptionsCategory: field.dynamicOptionsCategory,
+  relationConfig: field.relationConfig,
+  defaultValue: field.defaultValue,
+  validation: field.validation,
+  readonly: field.readonly,
+  nature: field.nature,
+  scope,
+});
+
+const buildGroupedRecords = (
+  rows: Record<string, string>[],
+  groupingColumn: string,
+  hasHeader: boolean
+): { records: GroupedRecord[]; missingGroupSourceLines: number[] } => {
+  const map = new Map<string, GroupedRecord>();
+  const missingGroupSourceLines: number[] = [];
+
+  rows.forEach((row, rowIndex) => {
+    const sourceLine = hasHeader ? rowIndex + 2 : rowIndex + 1;
+    const rawKey = String(row[groupingColumn] ?? "").trim();
+    if (!rawKey) {
+      missingGroupSourceLines.push(sourceLine);
+      return;
+    }
+
+    const existing = map.get(rawKey);
+    if (existing) {
+      existing.rows.push(row);
+      existing.sourceLines.push(sourceLine);
+      return;
+    }
+
+    map.set(rawKey, {
+      key: rawKey,
+      firstRow: row,
+      rows: [row],
+      sourceLines: [sourceLine],
+    });
+  });
+
+  return {
+    records: Array.from(map.values()),
+    missingGroupSourceLines,
+  };
+};
+
+const mapLegacyInvoiceStatus = (value: unknown): string | null => {
+  const normalized = normalizeKey(value);
+  if (!normalized) return null;
+
+  if (["paid", normalizeKey("پرداخت شده")].includes(normalized)) return "settled";
+  if (["approved", normalizeKey("تایید شده")].includes(normalized)) return "confirmed";
+  if ([normalizeKey("پیش پرداخت"), "prepayment"].includes(normalized)) return "prepayment";
+  if (["created", normalizeKey("ایجاد شده")].includes(normalized)) return "created";
+  if (["cancel", "cancelled", "canceled", normalizeKey("لغو شده")].includes(normalized)) return "canceled";
+  return null;
+};
+
+const getCustomerLookupCandidates = (row: Record<string, unknown>): string[] => {
+  const values = [
+    row.full_name,
+    row.legal_name,
+    row.business_name,
+    [row.first_name, row.last_name].filter(Boolean).join(" ").trim(),
+    [row.prefix, row.first_name, row.last_name].filter(Boolean).join(" ").trim(),
+    row.system_code,
+    row.legacy_contact_code,
+    row.mobile_1,
+  ];
+  return values.map((value) => String(value ?? "").trim()).filter(Boolean);
+};
+
+const getProductLookupCandidates = (row: Record<string, unknown>, targetField: string): string[] => {
+  const values = [
+    row[targetField],
+    row.name,
+    row.system_code,
+    row.manual_code,
+    row.crm_code,
+    row.accounting_code,
+  ];
+  return values.map((value) => String(value ?? "").trim()).filter(Boolean);
+};
+
+const finalizeInvoiceHeaderPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
+  if (isValueEmpty(payload.status) && !isValueEmpty(payload.legacy_status)) {
+    const mappedStatus = mapLegacyInvoiceStatus(payload.legacy_status);
+    if (mappedStatus) payload.status = mappedStatus;
+  }
+
+  if (isValueEmpty(payload.name) && !isValueEmpty(payload.legacy_invoice_number)) {
+    payload.name = String(payload.legacy_invoice_number);
+  }
+
+  return payload;
+};
+
+const finalizeInvoiceItemPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
+  const quantity = Number(payload.quantity ?? 0);
+  const unitPrice = Number(payload.unit_price ?? 0);
+  const discount = Number(payload.discount ?? 0);
+  const vat = Number(payload.vat ?? 0);
+
+  if (isValueEmpty(payload.total_price) && (quantity > 0 || unitPrice > 0)) {
+    payload.total_price = quantity * unitPrice - discount + vat;
+  }
+
+  return payload;
+};
 
 const buildRowHasAnyValue = (row: Record<string, string>): boolean =>
   Object.values(row).some((value) => !isValueEmpty(value));
@@ -274,12 +653,18 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   onImported,
 }) => {
   const { message } = App.useApp();
+  const supportsGroupedInvoiceImport =
+    moduleId === "invoices" || moduleId === "purchase_invoices";
 
   const [step, setStep] = useState<number>(0);
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [hasHeader, setHasHeader] = useState<boolean>(true);
   const [encoding, setEncoding] = useState<EncodingType>("utf-8");
+  const [importMode, setImportMode] = useState<ImportMode>(
+    supportsGroupedInvoiceImport ? "grouped_invoice" : "simple"
+  );
+  const [groupingColumn, setGroupingColumn] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [rawMatrix, setRawMatrix] = useState<string[][]>([]);
@@ -288,38 +673,103 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const [duplicateFields, setDuplicateFields] = useState<string[]>([]);
   const [saveCustomMapping, setSaveCustomMapping] = useState<boolean>(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
-
-  const importableFields = useMemo(() => {
-    return [...moduleConfig.fields]
-      .filter((field) => IMPORTABLE_TYPES.has(field.type))
-      .filter((field) => !field.readonly)
-      .filter((field) => field.nature !== FieldNature.SYSTEM)
-      .sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-  }, [moduleConfig.fields]);
-
-  const fieldByKey = useMemo(() => {
-    const map = new Map<string, ModuleField>();
-    importableFields.forEach((field) => map.set(field.key, field));
-    return map;
-  }, [importableFields]);
-
-  const requiredFields = useMemo(
-    () => importableFields.filter((field) => field.validation?.required),
-    [importableFields]
-  );
-
+  const [autoSyncCustomerStats, setAutoSyncCustomerStats] = useState<boolean>(moduleId === "invoices");
   const parsedSheet = useMemo(() => matrixToSheetData(rawMatrix, hasHeader), [rawMatrix, hasHeader]);
 
-  const mappedFieldKeys = useMemo(() => {
+  const headerImportableFields = useMemo(() => {
+    const fields = [...moduleConfig.fields]
+      .filter((field) => {
+        if (!IMPORTABLE_TYPES.has(field.type)) return false;
+        if (
+          supportsGroupedInvoiceImport &&
+          importMode === "grouped_invoice" &&
+          GROUPED_INVOICE_SUMMARY_FIELD_KEYS.has(field.key)
+        ) {
+          return true;
+        }
+        if (field.readonly && !isExplicitlyImportableReadonlyField(moduleId, field.key)) return false;
+        if (field.nature === FieldNature.SYSTEM) return false;
+        return true;
+      })
+      .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+      .map((field) => toImportField(field, "header"));
+
+    if (supportsAssigneeField(moduleId) && !fields.some((field) => field.key === "assignee_id")) {
+      fields.push({
+        key: "assignee_id",
+        type: FieldType.USER,
+        labels: { fa: getAssigneeLabel(moduleId), en: "Assignee" },
+        scope: "header",
+      });
+    }
+
+    return fields;
+  }, [importMode, moduleConfig.fields, moduleId, supportsGroupedInvoiceImport]);
+
+  const invoiceItemsBlock = useMemo(() => {
+    if (!supportsGroupedInvoiceImport || importMode !== "grouped_invoice") return null;
+    return moduleConfig.blocks?.find((block) => block.id === "invoiceItems" && Array.isArray(block.tableColumns)) ?? null;
+  }, [importMode, moduleConfig.blocks, supportsGroupedInvoiceImport]);
+
+  const itemImportableFields = useMemo<ImportFieldDescriptor[]>(() => {
+    if (!invoiceItemsBlock?.tableColumns?.length) return [];
+    return invoiceItemsBlock.tableColumns
+      .filter((column) => IMPORTABLE_TYPES.has(column.type))
+      .map((column: any) => ({
+        key: column.key,
+        type: column.type,
+        labels: { fa: column.title },
+        options: column.options,
+        dynamicOptionsCategory: column.dynamicOptionsCategory,
+        relationConfig: column.relationConfig,
+        readonly: column.readonly,
+        scope: "item" as const,
+      }));
+  }, [invoiceItemsBlock]);
+
+  const headerFieldByKey = useMemo(() => {
+    const map = new Map<string, ImportFieldDescriptor>();
+    headerImportableFields.forEach((field) => map.set(field.key, field));
+    return map;
+  }, [headerImportableFields]);
+
+  const itemFieldByKey = useMemo(() => {
+    const map = new Map<string, ImportFieldDescriptor>();
+    itemImportableFields.forEach((field) => map.set(field.key, field));
+    return map;
+  }, [itemImportableFields]);
+
+  const requiredFields = useMemo(
+    () => headerImportableFields.filter((field) => field.validation?.required),
+    [headerImportableFields]
+  );
+
+  const groupedData = useMemo(() => {
+    if (importMode !== "grouped_invoice" || !groupingColumn) {
+      return { records: [] as GroupedRecord[], missingGroupSourceLines: [] as number[] };
+    }
+    return buildGroupedRecords(parsedSheet.rows, groupingColumn, hasHeader);
+  }, [groupingColumn, hasHeader, importMode, parsedSheet.rows]);
+
+  const mappedHeaderFieldKeys = useMemo(() => {
     return mappingRows
+      .filter((row) => row.targetScope === "header")
+      .map((row) => row.targetFieldKey)
+      .filter((key): key is string => Boolean(key));
+  }, [mappingRows]);
+
+  const mappedItemFieldKeys = useMemo(() => {
+    return mappingRows
+      .filter((row) => row.targetScope === "item")
       .map((row) => row.targetFieldKey)
       .filter((key): key is string => Boolean(key));
   }, [mappingRows]);
 
   const mappedRequiredFieldKeys = useMemo(() => {
-    const set = new Set(mappedFieldKeys);
+    const set = new Set(mappedHeaderFieldKeys);
+    if (set.has("legacy_status")) set.add("status");
     return requiredFields.filter((field) => set.has(field.key)).map((field) => field.key);
-  }, [mappedFieldKeys, requiredFields]);
+  }, [mappedHeaderFieldKeys, requiredFields]);
 
   const missingRequiredFields = useMemo(() => {
     const set = new Set(mappedRequiredFieldKeys);
@@ -332,6 +782,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setIsImporting(false);
     setHasHeader(true);
     setEncoding("utf-8");
+    setImportMode(supportsGroupedInvoiceImport ? "grouped_invoice" : "simple");
+    setGroupingColumn("");
     setSelectedFile(null);
     setFileList([]);
     setRawMatrix([]);
@@ -339,7 +791,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setDuplicateStrategy("skip");
     setDuplicateFields([]);
     setSaveCustomMapping(false);
-  }, []);
+    setAutoSyncCustomerStats(moduleId === "invoices");
+  }, [moduleId, supportsGroupedInvoiceImport]);
 
   useEffect(() => {
     if (!open) return;
@@ -390,18 +843,57 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   }, [encoding, parseFile, selectedFile]);
 
   useEffect(() => {
+    if (!supportsGroupedInvoiceImport || importMode !== "grouped_invoice") return;
+    if (!parsedSheet.headers.length) {
+      setGroupingColumn("");
+      return;
+    }
+    if (groupingColumn && parsedSheet.headers.includes(groupingColumn)) return;
+
+    const preferred =
+      parsedSheet.headers.find((header) =>
+        [normalizeKey("شماره ی فاکتور"), normalizeKey("شماره فاکتور"), normalizeKey("invoice number")].includes(
+          normalizeKey(header)
+        )
+      ) ?? parsedSheet.headers[0];
+    setGroupingColumn(preferred ?? "");
+  }, [groupingColumn, importMode, parsedSheet.headers, supportsGroupedInvoiceImport]);
+
+  useEffect(() => {
     if (!parsedSheet.headers.length) {
       setMappingRows([]);
       return;
     }
-    const rows: MappingRow[] = parsedSheet.headers.map((header) => ({
-      sourceColumn: header,
-      sampleValue: parsedSheet.firstRow?.[header] ?? "",
-      targetFieldKey: guessTargetField(header, importableFields),
-      defaultValue: "",
-    }));
+
+    const rows: MappingRow[] = parsedSheet.headers.map((header) => {
+      if (supportsGroupedInvoiceImport && importMode === "grouped_invoice") {
+        const guessed = guessGroupedInvoiceTarget(header, headerImportableFields, itemImportableFields);
+        return {
+          sourceColumn: header,
+          sampleValue: parsedSheet.firstRow?.[header] ?? "",
+          targetScope: guessed.scope,
+          targetFieldKey: guessed.key,
+          defaultValue: "",
+        };
+      }
+
+      return {
+        sourceColumn: header,
+        sampleValue: parsedSheet.firstRow?.[header] ?? "",
+        targetScope: "header",
+        targetFieldKey: guessTargetField(header, headerImportableFields),
+        defaultValue: "",
+      };
+    });
     setMappingRows(rows);
-  }, [importableFields, parsedSheet.firstRow, parsedSheet.headers]);
+  }, [
+    headerImportableFields,
+    importMode,
+    itemImportableFields,
+    parsedSheet.firstRow,
+    parsedSheet.headers,
+    supportsGroupedInvoiceImport,
+  ]);
 
   const handleSelectFile = useCallback(
     async (file: File) => {
@@ -420,7 +912,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         await parseFile(file, encoding);
       } catch (error) {
         setRawMatrix([]);
-        message.error(`خطا در خواندن فایل: ${error instanceof Error ? error.message : "نامشخص"}`);
+        message.error(toFaErrorMessage(error as any, "خطا در خواندن فایل"));
       }
     },
     [encoding, message, parseFile]
@@ -431,6 +923,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setFileList([]);
     setRawMatrix([]);
     setMappingRows([]);
+    setGroupingColumn("");
   }, []);
 
   const updateMappingRow = useCallback(
@@ -442,31 +935,159 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     []
   );
 
-  const convertValueByType = useCallback(
-    (
-      field: ModuleField,
+  const ensureDynamicOptionValue = useCallback(
+    async (
+      category: string,
       rawValue: string,
-      relationLookups: RelationLookupMap
-    ): unknown => {
+      dynamicOptionLookups: DynamicOptionLookupMap
+    ): Promise<string | undefined> => {
       const value = String(rawValue ?? "").trim();
       if (!value) return undefined;
 
-      if ((field.type === FieldType.SELECT || field.type === FieldType.STATUS) && field.options?.length) {
-        const byValue = field.options.find((option) => normalizeKey(option.value) === normalizeKey(value));
-        if (byValue) return byValue.value;
-        const byLabel = field.options.find((option) => normalizeKey(option.label) === normalizeKey(value));
-        if (byLabel) return byLabel.value;
+      const map = dynamicOptionLookups[category] || new Map<string, string>();
+      dynamicOptionLookups[category] = map;
+
+      const normalized = normalizeKey(value);
+      const existing = map.get(normalized);
+      if (existing) return existing;
+
+      const { data: inserted, error } = await withTimeout(
+        supabase
+          .from("dynamic_options")
+          .insert([{ category, label: value, value, is_active: true }])
+          .select("label, value")
+          .single(),
+        20000,
+        `ایجاد گزینه پویا (${category})`
+      );
+
+      if (error) {
+        if (!isProbablyDuplicateInsertError(error)) throw error;
+        const { data: existingRow, error: lookupError } = await withTimeout(
+          supabase
+            .from("dynamic_options")
+            .select("label, value")
+            .eq("category", category)
+            .eq("value", value)
+            .maybeSingle(),
+          20000,
+          `بررسی گزینه پویا (${category})`
+        );
+        if (lookupError) throw lookupError;
+        const resolvedValue = String(existingRow?.value || value).trim();
+        if (!resolvedValue) return undefined;
+        map.set(normalized, resolvedValue);
+        if (existingRow?.label) map.set(normalizeKey(existingRow.label), resolvedValue);
+        return resolvedValue;
       }
 
-      if (
-        field.type === FieldType.RELATION ||
-        field.type === FieldType.USER
-      ) {
-        const map = relationLookups[field.key];
-        if (!map) return value;
-        const exact = map.get(encodeForLookup(value));
-        if (exact) return exact;
-        return value;
+      const resolvedValue = String(inserted?.value || value).trim();
+      if (!resolvedValue) return undefined;
+      map.set(normalized, resolvedValue);
+      if (inserted?.label) map.set(normalizeKey(inserted.label), resolvedValue);
+      return resolvedValue;
+    },
+    []
+  );
+
+  const ensureRelationValue = useCallback(
+    async (
+      field: ImportFieldDescriptor,
+      rawValue: string,
+      relationLookups: RelationLookupMap
+    ): Promise<string | undefined> => {
+      const value = stripLegacyReferencePrefix(rawValue);
+      if (!value) return undefined;
+
+      const lookupKey = `${field.scope}:${field.key}`;
+      const map = relationLookups[lookupKey] || new Map<string, string>();
+      relationLookups[lookupKey] = map;
+
+      const exact = map.get(encodeForLookup(value));
+      if (exact) return exact;
+
+      const targetModule = String(field.relationConfig?.targetModule || "").trim();
+      if (!targetModule || !RELATION_AUTOCREATE_TARGET_MODULES.has(targetModule)) {
+        return undefined;
+      }
+
+      const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig?.targetField);
+      const selectExpr = Array.from(new Set(["id", targetField])).join(", ");
+
+      const existingResult = (await withTimeout(
+        supabase
+          .from(targetModule)
+          .select(selectExpr)
+          .eq(targetField, value)
+          .limit(1),
+        20000,
+        `جستجوی رابطه (${field.labels.fa})`
+      )) as unknown as QueryResult<Record<string, unknown>[]>;
+      if (existingResult.error) throw existingResult.error;
+
+      const existingRow = existingResult.data?.[0];
+      if (existingRow?.id) {
+        const existingId = String(existingRow.id);
+        map.set(encodeForLookup(value), existingId);
+        const relationLabel = String(existingRow[targetField] ?? "").trim();
+        if (relationLabel) map.set(encodeForLookup(relationLabel), existingId);
+        return existingId;
+      }
+
+      const payload = buildRelationAutoCreatePayload(targetModule, value);
+      if (!payload) return undefined;
+
+      const insertResult = (await withTimeout(
+        supabase.from(targetModule).insert(payload).select(selectExpr).single(),
+        20000,
+        `ایجاد رابطه (${field.labels.fa})`
+      )) as unknown as QueryResult<Record<string, unknown>>;
+      if (insertResult.error) throw insertResult.error;
+
+      const inserted = insertResult.data;
+      const insertedId = String(inserted?.id || "").trim();
+      if (!insertedId) return undefined;
+      map.set(encodeForLookup(value), insertedId);
+      const relationLabel = String(inserted?.[targetField] ?? "").trim();
+      if (relationLabel) map.set(encodeForLookup(relationLabel), insertedId);
+      return insertedId;
+    },
+    []
+  );
+
+  const convertValueByType = useCallback(
+    (
+      field: ImportFieldDescriptor,
+      rawValue: string,
+      importContext: ImportRuntimeContext
+    ): Promise<unknown> => {
+      const value = String(rawValue ?? "").trim();
+      if (!value) return Promise.resolve(undefined);
+
+      if ((field.type === FieldType.SELECT || field.type === FieldType.STATUS) && field.options?.length) {
+        const byValue = field.options.find((option) => normalizeKey(option.value) === normalizeKey(value));
+        if (byValue) return Promise.resolve(byValue.value);
+        const byLabel = field.options.find((option) => normalizeKey(option.label) === normalizeKey(value));
+        if (byLabel) return Promise.resolve(byLabel.value);
+        if (field.type === FieldType.STATUS) {
+          const legacyStatus = mapLegacyInvoiceStatus(value);
+          if (legacyStatus) return Promise.resolve(legacyStatus);
+        }
+      }
+
+      if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
+        return ensureRelationValue(field, value, importContext.relationLookups);
+      }
+
+      if (field.dynamicOptionsCategory && DYNAMIC_OPTION_IMPORT_TYPES.has(field.type)) {
+        if (field.type === FieldType.MULTI_SELECT || field.type === FieldType.CHECKLIST) {
+          return Promise.all(
+            splitByDelimiters(value).map((item) =>
+              ensureDynamicOptionValue(field.dynamicOptionsCategory!, item, importContext.dynamicOptionLookups)
+            )
+          ).then((items) => items.filter((item): item is string => Boolean(item)));
+        }
+        return ensureDynamicOptionValue(field.dynamicOptionsCategory, value, importContext.dynamicOptionLookups);
       }
 
       switch (field.type) {
@@ -475,118 +1096,233 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         case FieldType.STOCK:
         case FieldType.PERCENTAGE: {
           const numberVal = parseNumber(value);
-          return numberVal ?? undefined;
+          return Promise.resolve(numberVal ?? undefined);
         }
         case FieldType.CHECKBOX: {
           const boolVal = parseBoolean(value);
-          return boolVal ?? undefined;
+          return Promise.resolve(boolVal ?? undefined);
         }
         case FieldType.DATE: {
-          const date = resolveDate(value);
-          return date ? date.toISOString().slice(0, 10) : value;
+          return Promise.resolve(normalizeImportedDateValue(value, FieldType.DATE));
         }
         case FieldType.DATETIME: {
-          const date = resolveDate(value);
-          return date ? date.toISOString() : value;
+          return Promise.resolve(normalizeImportedDateValue(value, FieldType.DATETIME));
         }
         case FieldType.MULTI_SELECT:
         case FieldType.CHECKLIST:
         case FieldType.TAGS:
-          return splitByDelimiters(value);
+          return Promise.resolve(splitByDelimiters(value));
         case FieldType.PHONE:
-          return toEnglishDigits(value).replace(/[^\d+]/g, "");
+          return Promise.resolve(normalizePhoneForStorage(value));
         default:
-          return value;
+          return Promise.resolve(value);
       }
     },
-    []
+    [ensureDynamicOptionValue, ensureRelationValue]
   );
 
   const loadRelationLookups = useCallback(async (): Promise<RelationLookupMap> => {
-    const mappedTargets = mappingRows
-      .map((row) => row.targetFieldKey)
-      .filter((key): key is string => Boolean(key));
-    const uniqueKeys = Array.from(new Set(mappedTargets));
-    const relationFields: ModuleField[] = [];
-    uniqueKeys.forEach((key) => {
-      const field = fieldByKey.get(key);
+    const relationFields: ImportFieldDescriptor[] = [];
+    const seen = new Set<string>();
+
+    mappingRows.forEach((mapping) => {
+      if (!mapping.targetFieldKey) return;
+      const field =
+        mapping.targetScope === "item"
+          ? itemFieldByKey.get(mapping.targetFieldKey)
+          : headerFieldByKey.get(mapping.targetFieldKey);
       if (!field) return;
-      if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
-        relationFields.push(field);
-      }
+      if (field.type !== FieldType.RELATION && field.type !== FieldType.USER) return;
+
+      const lookupKey = `${field.scope}:${field.key}`;
+      if (seen.has(lookupKey)) return;
+      seen.add(lookupKey);
+      relationFields.push(field);
     });
 
-    const lookupMap: RelationLookupMap = {};
-    for (const field of relationFields) {
-      const map = new Map<string, string>();
+      const lookupMap: RelationLookupMap = {};
+      for (const field of relationFields) {
+        const lookupKey = `${field.scope}:${field.key}`;
+        const map = new Map<string, string>();
+
+      if (field.key === "assignee_id") {
+        const { data: users } = await withTimeout(
+          supabase.from("profiles").select("id, full_name, email"),
+          20000,
+          "دریافت مسئول‌ها برای تطبیق"
+        );
+        (users || []).forEach((item: { id: string; full_name: string | null; email?: string | null }) => {
+          const encodedValue = `user_${item.id}`;
+          map.set(encodeForLookup(item.id), encodedValue);
+          if (item.full_name) map.set(encodeForLookup(item.full_name), encodedValue);
+          if (item.email) map.set(encodeForLookup(item.email), encodedValue);
+        });
+
+        if (supportsAssigneeTypeField(moduleId)) {
+          const { data: roles } = await withTimeout(
+            supabase.from("org_roles").select("id, title"),
+            20000,
+            "دریافت نقش‌ها برای تطبیق"
+          );
+          (roles || []).forEach((item: { id: string; title?: string | null }) => {
+            const encodedValue = `role_${item.id}`;
+            map.set(encodeForLookup(item.id), encodedValue);
+            if (item.title) map.set(encodeForLookup(item.title), encodedValue);
+          });
+        }
+
+        lookupMap[lookupKey] = map;
+        continue;
+      }
+
       if (field.type === FieldType.USER) {
         const { data } = await withTimeout(
-          supabase.from("profiles").select("id, full_name"),
+          supabase.from("profiles").select("id, full_name, email"),
           20000,
           "دریافت کاربران برای تطبیق"
         );
-        (data || []).forEach((item: { id: string; full_name: string | null }) => {
+        (data || []).forEach((item: { id: string; full_name: string | null; email?: string | null }) => {
           map.set(encodeForLookup(item.id), item.id);
           if (item.full_name) map.set(encodeForLookup(item.full_name), item.id);
+          if (item.email) map.set(encodeForLookup(item.email), item.id);
         });
-      } else if (field.relationConfig?.targetModule) {
-        const targetField = field.relationConfig.targetField || "name";
-        const columns = ["id", targetField];
-        if (targetField !== "system_code") columns.push("system_code");
-        const { data } = await withTimeout(
-          supabase
-            .from(field.relationConfig.targetModule)
-            .select(columns.join(", "))
-            .limit(5000),
-          20000,
-          `دریافت داده مرجع (${field.labels.fa})`
-        );
-        const rows = (data || []) as unknown as Record<string, unknown>[];
-        rows.forEach((item) => {
-          const id = String(item.id ?? "");
-          if (!id) return;
-          map.set(encodeForLookup(id), id);
-          const title = item[targetField];
-          if (title) map.set(encodeForLookup(String(title)), id);
-          const systemCode = item.system_code;
-          if (systemCode) map.set(encodeForLookup(String(systemCode)), id);
-          if (title && systemCode) {
-            map.set(encodeForLookup(`${title} (${systemCode})`), id);
-          }
-        });
+        lookupMap[lookupKey] = map;
+        continue;
       }
-      lookupMap[field.key] = map;
+
+      if (!field.relationConfig?.targetModule) {
+        lookupMap[lookupKey] = map;
+        continue;
+      }
+
+      const targetModule = field.relationConfig.targetModule;
+      const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig.targetField);
+      const columns = getRelationLookupColumns(targetModule, targetField);
+      const selectVariants = [
+        columns.join(", "),
+        columns.filter((column) => column !== "system_code").join(", "),
+      ].filter(Boolean);
+
+      let data: any[] | null = null;
+      for (const selectExpr of selectVariants) {
+        try {
+            const result = await withTimeout(
+              supabase
+                .from(targetModule)
+                .select(selectExpr)
+                .limit(5000),
+              20000,
+              `دریافت داده مرجع (${field.labels.fa})`
+            );
+          data = (result.data || []) as any[];
+          break;
+        } catch (error: any) {
+          const errorCode = String(error?.code || '').toUpperCase();
+          const errorText = String(error?.message || error?.details || '').toLowerCase();
+          const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+          if (!isMissingColumn) throw error;
+        }
+      }
+
+      const rows = ((data || []) as unknown) as Record<string, unknown>[];
+      rows.forEach((item) => {
+        const id = String(item.id ?? "");
+        if (!id) return;
+        map.set(encodeForLookup(id), id);
+
+        getRelationLookupCandidates(targetModule, item, targetField).forEach((candidate) =>
+          map.set(encodeForLookup(candidate), id)
+        );
+      });
+
+      lookupMap[lookupKey] = map;
     }
 
     return lookupMap;
-  }, [fieldByKey, mappingRows]);
+  }, [headerFieldByKey, itemFieldByKey, mappingRows, moduleId]);
 
-  const buildPayloadFromRow = useCallback(
-    (
+  const loadDynamicOptionLookups = useCallback(async (): Promise<DynamicOptionLookupMap> => {
+    const categories = new Set<string>();
+
+    mappingRows.forEach((mapping) => {
+      if (!mapping.targetFieldKey) return;
+      const field =
+        mapping.targetScope === "item"
+          ? itemFieldByKey.get(mapping.targetFieldKey)
+          : headerFieldByKey.get(mapping.targetFieldKey);
+      if (!field) return;
+      if (!field.dynamicOptionsCategory) return;
+      if (!DYNAMIC_OPTION_IMPORT_TYPES.has(field.type)) return;
+      categories.add(field.dynamicOptionsCategory);
+    });
+
+    const lookupMap: DynamicOptionLookupMap = {};
+    for (const category of categories) {
+      const { data, error } = await withTimeout(
+        supabase
+          .from("dynamic_options")
+          .select("label, value")
+          .eq("category", category)
+          .eq("is_active", true)
+          .limit(5000),
+        20000,
+        `دریافت گزینه‌های پویا (${category})`
+      );
+      if (error) throw error;
+
+      const map = new Map<string, string>();
+      (data || []).forEach((item: { label?: string | null; value?: string | null }) => {
+        const resolvedValue = String(item.value || "").trim();
+        if (!resolvedValue) return;
+        map.set(normalizeKey(resolvedValue), resolvedValue);
+        if (item.label) map.set(normalizeKey(item.label), resolvedValue);
+      });
+      lookupMap[category] = map;
+    }
+
+    return lookupMap;
+  }, [headerFieldByKey, itemFieldByKey, mappingRows]);
+
+  const loadImportRuntimeContext = useCallback(async (): Promise<ImportRuntimeContext> => {
+    const [relationLookups, dynamicOptionLookups] = await Promise.all([
+      loadRelationLookups(),
+      loadDynamicOptionLookups(),
+    ]);
+    return {
+      relationLookups,
+      dynamicOptionLookups,
+    };
+  }, [loadDynamicOptionLookups, loadRelationLookups]);
+
+  const buildPayloadFromMappings = useCallback(
+    async (
       row: Record<string, string>,
-      relationLookups: RelationLookupMap
-    ): Record<string, unknown> => {
+      mappings: MappingRow[],
+      fieldByKey: Map<string, ImportFieldDescriptor>,
+      availableFields: ImportFieldDescriptor[],
+      importContext: ImportRuntimeContext
+    ): Promise<Record<string, unknown>> => {
       const payload: Record<string, unknown> = {};
 
-      mappingRows.forEach((mapping) => {
-        if (!mapping.targetFieldKey) return;
+      for (const mapping of mappings) {
+        if (!mapping.targetFieldKey) continue;
         const field = fieldByKey.get(mapping.targetFieldKey);
-        if (!field) return;
+        if (!field) continue;
 
         const rawValue = row[mapping.sourceColumn] ?? "";
-        const converted = convertValueByType(field, rawValue, relationLookups);
+        const converted = await convertValueByType(field, rawValue, importContext);
         if (!isValueEmpty(converted)) {
           payload[field.key] = converted;
-          return;
+          continue;
         }
 
         if (mapping.defaultValue.trim() !== "") {
-          const defaultConverted = convertValueByType(field, mapping.defaultValue, relationLookups);
+          const defaultConverted = await convertValueByType(field, mapping.defaultValue, importContext);
           if (!isValueEmpty(defaultConverted)) payload[field.key] = defaultConverted;
         }
-      });
+      }
 
-      importableFields.forEach((field) => {
+      availableFields.forEach((field) => {
         if (Object.prototype.hasOwnProperty.call(payload, field.key)) return;
         if (field.defaultValue === undefined || field.defaultValue === null) return;
         payload[field.key] = field.defaultValue;
@@ -594,7 +1330,42 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       return payload;
     },
-    [convertValueByType, fieldByKey, importableFields, mappingRows]
+    [convertValueByType]
+  );
+
+  const finalizeImportedPayload = useCallback(
+    (rawPayload: Record<string, unknown>): Record<string, unknown> => {
+      const payload = { ...rawPayload };
+      const rawAssignee = String(payload.assignee_id || "").trim();
+      const assigneeMatch = rawAssignee.match(/^(user|role)_(.+)$/);
+      if (assigneeMatch) {
+        const assigneeType = assigneeMatch[1];
+        const assigneeId = assigneeMatch[2];
+        if (assigneeType === "role" && supportsGlobalRoleAssignee(moduleId)) {
+          payload.assignee_id = null;
+          payload.assignee_role_id = assigneeId;
+        } else {
+          payload.assignee_id = assigneeId;
+          if ("assignee_role_id" in payload) payload.assignee_role_id = null;
+        }
+        if (supportsAssigneeTypeField(moduleId)) {
+          payload.assignee_type = assigneeType;
+        }
+      } else if (payload.assignee_id && supportsAssigneeTypeField(moduleId) && !payload.assignee_type) {
+        payload.assignee_type = "user";
+        if ("assignee_role_id" in payload) payload.assignee_role_id = null;
+      }
+
+      if (moduleId === "customers") {
+        const nextFullName = buildAutoCustomerName(payload);
+        if (nextFullName) {
+          payload.full_name = nextFullName;
+        }
+      }
+
+      return payload;
+    },
+    [moduleId]
   );
 
   const validateBeforeImport = useCallback((): boolean => {
@@ -605,6 +1376,24 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     if (!parsedSheet.rows.length) {
       message.error("در فایل داده‌ای برای وارد کردن پیدا نشد.");
       return false;
+    }
+    if (importMode === "grouped_invoice") {
+      if (!groupingColumn) {
+        message.error("ستون گروه‌بندی فاکتور را انتخاب کنید.");
+        return false;
+      }
+      if (groupedData.missingGroupSourceLines.length > 0) {
+        message.error(`بعضی ردیف‌ها ستون گروه‌بندی ندارند. نمونه: ${groupedData.missingGroupSourceLines.slice(0, 3).join("، ")}`);
+        return false;
+      }
+      if (!groupedData.records.length) {
+        message.error("هیچ گروه فاکتوری برای واردسازی ساخته نشد.");
+        return false;
+      }
+      if (mappedItemFieldKeys.length === 0) {
+        message.error("حداقل یک ستون را به اقلام فاکتور وصل کنید.");
+        return false;
+      }
     }
     if ((duplicateStrategy === "overwrite" || duplicateStrategy === "merge") && !duplicateFields.length) {
       message.error("برای بازنویسی یا ادغام، حداقل یک فیلد تطبیق انتخاب کنید.");
@@ -622,19 +1411,49 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   }, [
     duplicateFields.length,
     duplicateStrategy,
+    groupedData.missingGroupSourceLines,
+    groupedData.records.length,
+    groupingColumn,
+    importMode,
+    mappedItemFieldKeys.length,
     message,
     missingRequiredFields,
     parsedSheet.rows.length,
     selectedFile,
   ]);
 
+  const findExistingRecord = useCallback(
+    async (payload: Record<string, unknown>, label: string) => {
+      if (!duplicateFields.length) return null;
+
+      const duplicateFilter = duplicateFields.reduce<Record<string, unknown>>((acc, fieldKey) => {
+        const value = payload[fieldKey];
+        if (!isValueEmpty(value)) acc[fieldKey] = value;
+        return acc;
+      }, {});
+
+      if (Object.keys(duplicateFilter).length !== duplicateFields.length) return null;
+
+      let query = supabase.from(moduleConfig.table).select("*").limit(1);
+      Object.entries(duplicateFilter).forEach(([key, value]) => {
+        query = query.eq(key, value as never);
+      });
+      const { data } = await withTimeout(Promise.resolve(query), 20000, label);
+      return data && data[0] ? (data[0] as Record<string, unknown>) : null;
+    },
+    [duplicateFields, moduleConfig.table]
+  );
+
   const handleImport = useCallback(async () => {
     if (!validateBeforeImport()) return;
     setIsImporting(true);
-    setImportProgress({ current: 0, total: parsedSheet.rows.length });
+    setImportProgress({
+      current: 0,
+      total: importMode === "grouped_invoice" ? groupedData.records.length : parsedSheet.rows.length,
+    });
     try {
-      const relationLookups = await withTimeout(
-        loadRelationLookups(),
+      const importContext = await withTimeout(
+        loadImportRuntimeContext(),
         30000,
         "آماده‌سازی تطبیق روابط"
       );
@@ -643,90 +1462,186 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       let skipped = 0;
       let failed = 0;
       const errors: string[] = [];
+      const touchedCustomerIds = new Set<string>();
 
-      for (let idx = 0; idx < parsedSheet.rows.length; idx += 1) {
-        const row = parsedSheet.rows[idx];
-        const sourceLine = hasHeader ? idx + 2 : idx + 1;
-        setImportProgress({ current: idx + 1, total: parsedSheet.rows.length });
+      if (importMode === "grouped_invoice") {
+        const headerMappings = mappingRows.filter((row) => row.targetScope === "header");
+        const itemMappings = mappingRows.filter((row) => row.targetScope === "item");
 
-        if (!buildRowHasAnyValue(row)) continue;
+        for (let idx = 0; idx < groupedData.records.length; idx += 1) {
+          const record = groupedData.records[idx];
+          const sourceLine = record.sourceLines[0];
+          setImportProgress({ current: idx + 1, total: groupedData.records.length });
 
-        const payloadRaw = buildPayloadFromRow(row, relationLookups);
-        const payload =
-          moduleId === "tasks"
-            ? attachTaskCompletionIfNeeded(payloadRaw as Record<string, unknown>)
-            : payloadRaw;
-
-        const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
-        if (missingInRow.length > 0) {
-          failed += 1;
-          errors.push(`ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
-          continue;
-        }
-
-        try {
-          let existingRecord: Record<string, unknown> | null = null;
-
-          if (duplicateFields.length > 0) {
-            const duplicateFilter = duplicateFields.reduce<Record<string, unknown>>((acc, fieldKey) => {
-              const value = payload[fieldKey];
-              if (!isValueEmpty(value)) acc[fieldKey] = value;
-              return acc;
-            }, {});
-
-            if (Object.keys(duplicateFilter).length === duplicateFields.length) {
-              let query = supabase.from(moduleConfig.table).select("*").limit(1);
-              Object.entries(duplicateFilter).forEach(([key, value]) => {
-                query = query.eq(key, value as never);
-              });
-              const { data } = await withTimeout(
-                Promise.resolve(query),
-                20000,
-                `بررسی تکراری بودن ردیف ${sourceLine}`
+          try {
+            const headerPayloadRaw = await buildPayloadFromMappings(
+              record.firstRow,
+              headerMappings,
+              headerFieldByKey,
+              headerImportableFields,
+              importContext
+            );
+            const headerPayload = finalizeInvoiceHeaderPayload(headerPayloadRaw);
+            const itemPayloads: Record<string, unknown>[] = [];
+            for (const row of record.rows) {
+              const itemPayload = finalizeInvoiceItemPayload(
+                await buildPayloadFromMappings(row, itemMappings, itemFieldByKey, itemImportableFields, importContext)
               );
-              existingRecord = (data && data[0] ? (data[0] as Record<string, unknown>) : null);
+              if (Object.keys(itemPayload).length > 0) itemPayloads.push(itemPayload);
             }
-          }
 
-          if (existingRecord) {
-            if (duplicateStrategy === "skip") {
-              skipped += 1;
+            if (!itemPayloads.length) {
+              failed += 1;
+              errors.push(`فاکتور ${record.key} در ردیف ${sourceLine}: هیچ قلم معتبری برای ثبت پیدا نشد.`);
               continue;
             }
-            const updatePayload =
-              duplicateStrategy === "merge"
-                ? Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
-                    if (!isValueEmpty(value)) acc[key] = value;
-                    return acc;
-                  }, {})
-                : payload;
+
+            const payload = finalizeImportedPayload({
+              ...headerPayload,
+              invoiceItems: itemPayloads,
+            });
+
+            const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
+            if (missingInRow.length > 0) {
+              failed += 1;
+              errors.push(`فاکتور ${record.key} در ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
+              continue;
+            }
+
+            const existingRecord = await findExistingRecord(payload, `بررسی تکراری بودن فاکتور ${record.key}`);
+            if (existingRecord) {
+              if (duplicateStrategy === "skip") {
+                skipped += 1;
+                continue;
+              }
+
+              const updatePayload =
+                duplicateStrategy === "merge"
+                  ? Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+                      if (!isValueEmpty(value)) acc[key] = value;
+                      return acc;
+                    }, {})
+                  : payload;
+
+              const { error } = await withTimeout(
+                supabase
+                  .from(moduleConfig.table)
+                  .update(updatePayload)
+                  .eq("id", existingRecord.id as string),
+                20000,
+                `بروزرسانی فاکتور ${record.key}`
+              );
+              if (error) throw error;
+              updated += 1;
+              if (moduleId === "invoices" && payload.customer_id) {
+                touchedCustomerIds.add(String(payload.customer_id));
+              }
+              continue;
+            }
 
             const { error } = await withTimeout(
-              supabase
-                .from(moduleConfig.table)
-                .update(updatePayload)
-                .eq("id", existingRecord.id as string),
+              supabase.from(moduleConfig.table).insert(payload),
               20000,
-              `بروزرسانی ردیف ${sourceLine}`
+              `ثبت فاکتور ${record.key}`
             );
             if (error) throw error;
-            updated += 1;
+            inserted += 1;
+            if (moduleId === "invoices" && payload.customer_id) {
+              touchedCustomerIds.add(String(payload.customer_id));
+            }
+          } catch (rowError) {
+            failed += 1;
+            errors.push(
+              `فاکتور ${record.key} در ردیف ${sourceLine}: ${toFaErrorMessage(rowError as any, "خطای نامشخص")}`
+            );
+          }
+        }
+      } else {
+        const headerMappings = mappingRows.filter((row) => row.targetScope === "header");
+
+        for (let idx = 0; idx < parsedSheet.rows.length; idx += 1) {
+          const row = parsedSheet.rows[idx];
+          const sourceLine = hasHeader ? idx + 2 : idx + 1;
+          setImportProgress({ current: idx + 1, total: parsedSheet.rows.length });
+
+          if (!buildRowHasAnyValue(row)) continue;
+
+          const payloadRaw = await buildPayloadFromMappings(
+            row,
+            headerMappings,
+            headerFieldByKey,
+            headerImportableFields,
+            importContext
+          );
+          const payloadPrepared =
+            moduleId === "tasks"
+              ? attachTaskCompletionIfNeeded(payloadRaw as Record<string, unknown>)
+              : payloadRaw;
+          const payload = finalizeImportedPayload(payloadPrepared as Record<string, unknown>);
+
+          const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
+          if (missingInRow.length > 0) {
+            failed += 1;
+            errors.push(`ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
             continue;
           }
 
-          const { error } = await withTimeout(
-            supabase.from(moduleConfig.table).insert(payload),
-            20000,
-            `ثبت ردیف ${sourceLine}`
-          );
-          if (error) throw error;
-          inserted += 1;
-        } catch (rowError) {
-          failed += 1;
-          errors.push(
-            `ردیف ${sourceLine}: ${rowError instanceof Error ? rowError.message : "خطای نامشخص"}`
-          );
+          try {
+            const existingRecord = await findExistingRecord(payload, `بررسی تکراری بودن ردیف ${sourceLine}`);
+
+            if (existingRecord) {
+              if (duplicateStrategy === "skip") {
+                skipped += 1;
+                continue;
+              }
+              const updatePayload =
+                duplicateStrategy === "merge"
+                  ? Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+                      if (!isValueEmpty(value)) acc[key] = value;
+                      return acc;
+                    }, {})
+                  : payload;
+
+              const { error } = await withTimeout(
+                supabase
+                  .from(moduleConfig.table)
+                  .update(updatePayload)
+                  .eq("id", existingRecord.id as string),
+                20000,
+                `بروزرسانی ردیف ${sourceLine}`
+              );
+              if (error) throw error;
+              updated += 1;
+              if (moduleId === "invoices" && payload.customer_id) {
+                touchedCustomerIds.add(String(payload.customer_id));
+              }
+              continue;
+            }
+
+            const { error } = await withTimeout(
+              supabase.from(moduleConfig.table).insert(payload),
+              20000,
+              `ثبت ردیف ${sourceLine}`
+            );
+            if (error) throw error;
+            inserted += 1;
+            if (moduleId === "invoices" && payload.customer_id) {
+              touchedCustomerIds.add(String(payload.customer_id));
+            }
+          } catch (rowError) {
+            failed += 1;
+            errors.push(
+              `ردیف ${sourceLine}: ${toFaErrorMessage(rowError as any, "خطای نامشخص")}`
+            );
+          }
         }
+      }
+
+      if (moduleId === "invoices" && autoSyncCustomerStats && touchedCustomerIds.size > 0) {
+        await syncCustomerLevelsByInvoiceCustomers({
+          supabase: supabase as any,
+          customerIds: Array.from(touchedCustomerIds),
+        });
       }
 
       const baseMessage = `واردسازی انجام شد. جدید: ${inserted} | بروزرسانی: ${updated} | تکراری/ثبت‌نشده: ${skipped} | خطا: ${failed}`;
@@ -746,11 +1661,21 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       setImportProgress(null);
     }
   }, [
-    buildPayloadFromRow,
+    autoSyncCustomerStats,
+    buildPayloadFromMappings,
     duplicateFields,
     duplicateStrategy,
+    finalizeImportedPayload,
+    findExistingRecord,
+    groupedData.records,
     hasHeader,
-    loadRelationLookups,
+    headerFieldByKey,
+    headerImportableFields,
+    importMode,
+    itemFieldByKey,
+    itemImportableFields,
+    loadImportRuntimeContext,
+    mappingRows,
     message,
     moduleConfig.table,
     moduleId,
@@ -864,6 +1789,46 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             </div>
           </div>
 
+          {supportsGroupedInvoiceImport && (
+            <div className="rounded-xl border border-gray-200 px-3 py-2 space-y-2">
+              <div className="text-sm text-gray-500">حالت ورود اطلاعات</div>
+              <Select
+                value={importMode}
+                onChange={(value) => setImportMode(value)}
+                className="w-full"
+                options={[
+                  { label: "ردیف‌های مستقل", value: "simple" },
+                  { label: "فاکتور گروه‌بندی‌شده", value: "grouped_invoice" },
+                ]}
+              />
+            </div>
+          )}
+
+          {supportsGroupedInvoiceImport && importMode === "grouped_invoice" && parsedSheet.headers.length > 0 && (
+            <div className="rounded-xl border border-gray-200 px-3 py-2 space-y-2">
+              <div className="text-sm text-gray-500">
+                ستون تشخیص فاکتور <span className="text-red-500">*</span>
+              </div>
+              <Select
+                value={groupingColumn || undefined}
+                onChange={(value) => setGroupingColumn(value)}
+                className="w-full"
+                options={parsedSheet.headers.map((header) => ({ label: header, value: header }))}
+              />
+              {groupingColumn && (
+                <div className="text-xs text-gray-500">
+                  تعداد فاکتورهای تشخیص‌داده‌شده: {groupedData.records.length.toLocaleString("fa-IR")}
+                  {groupedData.missingGroupSourceLines.length > 0 && (
+                    <span className="text-red-500">
+                      {" "}
+                      | ردیف‌های بدون کلید: {groupedData.missingGroupSourceLines.length.toLocaleString("fa-IR")}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {isParsing && (
             <div className="flex items-center gap-2 text-gray-500">
               <Spin size="small" />
@@ -899,13 +1864,25 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               onChange={(values) => setDuplicateFields(values)}
               className="w-full"
               optionFilterProp="label"
-              options={importableFields.map((field) => ({
+              options={headerImportableFields.map((field) => ({
                 label: field.labels.fa,
                 value: field.key,
               }))}
               placeholder="انتخاب فیلدهای تطبیق"
             />
           </div>
+
+          {moduleId === "invoices" && (
+            <div className="rounded-xl border border-gray-200 px-3 py-2">
+              <Checkbox
+                checked={autoSyncCustomerStats}
+                onChange={(event) => setAutoSyncCustomerStats(event.target.checked)}
+              >
+                بعد از ایمپورت، آمار خرید مشتری‌ها مثل تاریخ اولین خرید، تاریخ آخرین خرید و تعداد فاکتورها
+                به صورت خودکار محاسبه و بروزرسانی شود
+              </Checkbox>
+            </div>
+          )}
         </div>
       );
     }
@@ -938,6 +1915,13 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           <Checkbox checked={saveCustomMapping} onChange={(event) => setSaveCustomMapping(event.target.checked)} />
         </div>
 
+        {importMode === "grouped_invoice" && (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+            این حالت، ستون‌های فایل را به دو بخش تقسیم می‌کند: «سربرگ فاکتور» و «اقلام فاکتور».
+            تعداد فاکتورهای آماده واردسازی: {groupedData.records.length.toLocaleString("fa-IR")}
+          </div>
+        )}
+
         <Table<MappingRow>
           rowKey="sourceColumn"
           pagination={false}
@@ -959,30 +1943,60 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               width: 260,
               render: (value: string) => <span className="text-gray-600">{value || "-"}</span>,
             },
+            ...(importMode === "grouped_invoice"
+              ? [
+                  {
+                    title: "بخش",
+                    dataIndex: "targetScope",
+                    key: "targetScope",
+                    width: 180,
+                    render: (value: MappingTargetScope, row: MappingRow) => (
+                      <Select
+                        value={value}
+                        className="w-full"
+                        onChange={(nextScope) =>
+                          updateMappingRow(row.sourceColumn, {
+                            targetScope: nextScope,
+                            targetFieldKey: null,
+                          })
+                        }
+                        options={[
+                          { label: "سربرگ فاکتور", value: "header" },
+                          { label: "اقلام فاکتور", value: "item" },
+                        ]}
+                      />
+                    ),
+                  },
+                ]
+              : []),
             {
               title: "فیلد های موجود",
               dataIndex: "targetFieldKey",
               key: "targetFieldKey",
               width: 320,
-              render: (value: string | null, row: MappingRow) => (
-                <Select
-                  value={value}
-                  allowClear
-                  className="w-full"
-                  optionFilterProp="label"
-                  placeholder="انتخاب فیلد"
-                  onChange={(nextValue) =>
-                    updateMappingRow(row.sourceColumn, { targetFieldKey: nextValue || null })
-                  }
-                  options={importableFields.map((field) => ({
-                    label: field.labels.fa,
-                    value: field.key,
-                    disabled:
-                      Boolean(field.key !== value) &&
-                      mappedFieldKeys.includes(field.key),
-                  }))}
-                />
-              ),
+              render: (value: string | null, row: MappingRow) => {
+                const options = (row.targetScope === "item" ? itemImportableFields : headerImportableFields).map((field) => ({
+                  label: field.labels.fa,
+                  value: field.key,
+                  disabled:
+                    Boolean(field.key !== value) &&
+                    (row.targetScope === "item" ? mappedItemFieldKeys : mappedHeaderFieldKeys).includes(field.key),
+                }));
+
+                return (
+                  <Select
+                    value={value}
+                    allowClear
+                    className="w-full"
+                    optionFilterProp="label"
+                    placeholder="انتخاب فیلد"
+                    onChange={(nextValue) =>
+                      updateMappingRow(row.sourceColumn, { targetFieldKey: nextValue || null })
+                    }
+                    options={options}
+                  />
+                );
+              },
             },
             {
               title: "مقدار پیش فرض",
@@ -1004,20 +2018,29 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       </div>
     );
   }, [
+    autoSyncCustomerStats,
     duplicateFields,
     duplicateStrategy,
     fileList,
+    groupedData.missingGroupSourceLines.length,
+    groupedData.records.length,
+    groupingColumn,
     handleRemoveFile,
     handleSelectFile,
+    headerImportableFields,
     hasHeader,
-    importableFields,
+    importMode,
+    itemImportableFields,
     isParsing,
-    mappedFieldKeys,
+    mappedHeaderFieldKeys,
+    mappedItemFieldKeys,
     mappedRequiredFieldKeys,
     mappingRows,
+    moduleId,
     requiredFields,
     saveCustomMapping,
     step,
+    supportsGroupedInvoiceImport,
     updateMappingRow,
     encoding,
   ]);

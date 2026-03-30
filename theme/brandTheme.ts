@@ -1,7 +1,10 @@
 export const THEME_STORAGE_KEY = 'kalamapp-theme';
 export const BRANDING_UPDATED_EVENT = 'erp:branding-updated';
+export const BRANDING_APPLIED_EVENT = 'erp:branding-applied';
 export const BRANDING_INTEGRATION_CONNECTION_TYPE = 'ui_theme';
 export const BRANDING_INTEGRATION_PROVIDER = 'branding';
+export const AUTO_THEME_LIGHT_START_HOUR = 6;
+export const AUTO_THEME_DARK_START_HOUR = 18;
 
 export interface BrandingPalette {
   primary: string;
@@ -19,6 +22,11 @@ export interface BrandingConfig {
   paletteKey: BrandingPaletteKey;
   palette: BrandingPalette;
 }
+
+export const resolveSmartThemeMode = (date = new Date()): 'light' | 'dark' => {
+  const hour = Number(date?.getHours?.() ?? 12);
+  return hour >= AUTO_THEME_DARK_START_HOUR || hour < AUTO_THEME_LIGHT_START_HOUR ? 'dark' : 'light';
+};
 
 export const BRAND_PALETTE_PRESETS = {
   executive_indigo: {

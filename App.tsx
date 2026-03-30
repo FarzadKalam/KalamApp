@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Refine, Authenticated } from "@refinedev/core";
-import { notificationProvider, ErrorComponent } from "@refinedev/antd";
+import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
@@ -25,6 +25,8 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import AccountingPage from "./pages/AccountingPage";
 import AccountingAccountReviewPage from "./pages/AccountingAccountReviewPage";
+import AccountingReportsPage from "./pages/AccountingReportsPage";
+import AccountingReportViewerPage from "./pages/AccountingReportViewerPage";
 import AccountingSettingsPage from "./pages/AccountingSettingsPage";
 import ChartOfAccountsTreePage from "./pages/ChartOfAccountsTreePage";
 import AccountingRecordPage from "./pages/AccountingRecordPage";
@@ -36,53 +38,57 @@ import ProductionGroupOrdersList from "./pages/ProductionGroupOrdersList";
 import ProductionGroupOrderWizard from "./pages/ProductionGroupOrderWizard";
 import HRPage from "./pages/HRPage";
 import FilesGalleryPage from "./pages/FilesGalleryPage";
+import WorkSchedulesPage from "./pages/WorkSchedulesPage";
+import HrQuickRequestPage from "./pages/HrQuickRequestPage";
 import {
-  BRANDING_INTEGRATION_CONNECTION_TYPE,
-  BRANDING_INTEGRATION_PROVIDER,
+  BRANDING_APPLIED_EVENT,
   BRANDING_UPDATED_EVENT,
   DEFAULT_BRANDING,
   THEME_STORAGE_KEY,
   applyBrandCssVariables,
-  mergeBrandingConfig,
+  resolveSmartThemeMode,
   type BrandingConfig,
-  type BrandingSettingsPayload,
 } from "./theme/brandTheme";
 import { isAccountingMinimalModule } from "./utils/accountingModules";
-import { normalizeCurrencyConfig, persistCurrencyConfig } from "./utils/currency";
-
-const BRANDING_CACHE_KEY = 'erp:branding-cache';
+import {
+  clearRuntimeBrandingCache,
+  persistRuntimeBranding,
+  loadRuntimeBranding,
+  readCachedBranding,
+} from "./utils/brandingRuntime";
+import { clearCurrentUserRoleContextCache } from "./utils/permissions";
+import { clearReferenceDataCache } from "./utils/referenceData";
+import { clearSessionBootstrapCache, primeSessionBootstrap } from "./utils/sessionCache";
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
   const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
   if (savedTheme === "dark") return true;
   if (savedTheme === "light") return false;
-  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
+  return resolveSmartThemeMode() === "dark";
 };
 
 const getInitialBranding = (): BrandingConfig => {
   if (typeof window === "undefined") return DEFAULT_BRANDING;
-  try {
-    const raw = window.localStorage.getItem(BRANDING_CACHE_KEY);
-    if (!raw) return DEFAULT_BRANDING;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return DEFAULT_BRANDING;
-    const snapshot = parsed as Partial<BrandingConfig>;
-    const paletteKey = String(snapshot.paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload['palette_key'];
-    return mergeBrandingConfig(DEFAULT_BRANDING, {
-      brand_name: String(snapshot.brandName || DEFAULT_BRANDING.brandName),
-      short_name: String(snapshot.shortName || DEFAULT_BRANDING.shortName),
-      app_title: String(snapshot.appTitle || DEFAULT_BRANDING.appTitle),
-      palette_key: paletteKey,
-    });
-  } catch {
-    return DEFAULT_BRANDING;
-  }
+  return readCachedBranding() || DEFAULT_BRANDING;
+};
+
+const resolvePopupContainer = (triggerNode?: HTMLElement) => {
+  if (typeof document === "undefined") return triggerNode || ({} as HTMLElement);
+  if (!triggerNode) return document.body;
+  const overlayHost = triggerNode.closest(
+    ".ant-modal-root, .ant-modal, .ant-drawer, .ant-drawer-content, .ant-popover"
+  ) as HTMLElement | null;
+  return overlayHost || triggerNode.parentElement || document.body;
 };
 
 function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
   const [branding, setBranding] = useState<BrandingConfig>(getInitialBranding);
+  const authLifecycleRef = useRef<{ initialized: boolean; userId: string | null }>({
+    initialized: false,
+    userId: null,
+  });
 
   useEffect(() => {
     document.body.style.fontFamily = 'Vazirmatn, sans-serif';
@@ -90,84 +96,88 @@ function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDarkMode);
-    window.localStorage.setItem(THEME_STORAGE_KEY, isDarkMode ? "dark" : "light");
   }, [isDarkMode]);
 
-  const loadBranding = useCallback(async () => {
+  const handleToggleTheme = useCallback(() => {
+    setIsDarkMode((prev) => {
+      const next = !prev;
+      window.localStorage.setItem(THEME_STORAGE_KEY, next ? "dark" : "light");
+      return next;
+    });
+  }, []);
+
+  const loadBranding = useCallback(async (force = false) => {
     try {
-      const [companyResult, themeResult] = await Promise.all([
-        supabase
-          .from('company_settings')
-          .select('*')
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle(),
-        supabase
-          .from('integration_settings')
-          .select('id, settings')
-          .eq('connection_type', BRANDING_INTEGRATION_CONNECTION_TYPE)
-          .eq('provider', BRANDING_INTEGRATION_PROVIDER)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
-
-      const companyRow = (companyResult.data || {}) as Record<string, any>;
-      const companyFullName = String(companyRow.company_full_name || companyRow.company_name || '').trim();
-      const tradeName = String(companyRow.trade_name || '').trim();
-      const paletteKey = String(companyRow.brand_palette_key || '').trim();
-      const settingsContainer = themeResult.data?.settings;
-      const rawBranding =
-        settingsContainer &&
-        typeof settingsContainer === 'object' &&
-        'branding' in (settingsContainer as Record<string, unknown>) &&
-        (settingsContainer as Record<string, unknown>).branding &&
-        typeof (settingsContainer as Record<string, unknown>).branding === 'object'
-          ? ((settingsContainer as Record<string, unknown>).branding as Record<string, unknown>)
-          : (settingsContainer as Record<string, unknown> | undefined);
-
-      const merged = mergeBrandingConfig(DEFAULT_BRANDING, {
-        ...(rawBranding || {}),
-        palette_key: String(rawBranding?.palette_key || paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload['palette_key'],
-        brand_name: String(rawBranding?.brand_name || tradeName || companyFullName || DEFAULT_BRANDING.brandName),
-        app_title: String(rawBranding?.app_title || companyFullName || tradeName || DEFAULT_BRANDING.appTitle),
-        short_name: String(rawBranding?.short_name || tradeName || companyFullName || DEFAULT_BRANDING.shortName),
-      });
-      const currency = normalizeCurrencyConfig({
-        code: String(companyRow.currency_code || '').trim().toUpperCase() as any,
-        label: String(companyRow.currency_label || '').trim(),
-      });
-      persistCurrencyConfig(currency);
-      window.localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify(merged));
-      setBranding(merged);
-    } catch {
-      persistCurrencyConfig(null);
-      setBranding(DEFAULT_BRANDING);
+      if (force) {
+        clearRuntimeBrandingCache();
+      }
+      const runtimeBranding = await loadRuntimeBranding({ force });
+      persistRuntimeBranding(runtimeBranding);
+      setBranding(runtimeBranding.branding);
+    } catch (error) {
+      console.warn('Could not load branding settings', error);
     }
   }, []);
 
   useEffect(() => {
-    loadBranding();
-    window.addEventListener(BRANDING_UPDATED_EVENT, loadBranding as EventListener);
+    const handleBrandingUpdated = () => {
+      void loadBranding(true);
+    };
+
+    void loadBranding();
+    window.addEventListener(BRANDING_UPDATED_EVENT, handleBrandingUpdated as EventListener);
     return () => {
-      window.removeEventListener(BRANDING_UPDATED_EVENT, loadBranding as EventListener);
+      window.removeEventListener(BRANDING_UPDATED_EVENT, handleBrandingUpdated as EventListener);
     };
   }, [loadBranding]);
 
   useEffect(() => {
     applyBrandCssVariables(branding);
     document.documentElement.setAttribute('data-brand-title', branding.appTitle);
+    window.dispatchEvent(new CustomEvent(BRANDING_APPLIED_EVENT));
   }, [branding]);
 
   useEffect(() => {
-    const publicPaths = ["/inquiry"];
+    const publicPaths = ["/inquiry", "/login"];
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       const eventName = String(event);
       const pathname = window.location.pathname;
       const isPublic = publicPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+      const nextUserId = session?.user?.id || null;
+      const previousUserId = authLifecycleRef.current.userId;
+      const userChanged = previousUserId !== nextUserId;
+      authLifecycleRef.current.userId = nextUserId;
+
+      if (eventName === "INITIAL_SESSION") {
+        if (authLifecycleRef.current.initialized) return;
+        authLifecycleRef.current.initialized = true;
+        if (!nextUserId) return;
+        void primeSessionBootstrap(supabase);
+        void loadBranding();
+        return;
+      }
+
+      if (eventName === "SIGNED_IN") {
+        authLifecycleRef.current.initialized = true;
+        if (!userChanged && nextUserId) return;
+        clearSessionBootstrapCache();
+        clearCurrentUserRoleContextCache();
+        clearReferenceDataCache();
+        void primeSessionBootstrap(supabase);
+        void loadBranding(true);
+        return;
+      }
+
+      if (eventName === "TOKEN_REFRESHED") {
+        return;
+      }
 
       if ((eventName === "SIGNED_OUT" || eventName === "TOKEN_REFRESH_FAILED") && !isPublic) {
+        authLifecycleRef.current.userId = null;
+        clearSessionBootstrapCache();
+        clearCurrentUserRoleContextCache();
+        clearReferenceDataCache();
         window.location.replace("/login");
       }
     });
@@ -175,7 +185,7 @@ function App() {
     return () => {
       subscription?.subscription?.unsubscribe();
     };
-  }, []);
+  }, [loadBranding]);
 
   const resources = Object.values(MODULES).map((mod) => ({
     name: mod.id, 
@@ -196,8 +206,11 @@ function App() {
     if (pathname.startsWith("/settings")) return "تنظیمات";
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
+    if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
     if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
     if (pathname.startsWith("/accounting/settings")) return "تنظیمات حسابداری";
+    if (pathname === "/accounting/reports") return "گزارشات حسابداری";
+    if (pathname.startsWith("/accounting/reports/")) return "گزارش حسابداری";
     if (pathname.startsWith("/accounting/account-review")) return "مرور حساب ها";
     if (pathname.startsWith("/cash_bank")) return "نقد و بانک";
     if (pathname === "/accounting" || pathname.startsWith("/accounting/")) return "حسابداری";
@@ -253,6 +266,12 @@ function App() {
 
   const ModuleCreateRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === "work_schedules") {
+      return <WorkSchedulesPage />;
+    }
+    if (routeModuleId === "leave_requests" || routeModuleId === "overtime_requests" || routeModuleId === "mission_requests") {
+      return <HrQuickRequestPage />;
+    }
     if (routeModuleId === "journal_entries") {
       return <JournalEntryCreatePage />;
     }
@@ -264,6 +283,12 @@ function App() {
 
   const ModuleShowRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId === "work_schedules") {
+      return <WorkSchedulesPage />;
+    }
+    if (routeModuleId === "leave_requests" || routeModuleId === "overtime_requests" || routeModuleId === "mission_requests") {
+      return <HrQuickRequestPage />;
+    }
     if (routeModuleId === "journal_entries") {
       return <JournalEntryShowPage />;
     }
@@ -273,11 +298,86 @@ function App() {
     return <ModuleShow />;
   };
 
+  const RefineAppContent: React.FC = () => {
+    const notificationProvider = useNotificationProvider();
+
+    return (
+      <Refine
+        dataProvider={dataProvider(supabase)}
+        authProvider={authProvider}
+        notificationProvider={notificationProvider}
+        routerProvider={routerBindings}
+        resources={resources}
+        options={{
+          syncWithLocation: true,
+          warnWhenUnsavedChanges: true,
+          disableTelemetry: true,
+        }}
+      >
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/inquiry/*" element={<InquiryForm />} />
+
+          <Route
+            element={
+              <Authenticated
+                key="authenticated-inner"
+                fallback={<CatchAllNavigate to="/login" />}
+              >
+                <Layout
+                  isDarkMode={isDarkMode}
+                  toggleTheme={handleToggleTheme}
+                  brandShortName={branding.shortName}
+                >
+                  <Outlet />
+                </Layout>
+              </Authenticated>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/profile/:id" element={<ProfilePage />} />
+            <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
+            <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
+            <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
+            <Route path="/hr" element={<HRPage />} />
+            <Route path="/hr/:employeeId" element={<HRPage />} />
+                <Route path="/gallery" element={<FilesGalleryPage />} />
+            <Route path="/accounting" element={<AccountingPage />} />
+            <Route path="/accounting/reports" element={<AccountingReportsPage />} />
+            <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
+            <Route path="/cash_bank" element={<CashBankPage />} />
+            <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
+            <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
+            <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
+            <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
+            <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
+            <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
+            
+            <Route path="/:moduleId">
+              <Route index element={<ModuleListRouteResolver />} />
+              <Route path="create" element={<ModuleCreateRouteResolver />} />
+              <Route path=":id" element={<ModuleShowRouteResolver />} />
+              <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
+            </Route>
+
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<ErrorComponent />} />
+          </Route>
+        </Routes>
+        
+        <UnsavedChangesNotifier />
+        <DocumentTitleHandler handler={titleHandler} />
+      </Refine>
+    );
+  };
+
   return (
     <BrowserRouter>
       <ConfigProvider 
         direction="rtl" 
         locale={faIR} 
+        getPopupContainer={resolvePopupContainer}
         theme={{
           algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: {
@@ -288,70 +388,7 @@ function App() {
       >
         <JalaliLocaleListener />
         <AntdApp>
-          <Refine
-            dataProvider={dataProvider(supabase)}
-            authProvider={authProvider}
-            notificationProvider={notificationProvider}
-            routerProvider={routerBindings}
-            resources={resources} 
-            options={{
-              syncWithLocation: true, 
-              warnWhenUnsavedChanges: true, 
-              projectId: "kalam-tazeh-holding",
-            }}
-          >
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/inquiry/*" element={<InquiryForm />} />
-
-              <Route
-                element={
-                  <Authenticated
-                    key="authenticated-inner"
-                    fallback={<CatchAllNavigate to="/login" />}
-                  >
-                    <Layout
-                      isDarkMode={isDarkMode}
-                      toggleTheme={() => setIsDarkMode((prev) => !prev)}
-                      brandShortName={branding.shortName}
-                    >
-                      <Outlet />
-                    </Layout>
-                  </Authenticated>
-                }
-              >
-                <Route index element={<Dashboard />} />
-                <Route path="/profile" element={<ProfilePage />} />
-                <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
-                <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
-                <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
-                <Route path="/hr" element={<HRPage />} />
-                <Route path="/hr/:employeeId" element={<HRPage />} />
-                <Route path="/gallery" element={<FilesGalleryPage />} />
-                <Route path="/accounting" element={<AccountingPage />} />
-                <Route path="/cash_bank" element={<CashBankPage />} />
-                <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
-                <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
-                <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
-                <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
-                <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
-                <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
-                
-                <Route path="/:moduleId">
-                  <Route index element={<ModuleListRouteResolver />} />
-                  <Route path="create" element={<ModuleCreateRouteResolver />} />
-                  <Route path=":id" element={<ModuleShowRouteResolver />} />
-                  <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
-                </Route>
-
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="*" element={<ErrorComponent />} />
-              </Route>
-            </Routes>
-            
-            <UnsavedChangesNotifier />
-            <DocumentTitleHandler handler={titleHandler} />
-          </Refine>
+          <RefineAppContent />
         </AntdApp>
       </ConfigProvider>
     </BrowserRouter>

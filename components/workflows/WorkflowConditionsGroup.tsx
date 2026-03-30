@@ -38,13 +38,17 @@ const getFieldOptions = (
     return dynamicOptions[field.dynamicOptionsCategory] || [];
   }
   if (
-    (field.type === FieldType.RELATION || field.type === FieldType.USER) &&
+    (field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS) &&
     relationOptions[field.key]
   ) {
     return relationOptions[field.key] || [];
   }
   return [];
 };
+
+const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
+
+const selectPopupStyles = { popup: { root: { zIndex: 12600 } } } as const;
 
 const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   value,
@@ -99,6 +103,19 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     onChange(safeValue.filter((item) => item.id !== id));
   };
 
+  const commonSelectProps = {
+    showSearch: true,
+    optionFilterProp: 'label' as const,
+    disabled,
+    placeholder: 'انتخاب مقدار',
+    className: 'w-full',
+    getPopupContainer: popupContainer,
+    popupMatchSelectWidth: false,
+    listHeight: 240,
+    virtual: false,
+    styles: selectPopupStyles,
+  };
+
   const renderValueInput = (condition: WorkflowCondition) => {
     const field = fields.find((f) => f.key === condition.field);
     if (!field) {
@@ -107,7 +124,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
 
     if (!workflowOperatorNeedsValue(condition.operator)) {
       return (
-        <div className="text-xs text-gray-400 py-1 px-2 rounded border border-dashed border-gray-200">
+        <div className="rounded border border-dashed border-gray-200 px-2 py-1 text-xs text-gray-400">
           این عملگر نیاز به مقدار ندارد
         </div>
       );
@@ -127,13 +144,6 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     }
 
     const options = getFieldOptions(field, dynamicOptions, relationOptions);
-    const commonSelectProps = {
-      showSearch: true,
-      optionFilterProp: 'label' as const,
-      disabled,
-      placeholder: 'انتخاب مقدار',
-      className: 'w-full',
-    };
 
     if (field.dynamicOptionsCategory) {
       return (
@@ -150,6 +160,8 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           className="w-full"
           allowClear
           showSearch
+          getPopupContainer={popupContainer as any}
+          popupStyle={{ zIndex: 12600 }}
         />
       );
     }
@@ -213,7 +225,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
 
     if (field.type === FieldType.CHECKBOX) {
       return (
-        <div className="w-full flex items-center justify-start px-1">
+        <div className="flex w-full items-center justify-start px-1">
           <Switch
             checked={!!condition.value}
             disabled={disabled}
@@ -283,7 +295,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           return (
             <div
               key={condition.id}
-              className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-white/5 p-3"
+              className="grid grid-cols-1 items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/70 p-3 md:grid-cols-12 dark:border-gray-700 dark:bg-white/5"
             >
               <div className="md:col-span-4">
                 <Select
@@ -291,6 +303,11 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   optionFilterProp="label"
                   disabled={disabled}
                   options={fieldOptions}
+                  getPopupContainer={popupContainer}
+                  popupMatchSelectWidth={false}
+                  listHeight={240}
+                  virtual={false}
+                  styles={selectPopupStyles}
                   value={condition.field}
                   onChange={(nextFieldKey) => {
                     const nextField = fields.find((f) => f.key === nextFieldKey);
@@ -308,6 +325,11 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                 <Select
                   disabled={disabled}
                   options={getWorkflowOperatorOptions(field)}
+                  getPopupContainer={popupContainer}
+                  popupMatchSelectWidth={false}
+                  listHeight={220}
+                  virtual={false}
+                  styles={selectPopupStyles}
                   value={condition.operator}
                   onChange={(nextOperator) =>
                     updateCondition(condition.id, {
@@ -319,7 +341,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                 />
               </div>
               <div className="md:col-span-4">{renderValueInput(condition)}</div>
-              <div className="md:col-span-1 flex justify-end">
+              <div className="flex justify-end md:col-span-1">
                 <Button
                   type="text"
                   danger

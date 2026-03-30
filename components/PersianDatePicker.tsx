@@ -16,6 +16,7 @@ interface PersianDatePickerProps {
   className?: string;
   disabled?: boolean;
   placeholder?: string;
+  zIndex?: number;
 }
 
 const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
@@ -25,6 +26,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   className,
   disabled,
   placeholder,
+  zIndex = 10050,
 }) => {
   const safeOnChange = onChange ?? (() => {});
 
@@ -92,7 +94,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
     locale: persian_fa,
     format,
     portal: true,
-    zIndex: 10050,
+    zIndex,
     plugins:
       type === "DATETIME" || type === "TIME"
         ? [<TimePicker key="time" position="bottom" hideSeconds />]

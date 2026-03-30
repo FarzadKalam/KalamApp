@@ -1,9 +1,22 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType } from '../types';
+import {
+  ModuleDefinition,
+  ModuleNature,
+  ViewMode,
+  FieldType,
+  FieldLocation,
+  BlockType,
+  LogicOperator,
+  FieldNature,
+} from '../types';
 
 export const supplierModule: ModuleDefinition = {
   id: 'suppliers',
   titles: { fa: 'مدیریت تامین‌کنندگان', en: 'Suppliers' },
   nature: ModuleNature.STANDARD,
+  relationDisplay: {
+    labelTemplate: '{{business_name}} - {{last_name}}',
+    searchFields: ['business_name', 'first_name', 'last_name', 'mobile_1', 'phone', 'system_code', 'id'],
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID, ViewMode.KANBAN],
   defaultViewMode: ViewMode.LIST,
   fields: [
@@ -11,15 +24,28 @@ export const supplierModule: ModuleDefinition = {
     { key: 'business_name', labels: { fa: 'نام تجاری/فروشگاه', en: 'Business Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, validation: { required: true }, isKey: true, isTableColumn: true },
     { key: 'last_name', labels: { fa: 'نام خانوادگی رابط', en: 'Contact Last Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, isTableColumn: true },
     { key: 'supply_type', labels: { fa: 'زمینه فعالیت', en: 'Type' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 4, dynamicOptionsCategory: 'supply_type', isTableColumn: true },
-    { key: 'is_customer', labels: { fa: 'این تامین‌کننده مشتری هم هست', en: 'Also Customer' }, type: FieldType.CHECKBOX, location: FieldLocation.HEADER, order: 4.5, isTableColumn: true },
     {
-      key: 'rank', labels: { fa: 'درجه اعتبار', en: 'Rank' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 5,
+      key: 'status',
+      labels: { fa: 'وضعیت', en: 'Status' },
+      type: FieldType.STATUS,
+      location: FieldLocation.HEADER,
+      order: 4.2,
       options: [
-        { label: 'ویژه', value: 'A', color: 'green' },
-        { label: 'خوب', value: 'B', color: 'blue' },
-        { label: 'متوسط', value: 'C', color: 'orange' },
-        { label: 'ضعیف', value: 'D', color: 'red' }
-      ], defaultValue: 'B', isTableColumn: true
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'draft', color: 'orange' },
+      ],
+      defaultValue: 'active',
+      nature: FieldNature.PREDEFINED,
+      isTableColumn: true,
+    },
+    {
+      key: 'rank',
+      labels: { fa: 'شرایط پرداخت', en: 'Payment Terms' },
+      type: FieldType.MULTI_SELECT,
+      location: FieldLocation.HEADER,
+      order: 5,
+      dynamicOptionsCategory: 'supplier_payment_terms',
+      isTableColumn: true,
     },
     { key: 'mobile_1', labels: { fa: 'موبایل تماس', en: 'Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 6, isTableColumn: true },
 
@@ -27,6 +53,17 @@ export const supplierModule: ModuleDefinition = {
     { key: 'first_name', labels: { fa: 'نام رابط', en: 'Contact First Name' }, type: FieldType.TEXT, blockId: 'basic_info' },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, blockId: 'basic_info', readonly: true },
     { key: 'website', labels: { fa: 'وب‌سایت', en: 'Website' }, type: FieldType.TEXT, blockId: 'basic_info' },
+    { key: 'is_customer', labels: { fa: 'این تامین‌کننده مشتری هم هست', en: 'Also Customer' }, type: FieldType.CHECKBOX, blockId: 'basic_info', order: 3.1, isTableColumn: true },
+    { key: 'is_employee', labels: { fa: 'این تامین‌کننده کارمند هم هست', en: 'Also Employee' }, type: FieldType.CHECKBOX, blockId: 'basic_info', order: 3.2, isTableColumn: false },
+    {
+      key: 'related_employee_id',
+      labels: { fa: 'کارمند مرتبط', en: 'Related Employee' },
+      type: FieldType.RELATION,
+      blockId: 'basic_info',
+      order: 3.3,
+      relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
+      logic: { visibleIf: { field: 'is_employee', operator: LogicOperator.IS_TRUE } },
+    },
 
     { key: 'mobile_2', labels: { fa: 'موبایل دوم', en: 'Mobile 2' }, type: FieldType.PHONE, blockId: 'contact_info' },
     { key: 'phone', labels: { fa: 'تلفن ثابت', en: 'Phone' }, type: FieldType.PHONE, blockId: 'contact_info' },
@@ -56,13 +93,26 @@ export const supplierModule: ModuleDefinition = {
   ],
   relatedTabs: [
     {
-      id: 'supplier_products',
-      title: 'محصولات تامین شده',
-      icon: 'AppstoreOutlined',
+      id: 'supplier_purchase_invoices',
+      title: 'فاکتورهای خرید',
+      icon: 'FileTextOutlined',
       relationType: 'fk',
-      targetModule: 'products',
-      foreignKey: 'related_supplier'
-    }
+      targetModule: 'purchase_invoices',
+      foreignKey: 'supplier_id'
+    },
+    {
+      id: 'supplier_payments',
+      title: 'پرداخت‌ها به تامین‌کننده',
+      icon: 'CreditCardOutlined',
+      relationType: 'supplier_payments'
+    },
+    {
+      id: 'supplier_products',
+      title: 'محصولات خریداری شده',
+      icon: 'ShoppingOutlined',
+      relationType: 'supplier_products',
+      targetModule: 'products'
+    },
   ],
   table: 'suppliers'
 };

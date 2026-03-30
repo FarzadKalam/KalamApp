@@ -23,8 +23,10 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 interface ProductionStagesFieldProps {
   recordId?: string;
   moduleId?: string;
+  autoOpenTaskId?: string | null;
   readOnly?: boolean;
   compact?: boolean;
+  cardCompact?: boolean;
   allowReportEditInReadOnly?: boolean;
   lazyLoad?: boolean;
   onlyLineId?: string | null;
@@ -78,7 +80,7 @@ type StageHandoverForm = {
   updatedAt?: string | null;
 };
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, readOnly = false, compact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false }) => {
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false }) => {
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
@@ -124,6 +126,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
   const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
+  const autoOpenedTaskIdRef = useRef<string | null>(null);
 
   const onQuantityChangeRef = useRef<((qty: number) => void) | undefined>();
 
@@ -520,20 +523,29 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return role?.title || 'تعیین نشده';
     }
     const user = assignees.users.find((item: any) => String(item?.id) === String(assigneeId));
-    return user?.full_name || 'تعیین نشده';
+    return user?.display_name || user?.full_name || user?.email || user?.mobile_1 || 'تعیین نشده';
   }, [assignees.roles, assignees.users]);
 
   const fetchAssignees = async () => {
     try {
-      const { data: users } = await supabase.from('profiles').select('id, full_name');
+      const { data: users } = await supabase.from('profiles').select('id, full_name, email, mobile_1');
       const { data: roles } = await supabase.from('org_roles').select('*');
+      const normalizedUsers = (users || []).map((user: any) => ({
+        ...user,
+        display_name:
+          String(user?.full_name || '').trim() ||
+          String(user?.email || '').trim() ||
+          String(user?.mobile_1 || '').trim() ||
+          `کاربر ${String(user?.id || '').slice(0, 8)}`,
+      }));
       const normalizedRoles = (roles || []).map((role: any) => ({
         ...role,
         title: role?.title || role?.name || role?.id,
       }));
-      setAssignees({ users: users || [], roles: normalizedRoles });
+      setAssignees({ users: normalizedUsers, roles: normalizedRoles });
     } catch (e) {
-      console.error('Error fetching assignees', e);
+      if (String((e as any)?.name || '') === 'AbortError') return;
+      console.warn('Could not fetch assignees', e);
     }
   };
   const fetchTaskTypeOptions = useCallback(async () => {
@@ -553,7 +565,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .filter((row) => row.label && row.value);
       setTaskTypeOptions(options);
     } catch (error) {
-      console.warn('Could not fetch task type options', error);
+      if (String((error as any)?.name || '') === 'AbortError') return;
       setTaskTypeOptions([]);
     }
   }, []);
@@ -570,7 +582,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .maybeSingle();
       setCurrentUser({ id: userId, roleId: profile?.role_id ? String(profile.role_id) : null, fullName: profile?.full_name || 'کاربر' });
     } catch (err) {
-      console.warn('Could not fetch current user for handover', err);
+      if (String((err as any)?.name || '') === 'AbortError') return;
     }
   }, []);
 
@@ -628,7 +640,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .from('tasks')
         .select(`
           *,
-          assignee:profiles!tasks_assignee_id_fkey(full_name, avatar_url),
+          assignee:profiles!tasks_assignee_id_fkey(full_name, email, mobile_1, avatar_url),
           assigned_role:org_roles(title)
         `);
 
@@ -661,7 +673,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setTasks(next);
       return next;
     } catch (error: any) {
-      console.error('Error fetching tasks:', error);
+      if (String((error as any)?.name || '') === 'AbortError') return [] as any[];
       return [] as any[];
     } finally {
       setLoading(false);
@@ -1244,6 +1256,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     toSourceTotals,
     toGroupTotals,
   ]);
+
+  useEffect(() => {
+    if (!autoOpenTaskId) {
+      autoOpenedTaskIdRef.current = null;
+      return;
+    }
+    if (autoOpenedTaskIdRef.current === String(autoOpenTaskId)) return;
+    if (!tasks.length) return;
+
+    const targetTask = tasks.find((task: any) => String(task?.id || '') === String(autoOpenTaskId));
+    if (!targetTask) return;
+
+    autoOpenedTaskIdRef.current = String(autoOpenTaskId);
+    void openTaskHandoverModal(targetTask, tasks);
+  }, [autoOpenTaskId, openTaskHandoverModal, tasks]);
 
   const setHandoverGroupCollapsed = useCallback((groupIndex: number, collapsed: boolean) => {
     setHandoverGroups((prev) => {
@@ -2090,9 +2117,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ? { ...row, task_report: reportText || null, recurrence_info: nextRecurrence }
           : row
       )));
-      message.success('گزارش وظیفه ثبت شد');
+      message.success('گزارش فعالیت ثبت شد');
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'ثبت گزارش وظیفه ناموفق بود'));
+      message.error(toFaErrorMessage(err, 'ثبت گزارش فعالیت ناموفق بود'));
     } finally {
       setSavingReportIds((prev) => ({ ...prev, [taskId]: false }));
     }
@@ -2138,7 +2165,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return `تیم ${task.assigned_role.title}`;
     }
     if (task.assignee_id && task.assignee) {
-      return task.assignee.full_name;
+      return task.assignee.full_name || task.assignee.email || task.assignee.mobile_1 || 'تعیین نشده';
     }
     return 'تعیین نشده';
   };
@@ -2152,7 +2179,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
     if (userId) {
       const user = assignees.users.find((item: any) => String(item?.id) === userId);
-      return user?.full_name || 'تعیین نشده';
+      return user?.display_name || user?.full_name || user?.email || user?.mobile_1 || 'تعیین نشده';
     }
     return 'تعیین نشده';
   }, [assignees.roles, assignees.users]);
@@ -2286,13 +2313,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               allowClear
               showSearch
               optionFilterProp="label"
-              getPopupContainer={() => document.body}
-              dropdownStyle={{ zIndex: 10050 }}
+              getPopupContainer={(node) => node?.parentElement || document.body}
+              styles={{ popup: { root: { zIndex: 10050 } } }}
             >
               <Select.OptGroup label="کاربران">
                 {assignees.users.map((u) => (
-                  <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.full_name}>
-                    <Space><UserOutlined /> {u.full_name}</Space>
+                  <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
+                    <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
                   </Select.Option>
                 ))}
               </Select.OptGroup>
@@ -2314,8 +2341,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               onChange={(val) => { void handleStatusChange(task.id, val); }}
               className="w-44"
               disabled={!canEditTaskStatus}
-              getPopupContainer={() => document.body}
-              dropdownStyle={{ zIndex: 10050 }}
+              getPopupContainer={(node) => node?.parentElement || document.body}
+              styles={{ popup: { root: { zIndex: 10050 } } }}
               options={[
                 { value: 'todo', label: 'انجام نشده' },
                 { value: 'in_progress', label: 'در حال انجام' },
@@ -2326,7 +2353,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
 
           <div className="space-y-1">
-            <span className="text-xs text-gray-500">نوع وظیفه:</span>
+            <span className="text-xs text-gray-500">نوع فعالیت:</span>
             <div className="rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-2 py-1 text-xs text-gray-700 dark:text-gray-200">
               {taskTypeValue || '-'}
             </div>
@@ -2349,7 +2376,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           )}
 
           <div className="space-y-1">
-            <span className="text-xs text-gray-500">توضیحات وظیفه:</span>
+            <span className="text-xs text-gray-500">شرح فعالیت:</span>
             <div className="rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-2 py-2 text-xs leading-6 text-gray-700 dark:text-gray-200 min-h-[54px] whitespace-pre-wrap break-words">
               {String(task?.description || '').trim() || '-'}
             </div>
@@ -2391,7 +2418,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
 
           <div className="space-y-1">
-            <span className="text-xs text-gray-500">گزارش وظیفه:</span>
+            <span className="text-xs text-gray-500">گزارش فعالیت:</span>
             <Input.TextArea
               value={reportDraft}
               placeholder="متن گزارش را بنویسید..."
@@ -2982,12 +3009,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         });
 
       if (!payload.length) {
-        message.info('برای همه مراحل وظیفه ثبت شده است');
+        message.info('برای همه مراحل فعالیت ثبت شده است');
         return;
       }
       await insertTasksWithFallback(payload);
       await fetchTasks();
-      message.success(`${toPersianNumber(payload.length)} وظیفه ایجاد شد`);
+      message.success(`${toPersianNumber(payload.length)} فعالیت ایجاد شد`);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ارجاع خودکار فرآیند ناموفق بود'));
     } finally {
@@ -3318,7 +3345,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       <div>دستمزد: {toPersianNumber(Number(stage.wage || 0).toLocaleString('en-US'))} تومان</div>
                       <div>وزن: {toPersianNumber(stage.weight || 0)}</div>
                       <div>مسئول: {getDraftAssigneeLabel(stage)}</div>
-                      {String(stage?.task_type || '').trim() && <div>نوع وظیفه: {stage.task_type}</div>}
+                      {String(stage?.task_type || '').trim() && <div>نوع فعالیت: {stage.task_type}</div>}
                       {String(stage?.description || '').trim() && <div>توضیحات: {stage.description}</div>}
                       <div>زمان انجام: {formatDraftDuration(stage)}</div>
                       {!readOnly && (
@@ -3382,9 +3409,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           && (!Array.isArray(normalizedProcessLineGroups[0]?.tasks) || normalizedProcessLineGroups[0].tasks.length === 0)
           && (!Array.isArray(normalizedProcessLineGroups[0]?.lineSegments) || normalizedProcessLineGroups[0].lineSegments.length === 0);
 
-        const renderSegmentsBar = (segments: any[], barKey: string) => (
+        const renderSegmentsBar = (segments: any[], barKey: string) => {
+          const shouldCompactSegments = cardCompact && segments.length > 5;
+          const displaySegments = shouldCompactSegments ? segments.slice(0, 5) : segments;
+          const hiddenCount = shouldCompactSegments ? Math.max(0, segments.length - displaySegments.length) : 0;
+          const getCompactLabel = (value: unknown) => {
+            const raw = String(value || '').trim();
+            return raw ? raw.charAt(0) : '-';
+          };
+
+          return (
           <div className={`relative flex-1 flex bg-gray-100 dark:bg-gray-800 rounded-lg overflow-visible border border-gray-200 dark:border-gray-700 ${compact ? 'h-5' : 'h-9'}`}>
-            {segments.map((segment: any, index: number) => (
+            {displaySegments.map((segment: any, index: number) => (
               segment.type === 'task' ? (
                 (() => {
                   const isAssignedToCurrent = isTaskAssignedToCurrentUser(segment);
@@ -3404,7 +3440,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       title={null}
                     >
                       <div
-                        className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === segments.length - 1 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
+                        className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === displaySegments.length - 1 && hiddenCount === 0 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
                         style={{
                           flex: 1,
                           backgroundColor: segmentColor,
@@ -3412,10 +3448,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
                             : undefined,
                         }}
-                      >
+                        >
                         <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
                           <span className={`text-white font-medium truncate w-full text-center drop-shadow-md ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                            {segment.title || segment.name}
+                            {shouldCompactSegments ? getCompactLabel(segment.title || segment.name) : (segment.title || segment.name)}
                           </span>
                           {!compact && segment.sort_order && (
                             <span className="text-[8px] text-white/90 absolute bottom-0.5 right-1 bg-black/10 px-1 rounded-sm">
@@ -3437,7 +3473,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
                       <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
                       <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
-                      {String(segment?.task_type || '').trim() && <div>نوع وظیفه: {segment.task_type}</div>}
+                      {String(segment?.task_type || '').trim() && <div>نوع فعالیت: {segment.task_type}</div>}
                       {String(segment?.description || '').trim() && <div>توضیحات: {segment.description}</div>}
                       <div>زمان انجام: {formatDraftDuration(segment)}</div>
                       {!readOnly && (
@@ -3448,7 +3484,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               onClick={() => openTaskModal(line.id, segment)}
                               className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
                             >
-                              ایجاد وظیفه
+                              ایجاد فعالیت
                             </Button>
                           )}
                           <Button
@@ -3468,25 +3504,35 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   title={null}
                 >
                   <div
-                    className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === segments.length - 1 ? 'rounded-l-lg' : ''}`}
+                    className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === displaySegments.length - 1 && hiddenCount === 0 ? 'rounded-l-lg' : ''}`}
                     style={{ flex: 1, border: '1px dashed #d1d5db', backgroundColor: 'transparent' }}
                   >
                     <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
                       <span className={`text-gray-600 font-medium truncate w-full text-center ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                        {segment.label}
+                        {shouldCompactSegments ? getCompactLabel(segment.label) : segment.label}
                       </span>
                     </div>
                   </div>
                 </Popover>
               )
             ))}
+            {hiddenCount > 0 && (
+              <div
+                className={`relative flex items-center justify-center bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-100 font-semibold rounded-l-lg ${displaySegments.length !== 0 ? 'border-r border-gray-300/70 dark:border-gray-600/80' : ''} ${compact ? 'text-[9px]' : 'text-[11px]'}`}
+                style={{ flex: 0.8 }}
+                title={`${toPersianNumber(hiddenCount)} فعالیت دیگر`}
+              >
+                +{toPersianNumber(hiddenCount)}
+              </div>
+            )}
             {segments.length === 0 && (
               <div className="w-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-xs bg-gray-50 dark:bg-gray-900 h-full">
                 {compact ? <span className="opacity-50">-</span> : (isProcessModule ? 'بدون مرحله فرآیند' : 'بدون مرحله تولید')}
               </div>
             )}
           </div>
-        );
+          );
+        };
 
         return (
           <div key={line.id} className="space-y-2">
@@ -3740,7 +3786,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
-        title={<div className="flex items-center gap-2 text-leather-800"><div className="bg-leather-50 p-1 rounded text-leather-600"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند (وظیفه)' : 'افزودن مرحله تولید'}</div>}
+        title={<div className="flex items-center gap-2 text-leather-800"><div className="bg-leather-50 p-1 rounded text-leather-600"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند (فعالیت)' : 'افزودن مرحله تولید'}</div>}
         open={isTaskModalOpen}
         onCancel={() => setIsTaskModalOpen(false)}
         footer={null}
@@ -3774,16 +3820,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </div>
 
             <div className="col-span-12">
-              <Form.Item name="task_type" label="نوع وظیفه">
+              <Form.Item name="task_type" label="نوع فعالیت">
                 <DynamicSelectField
-                  value={taskForm.getFieldValue('task_type')}
-                  onChange={(val) => taskForm.setFieldValue('task_type', val)}
                   options={taskTypeOptions}
                   category="task_type"
                   onOptionsUpdate={fetchTaskTypeOptions}
-                  placeholder="انتخاب نوع وظیفه"
+                  placeholder="انتخاب نوع فعالیت"
                   className="w-full"
-                  getPopupContainer={() => document.body}
+                  getPopupContainer={(node) => node?.parentElement || document.body}
                 />
               </Form.Item>
             </div>
@@ -3793,8 +3837,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Select placeholder="انتخاب کنید..." allowClear showSearch optionFilterProp="label">
                   <Select.OptGroup label="کاربران">
                     {assignees.users.map(u => (
-                      <Select.Option key={`user-${u.id}`} value={`user:${u.id}`} label={u.full_name}>
-                        <Space><UserOutlined /> {u.full_name}</Space>
+                      <Select.Option key={`user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
+                        <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
                       </Select.Option>
                     ))}
                   </Select.OptGroup>
@@ -3811,7 +3855,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             <div className="col-span-12">
               <Form.Item name="description" label="توضیحات">
-                <Input.TextArea placeholder="توضیحات مرحله/وظیفه" autoSize={{ minRows: 2, maxRows: 4 }} />
+                <Input.TextArea placeholder="شرح مرحله/فعالیت" autoSize={{ minRows: 2, maxRows: 4 }} />
               </Form.Item>
             </div>
 
@@ -3824,7 +3868,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     showSearch
                     optionFilterProp="label"
                     options={productionShelfOptions}
-                    getPopupContainer={() => document.body}
+                    getPopupContainer={(node) => node?.parentElement || document.body}
                   />
                 </Form.Item>
               </div>
@@ -3867,10 +3911,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <Form.Item name="due_date" label="موعد انجام (دستی)">
                 <PersianDatePicker
                   type="DATETIME"
-                  value={taskForm.getFieldValue('due_date')}
-                  onChange={(val) => taskForm.setFieldValue('due_date', val)}
                   placeholder="تاریخ و ساعت (اختیاری)"
                   className="w-full"
+                  zIndex={10060}
                 />
               </Form.Item>
             </div>
@@ -3921,16 +3964,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   </Form.Item>
                 </div>
                 <div className="col-span-12">
-                  <Form.Item name="task_type" label="نوع وظیفه">
+                  <Form.Item name="task_type" label="نوع فعالیت">
                     <DynamicSelectField
-                      value={draftForm.getFieldValue('task_type')}
-                      onChange={(val) => draftForm.setFieldValue('task_type', val)}
                       options={taskTypeOptions}
                       category="task_type"
                       onOptionsUpdate={fetchTaskTypeOptions}
-                      placeholder="انتخاب نوع وظیفه"
+                      placeholder="انتخاب نوع فعالیت"
                       className="w-full"
-                      getPopupContainer={() => document.body}
+                      getPopupContainer={(node) => node?.parentElement || document.body}
                     />
                   </Form.Item>
                 </div>
@@ -3944,8 +3985,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     <Select placeholder="انتخاب کنید..." allowClear showSearch optionFilterProp="label">
                       <Select.OptGroup label="کاربران">
                         {assignees.users.map(u => (
-                          <Select.Option key={`draft-user-${u.id}`} value={`user:${u.id}`} label={u.full_name}>
-                            <Space><UserOutlined /> {u.full_name}</Space>
+                          <Select.Option key={`draft-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
+                            <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
                           </Select.Option>
                         ))}
                       </Select.OptGroup>

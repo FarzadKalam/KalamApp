@@ -169,9 +169,14 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
 
   const insertImageByUrl = () => {
     if (!editor) return;
-    const imageUrl = window.prompt('آدرس تصویر را وارد کنید');
+    const imageUrl = window.prompt('\u0622\u062f\u0631\u0633 \u062a\u0635\u0648\u06cc\u0631 \u0631\u0627 \u0648\u0627\u0631\u062f \u06a9\u0646\u06cc\u062f');
     if (!imageUrl || !imageUrl.trim()) return;
-    editor.chain().focus().setImage({ src: imageUrl.trim() }).run();
+    editor.chain().focus().setImage({
+      src: imageUrl.trim(),
+      width: '180px',
+      height: 'auto',
+      inlineStyle: 'display:block;width:180px;max-width:180px;height:auto;object-fit:contain;border-radius:10px;'
+    }).run();
   };
 
   const handleLocalImagePick: React.ChangeEventHandler<HTMLInputElement> = (event) => {
@@ -180,7 +185,14 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
     const reader = new FileReader();
     reader.onload = () => {
       const result = String(reader.result || '');
-      if (result) editor.chain().focus().setImage({ src: result }).run();
+      if (result) {
+        editor.chain().focus().setImage({
+          src: result,
+          width: '180px',
+          height: 'auto',
+          inlineStyle: 'display:block;width:180px;max-width:180px;height:auto;object-fit:contain;border-radius:10px;'
+        }).run();
+      }
     };
     reader.readAsDataURL(file);
     event.target.value = '';

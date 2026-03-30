@@ -1,8 +1,61 @@
 import { AuthBindings } from "@refinedev/core";
 import { supabase } from "./supabaseClient";
 
+type CachedUserState = {
+  user: any | null;
+  expiresAt: number;
+  promise: Promise<any | null> | null;
+};
+
+const USER_CACHE_TTL_MS = 60_000;
+const cachedUserState: CachedUserState = {
+  user: null,
+  expiresAt: 0,
+  promise: null,
+};
+
+const clearCachedUser = () => {
+  cachedUserState.user = null;
+  cachedUserState.expiresAt = 0;
+  cachedUserState.promise = null;
+};
+
+const getCachedUser = async () => {
+  const now = Date.now();
+  if (cachedUserState.user && cachedUserState.expiresAt > now) {
+    return cachedUserState.user;
+  }
+  if (cachedUserState.promise) {
+    return cachedUserState.promise;
+  }
+
+  cachedUserState.promise = (async () => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionUser = sessionData?.session?.user || null;
+    const expiresAt = sessionData?.session?.expires_at ? sessionData.session.expires_at * 1000 : 0;
+    if (sessionUser && (!expiresAt || expiresAt > Date.now())) {
+      cachedUserState.user = sessionUser;
+      cachedUserState.expiresAt = Date.now() + USER_CACHE_TTL_MS;
+      cachedUserState.promise = null;
+      return sessionUser;
+    }
+
+    const { data } = await supabase.auth.getUser();
+    cachedUserState.user = data?.user || null;
+    cachedUserState.expiresAt = Date.now() + USER_CACHE_TTL_MS;
+    cachedUserState.promise = null;
+    return cachedUserState.user;
+  })().catch((error) => {
+    clearCachedUser();
+    throw error;
+  });
+
+  return cachedUserState.promise;
+};
+
 export const authProvider: AuthBindings = {
   login: async ({ email, password }) => {
+    clearCachedUser();
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -24,6 +77,7 @@ export const authProvider: AuthBindings = {
     };
   },
   logout: async () => {
+    clearCachedUser();
     const { error } = await supabase.auth.signOut();
     if (error) {
       return {
@@ -45,6 +99,9 @@ export const authProvider: AuthBindings = {
 
     const expiresAt = session?.expires_at ? session.expires_at * 1000 : 0;
     if (session && (!expiresAt || expiresAt > Date.now())) {
+      cachedUserState.user = session.user || cachedUserState.user;
+      cachedUserState.expiresAt = Date.now() + USER_CACHE_TTL_MS;
+      cachedUserState.promise = null;
       return {
         authenticated: true,
       };
@@ -60,19 +117,19 @@ export const authProvider: AuthBindings = {
     };
   },
   getPermissions: async () => {
-    const { data } = await supabase.auth.getUser();
-    if (data?.user) {
-      return data.user.role;
+    const user = await getCachedUser();
+    if (user) {
+      return user.role;
     }
     return null;
   },
   getIdentity: async () => {
-    const { data } = await supabase.auth.getUser();
-    if (data?.user) {
+    const user = await getCachedUser();
+    if (user) {
       return {
-        ...data.user,
-        name: data.user.user_metadata?.full_name || data.user.email,
-        avatar: data.user.user_metadata?.avatar_url,
+        ...user,
+        name: user.user_metadata?.full_name || user.email,
+        avatar: user.user_metadata?.avatar_url,
       };
     }
     return null;

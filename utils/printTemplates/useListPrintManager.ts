@@ -1,0 +1,423 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DOMPurify from 'dompurify';
+import { supabase } from '../../supabaseClient';
+import { toPersianNumber, safeJalaliFormat } from '../persianNumberFormatter';
+import { readCurrencyConfig } from '../currency';
+import { buildListTableHtml, type ListFieldDefinition } from '../listPrintExport';
+import {
+  buildDefaultTemplatesForModule,
+  loadPrintTemplatesStore,
+  mergeTemplatesWithDefaults,
+  savePrintTemplatesStore,
+  type StoredPrintTemplate,
+} from './store';
+import type { PrintTemplate } from './index';
+
+const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
+
+const getPaperMetrics = (
+  paperSize: 'A4' | 'A5' | 'A6' = 'A4',
+  orientation: 'portrait' | 'landscape' = 'portrait'
+) => {
+  const base =
+    paperSize === 'A6'
+      ? { width: 105, height: 148 }
+      : paperSize === 'A5'
+        ? { width: 148, height: 210 }
+        : { width: 210, height: 297 };
+
+  return orientation === 'landscape'
+    ? { widthMm: base.height, heightMm: base.width }
+    : { widthMm: base.width, heightMm: base.height };
+};
+
+interface UseListPrintManagerProps {
+  moduleId: string;
+  moduleConfig: any;
+  rows: any[];
+  printableFields: ListFieldDefinition[];
+  relationOptions?: Record<string, any[]>;
+}
+
+export const useListPrintManager = ({
+  moduleId,
+  moduleConfig,
+  rows,
+  printableFields,
+  relationOptions = {},
+}: UseListPrintManagerProps) => {
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [printMode, setPrintMode] = useState(false);
+  const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
+  const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
+  const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
+  const [templatesStoreMeta, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
+    rowId: null,
+    provider: 'tiptap',
+  });
+  const [savingPrintFields, setSavingPrintFields] = useState(false);
+  const [companyInfo, setCompanyInfo] = useState<any>(null);
+  const templatesLoadedRef = useRef(false);
+  const companyLoadedRef = useRef(false);
+  const currencyLabel = readCurrencyConfig().label || '';
+
+  const loadTemplates = useCallback(async (mounted = true) => {
+    try {
+      const loaded = await loadPrintTemplatesStore();
+      if (!mounted) return;
+      setTemplatesStoreMeta({
+        rowId: loaded.rowId || null,
+        provider: loaded.provider || 'tiptap',
+      });
+      setTemplatesByModuleStore(loaded.templatesByModule || {});
+      setStoredTemplates((loaded.templatesByModule[moduleId] || []).filter((tpl) => tpl.isActive !== false));
+      return true;
+    } catch (error) {
+      console.error('Load list print templates failed', error);
+      if (mounted) {
+        setTemplatesByModuleStore({});
+        setStoredTemplates([]);
+      }
+      return false;
+    }
+  }, [moduleId]);
+
+  useEffect(() => {
+    if (!isPrintModalOpen && !printMode) return;
+    if (templatesLoadedRef.current) return;
+    let mounted = true;
+    loadTemplates(mounted).then((loaded) => {
+      if (mounted && loaded) templatesLoadedRef.current = true;
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [isPrintModalOpen, loadTemplates, printMode]);
+
+  useEffect(() => {
+    if (!isPrintModalOpen && !printMode) return;
+    if (companyLoadedRef.current) return;
+    let mounted = true;
+    const loadCompany = async () => {
+      try {
+        const { data } = await supabase.from('company_settings').select('*').limit(1).maybeSingle();
+        if (mounted) {
+          setCompanyInfo(data || null);
+          companyLoadedRef.current = true;
+        }
+      } catch (error) {
+        console.error('Load company settings for list print failed', error);
+      }
+    };
+    loadCompany();
+    return () => {
+      mounted = false;
+    };
+  }, [isPrintModalOpen, printMode]);
+
+  const availableTemplates = useMemo(() => {
+    const merged = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || storedTemplates);
+    const scopedTemplates = merged.filter((tpl) => (tpl.scope || 'record') === 'list' && tpl.isActive !== false);
+    if (scopedTemplates.length > 0) return scopedTemplates;
+    return buildDefaultTemplatesForModule(moduleId, 'list').filter((tpl) => tpl.isActive !== false);
+  }, [moduleId, storedTemplates, templatesByModuleStore]);
+
+  const printTemplates = useMemo<PrintTemplate[]>(
+    () =>
+      availableTemplates.map((tpl) => ({
+        id: `custom:${tpl.id}`,
+        title: tpl.title,
+        description: tpl.description || 'قالب چاپ جدولی',
+        isSystem: tpl.isSystem === true,
+      })),
+    [availableTemplates]
+  );
+
+  useEffect(() => {
+    if (!printTemplates.length) {
+      setSelectedTemplateId('');
+      return;
+    }
+    if (printTemplates.some((item) => item.id === selectedTemplateId)) return;
+    setSelectedTemplateId(printTemplates[0].id);
+  }, [printTemplates, selectedTemplateId]);
+
+  const selectedStoredTemplate = useMemo(() => {
+    if (!selectedTemplateId.startsWith('custom:')) return null;
+    const id = selectedTemplateId.replace('custom:', '');
+    return availableTemplates.find((tpl) => tpl.id === id) || null;
+  }, [availableTemplates, selectedTemplateId]);
+
+  const printableFieldsForTemplate = useMemo(() => printableFields || [], [printableFields]);
+
+  useEffect(() => {
+    if (!selectedTemplateId) return;
+    const defaultKeys =
+      (Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
+        ? selectedStoredTemplate.selectedFieldKeys
+        : printableFieldsForTemplate.map((field) => field.key)) || [];
+
+    if (!defaultKeys.length) return;
+
+    setSelectedPrintFields((prev) => {
+      if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
+      return {
+        ...prev,
+        [selectedTemplateId]: defaultKeys,
+      };
+    });
+  }, [printableFieldsForTemplate, selectedStoredTemplate?.selectedFieldKeys, selectedTemplateId]);
+
+  const selectedColumns = useMemo(() => {
+    const selected = selectedPrintFields[selectedTemplateId] || [];
+    if (selected.length === 0) return printableFieldsForTemplate;
+    const selectedSet = new Set(selected);
+    const filtered = printableFieldsForTemplate.filter((field) => selectedSet.has(field.key));
+    return filtered.length > 0 ? filtered : printableFieldsForTemplate;
+  }, [printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]);
+
+  const rowsPerPage = useMemo(() => {
+    const orientation = selectedStoredTemplate?.orientation || 'portrait';
+    const columnCount = Math.max(1, selectedColumns.length);
+    let base = orientation === 'landscape' ? 22 : 16;
+    if (columnCount >= 8) base -= 3;
+    if (columnCount >= 11) base -= 3;
+    return Math.max(6, base);
+  }, [selectedColumns.length, selectedStoredTemplate?.orientation]);
+
+  const pagedRows = useMemo(() => {
+    if (!Array.isArray(rows) || rows.length === 0) return [[]];
+    const chunks: any[][] = [];
+    for (let index = 0; index < rows.length; index += rowsPerPage) {
+      chunks.push(rows.slice(index, index + rowsPerPage));
+    }
+    return chunks;
+  }, [rows, rowsPerPage]);
+
+  const resolveValue = useCallback((path: string, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
+    if (path === 'system.list_title') return moduleConfig?.titles?.fa || moduleId;
+    if (path === 'system.selected_count') return toPersianNumber(rows.length);
+    if (path === 'system.print_date') return toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD HH:mm'));
+    if (path === 'system.page_index') return toPersianNumber(pageIndex + 1);
+    if (path === 'system.page_count') return toPersianNumber(pageCount);
+    if (path === 'system.list_table') {
+      return buildListTableHtml(selectedColumns, pageRows, relationOptions, currencyLabel, rowOffset);
+    }
+    if (path.startsWith('company.')) {
+      const key = path.replace(/^company\./, '');
+      return String(companyInfo?.[key] || '');
+    }
+    return '';
+  }, [companyInfo, currencyLabel, moduleConfig?.titles?.fa, moduleId, relationOptions, rows.length, selectedColumns]);
+
+  const renderTemplateSection = useCallback((html: string | undefined, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
+    const filled = String(html || '').replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
+      return resolveValue(key, pageIndex, pageCount, pageRows, rowOffset);
+    });
+    return DOMPurify.sanitize(filled, {
+      ADD_TAGS: ['colgroup', 'col'],
+      ADD_ATTR: ['style', 'width', 'height', 'colspan', 'rowspan', 'src', 'alt'],
+    });
+  }, [resolveValue]);
+
+  const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
+    setSelectedPrintFields((prev) => {
+      const current = prev[templateId] || [];
+      if (current.includes(fieldName)) {
+        return { ...prev, [templateId]: current.filter((item) => item !== fieldName) };
+      }
+      return { ...prev, [templateId]: [...current, fieldName] };
+    });
+  }, []);
+
+  const handleSavePrintFields = useCallback(async () => {
+    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;
+    setSavingPrintFields(true);
+    try {
+      const selectedKeys = Array.from(
+        new Set((selectedPrintFields[selectedTemplateId] || []).map((item) => String(item || '').trim()).filter(Boolean))
+      );
+      const mergedTemplates = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || []);
+      const nextModuleTemplates = mergedTemplates.map((template) =>
+        template.id === selectedStoredTemplate.id
+          ? {
+              ...template,
+              selectedFieldKeys: selectedKeys,
+              updatedAt: new Date().toISOString(),
+            }
+          : template
+      );
+      const nextStore = {
+        ...templatesByModuleStore,
+        [moduleId]: nextModuleTemplates,
+      };
+      const saveResult = await savePrintTemplatesStore({
+        rowId: templatesStoreMeta.rowId,
+        provider: templatesStoreMeta.provider,
+        templatesByModule: nextStore,
+      });
+      setTemplatesStoreMeta((prev) => ({
+        rowId: saveResult.rowId ?? prev.rowId,
+        provider: prev.provider,
+      }));
+      setTemplatesByModuleStore(nextStore);
+      setStoredTemplates(nextModuleTemplates.filter((tpl) => tpl.isActive !== false));
+      return true;
+    } catch (error) {
+      console.error('Save list print fields failed', error);
+      return false;
+    } finally {
+      setSavingPrintFields(false);
+    }
+  }, [moduleId, selectedPrintFields, selectedStoredTemplate, selectedTemplateId, templatesByModuleStore, templatesStoreMeta.provider, templatesStoreMeta.rowId]);
+
+  const handlePrint = useCallback(() => {
+    if (!selectedTemplateId) return;
+    if (typeof document !== 'undefined') {
+      document.body.classList.add('print-mode');
+    }
+    setPrintMode(true);
+
+    let tries = 0;
+    const triggerPrint = () => {
+      const printRoot = document.getElementById('print-root');
+      const hasContent = Boolean(printRoot && String(printRoot.innerHTML || '').trim().length > 0);
+      if (!hasContent && tries < 20) {
+        tries += 1;
+        window.setTimeout(triggerPrint, 70);
+        return;
+      }
+      if (!hasContent) {
+        setPrintMode(false);
+        if (typeof document !== 'undefined') {
+          document.body.classList.remove('print-mode');
+        }
+        return;
+      }
+
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          try {
+            window.focus();
+            window.print();
+          } catch (error) {
+            console.error('Print dialog failed to open', error);
+            setPrintMode(false);
+            if (typeof document !== 'undefined') {
+              document.body.classList.remove('print-mode');
+            }
+          }
+        });
+      });
+    };
+
+    window.setTimeout(triggerPrint, 100);
+  }, [selectedTemplateId]);
+
+  useEffect(() => {
+    if (!printMode) return;
+    const handleAfterPrint = () => setPrintMode(false);
+    window.addEventListener('afterprint', handleAfterPrint);
+    return () => window.removeEventListener('afterprint', handleAfterPrint);
+  }, [printMode]);
+
+  const renderPrintCard = useCallback(() => {
+    if (!selectedStoredTemplate) return null;
+
+    const metrics = getPaperMetrics(selectedStoredTemplate.paperSize, selectedStoredTemplate.orientation || 'portrait');
+    const pageMargins = {
+      top: Number(selectedStoredTemplate.pageMarginTop ?? PAGE_MARGINS.top),
+      right: Number(selectedStoredTemplate.pageMarginRight ?? PAGE_MARGINS.right),
+      bottom: Number(selectedStoredTemplate.pageMarginBottom ?? PAGE_MARGINS.bottom),
+      left: Number(selectedStoredTemplate.pageMarginLeft ?? PAGE_MARGINS.left),
+    };
+
+    return React.createElement(
+      'div',
+      {
+        className: 'list-print-shell',
+        style: {
+          width: `${metrics.widthMm}mm`,
+          minHeight: `${metrics.heightMm}mm`,
+          background: '#fff',
+          color: '#111827',
+        },
+      },
+      ...pagedRows.map((pageRows, pageIndex) => {
+        const rowOffset = pageIndex * rowsPerPage;
+        const headerHtml = renderTemplateSection(selectedStoredTemplate.headerHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
+        const contentHtml = renderTemplateSection(selectedStoredTemplate.contentHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
+        const footerHtml = renderTemplateSection(selectedStoredTemplate.footerHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
+
+        return React.createElement(
+          'div',
+          {
+            key: `list-print-page-${pageIndex + 1}`,
+            className: 'list-print-page',
+            style: {
+              width: `${metrics.widthMm}mm`,
+              minHeight: `${metrics.heightMm}mm`,
+              boxSizing: 'border-box',
+              padding: `${pageMargins.top}mm ${pageMargins.right}mm ${pageMargins.bottom}mm ${pageMargins.left}mm`,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              background: '#fff',
+              pageBreakAfter: pageIndex < pagedRows.length - 1 ? 'always' : 'auto',
+              breakAfter: pageIndex < pagedRows.length - 1 ? 'page' : 'auto',
+            },
+          },
+          selectedStoredTemplate.showHeader === false
+            ? null
+            : React.createElement('div', {
+                dangerouslySetInnerHTML: { __html: headerHtml },
+              }),
+          React.createElement('div', {
+            style: { flex: '1 1 auto' },
+            dangerouslySetInnerHTML: { __html: contentHtml },
+          }),
+          selectedStoredTemplate.showFooter === false
+            ? null
+            : React.createElement('div', {
+                dangerouslySetInnerHTML: { __html: footerHtml },
+              }),
+        );
+      }),
+    );
+  }, [pagedRows, renderTemplateSection, rowsPerPage, selectedStoredTemplate]);
+
+  const refreshTemplates = useCallback(async () => {
+    await loadTemplates(true);
+  }, [loadTemplates]);
+
+  const previewMeta = useMemo(
+    () => ({
+      orientation: selectedStoredTemplate?.orientation || 'portrait',
+      paperSize: selectedStoredTemplate?.paperSize || 'A4',
+    }),
+    [selectedStoredTemplate?.orientation, selectedStoredTemplate?.paperSize]
+  );
+
+  return {
+    isPrintModalOpen,
+    selectedTemplateId,
+    setSelectedTemplateId,
+    setIsPrintModalOpen,
+    printMode,
+    selectedPrintFields,
+    printTemplates,
+    printableFieldsForTemplate,
+    handleTogglePrintField,
+    handleSavePrintFields,
+    savingPrintFields,
+    handlePrint,
+    refreshTemplates,
+    renderPrintCard,
+    previewMeta,
+    allowFieldSelectionTab: true,
+  };
+};

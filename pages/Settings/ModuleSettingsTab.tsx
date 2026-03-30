@@ -47,6 +47,7 @@ import {
   ModuleSettingsStore,
   SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
 } from './moduleSettingsTypes';
+import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
 
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -153,6 +154,7 @@ const HEADER_DESTINATION = '__header__';
 const fieldTypeLabels: Record<FieldType, string> = {
   [FieldType.TEXT]: 'متن کوتاه',
   [FieldType.LONG_TEXT]: 'متن بلند',
+  [FieldType.SUPER_LONG_TEXT]: 'متن خیلی بلند',
   [FieldType.NUMBER]: 'عدد',
   [FieldType.PRICE]: 'قیمت',
   [FieldType.PERCENTAGE]: 'درصد',
@@ -519,6 +521,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
       setSettingsByModule(nextModules);
       setSettingsRowId(data?.id ? String(data.id) : settingsRowId);
+      clearSystemCodeSettingsCache();
       setIsDirty(false);
       message.success('تنظیمات ماژول ذخیره شد.');
     } catch (err: any) {

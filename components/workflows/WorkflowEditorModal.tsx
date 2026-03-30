@@ -1,20 +1,41 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Collapse, Form, Input, InputNumber, Modal, Radio, Select, Switch } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Collapse,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Radio,
+  Select,
+  Switch,
+} from 'antd';
 import { FieldType, ModuleField } from '../../types';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
-import WorkflowConditionsGroup from './WorkflowConditionsGroup';
-import WorkflowActionsBuilder from './WorkflowActionsBuilder';
+import { supportsGlobalRoleAssignee } from '../../utils/assigneeSupport';
+import { fetchAssigneeDirectory } from '../../utils/referenceData';
+import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from '../../utils/relationTargetField';
+import { supportsSystemCode } from '../../utils/systemCode';
 import {
+  getWorkflowConditionFields,
+} from '../../utils/workflowHelpers';
+import {
+  WORKFLOW_ASSIGNEE_FIELD_KEY,
   WorkflowAction,
   WorkflowCondition,
   WorkflowModuleOption,
   WorkflowRecord,
   intervalUnitOptions,
   triggerTypeOptions,
+  workflowExecutionModeOptions,
 } from '../../utils/workflowTypes';
-import PersianDatePicker from '../PersianDatePicker';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import PersianDatePicker from '../PersianDatePicker';
+import WorkflowActionsBuilder from './WorkflowActionsBuilder';
+import WorkflowConditionsGroup from './WorkflowConditionsGroup';
 
 type WorkflowEditorModalProps = {
   open: boolean;
@@ -31,6 +52,7 @@ type FormValues = {
   name: string;
   description?: string;
   trigger_type: 'on_create' | 'on_upsert' | 'interval';
+  execution_mode: 'first_match' | 'every_match';
   interval_value?: number;
   interval_unit?: 'hour' | 'day' | 'month';
   interval_at?: string | null;
@@ -38,14 +60,130 @@ type FormValues = {
   is_active?: boolean;
 };
 
+const mapGenericRowsToOptions = (
+  rows: any[],
+  targetField: string
+) =>
+  (rows || []).map((row: any) => {
+    const label =
+      row?.[targetField] ||
+      row?.name ||
+      row?.title ||
+      row?.full_name ||
+      row?.business_name ||
+      row?.shelf_number ||
+      row?.system_code ||
+      row?.id;
+    const code = row?.system_code ? ` (${row.system_code})` : '';
+    return {
+      label: `${label}${code}`,
+      value: String(row?.id || ''),
+    };
+  }).filter((item) => item.value);
+
+const loadWorkflowFieldOptions = async (
+  field: ModuleField,
+  moduleScopeId: string
+): Promise<Array<{ label: string; value: string }>> => {
+  const scopeModuleId = String((field as any)?.workflowOptionScopeModuleId || moduleScopeId || '').trim();
+
+  if (field.key === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+    const directory = await fetchAssigneeDirectory(supabase);
+    const userOptions = (directory.users || []).map((user) => ({
+      label: String(user?.display_name || user?.full_name || user?.id || '').trim(),
+      value: `user_${String(user?.id || '').trim()}`,
+    })).filter((item) => item.value !== 'user_');
+
+    const roleOptions = supportsGlobalRoleAssignee(scopeModuleId)
+      ? (directory.roles || []).map((role) => ({
+          label: String(role?.title || role?.id || '').trim(),
+          value: `role_${String(role?.id || '').trim()}`,
+        })).filter((item) => item.value !== 'role_')
+      : [];
+
+    return [...userOptions, ...roleOptions];
+  }
+
+  if (field.type === FieldType.TAGS) {
+    const { data, error } = await supabase
+      .from('tags')
+      .select('id, title')
+      .order('title', { ascending: true });
+    if (error) throw error;
+    return (data || []).map((row: any) => ({
+      label: String(row?.title || row?.id || ''),
+      value: String(row?.id || ''),
+    })).filter((item) => item.value);
+  }
+
+  if (field.type === FieldType.USER) {
+    const { data, error } = await supabase.from('profiles').select('id, full_name').limit(300);
+    if (error) throw error;
+    return (data || []).map((row: any) => ({
+      label: String(row?.full_name || row?.id || ''),
+      value: String(row?.id || ''),
+    })).filter((item) => item.value);
+  }
+
+  const targetModule = String(field?.relationConfig?.targetModule || '').trim();
+  if (!targetModule) {
+    return [];
+  }
+
+  if (targetModule === 'process_templates') {
+    const { data, error } = await supabase
+      .from('process_templates')
+      .select('id, name, module_id, is_active')
+      .order('name', { ascending: true });
+    if (error) throw error;
+
+    const scopedRows = (data || []).filter((row: any) => {
+      if (row?.is_active === false) return false;
+      const rowModuleId = String(row?.module_id || '').trim();
+      return !rowModuleId || rowModuleId === scopeModuleId;
+    });
+
+    return scopedRows.map((row: any) => ({
+      label: String(row?.name || row?.id || ''),
+      value: String(row?.id || ''),
+    })).filter((item) => item.value);
+  }
+
+  const targetField = getPreferredRelationTargetField(targetModule, field?.relationConfig?.targetField);
+  const includeSystemCode = supportsSystemCode(targetModule);
+  const fallbackFields = getRelationLabelFallbackFields(targetModule);
+  const selectVariants = [
+    Array.from(
+      new Set(['id', targetField, ...(includeSystemCode ? ['system_code'] : []), ...fallbackFields])
+    ).filter(Boolean).join(', '),
+    Array.from(new Set(['id', targetField, ...fallbackFields])).filter(Boolean).join(', '),
+  ];
+
+  let rows: any[] = [];
+  for (const selectColumns of selectVariants) {
+    const result = await supabase.from(targetModule).select(selectColumns).limit(300);
+    if (!result.error) {
+      rows = result.data || [];
+      break;
+    }
+    const errorCode = String((result.error as any)?.code || '').toUpperCase();
+    const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
+    const isMissingColumn =
+      errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+    if (!isMissingColumn) throw result.error;
+  }
+
+  return mapGenericRowsToOptions(rows, targetField);
+};
+
 const loadDynamicAndRelationOptions = async (
-  moduleId: string
+  moduleId: string,
+  fields: ModuleField[]
 ): Promise<{
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
   relationOptions: Record<string, Array<{ label: string; value: string }>>;
 }> => {
-  const moduleConfig = MODULES[moduleId];
-  if (!moduleConfig) {
+  if (!moduleId || !MODULES[moduleId]) {
     return { dynamicOptions: {}, relationOptions: {} };
   }
 
@@ -54,71 +192,39 @@ const loadDynamicAndRelationOptions = async (
 
   const dynamicCategories = Array.from(
     new Set(
-      moduleConfig.fields
-        .map((f) => f.dynamicOptionsCategory)
-        .filter((cat): cat is string => !!cat)
+      (fields || [])
+        .map((field) => field.dynamicOptionsCategory)
+        .filter((category): category is string => !!category)
     )
   );
 
   await Promise.all(
     dynamicCategories.map(async (category) => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('dynamic_options')
         .select('label, value')
         .eq('category', category)
         .eq('is_active', true)
         .order('display_order', { ascending: true });
+      if (error) throw error;
       dynamicOptions[category] = (data || []).map((item: any) => ({
         label: String(item?.label ?? item?.value ?? ''),
-        value: String(item?.value ?? ''),
+        value: String(item?.value ?? item?.label ?? ''),
       }));
     })
   );
 
-  const relationFields = moduleConfig.fields.filter(
-    (f) => f.type === FieldType.RELATION || f.type === FieldType.USER
+  const optionFields = (fields || []).filter(
+    (field) =>
+      field.key === WORKFLOW_ASSIGNEE_FIELD_KEY ||
+      field.type === FieldType.RELATION ||
+      field.type === FieldType.USER ||
+      field.type === FieldType.TAGS
   );
 
   await Promise.all(
-    relationFields.map(async (field) => {
-      if (field.type === FieldType.USER) {
-        const { data } = await supabase.from('profiles').select('id, full_name').limit(300);
-        relationOptions[field.key] = (data || []).map((row: any) => ({
-          label: row?.full_name || row?.id,
-          value: row?.id,
-        }));
-        return;
-      }
-
-      const targetModule = field?.relationConfig?.targetModule;
-      if (!targetModule) {
-        relationOptions[field.key] = [];
-        return;
-      }
-
-      const targetField = field?.relationConfig?.targetField || 'name';
-      const selectColumns = Array.from(
-        new Set(['id', targetField, 'system_code', 'name', 'title', 'business_name', 'shelf_number'])
-      )
-        .filter(Boolean)
-        .join(', ');
-
-      const { data } = await supabase.from(targetModule).select(selectColumns).limit(300);
-      relationOptions[field.key] = (data || []).map((row: any) => {
-        const label =
-          row?.[targetField] ||
-          row?.name ||
-          row?.title ||
-          row?.business_name ||
-          row?.shelf_number ||
-          row?.system_code ||
-          row?.id;
-        const code = row?.system_code ? ` (${row.system_code})` : '';
-        return {
-          label: `${label}${code}`,
-          value: row?.id,
-        };
-      });
+    optionFields.map(async (field) => {
+      relationOptions[field.key] = await loadWorkflowFieldOptions(field, moduleId);
     })
   );
 
@@ -153,7 +259,13 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     [moduleId]
   );
 
+  const conditionFields: ModuleField[] = useMemo(
+    () => getWorkflowConditionFields(moduleId),
+    [moduleId]
+  );
+
   const isEditMode = !!record?.id;
+  const triggerType = Form.useWatch('trigger_type', form);
 
   useEffect(() => {
     if (!open) return;
@@ -164,33 +276,34 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       name: record?.name || '',
       description: record?.description || '',
       trigger_type: (record?.trigger_type as any) || 'on_create',
+      execution_mode: (record?.execution_mode as any) || 'first_match',
       interval_value: record?.interval_value || undefined,
       interval_unit: (record?.interval_unit as any) || 'day',
       interval_at: record?.interval_at || null,
       batch_size: record?.batch_size || undefined,
       is_active: record?.is_active ?? true,
     });
-    setConditionsAll(Array.isArray(record?.conditions_all) ? (record?.conditions_all as any) : []);
-    setConditionsAny(Array.isArray(record?.conditions_any) ? (record?.conditions_any as any) : []);
-    setActions(Array.isArray(record?.actions) ? (record?.actions as any) : []);
+    setConditionsAll(Array.isArray(record?.conditions_all) ? (record.conditions_all as any) : []);
+    setConditionsAny(Array.isArray(record?.conditions_any) ? (record.conditions_any as any) : []);
+    setActions(Array.isArray(record?.actions) ? (record.actions as any) : []);
   }, [open, record, initialModuleId, form]);
 
   useEffect(() => {
     if (!open || !moduleId) return;
     let cancelled = false;
+
     const run = async () => {
-      const loaded = await loadDynamicAndRelationOptions(moduleId);
+      const loaded = await loadDynamicAndRelationOptions(moduleId, conditionFields);
       if (cancelled) return;
       setDynamicOptions(loaded.dynamicOptions);
       setRelationOptions(loaded.relationOptions);
     };
-    run();
+
+    void run();
     return () => {
       cancelled = true;
     };
-  }, [open, moduleId]);
-
-  const triggerType = Form.useWatch('trigger_type', form);
+  }, [open, moduleId, conditionFields]);
 
   const handleSubmit = async () => {
     if (!canEdit) return;
@@ -214,6 +327,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         name: values.name?.trim(),
         description: values.description?.trim() || null,
         trigger_type: values.trigger_type,
+        execution_mode: values.execution_mode || 'first_match',
         interval_value: values.trigger_type === 'interval' ? values.interval_value || null : null,
         interval_unit: values.trigger_type === 'interval' ? values.interval_unit || null : null,
         interval_at: values.trigger_type === 'interval' ? values.interval_at || null : null,
@@ -306,6 +420,9 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
           <Form.Item name="trigger_type" initialValue="on_create">
             <Radio.Group options={triggerTypeOptions} optionType="button" buttonStyle="solid" />
           </Form.Item>
+          <Form.Item label="زمان اجرا" name="execution_mode" initialValue="first_match">
+            <Radio.Group options={workflowExecutionModeOptions} />
+          </Form.Item>
           {triggerType === 'interval' && (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <div className="md:col-span-4">
@@ -330,7 +447,11 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                 <Select options={intervalUnitOptions} />
               </Form.Item>
               <Form.Item label="در ساعت" name="interval_at">
-                <PersianDatePicker type="TIME" value={form.getFieldValue('interval_at') || null} onChange={(nextVal) => form.setFieldValue('interval_at', nextVal)} />
+                <PersianDatePicker
+                  type="TIME"
+                  value={form.getFieldValue('interval_at') || null}
+                  onChange={(nextVal) => form.setFieldValue('interval_at', nextVal)}
+                />
               </Form.Item>
               <Form.Item label="چه تعداد رکورد بررسی شود؟" name="batch_size">
                 <InputNumber min={1} className="w-full persian-number" placeholder="پیش‌فرض: همه" />
@@ -351,7 +472,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                   <WorkflowConditionsGroup
                     value={conditionsAll}
                     onChange={setConditionsAll}
-                    fields={selectedModuleFields}
+                    fields={conditionFields}
                     dynamicOptions={dynamicOptions}
                     relationOptions={relationOptions}
                     disabled={!canEdit}
@@ -365,7 +486,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                   <WorkflowConditionsGroup
                     value={conditionsAny}
                     onChange={setConditionsAny}
-                    fields={selectedModuleFields}
+                    fields={conditionFields}
                     dynamicOptions={dynamicOptions}
                     relationOptions={relationOptions}
                     disabled={!canEdit}

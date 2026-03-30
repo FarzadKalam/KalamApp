@@ -285,6 +285,25 @@ alter table public.changelogs
 create index if not exists idx_changelogs_module_record
   on public.changelogs(module_id, record_id, created_at desc);
 
+create table if not exists public.user_login_events (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.user_login_events
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists user_id uuid references public.profiles(id) on delete cascade,
+  add column if not exists login_method text not null default 'password',
+  add column if not exists source text not null default 'web',
+  add column if not exists user_agent text,
+  add column if not exists created_at timestamptz not null default now();
+
+create index if not exists idx_user_login_events_user_created_at
+  on public.user_login_events(user_id, created_at desc)
+  where user_id is not null;
+
+create index if not exists idx_user_login_events_org_created_at
+  on public.user_login_events(org_id, created_at desc);
+
 create table if not exists public.notes (
   id uuid primary key default gen_random_uuid()
 );
@@ -306,6 +325,24 @@ alter table public.notes
 
 create index if not exists idx_notes_module_record on public.notes(module_id, record_id);
 create index if not exists idx_notes_created_at on public.notes(created_at desc);
+
+create or replace function public.normalize_note_scope()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.module_id := coalesce(nullif(trim(new.module_id), ''), '');
+  new.record_id := coalesce(nullif(trim(new.record_id), ''), '');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_notes_normalize_scope on public.notes;
+
+create trigger trg_notes_normalize_scope
+before insert or update on public.notes
+for each row
+execute function public.normalize_note_scope();
 
 create table if not exists public.sidebar_unread (
   id uuid primary key default gen_random_uuid()
@@ -337,6 +374,7 @@ alter table public.workflows
   add column if not exists name text not null default '',
   add column if not exists description text,
   add column if not exists trigger_type text not null default 'on_create',
+  add column if not exists execution_mode text not null default 'first_match',
   add column if not exists interval_value integer,
   add column if not exists interval_unit text,
   add column if not exists interval_at text,
@@ -359,6 +397,17 @@ begin
     alter table public.workflows
       add constraint workflows_trigger_type_check
       check (trigger_type in ('on_create', 'on_upsert', 'interval'));
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'workflows_execution_mode_check'
+  ) then
+    alter table public.workflows
+      add constraint workflows_execution_mode_check
+      check (execution_mode in ('first_match', 'every_match'));
   end if;
 end $$;
 
@@ -486,12 +535,20 @@ alter table public.customers
   add column if not exists first_name text,
   add column if not exists last_name text,
   add column if not exists system_code text,
+  add column if not exists legacy_contact_code text,
   add column if not exists rank text,
   add column if not exists mobile_1 text,
   add column if not exists prefix text,
   add column if not exists business_name text,
+  add column if not exists accounting_code text,
+  add column if not exists email text,
+  add column if not exists assistant_phone text,
   add column if not exists birth_date date,
   add column if not exists lead_source text,
+  add column if not exists referrer_module text,
+  add column if not exists referrer_customer_id uuid references public.customers(id) on delete set null,
+  add column if not exists referrer_employee_id uuid,
+  add column if not exists referrer_supplier_id uuid references public.suppliers(id) on delete set null,
   add column if not exists mobile_2 text,
   add column if not exists phone text,
   add column if not exists province text,
@@ -505,6 +562,13 @@ alter table public.customers
   add column if not exists last_purchase_date date,
   add column if not exists purchase_count numeric(18,3) not null default 0,
   add column if not exists total_spend numeric(18,2) not null default 0,
+  add column if not exists total_paid_amount numeric(18,2) not null default 0,
+  add column if not exists organization_position text,
+  add column if not exists acquaintance_days integer,
+  add column if not exists cooperation_days integer,
+  add column if not exists customer_interests jsonb not null default '[]'::jsonb,
+  add column if not exists assignee_id uuid references public.profiles(id) on delete set null,
+  add column if not exists assignee_type text,
   add column if not exists process_template_id uuid,
   add column if not exists process_run_id uuid,
   add column if not exists created_by uuid references auth.users(id) on delete set null,
@@ -516,6 +580,294 @@ create index if not exists idx_customers_org_name on public.customers(org_id, fi
 create unique index if not exists idx_customers_org_system_code
   on public.customers(org_id, system_code)
   where system_code is not null and system_code <> '';
+create index if not exists idx_customers_legacy_contact_code
+  on public.customers(org_id, legacy_contact_code)
+  where legacy_contact_code is not null and legacy_contact_code <> '';
+
+create table if not exists public.work_schedules (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.work_schedules
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists title text not null default '',
+  add column if not exists employee_id uuid references public.employees(id) on delete set null,
+  add column if not exists status text not null default 'draft',
+  add column if not exists schedule_type text not null default 'fixed',
+  add column if not exists is_active boolean not null default true,
+  add column if not exists effective_from date,
+  add column if not exists effective_to date,
+  add column if not exists start_time time,
+  add column if not exists end_time time,
+  add column if not exists flexible_start_time time,
+  add column if not exists flexible_end_time time,
+  add column if not exists expected_daily_minutes integer not null default 480,
+  add column if not exists weekly_plan jsonb not null default '{}'::jsonb,
+  add column if not exists weekly_days jsonb not null default '[]'::jsonb,
+  add column if not exists notes text,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.work_schedules
+set
+  title = coalesce(title, ''),
+  status = coalesce(nullif(status, ''), 'draft'),
+  schedule_type = coalesce(nullif(schedule_type, ''), 'fixed'),
+  is_active = coalesce(is_active, true),
+  expected_daily_minutes = coalesce(expected_daily_minutes, 480),
+  weekly_plan = coalesce(weekly_plan, '{}'::jsonb),
+  weekly_days = coalesce(weekly_days, '[]'::jsonb)
+where
+  title is null
+  or status is null
+  or status = ''
+  or schedule_type is null
+  or schedule_type = ''
+  or is_active is null
+  or expected_daily_minutes is null
+  or weekly_plan is null
+  or weekly_days is null;
+
+alter table public.work_schedules
+  alter column title set default '',
+  alter column title set not null,
+  alter column status set default 'draft',
+  alter column status set not null,
+  alter column schedule_type set default 'fixed',
+  alter column schedule_type set not null,
+  alter column is_active set default true,
+  alter column is_active set not null,
+  alter column expected_daily_minutes set default 480,
+  alter column expected_daily_minutes set not null,
+  alter column weekly_plan set default '{}'::jsonb,
+  alter column weekly_plan set not null,
+  alter column weekly_days set default '[]'::jsonb,
+  alter column weekly_days set not null;
+
+create index if not exists idx_work_schedules_org_title on public.work_schedules(org_id, title);
+create index if not exists idx_work_schedules_employee on public.work_schedules(employee_id)
+  where employee_id is not null;
+
+create table if not exists public.employees (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.employees
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists image_url text,
+  add column if not exists full_name text,
+  add column if not exists system_code text,
+  add column if not exists related_profile_id uuid references public.profiles(id) on delete set null,
+  add column if not exists employment_status text not null default 'active',
+  add column if not exists employment_type text,
+  add column if not exists salary_type text,
+  add column if not exists department text,
+  add column if not exists team text,
+  add column if not exists job_title text,
+  add column if not exists national_code text,
+  add column if not exists father_name text,
+  add column if not exists birth_certificate_number text,
+  add column if not exists insurance_number text,
+  add column if not exists gender text,
+  add column if not exists birth_date date,
+  add column if not exists hire_date date,
+  add column if not exists termination_date date,
+  add column if not exists mobile_1 text,
+  add column if not exists mobile_2 text,
+  add column if not exists phone text,
+  add column if not exists email text,
+  add column if not exists province text,
+  add column if not exists city text,
+  add column if not exists address text,
+  add column if not exists default_work_schedule_id uuid references public.work_schedules(id) on delete set null,
+  add column if not exists has_flexible_hours boolean not null default false,
+  add column if not exists overtime_auto_approve boolean not null default false,
+  add column if not exists leave_auto_approve boolean not null default false,
+  add column if not exists mission_auto_approve boolean not null default false,
+  add column if not exists expected_daily_minutes integer not null default 480,
+  add column if not exists grace_minutes_for_late integer not null default 0,
+  add column if not exists insurance_subject boolean not null default true,
+  add column if not exists employee_insurance_rate numeric(8,4) not null default 7,
+  add column if not exists employer_insurance_rate numeric(8,4) not null default 23,
+  add column if not exists bank_name text,
+  add column if not exists bank_account_number text,
+  add column if not exists bank_card_number text,
+  add column if not exists iban text,
+  add column if not exists base_salary numeric(18,2) not null default 0,
+  add column if not exists hourly_rate numeric(18,2) not null default 0,
+  add column if not exists overtime_rate numeric(18,2) not null default 0,
+  add column if not exists late_penalty_rate numeric(18,2) not null default 0,
+  add column if not exists early_bonus_rate numeric(18,2) not null default 0,
+  add column if not exists production_bonus_rate numeric(18,2) not null default 0,
+  add column if not exists commission_percentage numeric(8,4) not null default 0,
+  add column if not exists profit_share_percentage numeric(8,4) not null default 0,
+  add column if not exists profit_share_basis text not null default 'net_profit',
+  add column if not exists profit_share_cost_center_id uuid references public.cost_centers(id) on delete set null,
+  add column if not exists notes text,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.employees
+set
+  employment_status = coalesce(nullif(employment_status, ''), 'active'),
+  has_flexible_hours = coalesce(has_flexible_hours, false),
+  overtime_auto_approve = coalesce(overtime_auto_approve, false),
+  leave_auto_approve = coalesce(leave_auto_approve, false),
+  mission_auto_approve = coalesce(mission_auto_approve, false),
+  expected_daily_minutes = coalesce(expected_daily_minutes, 480),
+  grace_minutes_for_late = coalesce(grace_minutes_for_late, 0),
+  insurance_subject = coalesce(insurance_subject, true),
+  employee_insurance_rate = coalesce(employee_insurance_rate, 7),
+  employer_insurance_rate = coalesce(employer_insurance_rate, 23),
+  base_salary = coalesce(base_salary, 0),
+  hourly_rate = coalesce(hourly_rate, 0),
+  overtime_rate = coalesce(overtime_rate, 0),
+  late_penalty_rate = coalesce(late_penalty_rate, 0),
+  early_bonus_rate = coalesce(early_bonus_rate, 0),
+  production_bonus_rate = coalesce(production_bonus_rate, 0),
+  commission_percentage = coalesce(commission_percentage, 0),
+  profit_share_percentage = coalesce(profit_share_percentage, 0),
+  profit_share_basis = coalesce(nullif(profit_share_basis, ''), 'net_profit')
+where
+  employment_status is null
+  or employment_status = ''
+  or has_flexible_hours is null
+  or overtime_auto_approve is null
+  or leave_auto_approve is null
+  or mission_auto_approve is null
+  or expected_daily_minutes is null
+  or grace_minutes_for_late is null
+  or insurance_subject is null
+  or employee_insurance_rate is null
+  or employer_insurance_rate is null
+  or base_salary is null
+  or hourly_rate is null
+  or overtime_rate is null
+  or late_penalty_rate is null
+  or early_bonus_rate is null
+  or production_bonus_rate is null
+  or commission_percentage is null
+  or profit_share_percentage is null
+  or profit_share_basis is null
+  or profit_share_basis = '';
+
+alter table public.employees
+  alter column employment_status set default 'active',
+  alter column employment_status set not null,
+  alter column has_flexible_hours set default false,
+  alter column has_flexible_hours set not null,
+  alter column overtime_auto_approve set default false,
+  alter column overtime_auto_approve set not null,
+  alter column leave_auto_approve set default false,
+  alter column leave_auto_approve set not null,
+  alter column mission_auto_approve set default false,
+  alter column mission_auto_approve set not null,
+  alter column expected_daily_minutes set default 480,
+  alter column expected_daily_minutes set not null,
+  alter column grace_minutes_for_late set default 0,
+  alter column grace_minutes_for_late set not null,
+  alter column insurance_subject set default true,
+  alter column insurance_subject set not null,
+  alter column employee_insurance_rate set default 7,
+  alter column employee_insurance_rate set not null,
+  alter column employer_insurance_rate set default 23,
+  alter column employer_insurance_rate set not null,
+  alter column base_salary set default 0,
+  alter column base_salary set not null,
+  alter column hourly_rate set default 0,
+  alter column hourly_rate set not null,
+  alter column overtime_rate set default 0,
+  alter column overtime_rate set not null,
+  alter column late_penalty_rate set default 0,
+  alter column late_penalty_rate set not null,
+  alter column early_bonus_rate set default 0,
+  alter column early_bonus_rate set not null,
+  alter column production_bonus_rate set default 0,
+  alter column production_bonus_rate set not null,
+  alter column commission_percentage set default 0,
+  alter column commission_percentage set not null,
+  alter column profit_share_percentage set default 0,
+  alter column profit_share_percentage set not null,
+  alter column profit_share_basis set default 'net_profit',
+  alter column profit_share_basis set not null;
+
+create index if not exists idx_employees_org_name on public.employees(org_id, full_name);
+create unique index if not exists idx_employees_org_system_code
+  on public.employees(org_id, system_code)
+  where system_code is not null and system_code <> '';
+create unique index if not exists idx_employees_related_profile
+  on public.employees(related_profile_id)
+  where related_profile_id is not null;
+create index if not exists idx_employees_default_work_schedule
+  on public.employees(default_work_schedule_id)
+  where default_work_schedule_id is not null;
+create index if not exists idx_employees_profit_share_cost_center
+  on public.employees(profit_share_cost_center_id)
+  where profit_share_cost_center_id is not null;
+
+create table if not exists public.attendance_logs (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.attendance_logs
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists employee_id uuid references public.employees(id) on delete set null,
+  add column if not exists related_profile_id uuid references public.profiles(id) on delete set null,
+  add column if not exists assignee_id uuid references public.profiles(id) on delete set null default auth.uid(),
+  add column if not exists assignee_type text not null default 'user',
+  add column if not exists log_type text not null default 'check_in',
+  add column if not exists occurred_at timestamptz not null default now(),
+  add column if not exists source_type text not null default 'manual',
+  add column if not exists location_text text,
+  add column if not exists notes text,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.attendance_logs
+set
+  assignee_id = coalesce(assignee_id, related_profile_id, created_by),
+  assignee_type = coalesce(nullif(assignee_type, ''), 'user'),
+  log_type = coalesce(nullif(log_type, ''), 'check_in'),
+  source_type = coalesce(nullif(source_type, ''), 'manual'),
+  occurred_at = coalesce(occurred_at, now())
+where
+  assignee_id is null
+  or assignee_type is null
+  or assignee_type = ''
+  or log_type is null
+  or log_type = ''
+  or source_type is null
+  or source_type = ''
+  or occurred_at is null;
+
+alter table public.attendance_logs
+  alter column assignee_id set default auth.uid(),
+  alter column assignee_type set default 'user',
+  alter column assignee_type set not null,
+  alter column log_type set default 'check_in',
+  alter column log_type set not null,
+  alter column occurred_at set default now(),
+  alter column occurred_at set not null,
+  alter column source_type set default 'manual',
+  alter column source_type set not null;
+
+create index if not exists idx_attendance_logs_org_time
+  on public.attendance_logs(org_id, occurred_at desc);
+create index if not exists idx_attendance_logs_employee_time
+  on public.attendance_logs(employee_id, occurred_at desc)
+  where employee_id is not null;
+create index if not exists idx_attendance_logs_profile_time
+  on public.attendance_logs(related_profile_id, occurred_at desc)
+  where related_profile_id is not null;
+create index if not exists idx_attendance_logs_assignee_time
+  on public.attendance_logs(assignee_id, occurred_at desc)
+  where assignee_id is not null;
 
 create table if not exists public.products (
   id uuid primary key default gen_random_uuid()
@@ -543,6 +895,15 @@ alter table public.products
   add column if not exists waste_rate numeric(12,4) not null default 0,
   add column if not exists buy_price numeric(18,2) not null default 0,
   add column if not exists sell_price numeric(18,2) not null default 0,
+  add column if not exists total_sold_amount numeric(18,2) not null default 0,
+  add column if not exists total_sold_quantity numeric(18,3) not null default 0,
+  add column if not exists invoice_count integer not null default 0,
+  add column if not exists monthly_rent numeric(18,2) not null default 0,
+  add column if not exists vat_percentage numeric(8,4) not null default 10,
+  add column if not exists is_vat_exempt boolean not null default true,
+  add column if not exists description text,
+  add column if not exists required_quantity numeric(18,3) not null default 0,
+  add column if not exists commission_percentage numeric(8,4) not null default 0,
   add column if not exists production_cost numeric(18,2) not null default 0,
   add column if not exists auto_name_enabled boolean not null default false,
   add column if not exists grid_materials jsonb not null default '[]'::jsonb,
@@ -559,6 +920,8 @@ alter table public.products
   add column if not exists fitting_colors jsonb not null default '[]'::jsonb,
   add column if not exists fitting_size text,
   add column if not exists assignee_id uuid references public.profiles(id) on delete set null,
+  add column if not exists assignee_role_id uuid references public.org_roles(id) on delete set null,
+  add column if not exists assignee_type text,
   add column if not exists created_by uuid references auth.users(id) on delete set null,
   add column if not exists updated_by uuid references auth.users(id) on delete set null,
   add column if not exists created_at timestamptz not null default now(),
@@ -571,6 +934,7 @@ create unique index if not exists idx_products_org_system_code
 create index if not exists idx_products_org_name on public.products(org_id, name);
 create index if not exists idx_products_category on public.products(category);
 create index if not exists idx_products_product_type on public.products(product_type);
+create index if not exists idx_products_assignee on public.products(assignee_id, assignee_role_id);
 
 create table if not exists public.product_images (
   id uuid primary key default gen_random_uuid()
@@ -782,11 +1146,16 @@ alter table public.invoices
   add column if not exists name text not null default '',
   add column if not exists invoice_date date,
   add column if not exists system_code text,
+  add column if not exists legacy_invoice_number text,
   add column if not exists status text not null default 'draft',
+  add column if not exists legacy_status text,
+  add column if not exists legacy_accounting_status text,
   add column if not exists customer_id uuid references public.customers(id) on delete set null,
   add column if not exists sale_source text,
+  add column if not exists legacy_source text,
   add column if not exists "invoiceItems" jsonb not null default '[]'::jsonb,
   add column if not exists payments jsonb not null default '[]'::jsonb,
+  add column if not exists legacy_ready_text text,
   add column if not exists total_invoice_amount numeric(18,2) not null default 0,
   add column if not exists total_received_amount numeric(18,2) not null default 0,
   add column if not exists remaining_balance numeric(18,2) not null default 0,
@@ -804,6 +1173,9 @@ create unique index if not exists idx_invoices_org_system_code
 
 create index if not exists idx_invoices_customer_id on public.invoices(customer_id);
 create index if not exists idx_invoices_status_date on public.invoices(org_id, status, invoice_date);
+create index if not exists idx_invoices_legacy_invoice_number
+  on public.invoices(org_id, legacy_invoice_number)
+  where legacy_invoice_number is not null and legacy_invoice_number <> '';
 
 create table if not exists public.purchase_invoices (
   id uuid primary key default gen_random_uuid()
@@ -814,11 +1186,16 @@ alter table public.purchase_invoices
   add column if not exists name text not null default '',
   add column if not exists invoice_date date,
   add column if not exists system_code text,
+  add column if not exists legacy_invoice_number text,
   add column if not exists status text not null default 'draft',
+  add column if not exists legacy_status text,
+  add column if not exists legacy_accounting_status text,
   add column if not exists supplier_id uuid references public.suppliers(id) on delete set null,
   add column if not exists purchase_source text,
+  add column if not exists legacy_source text,
   add column if not exists "invoiceItems" jsonb not null default '[]'::jsonb,
   add column if not exists payments jsonb not null default '[]'::jsonb,
+  add column if not exists legacy_ready_text text,
   add column if not exists total_invoice_amount numeric(18,2) not null default 0,
   add column if not exists total_received_amount numeric(18,2) not null default 0,
   add column if not exists remaining_balance numeric(18,2) not null default 0,
@@ -836,6 +1213,9 @@ create unique index if not exists idx_purchase_invoices_org_system_code
 
 create index if not exists idx_purchase_invoices_supplier_id on public.purchase_invoices(supplier_id);
 create index if not exists idx_purchase_invoices_status_date on public.purchase_invoices(org_id, status, invoice_date);
+create index if not exists idx_purchase_invoices_legacy_invoice_number
+  on public.purchase_invoices(org_id, legacy_invoice_number)
+  where legacy_invoice_number is not null and legacy_invoice_number <> '';
 
 create table if not exists public.tasks (
   id uuid primary key default gen_random_uuid()
@@ -900,6 +1280,51 @@ create index if not exists idx_calculation_formulas_org_name
   on public.calculation_formulas(org_id, name);
 
 -- =====================================================
+-- Price lists
+-- =====================================================
+
+create table if not exists public.price_lists (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.price_lists
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists name text not null default '',
+  add column if not exists status text not null default 'active',
+  add column if not exists description text,
+  add column if not exists items jsonb not null default '[]'::jsonb,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.price_lists
+set
+  name = coalesce(name, ''),
+  status = case
+    when coalesce(nullif(status, ''), 'active') in ('active', 'draft') then coalesce(nullif(status, ''), 'active')
+    else 'active'
+  end,
+  items = coalesce(items, '[]'::jsonb)
+where
+  name is null
+  or status is null
+  or status = ''
+  or status not in ('active', 'draft')
+  or items is null;
+
+alter table public.price_lists
+  alter column name set default '',
+  alter column name set not null,
+  alter column status set default 'active',
+  alter column status set not null,
+  alter column items set default '[]'::jsonb,
+  alter column items set not null;
+
+create index if not exists idx_price_lists_org_name
+  on public.price_lists(org_id, name);
+
+-- =====================================================
 -- Bundles
 -- =====================================================
 
@@ -910,14 +1335,38 @@ create table if not exists public.product_bundles (
 alter table public.product_bundles
   add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
   add column if not exists bundle_number text,
-  add column if not exists status text,
+  add column if not exists name text not null default '',
+  add column if not exists image_url text,
+  add column if not exists status text not null default 'active',
   add column if not exists shelf_id uuid references public.shelves(id) on delete set null,
   add column if not exists notes text,
   add column if not exists products jsonb not null default '[]'::jsonb,
+  add column if not exists assignee_id uuid references public.profiles(id) on delete set null,
+  add column if not exists assignee_type text,
   add column if not exists created_by uuid references auth.users(id) on delete set null,
   add column if not exists updated_by uuid references auth.users(id) on delete set null,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
+
+update public.product_bundles
+set
+  name = coalesce(nullif(name, ''), nullif(bundle_number, ''), ''),
+  status = case
+    when coalesce(nullif(status, ''), 'active') in ('active', 'draft') then coalesce(nullif(status, ''), 'active')
+    else 'active'
+  end
+where
+  name is null
+  or name = ''
+  or status is null
+  or status = ''
+  or status not in ('active', 'draft');
+
+alter table public.product_bundles
+  alter column name set default '',
+  alter column name set not null,
+  alter column status set default 'active',
+  alter column status set not null;
 
 create index if not exists idx_product_bundles_org_status
   on public.product_bundles(org_id, status, created_at desc);
@@ -1339,6 +1788,16 @@ end $$;
 
 do $$
 begin
+  if not exists (select 1 from pg_constraint where conname = 'customers_referrer_employee_id_fkey') then
+    alter table public.customers
+      add constraint customers_referrer_employee_id_fkey
+      foreign key (referrer_employee_id) references public.employees(id) on delete set null
+      not valid;
+  end if;
+end $$;
+
+do $$
+begin
   if not exists (select 1 from pg_constraint where conname = 'invoices_project_id_fkey') then
     alter table public.invoices
       add constraint invoices_project_id_fkey
@@ -1494,10 +1953,10 @@ begin
   foreach t in array array[
     'organizations','org_roles','profiles','company_settings','integration_settings',
     'dynamic_options','saved_views','tags','notes','sidebar_unread','workflows',
-    'warehouses','shelves','suppliers','customers','products','product_images',
+    'warehouses','shelves','suppliers','customers','work_schedules','employees','attendance_logs','products','product_images',
     'product_inventory','production_group_orders','production_boms','production_orders',
     'production_lines','stock_transfers','invoices','purchase_invoices','tasks',
-    'calculation_formulas','product_bundles','bundle_items','projects','project_members',
+    'calculation_formulas','price_lists','product_bundles','bundle_items','projects','project_members',
     'marketing_leads','process_templates','process_template_stages','process_runs',
     'process_run_stages','ai_record_contexts'
   ]
@@ -1544,11 +2003,12 @@ declare
 begin
   foreach t in array array[
     'org_roles','profiles','company_settings','integration_settings','dynamic_options',
-    'saved_views','tags','record_tags','changelogs','notes','sidebar_unread',
-    'workflows','workflow_logs','warehouses','shelves','suppliers','customers',
+    'saved_views','tags','record_tags','changelogs','user_login_events','notes','sidebar_unread',
+    'workflows','workflow_logs','warehouses','shelves','suppliers','customers','work_schedules','employees','attendance_logs',
     'products','product_images','product_inventory','production_group_orders',
     'production_boms','production_orders','production_lines','product_lines',
     'stock_transfers','invoices','purchase_invoices','tasks','calculation_formulas',
+    'price_lists',
     'product_bundles','bundle_items','process_templates','process_runs','projects',
     'project_members','marketing_leads','module_relations','ai_record_contexts'
   ]
@@ -1618,6 +2078,148 @@ with check (
       and r.org_id = public.current_org_id()
   )
 );
+
+create table if not exists public.leave_requests (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.leave_requests
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists employee_id uuid references public.employees(id) on delete set null,
+  add column if not exists status text not null default 'pending',
+  add column if not exists leave_type text not null default 'daily',
+  add column if not exists start_date date,
+  add column if not exists end_date date,
+  add column if not exists total_days numeric(10,2) not null default 0,
+  add column if not exists total_minutes integer not null default 0,
+  add column if not exists notes text,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists idx_leave_requests_org_dates on public.leave_requests(org_id, start_date, end_date);
+create index if not exists idx_leave_requests_employee on public.leave_requests(employee_id)
+  where employee_id is not null;
+
+create table if not exists public.overtime_requests (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.overtime_requests
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists employee_id uuid references public.employees(id) on delete set null,
+  add column if not exists status text not null default 'pending',
+  add column if not exists work_date date,
+  add column if not exists start_time time,
+  add column if not exists end_time time,
+  add column if not exists total_minutes integer not null default 0,
+  add column if not exists notes text,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists idx_overtime_requests_org_work_date on public.overtime_requests(org_id, work_date);
+create index if not exists idx_overtime_requests_employee on public.overtime_requests(employee_id)
+  where employee_id is not null;
+
+create table if not exists public.mission_requests (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.mission_requests
+  add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
+  add column if not exists employee_id uuid references public.employees(id) on delete set null,
+  add column if not exists status text not null default 'pending',
+  add column if not exists start_date date,
+  add column if not exists end_date date,
+  add column if not exists destination text,
+  add column if not exists notes text,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists idx_mission_requests_org_dates on public.mission_requests(org_id, start_date, end_date);
+create index if not exists idx_mission_requests_employee on public.mission_requests(employee_id)
+  where employee_id is not null;
+
+do $$
+begin
+  if to_regprocedure('public.set_updated_at()') is not null then
+    drop trigger if exists trg_leave_requests_updated_at on public.leave_requests;
+    create trigger trg_leave_requests_updated_at
+      before update on public.leave_requests
+      for each row execute function public.set_updated_at();
+
+    drop trigger if exists trg_overtime_requests_updated_at on public.overtime_requests;
+    create trigger trg_overtime_requests_updated_at
+      before update on public.overtime_requests
+      for each row execute function public.set_updated_at();
+
+    drop trigger if exists trg_mission_requests_updated_at on public.mission_requests;
+    create trigger trg_mission_requests_updated_at
+      before update on public.mission_requests
+      for each row execute function public.set_updated_at();
+  end if;
+end $$;
+
+grant select, insert, update, delete on public.leave_requests to authenticated, service_role;
+grant select, insert, update, delete on public.overtime_requests to authenticated, service_role;
+grant select, insert, update, delete on public.mission_requests to authenticated, service_role;
+
+alter table public.leave_requests enable row level security;
+alter table public.overtime_requests enable row level security;
+alter table public.mission_requests enable row level security;
+
+drop policy if exists p_leave_requests_org_all on public.leave_requests;
+create policy p_leave_requests_org_all on public.leave_requests
+  for all to authenticated
+  using (
+    to_regprocedure('public.current_org_id()') is null
+    or public.current_org_id() is null
+    or org_id is null
+    or org_id = public.current_org_id()
+  )
+  with check (
+    to_regprocedure('public.current_org_id()') is null
+    or public.current_org_id() is null
+    or org_id is null
+    or org_id = public.current_org_id()
+  );
+
+drop policy if exists p_overtime_requests_org_all on public.overtime_requests;
+create policy p_overtime_requests_org_all on public.overtime_requests
+  for all to authenticated
+  using (
+    to_regprocedure('public.current_org_id()') is null
+    or public.current_org_id() is null
+    or org_id is null
+    or org_id = public.current_org_id()
+  )
+  with check (
+    to_regprocedure('public.current_org_id()') is null
+    or public.current_org_id() is null
+    or org_id is null
+    or org_id = public.current_org_id()
+  );
+
+drop policy if exists p_mission_requests_org_all on public.mission_requests;
+create policy p_mission_requests_org_all on public.mission_requests
+  for all to authenticated
+  using (
+    to_regprocedure('public.current_org_id()') is null
+    or public.current_org_id() is null
+    or org_id is null
+    or org_id = public.current_org_id()
+  )
+  with check (
+    to_regprocedure('public.current_org_id()') is null
+    or public.current_org_id() is null
+    or org_id is null
+    or org_id = public.current_org_id()
+  );
 
 -- =====================================================
 -- Pattern for future tables (tenant-safe defaults)

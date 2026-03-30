@@ -43,6 +43,7 @@ export enum RelatedDisplayMode {
 export enum FieldType {
   TEXT = 'text',
   LONG_TEXT = 'long_text',
+  SUPER_LONG_TEXT = 'superlongtext',
   NUMBER = 'number',
   PRICE = 'price',     
   PERCENTAGE = 'percentage', 
@@ -156,6 +157,7 @@ export interface ModuleField {
   type: FieldType;
   labels: { fa: string; en?: string };
   isTableColumn?: boolean;
+  hideInCreateForm?: boolean;
   options?: SelectOption[];
   
   // --- ویژگی اضافه شده برای رفع خطا ---
@@ -178,6 +180,13 @@ export interface ModuleField {
     targetField?: string;
     filter?: Record<string, any>;
     dependsOn?: string;
+    sourceModules?: Array<{
+      targetModule: string;
+      targetField?: string;
+      filter?: Record<string, any>;
+      tagLabel?: string;
+      tagColor?: string;
+    }>;
     quickCreateFieldKeys?: string[];
     quickCreateDefaults?: Record<string, any>;
   };
@@ -191,6 +200,7 @@ export interface BlockDefinition {
   order: number;
   icon?: string;
   visibleIf?: any;
+  hideInCreateForm?: boolean;
   readonly?: boolean;
   gridConfig?: {
     categories: Array<{ value: string; label: string; specBlockId: string }>;
@@ -201,7 +211,17 @@ export interface BlockDefinition {
     type: FieldType;
     width?: number;
     showTotal?: boolean; // <--- این خط جدید است: برای نمایش جمع کل در پایین ستون
-    relationConfig?: { targetModule: string; targetField: string; };
+    relationConfig?: {
+      targetModule: string;
+      targetField: string;
+      sourceModules?: Array<{
+        targetModule: string;
+        targetField?: string;
+        filter?: Record<string, any>;
+        tagLabel?: string;
+        tagColor?: string;
+      }>;
+    };
   rowCalculationType?: RowCalculationType;
   }[];
   // ویژگی اتصال به دیتای خارجی
@@ -227,7 +247,17 @@ summaryConfig?: {
   };
 }
 
-export type RelatedTabRelationType = 'fk' | 'jsonb_contains' | 'join_table' | 'customer_products' | 'customer_payments' | 'product_customers';
+export type RelatedTabRelationType =
+  | 'fk'
+  | 'fk_from_field'
+  | 'jsonb_contains'
+  | 'join_table'
+  | 'customer_products'
+  | 'customer_payments'
+  | 'customer_payments_from_field'
+  | 'product_customers'
+  | 'supplier_payments'
+  | 'supplier_products';
 
 export interface RelatedTabConfig {
   id: string;
@@ -235,6 +265,7 @@ export interface RelatedTabConfig {
   icon?: string;
   targetModule?: string;
   foreignKey?: string;
+  sourceField?: string;
   relationType?: RelatedTabRelationType;
   jsonbColumn?: string;
   jsonbMatchKey?: string;
@@ -248,6 +279,24 @@ export interface ModuleDefinition {
   titles: { fa: string; en?: string; faSingular?: string };
   nature?: ModuleNature;
   table: string;
+  dashboard?: {
+    quickCreateLabel?: string;
+    recentListFields?: string[];
+    summaryCard?: {
+      preset:
+        | 'tasks_pending_mine'
+        | 'invoices_total_amount_mine'
+        | 'customers_new_mine'
+        | 'projects_in_progress'
+        | 'billboards_opening'
+        | 'products_total';
+      title?: string;
+    };
+  };
+  relationDisplay?: {
+    labelTemplate?: string;
+    searchFields?: string[];
+  };
   fields: ModuleField[];
   blocks: BlockDefinition[];
   supportedViewModes?: ViewMode[];

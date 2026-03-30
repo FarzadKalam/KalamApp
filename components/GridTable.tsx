@@ -7,6 +7,8 @@ import { MODULES } from '../moduleRegistry';
 import { convertArea, HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
 import { getSingleOptionLabel } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
+import { mergeSelectOptions } from '../utils/selectOptions';
+import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import QrScanPopover from './QrScanPopover';
 import { buildProductFilters, runProductsQuery } from './editableTable/productionOrderHelpers';
@@ -888,19 +890,28 @@ const GridTable: React.FC<GridTableProps> = ({
     const updates: Record<string, any[]> = {};
     for (const cat of missing) {
       try {
-        const { data } = await supabase
-          .from('dynamic_options')
-          .select('label, value')
-          .eq('category', cat)
-          .eq('is_active', true)
-          .order('display_order', { ascending: true });
-        if (data) updates[cat] = data.filter((i: any) => i.value !== null);
+        const data = await fetchDynamicOptionsByCategory(supabase, cat);
+        updates[cat] = (data || []).filter((i: any) => i.value !== null);
       } catch (err) {
         console.warn('Dynamic options load failed:', cat, err);
       }
     }
     if (Object.keys(updates).length > 0) {
       setLocalDynamicOptions((prev) => ({ ...prev, ...updates }));
+    }
+  };
+
+  const refreshDynamicOptionsForCategory = async (category?: string) => {
+    const normalizedCategory = String(category || '').trim();
+    if (!normalizedCategory) return;
+    try {
+      const data = await fetchDynamicOptionsByCategory(supabase, normalizedCategory, { force: true });
+      setLocalDynamicOptions((prev) => ({
+        ...prev,
+        [normalizedCategory]: (data || []).filter((item: any) => item?.value !== null),
+      }));
+    } catch (err) {
+      console.warn('Dynamic options refresh failed:', normalizedCategory, err);
     }
   };
 
@@ -1018,7 +1029,7 @@ const GridTable: React.FC<GridTableProps> = ({
                 className="w-full"
                 showSearch
                 optionFilterProp="label"
-                getPopupContainer={() => document.body}
+                getPopupContainer={(node) => node?.parentElement || document.body}
               />
               <div className="text-xs text-gray-500">یا</div>
               <Radio.Group
@@ -1044,7 +1055,7 @@ const GridTable: React.FC<GridTableProps> = ({
                     }}
                     loading={transferProductOptionsLoading}
                     notFoundContent={transferProductOptionsLoading ? <Spin size="small" /> : undefined}
-                    getPopupContainer={() => document.body}
+                    getPopupContainer={(node) => node?.parentElement || document.body}
                     onDropdownVisibleChange={(open) => {
                       if (open) {
                         void loadTransferProductOptions(categoryValue);
@@ -1131,8 +1142,8 @@ const GridTable: React.FC<GridTableProps> = ({
                       options={categories.map((c) => ({ label: c.label, value: c.value }))}
                       placeholder="انتخاب کنید"
                       className="min-w-[160px]"
-                      getPopupContainer={() => document.body}
-                      dropdownStyle={{ zIndex: 10050 }}
+                      getPopupContainer={(node) => node?.parentElement || document.body}
+                      styles={{ popup: { root: { zIndex: 1100 } } }}
                     />
                   ) : (
                     <span className="min-w-[160px] text-xs text-white font-black truncate">
@@ -1186,8 +1197,8 @@ const GridTable: React.FC<GridTableProps> = ({
                         }}
                         onChange={(val) => applySelectedProduct(rowIndex, val)}
                         disabled={!rowCanEdit}
-                        getPopupContainer={() => document.body}
-                        dropdownStyle={{ zIndex: 10050 }}
+                        getPopupContainer={(node) => node?.parentElement || document.body}
+                        styles={{ popup: { root: { zIndex: 1100 } } }}
                       />
                         );
                       })()}
@@ -1323,7 +1334,10 @@ const GridTable: React.FC<GridTableProps> = ({
                           if (canViewField && canViewField(field.key) === false) return null;
                           let options = field.options;
                           if (field.dynamicOptionsCategory) {
-                            options = dynamicOptions[field.dynamicOptionsCategory] || localDynamicOptions[field.dynamicOptionsCategory];
+                            options = mergeSelectOptions(
+                              localDynamicOptions[field.dynamicOptionsCategory],
+                              dynamicOptions[field.dynamicOptionsCategory]
+                            );
                           }
                           const effectiveField = (isSpecsLocked || !rowCanEdit) ? { ...field, readonly: true } : field;
                           return (
@@ -1335,6 +1349,7 @@ const GridTable: React.FC<GridTableProps> = ({
                                 forceEditMode={true}
                                 compactMode={true}
                                 options={options}
+                                onOptionsUpdate={field.dynamicOptionsCategory ? () => refreshDynamicOptionsForCategory(field.dynamicOptionsCategory) : undefined}
                                 onChange={(val) => {
                                   if (isSpecsLocked || !rowCanEdit) return;
                                   updateRow(rowIndex, { specs: { ...(row.specs || {}), [field.key]: val } });
@@ -1374,7 +1389,7 @@ const GridTable: React.FC<GridTableProps> = ({
                       <Popover
                         trigger="click"
                         placement="bottom"
-                        getPopupContainer={() => document.body}
+                        getPopupContainer={(node) => node?.parentElement || document.body}
                         open={pieceActionPopover?.rowKey === rowKey && pieceActionPopover?.action === 'move'}
                         onOpenChange={(open) => {
                           if (open) {
@@ -1394,7 +1409,7 @@ const GridTable: React.FC<GridTableProps> = ({
                       <Popover
                         trigger="click"
                         placement="bottom"
-                        getPopupContainer={() => document.body}
+                        getPopupContainer={(node) => node?.parentElement || document.body}
                         open={pieceActionPopover?.rowKey === rowKey && pieceActionPopover?.action === 'copy'}
                         onOpenChange={(open) => {
                           if (open) {
@@ -1521,8 +1536,8 @@ const GridTable: React.FC<GridTableProps> = ({
                                 onChange={(v) => updatePiece(rowIndex, pieceIndex, { main_unit: v })}
                                 onBlur={() => updatePiece(rowIndex, pieceIndex, {})}
                                 style={{ minWidth: 120 }}
-                                getPopupContainer={() => document.body}
-                                dropdownStyle={{ zIndex: 10050 }}
+                                getPopupContainer={(node) => node?.parentElement || document.body}
+                                styles={{ popup: { root: { zIndex: 1100 } } }}
                               />
                             ) : (
                               <Text className="font-medium whitespace-nowrap inline-block">{val || '-'}</Text>
@@ -1541,8 +1556,8 @@ const GridTable: React.FC<GridTableProps> = ({
                                 onChange={(v) => updatePiece(rowIndex, pieceIndex, { sub_unit: v })}
                                 onBlur={() => updatePiece(rowIndex, pieceIndex, {})}
                                 style={{ minWidth: 120 }}
-                                getPopupContainer={() => document.body}
-                                dropdownStyle={{ zIndex: 10050 }}
+                                getPopupContainer={(node) => node?.parentElement || document.body}
+                                styles={{ popup: { root: { zIndex: 1100 } } }}
                               />
                             ) : (
                               <Text className="font-medium whitespace-nowrap inline-block">{val || '-'}</Text>
@@ -1574,8 +1589,8 @@ const GridTable: React.FC<GridTableProps> = ({
                                 options={dynamicOptions['calculation_formulas'] || []}
                                 onChange={(v) => updatePiece(rowIndex, pieceIndex, { formula_id: v })}
                                 style={{ minWidth: 150 }}
-                                getPopupContainer={() => document.body}
-                                dropdownStyle={{ zIndex: 10050 }}
+                                getPopupContainer={(node) => node?.parentElement || document.body}
+                                styles={{ popup: { root: { zIndex: 1100 } } }}
                               />
                             ) : (
                               <Text className="font-medium whitespace-nowrap inline-block">

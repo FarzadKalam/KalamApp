@@ -17,7 +17,7 @@ interface HeaderActionsProps {
   refreshLoading?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
-  extraActions?: { id: string; label: string; variant?: 'primary' | 'default'; onClick: () => void; }[];
+  extraActions?: { id: string; label: string; variant?: 'primary' | 'default'; onClick: () => void; icon?: React.ReactNode; loading?: boolean; }[];
 }
 
 const HeaderActions: React.FC<HeaderActionsProps> = ({
@@ -40,6 +40,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
           <Button
             key={action.id}
             icon={
+              action.icon ? action.icon :
               action.id === 'auto_name'
                 ? <StarOutlined />
                 : action.variant === 'primary'
@@ -49,6 +50,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             type={action.variant === 'primary' ? 'primary' : 'default'}
             onClick={action.onClick}
             size="middle"
+            loading={action.loading}
             className={action.variant === 'primary' ? 'bg-leather-600 hover:!bg-leather-500 border-none' : 'hover:text-leather-600 hover:border-leather-600'}
           >
             {action.label}

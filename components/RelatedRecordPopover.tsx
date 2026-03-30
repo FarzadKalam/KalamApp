@@ -4,8 +4,13 @@ import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import SmartFieldRenderer from './SmartFieldRenderer';
+import PhoneActionsPopover from './PhoneActionsPopover';
+import RecordMessageActions from './RecordMessageActions';
 import { getRecordTitle } from '../utils/recordTitle';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
+import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
+import { supportsSystemCode } from '../utils/systemCode';
+import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -122,6 +127,11 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     return getRecordTitle(record || {}, moduleConfig, { fallback: label || recordId || '-' });
   }, [label, moduleConfig, record, recordId]);
 
+  const hasQuickMessageActions = useMemo(() => {
+    if (!record) return false;
+    return Boolean(getPrimaryRecordPhone(moduleId, record) || hasAnyRecordBotTarget(record));
+  }, [moduleId, record]);
+
   useEffect(() => {
     if (!open || !moduleConfig || !recordId) return;
     let cancelled = false;
@@ -179,16 +189,34 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
               const targetField = field.type === FieldType.USER
                 ? 'full_name'
-                : String(field?.relationConfig?.targetField || 'name');
+                : getPreferredRelationTargetField(targetModule, String(field?.relationConfig?.targetField || ''));
 
               const targetModuleConfig = MODULES[targetModule];
               const targetTable = targetModuleConfig?.table || targetModule;
-              const selectFields = Array.from(new Set(['id', targetField, 'system_code'])).join(', ');
+              const includeSystemCode = targetModule !== 'cheques' && supportsSystemCode(targetModule);
+              const selectFields = Array.from(new Set(['id', targetField, ...(includeSystemCode ? ['system_code'] : [])])).join(', ');
 
-              const { data: relatedRows } = await supabase
+              let relatedRows: any[] = [];
+              const primary = await supabase
                 .from(targetTable)
                 .select(selectFields)
                 .in('id', normalizedValues);
+              if (primary.error) {
+                const errorCode = String((primary.error as any)?.code || '').toUpperCase();
+                const errorText = String((primary.error as any)?.message || (primary.error as any)?.details || '').toLowerCase();
+                const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+                if (includeSystemCode && isMissingColumn) {
+                  const fallback = await supabase
+                    .from(targetTable)
+                    .select(Array.from(new Set(['id', targetField])).join(', '))
+                    .in('id', normalizedValues);
+                  relatedRows = (fallback.data || []) as any[];
+                } else {
+                  throw primary.error;
+                }
+              } else {
+                relatedRows = (primary.data || []) as any[];
+              }
 
               const byId = new Map<string, { label: string; value: string }>();
               (relatedRows || []).forEach((row: any) => {
@@ -266,7 +294,11 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       return <span className="font-semibold persian-number">{formatted}</span>;
     }
 
-    if (field.type === FieldType.PHONE || field.type === FieldType.TEXT || field.type === FieldType.LONG_TEXT) {
+    if (field.type === FieldType.PHONE) {
+      return <PhoneActionsPopover value={value} moduleId={moduleId} record={record} className="font-medium break-words" />;
+    }
+
+    if (field.type === FieldType.TEXT || field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
       return <span className="font-medium break-words">{toPersianNumber(String(value))}</span>;
     }
 
@@ -330,6 +362,12 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           )}
         </div>
 
+        {!loading && record && hasQuickMessageActions && (
+          <div className="mb-3 flex items-center justify-end">
+            <RecordMessageActions moduleId={moduleId} record={record} compact />
+          </div>
+        )}
+
         {previewImageUrl && (
           <div className="mb-3 rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-black/20">
             <img src={previewImageUrl} alt={previewTitle} className="w-full h-36 object-cover" />
@@ -366,7 +404,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         footer={null}
         title={null}
         centered
-        destroyOnClose
+        destroyOnHidden
         width={460}
         zIndex={overlayZIndex}
       >
@@ -381,7 +419,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       trigger="click"
       open={open}
       onOpenChange={setOpen}
-      getPopupContainer={() => document.body}
+      getPopupContainer={(node) => node?.parentElement || document.body}
       overlayStyle={{ zIndex: overlayZIndex }}
     >
       {children || (

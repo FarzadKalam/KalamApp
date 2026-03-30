@@ -1,25 +1,95 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Input, List, Spin, Empty, Tag } from 'antd';
+import { Button, Empty, Input, List, Spin, Tag } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import RelatedRecordCard from './RelatedRecordCard';
-import { RelatedTabConfig } from '../../types';
+import { FieldType, RelatedTabConfig } from '../../types';
 import { getRecordTitle } from '../../utils/recordTitle';
+import {
+  buildRelationValueMap,
+  formatRecordDisplayValue,
+  RelationValueMap,
+  resolveOptionLabel,
+} from '../../utils/recordDisplayFormatter';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
   currentRecordId: string;
+  currentModuleId: string;
 }
 
-const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentRecordId }) => {
+const SALES_PRODUCT_STATUSES = new Set(['confirmed', 'final', 'settled', 'completed']);
+const PURCHASE_PRODUCT_STATUSES = new Set(['final', 'settled', 'completed']);
+const PAYMENT_RELATION_TYPES = new Set(['customer_payments', 'customer_payments_from_field', 'supplier_payments']);
+const PRODUCT_AGGREGATE_RELATION_TYPES = new Set(['customer_products', 'supplier_products']);
+const PAYMENT_VISIBLE_KEYS = [
+  'payment_type',
+  'cheque_id',
+  'barter_id',
+  'target_account',
+  'source_account',
+  'spent_cheque_id',
+  'responsible_id',
+  'cheque_status',
+  'date',
+  'amount',
+  'description',
+];
+
+const toNumber = (value: any) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const buildPaymentRows = (invoices: any[], relationLabel: string) => (
+  (invoices || []).flatMap((invoice: any) =>
+    (invoice.payments || []).map((payment: any, index: number) => ({
+      id: `${invoice.id}_${index}`,
+      invoice_id: invoice.id,
+      invoice_name: invoice.name,
+      __moduleId: invoice.__moduleId || 'invoices',
+      __relationLabel: relationLabel,
+      ...payment,
+    })),
+  )
+);
+
+const resolveStatusMeta = (item: any, moduleId: string) => {
+  const moduleConfig = MODULES[moduleId];
+  const statusField = (moduleConfig?.fields || []).find((field: any) => String(field?.key || '') === 'status');
+  const rawValue = item?.status;
+  if (!statusField || rawValue === undefined || rawValue === null || rawValue === '') return null;
+  const option = (statusField.options || []).find((entry: any) => String(entry?.value || '') === String(rawValue));
+  return option
+    ? { label: String(option.label || rawValue), color: String(option.color || 'default') }
+    : null;
+};
+
+const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentRecordId, currentModuleId }) => {
   const navigate = useNavigate();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchValue, setSearchValue] = useState('');
   const [profileNameMap, setProfileNameMap] = useState<Record<string, string>>({});
+  const [sourceFieldValue, setSourceFieldValue] = useState<any>(null);
+  const [sourceFieldLoading, setSourceFieldLoading] = useState(false);
+  const [relationValueMap, setRelationValueMap] = useState<RelationValueMap>({});
+  const [paymentRelationValueMap, setPaymentRelationValueMap] = useState<RelationValueMap>({});
   const targetConfig = tab.targetModule ? MODULES[tab.targetModule] : undefined;
+  const sourceConfig = MODULES[currentModuleId];
+  const paymentModuleId = tab.relationType === 'supplier_payments' ? 'purchase_invoices' : 'invoices';
+  const paymentBlock = useMemo(
+    () => MODULES[paymentModuleId]?.blocks?.find((block: any) => String(block?.id || '') === 'payments'),
+    [paymentModuleId],
+  );
+  const paymentColumns = useMemo(() => paymentBlock?.tableColumns || [], [paymentBlock]);
+  const paymentColumnMap = useMemo(
+    () => Object.fromEntries((paymentColumns || []).map((column: any) => [String(column.key), column])),
+    [paymentColumns],
+  );
 
   const formatValue = (val: any) => {
     if (val === null || val === undefined || val === '') return '';
@@ -32,14 +102,6 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
       }
     }
     return String(val);
-  };
-
-  const extractProductIds = (invoiceItems: any[]) => {
-    const ids = new Set<string>();
-    (invoiceItems || []).forEach((row) => {
-      if (row?.product_id) ids.add(String(row.product_id));
-    });
-    return Array.from(ids);
   };
 
   const fetchProfileNames = async (records: any[]) => {
@@ -61,50 +123,181 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     setProfileNameMap(map);
   };
 
+  const aggregateSalesProducts = async (invoices: any[]) => {
+    const aggregates = new Map<string, any>();
+    const productIds = new Set<string>();
+
+    (invoices || []).forEach((invoice: any) => {
+      (invoice.invoiceItems || []).forEach((row: any) => {
+        const productId = String(row?.product_id || '').trim();
+        if (!productId) return;
+        const key = productId;
+        productIds.add(productId);
+        const existing = aggregates.get(key) || {
+          id: productId,
+          __purchase_count: 0,
+          __total_purchased_amount: 0,
+        };
+        existing.__purchase_count += 1;
+        existing.__total_purchased_amount += toNumber(row?.total_price || (toNumber(row?.quantity) * toNumber(row?.unit_price)));
+        aggregates.set(key, existing);
+      });
+    });
+
+    const ids = Array.from(productIds);
+    if (!ids.length) return [];
+
+    const [productsRes, billboardsRes, bundlesRes] = await Promise.all([
+      supabase.from('products').select('*').in('id', ids),
+      supabase.from('billboards').select('*').in('id', ids),
+      supabase.from('product_bundles').select('*').in('id', ids),
+    ]);
+
+    const recordMap = new Map<string, { moduleId: string; row: any }>();
+    (productsRes.data || []).forEach((row: any) => recordMap.set(String(row.id), { moduleId: 'products', row }));
+    (billboardsRes.data || []).forEach((row: any) => recordMap.set(String(row.id), { moduleId: 'billboards', row }));
+    (bundlesRes.data || []).forEach((row: any) => {
+      if (!recordMap.has(String(row.id))) {
+        recordMap.set(String(row.id), { moduleId: 'product_bundles', row });
+      }
+    });
+
+    return Array.from(aggregates.values())
+      .map((item) => {
+        const resolved = recordMap.get(String(item.id));
+        if (!resolved) return null;
+        return {
+          ...resolved.row,
+          __moduleId: resolved.moduleId,
+          __purchase_count: item.__purchase_count,
+          __total_purchased_amount: item.__total_purchased_amount,
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => toNumber(b?.__total_purchased_amount) - toNumber(a?.__total_purchased_amount));
+  };
+
+  const aggregatePurchaseProducts = async (purchaseInvoices: any[]) => {
+    const aggregates = new Map<string, any>();
+    const productIds = new Set<string>();
+
+    (purchaseInvoices || []).forEach((invoice: any) => {
+      (invoice.invoiceItems || []).forEach((row: any) => {
+        const productId = String(row?.product_id || '').trim();
+        if (!productId) return;
+        productIds.add(productId);
+        const existing = aggregates.get(productId) || {
+          id: productId,
+          __purchase_count: 0,
+          __total_purchased_amount: 0,
+        };
+        existing.__purchase_count += 1;
+        existing.__total_purchased_amount += toNumber(row?.total_price || (toNumber(row?.quantity) * toNumber(row?.unit_price)));
+        aggregates.set(productId, existing);
+      });
+    });
+
+    const ids = Array.from(productIds);
+    if (!ids.length) return [];
+
+    const { data } = await supabase.from('products').select('*').in('id', ids);
+    const byId = new Map((data || []).map((row: any) => [String(row.id), row]));
+
+    return Array.from(aggregates.values())
+      .map((item) => {
+        const row = byId.get(String(item.id));
+        if (!row) return null;
+        return {
+          ...row,
+          __moduleId: 'products',
+          __purchase_count: item.__purchase_count,
+          __total_purchased_amount: item.__total_purchased_amount,
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => toNumber(b?.__total_purchased_amount) - toNumber(a?.__total_purchased_amount));
+  };
+
+  useEffect(() => {
+    const loadSourceField = async () => {
+      if (!tab.sourceField) {
+        setSourceFieldValue(null);
+        return;
+      }
+      setSourceFieldLoading(true);
+      try {
+        const sourceTable = sourceConfig?.table || currentModuleId;
+        const { data, error } = await (supabase
+          .from(sourceTable as any)
+          .select(tab.sourceField)
+          .eq('id', currentRecordId)
+          .maybeSingle() as any);
+        if (error) throw error;
+        setSourceFieldValue((data as any)?.[tab.sourceField] ?? null);
+      } catch (err) {
+        console.warn('Could not load source field for related tab', err);
+        setSourceFieldValue(null);
+      } finally {
+        setSourceFieldLoading(false);
+      }
+    };
+
+    void loadSourceField();
+  }, [currentModuleId, currentRecordId, sourceConfig?.table, tab.sourceField]);
+
   useEffect(() => {
     const fetchRelated = async () => {
       setLoading(true);
       try {
-        if (tab.relationType === 'customer_payments') {
+        if (tab.relationType === 'customer_payments' || tab.relationType === 'customer_payments_from_field') {
+          const customerId = tab.relationType === 'customer_payments_from_field' ? sourceFieldValue : currentRecordId;
+          if (!customerId) {
+            setItems([]);
+            return;
+          }
+
           const { data: invoices } = await supabase
             .from('invoices')
             .select('id, name, payments, created_at')
-            .eq('customer_id', currentRecordId)
+            .eq('customer_id', customerId)
             .order('created_at', { ascending: false });
 
-          const payments = (invoices || []).flatMap((invoice: any) =>
-            (invoice.payments || []).map((payment: any, index: number) => ({
-              id: `${invoice.id}_${index}`,
-              invoice_id: invoice.id,
-              invoice_name: invoice.name,
-              ...payment,
-            }))
-          );
+          setItems(buildPaymentRows((invoices || []).map((row: any) => ({ ...row, __moduleId: 'invoices' })), 'دریافت مرتبط'));
+          return;
+        }
 
-          setItems(payments);
+        if (tab.relationType === 'supplier_payments') {
+          const { data: invoices } = await supabase
+            .from('purchase_invoices')
+            .select('id, name, payments, created_at')
+            .eq('supplier_id', currentRecordId)
+            .order('created_at', { ascending: false });
+
+          setItems(buildPaymentRows((invoices || []).map((row: any) => ({ ...row, __moduleId: 'purchase_invoices' })), 'پرداخت مرتبط'));
           return;
         }
 
         if (tab.relationType === 'customer_products') {
           const { data: invoices } = await supabase
             .from('invoices')
-            .select('invoiceItems')
-            .eq('customer_id', currentRecordId);
+            .select('id, name, status, invoiceItems, created_at')
+            .eq('customer_id', currentRecordId)
+            .in('status', Array.from(SALES_PRODUCT_STATUSES))
+            .order('created_at', { ascending: false });
 
-          const productIds = new Set<string>();
-          (invoices || []).forEach((invoice: any) => {
-            extractProductIds(invoice.invoiceItems || []).forEach((id) => productIds.add(id));
-          });
+          setItems(await aggregateSalesProducts(invoices || []));
+          return;
+        }
 
-          const idList = Array.from(productIds);
-          if (!idList.length) {
-            setItems([]);
-            return;
-          }
+        if (tab.relationType === 'supplier_products') {
+          const { data: invoices } = await supabase
+            .from('purchase_invoices')
+            .select('id, name, status, invoiceItems, created_at')
+            .eq('supplier_id', currentRecordId)
+            .in('status', Array.from(PURCHASE_PRODUCT_STATUSES))
+            .order('created_at', { ascending: false });
 
-          const { data } = await supabase.from('products').select('*').in('id', idList);
-          setItems(data || []);
-          await fetchProfileNames(data || []);
+          setItems(await aggregatePurchaseProducts(invoices || []));
           return;
         }
 
@@ -159,6 +352,24 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           return;
         }
 
+        if (tab.relationType === 'fk_from_field' && tab.targetModule && tab.foreignKey) {
+          if (!sourceFieldValue) {
+            setItems([]);
+            return;
+          }
+          let query = supabase
+            .from(tab.targetModule)
+            .select('*')
+            .eq(tab.foreignKey, sourceFieldValue);
+          if (tab.targetModule === currentModuleId) {
+            query = query.neq('id', currentRecordId);
+          }
+          const { data } = await query;
+          setItems(data || []);
+          await fetchProfileNames(data || []);
+          return;
+        }
+
         if (tab.targetModule && tab.foreignKey) {
           const { data } = await supabase
             .from(tab.targetModule)
@@ -175,20 +386,78 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
       }
     };
 
-    fetchRelated();
-  }, [tab, currentRecordId]);
+    void fetchRelated();
+  }, [tab, currentRecordId, currentModuleId, sourceFieldValue]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRelationMaps = async () => {
+      if (!items.length) {
+        setRelationValueMap({});
+        setPaymentRelationValueMap({});
+        return;
+      }
+
+      if (PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''))) {
+        const paymentMap = await buildRelationValueMap(supabase, paymentColumns, items);
+        if (!cancelled) {
+          setPaymentRelationValueMap(paymentMap);
+          setRelationValueMap({});
+        }
+        return;
+      }
+
+      if (PRODUCT_AGGREGATE_RELATION_TYPES.has(String(tab.relationType || ''))) {
+        setRelationValueMap({});
+        setPaymentRelationValueMap({});
+        return;
+      }
+
+      const fields = (targetConfig?.fields || []).filter((field: any) => field?.isTableColumn || field?.isKey);
+      if (!fields.length) {
+        setRelationValueMap({});
+        return;
+      }
+
+      const genericMap = await buildRelationValueMap(supabase, fields, items);
+      if (!cancelled) {
+        setRelationValueMap(genericMap);
+        setPaymentRelationValueMap({});
+      }
+    };
+
+    void loadRelationMaps();
+    return () => {
+      cancelled = true;
+    };
+  }, [items, paymentColumns, tab.relationType, targetConfig]);
 
   const filteredItems = useMemo(() => {
     if (!searchValue.trim()) return items;
     const term = searchValue.toLowerCase();
 
-    if (tab.relationType === 'customer_payments') {
+    if (PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''))) {
       return items.filter((item: any) => {
-        return [item.invoice_name, item.payment_type, item.status, item.target_account, item.amount, item.date]
+        return [item.invoice_name, item.payment_type, item.status, item.target_account, item.source_account, item.amount, item.date]
           .map(formatValue)
           .join(' ')
           .toLowerCase()
           .includes(term);
+      });
+    }
+
+    if (PRODUCT_AGGREGATE_RELATION_TYPES.has(String(tab.relationType || ''))) {
+      return items.filter((item: any) => {
+        const moduleId = String(item?.__moduleId || '');
+        const moduleConfig = MODULES[moduleId];
+        const title = getRecordTitle(item, moduleConfig, { fallback: '' });
+        return [
+          title,
+          moduleConfig?.titles?.faSingular,
+          item?.system_code,
+          item?.manual_code,
+        ].map(formatValue).join(' ').toLowerCase().includes(term);
       });
     }
 
@@ -201,20 +470,26 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     });
   }, [items, searchValue, tab.relationType, targetConfig]);
 
-  if (loading) return <div className="flex justify-center p-10"><Spin /></div>;
+  if (loading || sourceFieldLoading) return <div className="flex justify-center p-10"><Spin /></div>;
   if (!filteredItems.length) return <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
 
   const buildInitialValues = () => {
     if (tab.relationType === 'fk' && tab.foreignKey) {
       return { [tab.foreignKey]: currentRecordId };
     }
+    if (tab.relationType === 'fk_from_field' && tab.foreignKey && sourceFieldValue) {
+      return { [tab.foreignKey]: sourceFieldValue };
+    }
     if (tab.relationType === 'jsonb_contains' && tab.targetModule === 'invoices' && tab.jsonbMatchKey) {
       return { invoiceItems: [{ [tab.jsonbMatchKey]: currentRecordId, quantity: 1 }] };
+    }
+    if (tab.relationType === 'customer_payments_from_field' && sourceFieldValue) {
+      return { customer_id: sourceFieldValue };
     }
     return {};
   };
 
-  const canCreate = Boolean(tab.targetModule);
+  const canCreate = Boolean(tab.targetModule) && !PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''));
 
   return (
     <div className="h-full overflow-y-auto">
@@ -237,21 +512,106 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         className="mb-4 rounded-lg"
       />
 
-      {tab.relationType === 'customer_payments' ? (
+      {PAYMENT_RELATION_TYPES.has(String(tab.relationType || '')) ? (
         <List
           dataSource={filteredItems}
-          renderItem={(item: any) => (
-            <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-gray-700 p-3 rounded-xl mb-3">
-              <div className="font-bold text-gray-800 dark:text-gray-200">{item.invoice_name || 'فاکتور'}</div>
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {item.status && <Tag className="text-[10px] m-0" color="blue">{item.status}</Tag>}
-                {item.payment_type && <Tag className="text-[10px] m-0">{item.payment_type}</Tag>}
-                {item.target_account && <Tag className="text-[10px] m-0">{item.target_account}</Tag>}
-                {item.amount && <Tag className="text-[10px] m-0">{item.amount}</Tag>}
-                {item.date && <Tag className="text-[10px] m-0">{item.date}</Tag>}
-              </div>
-            </div>
-          )}
+          renderItem={(item: any) => {
+            const statusField = paymentColumnMap.status;
+            const rawStatus = String(item?.status || '').trim();
+            const statusOption = (statusField?.options || []).find((option: any) => String(option?.value || '') === rawStatus);
+            const visibleFields = PAYMENT_VISIBLE_KEYS
+              .map((key) => paymentColumnMap[key])
+              .filter(Boolean)
+              .filter((field: any) => item?.[field.key] !== undefined && item?.[field.key] !== null && item?.[field.key] !== '');
+
+            return (
+              <Link to={`/${item.__moduleId}/${item.invoice_id}`} className="block">
+                <div className="mb-3 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-gradient-to-b from-white to-gray-50 p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:from-[#1d1d1d] dark:to-[#171717]">
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-extrabold text-gray-800 dark:text-gray-100">
+                        {formatRecordDisplayValue(item.invoice_name || 'فاکتور')}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-300">
+                        {item.__relationLabel || 'پرداخت مرتبط'}
+                      </div>
+                    </div>
+                    {statusOption ? (
+                      <Tag
+                        className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[11px] !font-semibold"
+                        color={String(statusOption?.color || 'default')}
+                      >
+                        {statusOption.label}
+                      </Tag>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    {visibleFields.map((field: any) => (
+                      <div key={field.key} className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 last:border-b-0 last:pb-0 dark:border-gray-800">
+                        <span className="text-gray-500 dark:text-gray-400">{field.title || field.key}</span>
+                        <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
+                          {resolveOptionLabel(item?.[field.key], field) || formatRecordDisplayValue(item?.[field.key], field, paymentRelationValueMap)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </Link>
+            );
+          }}
+        />
+      ) : PRODUCT_AGGREGATE_RELATION_TYPES.has(String(tab.relationType || '')) ? (
+        <List
+          dataSource={filteredItems}
+          renderItem={(item: any) => {
+            const moduleId = String(item?.__moduleId || 'products');
+            const moduleConfig = MODULES[moduleId];
+            const title = getRecordTitle(item, moduleConfig, { fallback: '-' });
+            const statusMeta = resolveStatusMeta(item, moduleId);
+            const codeLabel = String(item?.system_code || item?.manual_code || '').trim();
+
+            return (
+              <Link to={`/${moduleId}/${item.id}`} className="block">
+                <div className="mb-3 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-gradient-to-b from-white to-gray-50 p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:from-[#1d1d1d] dark:to-[#171717]">
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-extrabold text-gray-800 dark:text-gray-100" title={title}>
+                        {toPersianNumber(title)}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-300">
+                        {moduleConfig?.titles?.faSingular || moduleConfig?.titles?.fa || moduleId}
+                        {codeLabel ? ` • ${toPersianNumber(codeLabel)}` : ''}
+                      </div>
+                    </div>
+                    {statusMeta ? (
+                      <Tag
+                        className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[11px] !font-semibold"
+                        color={statusMeta.color}
+                      >
+                        {statusMeta.label}
+                      </Tag>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="grid grid-cols-[110px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 dark:border-gray-800">
+                      <span className="text-gray-500 dark:text-gray-400">جمع مبلغ خریداری شده</span>
+                      <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
+                        {formatRecordDisplayValue(item?.__total_purchased_amount, { key: '__total_purchased_amount', type: FieldType.PRICE })}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-[110px_1fr] gap-2 items-start">
+                      <span className="text-gray-500 dark:text-gray-400">تعداد دفعات خریداری شده</span>
+                      <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
+                        {formatRecordDisplayValue(item?.__purchase_count, { key: '__purchase_count', type: FieldType.NUMBER })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </Link>
+            );
+          }}
         />
       ) : (
         <List
@@ -262,6 +622,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
               item={item}
               moduleConfig={targetConfig}
               profileNameMap={profileNameMap}
+              relationValueMap={relationValueMap}
             />
           )}
         />

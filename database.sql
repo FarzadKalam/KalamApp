@@ -106,8 +106,8 @@ on public.integration_settings(connection_type);
 create table if not exists public.notes (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references public.organizations(id) on delete set null,
-  module_id text not null,
-  record_id text not null,
+  module_id text not null default '',
+  record_id text not null default '',
   content text not null,
   mention_user_ids uuid[] not null default '{}'::uuid[],
   mention_role_ids uuid[] not null default '{}'::uuid[],
@@ -122,6 +122,24 @@ create table if not exists public.notes (
 create index if not exists idx_notes_module_record on public.notes(module_id, record_id);
 create index if not exists idx_notes_created_at on public.notes(created_at desc);
 
+create or replace function public.normalize_note_scope()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.module_id := coalesce(nullif(trim(new.module_id), ''), '');
+  new.record_id := coalesce(nullif(trim(new.record_id), ''), '');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_notes_normalize_scope on public.notes;
+
+create trigger trg_notes_normalize_scope
+before insert or update on public.notes
+for each row
+execute function public.normalize_note_scope();
+
 create table if not exists public.workflows (
   id uuid primary key default gen_random_uuid(),
   org_id uuid references public.organizations(id) on delete set null,
@@ -129,6 +147,7 @@ create table if not exists public.workflows (
   name text not null,
   description text,
   trigger_type text not null default 'on_create' check (trigger_type in ('on_create','on_upsert','interval')),
+  execution_mode text not null default 'first_match' check (execution_mode in ('first_match','every_match')),
   interval_value integer,
   interval_unit text check (interval_unit in ('hour','day','month')),
   interval_at text,

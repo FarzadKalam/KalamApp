@@ -223,7 +223,7 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
               options={bankOptions}
               allowClear
               placeholder="انتخاب حساب بانکی ثبت‌شده"
-              getPopupContainer={() => document.body}
+              getPopupContainer={(node) => node?.parentElement || document.body}
             />
           ) : editable ? (
             <Input

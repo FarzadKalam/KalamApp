@@ -35,7 +35,19 @@ export const WORKFLOW_OPERATORS = {
   hours_remaining_lt: 'کمتر از چند ساعت مانده باشد',
 } as const;
 
-export type WorkflowOperator = keyof typeof WORKFLOW_OPERATORS;
+Object.assign(WORKFLOW_OPERATORS as Record<string, string>, {
+  in: 'شامل شده باشد با',
+  not_in: 'شامل نشده باشد با',
+  is_true: 'فعال باشد',
+  is_false: 'غیرفعال باشد',
+  days_passed_eq: 'چند روز گذشته باشد',
+  days_remaining_eq: 'چند روز مانده باشد',
+});
+
+export type WorkflowOperator =
+  | keyof typeof WORKFLOW_OPERATORS
+  | 'days_passed_eq'
+  | 'days_remaining_eq';
 
 const baseTextOperators: WorkflowOperator[] = [
   'contains',
@@ -77,13 +89,7 @@ const baseSelectOperators: WorkflowOperator[] = [
   'not_null',
 ];
 
-const baseBooleanOperators: WorkflowOperator[] = [
-  'is_true',
-  'is_false',
-  'eq',
-  'neq',
-  'changed',
-];
+const baseBooleanOperators: WorkflowOperator[] = ['is_true', 'is_false'];
 
 const baseDateOperators: WorkflowOperator[] = [
   'eq',
@@ -98,8 +104,10 @@ const baseDateOperators: WorkflowOperator[] = [
   'is_today',
   'is_yesterday',
   'is_tomorrow',
+  'days_passed_eq',
   'days_passed_gt',
   'days_passed_lt',
+  'days_remaining_eq',
   'days_remaining_gt',
   'days_remaining_lt',
   'is_null',
@@ -137,8 +145,10 @@ const baseDateTimeOperators: WorkflowOperator[] = [
   'is_today',
   'is_yesterday',
   'is_tomorrow',
+  'days_passed_eq',
   'days_passed_gt',
   'days_passed_lt',
+  'days_remaining_eq',
   'days_remaining_gt',
   'days_remaining_lt',
   'hours_passed_gt',
@@ -177,6 +187,7 @@ export const getWorkflowOperatorsForField = (field?: ModuleField | null): Workfl
     case FieldType.PHONE:
     case FieldType.TEXT:
     case FieldType.LONG_TEXT:
+    case FieldType.SUPER_LONG_TEXT:
     default:
       return baseTextOperators;
   }
@@ -184,7 +195,7 @@ export const getWorkflowOperatorsForField = (field?: ModuleField | null): Workfl
 
 export const getWorkflowOperatorOptions = (field?: ModuleField | null) =>
   getWorkflowOperatorsForField(field).map((op) => ({
-    label: WORKFLOW_OPERATORS[op],
+    label: (WORKFLOW_OPERATORS as Record<string, string>)[op],
     value: op,
   }));
 
@@ -208,8 +219,10 @@ export const workflowOperatorNeedsValue = (operator?: string) => {
 
 export const workflowOperatorNumericValue = (operator?: string) => {
   return [
+    'days_passed_eq',
     'days_passed_gt',
     'days_passed_lt',
+    'days_remaining_eq',
     'days_remaining_gt',
     'days_remaining_lt',
     'hours_passed_gt',

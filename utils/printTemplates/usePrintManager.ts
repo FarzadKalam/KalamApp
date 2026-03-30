@@ -1,17 +1,28 @@
-﻿import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { QRCode } from 'antd';
 import DOMPurify from 'dompurify';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { PrintTemplate } from './index';
 import { InvoiceCard } from './templates/invoice-card';
 import { ProductLabel } from './templates/product-label';
 import { ProductionPassport } from './templates/production-passport';
 import { toPersianNumber, formatPersianPrice, safeJalaliFormat } from '../../utils/persianNumberFormatter';
 import { supabase } from '../../supabaseClient';
+import { BlockType } from '../../types';
+import { getAssigneeLabel } from '../assigneeLabel';
+import { getResolvedAssigneeId } from '../assigneeValue';
+import {
+  calculateSalesPackageDiscountTotal,
+  calculateSalesPackageGrossTotal,
+  calculateSalesPackageTotal,
+} from '../salesCatalog';
 import {
   buildDefaultTemplatesForModule,
   getModuleTitle,
   getSystemTemplateFieldOptions,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
+  savePrintTemplatesStore,
   type StoredPrintTemplate,
 } from './store';
 
@@ -22,11 +33,21 @@ interface UsePrintManagerProps {
   printableFields: any[];
   formatPrintValue: (field: any, value: any) => string;
   relationOptions?: Record<string, any[]>;
+  canViewField?: (fieldKey: string) => boolean;
 }
 
 const DEFAULT_PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at']);
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
+const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
+const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
+
+const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
+
+const getReducedPrintFontSize = (baseSize: number) => {
+  const nextSize = Math.max(7, baseSize - 3);
+  return Number.isInteger(nextSize) ? `${nextSize}px` : `${nextSize.toFixed(1)}px`;
+};
 
 const getPathValue = (obj: any, path: string) =>
   path.split('.').reduce((acc, key) => (acc === null || acc === undefined ? undefined : acc[key]), obj);
@@ -154,17 +175,103 @@ const getDisplayValue = (value: any): string => {
   return localizePlainText(value);
 };
 
-const toPersianPlain = (value: any) => toPersianNumber(String(value ?? ''));
-const getCompactPrintColumns = (columns: any[] = []) =>
-  columns
-    .filter((column) => {
-      const key = String(column?.key || '').trim();
-      const title = String(column?.title || '').trim();
-      if (!key || !title) return false;
-      if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
-      return true;
-    })
-    .slice(0, 5);
+const normalizePrintableNumber = (value: any) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value ?? '');
+  const rounded = Math.round((numeric + Number.EPSILON) * 1000) / 1000;
+  return String(rounded);
+};
+const toPersianPlain = (value: any) => toPersianNumber(normalizePrintableNumber(value));
+const getAddressDisplay = (source: any) => {
+  const province = String(source?.province || source?.province_name || source?.state || source?.state_name || '').trim();
+  const city = String(source?.city || source?.city_name || '').trim();
+  const address = String(source?.address || '').trim();
+  const parts = [
+    province ? `\u0627\u0633\u062A\u0627\u0646 ${localizePlainText(province)}` : '',
+    city ? `\u0634\u0647\u0631 ${localizePlainText(city)}` : '',
+    address ? localizePlainText(address) : '',
+  ].filter(Boolean);
+  return parts.join('، ');
+};
+const getRecordImageUrl = (record: any, fields: any[] = []) => {
+  const imageField = (fields || []).find((field: any) =>
+    String(field?.type || '').toLowerCase() === 'image' || /(^|_)(image|photo|logo|avatar)(_url)?$/i.test(String(field?.key || ''))
+  );
+  const candidateKeys = Array.from(
+    new Set(
+      [imageField?.key, 'image_url', 'logo_url', 'avatar_url', 'photo_url', 'attachment']
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const value = candidateKeys
+    .map((key) => String(record?.[key] || '').trim())
+    .find((item) => /^https?:\/\//i.test(item) || /^data:image\//i.test(item));
+  return value || '';
+};
+const extractAnyRelationLabel = (relationOptions: Record<string, any[]>, value: any) => {
+  const targetValue = String(value || '').trim();
+  if (!targetValue) return '';
+  for (const options of Object.values(relationOptions || {})) {
+    const match = Array.isArray(options)
+      ? options.find((item: any) => String(item?.value || '').trim() === targetValue)
+      : null;
+    const label = String(match?.name || match?.label || '').trim();
+    if (label) return label;
+  }
+  return '';
+};
+const getInvoiceItemTitle = (row: any) =>
+  String(
+    row?.package_name ||
+    row?.package?.name ||
+    row?.selected_package_name ||
+    row?.selected_package_label ||
+    row?.package_title ||
+    row?.selected_product_name ||
+    row?.selectedProductName ||
+    row?.selected_product_label ||
+    row?.billboard?.name ||
+    row?.billboard?.title ||
+    row?.selected_billboard_name ||
+    row?.billboard_name ||
+    row?.billboard_title ||
+    row?.service_title ||
+    row?.name ||
+    row?.title ||
+    row?.product_name ||
+    row?.product?.name ||
+    row?.service_name ||
+    row?.system_code ||
+    row?.package_id ||
+    row?.product_id ||
+    '-'
+  ).trim() || '-';
+const hasMeaningfulCellValue = (cell: Element | null) => {
+  if (!cell) return false;
+  if (cell.querySelector('img,svg,canvas,video,iframe')) return true;
+  const text = String(cell.textContent || '')
+    .replace(/\u200c/g, '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Boolean(text && text !== '-' && text !== '---');
+};
+const getCompactPrintColumns = (columns: any[] = []) => {
+  const filtered = columns.filter((column) => {
+    const key = String(column?.key || '').trim();
+    const title = String(column?.title || '').trim();
+    if (!key || !title) return false;
+    if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
+    return true;
+  });
+  const selected = filtered.slice(0, 5);
+  const totalPriceColumn = filtered.find((column) => String(column?.key || '').trim() === 'total_price');
+  if (totalPriceColumn && !selected.some((column) => String(column?.key || '').trim() === 'total_price')) {
+    selected.push(totalPriceColumn);
+  }
+  return selected;
+};
 
 export const usePrintManager = ({
   moduleId,
@@ -173,6 +280,7 @@ export const usePrintManager = ({
   printableFields,
   formatPrintValue,
   relationOptions = {},
+  canViewField,
 }: UsePrintManagerProps) => {
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
@@ -180,8 +288,17 @@ export const usePrintManager = ({
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
   const [sellerInfo, setSellerInfo] = useState<any>(null);
   const [customerInfo, setCustomerInfo] = useState<any>(null);
+  const [supplierInfo, setSupplierInfo] = useState<any>(null);
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
+  const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
+  const [templatesStoreMeta, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
+    rowId: null,
+    provider: 'tiptap',
+  });
+  const [savingPrintFields, setSavingPrintFields] = useState(false);
   const bodyMeasureRef = useRef<HTMLDivElement | null>(null);
+  const templatesLoadedRef = useRef(false);
+  const dependenciesLoadedKeyRef = useRef<string | null>(null);
   const [renderedPageCount, setRenderedPageCount] = useState(1);
   const [forcedPrintPageCount, setForcedPrintPageCount] = useState<number | null>(null);
 
@@ -189,27 +306,42 @@ export const usePrintManager = ({
     try {
       const loaded = await loadPrintTemplatesStore();
       if (!mounted) return;
+      setTemplatesStoreMeta({
+        rowId: loaded.rowId || null,
+        provider: loaded.provider || 'tiptap',
+      });
+      setTemplatesByModuleStore(loaded.templatesByModule || {});
       setStoredTemplates((loaded.templatesByModule[moduleId] || []).filter((tpl) => tpl.isActive !== false));
+      return true;
     } catch (err) {
       console.error('Load print templates failed', err);
-      if (mounted) setStoredTemplates([]);
+      if (mounted) {
+        setTemplatesByModuleStore({});
+        setStoredTemplates([]);
+      }
+      return false;
     }
   }, [moduleId]);
 
   useEffect(() => {
+    if (!isPrintModalOpen && !printMode) return;
+    if (templatesLoadedRef.current) return;
     let mounted = true;
-    loadTemplates(mounted);
+    loadTemplates(mounted).then((loaded) => {
+      if (mounted && loaded) templatesLoadedRef.current = true;
+    });
     return () => {
       mounted = false;
     };
-  }, [loadTemplates]);
+  }, [isPrintModalOpen, loadTemplates, printMode]);
 
   const availableTemplates = useMemo<StoredPrintTemplate[]>(() => {
-    const merged = mergeTemplatesWithDefaults(moduleId, storedTemplates);
-    const activeMerged = merged.filter((tpl) => tpl.isActive !== false);
+    const merged = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || storedTemplates);
+    const scopedTemplates = merged.filter((tpl) => (tpl.scope || 'record') !== 'list');
+    const activeMerged = scopedTemplates.filter((tpl) => tpl.isActive !== false);
     if (activeMerged.length > 0) return activeMerged;
-    return buildDefaultTemplatesForModule(moduleId).filter((tpl) => tpl.isActive !== false);
-  }, [moduleId, storedTemplates]);
+    return buildDefaultTemplatesForModule(moduleId, 'record').filter((tpl) => tpl.isActive !== false);
+  }, [moduleId, storedTemplates, templatesByModuleStore]);
 
   const printTemplates = useMemo<PrintTemplate[]>(() => {
     return availableTemplates.map((tpl) => ({
@@ -239,20 +371,80 @@ export const usePrintManager = ({
     const id = selectedTemplateId.replace('custom:', '');
     return availableTemplates.find((tpl) => tpl.id === id) || null;
   }, [availableTemplates, selectedTemplateId]);
+  const isCompactSummaryTemplate = useMemo(
+    () => Boolean(selectedStoredTemplate?.isSystem && /_compact_a(?:5|6)$/i.test(String(selectedStoredTemplate?.id || ''))),
+    [selectedStoredTemplate?.id, selectedStoredTemplate?.isSystem]
+  );
+  const isNonInvoiceSystemSummaryTemplate = useMemo(
+    () =>
+      Boolean(
+        selectedStoredTemplate?.isSystem &&
+        String(selectedStoredTemplate?.scope || 'record') === 'record' &&
+        !String(selectedStoredTemplate?.id || '').includes('_list_') &&
+        moduleId !== 'invoices' &&
+        moduleId !== 'purchase_invoices'
+      ),
+    [moduleId, selectedStoredTemplate?.id, selectedStoredTemplate?.isSystem, selectedStoredTemplate?.scope]
+  );
+  const recordImageField = useMemo(() => {
+    const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
+    return (
+      fields.find(
+        (field: any) =>
+          (String(field?.type || '').toLowerCase() === 'image' || /(^|_)(image|photo|logo|avatar)(_url)?$/i.test(String(field?.key || ''))) &&
+          (canViewField ? canViewField(String(field?.key || '')) : true)
+      ) || null
+    );
+  }, [canViewField, moduleConfig?.fields]);
   const systemTemplateFieldOptions = useMemo(() => {
-    return getSystemTemplateFieldOptions(moduleId).map((item) => ({
-      key: item.key,
-      labels: { fa: item.label },
-      value: true,
-      group: item.group,
-      kind: item.kind,
-    }));
-  }, [moduleId]);
+    const baseOptions = getSystemTemplateFieldOptions(moduleId)
+      .filter((item) => {
+        if (item.key.startsWith('record.')) {
+          const rawKey = item.key.replace(/^record\./, '');
+          return canViewField ? canViewField(rawKey) : true;
+        }
+        if (item.key.startsWith('block.') && item.columnKey) {
+          return canViewField ? canViewField(item.columnKey) : true;
+        }
+        return true;
+      })
+      .map((item) => ({
+        key: item.key,
+        labels: { fa: item.label },
+        value: true,
+        group: item.group,
+        kind: item.kind,
+      }));
+
+    const mediaOptions = [
+      ...(recordImageField
+        ? [
+            {
+              key: 'system.record_image',
+              labels: { fa: '\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F' },
+              value: true,
+              group: '\u0633\u06CC\u0633\u062A\u0645',
+              kind: 'record',
+            },
+          ]
+        : []),
+      {
+        key: 'system.record_qr',
+        labels: { fa: '\u06A9\u062F QR \u0631\u06A9\u0648\u0631\u062F' },
+        value: true,
+        group: '\u0633\u06CC\u0633\u062A\u0645',
+        kind: 'record',
+      },
+    ];
+
+    return [...baseOptions, ...mediaOptions];
+  }, [canViewField, moduleId, recordImageField]);
   const isSelectedTemplateSystem = Boolean(selectedStoredTemplate?.isSystem || selectedTemplateMeta?.isSystem);
   const printableFieldsForTemplate = useMemo(() => {
     if (!isSelectedTemplateSystem) return printableFields;
+    if (!isCompactSummaryTemplate) return printableFields;
     return systemTemplateFieldOptions;
-  }, [isSelectedTemplateSystem, printableFields, systemTemplateFieldOptions]);
+  }, [isCompactSummaryTemplate, isSelectedTemplateSystem, printableFields, systemTemplateFieldOptions]);
   const templateSelectedKeySet = useMemo(
     () => new Set<string>(selectedPrintFields[selectedTemplateId] || []),
     [selectedPrintFields, selectedTemplateId]
@@ -267,15 +459,34 @@ export const usePrintManager = ({
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string) => {
-      if (!isSelectedTemplateSystem) return true;
+      if (!isSelectedTemplateSystem || !isCompactSummaryTemplate) return true;
       if (!hasTemplateSelectionState) return true;
       if (!knownSystemFieldKeys.has(fieldPath)) return true;
       return templateSelectedKeySet.has(fieldPath);
     },
-    [hasTemplateSelectionState, isSelectedTemplateSystem, knownSystemFieldKeys, templateSelectedKeySet]
+    [hasTemplateSelectionState, isCompactSummaryTemplate, isSelectedTemplateSystem, knownSystemFieldKeys, templateSelectedKeySet]
   );
   const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
   const printQrValue = pageUrl;
+  const recordImageUrl = useMemo(
+    () => (recordImageField ? getRecordImageUrl(data, [recordImageField]) : ''),
+    [data, recordImageField]
+  );
+  const recordQrSvgMarkup = useMemo(() => {
+    if (!printQrValue) return '';
+    try {
+      return renderToStaticMarkup(
+        React.createElement(QRCode, {
+          value: printQrValue,
+          bordered: false,
+          type: 'svg',
+          size: 72,
+        })
+      );
+    } catch {
+      return '';
+    }
+  }, [printQrValue]);
 
   const openPrintModal = useCallback(() => {
     setIsPrintModalOpen(true);
@@ -322,21 +533,21 @@ export const usePrintManager = ({
         bodyRectHeight,
         1
       );
-      measuredPageCount = Math.max(1, Math.ceil(bodyHeight / pageBodyHeightPx));
+      measuredPageCount = Math.max(1, Math.ceil(Math.max(bodyHeight - 4, 1) / pageBodyHeightPx));
     }
-    if (previewPageCount > measuredPageCount) {
+    if (!bodyMeasureRef.current && previewPageCount > measuredPageCount) {
       measuredPageCount = previewPageCount;
     }
     if (measuredPageCount !== renderedPageCount) {
       setRenderedPageCount(measuredPageCount);
     }
     const nextForcedPages = selectedTemplateId.startsWith('custom:')
-      ? Math.max(1, measuredPageCount, previewPageCount || 0)
+      ? Math.max(1, measuredPageCount)
       : null;
     setForcedPrintPageCount(nextForcedPages);
 
-    if (typeof document !== 'undefined') {
-      document.body.classList.add('print-mode');
+      if (typeof document !== 'undefined') {
+        document.body.classList.add('print-mode');
       const currentTpl = selectedTemplateId.startsWith('custom:')
         ? availableTemplates.find((tpl) => tpl.id === selectedTemplateId.replace('custom:', '')) || null
         : null;
@@ -352,11 +563,12 @@ export const usePrintManager = ({
         styleEl.id = styleId;
         document.head.appendChild(styleEl);
       }
-      styleEl.textContent = `@media print { @page { size: ${pageSize}; margin: 0; } }`;
+      styleEl.media = 'print';
+      styleEl.textContent = `@page { size: ${pageSize}; margin: 0; }`;
     }
     setPrintMode(true);
     const expectedCustomPages = selectedTemplateId.startsWith('custom:')
-      ? Math.max(1, measuredPageCount, previewPageCount || 0)
+      ? Math.max(1, measuredPageCount)
       : 1;
 
     let tries = 0;
@@ -368,9 +580,9 @@ export const usePrintManager = ({
       const hasExpectedPages =
         expectedCustomPages <= 1 ? hasContent : renderedPages >= expectedCustomPages;
 
-      if ((!hasContent || !hasExpectedPages) && tries < 50) {
+      if ((!hasContent || !hasExpectedPages) && tries < 20) {
         tries += 1;
-        setTimeout(triggerPrint, 80);
+        setTimeout(triggerPrint, 60);
         return;
       }
       if (!hasContent || !hasExpectedPages) {
@@ -385,14 +597,23 @@ export const usePrintManager = ({
       document.documentElement.scrollTop = 0;
       document.body.scrollTop = 0;
 
-      setTimeout(() => {
-        window.print();
-        // Keep print mode active until afterprint; fallback timeout is only for edge browsers.
-        setTimeout(() => setPrintMode(false), 15000);
-      }, 180);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          try {
+            window.focus();
+            window.print();
+          } catch (error) {
+            console.error('Print dialog failed to open', error);
+            setPrintMode(false);
+            if (typeof document !== 'undefined') {
+              document.body.classList.remove('print-mode');
+            }
+          }
+        });
+      });
     };
 
-    setTimeout(triggerPrint, 180);
+    setTimeout(triggerPrint, 80);
   }, [availableTemplates, renderedPageCount, selectedStoredTemplate, selectedTemplateId]);
 
   useEffect(() => {
@@ -443,6 +664,55 @@ export const usePrintManager = ({
     });
   }, []);
 
+  const handleSavePrintFields = useCallback(async () => {
+    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;
+    setSavingPrintFields(true);
+    try {
+      const selectedKeys = Array.from(
+        new Set((selectedPrintFields[selectedTemplateId] || []).map((item) => String(item || '').trim()).filter(Boolean))
+      );
+      const mergedTemplates = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || []);
+      const nextModuleTemplates = mergedTemplates.map((template) =>
+        template.id === selectedStoredTemplate.id
+          ? {
+              ...template,
+              selectedFieldKeys: selectedKeys,
+              updatedAt: new Date().toISOString(),
+            }
+          : template
+      );
+      const nextStore = {
+        ...templatesByModuleStore,
+        [moduleId]: nextModuleTemplates,
+      };
+      const saveResult = await savePrintTemplatesStore({
+        rowId: templatesStoreMeta.rowId,
+        provider: templatesStoreMeta.provider,
+        templatesByModule: nextStore,
+      });
+      setTemplatesStoreMeta((prev) => ({
+        rowId: saveResult.rowId ?? prev.rowId,
+        provider: prev.provider,
+      }));
+      setTemplatesByModuleStore(nextStore);
+      setStoredTemplates(nextModuleTemplates.filter((tpl) => tpl.isActive !== false));
+      return true;
+    } catch (error) {
+      console.error('Save print field selection failed', error);
+      return false;
+    } finally {
+      setSavingPrintFields(false);
+    }
+  }, [
+    moduleId,
+    selectedPrintFields,
+    selectedStoredTemplate,
+    selectedTemplateId,
+    templatesByModuleStore,
+    templatesStoreMeta.provider,
+    templatesStoreMeta.rowId,
+  ]);
+
   const invoiceSummary = useMemo(() => {
     const items = Array.isArray(data?.invoiceItems) ? data.invoiceItems : [];
     const payments = Array.isArray(data?.payments) ? data.payments : [];
@@ -488,14 +758,59 @@ export const usePrintManager = ({
 
     return { total, received, remaining };
   }, [data]);
+  const packageSummary = useMemo(() => {
+    if (moduleId !== 'product_bundles') {
+      return { gross: 0, discount: 0, final: 0 };
+    }
+    const items = Array.isArray(data?.products) ? data.products : [];
+    return {
+      gross: calculateSalesPackageGrossTotal(items),
+      discount: calculateSalesPackageDiscountTotal(items),
+      final: calculateSalesPackageTotal(items),
+    };
+  }, [data?.products, moduleId]);
+  const resolvedCurrencyLabel = useMemo(
+    () => localizePlainText(sellerInfo?.currency_label || sellerInfo?.currency_code || 'ریال'),
+    [sellerInfo?.currency_code, sellerInfo?.currency_label]
+  );
+  const buildPackageSummaryTableHtml = useCallback(() => {
+    if (moduleId !== 'product_bundles') return '';
+    const hasAnyValue = packageSummary.gross > 0 || packageSummary.discount > 0 || packageSummary.final > 0;
+    if (!hasAnyValue) return '';
+    return `
+      <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:11px;">
+        <tbody>
+          <tr>
+            <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.36);">جمع قبل از تخفیف</td>
+            <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">${formatPersianPrice(packageSummary.gross)} <span style="font-size:9px; color:#64748b;">${resolvedCurrencyLabel}</span></td>
+            <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.24);">جمع تخفیف</td>
+            <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">${formatPersianPrice(packageSummary.discount)} <span style="font-size:9px; color:#64748b;">${resolvedCurrencyLabel}</span></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08);">مبلغ نهایی پکیج</td>
+            <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">${formatPersianPrice(packageSummary.final)} <span style="font-size:9px; color:#64748b;">${resolvedCurrencyLabel}</span></td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+  }, [moduleId, packageSummary.discount, packageSummary.final, packageSummary.gross, resolvedCurrencyLabel]);
 
   const buildCompactFieldsTableHtml = useCallback(() => {
     const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
-    const rows = fields
-      .filter((field: any) => field?.key && !PRINT_COLUMN_IGNORE_KEYS.has(String(field.key)))
-      .map((field: any) => {
+    const regularRows: string[] = [];
+    const longTextRows: string[] = [];
+    fields
+        .filter(
+          (field: any) =>
+            field?.key &&
+            !PRINT_COLUMN_IGNORE_KEYS.has(String(field.key)) &&
+            !(isNonInvoiceSystemSummaryTemplate && String(field.key) === 'name') &&
+            String(field?.type || '').toLowerCase() !== 'image' &&
+            isSystemFieldVisible(`record.${String(field.key)}`)
+        )
+      .forEach((field: any) => {
         const raw = data?.[field.key];
-        if (raw === null || raw === undefined || raw === '') return null;
+        if (raw === null || raw === undefined || raw === '') return;
         let displayValue = '';
         try {
           displayValue = String(formatPrintValue(field, raw) || '').trim();
@@ -503,27 +818,62 @@ export const usePrintManager = ({
           displayValue = '';
         }
         if (!displayValue) displayValue = localizePlainText(raw);
-        if (!displayValue || displayValue === '-') return null;
-        return `
+        if (!displayValue || displayValue === '-') return;
+        if (isLongTextType(field?.type)) {
+          longTextRows.push(`
+          <div style="margin-top:8px;">
+            <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${field.labels?.fa || field.key}</div>
+            <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${displayValue}</div>
+          </div>
+        `);
+          return;
+        }
+        regularRows.push(`
           <tr>
             <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${field.labels?.fa || field.key}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px;">${displayValue}</td>
           </tr>
-        `;
+        `);
       })
-      .filter(Boolean)
-      .slice(0, 24)
-      .join('');
+    ;
 
-    if (!rows) {
+    const hasAssigneeField = fields.some((field: any) => String(field?.key || '').trim() === 'assignee_id');
+    const resolvedAssigneeId = getResolvedAssigneeId(data);
+    const responsibleValue = String(
+      data?.assignee_name ||
+      data?.responsible_name ||
+      data?.created_by_name ||
+      extractAnyRelationLabel(relationOptions || {}, resolvedAssigneeId) ||
+      ''
+    ).trim();
+
+    if (!hasAssigneeField && responsibleValue && isSystemFieldVisible('record.assignee_id')) {
+      regularRows.unshift(`
+          <tr>
+            <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${getAssigneeLabel(moduleId)}</td>
+            <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px;">${localizePlainText(responsibleValue)}</td>
+          </tr>
+        `);
+    }
+
+    const rowsHtml = regularRows.slice(0, 24).join('');
+    const longTextRowsHtml = longTextRows.join('');
+    if (!rowsHtml && !longTextRowsHtml) {
       return '<div style="padding:8px;border:1px solid var(--table-border-color, #d1d5db);border-radius:8px;">مقدار قابل چاپی ثبت نشده است.</div>';
     }
-    return `
+    return [
+      rowsHtml
+        ? `
       <table style="width:100%; border-collapse:collapse; font-size:11px;">
-        <tbody>${rows}</tbody>
+        <tbody>${rowsHtml}</tbody>
       </table>
-    `;
-  }, [data, formatPrintValue, moduleConfig?.fields]);
+    `
+        : '',
+      longTextRowsHtml,
+    ]
+      .filter(Boolean)
+      .join('');
+  }, [data, formatPrintValue, isNonInvoiceSystemSummaryTemplate, isSystemFieldVisible, moduleConfig?.fields, moduleId, relationOptions]);
 
   const buildInvoiceItemsTable = useCallback((items: any[]) => {
     if (!Array.isArray(items) || items.length === 0) {
@@ -532,7 +882,7 @@ export const usePrintManager = ({
 
     const rows = items
       .map((item: any) => {
-        const productName = item?.selected_product_name || item?.product_name || item?.product?.name || item?.name || '-';
+        const productName = getInvoiceItemTitle(item);
         const quantity = toPersianNumber(String(item?.quantity || 0));
         const unitPrice = formatPersianPrice(Number(item?.unit_price || 0));
         const total = formatPersianPrice(Number(item?.quantity || 0) * Number(item?.unit_price || 0));
@@ -584,11 +934,26 @@ export const usePrintManager = ({
     (blockId: string, column: any, row: any): string => {
       if (!column) return '-';
       const key = column.key;
-      const rawValue =
-        row?.[key] ??
-        row?.[`${key}_label`] ??
-        row?.[`${key}_name`] ??
-        (key === 'product_id' ? row?.selected_product_name : undefined);
+      let rawValue =
+        key === 'product_id'
+          ? (
+              getInvoiceItemTitle(row) !== '-'
+                ? getInvoiceItemTitle(row)
+                : extractAnyRelationLabel(relationOptions, row?.product_id)
+            )
+          : key === 'package_id'
+            ? (
+                getInvoiceItemTitle(row) !== '-'
+                  ? getInvoiceItemTitle(row)
+                  : extractAnyRelationLabel(relationOptions, row?.package_id)
+              )
+          : row?.[key] ??
+            row?.[`${key}_label`] ??
+            row?.[`${key}_name`];
+
+      if ((rawValue === null || rawValue === undefined || rawValue === '') && key === 'total_price' && row?.price !== undefined) {
+        rawValue = row.price;
+      }
 
       if (key === 'dimensions') {
         const length = row?.length;
@@ -629,7 +994,7 @@ export const usePrintManager = ({
 
       return getDisplayValue(rawValue);
     },
-    [formatPrintValue, getFieldOptionLabel]
+    [formatPrintValue, getFieldOptionLabel, relationOptions]
   );
 
   const buildBlockSummaryMap = useCallback(
@@ -647,6 +1012,32 @@ export const usePrintManager = ({
     },
     [moduleConfig?.blocks]
   );
+  const buildRowMetaText = useCallback(
+    (blockId: string, row: any) => {
+      const optionalParts: string[] = [];
+      const descriptionValue = getDisplayValue(row?.description || row?.notes || '');
+      if (descriptionValue && descriptionValue !== '-') optionalParts.push(descriptionValue);
+      if (row?.length || row?.width) {
+        const countValue = Number(row?.dimension_count || 0) > 0
+          ? formatCellValue(blockId, { key: 'dimension_count', title: 'تعداد', type: 'number' }, row)
+          : (
+              String(row?.sub_unit || '').trim() === 'عدد'
+                ? formatCellValue(blockId, { key: 'sub_quantity', title: 'تعداد', type: 'number' }, row)
+                : '-'
+            );
+        optionalParts.push(`ابعاد: ${formatCellValue(blockId, { key: 'dimensions', title: 'ابعاد', type: 'text' }, row)}${countValue !== '-' ? ` | تعداد: ${countValue}` : ''}`);
+      }
+      if (row?.start_date) optionalParts.push(`شروع: ${formatCellValue(blockId, { key: 'start_date', title: 'تاریخ شروع', type: 'date' }, row)}`);
+      if (row?.end_date) optionalParts.push(`پایان: ${formatCellValue(blockId, { key: 'end_date', title: 'تاریخ پایان', type: 'date' }, row)}`);
+      if (Number(row?.sub_quantity || 0) !== 0) {
+        const subQty = formatCellValue(blockId, { key: 'sub_quantity', title: 'تعداد فرعی', type: 'number' }, row);
+        const subUnit = formatCellValue(blockId, { key: 'sub_unit', title: 'واحد فرعی', type: 'text' }, row);
+        if (subQty !== '-') optionalParts.push(`فرعی: ${subQty}${subUnit && subUnit !== '-' ? ` ${subUnit}` : ''}`);
+      }
+      return optionalParts.join(' | ');
+    },
+    [formatCellValue, getDisplayValue]
+  );
 
   const pruneEmptyTableCells = useCallback((table: HTMLTableElement) => {
     const normalizeCellText = (cell: Element | null) =>
@@ -656,9 +1047,9 @@ export const usePrintManager = ({
         .replace(/\s+/g, ' ')
         .trim();
 
-    const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+    const bodyRows = Array.from(table.tBodies).flatMap((section) => Array.from(section.rows || []));
     bodyRows.forEach((row) => {
-      const cells = Array.from(row.querySelectorAll('td,th'));
+      const cells = Array.from(row.cells || []);
       if (cells.length === 0) return;
       const isEmpty = cells.every((cell) => {
         const text = normalizeCellText(cell);
@@ -680,16 +1071,20 @@ export const usePrintManager = ({
         const blockId = table.getAttribute('data-print-block') || '';
         const tbody = table.querySelector('tbody');
         if (!tbody || !blockId) return;
+        if (!isSystemFieldVisible(`block.${blockId}`)) {
+          table.remove();
+          return;
+        }
 
-        const templateRows = Array.from(tbody.querySelectorAll('tr'));
+        const templateRows = Array.from(tbody.rows || []);
         const templateRow =
           templateRows.find((row) => /{{\s*row\.[a-zA-Z0-9_]+\s*}}/.test(row.innerHTML)) ||
-          templateRows.find((row) => row.querySelector('td,th')) ||
+          templateRows.find((row) => Array.from(row.cells || []).length > 0) ||
           null;
         if (!templateRow) return;
 
         const rowTemplate = templateRow.outerHTML;
-        const templateCells = Array.from(templateRow.querySelectorAll('td,th'));
+        const templateCells = Array.from(templateRow.cells || []);
         const hiddenColumnIndexes: number[] = [];
         templateCells.forEach((cell, index) => {
           const match = String(cell.innerHTML || '').match(/{{\s*row\.([a-zA-Z0-9_]+)\s*}}/);
@@ -713,30 +1108,27 @@ export const usePrintManager = ({
 
         if (rows.length === 0) {
           const colspan = Math.max(
-            table.querySelectorAll('thead th').length,
-            templateRow.querySelectorAll('td,th').length,
+            Array.from(table.tHead?.rows || []).reduce(
+              (max, row) => Math.max(max, Array.from(row.cells || []).length),
+              0
+            ),
+            Array.from(templateRow.cells || []).length,
             1
           );
           tbody.innerHTML = `<tr><td colspan="${colspan}" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">موردی ثبت نشده است.</td></tr>`;
         } else {
           tbody.innerHTML = rows
-            .map((row: any) =>
+            .map((row: any, rowIndex: number) =>
               rowTemplate.replace(/{{\s*row\.([a-zA-Z0-9_]+)\s*}}/g, (_match, key: string) => {
+                if (key === '__row_index__') {
+                  return toPersianNumber(String(rowIndex + 1));
+                }
                 if (key === 'description') {
                   const value = getDisplayValue(row?.description || row?.notes || '');
                   return value === '-' ? '' : value;
                 }
                 if (key === '__invoice_item_meta__') {
-                  const optionalParts: string[] = [];
-                  if (row?.length && row?.width) optionalParts.push(`ابعاد: ${formatCellValue(blockId, { key: 'dimensions', title: 'ابعاد', type: 'text' }, row)}`);
-                  if (row?.start_date) optionalParts.push(`شروع: ${formatCellValue(blockId, { key: 'start_date', title: 'تاریخ شروع', type: 'date' }, row)}`);
-                  if (row?.end_date) optionalParts.push(`پایان: ${formatCellValue(blockId, { key: 'end_date', title: 'تاریخ پایان', type: 'date' }, row)}`);
-                  if (row?.sub_quantity) {
-                    const subQty = formatCellValue(blockId, { key: 'sub_quantity', title: 'تعداد فرعی', type: 'number' }, row);
-                    const subUnit = formatCellValue(blockId, { key: 'sub_unit', title: 'واحد فرعی', type: 'text' }, row);
-                    if (subQty !== '-') optionalParts.push(`فرعی: ${subQty}${subUnit && subUnit !== '-' ? ` ${subUnit}` : ''}`);
-                  }
-                  return optionalParts.join(' | ');
+                  return buildRowMetaText(blockId, row);
                 }
                 if (key === 'cheque_status') {
                   const statusValue = row?.cheque_status || row?.status || '';
@@ -767,10 +1159,27 @@ export const usePrintManager = ({
             .join('');
         }
 
-        if (hiddenColumnIndexes.length > 0) {
-          const indexes = [...hiddenColumnIndexes].sort((a, b) => b - a);
-          Array.from(table.querySelectorAll('tr')).forEach((row) => {
-            const cells = Array.from(row.querySelectorAll('td,th'));
+        const autoHiddenIndexes: number[] = [];
+        if (rows.length > 0) {
+          const liveRows = Array.from(tbody.rows || []);
+          const maxColumnCount = Math.max(
+            ...Array.from(table.rows || []).map((row) => Array.from(row.cells || []).length),
+            0
+          );
+          for (let index = 0; index < maxColumnCount; index += 1) {
+            const hasAnyMeaningfulValue = liveRows.some((row) => {
+              const cells = Array.from(row.cells || []);
+              return hasMeaningfulCellValue(cells[index] || null);
+            });
+            if (!hasAnyMeaningfulValue) autoHiddenIndexes.push(index);
+          }
+        }
+
+        const allHiddenIndexes = Array.from(new Set([...hiddenColumnIndexes, ...autoHiddenIndexes]));
+        if (allHiddenIndexes.length > 0) {
+          const indexes = [...allHiddenIndexes].sort((a, b) => b - a);
+          Array.from(table.rows || []).forEach((row) => {
+            const cells = Array.from(row.cells || []);
             indexes.forEach((index) => {
               if (index < cells.length) cells[index].remove();
             });
@@ -780,15 +1189,18 @@ export const usePrintManager = ({
         const summaryMap = buildBlockSummaryMap(blockId, rows);
         table.innerHTML = table.innerHTML.replace(/{{\s*summary\.([a-zA-Z0-9_]+)\s*}}/g, (_match, key: string) => summaryMap[key] || '-');
         pruneEmptyTableCells(table);
+        const tableStyle = table.getAttribute('style') || '';
+        const hasExplicitColumnLayout =
+          table.querySelector('colgroup') !== null || /table-layout\s*:/i.test(tableStyle);
         table.setAttribute(
           'style',
-          `${table.getAttribute('style') || ''};width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;`
+          `${tableStyle};width:100%;max-width:100%;${hasExplicitColumnLayout ? '' : 'table-layout:fixed;'}border-collapse:collapse;`
         );
       });
 
       return root.innerHTML;
     },
-    [buildBlockSummaryMap, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, pruneEmptyTableCells]
+    [buildBlockSummaryMap, buildRowMetaText, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, pruneEmptyTableCells]
   );
 
   const buildBlockTableHtml = useCallback(
@@ -796,43 +1208,100 @@ export const usePrintManager = ({
       const block = Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks.find((item: any) => item.id === blockId) : null;
       const rows = data?.[blockId];
 
+      if (!isSystemFieldVisible(`block.${blockId}`)) {
+        return '';
+      }
+
       if (!block || !Array.isArray(block?.tableColumns)) {
         return `<div style="padding:8px;border:1px dashed #d1d5db;border-radius:8px;">بلاک ${blockId} تعریف نشده است.</div>`;
       }
 
       if (!Array.isArray(rows) || rows.length === 0) {
-        return `<div style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;">${block?.titles?.fa || 'بلاک'} خالی است.</div>`;
+        return '';
       }
 
-      const columns = getCompactPrintColumns(block.tableColumns);
+      let columns = getCompactPrintColumns(block.tableColumns);
+      if (moduleId === 'price_lists' && blockId === 'items') {
+        columns = columns.map((column: any) => (
+          String(column?.key || '').trim() === 'price'
+            ? { ...column, title: 'مبلغ نهایی' }
+            : column
+        ));
+      }
+      if (moduleId === 'product_bundles' && blockId === 'products') {
+        columns = columns.map((column: any) => (
+          String(column?.key || '').trim() === 'total_price'
+            ? { ...column, title: 'مبلغ نهایی' }
+            : column
+        ));
+      }
+      columns = columns.filter((column: any) => {
+        if (!isSystemFieldVisible(`block.${blockId}.${String(column.key)}`)) return false;
+        return rows.some((row: any) => {
+          const renderedValue = formatCellValue(blockId, column, row);
+          return renderedValue && renderedValue !== '-';
+        });
+      });
       if (columns.length === 0) {
-        return `<div style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;">${block?.titles?.fa || 'بلاک'} ستون قابل چاپی ندارد.</div>`;
+        return '';
       }
       const header = columns
         .map((column: any) => `<th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;overflow-wrap:anywhere;">${column.title || column.key}</th>`)
         .join('');
 
       const body = rows
-        .map((row: any) => {
+        .map((row: any, rowIndex: number) => {
           const cells = columns
             .map((column: any) => {
-              return `<td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">${formatCellValue(blockId, column, row) || '-'}</td>`;
+              const isLongTextColumn =
+                isLongTextType(column?.type) ||
+                ['description', 'notes'].includes(String(column?.key || '').trim().toLowerCase());
+              const shouldShowMetaUnderProduct =
+                (
+                  (moduleId === 'product_bundles' && blockId === 'products') ||
+                  (moduleId === 'price_lists' && blockId === 'items')
+                ) &&
+                String(column?.key || '').trim() === 'product_id';
+              if (shouldShowMetaUnderProduct) {
+                const title = formatCellValue(blockId, column, row) || '-';
+                const meta = buildRowMetaText(blockId, row);
+                return `<td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;vertical-align:top;"><div style="font-weight:700;">${title}</div>${meta ? `<div style="margin-top:2px;font-size:${getReducedPrintFontSize(11)};color:#64748b;line-height:1.7;${MULTILINE_PRINT_STYLE}">${meta}</div>` : ''}</td>`;
+              }
+              return `<td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;${isLongTextColumn ? `vertical-align:top;font-size:${getReducedPrintFontSize(11)};line-height:1.9;${MULTILINE_PRINT_STYLE}` : ''}">${formatCellValue(blockId, column, row) || '-'}</td>`;
             })
             .join('');
 
-          return `<tr>${cells}</tr>`;
+          return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${toPersianNumber(
+            String(rowIndex + 1)
+          )}</td>${cells}</tr>`;
         })
         .join('');
 
       return `
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead><tr>${header}</tr></thead>
+        <div style="margin-top:8px;">
+          <div style="font-size:11px;font-weight:800;margin-bottom:4px;color:rgb(var(--brand-500-rgb));">${block?.titles?.fa || 'جدول'}</div>
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead><tr><th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;width:44px;">ردیف</th>${header}</tr></thead>
           <tbody>${body}</tbody>
-        </table>
+          </table>
+        </div>
       `;
     },
-    [data, formatCellValue, moduleConfig?.blocks]
+    [buildRowMetaText, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, moduleId]
   );
+
+  const buildCompactTablesBlocksHtml = useCallback(() => {
+    const blocks = Array.isArray(moduleConfig?.blocks)
+      ? moduleConfig.blocks.filter(
+          (item: any) => item?.id && (item.type === BlockType.TABLE || item.type === BlockType.GRID_TABLE)
+        )
+      : [];
+    const html = blocks
+      .map((block: any) => buildBlockTableHtml(block.id))
+      .filter((value: string) => String(value || '').trim().length > 0)
+      .join('');
+    return html || '';
+  }, [buildBlockTableHtml, moduleConfig?.blocks]);
 
   const resolveVariableValue = useCallback(
     (path: string): string => {
@@ -840,11 +1309,24 @@ export const usePrintManager = ({
       if (path === 'system.today_date') return toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'));
       if (path === 'system.today_datetime') return `${toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'))} ${now.toLocaleTimeString('fa-IR')}`;
       if (path === 'system.compact_fields_table') return buildCompactFieldsTableHtml();
+      if (path === 'system.compact_tables_blocks') return buildCompactTablesBlocksHtml();
+      if (path === 'system.package_summary_table') return buildPackageSummaryTableHtml();
+      if (path === 'system.record_image') {
+        if (!isSystemFieldVisible('system.record_image') || !recordImageUrl) return '';
+        return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;"><img src="${recordImageUrl}" alt="\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F" style="display:block;max-width:92px;max-height:92px;object-fit:contain;" /></div>`;
+      }
+      if (path === 'system.record_qr') {
+        if (!isSystemFieldVisible('system.record_qr') || !recordQrSvgMarkup) return '';
+        return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;">${recordQrSvgMarkup}</div>`;
+      }
       if (path === 'invoice.items_table') return buildInvoiceItemsTable(data?.invoiceItems || []);
       if (path.startsWith('block.')) return buildBlockTableHtml(path.replace(/^block\./, ''));
       if (path === 'record.total_invoice_amount') return formatPersianPrice(invoiceSummary.total);
       if (path === 'record.total_received_amount') return formatPersianPrice(invoiceSummary.received);
       if (path === 'record.remaining_balance') return formatPersianPrice(invoiceSummary.remaining);
+      if (path === 'record.package_gross_total') return formatPersianPrice(packageSummary.gross);
+      if (path === 'record.package_discount_total') return formatPersianPrice(packageSummary.discount);
+      if (path === 'record.package_final_total') return formatPersianPrice(packageSummary.final);
       if (path === 'record.total_invoice_amount_words') return `${toPersianWords(invoiceSummary.total)} ریال`;
       if (path === 'responsible.name') {
         return localizePlainText(data?.assignee_name || data?.responsible_name || data?.created_by_name || '');
@@ -860,6 +1342,7 @@ export const usePrintManager = ({
       let source: any = null;
       if (root === 'record') source = data || {};
       if (root === 'customer') source = customerInfo || {};
+      if (root === 'supplier') source = supplierInfo || {};
       if (root === 'company') source = sellerInfo || {};
 
       if (root === 'record' && nestedPath && !isSystemFieldVisible(`record.${nestedPath}`)) {
@@ -872,6 +1355,9 @@ export const usePrintManager = ({
       }
       if (root === 'company' && nestedPath === 'currency_label') {
         return localizePlainText(source?.currency_label || source?.currency_code || 'ریال');
+      }
+      if ((root === 'company' || root === 'customer' || root === 'supplier') && nestedPath === 'address') {
+        return getAddressDisplay(source);
       }
 
       const raw = getPathValue(source, nestedPath);
@@ -893,6 +1379,11 @@ export const usePrintManager = ({
 
       if (root === 'customer' && nestedPath === 'person_type') {
         return String(raw) === 'حقوقی' || String(raw) === 'legal' ? 'حقوقی' : 'حقیقی';
+      }
+      if (root === 'supplier' && nestedPath === 'national_identifier') {
+        return localizePlainText(
+          String(source?.national_id || source?.company_national_id || source?.national_code || raw || '')
+        );
       }
       if (root === 'customer' && nestedPath === 'national_identifier') {
         const identifier = String(source?.person_type || '').includes('حقوق')
@@ -922,8 +1413,10 @@ export const usePrintManager = ({
     },
     [
       buildBlockTableHtml,
+      buildCompactTablesBlocksHtml,
       buildCompactFieldsTableHtml,
       buildInvoiceItemsTable,
+      buildPackageSummaryTableHtml,
       data,
       customerInfo,
       formatPrintValue,
@@ -933,7 +1426,13 @@ export const usePrintManager = ({
       moduleConfig?.fields,
       moduleConfig?.titles?.fa,
       moduleId,
+      packageSummary.discount,
+      packageSummary.final,
+      packageSummary.gross,
+      recordImageUrl,
+      recordQrSvgMarkup,
       sellerInfo,
+      supplierInfo,
       isSystemFieldVisible,
     ]
   );
@@ -957,6 +1456,49 @@ export const usePrintManager = ({
     return root.innerHTML;
   }, []);
 
+  const normalizeRenderedImages = useCallback((html: string) => {
+    if (typeof window === 'undefined' || !html) return html;
+    const parser = new window.DOMParser();
+    const doc = parser.parseFromString(`<div id="print-image-root">${html}</div>`, 'text/html');
+    const root = doc.getElementById('print-image-root');
+    if (!root) return html;
+
+    root.querySelectorAll('img').forEach((img) => {
+      const widthAttr = String(img.getAttribute('width') || '').trim();
+      const heightAttr = String(img.getAttribute('height') || '').trim();
+      const style = img.getAttribute('style') || '';
+      const widthStyle = style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
+      const maxWidthStyle = style.match(/(?:^|;)\s*max-width\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
+      const heightStyle = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
+      const maxHeightStyle = style.match(/(?:^|;)\s*max-height\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
+
+      const widthValue = widthStyle || (widthAttr ? `${widthAttr}px` : '') || maxWidthStyle;
+      const heightValue = heightStyle || (heightAttr ? `${heightAttr}px` : '') || maxHeightStyle;
+      const preservedStyle = style
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .filter((part) => !/^(width|max-width|height|max-height|display|object-fit)\s*:/i.test(part));
+      const nextStyleParts = [
+        ...preservedStyle,
+        'display:block',
+        'object-fit:contain',
+        widthValue ? `width:${widthValue}` : 'width:auto',
+        widthValue ? `max-width:${widthValue === '100%' ? '100%' : widthValue}` : 'max-width:100%',
+        heightValue ? `height:${heightValue}` : 'height:auto',
+        heightValue && heightValue !== 'auto' ? `max-height:${heightValue}` : '',
+      ].filter(Boolean);
+
+      const numericWidth = widthValue.match(/^(\d+(?:\.\d+)?)px$/i)?.[1];
+      const numericHeight = heightValue.match(/^(\d+(?:\.\d+)?)px$/i)?.[1];
+      if (numericWidth) img.setAttribute('width', `${Math.round(Number(numericWidth))}`);
+      if (numericHeight) img.setAttribute('height', `${Math.round(Number(numericHeight))}`);
+      img.setAttribute('style', Array.from(new Set(nextStyleParts)).join(';'));
+    });
+
+    return root.innerHTML;
+  }, []);
+
   const refreshTemplates = useCallback(async () => {
     await loadTemplates(true);
   }, [loadTemplates]);
@@ -977,8 +1519,16 @@ export const usePrintManager = ({
         return resolveVariableValue(key);
       });
       return DOMPurify.sanitize(filled, {
+        ADD_TAGS: ['colgroup', 'col'],
         ADD_ATTR: [
           'style',
+          'width',
+          'height',
+          'span',
+          'colspan',
+          'rowspan',
+          'colwidth',
+          'data-colwidth',
           'data-background-color',
           'data-border-color',
           'data-print-block',
@@ -992,11 +1542,11 @@ export const usePrintManager = ({
     if (!selectedStoredTemplate) return null;
 
     return {
-      headerHtml: localizeHtmlNumbers(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.headerHtml))),
-      contentHtml: localizeHtmlNumbers(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.contentHtml))),
-      footerHtml: localizeHtmlNumbers(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.footerHtml))),
+      headerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.headerHtml)))),
+      contentHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.contentHtml)))),
+      footerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.footerHtml)))),
     };
-  }, [fillTemplateHtml, localizeHtmlNumbers, renderBlockTemplateHtml, selectedStoredTemplate]);
+  }, [fillTemplateHtml, localizeHtmlNumbers, normalizeRenderedImages, renderBlockTemplateHtml, selectedStoredTemplate]);
 
   useEffect(() => {
     if (!selectedStoredTemplate) {
@@ -1039,7 +1589,7 @@ export const usePrintManager = ({
         bodyRectHeight,
         1
       );
-      const nextPageCount = Math.max(1, Math.ceil(bodyHeight / pageBodyHeightPx));
+      const nextPageCount = Math.max(1, Math.ceil(Math.max(bodyHeight - 4, 1) / pageBodyHeightPx));
       setRenderedPageCount((prev) => (prev === nextPageCount ? prev : nextPageCount));
     };
 
@@ -1180,7 +1730,7 @@ export const usePrintManager = ({
               key: `print-page-${pageIndex + 1}`,
               style: {
                 position: 'relative',
-                width: '100%',
+                width: `${metrics.widthMm}mm`,
                 height: `${metrics.heightMm}mm`,
                 minHeight: `${metrics.heightMm}mm`,
                 background: '#fff',
@@ -1337,6 +1887,9 @@ export const usePrintManager = ({
   ]);
 
   useEffect(() => {
+    if (!isPrintModalOpen && !printMode) return;
+    const dependencyKey = `${moduleId}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}`;
+    if (dependenciesLoadedKeyRef.current === dependencyKey) return;
     let isMounted = true;
     const loadDependencies = async () => {
       try {
@@ -1345,14 +1898,27 @@ export const usePrintManager = ({
           moduleId === 'invoices' && data?.customer_id
             ? supabase.from('customers').select('*').eq('id', data.customer_id).maybeSingle()
             : Promise.resolve({ data: null, error: null });
+        const supplierReq =
+          moduleId === 'purchase_invoices' && data?.supplier_id
+            ? supabase.from('suppliers').select('*').eq('id', data.supplier_id).maybeSingle()
+            : Promise.resolve({ data: null, error: null });
 
-        const [{ data: companyData, error: companyError }, { data: customerData, error: customerError }] = await Promise.all([
+        const [
+          { data: companyData, error: companyError },
+          { data: customerData, error: customerError },
+          { data: supplierData, error: supplierError },
+        ] = await Promise.all([
           companyReq as any,
           customerReq as any,
+          supplierReq as any,
         ]);
         if (!isMounted) return;
         if (!companyError) setSellerInfo(companyData || null);
         if (!customerError) setCustomerInfo(customerData || null);
+        if (!supplierError) setSupplierInfo(supplierData || null);
+        if (!companyError && !customerError && !supplierError) {
+          dependenciesLoadedKeyRef.current = dependencyKey;
+        }
       } catch (err) {
         console.error('Load print dependencies failed', err);
       }
@@ -1362,7 +1928,7 @@ export const usePrintManager = ({
     return () => {
       isMounted = false;
     };
-  }, [moduleId, data?.customer_id]);
+  }, [data?.customer_id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
 
   return {
     isPrintModalOpen,
@@ -1379,17 +1945,18 @@ export const usePrintManager = ({
     closePrintModal,
     handlePrint,
     handleTogglePrintField,
+    handleSavePrintFields,
     refreshTemplates,
     previewMeta,
     printableFieldsForTemplate,
     isSelectedTemplateSystem,
-    allowFieldSelectionTab:
-      isSelectedTemplateSystem ||
-      selectedTemplateId === 'product_label' ||
-      selectedTemplateId === 'production_passport',
+    savingPrintFields,
+    allowFieldSelectionTab: isCompactSummaryTemplate,
     renderPrintCard,
   };
 };
+
+
 
 
 

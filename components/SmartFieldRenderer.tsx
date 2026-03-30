@@ -1,6 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, InputNumber, Select, Switch, Upload, Image, Modal, App, Tag, Button } from 'antd';
-import { UploadOutlined, LoadingOutlined, QrcodeOutlined, PlusOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Form, Input, InputNumber, Select, Switch, Upload, Image, Modal, App, Tag, Button, Space } from 'antd';
+import {
+  UploadOutlined,
+  LoadingOutlined,
+  QrcodeOutlined,
+  PlusOutlined,
+  EllipsisOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PushpinOutlined,
+  SaveOutlined,
+  TeamOutlined,
+  UserOutlined,
+  DownOutlined,
+  UpOutlined,
+} from '@ant-design/icons';
 import maplibregl from 'maplibre-gl';
 import { ModuleField, FieldType, FieldNature } from '../types';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
@@ -13,6 +28,8 @@ import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import QrScanPopover from './QrScanPopover';
 import RecordFilesManager from './RecordFilesManager';
+import PhoneFieldInput from './PhoneFieldInput';
+import PhoneActionsPopover from './PhoneActionsPopover';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -23,6 +40,19 @@ import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM
 import { createThemeMapPinElement } from '../utils/mapPin';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+import { getSafeOptionFallback } from '../utils/optionHelpers';
+import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
+import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
+import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { getPreferredRelationTargetField } from '../utils/relationTargetField';
+import { fetchRelationOptionsForField, RELATION_DEFAULT_LIMIT } from '../utils/relationOptions';
+import { mergeSelectOptions } from '../utils/selectOptions';
+import { getAssigneeLabel } from '../utils/assigneeLabel';
+import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
+import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
+import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
+import { getProjectModuleOptions } from '../utils/workflowHelpers';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -174,7 +204,7 @@ const LocationPickerMap: React.FC<{
         message.includes('connection') ||
         message.includes('timeout') ||
         message.includes('err_connection') ||
-        message.includes('glyph');
+        message.includes('style');
 
       if (!shouldFallback) return;
 
@@ -238,10 +268,19 @@ interface SmartFieldRendererProps {
   canViewFilesManager?: boolean;
   canEditFilesManager?: boolean;
   canDeleteFilesManager?: boolean;
+  disableRequired?: boolean;
+  overlayZIndexBase?: number;
 }
 
+type ReadyTextItem = {
+  id: string;
+  title: string;
+  content: string;
+  pinned?: boolean;
+};
+
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1100
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -256,6 +295,55 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [isGlobalImageGalleryOpen, setIsGlobalImageGalleryOpen] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [locationDraft, setLocationDraft] = useState<LocationLatLng | null>(null);
+  const [isLongTextExpanded, setIsLongTextExpanded] = useState(false);
+  const [readyTextsOpen, setReadyTextsOpen] = useState(false);
+  const [readyTextsLoading, setReadyTextsLoading] = useState(false);
+  const [addingReadyText, setAddingReadyText] = useState(false);
+  const [readyTexts, setReadyTexts] = useState<ReadyTextItem[]>([]);
+  const [newReadyTextTitle, setNewReadyTextTitle] = useState('');
+  const [newReadyTextContent, setNewReadyTextContent] = useState('');
+  const [editingReadyTextId, setEditingReadyTextId] = useState<string | null>(null);
+  const [editingReadyTextTitle, setEditingReadyTextTitle] = useState('');
+  const [editingReadyTextContent, setEditingReadyTextContent] = useState('');
+  const [updatingReadyText, setUpdatingReadyText] = useState(false);
+  const [deletingReadyTextId, setDeletingReadyTextId] = useState<string | null>(null);
+  const [relationLiveOptions, setRelationLiveOptions] = useState<any[]>([]);
+  const [relationLoading, setRelationLoading] = useState(false);
+  const [relationSearchQuery, setRelationSearchQuery] = useState('');
+  const relationSearchTimerRef = useRef<number | null>(null);
+  const relationRequestVersionRef = useRef(0);
+  const relationPendingCountRef = useRef(0);
+  const missingExactRelationValueRef = useRef<string | null>(null);
+  const [readyTextPermissions, setReadyTextPermissions] = useState({
+    canView: true,
+    canAdd: true,
+    canEdit: true,
+    canDelete: true,
+  });
+  const readyTextPinStorageKey = useMemo(
+    () => `kalamapp.ready_text_pins.${moduleId || 'global'}.${field.key || 'field'}`,
+    [field.key, moduleId]
+  );
+  const readPinnedReadyTextIds = () => {
+    if (typeof window === 'undefined') return new Set<string>();
+    try {
+      const raw = window.localStorage.getItem(readyTextPinStorageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return new Set(
+        Array.isArray(parsed)
+          ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
+          : []
+      );
+    } catch {
+      return new Set<string>();
+    }
+  };
+  const sortReadyTexts = (items: ReadyTextItem[]) =>
+    [...items].sort((left, right) => {
+      const pinnedDelta = Number(Boolean(right?.pinned)) - Number(Boolean(left?.pinned));
+      if (pinnedDelta !== 0) return pinnedDelta;
+      return String(left?.title || '').localeCompare(String(right?.title || ''), 'fa');
+    });
   const [globalImageGalleryItems, setGlobalImageGalleryItems] = useState<Array<{
     id: string;
     url: string;
@@ -265,19 +353,85 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [globalImageGalleryLoading, setGlobalImageGalleryLoading] = useState(false);
   const supportsFilesGallery = Boolean(moduleId && recordId);
   const canShowFilesGallery = supportsFilesGallery && canViewFilesManager;
+  const isMobileViewport = typeof window !== 'undefined' && window.innerWidth < 768;
+  const selectPopupZIndex = overlayZIndexBase;
+  const modalOverlayZIndex = overlayZIndexBase + 10;
+  const scanModalZIndex = overlayZIndexBase + 15;
+  const quickCreateModalZIndex = overlayZIndexBase + 20;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPermissions = async () => {
+      try {
+        const permissions = await fetchCurrentUserRolePermissions(supabase);
+        if (cancelled) return;
+        setReadyTextPermissions(resolveReadyTextPermissions(permissions, moduleId));
+      } catch {
+        if (!cancelled) {
+          setReadyTextPermissions(resolveReadyTextPermissions(null, moduleId));
+        }
+      }
+    };
+
+    void loadPermissions();
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleId]);
 
   const fieldLabel = field?.labels?.fa || label || 'بدون نام';
   const fieldType = field?.type || type || FieldType.TEXT;
   const fieldKey = field?.key || 'unknown';
+  const isLongTextField = fieldType === FieldType.LONG_TEXT || fieldType === FieldType.SUPER_LONG_TEXT;
+  const isSuperLongTextField = fieldType === FieldType.SUPER_LONG_TEXT;
   const { label: currencyLabel } = useCurrencyConfig();
+  const getProtectedDynamicValues = (dynamicCategory?: string) => (
+    ['main_unit', 'task_type'].includes(String(dynamicCategory || '').trim())
+      ? (field.options || []).map((item: any) => String(item?.value || '')).filter(Boolean)
+      : []
+  );
+  const normalizedLongTextValue = isLongTextField ? String(value || '').trim() : '';
+  const longTextLineCount = normalizedLongTextValue ? normalizedLongTextValue.split(/\r?\n/).length : 0;
+  const shouldShowLongTextToggle = isLongTextField
+    && (
+      normalizedLongTextValue.length > (isSuperLongTextField ? 280 : 220)
+      || longTextLineCount > (isSuperLongTextField ? 5 : 4)
+    );
+  const collapsedLongTextMaxHeightClass = isSuperLongTextField ? 'max-h-40' : 'max-h-28';
+  const collapsedLongTextMinRows = isSuperLongTextField ? 6 : 4;
+  const expandedLongTextMaxRows = isSuperLongTextField ? 24 : 16;
+  const renderSelectOption = (option: any) => {
+    const data = option?.data || option;
+    const tagLabel = String(data?.tagLabel || '').trim();
+    const tagColor = String(data?.tagColor || '').trim() || 'default';
+    const optionLabel = String(data?.label || '').trim() || getSafeOptionFallback(data?.value, '-');
+    if (!tagLabel) return <span>{optionLabel}</span>;
+    return (
+      <div className="flex items-center gap-2 min-w-0">
+        <Tag color={tagColor} style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', paddingInline: 6 }}>
+          {tagLabel}
+        </Tag>
+        <span className="truncate">{optionLabel}</span>
+      </div>
+    );
+  };
   const isProcessStagesFieldKey = (
     fieldKey === 'execution_process_draft' ||
     fieldKey === 'marketing_process_draft' ||
     fieldKey === 'template_stages_preview' ||
     fieldKey === 'run_stages_preview'
   );
-  const isRequired = field?.validation?.required || false;
-  const fieldOptions = field?.options || options || [];
+  const isRequired = !disableRequired && (field?.validation?.required || false);
+  const fieldOptions = (
+    moduleId === 'process_templates' && field?.key === 'module_id'
+      ? getProjectModuleOptions()
+      : (options || field?.options || [])
+  );
+  const relationResolvedOptions = useMemo(
+    () => mergeSelectOptions(fieldOptions as any[], relationLiveOptions as any[]),
+    [fieldOptions, relationLiveOptions]
+  );
   const isReadonly = field?.readonly === true || field?.nature === FieldNature.SYSTEM;
   const parsedLocation = useMemo(() => parseLocationValue(value), [value]);
   const relationConfigAny = field.relationConfig as any;
@@ -310,6 +464,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     if (headerField?.key) return String(headerField.key);
     return 'name';
   }, [relationConfigAny?.targetField, quickCreateTargetModule]);
+  const quickCreateAutoNameToggleField = useMemo(
+    () => quickCreateTargetModule?.fields?.find((f: any) => String(f?.key || '') === 'auto_name_enabled') as ModuleField | undefined,
+    [quickCreateTargetModule]
+  );
+  const quickCreateHasAutoNameToggle = !!quickCreateAutoNameToggleField
+    && (quickCreateTargetModuleId === 'products' || quickCreateTargetModuleId === 'production_orders' || quickCreateTargetModuleId === 'customers');
 
   const quickCreateFields = useMemo(() => {
     const moduleFields = quickCreateTargetModule?.fields || [];
@@ -359,8 +519,237 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
     return Array.from(map.values()).sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0));
   }, [configuredQuickCreateKeys, quickCreateTargetField, quickCreateTargetModule]);
+  const getQuickCreateFieldValueLabel = (fieldKey: string, rawValue: any) => {
+    if (rawValue === undefined || rawValue === null) return '';
+    const targetField = quickCreateTargetModule?.fields?.find((item: any) => String(item?.key || '') === fieldKey);
+    if (!targetField) return String(rawValue);
+
+    const resolveOptionLabel = (singleValue: any) => {
+      if (singleValue === undefined || singleValue === null) return '';
+      let matchedOption = (targetField.options || []).find((item: any) => item?.value === singleValue);
+      if (matchedOption) return matchedOption.label;
+      if (targetField.dynamicOptionsCategory) {
+        matchedOption = (quickCreateDynamicOptions[targetField.dynamicOptionsCategory] || []).find((item: any) => item?.value === singleValue);
+        if (matchedOption) return matchedOption.label;
+      }
+      if (targetField.type === FieldType.RELATION) {
+        const matchedRelation = (quickCreateRelationOptions[fieldKey] || []).find((item: any) => item?.value === singleValue);
+        if (matchedRelation) return matchedRelation.label;
+      }
+      return String(singleValue);
+    };
+
+    if (Array.isArray(rawValue)) {
+      return rawValue.map((item) => resolveOptionLabel(item)).filter(Boolean).join('، ');
+    }
+    return resolveOptionLabel(rawValue);
+  };
+  const buildQuickCreateAutoProductName = (values: any) => {
+    const parts: string[] = [];
+    const addPart = (part?: string) => {
+      if (!part) return;
+      const trimmed = String(part).trim();
+      if (trimmed) parts.push(trimmed);
+    };
+    const normalizeDimension = (raw: any) => {
+      if (raw === null || raw === undefined) return '';
+      const text = String(raw).trim();
+      if (!text) return '';
+      const numeric = parseFloat(text);
+      if (!Number.isFinite(numeric)) return text;
+      return String(numeric).replace(/\.0+$/, '');
+    };
+
+    const productType = String(values?.product_type || '').trim().toLowerCase();
+    if (productType === 'goods') {
+      addPart(getQuickCreateFieldValueLabel('category', values?.category));
+      addPart(getQuickCreateFieldValueLabel('goods_subgroup', values?.goods_subgroup));
+    } else if (productType === 'service') {
+      addPart(getQuickCreateFieldValueLabel('product_category', values?.product_category));
+      addPart(getQuickCreateFieldValueLabel('service_subgroup', values?.service_subgroup));
+    } else {
+      addPart(getQuickCreateFieldValueLabel('category', values?.category));
+      addPart(getQuickCreateFieldValueLabel('product_category', values?.product_category));
+    }
+
+    addPart(getQuickCreateFieldValueLabel('material_type', values?.material_type));
+    addPart(getQuickCreateFieldValueLabel('brand_name', values?.brand_name));
+    addPart(getQuickCreateFieldValueLabel('color_name', values?.color_name));
+    addPart(getQuickCreateFieldValueLabel('feature_name', values?.feature_name));
+    addPart(getQuickCreateFieldValueLabel('quality_level', values?.quality_level));
+
+    const explicitSize = getQuickCreateFieldValueLabel('size_value', values?.size_value);
+    const lengthValue = normalizeDimension(values?.length_value);
+    const widthValue = normalizeDimension(values?.width_value);
+    if (lengthValue && widthValue) {
+      addPart(`${lengthValue}X${widthValue}`);
+    } else if (lengthValue) {
+      addPart(`طول ${lengthValue}`);
+    } else if (widthValue) {
+      addPart(`عرض ${widthValue}`);
+    } else {
+      addPart(explicitSize);
+    }
+
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  };
+  const buildQuickCreateAutoCustomerName = (values: any) => {
+    const normalize = (input: any) => String(input ?? '').replace(/\s+/g, ' ').trim();
+    const businessName = normalize(values?.business_name);
+    const personType = normalize(values?.person_type).toLowerCase();
+
+    if (personType === 'legal') {
+      const legalName = normalize(values?.legal_name);
+      if (legalName && businessName) return `${legalName} - ${businessName}`;
+      return legalName || businessName;
+    }
+
+    const realName = [values?.prefix, values?.first_name, values?.last_name]
+      .map((item) => normalize(item))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (realName && businessName) return `${realName} - ${businessName}`;
+    return realName || businessName;
+  };
+  const buildQuickCreateAutoProductionOrderName = (values: any) => {
+    const parts: string[] = [];
+    const addPart = (part?: string) => {
+      if (!part) return;
+      const trimmed = String(part).trim();
+      if (trimmed) parts.push(trimmed);
+    };
+    const bomLabelRaw = getQuickCreateFieldValueLabel('bom_id', values?.bom_id);
+    const bomLabelClean = String(bomLabelRaw || '').replace(/\s*\([^()]*\)\s*$/, '').trim();
+    addPart(bomLabelClean);
+    addPart(getQuickCreateFieldValueLabel('color', values?.color));
+    return parts.join(' ');
+  };
+  const applyQuickCreateAutoNaming = (rawValues: any) => {
+    const nextValues = { ...(rawValues || {}) };
+
+    if (quickCreateTargetModuleId === 'products' && nextValues.auto_name_enabled === true) {
+      const nextName = buildQuickCreateAutoProductName(nextValues);
+      if (nextName) nextValues.name = nextName;
+    }
+    if (quickCreateTargetModuleId === 'production_orders' && nextValues.auto_name_enabled === true) {
+      const nextName = buildQuickCreateAutoProductionOrderName(nextValues);
+      if (nextName) nextValues.name = nextName;
+    }
+    if (quickCreateTargetModuleId === 'customers' && nextValues.auto_name_enabled === true) {
+      const nextFullName = buildQuickCreateAutoCustomerName(nextValues);
+      if (nextFullName) nextValues.full_name = nextFullName;
+    }
+
+    return nextValues;
+  };
 
   const fieldAny = field as any;
+
+  useEffect(() => {
+    setIsLongTextExpanded(false);
+  }, [fieldKey, forceEditMode]);
+
+  const loadRelationOptions = async (searchText = '', exactId?: string | number | null) => {
+    if (fieldType !== FieldType.RELATION || !field.relationConfig) return;
+    if (field.relationConfig?.dependsOn) {
+      const dependsOnValue = String(allValues?.[field.relationConfig.dependsOn] || '').trim();
+      if (!dependsOnValue) {
+        setRelationLiveOptions([]);
+        missingExactRelationValueRef.current = null;
+        return;
+      }
+    }
+
+    const normalizedSearchText = String(searchText || '').trim();
+    const isExactLookup = exactId !== undefined && exactId !== null && exactId !== '';
+    if (!isExactLookup && normalizedSearchText.length > 0 && normalizedSearchText.length < 2) {
+      setRelationLiveOptions([]);
+      return;
+    }
+
+    const requestVersion = !isExactLookup ? relationRequestVersionRef.current + 1 : relationRequestVersionRef.current;
+    if (!isExactLookup) {
+      relationRequestVersionRef.current = requestVersion;
+    }
+
+    try {
+      relationPendingCountRef.current += 1;
+      setRelationLoading(true);
+      const remoteOptions = await fetchRelationOptionsForField(supabase, field, {
+        allValues,
+        search: isExactLookup ? '' : normalizedSearchText,
+        exactId: exactId ?? null,
+        limit: RELATION_DEFAULT_LIMIT,
+      });
+      if (!isExactLookup && requestVersion !== relationRequestVersionRef.current) {
+        return;
+      }
+      if (exactId) {
+        const normalizedExactId = String(exactId);
+        if ((remoteOptions || []).length === 0) {
+          missingExactRelationValueRef.current = normalizedExactId;
+          setRelationLiveOptions((prev) => {
+            const alreadyExists = (prev || []).some((item: any) => String(item?.value) === normalizedExactId);
+            if (alreadyExists) return prev;
+            return [
+              ...prev,
+              {
+                value: exactId,
+                label: 'رکورد حذف شده',
+                searchText: `رکورد حذف شده ${normalizedExactId}`.trim(),
+                module: field.relationConfig?.targetModule,
+                missing: true,
+              },
+            ];
+          });
+          return;
+        }
+        missingExactRelationValueRef.current = null;
+      }
+      setRelationLiveOptions((prev) => (
+        isExactLookup
+          ? mergeSelectOptions(prev as any[], remoteOptions as any[]) as any[]
+          : (remoteOptions as any[])
+      ));
+    } catch (error) {
+      console.warn(`Could not fetch relation options for ${fieldKey}`, error);
+    } finally {
+      relationPendingCountRef.current = Math.max(0, relationPendingCountRef.current - 1);
+      setRelationLoading(relationPendingCountRef.current > 0);
+    }
+  };
+
+  const resetRelationSearchState = () => {
+    if (relationSearchTimerRef.current) {
+      window.clearTimeout(relationSearchTimerRef.current);
+      relationSearchTimerRef.current = null;
+    }
+    relationRequestVersionRef.current += 1;
+    relationPendingCountRef.current = 0;
+    setRelationLoading(false);
+    setRelationSearchQuery('');
+  };
+
+  useEffect(() => {
+    if (fieldType !== FieldType.RELATION) return;
+    if (value === undefined || value === null || value === '') return;
+    if (String(relationSearchQuery || '').trim().length > 0) return;
+    const exists = relationResolvedOptions.some((item: any) => String(item?.value) === String(value));
+    if (exists) return;
+    if (missingExactRelationValueRef.current === String(value)) return;
+    void loadRelationOptions('', value);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldType, value, relationResolvedOptions, relationSearchQuery]);
+
+  useEffect(() => () => {
+    if (relationSearchTimerRef.current) {
+      window.clearTimeout(relationSearchTimerRef.current);
+    }
+  }, []);
+
   if (fieldAny?.dependsOn && allValues) {
       const parentValue = allValues[fieldAny.dependsOn.field];
       if (parentValue && fieldAny.dependsOn.map) {
@@ -532,6 +921,187 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
   };
 
+  const loadReadyTexts = async () => {
+    setReadyTextsLoading(true);
+    try {
+      let query = supabase
+        .from('ready_texts')
+        .select('id, title, content, module_id')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (moduleId) {
+        query = query.or(`module_id.is.null,module_id.eq.${moduleId}`);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
+      const pinnedIds = readPinnedReadyTextIds();
+      const rows = (data || [])
+        .map((row: any) => ({
+          id: String(row?.id || ''),
+          title: String(row?.title || '').trim(),
+          content: String(row?.content || ''),
+          pinned: pinnedIds.has(String(row?.id || '')),
+        }))
+        .filter((row) => row.id && row.content.trim().length > 0);
+      setReadyTexts(sortReadyTexts(rows));
+    } catch (error: any) {
+      console.warn('Could not load ready texts', error);
+      msg.error('برای متن‌های آماده ابتدا migration مرتبط با جدول ready_texts را اجرا کنید.');
+      setReadyTexts([]);
+    } finally {
+      setReadyTextsLoading(false);
+    }
+  };
+
+  const openReadyTexts = () => {
+    if (!readyTextPermissions.canView) {
+      msg.warning('دسترسی مشاهده متن‌های آماده برای این ماژول فعال نیست.');
+      return;
+    }
+    setReadyTextsOpen(true);
+    setNewReadyTextTitle('');
+    setNewReadyTextContent('');
+    setEditingReadyTextId(null);
+    setEditingReadyTextTitle('');
+    setEditingReadyTextContent('');
+    void loadReadyTexts();
+  };
+
+  const addReadyText = async () => {
+    if (!readyTextPermissions.canAdd) {
+      msg.warning('دسترسی افزودن متن آماده برای این ماژول فعال نیست.');
+      return;
+    }
+    const content = String(newReadyTextContent || '').trim();
+    const title = String(newReadyTextTitle || '').trim();
+    if (!content) {
+      msg.warning('متن آماده نمی‌تواند خالی باشد.');
+      return;
+    }
+    setAddingReadyText(true);
+    try {
+      const payload: any = {
+        title: title || content.slice(0, 40),
+        content,
+        module_id: moduleId || null,
+      };
+      const { error } = await supabase.from('ready_texts').insert([payload]);
+      if (error) throw error;
+      setNewReadyTextTitle('');
+      setNewReadyTextContent('');
+      await loadReadyTexts();
+      msg.success('متن آماده اضافه شد.');
+    } catch (error: any) {
+      console.warn('Could not add ready text', error);
+      msg.error('ثبت متن آماده ناموفق بود.');
+    } finally {
+      setAddingReadyText(false);
+    }
+  };
+
+  const startEditReadyText = (item: ReadyTextItem) => {
+    if (!readyTextPermissions.canEdit) {
+      msg.warning('دسترسی ویرایش متن آماده برای این ماژول فعال نیست.');
+      return;
+    }
+    setEditingReadyTextId(item.id);
+    setEditingReadyTextTitle(item.title || '');
+    setEditingReadyTextContent(item.content || '');
+  };
+
+  const cancelEditReadyText = () => {
+    setEditingReadyTextId(null);
+    setEditingReadyTextTitle('');
+    setEditingReadyTextContent('');
+  };
+
+  const updateReadyText = async () => {
+    if (!editingReadyTextId) return;
+    if (!readyTextPermissions.canEdit) {
+      msg.warning('دسترسی ویرایش متن آماده برای این ماژول فعال نیست.');
+      return;
+    }
+
+    const title = String(editingReadyTextTitle || '').trim();
+    const content = String(editingReadyTextContent || '').trim();
+    if (!content) {
+      msg.warning('متن آماده نمی‌تواند خالی باشد.');
+      return;
+    }
+
+    setUpdatingReadyText(true);
+    try {
+      const { error } = await supabase
+        .from('ready_texts')
+        .update({
+          title: title || content.slice(0, 40),
+          content,
+        })
+        .eq('id', editingReadyTextId);
+      if (error) throw error;
+      await loadReadyTexts();
+      cancelEditReadyText();
+      msg.success('متن آماده بروزرسانی شد.');
+    } catch (error) {
+      console.warn('Could not update ready text', error);
+      msg.error('بروزرسانی متن آماده ناموفق بود.');
+    } finally {
+      setUpdatingReadyText(false);
+    }
+  };
+
+  const deleteReadyText = async (id: string) => {
+    if (!readyTextPermissions.canDelete) {
+      msg.warning('دسترسی حذف متن آماده برای این ماژول فعال نیست.');
+      return;
+    }
+
+    setDeletingReadyTextId(id);
+    try {
+      const { error } = await supabase.from('ready_texts').delete().eq('id', id);
+      if (error) throw error;
+      setReadyTexts((prev) => prev.filter((item) => item.id !== id));
+      if (editingReadyTextId === id) {
+        cancelEditReadyText();
+      }
+      msg.success('متن آماده حذف شد.');
+    } catch (error) {
+      console.warn('Could not delete ready text', error);
+      msg.error('حذف متن آماده ناموفق بود.');
+    } finally {
+      setDeletingReadyTextId(null);
+    }
+  };
+  const toggleReadyTextPin = (id: string) => {
+    const normalizedId = String(id || '').trim();
+    if (!normalizedId) return;
+    const nextPinnedIds = readPinnedReadyTextIds();
+    if (nextPinnedIds.has(normalizedId)) {
+      nextPinnedIds.delete(normalizedId);
+    } else {
+      nextPinnedIds.add(normalizedId);
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(readyTextPinStorageKey, JSON.stringify(Array.from(nextPinnedIds)));
+    }
+    setReadyTexts((prev) => sortReadyTexts(
+      prev.map((item) => (
+        item.id === normalizedId
+          ? { ...item, pinned: nextPinnedIds.has(normalizedId) }
+          : item
+      ))
+    ));
+  };
+
+  const copyReadyText = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      msg.success('متن کپی شد.');
+    } catch {
+      msg.warning('کپی خودکار ممکن نبود.');
+    }
+  };
+
   const closeQuickCreate = () => {
     setQuickCreateOpen(false);
     quickCreateForm.resetFields();
@@ -543,13 +1113,48 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     if (!quickCreateOpen) return;
     const defaults: Record<string, any> = {};
     Object.entries(configuredQuickCreateDefaults).forEach(([key, val]) => {
-      defaults[key] = val;
+      defaults[key] = resolveConfiguredDefaultValue(val);
     });
     quickCreateFields.forEach((f: any) => {
-      if (f?.defaultValue !== undefined) defaults[f.key] = f.defaultValue;
+      if (f?.defaultValue !== undefined) defaults[f.key] = resolveConfiguredDefaultValue(f.defaultValue);
     });
-    quickCreateForm.setFieldsValue(defaults);
-  }, [configuredQuickCreateDefaults, quickCreateOpen, quickCreateFields, quickCreateForm]);
+    if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.defaultValue !== undefined) {
+      defaults[quickCreateAutoNameToggleField.key] = resolveConfiguredDefaultValue(quickCreateAutoNameToggleField.defaultValue);
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      quickCreateForm.setFieldsValue(defaults);
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    configuredQuickCreateDefaults,
+    quickCreateOpen,
+    quickCreateFields,
+    quickCreateForm,
+    quickCreateHasAutoNameToggle,
+    quickCreateAutoNameToggleField,
+  ]);
+
+  useEffect(() => {
+    if (!quickCreateOpen) return;
+    const nextValues = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
+    const computedEntries = Object.entries(nextValues).filter(([key, value]) => {
+      if (quickCreateTargetModuleId === 'customers' && key === 'full_name') {
+        return value && value !== quickCreateForm.getFieldValue('full_name');
+      }
+      if ((quickCreateTargetModuleId === 'products' || quickCreateTargetModuleId === 'production_orders') && key === 'name') {
+        return value && value !== quickCreateForm.getFieldValue('name');
+      }
+      return false;
+    });
+    if (computedEntries.length === 0) return;
+    quickCreateForm.setFieldsValue(Object.fromEntries(computedEntries));
+  }, [
+    quickCreateForm,
+    quickCreateOpen,
+    quickCreateTargetModuleId,
+    quickCreateRelationOptions,
+    quickCreateDynamicOptions,
+  ]);
 
   useEffect(() => {
     if (!quickCreateOpen || quickCreateFields.length === 0) return;
@@ -564,16 +1169,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
         if (quickField.dynamicOptionsCategory) {
           try {
-            const { data } = await supabase
-              .from('dynamic_options')
-              .select('label, value')
-              .eq('category', quickField.dynamicOptionsCategory)
-              .eq('is_active', true)
-              .order('display_order', { ascending: true });
-            dynamicMap[quickField.dynamicOptionsCategory] = (data || []).map((item: any) => ({
-              label: item.label,
-              value: item.value,
-            }));
+            dynamicMap[quickField.dynamicOptionsCategory] = await fetchDynamicOptionsByCategory(
+              supabase,
+              quickField.dynamicOptionsCategory
+            );
           } catch (err) {
             console.warn('Failed loading dynamic options:', quickField.dynamicOptionsCategory, err);
           }
@@ -581,26 +1180,42 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
         if (quickField.type === FieldType.RELATION && quickField.relationConfig?.targetModule) {
           const targetModule = quickField.relationConfig.targetModule;
-          const targetField = (quickField.relationConfig as any)?.targetField || 'name';
+          const targetField = getPreferredRelationTargetField(targetModule, (quickField.relationConfig as any)?.targetField);
           const isShelvesTarget = targetModule === 'shelves';
+          const includeSystemCode = targetModule !== 'cheques' && supportsSystemCode(targetModule);
           const extraSelect = isShelvesTarget ? ', shelf_number' : '';
           try {
-            let { data, error } = await supabase
-              .from(targetModule)
-              .select(`id, ${targetField}, system_code${extraSelect}`)
-              .limit(200);
-            if (error) {
-              const errorCode = String((error as any)?.code || '').toUpperCase();
-              const errorText = String((error as any)?.message || (error as any)?.details || '').toLowerCase();
-              const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-              if (!isMissingColumn) throw error;
-              const fallback: any = await supabase
+            const selectVariants = Array.from(
+              new Set(
+                [
+                  `id, ${targetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}`,
+                  `id, ${targetField}${extraSelect}`,
+                  `id, ${targetField}`,
+                ].map((item) => item.replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim())
+              )
+            );
+            let data: any[] = [];
+            let lastError: any = null;
+            for (const selectExpr of selectVariants) {
+              const result = await supabase
                 .from(targetModule)
-                .select(`id, ${targetField}${extraSelect}`)
+                .select(selectExpr)
                 .limit(200);
-              if (fallback.error) throw fallback.error;
-              data = fallback.data as any[];
+              if (!result.error) {
+                data = (result.data || []) as any[];
+                lastError = null;
+                break;
+              }
+              const errorCode = String((result.error as any)?.code || '').toUpperCase();
+              const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
+              const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+              if (!isMissingColumn) {
+                lastError = result.error;
+                break;
+              }
+              lastError = result.error;
             }
+            if (lastError && data.length === 0) throw lastError;
             relationMap[quickField.key] = (data || []).map((item: any) => ({
               label: item.system_code
                 ? `${item[targetField] || item.shelf_number || item.system_code || item.id} (${item.system_code})`
@@ -629,7 +1244,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     if (!quickCreateTargetModuleId) return;
     setQuickCreateLoading(true);
     try {
-      const values = await quickCreateForm.validateFields();
+      const draftValues = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
+      quickCreateForm.setFieldsValue(draftValues);
+      await quickCreateForm.validateFields();
+      const values = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
       const payload: Record<string, any> = {};
 
       quickCreateFields.forEach((f: any) => {
@@ -640,6 +1258,18 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         if (nextValue === '') nextValue = null;
         payload[f.key] = nextValue;
       });
+
+      ['assignee_id', 'assignee_type', 'assignee_role_id'].forEach((key) => {
+        if (!(key in values)) return;
+        const nextValue = values?.[key];
+        payload[key] = nextValue === '' ? null : nextValue;
+      });
+      if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
+        payload.system_code = await buildClientFallbackSystemCode(supabase, quickCreateTargetModuleId);
+      }
+      if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.key) {
+        payload[quickCreateAutoNameToggleField.key] = values?.[quickCreateAutoNameToggleField.key] !== false;
+      }
 
       if (!payload[quickCreateTargetField]) {
         throw new Error(`فیلد "${quickCreateTargetField}" الزامی است.`);
@@ -758,27 +1388,85 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         if (fieldType === FieldType.TIME) {
           return <span className="font-mono persian-number">{formatPersian(value, 'TIME')}</span>;
         }
-        if (fieldType === FieldType.SELECT || fieldType === FieldType.RELATION || fieldType === FieldType.STATUS) {
-             const selectedOpt = fieldOptions.find((o: any) => o.value === value);
-             if (fieldType === FieldType.STATUS && selectedOpt) {
-                 return <Tag color={selectedOpt.color}>{selectedOpt.label}</Tag>;
-             }
-             if (fieldType === FieldType.RELATION && field.relationConfig?.targetModule && value) {
-                 return (
-                   <RelatedRecordPopover
-                     moduleId={field.relationConfig.targetModule}
-                     recordId={String(value)}
-                     label={selectedOpt ? selectedOpt.label : String(value)}
-                   />
-                 );
-             }
-             return <span className="text-gray-800">{selectedOpt ? selectedOpt.label : (value || '-')}</span>;
+        if (fieldType === FieldType.PHONE) {
+          return (
+            <PhoneActionsPopover
+              value={value}
+              moduleId={moduleId}
+              record={allValues}
+              size={compactMode ? 'sm' : 'lg'}
+              className="font-medium w-full min-w-0"
+              emptyText={compactMode ? '' : '-'}
+            />
+          );
         }
+        if (fieldType === FieldType.SELECT || fieldType === FieldType.RELATION || fieldType === FieldType.STATUS) {
+             const selectedOpt = (fieldType === FieldType.RELATION ? relationResolvedOptions : fieldOptions).find((o: any) => String(o?.value) === String(value));
+             if (fieldType === FieldType.STATUS && selectedOpt) {
+                  return <Tag color={selectedOpt.color}>{selectedOpt.label}</Tag>;
+              }
+              const resolvedLabel = selectedOpt ? selectedOpt.label : getSafeOptionFallback(value);
+              if (fieldType === FieldType.RELATION && field.relationConfig?.targetModule && value) {
+                  const targetModule = String(selectedOpt?.module || field.relationConfig.targetModule || '').trim();
+                  return (
+                     <RelatedRecordPopover
+                       moduleId={targetModule || field.relationConfig.targetModule}
+                       recordId={String(value)}
+                       label={resolvedLabel}
+                     />
+                   );
+              }
+              return <span className="text-gray-800">{resolvedLabel}</span>;
+         }
         if (fieldType === FieldType.TAGS) {
              if (Array.isArray(value) && value.length > 0) {
                  return <div className="flex gap-1">{value.map((t: string, i: number) => <Tag key={i}>{t}</Tag>)}</div>;
              }
              return <span>-</span>;
+        }
+        if (isLongTextField) {
+          const rendered = String(value || '').trim();
+          return (
+            <div className="flex items-start gap-2 w-full">
+              <div className="flex-1 min-w-0">
+                <div className="relative">
+                  <div
+                    className={`text-gray-800 whitespace-pre-wrap break-words transition-all duration-200 ${isSuperLongTextField ? 'leading-7 text-[15px]' : 'leading-6'} ${shouldShowLongTextToggle && !isLongTextExpanded ? `${collapsedLongTextMaxHeightClass} overflow-hidden` : ''}`}
+                  >
+                    {rendered ? toPersianNumber(rendered) : (compactMode ? '' : '-')}
+                  </div>
+                  {shouldShowLongTextToggle && !isLongTextExpanded && (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white dark:from-[#1f1f1f] to-transparent" />
+                  )}
+                </div>
+                {shouldShowLongTextToggle && (
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={isLongTextExpanded ? <UpOutlined /> : <DownOutlined />}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setIsLongTextExpanded((prev) => !prev);
+                    }}
+                    className="mt-2 px-0 text-xs text-gray-500 hover:!text-leather-600"
+                  >
+                    {isLongTextExpanded ? 'جمع کردن' : 'مشاهده بیشتر'}
+                  </Button>
+                )}
+              </div>
+              {readyTextPermissions.canView && (
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<EllipsisOutlined />}
+                  onClick={openReadyTexts}
+                  title="متن‌های آماده"
+                  className="shrink-0 text-gray-500"
+                />
+              )}
+            </div>
+          );
         }
         
         return <span className="text-gray-800 break-words">{toPersianNumber(value) || (compactMode ? '' : '-')}</span>;
@@ -803,15 +1491,51 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             allowClear
           />
         );
+
+      case FieldType.PHONE:
+        return <PhoneFieldInput value={value} onChange={onChange} disabled={!forceEditMode || isReadonly} placeholder={compactMode ? undefined : fieldLabel} />;
       
       case FieldType.LONG_TEXT:
+      case FieldType.SUPER_LONG_TEXT:
         return (
-          <Input.TextArea
-            {...commonProps}
-            value={formatTextForInput(value)}
-            onChange={e => onChange(normalizeDigitsToEnglish(e.target.value))}
-            rows={compactMode ? 1 : 4}
-          />
+          <div className="w-full">
+            <div className="flex items-start gap-2 w-full">
+            <Input.TextArea
+              {...commonProps}
+              value={formatTextForInput(value)}
+              onChange={e => onChange(normalizeDigitsToEnglish(e.target.value))}
+              rows={compactMode ? 1 : collapsedLongTextMinRows}
+              autoSize={compactMode
+                ? undefined
+                : {
+                    minRows: collapsedLongTextMinRows,
+                    maxRows: isLongTextExpanded ? expandedLongTextMaxRows : collapsedLongTextMinRows + 4,
+                  }}
+            />
+            {readyTextPermissions.canView && (
+              <Button
+                size="small"
+                type="text"
+                icon={<EllipsisOutlined />}
+                onClick={openReadyTexts}
+                title="متن‌های آماده"
+                disabled={!forceEditMode || isReadonly}
+                className="mt-1 shrink-0 text-gray-500"
+              />
+            )}
+            </div>
+            {shouldShowLongTextToggle && !compactMode && (
+              <Button
+                size="small"
+                type="text"
+                icon={isLongTextExpanded ? <UpOutlined /> : <DownOutlined />}
+                onClick={() => setIsLongTextExpanded((prev) => !prev)}
+                className="mt-2 px-0 text-xs text-gray-500 hover:!text-leather-600"
+              >
+                {isLongTextExpanded ? 'نمایش فشرده' : 'باز کردن کامل'}
+              </Button>
+            )}
+          </div>
         );
       
       case FieldType.NUMBER:
@@ -841,11 +1565,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     onChange={onChange}
                     options={fieldOptions}
                     category={field.dynamicOptionsCategory}
+                    protectedValues={getProtectedDynamicValues(field.dynamicOptionsCategory)}
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     onOptionsUpdate={onOptionsUpdate}
                     disabled={!forceEditMode}
-                    getPopupContainer={() => document.body}
-                    dropdownStyle={{ zIndex: 4000 }}
+                    getPopupContainer={(node) => node.parentElement || document.body}
+                    popupStyle={{ zIndex: selectPopupZIndex }}
+                    modalZIndex={modalOverlayZIndex}
                 />
             );
         }
@@ -856,8 +1582,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 options={fieldOptions}
                 allowClear
                 optionFilterProp="label"
-                getPopupContainer={() => document.body}
-                styles={{ popup: { root: { zIndex: 4000 } } }}
+                getPopupContainer={(node) => node.parentElement || document.body}
+                styles={{ popup: { root: { zIndex: selectPopupZIndex } } }}
             />
         );
 
@@ -869,12 +1595,14 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     onChange={onChange}
                     options={fieldOptions}
                     category={field.dynamicOptionsCategory}
+                    protectedValues={getProtectedDynamicValues(field.dynamicOptionsCategory)}
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     mode="multiple"
-                onOptionsUpdate={onOptionsUpdate}
-                disabled={!forceEditMode}
-                getPopupContainer={() => document.body}
-                dropdownStyle={{ zIndex: 4000 }}
+                    onOptionsUpdate={onOptionsUpdate}
+                    disabled={!forceEditMode}
+                    getPopupContainer={(node) => node.parentElement || document.body}
+                    popupStyle={{ zIndex: selectPopupZIndex }}
+                    modalZIndex={modalOverlayZIndex}
                 />
             );
         }
@@ -886,14 +1614,16 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 options={fieldOptions}
                 allowClear
                 optionFilterProp="label"
-                getPopupContainer={() => document.body}
-                styles={{ popup: { root: { zIndex: 4000 } } }}
+                getPopupContainer={(node) => node.parentElement || document.body}
+                styles={{ popup: { root: { zIndex: selectPopupZIndex } } }}
             />
         );
 
       case FieldType.RELATION:
         const canQuickCreate = !!field.relationConfig?.targetModule;
-        let filteredOptions = fieldOptions;
+        const normalizedRelationSearchQuery = String(relationSearchQuery || '').trim();
+        const isRelationSearching = normalizedRelationSearchQuery.length > 0;
+        let filteredOptions = isRelationSearching ? relationLiveOptions : relationResolvedOptions;
         
         const relConfigAny = field.relationConfig as any;
         if (relConfigAny?.dependsOn && allValues) {
@@ -901,7 +1631,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
              if (!depVal) {
                  return <Select disabled placeholder="ابتدا فیلد مرتبط را انتخاب کنید" style={{width:'100%'}} value={value} options={[]} />;
              }
-             filteredOptions = fieldOptions.filter((opt: any) => opt.module === depVal);
+             filteredOptions = (isRelationSearching ? relationLiveOptions : fieldOptions).filter((opt: any) => opt.module === depVal);
         }
 
           return (
@@ -913,11 +1643,40 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     className="min-w-0"
                     showSearch
                     options={filteredOptions}
-                    optionFilterProp="label"
+                    loading={relationLoading}
+                    optionRender={renderSelectOption}
+                    optionFilterProp="searchText"
                     getPopupContainer={() => document.body}
+                    placement="bottomLeft"
+                    autoClearSearchValue
                     popupMatchSelectWidth={false}
-                    styles={{ popup: { root: { zIndex: 4000, minWidth: 320 } } }}
-                    filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                    virtual={false}
+                    listHeight={isMobileViewport ? 224 : 320}
+                    styles={{ popup: { root: { zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' } } }}
+                    filterOption={false}
+                    searchValue={relationSearchQuery}
+                    onChange={(nextValue) => {
+                      resetRelationSearchState();
+                      onChange(nextValue);
+                    }}
+                    notFoundContent={relationLoading ? 'در حال بارگذاری...' : 'موردی یافت نشد'}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        resetRelationSearchState();
+                        void loadRelationOptions('');
+                      } else {
+                        resetRelationSearchState();
+                      }
+                    }}
+                    onSearch={(searchText) => {
+                      setRelationSearchQuery(String(searchText || ''));
+                      if (relationSearchTimerRef.current) {
+                        window.clearTimeout(relationSearchTimerRef.current);
+                      }
+                      relationSearchTimerRef.current = window.setTimeout(() => {
+                        void loadRelationOptions(String(searchText || '').trim());
+                      }, 320);
+                    }}
                     popupRender={(menu) => (
                         <>
                           {menu}
@@ -960,9 +1719,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               </div>
               {value && field.relationConfig?.targetModule && (
                 <RelatedRecordPopover
-                  moduleId={field.relationConfig.targetModule}
+                  moduleId={String(filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.module || field.relationConfig.targetModule || '')}
                   recordId={String(value)}
-                  label={filteredOptions.find((opt: any) => opt.value === value)?.label || String(value)}
+                  label={filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.label || getSafeOptionFallback(value)}
                 >
                   <span className="text-xs text-leather-600 cursor-pointer hover:underline">
                     مشاهده سریع رکورد مرتبط
@@ -1018,6 +1777,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             className="w-full"
             disabled={!forceEditMode}
             placeholder={compactMode ? undefined : "انتخاب تاریخ"}
+            zIndex={overlayZIndexBase + 40}
           />
         );
 
@@ -1030,6 +1790,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             className="w-full"
             disabled={!forceEditMode}
             placeholder={compactMode ? undefined : "انتخاب زمان"}
+            zIndex={overlayZIndexBase + 40}
           />
         );
 
@@ -1042,6 +1803,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             className="w-full"
             disabled={!forceEditMode}
             placeholder={compactMode ? undefined : "انتخاب تاریخ و زمان"}
+            zIndex={overlayZIndexBase + 40}
           />
         );
 
@@ -1057,7 +1819,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             />
           );
         }
-        return <Input disabled placeholder="بعد از ذخیره، تگ‌ها قابل ویرایش است" />;
+        if (moduleId) {
+          return (
+            <TagInput
+              moduleId={moduleId}
+              initialTags={Array.isArray(value) ? value : []}
+              onChange={(nextTags) => onChange(nextTags || [])}
+              disabled={!forceEditMode || isReadonly}
+            />
+          );
+        }
+        return <Input disabled placeholder="تگ‌ها قابل انتخاب نیستند" />;
 
       case FieldType.IMAGE:
         if (imageSourceMode === 'gallery') {
@@ -1155,7 +1927,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       onCancel={() => setIsGlobalImageGalleryOpen(false)}
       footer={null}
       width={980}
-      zIndex={12000}
+      zIndex={modalOverlayZIndex}
       destroyOnHidden
     >
       <div className="mb-3 flex items-center justify-between">
@@ -1202,6 +1974,164 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     </Modal>
   );
 
+  const readyTextsModalNode = (
+    <Modal
+      title="متن‌های آماده"
+      open={readyTextsOpen}
+      onCancel={() => setReadyTextsOpen(false)}
+      footer={null}
+      width={760}
+      zIndex={modalOverlayZIndex}
+      destroyOnHidden
+    >
+      <div className="space-y-3">
+        {readyTextPermissions.canAdd && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <Input
+                value={newReadyTextTitle}
+                onChange={(e) => setNewReadyTextTitle(e.target.value)}
+                placeholder="عنوان متن"
+                maxLength={120}
+              />
+              <Input.TextArea
+                value={newReadyTextContent}
+                onChange={(e) => setNewReadyTextContent(e.target.value)}
+                placeholder="متن آماده جدید..."
+                autoSize={{ minRows: 1, maxRows: 4 }}
+                className="md:col-span-2"
+              />
+            </div>
+            <div className="flex items-center justify-end">
+              <Button type="primary" onClick={addReadyText} loading={addingReadyText}>
+                افزودن متن آماده
+              </Button>
+            </div>
+          </>
+        )}
+
+        <div className="border rounded-xl border-gray-200 dark:border-gray-700 max-h-[46vh] overflow-y-auto p-2 space-y-2">
+          {readyTextsLoading ? (
+            <div className="h-32 flex items-center justify-center text-sm text-gray-500 gap-2">
+              <LoadingOutlined />
+              در حال بارگذاری...
+            </div>
+          ) : readyTexts.length === 0 ? (
+            <div className="h-32 flex items-center justify-center text-sm text-gray-400">
+              متنی ثبت نشده است.
+            </div>
+          ) : (
+            readyTexts.map((item) => (
+              <div key={item.id} className="rounded-lg border border-gray-100 dark:border-gray-800 p-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    {editingReadyTextId === item.id ? (
+                      <div className="space-y-2">
+                        <Input
+                          value={editingReadyTextTitle}
+                          onChange={(e) => setEditingReadyTextTitle(e.target.value)}
+                          placeholder="عنوان متن"
+                          maxLength={120}
+                        />
+                        <Input.TextArea
+                          value={editingReadyTextContent}
+                          onChange={(e) => setEditingReadyTextContent(e.target.value)}
+                          autoSize={{ minRows: 2, maxRows: 6 }}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="text-xs font-semibold text-gray-700 dark:text-gray-200 truncate flex items-center gap-1">
+                          {item.pinned ? <PushpinOutlined className="text-amber-500" /> : null}
+                          <span>{item.title || 'متن بدون عنوان'}</span>
+                        </div>
+                        <div className="mt-1 text-xs whitespace-pre-wrap break-words text-gray-600 dark:text-gray-300">
+                          {item.content}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 self-start">
+                    <Button
+                      size="small"
+                      type={item.pinned ? 'primary' : 'default'}
+                      icon={<PushpinOutlined />}
+                      onClick={() => toggleReadyTextPin(item.id)}
+                    />
+                    <Button
+                      size="small"
+                      icon={<CopyOutlined />}
+                      onClick={() => void copyReadyText(item.content)}
+                    />
+                    {editingReadyTextId === item.id ? (
+                      <>
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<SaveOutlined />}
+                          onClick={() => void updateReadyText()}
+                          loading={updatingReadyText}
+                        >
+                          ذخیره
+                        </Button>
+                        <Button size="small" onClick={cancelEditReadyText}>
+                          انصراف
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            const currentValue = String(value || '');
+                            const readyTextValue = String(item.content || '');
+                            const nextValue = currentValue
+                              ? `${currentValue}${currentValue.endsWith('\n') ? '' : '\n'}${readyTextValue}\n`
+                              : `${readyTextValue}\n`;
+                            onChange(nextValue);
+                          }}
+                        >
+                          درج
+                        </Button>
+                        {readyTextPermissions.canEdit && (
+                          <Button
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => startEditReadyText(item)}
+                          />
+                        )}
+                        {readyTextPermissions.canDelete && (
+                          <Button
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            loading={deletingReadyTextId === item.id}
+                            onClick={() => {
+                              Modal.confirm({
+                                title: 'حذف متن آماده',
+                                content: 'این متن آماده حذف شود؟',
+                                okText: 'حذف',
+                                cancelText: 'انصراف',
+                                okButtonProps: { danger: true },
+                                onOk: async () => {
+                                  await deleteReadyText(item.id);
+                                },
+                              });
+                            }}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+
   const hasConfiguredTiles = Boolean(MAP_STYLE_URL || import.meta.env.VITE_MAP_TILE_URL);
   const locationPickerModalNode = (
     <Modal
@@ -1209,7 +2139,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       open={isLocationPickerOpen}
       onCancel={() => setIsLocationPickerOpen(false)}
       width={900}
-      zIndex={12000}
+      zIndex={modalOverlayZIndex}
       destroyOnHidden
       footer={[
         <Button key="cancel" onClick={() => setIsLocationPickerOpen(false)}>
@@ -1242,7 +2172,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     >
       {!hasConfiguredTiles && (
         <div className="mb-3 text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-900 border border-yellow-300">
-          برای استفاده در محیط داخلی، مقدار `VITE_MAP_STYLE_URL` را روی style.json سرور نقشه تنظیم کنید.
+          برای استفاده در محیط داخلی مقدار `VITE_MAP_STYLE_URL` را روی style.json سرور نقشه تنظیم کنید.
         </div>
       )}
       <div className="mb-2 text-xs text-gray-500">
@@ -1267,6 +2197,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 <RelationQuickCreateInline 
                     open={quickCreateOpen}
                     label={fieldLabel}
+                    moduleId={quickCreateTargetModuleId}
                     fields={quickCreateFields}
                     form={quickCreateForm}
                     loading={quickCreateLoading}
@@ -1274,6 +2205,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     dynamicOptions={quickCreateDynamicOptions}
                     onCancel={closeQuickCreate}
                     onOk={handleQuickCreate}
+                    overlayZIndexBase={quickCreateModalZIndex}
                 />
             )}
              <Modal 
@@ -1281,7 +2213,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 open={isScanModalOpen} 
                 onCancel={() => setIsScanModalOpen(false)} 
                 footer={null}
-                zIndex={10000}
+                zIndex={scanModalZIndex}
             >
                 <Input 
                     autoFocus 
@@ -1293,6 +2225,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 />
             </Modal>
             {globalImageGalleryModalNode}
+            {readyTextsModalNode}
             {locationPickerModalNode}
         </div>
       );
@@ -1301,6 +2234,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const formItemProps: any = {
       label: fieldLabel,
       name: fieldKey,
+      required: isRequired,
       rules: [{ required: isRequired, message: 'الزامی است' }],
       valuePropName: fieldType === FieldType.CHECKBOX ? 'checked' : 'value',
   };
@@ -1315,6 +2249,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             <RelationQuickCreateInline 
                 open={quickCreateOpen}
                 label={fieldLabel}
+                moduleId={quickCreateTargetModuleId}
                 fields={quickCreateFields}
                 form={quickCreateForm}
                 loading={quickCreateLoading}
@@ -1322,6 +2257,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 dynamicOptions={quickCreateDynamicOptions}
                 onCancel={closeQuickCreate}
                 onOk={handleQuickCreate}
+                overlayZIndexBase={quickCreateModalZIndex}
             />
         )}
         <Modal 
@@ -1329,7 +2265,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             open={isScanModalOpen} 
             onCancel={() => setIsScanModalOpen(false)} 
             footer={null}
-            zIndex={10000}
+            zIndex={scanModalZIndex}
         >
             <Input 
                 autoFocus 
@@ -1341,6 +2277,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             />
         </Modal>
         {globalImageGalleryModalNode}
+        {readyTextsModalNode}
         {locationPickerModalNode}
     </>
   );
@@ -1351,6 +2288,7 @@ export default SmartFieldRenderer;
 interface QuickCreateProps {
   open: boolean;
   label: string;
+  moduleId?: string;
   fields: ModuleField[];
   form: any;
   loading: boolean;
@@ -1358,11 +2296,13 @@ interface QuickCreateProps {
   dynamicOptions: Record<string, any[]>;
   onCancel: () => void;
   onOk: () => void;
+  overlayZIndexBase?: number;
 }
 
 export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   open,
   label,
+  moduleId,
   fields,
   form,
   loading,
@@ -1370,84 +2310,198 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   dynamicOptions,
   onCancel,
   onOk,
+  overlayZIndexBase = 12600,
 }) => {
-  const renderQuickField = (field: ModuleField) => {
-    const isDisabled = (field as any)?.readonly === true;
-    const baseSelectProps = {
-      showSearch: true,
-      allowClear: true,
-      optionFilterProp: 'label' as const,
-      getPopupContainer: () => document.body,
-      styles: { popup: { root: { zIndex: 5000 } } },
-      className: 'w-full',
-      disabled: isDisabled,
+  const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
+  const [assigneesLoading, setAssigneesLoading] = useState(false);
+  const supportsAssignee = supportsGlobalAssignee(String(moduleId || ''));
+  const supportsAssigneeType = supportsGlobalAssigneeType(String(moduleId || ''));
+  const supportsRoleAssignee = supportsGlobalRoleAssignee(String(moduleId || ''));
+  const assigneeLabel = getAssigneeLabel(moduleId);
+  const quickCreateModuleConfig = moduleId ? MODULES[moduleId] : undefined;
+  const autoNameToggleField = useMemo(
+    () => quickCreateModuleConfig?.fields?.find((field: any) => String(field?.key || '') === 'auto_name_enabled') as ModuleField | undefined,
+    [quickCreateModuleConfig]
+  );
+  const showAutoNameToggle = !!autoNameToggleField && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers');
+  const watchedAssigneeCombo = Form.useWatch('assignee_combo', form);
+  const watchedQuickCreateValues = Form.useWatch([], form) || {};
+  const childOverlayZIndexBase = overlayZIndexBase + 20;
+  const parseAssigneeCombo = (value?: string | null) => {
+    if (!value) return { assignee_type: null, assignee_id: null };
+    const [type, id] = String(value).split('_');
+    return { assignee_type: type || 'user', assignee_id: id || null };
+  };
+  const currentAssigneeComboValue = String(
+    watchedAssigneeCombo
+    || buildResolvedAssigneeCombo({
+      assignee_id: form?.getFieldValue?.('assignee_id'),
+      assignee_role_id: form?.getFieldValue?.('assignee_role_id'),
+      assignee_type: form?.getFieldValue?.('assignee_type'),
+    })
+    || ''
+  ).trim();
+  const currentAssigneePlaceholder = useMemo(() => {
+    if (!currentAssigneeComboValue) return null;
+    const { assignee_id, assignee_type } = parseAssigneeCombo(currentAssigneeComboValue);
+    if (!assignee_id) return null;
+    const normalizedType = String(assignee_type || 'user');
+    const matchedUser = assignees.users.find((item: any) => String(item?.id || '') === String(assignee_id));
+    const matchedRole = assignees.roles.find((item: any) => String(item?.id || '') === String(assignee_id));
+    return {
+      label: normalizedType === 'role'
+        ? (matchedRole?.title || 'تیم انتخاب‌شده')
+        : (matchedUser?.display_name || matchedUser?.full_name || 'مسئول انتخاب‌شده'),
+      value: currentAssigneeComboValue,
+      emoji: normalizedType === 'role' ? <TeamOutlined /> : <UserOutlined />,
+      type: normalizedType,
+    };
+  }, [assignees.roles, assignees.users, currentAssigneeComboValue]);
+  const assigneeOptions = useMemo(() => {
+    const userOptions = assignees.users.map((user) => ({
+      label: user.display_name || user.full_name,
+      value: `user_${user.id}`,
+      emoji: <UserOutlined />,
+    }));
+    const roleOptions = assignees.roles.map((role) => ({
+      label: role.title,
+      value: `role_${role.id}`,
+      emoji: <TeamOutlined />,
+    }));
+
+    const hasCurrentUser = currentAssigneePlaceholder?.type === 'user'
+      && userOptions.some((item) => item.value === currentAssigneePlaceholder.value);
+    const hasCurrentRole = currentAssigneePlaceholder?.type === 'role'
+      && roleOptions.some((item) => item.value === currentAssigneePlaceholder.value);
+
+    return [
+      {
+        label: 'پرسنل',
+        title: 'users',
+        options: currentAssigneePlaceholder?.type === 'user' && !hasCurrentUser
+          ? [currentAssigneePlaceholder, ...userOptions]
+          : userOptions,
+      },
+      ...(supportsRoleAssignee ? [{
+        label: 'تیم‌ها',
+        title: 'roles',
+        options: currentAssigneePlaceholder?.type === 'role' && !hasCurrentRole
+          ? [currentAssigneePlaceholder, ...roleOptions]
+          : roleOptions,
+      }] : []),
+    ];
+  }, [assignees.roles, assignees.users, currentAssigneePlaceholder, supportsRoleAssignee]);
+  const visibleFields = useMemo(
+    () => (supportsAssignee
+      ? fields.filter((field) => !['assignee_id', 'assignee_type', 'assignee_role_id', 'assignee_combo'].includes(String(field?.key || '')))
+      : fields)
+      .filter((field) => String(field?.key || '') !== 'auto_name_enabled'),
+    [fields, supportsAssignee],
+  );
+
+  useEffect(() => {
+    if (!open || !supportsAssignee) return;
+    let cancelled = false;
+
+    const loadAssignees = async () => {
+      try {
+        setAssigneesLoading(true);
+        const directory = await fetchAssigneeDirectory(supabase);
+        if (!cancelled) {
+          setAssignees(directory);
+        }
+      } catch (err) {
+        console.warn('Failed loading assignee directory for quick create', err);
+      } finally {
+        if (!cancelled) {
+          setAssigneesLoading(false);
+        }
+      }
     };
 
-    switch (field.type) {
-      case FieldType.TEXT:
-        return (
-          <Input
-            allowClear
-            disabled={isDisabled}
-          />
-        );
-      case FieldType.LONG_TEXT:
-        return (
-          <Input.TextArea
-            rows={2}
-            disabled={isDisabled}
-          />
-        );
-      case FieldType.NUMBER:
-      case FieldType.PRICE:
-      case FieldType.PERCENTAGE:
-      case FieldType.PERCENTAGE_OR_AMOUNT:
-      case FieldType.STOCK:
-        return (
-          <InputNumber
-            className="w-full persian-number"
-            controls={false}
-            disabled={isDisabled}
-            stringMode
-            inputMode="decimal"
-            formatter={(val, info) => formatNumericForInput(resolveFormatterSourceValue(info?.input, val), true)}
-            parser={(val) => normalizeNumericString(val)}
-            onKeyDown={preventNonNumericKeyDown}
-            onPaste={preventNonNumericPaste}
-          />
-        );
-      case FieldType.SELECT:
-      case FieldType.STATUS: {
-        const opts = field.dynamicOptionsCategory
-          ? (dynamicOptions[field.dynamicOptionsCategory] || [])
-          : (field.options || []);
-        return <Select {...baseSelectProps} options={opts as any[]} />;
+    void loadAssignees();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, supportsAssignee]);
+
+  useEffect(() => {
+    if (!open || !supportsAssignee || currentAssigneeComboValue) return;
+    let cancelled = false;
+
+    const setDefaultAssigneeToCurrentUser = async () => {
+      try {
+        const snapshot = await fetchSessionBootstrap(supabase);
+        const userId = String(snapshot?.user?.id || '').trim();
+        if (!userId || cancelled) return;
+
+        form.setFieldValue('assignee_combo', `user_${userId}`);
+        form.setFieldValue('assignee_id', userId);
+        form.setFieldValue('assignee_role_id', null);
+        if (supportsAssigneeType) {
+          form.setFieldValue('assignee_type', 'user');
+        }
+
+        const profile = snapshot?.profile;
+        if (profile?.id) {
+          setAssignees((prev) => {
+            const exists = prev.users.some((item: any) => String(item?.id || '') === userId);
+            if (exists) return prev;
+            return {
+              ...prev,
+              users: [
+                {
+                  id: profile.id,
+                  full_name: profile.full_name,
+                  display_name: profile.full_name,
+                },
+                ...prev.users,
+              ],
+            };
+          });
+        }
+      } catch (err) {
+        console.warn('Failed setting default assignee for quick create', err);
       }
-      case FieldType.MULTI_SELECT: {
-        const opts = field.dynamicOptionsCategory
-          ? (dynamicOptions[field.dynamicOptionsCategory] || [])
-          : (field.options || []);
-        return <Select {...baseSelectProps} mode="multiple" options={opts as any[]} />;
-      }
-      case FieldType.RELATION:
-        return <Select {...baseSelectProps} options={relationOptions[field.key] || []} />;
-      case FieldType.DATE:
-        return <PersianDatePicker type="DATE" disabled={isDisabled} />;
-      case FieldType.TIME:
-        return <PersianDatePicker type="TIME" disabled={isDisabled} />;
-      case FieldType.DATETIME:
-        return <PersianDatePicker type="DATETIME" disabled={isDisabled} />;
-      case FieldType.CHECKBOX:
-        return <Switch disabled={isDisabled} />;
-      default:
-        return (
-          <Input
-            allowClear
-            disabled={isDisabled}
-          />
-        );
-    }
+    };
+
+    void setDefaultAssigneeToCurrentUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentAssigneeComboValue, form, open, supportsAssignee, supportsAssigneeType]);
+
+  const renderQuickField = (field: ModuleField) => {
+    const fieldDynamicOptionsCategory = String((field as any)?.dynamicOptionsCategory || '').trim();
+    const mergedFieldOptions = field.type === FieldType.RELATION
+      ? (relationOptions[field.key] || [])
+      : mergeSelectOptions(
+        field.options as any[],
+        fieldDynamicOptionsCategory ? dynamicOptions[fieldDynamicOptionsCategory] : [],
+      );
+
+    return (
+      <SmartFieldRenderer
+        field={field}
+        value={form.getFieldValue(field.key)}
+        onChange={(value) => form.setFieldValue(field.key, value)}
+        compactMode
+        forceEditMode={(field as any)?.readonly !== true}
+        options={mergedFieldOptions}
+        onOptionsUpdate={() => undefined}
+        moduleId={moduleId}
+        allValues={watchedQuickCreateValues}
+        disableRequired
+        overlayZIndexBase={childOverlayZIndexBase}
+      />
+    );
   };
+  const renderQuickFieldLabel = (field: ModuleField) => (
+    <span className="inline-flex items-center gap-1">
+      <span>{field.labels?.fa || field.key}</span>
+      {field.validation?.required ? <span className="text-red-500">*</span> : null}
+    </span>
+  );
 
   return (
     <Modal
@@ -1459,7 +2513,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       cancelText="انصراف"
       confirmLoading={loading}
       destroyOnHidden
-      zIndex={2000} 
+      zIndex={overlayZIndexBase}
+      getContainer={typeof document === 'undefined' ? undefined : () => document.body}
     >
       <Form
         form={form}
@@ -1467,11 +2522,94 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         onFinish={onOk}
         className="max-h-[60vh] overflow-y-auto pr-1"
       >
-        {fields.map((field) => (
+        {showAutoNameToggle && (
+          <div className="mb-4 flex flex-col gap-3">
+            {showAutoNameToggle && autoNameToggleField && (
+              <div className="h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
+                <span className="text-xs text-gray-400 shrink-0">{autoNameToggleField.labels?.fa || 'نامگذاری خودکار'}:</span>
+                <div className="flex-1 min-w-0">
+                  <SmartFieldRenderer
+                    field={autoNameToggleField}
+                    value={form.getFieldValue(autoNameToggleField.key)}
+                    onChange={(value) => form.setFieldValue(autoNameToggleField.key, value)}
+                    compactMode
+                    forceEditMode={(autoNameToggleField as any)?.readonly !== true}
+                    options={autoNameToggleField.options}
+                    onOptionsUpdate={() => undefined}
+                    moduleId={moduleId}
+                    allValues={watchedQuickCreateValues}
+                    disableRequired
+                    overlayZIndexBase={childOverlayZIndexBase}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {supportsAssignee && (
+          <>
+            <Form.Item name="assignee_id" noStyle>
+              <Input type="hidden" />
+            </Form.Item>
+            <Form.Item name="assignee_type" noStyle>
+              <Input type="hidden" />
+            </Form.Item>
+            <Form.Item name="assignee_role_id" noStyle>
+              <Input type="hidden" />
+            </Form.Item>
+            <div className="mb-4">
+              <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
+                <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
+                <Form.Item name="assignee_combo" noStyle>
+                  <Select
+                    variant="borderless"
+                    placeholder="جستجو یا انتخاب مسئول / نقش"
+                    className="w-full max-w-full font-semibold text-gray-700 dark:text-gray-300"
+                    styles={{ popup: { root: { minWidth: 220, zIndex: childOverlayZIndexBase } } }}
+                    loading={assigneesLoading}
+                    options={assigneeOptions}
+                    showSearch
+                    optionFilterProp="label"
+                    filterOption={(input, option) =>
+                      String(option?.label || '').toLowerCase().includes(String(input || '').trim().toLowerCase())
+                    }
+                    optionRender={(option) => (
+                      <Space>
+                        <span role="img" aria-label={option.data.label}>{(option.data as any).emoji}</span>
+                        {option.data.label}
+                      </Space>
+                    )}
+                    getPopupContainer={(node) => node.parentElement || document.body}
+                    onChange={(value) => {
+                      const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
+                      const normalizedType = String(assignee_type || 'user');
+                      form.setFieldValue('assignee_combo', value || null);
+                      form.setFieldValue('assignee_id', normalizedType === 'role' ? null : (assignee_id || null));
+                      form.setFieldValue('assignee_role_id', normalizedType === 'role' && supportsRoleAssignee ? assignee_id : null);
+                      if (supportsAssigneeType) {
+                        form.setFieldValue('assignee_type', normalizedType);
+                      }
+                    }}
+                    allowClear
+                    onClear={() => {
+                      form.setFieldValue('assignee_combo', null);
+                      form.setFieldValue('assignee_id', null);
+                      form.setFieldValue('assignee_role_id', null);
+                      if (supportsAssigneeType) {
+                        form.setFieldValue('assignee_type', null);
+                      }
+                    }}
+                  />
+                </Form.Item>
+              </div>
+            </div>
+          </>
+        )}
+        {visibleFields.map((field) => (
           <Form.Item
             key={field.key}
             name={field.key}
-            label={field.labels?.fa || field.key}
+            label={renderQuickFieldLabel(field)}
             valuePropName={field.type === FieldType.CHECKBOX ? 'checked' : 'value'}
             rules={field.validation?.required ? [{ required: true, message: 'الزامی است' }] : undefined}
           >
@@ -1485,3 +2623,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     </Modal>
   );
 };
+
+
+

@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getPreferredRelationTargetField } from '../../utils/relationTargetField';
+import { supportsSystemCode } from '../../utils/systemCode';
 
 const parseMaybeJson = (value: any) => {
   if (typeof value !== 'string') return value;
@@ -86,8 +88,9 @@ const fetchRelationLabels = async (
   const map = new Map<string, string>();
   if (!uniqueIds.length || !targetModule) return map;
 
-  const field = targetField || 'name';
-  const selectWithCode = `id, ${field}, system_code`;
+  const field = getPreferredRelationTargetField(targetModule, targetField);
+  const includeSystemCode = supportsSystemCode(targetModule);
+  const selectWithCode = includeSystemCode ? `id, ${field}, system_code` : `id, ${field}`;
   const selectNoCode = `id, ${field}`;
 
   const buildLabel = (row: any) => {
@@ -105,6 +108,13 @@ const fetchRelationLabels = async (
     return map;
   } catch {
     // fall through
+  }
+
+  if (!includeSystemCode) {
+    uniqueIds.forEach((id) => {
+      if (!map.has(String(id))) map.set(String(id), String(id));
+    });
+    return map;
   }
 
   try {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Tree, Checkbox, Button, Input, message, Empty, Divider, Switch, Collapse } from 'antd';
+import { App, Tree, Checkbox, Button, Input, Empty, Divider, Switch, Collapse, Radio, Select } from 'antd';
 import { PlusOutlined, DeleteOutlined, SaveOutlined, LockOutlined, TeamOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -15,30 +15,50 @@ import {
   WORKFLOWS_PERMISSION_FIELDS,
   ACCOUNTING_PERMISSION_KEY,
   ACCOUNTING_PERMISSION_FIELDS,
+  MOBILE_FOOTER_PERMISSION_KEY,
+  MOBILE_FOOTER_DEFAULT_MODULES,
+  PREFERRED_ROLE_MODULE_SLOT_KEYS,
   type PermissionMap,
 } from '../../utils/permissions';
+import { getSoftwareRoleLabel } from '../../utils/softwareRoles';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
 
 const { Panel } = Collapse;
-const SYSTEM_ROLE_FA_LABELS: Record<string, string> = {
-  super_admin: 'مدیر ارشد',
-  admin: 'مدیر سیستم',
-  manager: 'مدیر',
-  viewer: 'مشاهده‌گر',
-};
 
 const RolesTab: React.FC = () => {
+  const { message } = App.useApp();
   const [roles, setRoles] = useState<any[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<PermissionMap>({});
   const [newRoleName, setNewRoleName] = useState('');
   const [selectedRoleTitle, setSelectedRoleTitle] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
 
   const defaultPermissions = useMemo(() => buildDefaultPermissions(MODULES), []);
+  const mobileFooterModuleOptions = useMemo(
+    () =>
+      Object.values(MODULES)
+        .map((module) => ({
+          label: module.titles.faSingular || module.titles.fa,
+          value: module.id,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'fa')),
+    []
+  );
+
+  useEffect(() => {
+    void loadCurrentUser();
+  }, []);
 
   useEffect(() => {
     fetchRoles();
-  }, []);
+  }, [currentOrgId]);
+
+  const loadCurrentUser = async () => {
+    const snapshot = await fetchSessionBootstrap(supabase, { force: true });
+    setCurrentOrgId(snapshot.orgId || null);
+  };
 
   useEffect(() => {
     if (!selectedRoleId) return;
@@ -48,21 +68,86 @@ const RolesTab: React.FC = () => {
   }, [selectedRoleId, roles, defaultPermissions]);
 
   const getRoleDisplayTitle = (role: any) => {
-    const rawTitle = String(role?.title || '').trim();
-    const normalized = rawTitle.toLowerCase();
-    return SYSTEM_ROLE_FA_LABELS[normalized] || rawTitle || 'بدون عنوان';
+    return getSoftwareRoleLabel(role?.title || role?.name);
   };
 
   const fetchRoles = async () => {
-    const { data } = await supabase.from('org_roles').select('*').order('created_at');
-    if (data) setRoles(data);
+    if (!currentOrgId) {
+      setRoles([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('org_roles')
+      .select('id, org_id, title, permissions, created_at')
+      .eq('org_id', currentOrgId)
+      .order('created_at');
+    if (error) {
+      console.error('RolesTab.fetchRoles error:', error);
+      message.error('خطا در بارگذاری لیست نقش‌ها');
+      setRoles([]);
+      return;
+    }
+    const roleMap = new Map<string, any>();
+    (data || []).forEach((role: any) => {
+      const id = String(role?.id || '');
+      if (id) roleMap.set(id, role);
+    });
+
+    const [{ data: profileRoleRows }, { data: inviteRoleRows }] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('role_id')
+        .eq('org_id', currentOrgId)
+        .not('role_id', 'is', null),
+      supabase
+        .from('phone_signup_invites')
+        .select('role_id')
+        .eq('org_id', currentOrgId)
+        .not('role_id', 'is', null),
+    ]);
+
+    const assignedRoleIds = Array.from(
+      new Set(
+        [...(profileRoleRows || []), ...(inviteRoleRows || [])]
+          .map((row: any) => String(row?.role_id || '').trim())
+          .filter(Boolean)
+      )
+    ).filter((id) => !roleMap.has(id));
+
+    if (assignedRoleIds.length > 0) {
+      const { data: assignedRoles } = await supabase
+        .from('org_roles')
+        .select('id, org_id, title, permissions, created_at')
+        .in('id', assignedRoleIds);
+      (assignedRoles || []).forEach((role: any) => {
+        const id = String(role?.id || '');
+        if (id) roleMap.set(id, role);
+      });
+    }
+
+    const mergedRoles = Array.from(roleMap.values()).sort(
+      (a: any, b: any) =>
+        new Date(String(a?.created_at || 0)).getTime() - new Date(String(b?.created_at || 0)).getTime()
+    );
+    setRoles(mergedRoles);
   };
 
   const handleAddRole = async () => {
     if (!newRoleName.trim()) return;
+    if (!currentOrgId) {
+      message.error('سازمان جاری قابل تشخیص نیست');
+      return;
+    }
     const { error } = await supabase
       .from('org_roles')
-      .insert([{ title: newRoleName.trim(), permissions: defaultPermissions }]);
+      .insert([
+        {
+          title: newRoleName.trim(),
+          permissions: defaultPermissions,
+          org_id: currentOrgId,
+        },
+      ]);
     if (!error) {
       message.success('جایگاه اضافه شد');
       setNewRoleName('');
@@ -105,9 +190,9 @@ const RolesTab: React.FC = () => {
 
   const handlePermissionChange = (
     moduleId: string,
-    type: 'view' | 'edit' | 'delete' | 'field',
+    type: 'view' | 'edit' | 'delete' | 'field' | 'scope',
     fieldKey?: string,
-    checked?: boolean
+    checked?: boolean | string
   ) => {
     setPermissions((prev) => {
       const merged = mergePermissionsWithDefaults(prev, defaultPermissions);
@@ -123,13 +208,16 @@ const RolesTab: React.FC = () => {
 
       if (type === 'field' && fieldKey) {
         target.fields![fieldKey] = checked !== false;
+      } else if (type === 'scope') {
+        target.record_scope = String(checked || 'all') as 'all' | 'own' | 'team';
       } else {
         (target as any)[type] = checked !== false;
         if (type === 'edit' && checked) target.view = true;
         if (type === 'delete' && checked) target.view = true;
         if (type === 'view' && !checked) {
-          target.edit = false;
-          target.delete = false;
+          if (!target.record_scope) {
+            target.record_scope = 'own';
+          }
         }
       }
 
@@ -152,6 +240,53 @@ const RolesTab: React.FC = () => {
       setPermissions(normalized);
     }
     setLoading(false);
+  };
+
+  const mobileFooterFields = useMemo(() => {
+    const merged = mergePermissionsWithDefaults(permissions, defaultPermissions);
+    return merged[MOBILE_FOOTER_PERMISSION_KEY]?.fields || {};
+  }, [defaultPermissions, permissions]);
+
+  const handleMobileFooterChange = (
+    slotKey: (typeof PREFERRED_ROLE_MODULE_SLOT_KEYS)[number],
+    moduleId: string
+  ) => {
+    setPermissions((prev) => {
+      const merged = mergePermissionsWithDefaults(prev, defaultPermissions);
+      const target = merged[MOBILE_FOOTER_PERMISSION_KEY] || {
+        view: true,
+        edit: true,
+        delete: true,
+        record_scope: 'all',
+        fields: {},
+      };
+      return {
+        ...merged,
+        [MOBILE_FOOTER_PERMISSION_KEY]: {
+          ...target,
+          fields: {
+            ...(target.fields || {}),
+            [slotKey]: moduleId,
+          },
+        },
+      };
+    });
+  };
+
+  const getMobileFooterOptions = (slotKey: (typeof PREFERRED_ROLE_MODULE_SLOT_KEYS)[number]) => {
+    const selectedElsewhere = new Set(
+      PREFERRED_ROLE_MODULE_SLOT_KEYS
+        .filter((key) => key !== slotKey)
+        .map((key) => String(mobileFooterFields[key] || '').trim())
+        .filter(Boolean)
+    );
+    return [
+      { label: 'بدون ماژول', value: '' },
+      ...mobileFooterModuleOptions.map((option) => ({
+        ...option,
+        disabled: selectedElsewhere.has(option.value),
+      })),
+    ];
   };
 
   const treeData = roles.map((role) => ({
@@ -259,7 +394,7 @@ const RolesTab: React.FC = () => {
               </Button>
             </div>
 
-            <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+             <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
               <Input
                 value={selectedRoleTitle}
                 onChange={(e) => setSelectedRoleTitle(e.target.value)}
@@ -272,6 +407,31 @@ const RolesTab: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto pr-2">
+              <div className="mb-5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-white/5 p-4">
+                <div className="mb-1 text-sm font-bold text-gray-800 dark:text-gray-100">ماژول های پر استفاده این نقش</div>
+                <div className="mb-4 text-xs text-gray-500 dark:text-gray-400">
+                  سه ماژول اول در فوتر نسخه موبایل نمایش داده می‌شوند. هر چهار ماژول برای شخصی‌سازی داشبورد این نقش استفاده می‌شوند و ماژول چهارم اختیاری است.
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  {PREFERRED_ROLE_MODULE_SLOT_KEYS.map((slotKey, index) => (
+                    <div key={slotKey}>
+                      <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+                        {index === 3 ? 'ماژول 4 (اختیاری)' : `ماژول ${index + 1}`}
+                      </div>
+                      <Select
+                        value={String(mobileFooterFields[slotKey] ?? MOBILE_FOOTER_DEFAULT_MODULES[index] ?? '')}
+                        options={getMobileFooterOptions(slotKey)}
+                        placeholder="انتخاب ماژول"
+                        showSearch
+                        optionFilterProp="label"
+                        allowClear={index === 3}
+                        getPopupContainer={(trigger) => trigger.parentElement || document.body}
+                        onChange={(value) => handleMobileFooterChange(slotKey, String(value || ''))}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
               <Collapse defaultActiveKey={[Object.values(MODULES)[0]?.id || 'products']} className="dark:bg-transparent dark:border-gray-800">
                 {Object.values(MODULES).map((module) => {
                   const modPerms = getModulePerms(module.id);
@@ -313,6 +473,18 @@ const RolesTab: React.FC = () => {
                       }
                     >
                       <div className="pl-6 pt-2">
+                        <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                          نمایش رکوردها
+                        </Divider>
+                        <Radio.Group
+                          value={modPerms.record_scope || 'all'}
+                          onChange={(e) => handlePermissionChange(module.id, 'scope', undefined, e.target.value)}
+                          className="mb-5 flex flex-col gap-2"
+                        >
+                          <Radio value="all">مشاهده همه رکوردها</Radio>
+                          <Radio value="own">فقط مشاهده رکوردهای به نام شخص</Radio>
+                          <Radio value="team">فقط مشاهده رکوردهای به نام تیم (جایگاه)</Radio>
+                        </Radio.Group>
                         <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
                           دسترسی به فیلدها و جداول
                         </Divider>

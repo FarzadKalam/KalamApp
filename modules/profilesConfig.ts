@@ -1,9 +1,23 @@
 import { ModuleDefinition, FieldType, FieldLocation, BlockType } from '../types';
+import { SOFTWARE_ROLE_OPTIONS } from '../utils/softwareRoles';
+
+const SOFTWARE_ROLE_OPTION_COLORS: Record<string, string> = {
+  super_admin: 'gold',
+  admin: 'blue',
+  manager: 'purple',
+  viewer: 'default',
+  user: 'green',
+  employee: 'cyan',
+};
 
 export const profilesModule: ModuleDefinition = {
   id: 'profiles',
   titles: { fa: 'پروفایل کاربری', en: 'User Profile' },
   table: 'profiles',
+  relationDisplay: {
+    labelTemplate: '{{full_name}}',
+    searchFields: ['full_name', 'email', 'mobile', 'mobile_1', 'job_title', 'id'],
+  },
   fields: [
     // --- فیلدهای اصلی (هدر) ---
     { 
@@ -54,16 +68,14 @@ export const profilesModule: ModuleDefinition = {
     },
     {
       key: 'role',
-      labels: { fa: 'نقش کاربری' },
+      labels: { fa: 'نقش نرم‌افزاری' },
       type: FieldType.SELECT,
       location: FieldLocation.BLOCK,
       blockId: 'details',
-      options: [
-        { label: 'مدیر کل سیستم', value: 'super_admin', color: 'gold' },
-        { label: 'مدیر داخلی', value: 'admin', color: 'blue' },
-        { label: 'کارمند', value: 'employee', color: 'cyan' },
-        { label: 'بازدیدکننده', value: 'viewer', color: 'default' },
-      ]
+      options: SOFTWARE_ROLE_OPTIONS.map((option) => ({
+        ...option,
+        color: SOFTWARE_ROLE_OPTION_COLORS[option.value] || 'default',
+      })),
     },
 
     // --- اطلاعات تکمیلی ---
@@ -88,6 +100,17 @@ export const profilesModule: ModuleDefinition = {
       titles: { fa: 'جزئیات' },
       type: BlockType.FIELD_GROUP,
       order: 1,
+    },
+  ],
+  relatedTabs: [
+    {
+      id: 'related_employee',
+      title: 'کارمند مرتبط',
+      icon: 'UsergroupAddOutlined',
+      relationType: 'fk_from_field',
+      targetModule: 'employees',
+      sourceField: 'id',
+      foreignKey: 'related_profile_id',
     },
   ]
 };

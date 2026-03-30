@@ -1,6 +1,7 @@
-﻿import { MODULES } from '../../moduleRegistry';
+import { MODULES } from '../../moduleRegistry';
 import { BlockType } from '../../types';
 import { supabase } from '../../supabaseClient';
+import { getCachedAuthUser } from '../sessionCache';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
 const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
@@ -10,6 +11,7 @@ export interface StoredPrintTemplate {
   title: string;
   description?: string;
   moduleId: string;
+  scope?: 'record' | 'list';
   headerHtml?: string;
   contentHtml: string;
   footerHtml?: string;
@@ -60,22 +62,166 @@ const DEFAULT_PAGE_MARGINS = {
   left: 8,
 } as const;
 const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at']);
+const INVOICE_MODULE_IDS = new Set(['invoices', 'purchase_invoices']);
+const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 
 const toRecord = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as Record<string, any>;
 };
 
-const getCompactPrintColumns = (columns: any[] = []) =>
-  columns
-    .filter((column) => {
-      const key = String(column?.key || '').trim();
-      const title = String(column?.title || '').trim();
-      if (!key || !title) return false;
+const getCompactPrintColumns = (columns: any[] = []) => {
+  const filtered = columns.filter((column) => {
+    const key = String(column?.key || '').trim();
+    const title = String(column?.title || '').trim();
+    if (!key || !title) return false;
+    if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
+    return true;
+  });
+  const selected = filtered.slice(0, 5);
+  const totalPriceColumn = filtered.find((column) => String(column?.key || '').trim() === 'total_price');
+  if (totalPriceColumn && !selected.some((column) => String(column?.key || '').trim() === 'total_price')) {
+    selected.push(totalPriceColumn);
+  }
+  return selected;
+};
+
+const isInvoiceModule = (moduleId: string) => INVOICE_MODULE_IDS.has(moduleId);
+const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
+const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
+const getReducedPrintFontSize = (baseSize: number) => {
+  const nextSize = Math.max(7, baseSize - 3);
+  return Number.isInteger(nextSize) ? `${nextSize}px` : `${nextSize.toFixed(1)}px`;
+};
+const getLongTextPrintStyle = (baseSize: number) => `font-size:${getReducedPrintFontSize(baseSize)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}`;
+
+const shouldIncludeSystemField = (selectedFieldKeys: string[] = [], fieldKey: string) => {
+  if (!selectedFieldKeys.length) return true;
+  return selectedFieldKeys.includes(fieldKey);
+};
+
+const buildCompactFieldsTemplateForCopy = (moduleId: string, selectedFieldKeys: string[] = []) => {
+  const module = MODULES[moduleId];
+  if (!module) return '';
+
+  const regularRows: string[] = [];
+  const longTextRows: string[] = [];
+
+  (module.fields || [])
+    .filter((field: any) => {
+      const key = String(field?.key || '').trim();
+      if (!key) return false;
       if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
-      return true;
+      if (String(field?.type || '').toLowerCase() === 'image') return false;
+      return shouldIncludeSystemField(selectedFieldKeys, `record.${key}`);
     })
-    .slice(0, 5);
+    .forEach((field: any) => {
+      const key = String(field?.key || '').trim();
+      const token = `{{record.${key}}}`;
+      if (isLongTextType(field?.type)) {
+        longTextRows.push(`
+<div style="margin-top:8px;">
+  <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${field.labels?.fa || key}</div>
+  <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; ${getLongTextPrintStyle(11)}">${token}</div>
+</div>`.trim());
+        return;
+      }
+      regularRows.push(`
+        <tr>
+          <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${field.labels?.fa || key}</td>
+          <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px;">${token}</td>
+        </tr>
+      `);
+    });
+
+  return [
+    regularRows.length
+      ? `
+<table style="width:100%; border-collapse:collapse; font-size:11px;">
+  <tbody>${regularRows.join('')}</tbody>
+</table>`.trim()
+      : '',
+    longTextRows.join(''),
+  ]
+    .filter(Boolean)
+    .join('\n');
+};
+
+const buildCompactTablesBlocksTemplateForCopy = (moduleId: string, selectedFieldKeys: string[] = []) => {
+  const module = MODULES[moduleId];
+  if (!module) return '';
+  return (module.blocks || [])
+    .filter((block: any) => {
+      if (!(block?.type === BlockType.TABLE || block?.type === BlockType.GRID_TABLE)) return false;
+      const blockKey = `block.${String(block?.id || '').trim()}`;
+      if (!selectedFieldKeys.length) return true;
+      return selectedFieldKeys.includes(blockKey) || selectedFieldKeys.some((key) => key.startsWith(`${blockKey}.`));
+    })
+    .map((block: any) => buildBlockSnippetTemplate(moduleId, String(block.id || '').trim()))
+    .filter(Boolean)
+    .join('\n');
+};
+
+const buildPackageSummaryTemplateForCopy = (moduleId: string) => {
+  if (moduleId !== 'product_bundles') return '';
+  return `
+<table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:11px;">
+  <tbody>
+    <tr>
+      <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.36);">جمع قبل از تخفیف</td>
+      <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.package_gross_total}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.24);">جمع تخفیف</td>
+      <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.package_discount_total}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+    </tr>
+    <tr>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08);">مبلغ نهایی پکیج</td>
+      <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">{{record.package_final_total}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+    </tr>
+  </tbody>
+</table>`.trim();
+};
+
+const getInvoiceTemplateConfig = (moduleId: string) => {
+  const isSales = moduleId === 'invoices';
+  return {
+    isSales,
+    counterpartyRoot: isSales ? 'customer' : 'supplier',
+    counterpartyTitle: isSales ? 'خریدار' : 'فروشنده',
+    companyTitle: isSales ? 'فروشنده' : 'خریدار',
+    paymentsTitle: isSales ? 'دریافت‌ها' : 'پرداخت‌ها',
+    paymentTypeTitle: isSales ? 'نوع دریافت' : 'نوع پرداخت',
+    paymentTotalTitle: isSales ? 'جمع دریافتی‌ها' : 'جمع پرداختی‌ها',
+    remainingTitle: isSales ? 'جمع باقیمانده' : 'مانده بدهی',
+    officialTitle: isSales ? 'فاکتور فروش رسمی' : 'فاکتور خرید رسمی',
+    unofficialTitle: isSales ? 'فاکتور فروش غیررسمی' : 'فاکتور خرید غیررسمی',
+    practicalA5Title: isSales ? 'فاکتور کاربردی A5 فروش' : 'فاکتور کاربردی A5 خرید',
+    practicalA4Title: isSales ? 'فاکتور کاربردی A4 فروش' : 'فاکتور کاربردی A4 خرید',
+  };
+};
+
+const buildInvoiceItemsSummaryFooter = () => `
+  <tfoot>
+    <tr>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.68); vertical-align:middle; text-align:center;">جمع کل</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.38); vertical-align:top; text-align:center;">
+        <div style="${MULTILINE_PRINT_STYLE}">{{record.total_invoice_amount_words}}</div>
+      </td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:900; background:rgba(var(--brand-500-rgb),0.08); text-align:center; vertical-align:middle;">{{record.total_invoice_amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; background:#fff;"></td>
+    </tr>
+  </tfoot>
+`;
+
+const buildInvoicePaymentsSummaryFooter = (paymentSummaryTitle: string, remainingSummaryTitle: string) => `
+  <tfoot>
+    <tr>
+      <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">${paymentSummaryTitle}</td>
+      <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08); text-align:center;">{{record.total_received_amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">${remainingSummaryTitle}</td>
+      <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08); text-align:center;">{{record.remaining_balance}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+    </tr>
+  </tfoot>
+`;
 
 const readLocalStore = (): PrintTemplatesStore => {
   if (typeof window === 'undefined') return { modules: {} };
@@ -152,62 +298,130 @@ export const buildDefaultFooterTemplateForModule = () => `
 `;
 
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
-  if (moduleId === 'invoices' && blockId === 'invoiceItems') {
+  const invoiceConfig = getInvoiceTemplateConfig(moduleId);
+
+  if (isInvoiceModule(moduleId) && blockId === 'invoiceItems') {
     return `
-<table data-print-block="invoiceItems" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:10.5px;">
+<table data-print-block="invoiceItems" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
   <thead>
-    <tr style="background:rgba(var(--brand-50-rgb),0.7);">
-      <th style="width:40%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">کالا / شرح</th>
-      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">تعداد</th>
-      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">واحد</th>
-      <th style="width:15%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">قیمت واحد</th>
-      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">تخفیف</th>
-      <th style="width:15%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">جمع ردیف</th>
+    <tr style="background:rgba(var(--brand-500-rgb),0.12);">
+      <th style="width:5%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
+      <th style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
+      <th style="width:9%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تعداد</th>
+      <th style="width:9%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
+      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">قیمت واحد</th>
+      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تخفیف</th>
+      <th style="width:15%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">جمع ردیف</th>
     </tr>
   </thead>
   <tbody>
     <tr>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.__row_index__}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; vertical-align:top; word-break:break-word; overflow-wrap:anywhere;">
         <div style="font-weight:700;">{{row.product_id}}</div>
-        <div style="margin-top:2px; font-size:9px; color:#64748b; line-height:1.6;">{{row.description}}</div>
-        <div style="margin-top:2px; font-size:9px; color:#64748b; line-height:1.6;">{{row.__invoice_item_meta__}}</div>
+        <div style="margin-top:2px; font-size:${getReducedPrintFontSize(9.8)}; color:#64748b; line-height:1.7; ${MULTILINE_PRINT_STYLE}">{{row.__invoice_item_meta__}}</div>
       </td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.quantity}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.main_unit}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.unit_price}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.unit_price}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.discount}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.total_price}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.total_price}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+    </tr>
+  </tbody>
+  ${buildInvoiceItemsSummaryFooter()}
+</table>
+`;
+  }
+
+  if (isInvoiceModule(moduleId) && blockId === 'payments') {
+    const paymentSummaryTitle = invoiceConfig.isSales ? 'جمع دریافت‌شده' : 'جمع پرداخت‌شده';
+    return `
+<table data-print-block="payments" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.6px;">
+  <thead>
+    <tr style="background:rgba(var(--brand-500-rgb),0.12);">
+      <th style="width:5%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
+      <th style="width:13%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">${invoiceConfig.paymentTypeTitle}</th>
+      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">شماره چک</th>
+      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">سررسید</th>
+      <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">بانک</th>
+      <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تاریخ</th>
+      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ</th>
+      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">وضعیت</th>
+      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">توضیحات</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.__row_index__}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.payment_type}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_serial_no}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_due_date}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_bank_name}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.date}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_status}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; word-break:break-word; overflow-wrap:anywhere; ${getLongTextPrintStyle(9.6)}">{{row.description}}</td>
+    </tr>
+  </tbody>
+  ${buildInvoicePaymentsSummaryFooter(paymentSummaryTitle, 'جمع باقیمانده')}
+</table>
+`;
+  }
+
+  if (moduleId === 'product_bundles' && blockId === 'products') {
+    return `
+<table data-print-block="products" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
+  <thead>
+    <tr style="background:rgba(var(--brand-500-rgb),0.12);">
+      <th style="width:6%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
+      <th style="width:36%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
+      <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تعداد</th>
+      <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
+      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">قیمت واحد</th>
+      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تخفیف</th>
+      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ نهایی</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.__row_index__}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; vertical-align:top; word-break:break-word; overflow-wrap:anywhere;">
+        <div style="font-weight:700;">{{row.product_id}}</div>
+        <div style="margin-top:2px; font-size:${getReducedPrintFontSize(9.8)}; color:#64748b; line-height:1.7; ${MULTILINE_PRINT_STYLE}">{{row.__invoice_item_meta__}}</div>
+      </td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.quantity}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.main_unit}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.unit_price}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.discount}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.total_price}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
     </tr>
   </tbody>
 </table>
 `;
   }
 
-  if (moduleId === 'invoices' && blockId === 'payments') {
+  if (moduleId === 'price_lists' && blockId === 'items') {
     return `
-<table data-print-block="payments" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:10.5px;">
+<table data-print-block="items" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
   <thead>
-    <tr style="background:rgba(var(--brand-50-rgb),0.7);">
-      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">نوع پرداخت</th>
-      <th style="width:13%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">شماره چک</th>
-      <th style="width:13%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">سررسید</th>
-      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">بانک</th>
-      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">تاریخ</th>
-      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">مبلغ</th>
-      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">وضعیت</th>
-      <th style="width:12%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">توضیحات</th>
+    <tr style="background:rgba(var(--brand-500-rgb),0.12);">
+      <th style="width:6%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
+      <th style="width:44%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
+      <th style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ نهایی</th>
+      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد پول</th>
+      <th style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.payment_type}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_serial_no}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_due_date}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_bank_name}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.date}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_status}}</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; word-break:break-word; overflow-wrap:anywhere;">{{row.description}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.__row_index__}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; vertical-align:top; word-break:break-word; overflow-wrap:anywhere;">
+        <div style="font-weight:700;">{{row.product_id}}</div>
+        <div style="margin-top:2px; font-size:${getReducedPrintFontSize(9.8)}; color:#64748b; line-height:1.7; ${MULTILINE_PRINT_STYLE}">{{row.__invoice_item_meta__}}</div>
+      </td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.price}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.currency_label}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.unit_name}}</td>
     </tr>
   </tbody>
 </table>
@@ -223,7 +437,12 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
     .map((column) => `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere;">${column.title}</th>`)
     .join('');
   const row = columns
-    .map((column) => `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere;">{{row.${column.key}}}</td>`)
+    .map((column) => {
+      const isLongTextColumn =
+        isLongTextType(column?.type) ||
+        ['description', 'notes'].includes(String(column?.key || '').trim().toLowerCase());
+      return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; overflow-wrap:anywhere; ${isLongTextColumn ? `vertical-align:top; ${getLongTextPrintStyle(10.5)}` : ''}">{{row.${column.key}}}</td>`;
+    })
     .join('');
   return `
 <table data-print-block="${blockId}" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:10.5px;">
@@ -245,6 +464,8 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
   const paperSize = paperSizeRaw === 'A5' || paperSizeRaw === 'A6' ? paperSizeRaw : 'A4';
   const orientationRaw = String(raw?.orientation || 'portrait').toLowerCase();
   const orientation = orientationRaw === 'landscape' ? 'landscape' : 'portrait';
+  const scopeRaw = String(raw?.scope || raw?.templateScope || 'record').toLowerCase();
+  const scope = scopeRaw === 'list' ? 'list' : 'record';
   const selectedFieldKeys: string[] = Array.isArray(raw?.selectedFieldKeys)
     ? Array.from(
         new Set<string>(
@@ -264,6 +485,7 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     title,
     description: String(raw?.description || ''),
     moduleId,
+    scope,
     headerHtml: String(raw?.headerHtml || raw?.header_html || '').trim() || buildDefaultHeaderTemplateForModule(moduleId),
     contentHtml,
     footerHtml: String(raw?.footerHtml || raw?.footer_html || '').trim() || buildDefaultFooterTemplateForModule(),
@@ -344,8 +566,8 @@ export const savePrintTemplatesStore = async (params: {
   templatesByModule: Record<string, StoredPrintTemplate[]>;
 }) => {
   writeLocalStore(params.templatesByModule);
-  const { data: authData } = await supabase.auth.getUser();
-  const userId = authData?.user?.id || null;
+  const authUser = await getCachedAuthUser(supabase);
+  const userId = authUser?.id || null;
 
   const payload: Record<string, any> = {
     connection_type: PRINT_TEMPLATES_CONNECTION_TYPE,
@@ -440,12 +662,15 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'تاریخ امروز', value: 'system.today_date', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ و زمان امروز', value: 'system.today_datetime', kind: 'field', group: 'سیستم' },
     { label: 'جدول فیلدهای دارای مقدار', value: 'system.compact_fields_table', kind: 'field', group: 'سیستم' },
+    { label: 'جدول‌های دارای مقدار', value: 'system.compact_tables_blocks', kind: 'field', group: 'سیستم' },
+    { label: 'تصویر رکورد', value: 'system.record_image', kind: 'field', group: 'سیستم' },
+    { label: 'کد QR رکورد', value: 'system.record_qr', kind: 'field', group: 'سیستم' },
   ];
 
   const moduleFields = buildUniqueFieldOptions(moduleId);
   const moduleBlocks = buildBlockOptions(moduleId);
 
-  const invoiceExtras: PrintTemplateVariableOption[] =
+  const moduleSpecificExtras: PrintTemplateVariableOption[] =
     moduleId === 'invoices'
       ? [
           { label: 'تاریخ فاکتور', value: 'record.invoice_date', kind: 'field', group: 'فیلدهای رکورد' },
@@ -464,9 +689,32 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
           { label: 'تلفن مشتری', value: 'customer.mobile_1', kind: 'field', group: 'طرف حساب' },
           { label: 'آدرس مشتری', value: 'customer.address', kind: 'field', group: 'طرف حساب' },
         ]
+      : moduleId === 'purchase_invoices'
+        ? [
+            { label: 'تاریخ فاکتور', value: 'record.invoice_date', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'وضعیت فاکتور', value: 'record.status', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'جمع کل فاکتور', value: 'record.total_invoice_amount', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'جمع پرداخت‌شده', value: 'record.total_received_amount', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'مانده بدهی', value: 'record.remaining_balance', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'نام تامین‌کننده', value: 'supplier.full_name', kind: 'field', group: 'طرف حساب' },
+            { label: 'نام کسب و کار تامین‌کننده', value: 'supplier.business_name', kind: 'field', group: 'طرف حساب' },
+            { label: 'شناسه ملی / کد ملی تامین‌کننده', value: 'supplier.national_identifier', kind: 'field', group: 'طرف حساب' },
+            { label: 'شماره ثبت تامین‌کننده', value: 'supplier.registration_number', kind: 'field', group: 'طرف حساب' },
+            { label: 'کد اقتصادی تامین‌کننده', value: 'supplier.economic_code', kind: 'field', group: 'طرف حساب' },
+            { label: 'کد پستی تامین‌کننده', value: 'supplier.postal_code', kind: 'field', group: 'طرف حساب' },
+            { label: 'تلفن تامین‌کننده', value: 'supplier.mobile_1', kind: 'field', group: 'طرف حساب' },
+            { label: 'آدرس تامین‌کننده', value: 'supplier.address', kind: 'field', group: 'طرف حساب' },
+          ]
+      : moduleId === 'product_bundles'
+        ? [
+            { label: 'جمع قبل از تخفیف پکیج', value: 'record.package_gross_total', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'جمع تخفیف پکیج', value: 'record.package_discount_total', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'مبلغ نهایی پکیج', value: 'record.package_final_total', kind: 'field', group: 'فیلدهای رکورد' },
+            { label: 'جدول خلاصه پکیج', value: 'system.package_summary_table', kind: 'field', group: 'سیستم' },
+          ]
       : [];
 
-  const merged = [...commonFields, ...moduleFields, ...moduleBlocks, ...invoiceExtras];
+  const merged = [...commonFields, ...moduleFields, ...moduleBlocks, ...moduleSpecificExtras];
   const seen = new Set<string>();
   return merged.filter((item) => {
     if (seen.has(item.value)) return false;
@@ -490,18 +738,28 @@ export const getSystemTemplateFieldOptions = (moduleId: string): SystemTemplateF
 
   const tableColumns: SystemTemplateFieldOption[] = (module.blocks || [])
     .filter((block: any) => block?.id && (block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE))
-    .flatMap((block: any) =>
-      (block.tableColumns || [])
+    .flatMap((block: any) => {
+      const blockTitle = block.titles?.fa || block.id;
+      const group = `جدول: ${blockTitle}`;
+      const baseOption: SystemTemplateFieldOption = {
+        key: `block.${block.id}`,
+        label: blockTitle,
+        group,
+        kind: 'table' as const,
+        blockId: block.id,
+      };
+      const columns = (block.tableColumns || [])
         .filter((column: any) => column?.key)
         .map((column: any) => ({
           key: `block.${block.id}.${column.key}`,
           label: `${column.title || column.key}`,
-          group: `جدول: ${block.titles?.fa || block.id}`,
+          group,
           kind: 'table' as const,
           blockId: block.id,
           columnKey: column.key,
-        }))
-    );
+        }));
+      return [baseOption, ...columns];
+    });
 
   const merged = [...recordFields, ...tableColumns];
   const seen = new Set<string>();
@@ -515,43 +773,24 @@ export const getSystemTemplateFieldOptions = (moduleId: string): SystemTemplateF
 export const buildDefaultTemplateForModule = (moduleId: string): string => {
   const singularTitle = getModuleTitle(moduleId, 'singular') || 'قالب چاپ';
 
-  if (moduleId === 'invoices') {
+  if (isInvoiceModule(moduleId)) {
+    const invoiceConfig = getInvoiceTemplateConfig(moduleId);
+    const invoiceItemsBlock = buildBlockSnippetTemplate(moduleId, 'invoiceItems');
+    const paymentsBlock = buildBlockSnippetTemplate(moduleId, 'payments');
     return `
 <div style="padding:0; box-sizing:border-box; direction:rtl; font-family:inherit; color:#111827; line-height:1.9;">
   <h2 style="margin:0 0 8px 0; font-size:18px; color:rgb(var(--brand-500-rgb));">${singularTitle}</h2>
-  <div style="margin-top:8px;">{{block.invoiceItems}}</div>
-  <table style="width:100%; border-collapse:collapse; margin-top:8px;">
-    <tbody>
-      <tr>
-        <td style="width:24%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">جمع کل فاکتور</td>
-        <td style="width:26%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:700;">{{record.total_invoice_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.44);">جمع به حروف</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px;">{{record.total_invoice_amount_words}}</td>
-      </tr>
-    </tbody>
-  </table>
+  <div style="margin-top:8px;">${invoiceItemsBlock}</div>
   <table style="width:100%; border-collapse:collapse; margin-top:8px;">
     <tbody>
       <tr>
         <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:8px; vertical-align:top;">
           <div style="font-weight:700; margin-bottom:6px;">توضیحات</div>
-          <div style="min-height:98px;">{{record.description}}</div>
+          <div style="min-height:98px; ${getLongTextPrintStyle(12)}">{{record.description}}</div>
         </td>
         <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:8px; vertical-align:top;">
-          <div style="font-weight:700; margin-bottom:6px;">دریافت / پرداخت</div>
-          {{block.payments}}
-          <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
-            <tbody>
-              <tr>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700;">جمع پرداختی</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.total_received_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-              </tr>
-              <tr>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700;">مانده</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.remaining_balance}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-              </tr>
-            </tbody>
-          </table>
+          <div style="font-weight:700; margin-bottom:6px;">${invoiceConfig.paymentsTitle}</div>
+          ${paymentsBlock}
         </td>
       </tr>
     </tbody>
@@ -562,13 +801,10 @@ export const buildDefaultTemplateForModule = (moduleId: string): string => {
 
   return `
 <div style="padding:0; box-sizing:border-box; direction:rtl; font-family:inherit; color:#111827; line-height:1.9;">
-  <h2 style="margin:0 0 8px 0; font-size:19px; color:rgb(var(--brand-500-rgb));">${singularTitle}</h2>
+  <div style="margin:0 0 2px 0; font-size:11px; color:#64748b;">${singularTitle}</div>
+  <h2 style="margin:0 0 8px 0; font-size:19px; color:rgb(var(--brand-500-rgb));">{{record.name}}</h2>
   <table style="width:100%; border-collapse:collapse; margin-top:8px;">
     <tbody>
-      <tr>
-        <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.6);">عنوان</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.name}}</td>
-      </tr>
       <tr>
         <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.45);">کد</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.system_code}}</td>
@@ -576,6 +812,8 @@ export const buildDefaultTemplateForModule = (moduleId: string): string => {
     </tbody>
   </table>
   <div style="margin-top:8px;">{{system.compact_fields_table}}</div>
+  <div style="margin-top:8px;">{{system.compact_tables_blocks}}</div>
+  {{system.package_summary_table}}
 </div>
 `;
 };
@@ -585,6 +823,7 @@ const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPri
   return {
     id: `default_${moduleId}_compact_a6`,
     moduleId,
+    scope: 'record',
     title: `${singularTitle} - خلاصه A6`,
     description: 'قالب خلاصه برای نمایش فیلدهای دارای مقدار',
     paperSize: 'A6',
@@ -607,7 +846,8 @@ const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPri
         <img src="{{company.logo_url}}" alt="لوگو" style="max-width:24px; max-height:24px; object-fit:contain;" />
       </td>
       <td style="width:76%; border:none; padding:6px; background:rgba(var(--brand-500-rgb),0.08);">
-        <div style="font-size:12px; font-weight:800; color:rgb(var(--brand-500-rgb));">${singularTitle}</div>
+        <div style="font-size:10px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
+        <div style="font-size:13px; font-weight:900; color:rgb(var(--brand-500-rgb)); line-height:1.7;">{{record.name}}</div>
         <div style="font-size:10px;">{{record.system_code}}</div>
       </td>
     </tr>
@@ -616,8 +856,13 @@ const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPri
 `,
     contentHtml: `
 <div style="direction:rtl; color:#111827; font-family:inherit;">
-  <div style="font-size:11px; font-weight:700; margin-bottom:4px;">نمایش فیلدهای دارای مقدار</div>
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:6px;">
+    {{system.record_image}}
+    {{system.record_qr}}
+  </div>
   {{system.compact_fields_table}}
+  <div style="margin-top:6px;">{{system.compact_tables_blocks}}</div>
+  {{system.package_summary_table}}
 </div>
 `,
     footerHtml: '',
@@ -626,22 +871,202 @@ const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPri
   };
 };
 
-export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTemplate[] => {
-  const now = nowIso();
-  const compactA6Template = buildCompactA6DefaultTemplate(moduleId, now);
+const buildCompactA5DefaultTemplate = (moduleId: string, now: string): StoredPrintTemplate => {
+  const singularTitle = getModuleTitle(moduleId, 'singular') || getModuleTitle(moduleId) || 'سند';
+  return {
+    id: `default_${moduleId}_compact_a5`,
+    moduleId,
+    scope: 'record',
+    title: `${singularTitle} - خلاصه A5`,
+    description: 'قالب خلاصه A5 برای نمایش فیلدها و جدول‌های دارای مقدار',
+    paperSize: 'A5',
+    orientation: 'portrait',
+    isActive: true,
+    isSystem: true,
+    showHeader: true,
+    showFooter: false,
+    headerHeight: 74,
+    footerHeight: 0,
+    pageMarginTop: 7,
+    pageMarginRight: 7,
+    pageMarginBottom: 7,
+    pageMarginLeft: 7,
+    headerHtml: `
+<table style="width:100%; border-collapse:collapse; direction:rtl; border:1px solid rgba(148,163,184,0.3); border-radius:12px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:18%; border:none; padding:6px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:28px; max-height:28px; object-fit:contain;" />
+      </td>
+      <td style="width:82%; border:none; padding:6px 8px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:10px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
+        <div style="font-size:15px; font-weight:900; color:rgb(var(--brand-500-rgb)); line-height:1.8;">{{record.name}}</div>
+        <div style="font-size:10px;">{{record.system_code}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`,
+    contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit;">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px;">
+    {{system.record_image}}
+    {{system.record_qr}}
+  </div>
+  {{system.compact_fields_table}}
+  <div style="margin-top:8px;">{{system.compact_tables_blocks}}</div>
+  {{system.package_summary_table}}
+</div>
+`,
+    footerHtml: '',
+    createdAt: now,
+    updatedAt: now,
+  };
+};
 
-  if (moduleId !== 'invoices') {
-    return [compactA6Template];
+const buildCompactA4DefaultTemplate = (moduleId: string, now: string): StoredPrintTemplate => {
+  const singularTitle = getModuleTitle(moduleId, 'singular') || getModuleTitle(moduleId) || 'سند';
+  return {
+    id: `default_${moduleId}_compact_a4`,
+    moduleId,
+    scope: 'record',
+    title: `${singularTitle} - خلاصه A4`,
+    description: 'قالب خلاصه A4 برای نمایش فیلدها و جدول‌های دارای مقدار',
+    paperSize: 'A4',
+    orientation: 'portrait',
+    isActive: true,
+    isSystem: true,
+    showHeader: true,
+    showFooter: false,
+    headerHeight: 78,
+    footerHeight: 0,
+    pageMarginTop: 10,
+    pageMarginRight: 10,
+    pageMarginBottom: 10,
+    pageMarginLeft: 10,
+    headerHtml: `
+<table style="width:100%; border-collapse:collapse; direction:rtl; border:1px solid rgba(148,163,184,0.3); border-radius:12px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:14%; border:none; padding:7px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
+      </td>
+      <td style="width:86%; border:none; padding:7px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:11px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
+        <div style="font-size:18px; font-weight:900; color:rgb(var(--brand-500-rgb)); line-height:1.8;">{{record.name}}</div>
+        <div style="font-size:11px;">{{record.system_code}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`,
+    contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit;">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px;">
+    {{system.record_image}}
+    {{system.record_qr}}
+  </div>
+  {{system.compact_fields_table}}
+  <div style="margin-top:10px;">{{system.compact_tables_blocks}}</div>
+  {{system.package_summary_table}}
+</div>
+`,
+    footerHtml: '',
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+const buildListA4DefaultTemplate = (
+  moduleId: string,
+  now: string,
+  orientation: 'portrait' | 'landscape'
+): StoredPrintTemplate => {
+  const moduleTitle = getModuleTitle(moduleId) || 'فهرست';
+  const orientationTitle = orientation === 'landscape' ? 'افقی' : 'عمودی';
+
+  return {
+    id: `default_${moduleId}_list_a4_${orientation}`,
+    moduleId,
+    scope: 'list',
+    title: `قالب پرینت جدول A4 ${orientationTitle}`,
+    description: `قالب سیستمی جدول ${moduleTitle} در قطع A4 ${orientationTitle}`,
+    paperSize: 'A4',
+    orientation,
+    isActive: true,
+    isSystem: true,
+    showHeader: true,
+    showFooter: true,
+    headerHeight: 84,
+    footerHeight: 44,
+    pageMarginTop: 8,
+    pageMarginRight: 8,
+    pageMarginBottom: 8,
+    pageMarginLeft: 8,
+    headerHtml: `
+<table style="width:100%; border-collapse:collapse; direction:rtl; border:1px solid rgba(148,163,184,0.3); border-radius:14px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:16%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
+      </td>
+      <td style="width:54%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:15px; font-weight:800; color:rgb(var(--brand-500-rgb));">{{system.list_title}}</div>
+        <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
+      </td>
+      <td style="width:30%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.22); text-align:right; font-size:11px; line-height:1.8;">
+        <div>تاریخ چاپ: {{system.print_date}}</div>
+        <div>تعداد رکورد: {{system.selected_count}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+    contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit;">
+  {{system.list_table}}
+</div>
+`.trim(),
+    footerHtml: `
+<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; color:#64748b; direction:rtl;">
+  <span>{{company.currency_label}}</span>
+  <span>صفحه {{system.page_index}} از {{system.page_count}}</span>
+</div>
+`.trim(),
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
+export const buildDefaultTemplatesForModule = (
+  moduleId: string,
+  scope: 'all' | 'record' | 'list' = 'all'
+): StoredPrintTemplate[] => {
+  const now = nowIso();
+  const compactA4Template = buildCompactA4DefaultTemplate(moduleId, now);
+  const compactA5Template = buildCompactA5DefaultTemplate(moduleId, now);
+  const compactA6Template = buildCompactA6DefaultTemplate(moduleId, now);
+  const listPortraitTemplate = buildListA4DefaultTemplate(moduleId, now, 'portrait');
+  const listLandscapeTemplate = buildListA4DefaultTemplate(moduleId, now, 'landscape');
+
+  if (!isInvoiceModule(moduleId)) {
+    const defaults: StoredPrintTemplate[] = [compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate];
+    return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
   }
 
   const invoiceItemsBlock = buildBlockSnippetTemplate(moduleId, 'invoiceItems');
   const paymentsBlock = buildBlockSnippetTemplate(moduleId, 'payments');
+  const counterpartyRoot = moduleId === 'purchase_invoices' ? 'supplier' : 'customer';
+  const counterpartyTitle = moduleId === 'purchase_invoices' ? 'فروشنده' : 'خریدار';
+  const companyPartyTitle = moduleId === 'purchase_invoices' ? 'خریدار' : 'فروشنده';
+  const paymentsPanelTitle = moduleId === 'purchase_invoices' ? 'پرداخت‌ها' : 'دریافت‌ها';
 
-  return [
+  const defaults: StoredPrintTemplate[] = [
     {
       id: 'default_invoice_unofficial',
       moduleId,
-      title: 'فاکتور فروش غیررسمی',
+      scope: 'record',
+      title: moduleId === 'purchase_invoices' ? 'فاکتور خرید غیررسمی' : 'فاکتور فروش غیررسمی',
       description: 'نسخه پیش‌فرض A4 افقی برای چاپ غیررسمی',
       paperSize: 'A4',
       orientation: 'landscape',
@@ -661,7 +1086,7 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
     <tbody>
       <tr>
         <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; background:rgba(var(--brand-50-rgb),0.18); vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات فروشنده</div>
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
           <table style="width:100%; border-collapse:collapse; font-size:11px;">
             <tbody>
               <tr>
@@ -678,20 +1103,20 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
           </table>
         </td>
         <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات خریدار</div>
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
           <table style="width:100%; border-collapse:collapse; font-size:11px;">
             <tbody>
               <tr>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نام</td>
-                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.full_name}}</td>
+                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.full_name}}</td>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">تلفن</td>
-                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.mobile_1}}</td>
+                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.mobile_1}}</td>
               </tr>
               <tr>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">کسب‌وکار</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.business_name}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.business_name}}</td>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">نشانی</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.address}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.address}}</td>
               </tr>
             </tbody>
           </table>
@@ -703,35 +1128,13 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
   <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
     <tbody>
       <tr>
-        <td style="width:24%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">جمع کل فاکتور</td>
-        <td style="width:26%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:700;">{{record.total_invoice_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.44);">جمع به حروف</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px;">{{record.total_invoice_amount_words}}</td>
-      </tr>
-    </tbody>
-  </table>
-  <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
-    <tbody>
-      <tr>
         <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
           <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">توضیحات</div>
-          <div style="min-height:64px;">{{record.description}}</div>
+          <div style="min-height:64px; ${getLongTextPrintStyle(12)}">{{record.description}}</div>
         </td>
         <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">دریافت / پرداخت</div>
+          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
           ${paymentsBlock}
-          <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
-            <tbody>
-              <tr>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700;">جمع پرداختی‌ها</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.total_received_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-              </tr>
-              <tr>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700;">جمع باقیمانده</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.remaining_balance}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-              </tr>
-            </tbody>
-          </table>
         </td>
       </tr>
     </tbody>
@@ -744,7 +1147,8 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
     {
       id: 'default_invoice_official',
       moduleId,
-      title: 'فاکتور فروش رسمی',
+      scope: 'record',
+      title: moduleId === 'purchase_invoices' ? 'فاکتور خرید رسمی' : 'فاکتور فروش رسمی',
       description: 'نسخه پیش‌فرض A4 افقی با فیلدهای رسمی فروشنده و خریدار',
       paperSize: 'A4',
       orientation: 'landscape',
@@ -764,7 +1168,7 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
     <tbody>
       <tr>
         <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; background:rgba(var(--brand-50-rgb),0.18);">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">مشخصات فروشنده</div>
+          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
           <table style="width:100%; border-collapse:collapse; font-size:11px;">
             <tbody>
               <tr>
@@ -793,36 +1197,36 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
           </table>
         </td>
         <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">مشخصات خریدار</div>
+          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
           <table style="width:100%; border-collapse:collapse; font-size:11px;">
             <tbody>
               <tr>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نوع</td>
-                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.person_type}}</td>
+                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.person_type}}</td>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نام</td>
-                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.full_name}}</td>
+                <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.full_name}}</td>
               </tr>
               <tr>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">کسب‌وکار</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.business_name}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.business_name}}</td>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">شناسه/ملی</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.national_identifier}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.national_identifier}}</td>
               </tr>
               <tr>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">شماره ثبت</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.registration_number}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.registration_number}}</td>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">کد اقتصادی</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.economic_code}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.economic_code}}</td>
               </tr>
               <tr>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">کد پستی</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.postal_code}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.postal_code}}</td>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">تلفن</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.mobile_1}}</td>
+                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.mobile_1}}</td>
               </tr>
               <tr>
                 <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">نشانی</td>
-                <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{customer.address}}</td>
+                <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:4px;">{{${counterpartyRoot}.address}}</td>
               </tr>
             </tbody>
           </table>
@@ -834,35 +1238,13 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
   <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
     <tbody>
       <tr>
-        <td style="width:24%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">جمع کل فاکتور</td>
-        <td style="width:26%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:700;">{{record.total_invoice_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.44);">جمع به حروف</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px;">{{record.total_invoice_amount_words}}</td>
-      </tr>
-    </tbody>
-  </table>
-  <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
-    <tbody>
-      <tr>
         <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
           <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">شرح / توضیحات</div>
-          <div style="min-height:64px;">{{record.description}}</div>
+          <div style="min-height:64px; ${getLongTextPrintStyle(12)}">{{record.description}}</div>
         </td>
         <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">پرداخت‌ها</div>
+          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
           ${paymentsBlock}
-          <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
-            <tbody>
-              <tr>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700;">جمع پرداختی‌ها</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.total_received_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-              </tr>
-              <tr>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700;">جمع باقیمانده</td>
-                <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.remaining_balance}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
-              </tr>
-            </tbody>
-          </table>
         </td>
       </tr>
     </tbody>
@@ -872,8 +1254,121 @@ export const buildDefaultTemplatesForModule = (moduleId: string): StoredPrintTem
       createdAt: now,
       updatedAt: now,
     },
+    {
+      id: 'default_invoice_practical_a5',
+      moduleId,
+      scope: 'record',
+      title: moduleId === 'purchase_invoices' ? 'فاکتور کاربردی A5 خرید' : 'فاکتور کاربردی A5 فروش',
+      description: 'نسخه فشرده A5 عمودی برای جا دادن اقلام بیشتر',
+      paperSize: 'A5',
+      orientation: 'portrait',
+      isActive: true,
+      isSystem: true,
+      showHeader: true,
+      showFooter: true,
+      headerHeight: 78,
+      footerHeight: 54,
+      pageMarginTop: 7,
+      pageMarginRight: 7,
+      pageMarginBottom: 7,
+      pageMarginLeft: 7,
+      headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
+      contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.75;">
+  <table style="width:100%; border-collapse:collapse; font-size:10px;">
+    <tbody>
+      <tr>
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.16); vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:3px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
+          <div>{{company.company_full_name}}</div>
+          <div style="font-size:9px; color:#64748b;">{{company.address}}</div>
+          <div style="font-size:9px; color:#64748b;">{{company.phone}}</div>
+        </td>
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:3px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
+          <div>{{${counterpartyRoot}.full_name}}</div>
+          <div style="font-size:9px; color:#64748b;">{{${counterpartyRoot}.business_name}}</div>
+          <div style="font-size:9px; color:#64748b;">{{${counterpartyRoot}.address}}</div>
+          <div style="font-size:9px; color:#64748b;">{{${counterpartyRoot}.mobile_1}} {{${counterpartyRoot}.mobile_2}}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="margin-top:6px;">${invoiceItemsBlock}</div>
+  <div style="margin-top:6px;">${paymentsBlock}</div>
+  <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:10px;">
+    <tbody>
+      <tr>
+        <td style="width:26%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.32);">توضیحات</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px; ${getLongTextPrintStyle(10)}">{{record.description}}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>`.trim(),
+      footerHtml: buildDefaultFooterTemplateForModule().trim(),
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'default_invoice_practical_a4',
+      moduleId,
+      scope: 'record',
+      title: moduleId === 'purchase_invoices' ? 'فاکتور کاربردی A4 خرید' : 'فاکتور کاربردی A4 فروش',
+      description: 'نسخه کاربردی A4 با چیدمان فشرده',
+      paperSize: 'A4',
+      orientation: 'portrait',
+      isActive: true,
+      isSystem: true,
+      showHeader: true,
+      showFooter: true,
+      headerHeight: 78,
+      footerHeight: 54,
+      pageMarginTop: 7,
+      pageMarginRight: 7,
+      pageMarginBottom: 7,
+      pageMarginLeft: 7,
+      headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
+      contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.75;">
+  <table style="width:100%; border-collapse:collapse; font-size:10px;">
+    <tbody>
+      <tr>
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.16); vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:3px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
+          <div>{{company.company_full_name}}</div>
+          <div style="font-size:9px; color:#64748b;">{{company.address}}</div>
+          <div style="font-size:9px; color:#64748b;">{{company.phone}}</div>
+        </td>
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:3px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
+          <div>{{${counterpartyRoot}.full_name}}</div>
+          <div style="font-size:9px; color:#64748b;">{{${counterpartyRoot}.address}}</div>
+          <div style="font-size:9px; color:#64748b;">{{${counterpartyRoot}.mobile_1}} {{${counterpartyRoot}.mobile_2}}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="margin-top:6px;">${invoiceItemsBlock}</div>
+  <div style="margin-top:6px;">${paymentsBlock}</div>
+  <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:10px;">
+    <tbody>
+      <tr>
+        <td style="width:22%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.32);">توضیحات</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px; ${getLongTextPrintStyle(10)}">{{record.description}}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>`.trim(),
+      footerHtml: buildDefaultFooterTemplateForModule().trim(),
+      createdAt: now,
+      updatedAt: now,
+    },
+    compactA4Template,
+    compactA5Template,
     compactA6Template,
+    listPortraitTemplate,
+    listLandscapeTemplate,
   ];
+
+  return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
 };
 
 export const mergeTemplatesWithDefaults = (
@@ -913,6 +1408,30 @@ export const mergeTemplatesWithDefaults = (
   });
 
   return next;
+};
+
+export const materializeSystemTemplateForCopy = (
+  moduleId: string,
+  template: StoredPrintTemplate
+): StoredPrintTemplate => {
+  if (!template?.isSystem) return template;
+
+  const selectedFieldKeys = Array.isArray(template.selectedFieldKeys)
+    ? template.selectedFieldKeys.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+
+  const replaceSystemPlaceholders = (html?: string) =>
+    String(html || '')
+      .replace(/{{\s*system\.compact_fields_table\s*}}/g, buildCompactFieldsTemplateForCopy(moduleId, selectedFieldKeys))
+      .replace(/{{\s*system\.compact_tables_blocks\s*}}/g, buildCompactTablesBlocksTemplateForCopy(moduleId, selectedFieldKeys))
+      .replace(/{{\s*system\.package_summary_table\s*}}/g, buildPackageSummaryTemplateForCopy(moduleId));
+
+  return {
+    ...template,
+    headerHtml: replaceSystemPlaceholders(template.headerHtml),
+    contentHtml: replaceSystemPlaceholders(template.contentHtml),
+    footerHtml: replaceSystemPlaceholders(template.footerHtml),
+  };
 };
 
 

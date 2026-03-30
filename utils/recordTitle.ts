@@ -47,10 +47,11 @@ const getCandidateKeys = (moduleConfig?: ModuleDefinition): string[] => {
   const keyFields = moduleConfig.fields.filter((f) => f.isKey).map((f) => f.key);
   const textLikeFields = moduleConfig.fields
     .filter(
-      (f) =>
-        f.type === FieldType.TEXT ||
-        f.type === FieldType.LONG_TEXT ||
-        /name|title|code|number|subject/i.test(f.key),
+        (f) =>
+          f.type === FieldType.TEXT ||
+          f.type === FieldType.LONG_TEXT ||
+          f.type === FieldType.SUPER_LONG_TEXT ||
+          /name|title|code|number|subject/i.test(f.key),
     )
     .map((f) => f.key);
 
@@ -90,4 +91,3 @@ export const getRecordTitle = (
 export const getModuleDisplayTitle = (moduleConfig?: ModuleDefinition, moduleId?: string): string => {
   return moduleConfig?.titles?.fa || moduleConfig?.titles?.en || moduleId || "";
 };
-

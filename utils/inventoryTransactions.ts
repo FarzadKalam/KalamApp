@@ -7,6 +7,10 @@ export interface InventoryDelta {
   delta: number;
 }
 
+interface ApplyInventoryDeltaOptions {
+  allowNegative?: boolean;
+}
+
 const toNumber = (value: any) => {
   const parsed = parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -24,7 +28,11 @@ export const aggregateInventoryDeltas = (deltas: InventoryDelta[]) => {
   return map;
 };
 
-export const applyInventoryDeltas = async (supabase: SupabaseClient, deltas: InventoryDelta[]) => {
+export const applyInventoryDeltas = async (
+  supabase: SupabaseClient,
+  deltas: InventoryDelta[],
+  options: ApplyInventoryDeltaOptions = {},
+) => {
   const aggregated = aggregateInventoryDeltas(deltas);
   for (const [key, delta] of aggregated.entries()) {
     const [productId, shelfId] = key.split(':');
@@ -41,7 +49,7 @@ export const applyInventoryDeltas = async (supabase: SupabaseClient, deltas: Inv
 
     const currentStock = toNumber(existing?.stock);
     const nextStock = currentStock + delta;
-    if (nextStock < 0) {
+    if (!options.allowNegative && nextStock < 0) {
       throw new Error('موجودی قفسه کافی نیست');
     }
 

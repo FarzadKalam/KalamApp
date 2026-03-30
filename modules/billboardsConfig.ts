@@ -147,7 +147,7 @@ const fieldsArray: any[] = [
   { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
   { key: 'manual_code', labels: { fa: 'کد دستی', en: 'Manual Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'location', labels: { fa: 'لوکیشن', en: 'Location' }, type: FieldType.LOCATION, location: FieldLocation.HEADER, order: 3.5, nature: FieldNature.STANDARD },
-  { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'آزاد', value: 'free', color: 'green' }, { label: 'رزرو شفاهی', value: 'oral_reserve', color: 'orange' }, { label: 'رزرو قطعی', value: 'final_reserve', color: 'pink' }, { label: 'در صف نصب', value: 'in_line', color: 'blue' }, { label: 'در حال اکران', value: 'opening', color: 'red' }, ], isTableColumn: true },
+  { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'آزاد', value: 'free', color: 'green' }, { label: 'رزرو شفاهی', value: 'oral_reserve', color: 'orange' }, { label: 'رزرو قطعی', value: 'final_reserve', color: 'pink' }, { label: 'در صف نصب', value: 'in_line', color: 'blue' }, { label: 'در حال اکران', value: 'opening', color: 'red' }, { label: 'غیرفعال', value: 'inactive', color: 'default' }], isTableColumn: true },
   { key: 'start_date', labels: { fa: 'تاریخ شروع', en: 'Start Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'end_date', labels: { fa: 'تاریخ پایان', en: 'End Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 8, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6, nature: FieldNature.STANDARD, isTableColumn: true },
@@ -182,9 +182,21 @@ const BLOCKS = {
 
 export const billboardConfig: ModuleDefinition = {
   id: 'billboards',
-  titles: { fa: 'تبلیغات محیطی', en: 'Billboards' },
+  titles: { fa: 'تبلیغات محیطی', faSingular: 'تابلو', en: 'Billboards' },
   nature: ModuleNature.PRODUCT,
   table: 'billboards',
+  dashboard: {
+    quickCreateLabel: 'تابلوی جدید',
+    recentListFields: ['name', 'status', 'start_date', 'end_date'],
+    summaryCard: {
+      preset: 'billboards_opening',
+      title: 'تعداد تابلوهای در حال اکران',
+    },
+  },
+  relationDisplay: {
+    labelTemplate: '{{name}} - {{system_code}}',
+    searchFields: ['name', 'system_code', 'address', 'category', 'id'],
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID, ViewMode.KANBAN, ViewMode.MAP],
   defaultViewMode: ViewMode.LIST,
   fields: fieldsArray,

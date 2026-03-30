@@ -209,3 +209,89 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="left"] {
 html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   border-left-color: #434343;
 }
+
+/* Keep Persian typography consistent in Ant portal-based UI */
+.ant-modal,
+.ant-modal *,
+.ant-drawer,
+.ant-drawer *,
+.ant-select-dropdown,
+.ant-select-dropdown *,
+.ant-picker-dropdown,
+.ant-picker-dropdown *,
+.ant-popover,
+.ant-popover *,
+.ant-tooltip,
+.ant-tooltip *,
+.ant-dropdown,
+.ant-dropdown *,
+.ant-message,
+.ant-message *,
+.ant-notification,
+.ant-notification * {
+  font-family: 'Vazirmatn', sans-serif !important;
+}
+
+/* SmartForm header inline controls (assignee/status) */
+.smartform-inline-status .ant-form-item {
+  margin-bottom: 0 !important;
+}
+
+.smartform-inline-status .ant-form-item-label {
+  display: none !important;
+}
+
+.smartform-inline-status .ant-form-item-control-input {
+  min-height: 32px;
+}
+
+.smartform-inline-status .ant-select-selector,
+.smartform-inline-assignee-select .ant-select-selector {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding-inline: 0 !important;
+}
+
+.smartform-inline-status .ant-select-selection-item,
+.smartform-inline-assignee-select .ant-select-selection-item {
+  font-weight: 600;
+}
+
+.smarttable-shell .ant-spin-nested-loading,
+.smarttable-shell .ant-spin-container,
+.smarttable-shell .ant-table-wrapper,
+.smarttable-shell .ant-table {
+  height: 100%;
+  min-height: 0;
+}
+
+.smarttable-shell .ant-spin-container,
+.smarttable-shell .ant-table-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.smarttable-shell .ant-table-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.smarttable-shell .ant-table-content,
+.smarttable-shell .ant-table-body {
+  scrollbar-gutter: stable;
+}
+
+.smarttable-shell .ant-table-pagination.ant-pagination {
+  margin: 12px 0 0 !important;
+  padding: 0 12px 12px;
+  justify-content: center;
+  row-gap: 8px;
+}
+
+@media (max-width: 767px) {
+  .smarttable-shell .ant-table-pagination.ant-pagination {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+}

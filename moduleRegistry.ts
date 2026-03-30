@@ -27,6 +27,13 @@ import { bankAccountsConfig } from './modules/bankAccountsConfig';
 import { chequesConfig } from './modules/chequesConfig';
 import { cashBankOperationsConfig } from './modules/cashBankOperationsConfig';
 import { bartersConfig } from './modules/bartersConfig';
+import { employeesModule } from './modules/employeesConfig';
+import { attendanceLogsModule } from './modules/attendanceLogsConfig';
+import { workSchedulesModule } from './modules/workSchedulesConfig';
+import { leaveRequestsModule } from './modules/leaveRequestsConfig';
+import { overtimeRequestsModule } from './modules/overtimeRequestsConfig';
+import { missionRequestsModule } from './modules/missionRequestsConfig';
+import { priceListsConfig } from './modules/priceListsConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -58,4 +65,11 @@ export const MODULES: Record<string, ModuleDefinition> = {
   cheques: chequesConfig,
   barters: bartersConfig,
   cash_bank_operations: cashBankOperationsConfig,
+  employees: employeesModule,
+  attendance_logs: attendanceLogsModule,
+  work_schedules: workSchedulesModule,
+  leave_requests: leaveRequestsModule,
+  overtime_requests: overtimeRequestsModule,
+  mission_requests: missionRequestsModule,
+  price_lists: priceListsConfig,
 };

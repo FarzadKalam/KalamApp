@@ -2,13 +2,19 @@ import { ModuleField } from '../types';
 
 export type WorkflowTriggerType = 'on_create' | 'on_upsert' | 'interval';
 export type WorkflowIntervalUnit = 'hour' | 'day' | 'month';
+export type WorkflowExecutionMode = 'first_match' | 'every_match';
 
 export type WorkflowActionType =
   | 'send_note'
   | 'send_sms'
   | 'send_email'
   | 'update_record'
-  | 'create_related_record';
+  | 'create_related_record'
+  | 'copy_process_template'
+  | 'execute_process';
+
+export const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
+const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 
 export type WorkflowCondition = {
   id: string;
@@ -29,6 +35,7 @@ export type WorkflowRecord = {
   name: string;
   description?: string | null;
   trigger_type: WorkflowTriggerType;
+  execution_mode?: WorkflowExecutionMode | null;
   interval_value?: number | null;
   interval_unit?: WorkflowIntervalUnit | null;
   interval_at?: string | null;
@@ -61,6 +68,11 @@ export const triggerTypeOptions: Array<{ label: string; value: WorkflowTriggerTy
   { label: 'بر اساس بازه زمانی', value: 'interval' },
 ];
 
+export const workflowExecutionModeOptions: Array<{ label: string; value: WorkflowExecutionMode }> = [
+  { label: 'اولین بار که شرایط محقق شد', value: 'first_match' },
+  { label: 'هر زمان که شرایط محقق شد', value: 'every_match' },
+];
+
 export const intervalUnitOptions: Array<{ label: string; value: WorkflowIntervalUnit }> = [
   { label: 'ساعت', value: 'hour' },
   { label: 'روز', value: 'day' },
@@ -73,5 +85,21 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال ایمیل', value: 'send_email' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ایجاد رکورد مرتبط', value: 'create_related_record' },
+  { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },
+  { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
 ];
 
+export const createWorkflowRelatedFieldKey = (
+  relationFieldKey: string,
+  targetModuleId: string,
+  targetFieldKey: string
+) => `${WORKFLOW_RELATED_FIELD_PREFIX}${relationFieldKey}::${targetModuleId}::${targetFieldKey}`;
+
+export const parseWorkflowRelatedFieldKey = (value: string) => {
+  const normalized = String(value || '');
+  if (!normalized.startsWith(WORKFLOW_RELATED_FIELD_PREFIX)) return null;
+  const raw = normalized.slice(WORKFLOW_RELATED_FIELD_PREFIX.length);
+  const [relationFieldKey, targetModuleId, targetFieldKey] = raw.split('::');
+  if (!relationFieldKey || !targetModuleId || !targetFieldKey) return null;
+  return { relationFieldKey, targetModuleId, targetFieldKey };
+};

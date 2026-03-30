@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Col, Grid, Input, Row, Space, Spin, Statistic, Table, Tag, Typography } from 'antd';
+import { App, Button, Card, Col, Grid, Row, Spin, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ApartmentOutlined, BankOutlined, CreditCardOutlined, PlusOutlined, SearchOutlined, WalletOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, BankOutlined, CreditCardOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import RelatedRecordPopover from '../components/RelatedRecordPopover';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { useCurrencyConfig } from '../utils/currency';
+import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
 
 const { Title, Text } = Typography;
 
@@ -415,42 +416,6 @@ const CashBankPage: React.FC = () => {
     salesById,
   ]);
 
-  const textFilter = useCallback(
-    (
-      placeholder: string,
-      getter: (record: RowItem) => string
-    ) => ({
-      filterDropdown: ({ selectedKeys, setSelectedKeys, confirm, clearFilters }: any) => (
-        <div className="p-2 w-56">
-          <Input
-            allowClear
-            placeholder={placeholder}
-            value={(selectedKeys?.[0] as string) || ''}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={() => confirm()}
-          />
-          <Space className="mt-2">
-            <Button type="primary" size="small" onClick={() => confirm()}>
-              اعمال
-            </Button>
-            <Button
-              size="small"
-              onClick={() => {
-                clearFilters?.();
-                confirm();
-              }}
-            >
-              پاک‌کردن
-            </Button>
-          </Space>
-        </div>
-      ),
-      filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
-      onFilter: (value: any, record: RowItem) => getter(record).toLowerCase().includes(String(value || '').toLowerCase().trim()),
-    }),
-    []
-  );
-
   const goCreateOperation = useCallback(
     (operationType: 'receipt' | 'payment') => {
       navigate('/cash_bank_operations/create', {
@@ -513,15 +478,6 @@ const CashBankPage: React.FC = () => {
     [rows]
   );
 
-  const sourceFilters = useMemo(
-    () =>
-      Array.from(new Set(rows.map((r) => r.sourceLabel).filter(Boolean))).map((value) => ({
-        text: value,
-        value,
-      })),
-    [rows]
-  );
-
   const columns: ColumnsType<RowItem> = useMemo(
     () => [
       {
@@ -529,13 +485,12 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'rowType',
         key: 'rowType',
         width: 95,
-        filters: [
-          { text: 'دریافت', value: 'receipt' },
-          { text: 'پرداخت', value: 'payment' },
-          { text: 'چک', value: 'cheque' },
-          { text: 'تهاتر', value: 'barter' },
-        ],
-        onFilter: (v, r) => String(r.rowType) === String(v),
+        ...createChoiceFilter('نوع', [
+          { label: 'دریافت', value: 'receipt' },
+          { label: 'پرداخت', value: 'payment' },
+          { label: 'چک', value: 'cheque' },
+          { label: 'تهاتر', value: 'barter' },
+        ], (record) => record.rowType),
         render: (v: RowItem['rowType']) => {
           const t = rowTag(v);
           return <Tag color={t.color}>{t.label}</Tag>;
@@ -546,16 +501,14 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'sourceLabel',
         key: 'sourceLabel',
         width: 180,
-        filters: sourceFilters,
-        ...textFilter('جستجو در منبع', (record) => record.sourceLabel),
+        ...createTextFilter('جستجو در منبع', (record) => record.sourceLabel),
       },
       {
         title: 'روش',
         dataIndex: 'paymentType',
         key: 'paymentType',
         width: 130,
-        filters: paymentTypeFilters,
-        ...textFilter('جستجو در روش', (record) => PAYMENT_TYPE_LABEL[record.paymentType] || record.paymentType),
+        ...createChoiceFilter('روش', paymentTypeFilters.map((item) => ({ label: String(item.text), value: String(item.value) })), (record) => record.paymentType),
         render: (v: string) => PAYMENT_TYPE_LABEL[v] || v || '-',
       },
       {
@@ -563,8 +516,7 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'status',
         key: 'status',
         width: 130,
-        filters: statusFilters,
-        ...textFilter('جستجو در وضعیت', (record) => STATUS_LABEL[record.status] || record.status),
+        ...createChoiceFilter('وضعیت', statusFilters.map((item) => ({ label: String(item.text), value: String(item.value) })), (record) => record.status),
         render: (v: string) => <Tag color={statusColor(v)}>{STATUS_LABEL[v] || v || '-'}</Tag>,
       },
       {
@@ -572,9 +524,7 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'date',
         key: 'date',
         width: 130,
-        ...textFilter('جستجو در تاریخ', (record) =>
-          record.date ? `${record.date} ${safeJalaliFormat(record.date, 'YYYY/MM/DD')}` : ''
-        ),
+        ...createDateRangeFilter('تاریخ', (record) => record.date),
         render: (v: string | null) => (v ? toPersianNumber(safeJalaliFormat(v, 'YYYY/MM/DD')) : '-'),
       },
       {
@@ -583,7 +533,7 @@ const CashBankPage: React.FC = () => {
         key: 'amount',
         width: 170,
         sorter: (a, b) => a.amount - b.amount,
-        ...textFilter('جستجو در مبلغ', (record) => String(record.amount)),
+        ...createNumberRangeFilter('مبلغ', (record) => record.amount),
         render: (v: number) => <span className="persian-number">{formatPersianPrice(v)}</span>,
       },
       {
@@ -591,7 +541,7 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'invoiceLabel',
         key: 'invoiceLabel',
         width: 190,
-        ...textFilter('جستجو در فاکتور', (record) => record.invoiceLabel),
+        ...createTextFilter('جستجو در فاکتور', (record) => record.invoiceLabel),
         render: (_: string, record: RowItem) => {
           if (!record.invoiceRelation?.moduleId || !record.invoiceRelation?.recordId) return record.invoiceLabel || '-';
           return (
@@ -610,7 +560,7 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'personLabel',
         key: 'personLabel',
         width: 190,
-        ...textFilter('جستجو در شخص', (record) => record.personLabel),
+        ...createTextFilter('جستجو در شخص', (record) => record.personLabel),
         render: (_: string, record: RowItem) => {
           if (!record.personRelation?.moduleId || !record.personRelation?.recordId) return record.personLabel || '-';
           return (
@@ -629,7 +579,7 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'bankLabel',
         key: 'bankLabel',
         width: 190,
-        ...textFilter('جستجو در حساب بانکی', (record) => record.bankLabel),
+        ...createTextFilter('جستجو در حساب بانکی', (record) => record.bankLabel),
         render: (_: string, record: RowItem) => {
           if (!record.bankRelation?.moduleId || !record.bankRelation?.recordId) return record.bankLabel || '-';
           return (
@@ -648,7 +598,7 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'chequeLabel',
         key: 'chequeLabel',
         width: 220,
-        ...textFilter('جستجو در چک', (record) => record.chequeLabel),
+        ...createTextFilter('جستجو در چک', (record) => record.chequeLabel),
         render: (_: string, record: RowItem) => {
           if (!record.chequeRelation?.moduleId || !record.chequeRelation?.recordId) return record.chequeLabel || '-';
           return (
@@ -667,11 +617,11 @@ const CashBankPage: React.FC = () => {
         dataIndex: 'description',
         key: 'description',
         width: 240,
-        ...textFilter('جستجو در توضیحات', (record) => record.description || ''),
+        ...createTextFilter('جستجو در توضیحات', (record) => record.description || ''),
         render: (v: string) => v || '-',
       },
     ],
-    [currencyLabel, paymentTypeFilters, sourceFilters, statusFilters, textFilter]
+    [currencyLabel, paymentTypeFilters, statusFilters]
   );
 
   if (loading) {

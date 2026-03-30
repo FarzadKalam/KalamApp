@@ -5,7 +5,7 @@ import {
     RightOutlined, SkinOutlined, AppstoreOutlined,
     BgColorsOutlined, ScissorOutlined, ToolOutlined, ExperimentOutlined,
     DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined,
-    ShoppingOutlined, ShoppingCartOutlined
+    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
@@ -18,8 +18,9 @@ const iconMap: Record<string, React.ReactNode> = {
   'AppstoreOutlined': <AppstoreOutlined />,
     'FileTextOutlined': <FileTextOutlined />,
     'CreditCardOutlined': <CreditCardOutlined />,
-    'ShoppingOutlined': <ShoppingOutlined />,
-    'ShoppingCartOutlined': <ShoppingCartOutlined />,
+  'ShoppingOutlined': <ShoppingOutlined />,
+  'ShoppingCartOutlined': <ShoppingCartOutlined />,
+  'ProjectOutlined': <ProjectOutlined />,
   'BgColorsOutlined': <BgColorsOutlined />,
   'ScissorOutlined': <ScissorOutlined />,
   'ToolOutlined': <ToolOutlined />,
@@ -45,11 +46,13 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
 
   const fixedTabs = [
       { key: 'notes', icon: <FileTextOutlined />, label: 'یادداشت‌ها', color: 'text-blue-500' },
-      { key: 'tasks', icon: <CheckSquareOutlined />, label: 'وظایف', color: 'text-green-500' },
+      { key: 'tasks', icon: <CheckSquareOutlined />, label: 'فعالیت ها', color: 'text-green-500' },
       { key: 'changelogs', icon: <HistoryOutlined />, label: 'تغییرات', color: 'text-orange-500' }
   ];
 
-    const relatedTabs = (moduleConfig.relatedTabs || []).map((tab) => ({
+    const relatedTabs = (moduleConfig.relatedTabs || [])
+      .filter((tab) => String(tab?.targetModule || '').trim() !== 'tasks')
+      .map((tab) => ({
         ...tab,
         key: tab.id || `related_${tab.targetModule}`,
         icon: iconMap[tab.icon || 'default'] || iconMap['default'],
@@ -86,6 +89,17 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             (seenRows || []).forEach((row: any) => {
                 seenMap[row.tab_key] = row.last_seen_at;
             });
+
+            const getSourceFieldValue = async (tab: RelatedTabConfig) => {
+                if (!tab.sourceField) return null;
+                const sourceTable = moduleConfig.table || moduleConfig.id;
+                const { data: sourceRecord } = await (supabase
+                    .from(sourceTable as any)
+                    .select(tab.sourceField)
+                    .eq('id', recordId)
+                    .maybeSingle() as any);
+                return (sourceRecord as any)?.[tab.sourceField] ?? null;
+            };
 
             const computeLatest = async (tab: any) => {
                 if (tab.key === 'notes') {
@@ -132,11 +146,43 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     return data?.[0]?.created_at || null;
                 }
 
+                if ((tab as RelatedTabConfig).relationType === 'customer_payments_from_field') {
+                    const sourceCustomerId = await getSourceFieldValue(tab as RelatedTabConfig);
+                    if (!sourceCustomerId) return null;
+                    const { data } = await supabase
+                        .from('invoices')
+                        .select('created_at')
+                        .eq('customer_id', sourceCustomerId)
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.created_at || null;
+                }
+
                 if ((tab as RelatedTabConfig).relationType === 'customer_products') {
                     const { data } = await supabase
                         .from('invoices')
                         .select('created_at')
                         .eq('customer_id', recordId)
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.created_at || null;
+                }
+
+                if ((tab as RelatedTabConfig).relationType === 'supplier_payments') {
+                    const { data } = await supabase
+                        .from('purchase_invoices')
+                        .select('created_at')
+                        .eq('supplier_id', recordId)
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.created_at || null;
+                }
+
+                if ((tab as RelatedTabConfig).relationType === 'supplier_products') {
+                    const { data } = await supabase
+                        .from('purchase_invoices')
+                        .select('created_at')
+                        .eq('supplier_id', recordId)
                         .order('created_at', { ascending: false })
                         .limit(1);
                     return data?.[0]?.created_at || null;
@@ -183,6 +229,22 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     return data?.[0]?.created_at || null;
                 }
 
+                if ((tab as RelatedTabConfig).relationType === 'fk_from_field' && tab.targetModule && tab.foreignKey) {
+                    const sourceValue = await getSourceFieldValue(tab as RelatedTabConfig);
+                    if (!sourceValue) return null;
+                    let query = (supabase
+                        .from(tab.targetModule as string) as any)
+                        .select('created_at')
+                        .eq(tab.foreignKey as string, sourceValue);
+                    if (tab.targetModule === moduleConfig.id) {
+                        query = query.neq('id', recordId);
+                    }
+                    const { data } = await query
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.created_at || null;
+                }
+
                 if (tab.targetModule && tab.foreignKey) {
                     const { data } = await (supabase
                         .from(tab.targetModule as string) as any)
@@ -211,7 +273,12 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             });
             setUnreadMap(nextMap);
         } catch (err) {
-            console.error(err);
+            const isAbortLike =
+                String((err as any)?.name || '').toLowerCase() === 'aborterror' ||
+                String((err as any)?.message || '').toLowerCase().includes('signal is aborted');
+            if (!isAbortLike) {
+                console.error(err);
+            }
         }
     };
 
@@ -287,6 +354,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     width={170}
                     open={isMobileMenuOpen}
                     onClose={() => setIsMobileMenuOpen(false)}
+                    getContainer={typeof document === 'undefined' ? undefined : () => document.body}
                     maskClosable
                     styles={{ body: { padding: '12px' } }}
                     style={{ left: -16 }}
@@ -320,6 +388,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             width={360}
             onClose={() => setActiveKey(null)}
             open={!!activeKey}
+            getContainer={typeof document === 'undefined' ? undefined : () => document.body}
             mask={false}
             styles={{ body: { padding: 0 }, header: { padding: '16px 24px' } }}
             className="shadow-2xl md:ml-14"
@@ -339,7 +408,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 )}
                 {relatedTabs.map(tab => (
                     activeKey === tab.key && (
-                        <RelatedRecordsPanel key={tab.key} tab={tab as RelatedTabConfig} currentRecordId={recordId} />
+                        <RelatedRecordsPanel key={tab.key} tab={tab as RelatedTabConfig} currentRecordId={recordId} currentModuleId={moduleConfig.id} />
                     )
                 ))}
             </div>

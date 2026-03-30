@@ -18,6 +18,8 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { FieldLocation, FieldType } from '../../types';
 import RecordFilesManager from '../RecordFilesManager';
 import TagInput from '../TagInput';
+import { getAssigneeLabel } from '../../utils/assigneeLabel';
+import { buildResolvedAssigneeCombo } from '../../utils/assigneeValue';
 
 interface HeroSectionProps {
   data: any;
@@ -35,6 +37,7 @@ interface HeroSectionProps {
   onImageUpdate: (file: File) => Promise<boolean> | boolean;
   onMainImageChange?: (url: string | null) => void;
   canViewField?: (fieldKey: string) => boolean;
+  canManageAssignee?: boolean;
   canEditModule?: boolean;
   checkVisibility?: (logic: any) => boolean;
   canViewFilesManager?: boolean;
@@ -58,6 +61,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   onImageUpdate,
   onMainImageChange,
   canViewField,
+  canManageAssignee = true,
   canEditModule = true,
   checkVisibility,
   canViewFilesManager = true,
@@ -69,6 +73,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   const imageField = moduleConfig?.fields?.find((f: any) => f.type === FieldType.IMAGE);
   const canShowImage = !!imageField && (canViewField ? canViewField(imageField.key) !== false : true);
   const canOpenFilesGallery = Boolean(canShowImage && data?.id && moduleId && canViewFilesManager);
+  const assigneeLabel = getAssigneeLabel(moduleId);
 
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const shouldOpenGalleryFromQuery = queryParams.get('gallery') === '1';
@@ -112,6 +117,15 @@ const HeroSection: React.FC<HeroSectionProps> = ({
     } catch {
       return '-';
     }
+  };
+
+  const resolveActorLabel = (rawName: any, userId: any) => {
+    const normalizedRaw = String(rawName || '').trim();
+    const placeholderValues = new Set(['سیستم/نامشخص', 'نامشخص', '-', 'system/unknown']);
+    if (normalizedRaw && !placeholderValues.has(normalizedRaw.toLowerCase()) && !placeholderValues.has(normalizedRaw)) {
+      return normalizedRaw;
+    }
+    return getUserName(String(userId || ''));
   };
 
   return (
@@ -162,17 +176,24 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 )}
               </div>
 
-              {(canViewField ? canViewField('assignee_id') !== false : true) && (
+              {canManageAssignee && (canViewField ? canViewField('assignee_id') !== false : true) && (
                 <div className="flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2 mb-4">
-                  <span className="text-xs text-gray-400 shrink-0">مسئول:</span>
+                  <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
                   <Select
                     variant="borderless"
-                    value={data.assignee_id ? `${data.assignee_type}_${data.assignee_id}` : null}
+                    value={buildResolvedAssigneeCombo(data)}
                     onChange={handleAssigneeChange}
-                    placeholder="انتخاب کنید"
+                    placeholder="جستجو یا انتخاب مسئول / نقش"
                     className="min-w-[140px] font-bold text-gray-700 dark:text-gray-300"
                     styles={{ popup: { root: { minWidth: 200 } } }}
                     options={getAssigneeOptions()}
+                    showSearch
+                    optionFilterProp="label"
+                    filterOption={(input, option) =>
+                      String(option?.label || '')
+                        .toLowerCase()
+                        .includes(String(input || '').trim().toLowerCase())
+                    }
                     optionRender={(option) => (
                       <Space>
                         <span role="img" aria-label={option.data.label}>{(option.data as any).emoji}</span>
@@ -203,7 +224,12 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
                 .filter((f: any) => (!f.logic || (checkVisibility ? checkVisibility(f.logic) : true)))
                 .map((f: any) => (
-                  <div key={f.key} className="flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4 first:pr-0">
+                  <div
+                    key={f.key}
+                    className={f.type === FieldType.SUPER_LONG_TEXT
+                      ? 'flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4 sm:col-span-2 xl:col-span-4'
+                      : 'flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4'}
+                  >
                     <span className="text-xs text-gray-400 uppercase tracking-wider">{f.labels.fa}</span>
                     {renderSmartField(f, true)}
                   </div>
@@ -235,7 +261,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 </div>
                 <div className="flex flex-col">
                   <span className="opacity-70">ایجاد کننده</span>
-                  <span className="font-bold text-gray-700 dark:text-gray-300">{data?.created_by_name || getUserName(data.created_by)}</span>
+                  <span className="font-bold text-gray-700 dark:text-gray-300">{resolveActorLabel(data?.created_by_name, data?.created_by)}</span>
                 </div>
               </div>
 
@@ -257,7 +283,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                 </div>
                 <div className="flex flex-col">
                   <span className="opacity-70">آخرین ویرایشگر</span>
-                  <span className="font-bold text-gray-700 dark:text-gray-300">{data?.updated_by_name || getUserName(data.updated_by)}</span>
+                  <span className="font-bold text-gray-700 dark:text-gray-300">{resolveActorLabel(data?.updated_by_name, data?.updated_by)}</span>
                 </div>
               </div>
 
@@ -295,3 +321,4 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 };
 
 export default HeroSection;
+

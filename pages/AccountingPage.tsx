@@ -6,13 +6,16 @@ import {
   NodeIndexOutlined,
   BankOutlined,
   CreditCardOutlined,
+  FundProjectionScreenOutlined,
+  ProfileOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
-import { ACCOUNTING_PERMISSION_KEY } from '../utils/permissions';
+import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
 import { useCurrencyConfig } from '../utils/currency';
+import { ACCOUNTING_REPORTS, getAccountingReportPath } from '../utils/accountingReports';
 
 const { Title, Text } = Typography;
 
@@ -52,9 +55,8 @@ const AccountingPage: React.FC = () => {
     const fetchPermissionsAndData = async () => {
       setLoading(true);
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const user = authData?.user;
-        if (!user) {
+        const context = await fetchCurrentUserRoleContext(supabase);
+        if (!context.userId) {
           if (active) {
             setCanViewPage(false);
             setLoading(false);
@@ -62,21 +64,7 @@ const AccountingPage: React.FC = () => {
           return;
         }
 
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role_id')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        const { data: role } = profile?.role_id
-          ? await supabase
-              .from('org_roles')
-              .select('permissions')
-              .eq('id', profile.role_id)
-              .maybeSingle()
-          : { data: null as any };
-
-        const permissions = role?.permissions || {};
+        const permissions = context.permissions || {};
         const accountingPerms = permissions?.[ACCOUNTING_PERMISSION_KEY] || {};
         const canViewAccounting =
           accountingPerms.view !== false &&
@@ -217,6 +205,14 @@ const AccountingPage: React.FC = () => {
     []
   );
 
+  const featuredReports = useMemo(
+    () =>
+      ACCOUNTING_REPORTS.filter((report) =>
+        ['account_review', 'journal_book', 'general_ledger', 'trial_balance'].includes(report.key)
+      ),
+    []
+  );
+
   if (loading) {
     return (
       <div className="h-[70vh] flex items-center justify-center">
@@ -291,6 +287,41 @@ const AccountingPage: React.FC = () => {
                     </Button>
                   </Col>
                 ))}
+            </Row>
+          </Card>
+        )}
+
+        {canShowSection('reports_hub') && (
+          <Card
+            title="گزارشات حسابداری"
+            extra={
+              <Button type="link" onClick={() => navigate('/accounting/reports')}>
+                مشاهده همه
+              </Button>
+            }
+            className="mb-6"
+          >
+            <Row gutter={[12, 12]}>
+              {featuredReports.map((report) => {
+                const Icon =
+                  report.key === 'trial_balance'
+                    ? FundProjectionScreenOutlined
+                    : report.key === 'journal_book'
+                      ? ProfileOutlined
+                      : report.icon;
+                return (
+                  <Col xs={24} sm={12} lg={6} key={report.key}>
+                    <Button
+                      block
+                      icon={<Icon />}
+                      onClick={() => navigate(getAccountingReportPath(report))}
+                      style={{ height: '40px' }}
+                    >
+                      {report.title}
+                    </Button>
+                  </Col>
+                );
+              })}
             </Row>
           </Card>
         )}

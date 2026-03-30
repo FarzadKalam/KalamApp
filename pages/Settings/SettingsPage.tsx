@@ -8,7 +8,7 @@ import ConnectionsTab from './ConnectionsTab';
 import CustomerLevelingTab from './CustomerLevelingTab';
 import ModuleListRefine from '../ModuleList_Refine';
 import { supabase } from '../../supabaseClient';
-import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
+import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../../utils/permissions';
 import WorkflowsManager from '../../components/workflows/WorkflowsManager';
 import ModuleSettingsTab from './ModuleSettingsTab';
 import PrintTemplatesTab from './PrintTemplatesTab';
@@ -23,9 +23,8 @@ const SettingsPage: React.FC = () => {
     let active = true;
     const fetchPermissions = async () => {
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const user = authData?.user;
-        if (!user) {
+        const context = await fetchCurrentUserRoleContext(supabase);
+        if (!context.userId) {
           if (active) {
             setTabPermissions({});
             setLoadingPermissions(false);
@@ -33,28 +32,8 @@ const SettingsPage: React.FC = () => {
           return;
         }
 
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role_id')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        if (!profile?.role_id) {
-          if (active) {
-            setTabPermissions({});
-            setLoadingPermissions(false);
-          }
-          return;
-        }
-
-        const { data: role } = await supabase
-          .from('org_roles')
-          .select('permissions')
-          .eq('id', profile.role_id)
-          .maybeSingle();
-
-        const settingsPerms = role?.permissions?.[SETTINGS_PERMISSION_KEY] || {};
-        const workflowsPerms = role?.permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
+        const settingsPerms = context.permissions?.[SETTINGS_PERMISSION_KEY] || {};
+        const workflowsPerms = context.permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
         const canViewSettings = settingsPerms.view !== false;
         const fields = settingsPerms.fields || {};
         const workflowFields = workflowsPerms.fields || {};

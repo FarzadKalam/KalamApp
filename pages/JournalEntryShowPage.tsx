@@ -40,6 +40,7 @@ type Entry = {
   total_credit: number;
   source_table: string | null;
   source_record_id: string | null;
+  source_record_title: string | null;
   created_at: string | null;
   created_by: string | null;
   updated_by: string | null;
@@ -123,7 +124,7 @@ type AccountSelectOption = {
 };
 
 const ENTRY_SELECT =
-  'id,entry_no,entry_date,description,fiscal_year_id,status,total_debit,total_credit,source_table,source_record_id,created_at,created_by,updated_by,posted_at,posted_by,updated_at';
+  'id,entry_no,entry_date,description,fiscal_year_id,status,total_debit,total_credit,source_table,source_record_id,source_record_title,created_at,created_by,updated_by,posted_at,posted_by,updated_at';
 const LINE_SELECT =
   'id,line_no,account_id,description,debit,credit,cost_center_id,party_type,party_id,metadata,chart_of_accounts:account_id(code,name),cost_centers:cost_center_id(code,name)';
 
@@ -452,6 +453,12 @@ const JournalEntryShowPage: React.FC = () => {
     if (!entry?.source_table || !entry?.source_record_id) return null;
     return MODULES[entry.source_table] ? `/${entry.source_table}/${entry.source_record_id}` : null;
   }, [entry?.source_record_id, entry?.source_table]);
+  const sourceRecordLabel = useMemo(() => {
+    const titleValue = String(entry?.source_record_title || '').trim();
+    if (titleValue) return titleValue;
+    const idValue = String(entry?.source_record_id || '').trim();
+    return idValue || '-';
+  }, [entry?.source_record_id, entry?.source_record_title]);
 
   const isRowEditing = (row: LineTableRow) => Boolean(row.__isNew || editingRows[row.id]);
 
@@ -1554,7 +1561,7 @@ const JournalEntryShowPage: React.FC = () => {
             <Input.TextArea rows={2} disabled={!canEditDraft} />
           </Form.Item>
 
-          <div className="bg-gray-50 dark:bg-white/5 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 text-xs text-gray-500 dark:text-gray-400 border border-gray-100 dark:border-white/5 mb-3">
+          <div className="bg-gray-50 dark:bg-white/5 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3 text-xs text-gray-500 dark:text-gray-400 border border-gray-100 dark:border-white/5 mb-3">
             <div className="flex items-center gap-2">
               <div className="bg-white dark:bg-white/10 p-1.5 rounded-full">
                 <SafetyCertificateOutlined className="text-green-600" />
@@ -1604,6 +1611,26 @@ const JournalEntryShowPage: React.FC = () => {
                 <span className="font-bold text-gray-700 dark:text-gray-300 persian-number">
                   {entry.posted_at ? `${renderDateTime(entry.posted_at)} - ${getUserName(entry.posted_by)}` : '-'}
                 </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="bg-white dark:bg-white/10 p-1.5 rounded-full">
+                <LinkOutlined className="text-indigo-500" />
+              </div>
+              <div className="flex flex-col">
+                <span className="opacity-70">رکورد مرتبط</span>
+                {sourcePath ? (
+                  <Button
+                    type="link"
+                    className="!h-auto !px-0 !py-0 !font-bold !text-gray-700 dark:!text-gray-300 text-right"
+                    onClick={() => navigate(sourcePath)}
+                  >
+                    {sourceRecordLabel}
+                  </Button>
+                ) : (
+                  <span className="font-bold text-gray-700 dark:text-gray-300">{sourceRecordLabel}</span>
+                )}
               </div>
             </div>
           </div>

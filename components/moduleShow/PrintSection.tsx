@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Modal, Tabs } from 'antd';
 import { EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
@@ -17,6 +17,8 @@ interface PrintSectionProps {
   printableFields?: any[];
   selectedPrintFields?: Record<string, string[]>;
   onTogglePrintField?: (templateId: string, fieldName: string) => void;
+  onSavePrintFields?: () => void | Promise<boolean>;
+  savingPrintFields?: boolean;
   allowFieldSelectionTab?: boolean;
   previewMeta?: {
     paperSize?: 'A4' | 'A5' | 'A6';
@@ -53,6 +55,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   printableFields = [],
   selectedPrintFields = {},
   onTogglePrintField = () => {},
+  onSavePrintFields,
+  savingPrintFields = false,
   allowFieldSelectionTab = false,
   previewMeta,
 }) => {
@@ -60,8 +64,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  const supportsZoom = false;
+  const pinchDistanceRef = useRef<number | null>(null);
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
+  const supportsZoom =
+    typeof CSS !== 'undefined' &&
+    typeof CSS.supports === 'function' &&
+    CSS.supports('zoom', '1');
 
   useEffect(() => {
     if (!printMode) return;
@@ -76,10 +84,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     };
   }, [printMode]);
 
-  const selectedTemplateMeta = useMemo(
-    () => printTemplates.find((template) => template.id === selectedTemplateId) || null,
-    [printTemplates, selectedTemplateId]
-  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   const isFieldSelectionAvailable =
     Boolean(selectedTemplateId) &&
     Boolean(allowFieldSelectionTab) &&
@@ -87,19 +99,17 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 
   const selectedFieldCount = (selectedPrintFields[selectedTemplateId] || []).length;
   const paperFrame = getPaperFrame(previewMeta?.paperSize || 'A4', previewMeta?.orientation || 'portrait');
+  const paperWidthPx = (paperFrame.mmWidth * 96) / 25.4;
+  const paperHeightPx = (paperFrame.mmHeight * 96) / 25.4;
 
   const fitPreviewZoom = useCallback(() => {
     const stage = previewStageRef.current;
     if (!stage) return;
-    const mmToPx = (value: number) => (value * 96) / 25.4;
-    const paperWidthPx = mmToPx(paperFrame.mmWidth);
-    const paperHeightPx = mmToPx(paperFrame.mmHeight);
-    const availableWidth = Math.max(120, stage.clientWidth - 24);
-    const availableHeight = Math.max(120, stage.clientHeight - 24);
-    const fit = Math.min(availableWidth / paperWidthPx, availableHeight / paperHeightPx);
+    const availableWidth = Math.max(120, stage.clientWidth - 28);
+    const fit = availableWidth / paperWidthPx;
     const clamped = Math.max(0.35, Math.min(1.6, fit));
     setZoom(Math.round(clamped * 100) / 100);
-  }, [paperFrame.mmHeight, paperFrame.mmWidth]);
+  }, [paperWidthPx]);
 
   useEffect(() => {
     if (!isPrintModalOpen || activeTab !== 'preview') return;
@@ -124,6 +134,21 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handleSaveFields = async () => {
+    if (!onSavePrintFields) return;
+    await onSavePrintFields();
+    if (activeTab !== 'preview') {
+      await handleRefresh();
+    }
+  };
+
+  const getTouchDistance = (touches: any) => {
+    if (touches.length < 2) return null;
+    const a = touches[0];
+    const b = touches[1];
+    return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
   };
 
   return (
@@ -169,7 +194,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                 >
                   <div className="print-template-card-title">
                     {template.title}
-                    {template.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+                     {template.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
                   </div>
                   <div className="print-template-card-desc">{template.description}</div>
                 </button>
@@ -182,21 +207,23 @@ const PrintSection: React.FC<PrintSectionProps> = ({
               activeKey={activeTab}
               onChange={(key) => {
                 setActiveTab(key);
-                if (key === 'preview' && onRefreshPreview) {
-                  void handleRefresh();
-                }
               }}
               tabPosition="top"
-              destroyInactiveTabPane
+              destroyOnHidden
               style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-              tabBarStyle={{ margin: 0, padding: '0 16px', borderBottom: '1px solid rgba(148,163,184,0.18)' }}
+              tabBarStyle={{
+                margin: 0,
+                padding: '0 16px',
+                borderBottom: '1px solid rgba(148,163,184,0.18)',
+                direction: isMobile ? 'ltr' : undefined,
+              }}
               items={[
                 {
                   key: 'preview',
                   label: (
-                    <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex items-center gap-2" style={{ direction: 'rtl' }}>
                       <EyeOutlined />
-                      پیش‌نمایش
+                      {isMobile ? 'پیش‌نمایش' : 'پیش‌نمایش'}
                     </span>
                   ),
                   children: (
@@ -230,22 +257,48 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                           />
                         </div>
                       </div>
-                      <div className="print-preview-stage" ref={previewStageRef}>
+                      <div
+                        className="print-preview-stage"
+                        ref={previewStageRef}
+                        onTouchStart={(event) => {
+                          pinchDistanceRef.current = getTouchDistance(event.touches);
+                        }}
+                        onTouchMove={(event) => {
+                          if (event.touches.length < 2) return;
+                          const nextDistance = getTouchDistance(event.touches);
+                          const prevDistance = pinchDistanceRef.current;
+                          if (!nextDistance || !prevDistance) {
+                            pinchDistanceRef.current = nextDistance;
+                            return;
+                          }
+                          const delta = (nextDistance - prevDistance) / 180;
+                          if (Math.abs(delta) < 0.015) return;
+                          setZoom((prev) => Math.max(0.35, Math.min(1.8, Math.round((prev + delta) * 100) / 100)));
+                          pinchDistanceRef.current = nextDistance;
+                        }}
+                        onTouchEnd={() => {
+                          pinchDistanceRef.current = null;
+                        }}
+                      >
                         <div className="print-preview-canvas">
                           <div
                             className="print-preview-zoom-frame"
-                            style={{
-                              width: supportsZoom ? `${paperFrame.mmWidth}mm` : `${paperFrame.mmWidth * zoom}mm`,
-                            }}
+                              style={{
+                                width: `${Math.round(paperWidthPx * zoom)}px`,
+                                minHeight: `${Math.round(paperHeightPx * zoom)}px`,
+                                maxWidth: '100%',
+                                overflow: 'hidden',
+                              }}
                           >
                             <div
                               className="print-preview-scale"
-                              style={{
-                                width: `${paperFrame.mmWidth}mm`,
-                                ...(supportsZoom
-                                  ? ({ zoom } as React.CSSProperties)
-                                  : { transform: `scale(${zoom})` }),
-                              }}
+                                style={{
+                                  width: `${paperFrame.mmWidth}mm`,
+                                  minHeight: `${paperFrame.mmHeight}mm`,
+                                  ...(supportsZoom
+                                    ? ({ zoom } as React.CSSProperties)
+                                    : { transform: `scale(${zoom})`, transformOrigin: 'top left' }),
+                                }}
                             >
                               {!printMode ? renderPrintCard() : null}
                             </div>
@@ -259,24 +312,34 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                   ? [
                       {
                         key: 'fields',
-                        label: `${selectedTemplateMeta?.isSystem ? 'فیلدهای سیستمی' : 'فیلدهای چاپ'} ${
-                          selectedFieldCount > 0 ? `(${selectedFieldCount})` : '(همه)'
-                        }`,
+                         label: (
+                           <span style={{ direction: 'rtl' }}>
+                             {`فیلدهای قابل چاپ ${selectedFieldCount > 0 ? `(${selectedFieldCount})` : '(همه)'}`}
+                           </span>
+                         ),
                         children: (
-                          <div className="print-fields-grid">
-                            {printableFields.map((field) => {
-                              const isSelected = (selectedPrintFields[selectedTemplateId] || []).includes(field.key);
-                              return (
-                                <div
-                                  key={field.key}
-                                  onClick={() => onTogglePrintField(selectedTemplateId, field.key)}
-                                  className={`print-field-card ${isSelected ? 'selected' : ''}`}
-                                >
-                                  <div className="print-field-checkbox">{isSelected ? '✓' : ''}</div>
-                                  <span>{field?.labels?.fa || field?.label || field?.key}</span>
-                                </div>
-                              );
-                            })}
+                          <div className="print-fields-pane">
+                            <div className="print-fields-toolbar">
+                               <div className="print-fields-meta">فقط گزینه‌های انتخاب‌شده در چاپ نهایی نمایش داده می‌شوند.</div>
+                              <Button size="small" type="primary" onClick={handleSaveFields} loading={savingPrintFields}>
+                                 ذخیره تغییرات
+                              </Button>
+                            </div>
+                            <div className="print-fields-grid">
+                              {printableFields.map((field) => {
+                                const isSelected = (selectedPrintFields[selectedTemplateId] || []).includes(field.key);
+                                return (
+                                  <div
+                                    key={field.key}
+                                    onClick={() => onTogglePrintField(selectedTemplateId, field.key)}
+                                    className={`print-field-card ${isSelected ? 'selected' : ''}`}
+                                  >
+                                    <div className="print-field-checkbox">{isSelected ? String.fromCharCode(10003) : ''}</div>
+                                    <span>{field?.labels?.fa || field?.label || field?.key}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         ),
                       },
@@ -404,6 +467,9 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           flex-direction: column;
           flex: 1 1 auto;
         }
+        .print-preview-shell .ant-tabs-nav-list {
+          flex-wrap: nowrap !important;
+        }
         .print-preview-shell .ant-tabs-content-holder {
           flex: 1 1 auto;
           overflow: hidden;
@@ -465,31 +531,38 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         }
         .print-preview-stage {
           flex: 1;
-          overflow: auto;
+          overflow-y: auto;
+          overflow-x: hidden;
           min-height: 0;
           border-top: 1px solid rgba(148,163,184,0.18);
           background: linear-gradient(180deg, rgba(226,232,240,0.42), rgba(241,245,249,0.92));
-          padding: 8px 10px 12px;
+          padding: 8px 10px 10px;
           display: flex;
           justify-content: center;
           align-items: flex-start;
           direction: ltr;
-          text-align: center;
+          text-align: initial;
+          overscroll-behavior: contain;
         }
         .print-preview-canvas {
+          width: fit-content;
+          max-width: 100%;
           min-width: 100%;
-          width: max-content;
           display: flex;
           justify-content: center;
           align-items: flex-start;
           margin: 0 auto;
+          overflow: hidden;
         }
         .print-preview-zoom-frame {
-          display: block;
-          width: fit-content;
+          display: inline-flex;
+          justify-content: center;
           margin: 0 auto;
           position: relative;
-          min-width: fit-content;
+          min-width: 0;
+          flex: 0 0 auto;
+          box-sizing: border-box;
+          max-width: 100%;
         }
         .print-preview-stage > .print-preview-zoom-frame {
           margin-inline: auto;
@@ -502,17 +575,23 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           background: #fff;
           box-shadow: 0 24px 60px rgba(15,23,42,0.22);
           box-sizing: border-box;
-          overflow: visible;
+          overflow: hidden;
           display: inline-block;
-          transform-origin: top left;
-          direction: ltr;
+          transform-origin: top center;
+          direction: rtl;
+          text-align: right;
           margin: 0 auto;
+          max-width: 100%;
         }
         .print-preview-scale > .invoice-custom-print-shell {
-          width: 100% !important;
+          width: auto !important;
           min-height: auto !important;
-          max-width: 100% !important;
+          max-width: none !important;
           box-sizing: border-box !important;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          margin: 0 auto;
         }
         .print-preview-scale .print-template-page + .print-template-page {
           margin-top: 10mm;
@@ -536,6 +615,27 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           gap: 12px;
           padding: 16px;
           overflow: auto;
+        }
+        .print-fields-pane {
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+        }
+        .print-fields-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 12px 16px 0;
+          direction: rtl;
+        }
+        .print-fields-meta {
+          font-size: 12px;
+          color: #64748b;
+        }
+        .dark .print-fields-meta {
+          color: #cbd5e1;
         }
         .print-field-card {
           display: flex;
@@ -582,6 +682,9 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           .print-template-list {
             border-inline-end: none;
             border-bottom: 1px solid rgba(148,163,184,0.18);
+          }
+          .print-preview-shell .ant-tabs-nav {
+            margin-bottom: 0 !important;
           }
         }
       `}</style>

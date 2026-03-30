@@ -541,7 +541,7 @@ const AccountingRecordPage: React.FC = () => {
           return;
         }
 
-        if (field.type === FieldType.TEXT || field.type === FieldType.LONG_TEXT) {
+        if (field.type === FieldType.TEXT || field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
           const value = String(raw || '').trim();
           payload[field.key] = value ? value : null;
           return;
@@ -692,7 +692,8 @@ const AccountingRecordPage: React.FC = () => {
 
     switch (field.type) {
       case FieldType.LONG_TEXT:
-        return <Input.TextArea rows={3} disabled={disabled} />;
+      case FieldType.SUPER_LONG_TEXT:
+        return <Input.TextArea rows={field.type === FieldType.SUPER_LONG_TEXT ? 6 : 3} disabled={disabled} />;
       case FieldType.CHECKBOX:
         return <Checkbox disabled={disabled} />;
       case FieldType.DATE:

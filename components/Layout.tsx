@@ -1,7 +1,8 @@
 ﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, message, Modal, Input, Spin } from 'antd';
+import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin } from 'antd';
 import type { InputRef } from 'antd';
 import { 
+  AppstoreOutlined,
   DashboardOutlined, 
   SkinOutlined, 
   TeamOutlined, 
@@ -30,9 +31,10 @@ import NotificationsPopover from './NotificationsPopover';
 import { getRecordTitle } from '../utils/recordTitle';
 import {
   ACCOUNTING_PERMISSION_KEY,
-  fetchCurrentUserRolePermissions,
+  resolvePreferredRoleModuleIds,
   type PermissionMap,
 } from '../utils/permissions';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -44,6 +46,7 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName }) => {
+  const { message: messageApi, modal } = App.useApp();
   const [collapsed, setCollapsed] = useState(true);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -54,6 +57,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<Array<{ moduleId: string; moduleTitle: string; items: any[] }>>([]);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
+  const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   
@@ -61,19 +65,23 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const location = useLocation();
 
   useEffect(() => {
+    let isMounted = true;
     const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      setCurrentUser(user);
-      if (user?.id) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url')
-          .eq('id', user.id)
-          .maybeSingle();
-        setCurrentUserProfile(profile || null);
-
-        const rolePerms = await fetchCurrentUserRolePermissions(supabase);
-        setRolePermissions(rolePerms || {});
+      try {
+        const snapshot = await fetchSessionBootstrap(supabase);
+        const user = snapshot.user;
+        if (!isMounted) return;
+        setCurrentUser(user);
+        if (user?.id) {
+          if (!isMounted) return;
+          setCurrentUserProfile(snapshot.profile || null);
+          setRolePermissions((snapshot.permissions || {}) as PermissionMap);
+        } else {
+          setCurrentUserProfile(null);
+          setRolePermissions({});
+        }
+      } finally {
+        if (isMounted) setRolePermissionsReady(true);
       }
     };
     getUser();
@@ -92,7 +100,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
     handleResize();
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
@@ -111,7 +122,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, [location.pathname, isMobile]);
 
   const handleLogout = () => {
-    Modal.confirm({
+    modal.confirm({
       title: 'خروج از حساب کاربری',
       icon: <ExclamationCircleOutlined />,
       content: 'آیا مطمئن هستید که می‌خواهید خارج شوید؟',
@@ -123,9 +134,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           const { error } = await supabase.auth.signOut();
           if (error) throw error;
           navigate('/login');
-          message.success('با موفقیت خارج شدید');
+          messageApi.success('با موفقیت خارج شدید');
         } catch (error) {
-          message.error('خطا در خروج از سیستم');
+          messageApi.error('خطا در خروج از سیستم');
         }
       },
     });
@@ -139,9 +150,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       label: 'منابع',
       children: [
         { key: '/products', label: 'کالاها و خدمات' },
+        { key: '/price_lists', label: 'لیست قیمت‌ها', disabled: !canViewModule('price_lists') },
+        { key: '/product_bundles', label: 'پکیج‌ها', disabled: !canViewModule('product_bundles') },
         { key: '/customers', label: 'مشتریان' },
         { key: '/suppliers', label: 'تامین کنندگان' },
         { key: '/warehouses', label: 'انبارها' },
+        { key: '/shelves', label: 'قفسه‌ها' },
         { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
       ]
     },
@@ -189,8 +203,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       icon: <TeamOutlined />,
       label: 'منابع انسانی',
       children: [
-        { key: '/tasks', label: 'وظایف' },
-        { key: '/hr', label: 'عملکرد کارکنان' },
+        { key: '/hr', label: 'داشبورد منابع انسانی' },
+        { key: '/employees', label: 'کارکنان' },
+        { key: '/attendance_logs', label: 'تردد' },
+        { key: '/work_schedules', label: 'برنامه حضور' },
+        { key: '/leave_requests', label: 'مرخصی‌ها' },
+        { key: '/overtime_requests', label: 'اضافه‌کاری‌ها' },
+        { key: '/mission_requests', label: 'ماموریت‌ها' },
+        { key: '/tasks', label: 'فعالیت ها' },
       ]
     },
     {
@@ -309,13 +329,60 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     isMenu?: boolean;
   };
 
-  const mobileNavItems: MobileNavItem[] = [
-    { key: '/products', icon: <SkinOutlined />, label: 'کالاها' },
-    { key: '/production_orders', icon: <CheckSquareOutlined />, label: 'تولید' },
-    { key: '/', icon: <HomeOutlined />, label: 'خانه', isCenter: true },
-    { key: '/invoices', icon: <FileTextOutlined />, label: 'فاکتورها' },
-    { key: 'more', icon: <MenuFoldOutlined />, label: 'بیشتر', isMenu: true },
-  ];
+  const mobileFooterModuleIds = useMemo(() => {
+    return resolvePreferredRoleModuleIds(rolePermissions, MODULES, 3);
+  }, [rolePermissions]);
+
+  const mobileNavItems: MobileNavItem[] = useMemo(() => {
+    const labelMap: Record<string, string> = {
+      products: 'کالاها',
+      production_orders: 'تولید',
+      invoices: 'فروش',
+      purchase_invoices: 'خرید',
+      product_bundles: 'پکیج',
+      price_lists: 'قیمت',
+      customers: 'مشتری',
+      suppliers: 'تامین',
+      projects: 'پروژه',
+      tasks: 'فعالیت ها',
+      employees: 'پرسنل',
+      warehouses: 'انبار',
+      marketing_leads: 'لیدها',
+      process_runs: 'فرآیند',
+      process_templates: 'الگوها',
+      attendance_logs: 'تردد',
+    };
+    const iconMap: Record<string, React.ReactNode> = {
+      products: <SkinOutlined />,
+      product_bundles: <AppstoreOutlined />,
+      price_lists: <AppstoreOutlined />,
+      production_orders: <CheckSquareOutlined />,
+      invoices: <FileTextOutlined />,
+      purchase_invoices: <FileTextOutlined />,
+      customers: <TeamOutlined />,
+      suppliers: <TeamOutlined />,
+      employees: <TeamOutlined />,
+      tasks: <CheckSquareOutlined />,
+      projects: <ProjectOutlined />,
+      warehouses: <BankOutlined />,
+      marketing_leads: <FileTextOutlined />,
+      attendance_logs: <CheckSquareOutlined />,
+      process_runs: <NodeIndexOutlined />,
+      process_templates: <NodeIndexOutlined />,
+    };
+    const dynamicItems = mobileFooterModuleIds.map((moduleId) => ({
+      key: `/${moduleId}`,
+      icon: iconMap[moduleId] || <AppstoreOutlined />,
+      label: labelMap[moduleId] || MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId,
+    }));
+    return [
+      dynamicItems[0],
+      dynamicItems[1],
+      { key: '/', icon: <HomeOutlined />, label: 'خانه', isCenter: true },
+      dynamicItems[2],
+      { key: 'more', icon: <MenuFoldOutlined />, label: 'بیشتر', isMenu: true },
+    ].filter(Boolean) as MobileNavItem[];
+  }, [mobileFooterModuleIds]);
 
   const toggleSidebar = () => {
     setCollapsed((prev) => !prev);
@@ -470,7 +537,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                   navigate(`/${moduleId}/${recordId}`);
                   return;
                 }
-                message.warning('کد معتبر نیست');
+                messageApi.warning('کد معتبر نیست');
               }}
             />
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
@@ -516,7 +583,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           {children}
         </Content>
 
-        {!isKeyboardVisible && (
+        {!isKeyboardVisible && rolePermissionsReady && (
           <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-dark-surface/95 backdrop-blur-xl border-t border-gray-200 dark:border-dark-border rounded-t-2xl flex items-center justify-around z-[1000] shadow-2xl transition-colors pb-[env(safe-area-inset-bottom)]">
              {mobileNavItems.map((item) => {
                const isActive = location.pathname === item.key;

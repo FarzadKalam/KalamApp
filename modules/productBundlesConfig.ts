@@ -1,15 +1,13 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, LogicOperator, FieldNature } from '../types';
-
-/**
- * Product Bundles Module Configuration
- * 
- * برای بسته‌های محصول نیمه‌آماده (semi_finished_bundle)
- * 
- * هر بسته شامل:
- * - شماره بسته (bundle_number)
- * - قفسه انبار (shelf_id)
- * - اقلام داخل بسته (bundle_items)
- */
+import {
+  BlockType,
+  FieldLocation,
+  FieldNature,
+  FieldType,
+  ModuleDefinition,
+  ModuleNature,
+  RowCalculationType,
+  ViewMode,
+} from '../types';
 
 const BLOCKS = {
   baseInfo: {
@@ -17,130 +15,129 @@ const BLOCKS = {
     titles: { fa: 'اطلاعات پایه', en: 'Basic Info' },
     icon: 'InfoCircleOutlined',
     order: 1,
-    type: BlockType.FIELD_GROUP
+    type: BlockType.FIELD_GROUP,
   },
-  
-  bundleContents: {
-    id: 'bundleContents',
-    titles: { fa: 'اقلام بسته', en: 'Bundle Contents' },
-    icon: 'BgColorsOutlined',
+  products: {
+    id: 'products',
+    titles: { fa: 'اقلام پکیج', en: 'Package Items' },
+    icon: 'TableOutlined',
     order: 2,
     type: BlockType.TABLE,
-    visibleIf: { field: 'status', operator: LogicOperator.NOT_EQUALS, value: null }
-  }
+    rowCalculationType: RowCalculationType.INVOICE_ROW,
+    tableColumns: [
+      {
+        key: 'product_id',
+        title: 'کالا / خدمت',
+        type: FieldType.RELATION,
+        width: 300,
+        relationConfig: {
+          targetModule: 'products',
+          targetField: 'name',
+          sourceModules: [
+            { targetModule: 'products', targetField: 'name' },
+            { targetModule: 'billboards', targetField: 'name', tagLabel: 'محیطی', tagColor: 'purple' },
+          ],
+        },
+      },
+      {
+        key: 'quantity',
+        title: 'تعداد / مقدار',
+        type: FieldType.NUMBER,
+        width: 130,
+      },
+      {
+        key: 'main_unit',
+        title: 'واحد',
+        type: FieldType.TEXT,
+        width: 120,
+      },
+      {
+        key: 'unit_price',
+        title: 'قیمت واحد',
+        type: FieldType.PRICE,
+        width: 150,
+        readonly: true,
+      },
+      {
+        key: 'discount',
+        title: 'تخفیف پکیج',
+        type: FieldType.PERCENTAGE_OR_AMOUNT,
+        width: 140,
+        showTotal: true,
+      },
+      {
+        key: 'total_price',
+        title: 'قیمت پکیج',
+        type: FieldType.PRICE,
+        width: 160,
+        readonly: true,
+        showTotal: true,
+      },
+    ],
+  },
 };
 
 export const productBundlesConfig: ModuleDefinition = {
   id: 'product_bundles',
-  titles: { fa: 'بسته‌های محصول', en: 'Product Bundles' },
+  titles: { fa: 'پکیج‌ها', faSingular: 'پکیج', en: 'Sales Packages' },
   nature: ModuleNature.PRODUCT,
   table: 'product_bundles',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  
   fields: [
-    // --- هدر ---
     {
-      key: 'bundle_number',
-      labels: { fa: 'شماره بسته', en: 'Bundle Number' },
+      key: 'image_url',
+      labels: { fa: 'تصویر / فایل', en: 'Image' },
+      type: FieldType.IMAGE,
+      location: FieldLocation.HEADER,
+      order: 0,
+      isTableColumn: true,
+      nature: FieldNature.PREDEFINED,
+    },
+    {
+      key: 'name',
+      labels: { fa: 'نام پکیج', en: 'Name' },
       type: FieldType.TEXT,
       location: FieldLocation.HEADER,
       order: 1,
       validation: { required: true },
+      isKey: true,
+      isTableColumn: true,
       nature: FieldNature.PREDEFINED,
-      isKey: true
     },
-
     {
       key: 'status',
       labels: { fa: 'وضعیت', en: 'Status' },
       type: FieldType.STATUS,
       location: FieldLocation.HEADER,
       order: 2,
+      defaultValue: 'active',
+      isTableColumn: true,
       options: [
         { label: 'فعال', value: 'active', color: 'green' },
-        { label: 'پیش‌نویس', value: 'draft', color: 'orange' },
-        { label: 'بایگانی', value: 'archived', color: 'gray' }
+        { label: 'غیرفعال', value: 'draft', color: 'orange' },
       ],
-      defaultValue: 'draft',
-      nature: FieldNature.PREDEFINED
+      nature: FieldNature.PREDEFINED,
     },
-
-    // --- اطلاعات پایه ---
     {
-      key: 'shelf_id',
-      labels: { fa: 'قفسه انبار', en: 'Storage Shelf' },
-      type: FieldType.RELATION,
+      key: 'notes',
+      labels: { fa: 'توضیحات', en: 'Description' },
+      type: FieldType.LONG_TEXT,
       location: FieldLocation.BLOCK,
       blockId: 'baseInfo',
-      order: 1,
-      relationConfig: {
-        targetModule: 'warehouses', // TODO: در صورت نیاز تصحیح شود
-        targetField: 'name'
-      },
-      nature: FieldNature.PREDEFINED
+      order: 3,
+      nature: FieldNature.STANDARD,
     },
-
     {
       key: 'created_at',
       labels: { fa: 'تاریخ ایجاد', en: 'Created At' },
       type: FieldType.DATETIME,
       location: FieldLocation.BLOCK,
       blockId: 'baseInfo',
-      order: 2,
+      order: 10,
       readonly: true,
-      nature: FieldNature.SYSTEM
+      nature: FieldNature.SYSTEM,
     },
-
-    {
-      key: 'notes',
-      labels: { fa: 'یادداشت‌ها', en: 'Notes' },
-      type: FieldType.LONG_TEXT,
-      location: FieldLocation.BLOCK,
-      blockId: 'baseInfo',
-      order: 3,
-      nature: FieldNature.STANDARD
-    }
   ],
-
-  blocks: [
-    BLOCKS.baseInfo,
-    
-    // بلوک جدول اقلام بسته
-    {
-      ...BLOCKS.bundleContents,
-      tableColumns: [
-        {
-          key: 'product_id',
-          title: 'محصول (مواد اولیه)',
-          type: FieldType.RELATION,
-          relationConfig: {
-            targetModule: 'products',
-            targetField: 'name'
-          }
-        },
-        {
-          key: 'quantity',
-          title: 'مقدار',
-          type: FieldType.NUMBER
-        },
-        {
-          key: 'unit',
-          title: 'واحد',
-          type: FieldType.TEXT
-        }
-      ]
-    }
-  ],
-
-  relatedTabs: [
-    {
-      id: 'products',
-      title: 'محصولات استفاده‌کننده',
-      icon: 'ShoppingCart',
-      targetModule: 'products',
-      foreignKey: 'bundle_id',
-      relationType: 'fk'
-    }
-  ]
+  blocks: [BLOCKS.baseInfo, BLOCKS.products],
 };

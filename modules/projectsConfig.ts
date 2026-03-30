@@ -10,9 +10,17 @@ import {
 
 export const projectsModule: ModuleDefinition = {
   id: 'projects',
-  titles: { fa: 'پروژه‌ها', en: 'Projects' },
+  titles: { fa: 'پروژه‌ها', faSingular: 'پروژه', en: 'Projects' },
   nature: ModuleNature.STANDARD,
   table: 'projects',
+  dashboard: {
+    quickCreateLabel: 'پروژه جدید',
+    recentListFields: ['name', 'status', 'priority', 'due_date'],
+    summaryCard: {
+      preset: 'projects_in_progress',
+      title: 'تعداد پروژه های درحال اجرا',
+    },
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.KANBAN, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [
@@ -241,7 +249,7 @@ export const projectsModule: ModuleDefinition = {
   relatedTabs: [
     {
       id: 'project_tasks',
-      title: 'وظایف پروژه',
+      title: 'فعالیت های پروژه',
       icon: 'CheckSquareOutlined',
       relationType: 'fk',
       targetModule: 'tasks',

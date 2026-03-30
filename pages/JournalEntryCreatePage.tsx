@@ -109,6 +109,7 @@ const JournalEntryCreatePage: React.FC = () => {
         source_module: initialValuesFromState?.source_module || null,
         source_table: initialValuesFromState?.source_table || null,
         source_record_id: initialValuesFromState?.source_record_id || null,
+        source_record_title: initialValuesFromState?.source_record_title || null,
       };
 
       const { data: inserted, error } = await supabase

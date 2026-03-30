@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Button, Spin, App, Avatar, Checkbox, Modal, Select, Form, Input } from 'antd';
+import { Button, App, Avatar, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
 import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -18,10 +18,12 @@ import HeroSection from '../components/moduleShow/HeroSection';
 import FieldGroupsTabs from '../components/moduleShow/FieldGroupsTabs';
 import TablesSection from '../components/moduleShow/TablesSection';
 import PrintSection from '../components/moduleShow/PrintSection';
+import CustomerFinancialOverviewPanel from '../components/accounting/CustomerFinancialOverviewPanel';
+import AccountLedgerPanel from '../components/accounting/AccountLedgerPanel';
 import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece, type StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
-import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { toPersianNumber } from '../utils/persianNumberFormatter';
 import { convertArea } from '../utils/unitConversions';
 import QrScanPopover from '../components/QrScanPopover';
 import { PRODUCTION_MESSAGES } from '../utils/productionMessages';
@@ -34,11 +36,92 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
-import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
-import { canAccessAssignedRecord } from '../utils/permissions';
+import { createJournalFromInvoice, syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
+import { canAccessAssignedRecord, fetchCurrentUserRoleContext } from '../utils/permissions';
+import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from '../utils/recordCopy';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { getSafeOptionFallback } from '../utils/optionHelpers';
+import { getAssigneeLabel } from '../utils/assigneeLabel';
+import { getResolvedAssigneeId } from '../utils/assigneeValue';
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
+import { getCachedAuthUser } from '../utils/sessionCache';
+import { supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
+import { fetchRelationOptionsForField } from '../utils/relationOptions';
+import { syncRecordTags } from '../utils/recordTags';
+import { getProjectModuleOptions } from '../utils/workflowHelpers';
+
+const toFaAccountingSyncError = (raw: unknown): string => {
+  const text = String(raw || '').trim();
+  if (!text) return 'خطا در صدور سند حسابداری.';
+
+  const lower = text.toLowerCase();
+  if (lower.includes('missing default accounts') && lower.includes('receivable') && lower.includes('revenue')) {
+    return 'حساب‌های پیش‌فرض دریافتنی و درآمد فروش تعریف نشده‌اند.';
+  }
+  if (lower.includes('missing default accounts') && lower.includes('payable')) {
+    return 'حساب پیش‌فرض پرداختنی تعریف نشده است.';
+  }
+  if (lower.includes('json object requested') && lower.includes('multiple')) {
+    return 'چند تنظیم هم‌زمان برای حسابداری پیدا شد. لطفا فقط یک تنظیم پیش‌فرض نگه دارید.';
+  }
+  if (/[a-z]/i.test(text)) {
+    return 'خطا در صدور سند حسابداری.';
+  }
+  return text;
+};
+
+const ModuleShowSkeleton: React.FC = () => {
+  return (
+    <div className="min-h-screen bg-[#f6f7fb] dark:bg-[#0f1115] px-4 py-5 md:px-6">
+      <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4">
+        <div className="rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#17191f]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex min-w-0 flex-1 items-start gap-4">
+              <Skeleton.Avatar active size={72} shape="square" className="!rounded-2xl" />
+              <div className="flex min-w-0 flex-1 flex-col gap-3">
+                <Skeleton.Input active style={{ width: '42%', height: 28 }} />
+                <Skeleton.Input active style={{ width: '68%', height: 18 }} />
+                <div className="flex flex-wrap gap-2">
+                  {Array.from({ length: 3 }).map((_, idx) => (
+                    <Skeleton.Button key={idx} active size="small" shape="round" />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {Array.from({ length: 3 }).map((_, idx) => (
+                <Skeleton.Button key={idx} active />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#17191f]">
+            <Skeleton active title={{ width: '26%' }} paragraph={{ rows: 10 }} />
+          </div>
+          <div className="rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#17191f]">
+            <Skeleton active title={{ width: '45%' }} paragraph={{ rows: 6 }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MODULE_SHOW_CACHE_TTL_MS = 30000;
+type ModuleShowSnapshot = {
+  record: any;
+  tags: any[];
+  cachedAt: number;
+};
+
+const moduleShowSnapshotCache = new Map<string, ModuleShowSnapshot>();
+let moduleShowBaseInfoCache: { users: any[]; roles: any[] } | null = null;
+let moduleShowBaseInfoPromise: Promise<{ users: any[]; roles: any[] }> | null = null;
 
 const ModuleShow: React.FC = () => {
   const { moduleId = 'products', id } = useParams();
@@ -46,6 +129,8 @@ const ModuleShow: React.FC = () => {
   const { message: msg, modal } = App.useApp();
   const { label: currencyLabel } = useCurrencyConfig();
   const moduleConfig = MODULES[moduleId];
+  const supportsAssignee = supportsModuleAssignee(moduleConfig);
+  const supportsRoleAssignee = supportsModuleRoleAssignee(moduleConfig);
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -60,8 +145,14 @@ const ModuleShow: React.FC = () => {
   const [, setUploadingImage] = useState(false);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
+  const [, setOptionsReady] = useState(false);
+  const hasRecordDataRef = useRef(false);
+  const activeRecordRequestRef = useRef(0);
+  const recordFetchPromiseRef = useRef<Promise<void> | null>(null);
+  const recordFetchKeyRef = useRef<string>('');
+  const skipNextOptionsFetchRef = useRef(false);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
-  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean }>({});
+  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: 'all' | 'own' | 'team' }>({});
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [autoSyncedBomId, setAutoSyncedBomId] = useState<string | null>(null);
   const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
@@ -83,11 +174,13 @@ const ModuleShow: React.FC = () => {
   const [outputProductId, setOutputProductId] = useState<string | null>(null);
   const [outputShelfId, setOutputShelfId] = useState<string | null>(null);
   const [isCreateProductOpen, setIsCreateProductOpen] = useState(false);
+  const [isCreateCustomerFromLeadOpen, setIsCreateCustomerFromLeadOpen] = useState(false);
   const [outputProductType, setOutputProductType] = useState<'goods' | null>(null);
   const [outputMode, setOutputMode] = useState<'existing' | 'new'>('existing');
   const [productionQuantityPreview, setProductionQuantityPreview] = useState<number | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [issueAccountingLoading, setIssueAccountingLoading] = useState(false);
+  const assigneeLabel = getAssigneeLabel(moduleId);
   const [stockMovementQuickAddSignal, setStockMovementQuickAddSignal] = useState(0);
   const [isQuickProjectModalOpen, setIsQuickProjectModalOpen] = useState(false);
   const [quickProjectLoading, setQuickProjectLoading] = useState(false);
@@ -110,9 +203,26 @@ const ModuleShow: React.FC = () => {
     }, [moduleId, id]);
 
   useEffect(() => {
+    const cacheKey = `${moduleId}:${id || ''}`;
+    const cachedSnapshot = moduleShowSnapshotCache.get(cacheKey);
+    const hasFreshSnapshot = !!cachedSnapshot && (Date.now() - cachedSnapshot.cachedAt) < MODULE_SHOW_CACHE_TTL_MS;
+    hasRecordDataRef.current = false;
+    skipNextOptionsFetchRef.current = false;
+    setData(hasFreshSnapshot ? cachedSnapshot?.record ?? null : null);
+    setLoading(!hasFreshSnapshot);
     setAutoSyncedBomId(null);
     setAutoSyncedProcessTemplateId(null);
+    setDynamicOptions({});
+    setRelationOptions({});
+    setOptionsReady(false);
+    setCurrentTags(hasFreshSnapshot ? cachedSnapshot?.tags ?? [] : []);
+    setAccessDenied(false);
+    hasRecordDataRef.current = hasFreshSnapshot;
   }, [id, moduleId]);
+
+  useEffect(() => {
+    hasRecordDataRef.current = !!data;
+  }, [data]);
 
   const readOrderQuantity = useCallback((record: any, override?: number | null) => {
     const raw = override ?? record?.quantity ?? record?.production_qty ?? record?.production_quantity ?? record?.qty ?? record?.count ?? 0;
@@ -636,45 +746,82 @@ const ModuleShow: React.FC = () => {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
 
+  const mergeUsersById = (rows: any[]) =>
+    rows.reduce((acc: any[], row: any) => {
+      const id = String(row?.id || '').trim();
+      if (!id) return acc;
+      const existingIndex = acc.findIndex((item) => String(item?.id || '') === id);
+      if (existingIndex >= 0) {
+        const next = [...acc];
+        next[existingIndex] = { ...next[existingIndex], ...row };
+        return next;
+      }
+      return [...acc, row];
+    }, []);
+
   const fetchBaseInfo = useCallback(async () => {
-      const { data: users } = await supabase.from('profiles').select('id, full_name, avatar_url');
-      const { data: roles } = await supabase.from('org_roles').select('*');
-      if (users) setAllUsers(users);
-      if (roles) {
-        setAllRoles(
-          roles.map((role: any) => ({
-            ...role,
-            title: role?.title || role?.name || role?.id,
-          }))
-        );
+      if (moduleShowBaseInfoCache) {
+        setAllUsers((prev) => mergeUsersById([...prev, ...moduleShowBaseInfoCache!.users]));
+        setAllRoles(moduleShowBaseInfoCache.roles);
+        return;
       }
+
+      if (!moduleShowBaseInfoPromise) {
+        moduleShowBaseInfoPromise = (async () => {
+          const directory = await fetchAssigneeDirectory(supabase);
+          moduleShowBaseInfoCache = {
+            users: directory.users || [],
+            roles: directory.roles || [],
+          };
+          return moduleShowBaseInfoCache;
+        })().finally(() => {
+          moduleShowBaseInfoPromise = null;
+        });
+      }
+
+      const directory = await moduleShowBaseInfoPromise;
+      setAllUsers((prev) => mergeUsersById([...prev, ...directory.users]));
+      setAllRoles(directory.roles);
   }, []);
 
-  useEffect(() => {
-    const fetchCurrentUser = async () => {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        const user = authData?.user;
-        if (!user) return;
-        setCurrentUserId(user.id);
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role_id')
-          .eq('id', user.id)
-          .single();
-        setCurrentUserRoleId(profile?.role_id || null);
-      } catch (err) {
-        console.warn('Could not fetch current user role:', err);
-      }
-    };
-    fetchCurrentUser();
-  }, []);
+  const ensureUserLabels = useCallback(async (userIds: Array<string | null | undefined>) => {
+    const normalizedIds = Array.from(
+      new Set(userIds.map((item) => String(item || '').trim()).filter(Boolean))
+    );
+    if (!normalizedIds.length) return;
 
-  const fetchRecord = useCallback(async () => {
+    const missingIds = normalizedIds.filter((id) => !allUsers.some((user) => String(user?.id || '') === id));
+    if (!missingIds.length) return;
+
+    const { data: profiles, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, mobile_1, avatar_url')
+      .in('id', missingIds);
+    if (error || !profiles?.length) return;
+
+    const normalizedProfiles = (profiles || []).map((user: any) => ({
+      ...user,
+      full_name:
+        String(user?.full_name || '').trim() ||
+        String(user?.email || '').trim() ||
+        String(user?.mobile_1 || '').trim() ||
+        `کاربر ${String(user?.id || '').slice(0, 8)}`,
+    }));
+
+    setAllUsers((prev) => mergeUsersById([...prev, ...normalizedProfiles]));
+  }, [allUsers]);
+
+  const fetchRecord = useCallback((force = false) => {
     if (!id || !moduleConfig) return;
-    setLoading(true);
-    
-    try {
+    const fetchKey = `${moduleId}:${id}`;
+    if (!force && recordFetchPromiseRef.current && recordFetchKeyRef.current === fetchKey) {
+      return recordFetchPromiseRef.current;
+    }
+    const requestId = activeRecordRequestRef.current + 1;
+    activeRecordRequestRef.current = requestId;
+    setLoading((prev) => (hasRecordDataRef.current ? prev : true));
+    const run = (async () => {
+      try {
         // 👇 تغییر مهم: اضافه کردن صریح فیلدهای سیستمی به select
         const { data: record, error } = await supabase
             .from(moduleId)
@@ -686,28 +833,29 @@ const ModuleShow: React.FC = () => {
                 updated_by
             `)
             .eq('id', id)
-            .single();
+            .maybeSingle();
 
-        if (error) throw error;
-        
-        const { data: tagsData } = await supabase
-            .from('record_tags')
-            .select('tags(id, title, color)')
-            .eq('record_id', id);
-
-        const tags = tagsData?.map((item: any) => item.tags).filter(Boolean) || [];
-        
-        const hasModuleViewAccess = modulePermissions.view !== false;
-        const assignedAccess = canAccessAssignedRecord(record, currentUserId, currentUserRoleId);
-
-        if (!hasModuleViewAccess && !assignedAccess) {
-          setAccessDenied(true);
+        if (error && String(error.code) !== 'PGRST116') throw error;
+        if (activeRecordRequestRef.current !== requestId) return;
+        if (!record) {
+          if (moduleId === 'products') {
+            const { data: billboardRecord, error: billboardError } = await supabase
+              .from('billboards')
+              .select('id')
+              .eq('id', id)
+              .maybeSingle();
+            if (billboardError && String(billboardError.code) !== 'PGRST116') throw billboardError;
+            if (billboardRecord?.id) {
+              navigate(`/billboards/${id}`, { replace: true });
+              return;
+            }
+          }
+          if (activeRecordRequestRef.current !== requestId) return;
           setData(null);
+          msg.error('رکورد موردنظر یافت نشد یا حذف شده است.');
           return;
         }
 
-        setAccessDenied(false);
-        setCurrentTags(tags);
         let nextRecord: any = record;
         if (moduleId === 'products') {
           const mainUnit = nextRecord?.main_unit;
@@ -771,30 +919,84 @@ const ModuleShow: React.FC = () => {
             })),
           };
         }
+        if (activeRecordRequestRef.current !== requestId) return;
+        skipNextOptionsFetchRef.current = true;
         setData(nextRecord);
+        void fetchOptions(nextRecord, requestId);
+        void (async () => {
+          const { data: tagsData } = await supabase
+            .from('record_tags')
+            .select('tags(id, title, color)')
+            .eq('record_id', id);
+          if (activeRecordRequestRef.current !== requestId) return;
+          const tags = tagsData?.map((item: any) => item.tags).filter(Boolean) || [];
+          moduleShowSnapshotCache.set(fetchKey, {
+            record: nextRecord,
+            tags,
+            cachedAt: Date.now(),
+          });
+          setCurrentTags(tags);
+        })();
     } catch (err: any) {
         const abortLike = String(err?.name || '').toLowerCase() === 'aborterror'
           || String(err?.message || '').toLowerCase().includes('signal is aborted');
         if (!abortLike) {
+          const code = String(err?.code || '');
+          const rawMessage = String(err?.message || '');
+          const missingRow = code === 'PGRST116' || /0 rows/i.test(rawMessage);
+          if (missingRow) {
+            msg.error('رکورد موردنظر یافت نشد یا حذف شده است.');
+            return;
+          }
           console.error(err);
-          msg.error('خطا در دریافت رکورد: ' + (err?.message || 'نامشخص'));
+          msg.error(toFaErrorMessage(err, 'خطا در دریافت رکورد.'));
         }
     } finally {
-        setLoading(false);
-    }
-  }, [id, moduleConfig, moduleId, msg, currentUserId, currentUserRoleId, modulePermissions.view]);
+        if (activeRecordRequestRef.current === requestId) {
+          setLoading(false);
+        }
+      }
+    })().finally(() => {
+      if (recordFetchKeyRef.current === fetchKey) {
+        recordFetchPromiseRef.current = null;
+        recordFetchKeyRef.current = '';
+      }
+    });
+    recordFetchKeyRef.current = fetchKey;
+    recordFetchPromiseRef.current = run;
+    return run;
+  }, [id, moduleConfig, moduleId, msg, navigate]);
 
   useEffect(() => {
-    fetchBaseInfo();
-  }, [fetchBaseInfo]);
+    if (!id) return;
+    const timer = window.setTimeout(() => {
+      void fetchBaseInfo();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [id, fetchBaseInfo]);
 
   useEffect(() => {
-    fetchRecord();
+    void fetchRecord();
   }, [fetchRecord]);
+
+  useEffect(() => {
+    void ensureUserLabels([data?.created_by, data?.updated_by, data?.assignee_type === 'user' ? data?.assignee_id : null]);
+  }, [data?.created_by, data?.updated_by, data?.assignee_id, data?.assignee_type, ensureUserLabels]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [id, moduleId]);
+
+  useEffect(() => {
+    if (!data) {
+      setAccessDenied(false);
+      return;
+    }
+    const recordScope = modulePermissions.record_scope ?? (modulePermissions.view === false ? 'own' : 'all');
+    const hasModuleViewAccess = modulePermissions.view !== false || recordScope !== 'all';
+    const scopedAccess = canAccessAssignedRecord(data, currentUserId, currentUserRoleId, recordScope);
+    setAccessDenied(!hasModuleViewAccess || !scopedAccess);
+  }, [data, currentUserId, currentUserRoleId, modulePermissions.record_scope, modulePermissions.view]);
 
   const loadProductionShelves = useCallback(async () => {
     const { data: shelves } = await supabase
@@ -948,7 +1150,7 @@ const ModuleShow: React.FC = () => {
       }
       if (hasIncompleteDraftStages || !hasProductionLine) {
         const shouldContinue = await askStartWarning(
-          'برای این سفارش، خط تولید تکمیل نشده و یک یا چند وظیفه در حالت پیش نویس هستند، آیا ادامه می دهید؟'
+          'برای این سفارش، خط تولید تکمیل نشده و یک یا چند فعالیت در حالت پیش نویس هستند، آیا ادامه می دهید؟'
         );
         if (!shouldContinue) return;
       }
@@ -1084,35 +1286,31 @@ const ModuleShow: React.FC = () => {
 
   const fetchFieldPermissions = useCallback(async () => {
     try {
-      const { data: authData } = await supabase.auth.getUser();
-      const user = authData?.user;
-      if (!user) return;
+      const context = await fetchCurrentUserRoleContext(supabase);
+      setCurrentUserId(context.userId);
+      setCurrentUserRoleId(context.roleId);
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role_id')
-        .eq('id', user.id)
-        .single();
+      if (!context.roleId) {
+        setFieldPermissions({});
+        setModulePermissions({});
+        setCanIssueAccountingEntry(true);
+        return;
+      }
 
-      if (!profile?.role_id) return;
-
-      const { data: role } = await supabase
-        .from('org_roles')
-        .select('permissions')
-        .eq('id', profile.role_id)
-        .single();
-
-      const modulePerms = role?.permissions?.[moduleId] || {};
-      const journalPerms = role?.permissions?.journal_entries || {};
+      const permissions = context.permissions || {};
+      const modulePerms = permissions?.[moduleId] || {};
+      const journalPerms = permissions?.journal_entries || {};
       const perms = modulePerms.fields || {};
       setFieldPermissions(perms);
       setModulePermissions({
         view: modulePerms.view,
         edit: modulePerms.edit,
-        delete: modulePerms.delete
+        delete: modulePerms.delete,
+        record_scope: modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all'),
       });
       setCanIssueAccountingEntry(journalPerms.view !== false && journalPerms.edit !== false);
     } catch (err) {
+      if (String((err as any)?.name || '') === 'AbortError') return;
       console.warn('Could not fetch field permissions:', err);
       setCanIssueAccountingEntry(true);
     }
@@ -1142,176 +1340,79 @@ const ModuleShow: React.FC = () => {
       if (bom) setLinkedBomData(bom);
   }, []);
 
-  const fetchOptions = useCallback(async (recordData: any = null) => {
+  const fetchOptions = useCallback(async (recordData: any = null, requestId?: number) => {
     if (!moduleConfig) return;
-    
-    const dynFields: any[] = [...moduleConfig.fields.filter(f => (f as any).dynamicOptionsCategory)];
-    moduleConfig.blocks?.forEach(b => {
-      if (b.tableColumns) {
-        b.tableColumns.forEach(c => {
-          if ((c.type === FieldType.SELECT || c.type === FieldType.MULTI_SELECT) && (c as any).dynamicOptionsCategory) {
-            dynFields.push(c);
-          }
-        });
-      }
-    });
-    
-    const dynOpts: Record<string, any[]> = {};
-    for (const field of dynFields) {
-      const cat = (field as any).dynamicOptionsCategory;
-      if (cat && !dynOpts[cat]) {
-        const { data } = await supabase.from('dynamic_options').select('label, value').eq('category', cat).eq('is_active', true);
-        if (data) dynOpts[cat] = data.filter(i => i.value !== null);
-      }
-    }
     try {
-      const { data: formulas } = await supabase.from('calculation_formulas').select('id, name');
-      if (formulas) {
-        dynOpts['calculation_formulas'] = formulas.map((f: any) => ({ label: f.name, value: f.id }));
-      }
-    } catch (err) {
-      console.warn('Could not load calculation formulas', err);
-    }
-    setDynamicOptions(dynOpts);
-
-        const relFields: any[] = [...moduleConfig.fields.filter(f => f.type === FieldType.RELATION)];
-    moduleConfig.blocks?.forEach(b => {
-      if (b.tableColumns) {
-        b.tableColumns.forEach(c => {
-          if (c.type === FieldType.RELATION) relFields.push({ ...c, key: `${b.id}_${c.key}` }); 
-        });
-      }
-    });
-
-    const relOpts: Record<string, any[]> = {};
-    const buildRelationOptionLabel = (targetModuleName: string, row: any, targetField: string) => {
-      const moduleName = String(targetModuleName || '').trim();
-      if (moduleName === 'cheques') {
-        const serial = String(row?.serial_no || row?.[targetField] || row?.system_code || row?.id || 'بدون شماره').trim();
-        const dueDateRaw = String(row?.due_date || '').trim();
-        const dueDate = dueDateRaw ? (safeJalaliFormat(dueDateRaw, 'YYYY/MM/DD') || dueDateRaw) : '';
-        const amount = Number(row?.amount || 0);
-        const dueLabel = dueDate ? toPersianNumber(dueDate) : '-';
-        const amountLabel = amount > 0 ? formatPersianPrice(amount) : '-';
-        return `${serial} (${dueLabel} - ${amountLabel})`;
-      }
-      if (moduleName === 'barters') {
-        const base = String(row?.[targetField] || row?.name || row?.system_code || row?.id || 'بدون عنوان').trim();
-        const remaining = Number(row?.remaining_amount || 0);
-        const remainingLabel = formatPersianPrice(remaining);
-        return `${base} (مانده: ${remainingLabel})`;
-      }
-      const baseLabel = row?.[targetField] || row?.shelf_number || row?.system_code || row?.id;
-      return row?.system_code ? `${baseLabel} (${row.system_code})` : baseLabel;
-    };
-    for (const field of relFields) {
-      if (field.relationConfig) {
-        const targetField = field.relationConfig.targetField || 'name';
-        if (field.relationConfig.dependsOn && recordData) {
-          const dependsOnValue = recordData[field.relationConfig.dependsOn];
-          if (dependsOnValue) {
-            try {
-              const isShelvesTarget = dependsOnValue === 'shelves';
-              const isChequeTarget = dependsOnValue === 'cheques';
-              const isBarterTarget = dependsOnValue === 'barters';
-              const skipSystemCodeModules = new Set(['process_templates', 'profiles', 'bank_accounts', 'cheques', 'barters']);
-              const includeSystemCode = !skipSystemCodeModules.has(String(dependsOnValue || ''));
-              const extraSelect = `${isShelvesTarget ? ', shelf_number' : ''}${isChequeTarget ? ', due_date, amount, serial_no' : ''}${isBarterTarget ? ', remaining_amount, status' : ''}`;
-              let { data: relData, error: relError } = await supabase
-                .from(dependsOnValue)
-                .select(`id, ${targetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}`)
-                .limit(200);
-              if (relError) {
-                const errorCode = String((relError as any)?.code || '').toUpperCase();
-                const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
-                const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-                if (!isMissingColumn) throw relError;
-                const fallback: any = await supabase
-                  .from(dependsOnValue)
-                  .select(`id, ${targetField}${extraSelect}`)
-                  .limit(200);
-                if (fallback.error) throw fallback.error;
-                relData = fallback.data as any[];
-              }
-              if (relData) {
-                const options = relData.map((i: any) => {
-                  return {
-                    label: buildRelationOptionLabel(String(dependsOnValue || ''), i, targetField),
-                    value: i.id,
-                    module: dependsOnValue,
-                    name: i?.[targetField] || i?.name || i?.serial_no || i?.id,
-                    system_code: i.system_code,
-                    due_date: i?.due_date,
-                    amount: i?.amount,
-                    remaining_amount: i?.remaining_amount,
-                    status: i?.status,
-                  };
-                });
-                relOpts[field.key] = options;
-              }
-            } catch (err) {
-              console.warn(`Could not fetch options for ${field.key}:`, err);
+      const dynFields: any[] = [...moduleConfig.fields.filter(f => (f as any).dynamicOptionsCategory)];
+      moduleConfig.blocks?.forEach(b => {
+        if (b.tableColumns) {
+          b.tableColumns.forEach(c => {
+            if ((c.type === FieldType.SELECT || c.type === FieldType.MULTI_SELECT) && (c as any).dynamicOptionsCategory) {
+              dynFields.push(c);
             }
-          }
-        } else {
-          const { targetModule, filter } = field.relationConfig;
-          try {
-            const isShelvesTarget = targetModule === 'shelves';
-            const isChequeTarget = targetModule === 'cheques';
-            const isBarterTarget = targetModule === 'barters';
-            const skipSystemCodeModules = new Set(['process_templates', 'profiles', 'bank_accounts', 'cheques', 'barters']);
-            const includeSystemCode = !skipSystemCodeModules.has(String(targetModule || ''));
-            const extraSelect = `${isShelvesTarget ? ', shelf_number' : ''}${isChequeTarget ? ', due_date, amount, serial_no' : ''}${isBarterTarget ? ', remaining_amount, status' : ''}`;
-            const filterKeys = filter ? Object.keys(filter) : [];
-            const filterSelect = filterKeys.length > 0 ? `, ${filterKeys.join(', ')}` : '';
-            let query = supabase
-              .from(targetModule)
-              .select(`id, ${targetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}${filterSelect}`)
-              .limit(200);
-            if (filter) query = query.match(filter);
-            let { data: relData, error: relError } = await query;
-            if (relError) {
-              const errorCode = String((relError as any)?.code || '').toUpperCase();
-              const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
-              const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-              if (!isMissingColumn) throw relError;
-              let fallbackQuery = supabase
-                .from(targetModule)
-                .select(`id, ${targetField}${extraSelect}${filterSelect}`)
-                .limit(200);
-              if (filter) fallbackQuery = fallbackQuery.match(filter);
-              const fallback: any = await fallbackQuery;
-              if (fallback.error) throw fallback.error;
-              relData = fallback.data as any[];
-            }
-            if (relData) {
-              const options = relData.map((i: any) => {
-                return {
-                  label: buildRelationOptionLabel(String(targetModule || ''), i, targetField),
-                  value: i.id,
-                  name: i?.[targetField] || i?.name || i?.serial_no || i?.id,
-                  system_code: i.system_code,
-                  due_date: i?.due_date,
-                  amount: i?.amount,
-                  remaining_amount: i?.remaining_amount,
-                  status: i?.status,
-                };
-              });
-              relOpts[field.key] = options;
-              if (field.key.includes('_')) relOpts[field.key.split('_').pop()!] = options;
-            }
-          } catch (err) {
-            console.warn(`Could not fetch options for ${field.key}:`, err);
-          }
+          });
         }
+      });
+      
+      const dynCategories = Array.from(
+        new Set(
+          dynFields
+            .map((field) => (field as any).dynamicOptionsCategory as string | undefined)
+            .filter(Boolean)
+        )
+      ) as string[];
+      const dynOpts: Record<string, any[]> = await fetchDynamicOptionsMap(supabase, dynCategories);
+      try {
+        const formulas = await fetchFormulaOptions(supabase);
+        if (formulas.length > 0) {
+          dynOpts['calculation_formulas'] = formulas;
+        }
+      } catch (err) {
+        console.warn('Could not load calculation formulas', err);
       }
+      if (requestId && activeRecordRequestRef.current !== requestId) return;
+      setDynamicOptions(dynOpts);
+
+      const relOpts: Record<string, any[]> = {};
+      const relationFieldsWithValue = moduleConfig.fields.filter((field) => {
+        if (field.type !== FieldType.RELATION || !field.relationConfig) return false;
+        const rawValue = recordData?.[field.key];
+        return rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
+      });
+
+      const relationResults = await Promise.allSettled(
+        relationFieldsWithValue.map(async (field) => {
+          const options = await fetchRelationOptionsForField(supabase, field, {
+            allValues: recordData || {},
+            exactId: recordData?.[field.key],
+            limit: 1,
+          });
+          return { fieldKey: field.key, options };
+        })
+      );
+
+      relationResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          relOpts[result.value.fieldKey] = result.value.options;
+        } else {
+          console.warn('Could not fetch exact relation option for ModuleShow field:', result.reason);
+        }
+      });
+      if (requestId && activeRecordRequestRef.current !== requestId) return;
+      setRelationOptions(relOpts);
+    } finally {
+      if (requestId && activeRecordRequestRef.current !== requestId) return;
+      setOptionsReady(true);
     }
-    setRelationOptions(relOpts);
-    }, [moduleConfig]);
+  }, [moduleConfig]);
 
   useEffect(() => {
     if (data) {
-      fetchOptions(data);
+      if (skipNextOptionsFetchRef.current) {
+        skipNextOptionsFetchRef.current = false;
+      } else {
+        void fetchOptions(data);
+      }
       if (moduleId === 'products' && data.production_bom_id) {
         fetchLinkedBom(data.production_bom_id);
       } else if (moduleId === 'production_boms') {
@@ -1350,7 +1451,7 @@ const ModuleShow: React.FC = () => {
         setData((prev: any) => ({ ...prev, ...patch }));
         setAutoSyncedBomId(data.bom_id);
       } catch (err) {
-        console.warn('Auto sync from BOM failed', err);
+        console.warn('همگام‌سازی خودکار از BOM ناموفق بود', err);
       }
     };
 
@@ -1394,7 +1495,7 @@ const ModuleShow: React.FC = () => {
         setData((prev: any) => ({ ...prev, ...patch }));
         setAutoSyncedProcessTemplateId(data.process_template_id);
       } catch (err) {
-        console.warn('Auto sync from process template failed', err);
+        console.warn('همگام‌سازی خودکار از الگوی فرآیند ناموفق بود', err);
       }
     };
 
@@ -1425,12 +1526,25 @@ const ModuleShow: React.FC = () => {
   }, [moduleConfig, moduleId, data]);
 
     const handleAssigneeChange = useCallback(async (value: string) => {
+      if (!supportsAssignee) {
+        msg.error('برای این ماژول ارجاع مسئول فعال نشده است.');
+        return;
+      }
       const [type, assignId] = value.split('_');
+      if (type === 'role' && !supportsRoleAssignee) {
+        msg.error('در این ماژول فقط امکان انتخاب مسئول از نوع پرسنل وجود دارد.');
+        return;
+      }
       try {
-        const { error } = await supabase.from(moduleId).update({ assignee_id: assignId, assignee_type: type }).eq('id', id);
+        const payload = type === 'role'
+          ? { assignee_id: null, assignee_role_id: assignId, assignee_type: type }
+          : { assignee_id: assignId, assignee_role_id: null, assignee_type: type };
+        const { error } = await supabase.from(moduleConfig?.table || moduleId).update(payload).eq('id', id);
         if (error) throw error;
 
-        const prevAssignee = data?.assignee_id ? `${data?.assignee_type || 'user'}:${data?.assignee_id}` : null;
+        const previousAssigneeId = getResolvedAssigneeId(data);
+        const prevAssigneeType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));
+        const prevAssignee = previousAssigneeId ? `${prevAssigneeType}:${previousAssigneeId}` : null;
         const nextAssignee = assignId ? `${type}:${assignId}` : null;
 
         const resolveAssigneeLabel = async (val: string | null) => {
@@ -1450,10 +1564,15 @@ const ModuleShow: React.FC = () => {
         const oldLabel = await resolveAssigneeLabel(prevAssignee);
         const newLabel = await resolveAssigneeLabel(nextAssignee);
 
-        setData((prev: any) => ({ ...prev, assignee_id: assignId, assignee_type: type }));
+        setData((prev: any) => ({
+          ...prev,
+          assignee_id: type === 'role' ? null : assignId,
+          assignee_role_id: type === 'role' ? assignId : null,
+          assignee_type: type,
+        }));
 
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         const recordTitle = getRecordTitle(data, moduleConfig) || null;
         await supabase.from('changelogs').insert([
           {
@@ -1461,7 +1580,7 @@ const ModuleShow: React.FC = () => {
             record_id: id,
             action: 'update',
             field_name: 'assignee_id',
-            field_label: 'مسئول',
+            field_label: assigneeLabel,
             old_value: oldLabel,
             new_value: newLabel,
             user_id: userId,
@@ -1469,9 +1588,9 @@ const ModuleShow: React.FC = () => {
           },
         ]);
 
-        msg.success('مسئول رکورد تغییر کرد');
+        msg.success(`${assigneeLabel} رکورد تغییر کرد`);
       } catch (e: any) { msg.error('خطا: ' + e.message); }
-    }, [data?.assignee_id, data?.assignee_type, data, id, moduleId, msg]);
+    }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
 
   // تابع برای کپی اقلام BOM به جداول مواد اولیه (با تایید کاربر)
     const handleRelatedBomChange = useCallback(async (bomId: string) => {
@@ -1605,7 +1724,7 @@ const ModuleShow: React.FC = () => {
       onOk: async () => {
         try {
           const nameField = detectCopyNameField(moduleConfig);
-          const payload = buildCopyPayload(data, { nameField });
+          const payload = buildCopyPayload(data, { nameField, moduleId });
           const tableName = moduleConfig.table || moduleId;
           const { data: inserted, error } = await supabase
             .from(tableName)
@@ -1749,8 +1868,8 @@ const ModuleShow: React.FC = () => {
         });
       }
 
-      const { data: authData } = await supabase.auth.getUser();
-      const userId = authData?.user?.id || null;
+      const authUser = await getCachedAuthUser(supabase);
+      const userId = authUser?.id || null;
       const payload: Record<string, any> = {
         name: String(values?.name || '').trim(),
         status: 'draft',
@@ -1784,8 +1903,29 @@ const ModuleShow: React.FC = () => {
     }
   }, [id, moduleId, msg, navigate, quickProjectForm, quickProjectTemplateOptions]);
 
-  const handleHeaderAction = (actionId: string) => {
-    if (actionId === 'create_production_order') {
+
+
+  const handleIssueAccounting = async () => {
+    if (!id) return;
+    setIssueAccountingLoading(true);
+    try {
+      await createJournalFromInvoice(supabase, id, navigate, msg);
+    } finally {
+      setIssueAccountingLoading(false);
+    }
+  };
+
+    const handleHeaderAction = (actionId: string) => {
+
+      if (actionId === 'create_journal_entry') {
+
+        handleIssueAccounting();
+
+        return;
+
+      }
+
+      if (actionId === 'create_production_order') {
       if (!MODULES['production_orders']) {
         msg.error('ماژول سفارش تولید یافت نشد');
         return;
@@ -1816,21 +1956,35 @@ const ModuleShow: React.FC = () => {
       void handleOpenQuickProjectModal();
       return;
     }
-    if (actionId === 'auto_name' && (moduleId === 'products' || moduleId === 'production_orders')) {
+    if (actionId === 'create_customer_from_lead' && moduleId === 'marketing_leads') {
       if (!canEditModule) return;
+      setIsCreateCustomerFromLeadOpen(true);
+      return;
+    }
+    if (actionId === 'auto_name' && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers')) {
+      if (!canEditModule) return;
+      const supportsAutoToggle = moduleId === 'products' || moduleId === 'production_orders';
       let enableAuto = !!data?.auto_name_enabled;
       modal.confirm({
-        title: moduleId === 'products' ? 'نامگذاری خودکار محصول' : 'نامگذاری خودکار سفارش تولید',
+        title: moduleId === 'products'
+          ? 'نامگذاری خودکار محصول'
+          : moduleId === 'production_orders'
+            ? 'نامگذاری خودکار سفارش تولید'
+            : 'نامگذاری خودکار مشتری',
         content: (
           <div className="space-y-3">
             <div>
               {moduleId === 'products'
-                ? 'نام محصول براساس مشخصات فعلی ساخته شود؟'
-                : 'نام سفارش براساس شناسنامه تولید و رنگ ساخته شود؟'}
+                ? 'نام محصول از مقادیر فعلی ساخته شود؟'
+                : moduleId === 'production_orders'
+                  ? 'نام سفارش تولید بر اساس BOM و رنگ ساخته شود؟'
+                  : 'نام کامل مشتری از فیلدهای فعلی ساخته شود؟'}
             </div>
-            <Checkbox defaultChecked={enableAuto} onChange={(e) => { enableAuto = e.target.checked; }}>
-              بروزرسانی خودکار هنگام تغییر مقادیر
-            </Checkbox>
+            {supportsAutoToggle && (
+              <Checkbox defaultChecked={enableAuto} onChange={(e) => { enableAuto = e.target.checked; }}>
+                با تغییر فیلدهای مرتبط، نام به صورت خودکار بروزرسانی شود
+              </Checkbox>
+            )}
           </div>
         ),
         okText: 'اعمال',
@@ -1838,28 +1992,41 @@ const ModuleShow: React.FC = () => {
         onOk: async () => {
           const nextName = moduleId === 'products'
             ? buildAutoProductName(data)
-            : buildAutoProductionOrderName(data);
+            : moduleId === 'production_orders'
+              ? buildAutoProductionOrderName(data)
+              : buildAutoCustomerName(data);
           if (!nextName) {
-            msg.warning('اطلاعات کافی برای نامگذاری وجود ندارد');
+            msg.warning('اطلاعات کافی برای نامگذاری خودکار وجود ندارد.');
             return;
           }
+
+          const updatePayload = moduleId === 'customers'
+            ? { full_name: nextName }
+            : { name: nextName, auto_name_enabled: enableAuto };
+
           try {
             const { error } = await supabase
               .from(moduleId)
-              .update({ name: nextName, auto_name_enabled: enableAuto })
+              .update(updatePayload)
               .eq('id', id);
             if (error) throw error;
-            setData((prev: any) => ({ ...prev, name: nextName, auto_name_enabled: enableAuto }));
+
+            if (moduleId === 'customers') {
+              setData((prev: any) => ({ ...prev, full_name: nextName }));
+            } else {
+              setData((prev: any) => ({ ...prev, name: nextName, auto_name_enabled: enableAuto }));
+            }
+
             await insertChangelog({
               action: 'update',
-              fieldName: 'name',
-              fieldLabel: getFieldLabel('name'),
-              oldValue: data?.name ?? null,
+              fieldName: moduleId === 'customers' ? 'full_name' : 'name',
+              fieldLabel: getFieldLabel(moduleId === 'customers' ? 'full_name' : 'name'),
+              oldValue: moduleId === 'customers' ? (data?.full_name ?? null) : (data?.name ?? null),
               newValue: nextName
             });
-            msg.success(moduleId === 'products' ? 'نام محصول بروزرسانی شد' : 'نام سفارش تولید بروزرسانی شد');
+            msg.success(moduleId === 'customers' ? 'نام کامل مشتری بروزرسانی شد.' : 'نام با موفقیت بروزرسانی شد.');
           } catch (e: any) {
-            msg.error('خطا در بروزرسانی نام: ' + e.message);
+            msg.error('بروزرسانی نام ناموفق بود: ' + e.message);
           }
         }
       });
@@ -1868,9 +2035,12 @@ const ModuleShow: React.FC = () => {
     msg.info('این عملیات هنوز پیاده‌سازی نشده است');
   };
 
+
+
+
   const handleImageUpdate = useCallback(async (file: File) => {
     if (!canEditModule) {
-      msg.warning('دسترسی ویرایش ندارید');
+      msg.warning('ابتدا رکورد را ذخیره کنید');
       return false;
     }
     if (!id) {
@@ -1923,8 +2093,8 @@ const ModuleShow: React.FC = () => {
     async (payload: { action: string; fieldName?: string; fieldLabel?: string; oldValue?: any; newValue?: any }) => {
       try {
         if (!moduleId || !id) return;
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         const recordTitle = getRecordTitle(data, moduleConfig) || null;
 
         const { error } = await supabase.from('changelogs').insert([
@@ -2029,8 +2199,8 @@ const ModuleShow: React.FC = () => {
       const { error } = await supabase.from(moduleId).update({ [key]: newValue }).eq('id', id);
       if (error) throw error;
       if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && key === 'status') {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         await applyInvoiceFinalizationInventory({
           supabase: supabase as any,
           moduleId,
@@ -2048,9 +2218,11 @@ const ModuleShow: React.FC = () => {
             ...(data || {}),
             [key]: newValue,
           },
+          includePayments: true,
         });
         if (accountingSync.errors.length > 0) {
-          console.warn('Invoice accounting sync warnings:', accountingSync.errors);
+          console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
+          msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
       }
       setData((prev: any) => ({ ...prev, [key]: newValue }));
@@ -2169,8 +2341,8 @@ const ModuleShow: React.FC = () => {
       }
 
       if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         await applyInvoiceFinalizationInventory({
           supabase: supabase as any,
           moduleId,
@@ -2188,9 +2360,11 @@ const ModuleShow: React.FC = () => {
             ...previous,
             ...values,
           },
+          includePayments: true,
         });
         if (accountingSync.errors.length > 0) {
-          console.warn('Invoice accounting sync warnings:', accountingSync.errors);
+          console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
+          msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
       }
 
@@ -2200,7 +2374,7 @@ const ModuleShow: React.FC = () => {
 
       msg.success('ذخیره شد');
       setIsEditDrawerOpen(false);
-      fetchRecord();
+      void fetchRecord(true);
     } catch (err: any) {
       msg.error(err.message);
     }
@@ -2216,8 +2390,8 @@ const ModuleShow: React.FC = () => {
     }
 
     const normalizedStatus = String(data?.status || '').trim().toLowerCase();
-    if (!['final', 'settled', 'completed'].includes(normalizedStatus)) {
-      msg.warning('برای صدور سند، ابتدا وضعیت فاکتور را روی نهایی/تسویه/تکمیل قرار دهید.');
+    if (!['final', 'settled', 'completed', 'confirmed'].includes(normalizedStatus)) {
+      msg.warning('برای صدور سند، وضعیت فاکتور باید یکی از حالت‌های تایید/نهایی/تسویه/تکمیل باشد.');
       return;
     }
 
@@ -2238,7 +2412,7 @@ const ModuleShow: React.FC = () => {
       });
 
       if (accountingSync.errors.length > 0) {
-        console.warn('Manual invoice accounting sync warnings:', accountingSync.errors);
+        console.warn('هشدارهای همگام‌سازی دستی سند حسابداری فاکتور:', accountingSync.errors);
       }
 
       if (accountingSync.createdEventKeys.length > 0) {
@@ -2246,19 +2420,27 @@ const ModuleShow: React.FC = () => {
           .map((key) => eventLabelMap[key] || key)
           .join('، ');
         msg.success(`صدور سند انجام شد: ${label}`);
+        const lastJournalId = accountingSync.createdJournalEntryIds[accountingSync.createdJournalEntryIds.length - 1];
+        if (lastJournalId) {
+          const journalModule = MODULES.journal_entries;
+          navigate(`/${journalModule.table}/${lastJournalId}`);
+        }
+        if (accountingSync.errors.length > 0) {
+          msg.warning(`صدور سند با هشدار: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
+        }
       } else if (accountingSync.errors.length === 0) {
         msg.info('سندی صادر نشد (قبلا صادر شده یا قواعد حسابداری کامل نیست).');
       } else {
-        msg.warning('صدور سند با خطا/نقص در قواعد حسابداری مواجه شد. جزئیات در کنسول ثبت شد.');
+        msg.warning(`صدور سند ناموفق: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
       }
 
-      await fetchRecord();
+      await fetchRecord(true);
     } catch (error: any) {
       msg.error(error?.message || 'خطا در صدور سند حسابداری');
     } finally {
       setIssueAccountingLoading(false);
     }
-  }, [canIssueAccountingEntry, data?.status, fetchRecord, id, issueAccountingLoading, moduleId, msg]);
+  }, [canIssueAccountingEntry, data?.status, fetchRecord, id, issueAccountingLoading, moduleId, msg, navigate]);
 
   const startEdit = (key: string, value: any) => {
     if (!canEditModule) return;
@@ -2285,7 +2467,7 @@ const ModuleShow: React.FC = () => {
   };
 
     const getOptionLabel = (field: any, value: any) => {
-      if (!field) return value;
+      if (!field) return getSafeOptionFallback(value);
       // اگر MULTI_SELECT است و آرایه است
       if (field.type === FieldType.MULTI_SELECT && Array.isArray(value)) {
           return value.map(v => {
@@ -2296,7 +2478,7 @@ const ModuleShow: React.FC = () => {
                   opt = dynamicOptions[cat]?.find((o: any) => o.value === v);
                   if (opt) return opt.label;
               }
-              return v;
+              return getSafeOptionFallback(v);
           }).join(', ');
       }
       
@@ -2313,13 +2495,13 @@ const ModuleShow: React.FC = () => {
               if (found) return found.label;
           }
       }
-      return value;
+      return getSafeOptionFallback(value);
   };
 
   const getFieldValueLabel = (fieldKey: string, value: any) => {
     if (value === undefined || value === null) return '';
     const field = moduleConfig?.fields?.find(f => f.key === fieldKey);
-    if (!field) return String(value);
+    if (!field) return getSafeOptionFallback(value, '');
     return String(getOptionLabel(field, value));
   };
 
@@ -2360,6 +2542,54 @@ const ModuleShow: React.FC = () => {
     addPart(getFieldValueLabel('color', record?.color));
     return parts.join(' ');
   };
+
+
+  const buildAutoCustomerName = (record: any) => {
+    if (!record) return '';
+    const normalize = (value: any) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    const businessName = normalize(record?.business_name);
+    const personType = normalize(record?.person_type).toLowerCase();
+
+    if (personType === 'legal') {
+      const legalName = normalize(record?.legal_name);
+      if (legalName && businessName) return legalName + ' - ' + businessName;
+      return legalName || businessName;
+    }
+
+    const realName = [record?.prefix, record?.first_name, record?.last_name]
+      .map((part) => normalize(part))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (realName && businessName) return realName + ' - ' + businessName;
+    return realName || businessName;
+  };
+
+  const buildCustomerInitialValuesFromLead = useCallback(() => {
+    if (moduleId !== 'marketing_leads') return {};
+    return {
+      business_name: data?.business_name || '',
+      prefix: data?.prefix || null,
+      first_name: data?.first_name || '',
+      last_name: data?.last_name || '',
+      mobile_1: data?.mobile || '',
+      mobile_2: data?.mobile_2 || '',
+      assistant_phone: data?.assistant_phone || '',
+      email: data?.email || '',
+      province: data?.province || null,
+      city: data?.city || null,
+      address: data?.address || '',
+      location: data?.location || undefined,
+      industry: data?.industry || null,
+      lead_source: data?.lead_source || data?.source || null,
+      notes: data?.notes || '',
+      assignee_id: data?.assignee_id || null,
+      assignee_type: data?.assignee_type || null,
+      assignee_role_id: data?.assignee_role_id || null,
+    } as Record<string, any>;
+  }, [data, moduleId]);
 
   const formatPersian = (val: any, kind: 'DATE' | 'TIME' | 'DATETIME') => {
     if (!val) return '';
@@ -2443,23 +2673,79 @@ const ModuleShow: React.FC = () => {
     printableFields,
     formatPrintValue,
     relationOptions,
+    canViewField,
   });
 
   const getUserName = (uid: string) => {
+      if (!String(uid || '').trim()) return 'سیستم';
       const user = allUsers.find(u => u.id === uid);
-      return user ? user.full_name : 'سیستم/نامشخص';
+      return user?.full_name || user?.email || user?.mobile_1 || 'نامشخص';
   };
 
-  const getAssigneeOptions = () => [
-      { label: 'پرسنل', title: 'users', options: allUsers.map(u => ({ label: u.full_name, value: `user_${u.id}`, emoji: <UserOutlined /> })) },
-      { label: 'تیم‌ها (جایگاه سازمانی)', title: 'roles', options: allRoles.map(r => ({ label: r.title, value: `role_${r.id}`, emoji: <TeamOutlined /> })) }
-  ];
+  const currentAssigneeOption = useMemo(() => {
+    if (!supportsAssignee) return null;
+    const resolvedAssigneeId = getResolvedAssigneeId(data);
+    if (!resolvedAssigneeId) return null;
+    const normalizedType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));
+    const matchedUser = allUsers.find((user) => String(user?.id || '') === resolvedAssigneeId);
+    const matchedRole = allRoles.find((role) => String(role?.id || '') === resolvedAssigneeId);
+    const explicitLabel = String(
+      data?.assignee_name ||
+      data?.assignee_label ||
+      data?.assignee_role_name ||
+      ''
+    ).trim();
+    return {
+      label:
+        explicitLabel ||
+        (normalizedType === 'role'
+          ? String(matchedRole?.title || 'تیم انتخاب‌شده')
+          : String(matchedUser?.full_name || matchedUser?.email || matchedUser?.mobile_1 || 'مسئول انتخاب‌شده')),
+      value: `${normalizedType}_${resolvedAssigneeId}`,
+      emoji: normalizedType === 'role' ? <TeamOutlined /> : <UserOutlined />,
+      type: normalizedType,
+    };
+  }, [allRoles, allUsers, data, data?.assignee_label, data?.assignee_name, data?.assignee_role_name, data?.assignee_type, supportsAssignee]);
+
+  const getAssigneeOptions = () => {
+    if (!supportsAssignee) return [];
+    const userOptions = allUsers.map((u) => ({
+      label: u.full_name || u.email || u.mobile_1 || `کاربر ${String(u.id || '').slice(0, 8)}`,
+      value: `user_${u.id}`,
+      emoji: <UserOutlined />,
+    }));
+    const roleOptions = allRoles.map((r) => ({
+      label: r.title,
+      value: `role_${r.id}`,
+      emoji: <TeamOutlined />,
+    }));
+    const hasCurrentUser = currentAssigneeOption?.type === 'user' && userOptions.some((item) => item.value === currentAssigneeOption.value);
+    const hasCurrentRole = currentAssigneeOption?.type === 'role' && roleOptions.some((item) => item.value === currentAssigneeOption.value);
+    return [
+      {
+        label: 'پرسنل',
+        title: 'users',
+        options: currentAssigneeOption?.type === 'user' && !hasCurrentUser
+          ? [currentAssigneeOption, ...userOptions]
+          : userOptions,
+      },
+      ...(supportsRoleAssignee
+        ? [{
+            label: 'تیم‌ها (جایگاه سازمانی)',
+            title: 'roles',
+            options: currentAssigneeOption?.type === 'role' && !hasCurrentRole
+              ? [currentAssigneeOption, ...roleOptions]
+              : roleOptions,
+          }]
+        : []),
+    ];
+  };
 
   const handleConfirmStartProduction = async () => {
     try {
       const confirmedGroups = startMaterials.filter((group) => group.isConfirmed === true);
       if (confirmedGroups.length === 0) {
-        msg.error('ابتدا هر ردیف محصول را ذخیره کنید');
+        msg.warning('هیچ محصولی در حالت تایید نهایی نیست');
         return;
       }
       const materialsWithDelivery = confirmedGroups.filter((group) => group.totalDeliveredQty > 0);
@@ -2474,7 +2760,7 @@ const ModuleShow: React.FC = () => {
       }
       const missingSourceShelf = materialsWithDelivery.filter((group) => !group.sourceShelfId);
       if (missingSourceShelf.length > 0) {
-        msg.error('برای محصول‌های ثبت‌شده، قفسه برداشت انتخاب نشده است.');
+        msg.error('برخی قفسه‌های برداشت برای محصول انتخاب‌شده موجودی معتبر ندارند.');
         return;
       }
       const invalidSourceShelf = materialsWithDelivery.filter((group) => {
@@ -2500,8 +2786,8 @@ const ModuleShow: React.FC = () => {
       setStatusLoading(true);
       await applyProductionMoves(moves);
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         const transferPayload = moves.map((move) => ({
           transfer_type: 'production',
           product_id: move.product_id,
@@ -2717,8 +3003,8 @@ const ModuleShow: React.FC = () => {
         await Promise.all(consumedProductIds.map((productId) => syncProductStock(productId)));
       }
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         const consumptionTransferPayload = Array.from(consumedGrouped.entries()).map(([key, qty]) => {
           const [productId, fromShelfId] = key.split(':');
           return {
@@ -2743,8 +3029,8 @@ const ModuleShow: React.FC = () => {
       await addFinishedGoods(outputProductId, outputShelfId, normalizedQty);
       await syncProductStock(outputProductId);
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         await supabase.from('stock_transfers').insert({
           transfer_type: 'production',
           product_id: outputProductId,
@@ -2787,17 +3073,24 @@ const ModuleShow: React.FC = () => {
     } as any;
   };
 
-  const handleCreateProductSave = async (values: any) => {
+  const handleCreateProductSave = async (values: any, meta?: { selectedTags?: any[] }) => {
     try {
       setStatusLoading(true);
+      const payload = { ...values };
+      if (supportsSystemCode('products') && !payload.system_code) {
+        payload.system_code = await buildClientFallbackSystemCode(supabase, 'products', 'products');
+      }
       const { data: inserted, error } = await supabase
         .from('products')
-        .insert(values)
+        .insert(payload)
         .select('id')
         .single();
       if (error) throw error;
       const productId = inserted?.id;
       if (!productId) throw new Error('ثبت محصول ناموفق بود');
+      if (Array.isArray(meta?.selectedTags) && meta.selectedTags.length > 0) {
+        await syncRecordTags(supabase, 'products', String(productId), meta.selectedTags);
+      }
       setOutputProductId(productId);
       const outputShelf = outputShelfId || null;
       if (!outputShelf) {
@@ -2841,8 +3134,8 @@ const ModuleShow: React.FC = () => {
         await Promise.all(consumedProductIds.map((productId) => syncProductStock(productId)));
       }
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         const consumptionTransferPayload = Array.from(consumedGrouped.entries()).map(([key, qty]) => {
           const [productId, fromShelfId] = key.split(':');
           return {
@@ -2867,8 +3160,8 @@ const ModuleShow: React.FC = () => {
       await addFinishedGoods(productId, outputShelf, normalizedQty);
       await syncProductStock(productId);
       try {
-        const { data: authData } = await supabase.auth.getUser();
-        const userId = authData?.user?.id || null;
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
         await supabase.from('stock_transfers').insert({
           transfer_type: 'production',
           product_id: productId,
@@ -2902,9 +3195,59 @@ const ModuleShow: React.FC = () => {
     }
   };
 
+  const handleCreateCustomerFromLeadSave = useCallback(async (values: any) => {
+    try {
+      if (!id || moduleId !== 'marketing_leads') return;
+      const authUser = await getCachedAuthUser(supabase);
+      const authUserId = authUser?.id || null;
+      const customerPayload = {
+        ...values,
+        assignee_id: values?.assignee_id ?? data?.assignee_id ?? null,
+        assignee_type: values?.assignee_type ?? data?.assignee_type ?? null,
+        assignee_role_id: values?.assignee_role_id ?? data?.assignee_role_id ?? null,
+        created_by: values?.created_by ?? authUserId ?? undefined,
+        updated_by: values?.updated_by ?? authUserId ?? undefined,
+      };
+
+      const { data: insertedCustomer, error: insertError } = await supabase
+        .from('customers')
+        .insert(customerPayload)
+        .select('id')
+        .single();
+      if (insertError) throw insertError;
+
+      const customerId = insertedCustomer?.id;
+      if (!customerId) throw new Error('ایجاد مشتری ناموفق بود.');
+
+      const { error: leadUpdateError } = await supabase
+        .from('marketing_leads')
+        .update({
+          customer_id: customerId,
+          lead_type: 'existing_customer',
+          updated_by: authUserId ?? undefined,
+        })
+        .eq('id', id);
+      if (leadUpdateError) throw leadUpdateError;
+
+      msg.success('مشتری از روی لید ایجاد شد.');
+      setIsCreateCustomerFromLeadOpen(false);
+      void fetchRecord(true);
+    } catch (err: any) {
+      msg.error(toFaErrorMessage(err));
+      throw err;
+    }
+  }, [data, fetchRecord, id, moduleId, msg]);
+
   const handleRecordPatch = useCallback((patch: Record<string, any>) => {
     setData((prev: any) => ({ ...(prev || {}), ...patch }));
   }, []);
+  const extraBlockContent = useMemo<Record<string, React.ReactNode>>(() => {
+    const content: Record<string, React.ReactNode> = {};
+    if (moduleId === 'customers' && id) {
+      content.financial_stats = <CustomerFinancialOverviewPanel customerId={id} customerData={data} />;
+    }
+    return content;
+  }, [data, id, moduleId]);
 
   if (accessDenied) {
     return (
@@ -2913,7 +3256,10 @@ const ModuleShow: React.FC = () => {
       </div>
     );
   }
-  if (!moduleConfig || !data) return loading ? <div className="flex h-screen items-center justify-center"><Spin size="large" /></div> : null;
+  if (!moduleConfig || (!data && loading)) {
+    return <ModuleShowSkeleton />;
+  }
+  if (!data) return null;
 
   const renderSmartField = (field: any, isHeader = false) => {
     if (!canViewField(field.key)) return null;
@@ -2925,11 +3271,13 @@ const ModuleShow: React.FC = () => {
       field.key === 'template_stages_preview' ||
       field.key === 'run_stages_preview'
     );
+    const isSuperLongTextField = field.type === FieldType.SUPER_LONG_TEXT;
     const compactMode = (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) ? false : true;
 
     if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {
       let options = field.options;
-      if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
+      if (moduleId === 'process_templates' && field.key === 'module_id') options = getProjectModuleOptions();
+      else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
       else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
 
       return (
@@ -2974,12 +3322,13 @@ const ModuleShow: React.FC = () => {
 
     const tempValue = tempValues[field.key] !== undefined ? tempValues[field.key] : baseValue;
     let options = field.options;
-    if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
+    if (moduleId === 'process_templates' && field.key === 'module_id') options = getProjectModuleOptions();
+    else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
 
     if (isEditing) {
       return (
-        <div className="flex items-center gap-1 min-w-[150px]">
+        <div className={`flex gap-1 min-w-[150px] w-full ${isSuperLongTextField ? 'items-start' : 'items-center'}`}>
           <div className="flex-1">
             <SmartFieldRenderer
               field={field}
@@ -3010,8 +3359,20 @@ const ModuleShow: React.FC = () => {
               allValues={data}
             />
           </div>
-          <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => saveEdit(field.key)} className="bg-green-500 hover:!bg-green-600 border-none" />
-          <Button size="small" icon={<CloseOutlined />} onClick={() => cancelEdit(field.key)} danger />
+          <Button
+            size="small"
+            type="text"
+            icon={<CheckOutlined />}
+            onClick={() => saveEdit(field.key)}
+            className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
+          />
+          <Button
+            size="small"
+            type="text"
+            icon={<CloseOutlined />}
+            onClick={() => cancelEdit(field.key)}
+            className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
+          />
         </div>
       );
     }
@@ -3041,10 +3402,10 @@ const ModuleShow: React.FC = () => {
 
     return (
       <div
-        className="group flex items-center justify-between min-h-[32px] hover:bg-gray-50 dark:hover:bg-white/5 px-3 rounded-lg -mx-3 transition-colors cursor-pointer border border-transparent hover:border-gray-100 dark:hover:border-gray-700"
+        className={`group flex justify-between min-h-[32px] hover:bg-gray-50 dark:hover:bg-white/5 px-3 rounded-lg -mx-3 transition-colors cursor-pointer border border-transparent hover:border-gray-100 dark:hover:border-gray-700 ${isSuperLongTextField ? 'items-start py-2' : 'items-center'}`}
         onClick={() => !field.readonly && canEditModule && startEdit(field.key, value)}
       >
-        <div className="text-gray-800 dark:text-gray-200">{displayNode}</div>
+        <div className="text-gray-800 dark:text-gray-200 flex-1 min-w-0">{displayNode}</div>
         {!field.readonly && canEditModule && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
       </div>
     );
@@ -3078,6 +3439,14 @@ const ModuleShow: React.FC = () => {
       label: 'ایجاد پروژه',
       variant: 'default',
       onClick: () => handleHeaderAction('create_project')
+    });
+  }
+  if (moduleId === 'marketing_leads' && canEditModule && data?.lead_type === 'new_lead' && !data?.customer_id) {
+    headerActions.push({
+      id: 'create_customer_from_lead',
+      label: 'ایجاد مشتری',
+      variant: 'primary',
+      onClick: () => handleHeaderAction('create_customer_from_lead')
     });
   }
   if (moduleId === 'products' && canUseAction('quick_stock_movement')) {
@@ -3134,8 +3503,8 @@ const ModuleShow: React.FC = () => {
     }
   }
 
-  const currentAssigneeId = data.assignee_id;
-  const currentAssigneeType = data.assignee_type;
+  const currentAssigneeId = getResolvedAssigneeId(data);
+  const currentAssigneeType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));
   let assigneeIcon = <UserOutlined />;
   if (currentAssigneeId) {
       if (currentAssigneeType === 'user') {
@@ -3148,7 +3517,7 @@ const ModuleShow: React.FC = () => {
   }
   const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });
   const handleHeaderRefresh = async () => {
-    await fetchRecord();
+    await fetchRecord(true);
   };
 
   return (
@@ -3187,28 +3556,20 @@ const ModuleShow: React.FC = () => {
         moduleId={moduleId}
         moduleConfig={moduleConfig}
         currentTags={currentTags}
-        onTagsChange={fetchRecord}
+        onTagsChange={() => void fetchRecord(true)}
         renderSmartField={renderSmartField}
         getOptionLabel={getOptionLabel}
         getUserName={getUserName}
         handleAssigneeChange={handleAssigneeChange}
         getAssigneeOptions={getAssigneeOptions}
         assigneeIcon={assigneeIcon}
+        canManageAssignee={supportsAssignee}
         onImageUpdate={handleImageUpdate}
         onMainImageChange={handleMainImageChange}
         canViewField={canViewField}
         canEditModule={canEditModule}
         checkVisibility={checkVisibility}
       />
-
-      {moduleId === 'customers' && (
-        <div className="mb-6 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="mb-2 text-sm font-bold text-gray-700">توضیحات</div>
-          <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
-            {data?.notes || '-'}
-          </div>
-        </div>
-      )}
 
       <FieldGroupsTabs
         fieldGroups={fieldGroups}
@@ -3224,6 +3585,7 @@ const ModuleShow: React.FC = () => {
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
         stockMovementQuickAddSignal={stockMovementQuickAddSignal}
+        extraBlockContent={extraBlockContent}
       />
 
       <TablesSection
@@ -3237,6 +3599,14 @@ const ModuleShow: React.FC = () => {
         onDataUpdate={handleRecordPatch}
       />
 
+      {moduleId === 'chart_of_accounts' && id ? (
+        <AccountLedgerPanel
+          accountId={id}
+          accountCode={data?.code ?? null}
+          accountName={data?.name ?? null}
+        />
+      ) : null}
+
       {isEditDrawerOpen && (
         <SmartForm
           module={moduleConfig}
@@ -3246,7 +3616,6 @@ const ModuleShow: React.FC = () => {
           onSave={handleSmartFormSave}
           onCancel={() => {
             setIsEditDrawerOpen(false);
-            fetchRecord();
           }}
         />
       )}
@@ -3266,6 +3635,17 @@ const ModuleShow: React.FC = () => {
           }}
           onCancel={() => setIsCreateOrderOpen(false)}
           onSave={handleCreateOrderFromBom}
+        />
+      )}
+
+      {isCreateCustomerFromLeadOpen && MODULES['customers'] && (
+        <SmartForm
+          module={MODULES['customers']}
+          visible={isCreateCustomerFromLeadOpen}
+          title="ایجاد مشتری از روی لید"
+          initialValues={buildCustomerInitialValuesFromLead()}
+          onCancel={() => setIsCreateCustomerFromLeadOpen(false)}
+          onSave={handleCreateCustomerFromLeadSave}
         />
       )}
 
@@ -3295,7 +3675,7 @@ const ModuleShow: React.FC = () => {
               optionFilterProp="label"
               options={quickProjectCustomerOptions}
               placeholder="انتخاب مشتری"
-              getPopupContainer={() => document.body}
+              getPopupContainer={(node) => node?.parentElement || document.body}
             />
           </Form.Item>
 
@@ -3306,7 +3686,7 @@ const ModuleShow: React.FC = () => {
               optionFilterProp="label"
               options={quickProjectTemplateOptions}
               placeholder="انتخاب الگو (اختیاری)"
-              getPopupContainer={() => document.body}
+              getPopupContainer={(node) => node?.parentElement || document.body}
             />
           </Form.Item>
 
@@ -3393,7 +3773,7 @@ const ModuleShow: React.FC = () => {
                     showSearch
                     optionFilterProp="label"
                     className="w-full"
-                    getPopupContainer={() => document.body}
+                    getPopupContainer={(node) => node?.parentElement || document.body}
                   />
                   <QrScanPopover
                     label=""
@@ -3420,7 +3800,7 @@ const ModuleShow: React.FC = () => {
                     { label: 'کالا', value: 'goods' },
                   ]}
                   className="w-full"
-                  getPopupContainer={() => document.body}
+                  getPopupContainer={(node) => node?.parentElement || document.body}
                 />
               </div>
 
@@ -3453,7 +3833,7 @@ const ModuleShow: React.FC = () => {
                         showSearch
                         optionFilterProp="label"
                         className="w-full"
-                        getPopupContainer={() => document.body}
+                        getPopupContainer={(node) => node?.parentElement || document.body}
                       />
                       <QrScanPopover
                         label=""
@@ -3524,6 +3904,8 @@ const ModuleShow: React.FC = () => {
         printableFields={printManager.printableFieldsForTemplate || printableFields}
         selectedPrintFields={printManager.selectedPrintFields}
         onTogglePrintField={printManager.handleTogglePrintField}
+        onSavePrintFields={printManager.handleSavePrintFields}
+        savingPrintFields={printManager.savingPrintFields}
         onRefreshPreview={printManager.refreshTemplates}
         allowFieldSelectionTab={printManager.allowFieldSelectionTab}
         previewMeta={printManager.previewMeta}
