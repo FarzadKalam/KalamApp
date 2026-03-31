@@ -30,6 +30,7 @@ import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/syst
 import { syncRecordTags } from '../utils/recordTags';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -171,7 +172,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
           const initialProps = initialValues || {};
           const assigneeCombo = buildResolvedAssigneeCombo(initialProps);
-          const finalValues: Record<string, any> = { ...defaults, ...initialProps, assignee_combo: assigneeCombo };
+          let finalValues: Record<string, any> = { ...defaults, ...initialProps, assignee_combo: assigneeCombo };
           Object.entries(defaults).forEach(([key, value]) => {
             if (finalValues[key] === undefined || finalValues[key] === null || finalValues[key] === '') {
               finalValues[key] = value;
@@ -192,6 +193,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 console.warn('Could not set default assignee for create form', err);
               }
             }
+          }
+
+          if (module.id === 'tasks') {
+            finalValues = normalizeTaskSourceValues(finalValues);
           }
 
           setFormData(finalValues);
@@ -325,10 +330,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
   // --- 2. دریافت آپشن‌های ارتباطی (Relation) ---
   const fetchRelationOptions = async () => {
     const options: Record<string, any[]> = {};
+    const currentValues = form.getFieldsValue(true);
     const fetchOptionsForField = async (field: any, key: string) => {
       try {
+        if (module.id === 'tasks' && field.key === 'source_record_id') {
+          const sourceModuleId = String(currentValues?.related_to_module || currentValues?.source_module_id || '').trim();
+          options[key] = await fetchTaskSourceRecordOptions(supabase, sourceModuleId, {
+            exactId: currentValues?.source_record_id ?? null,
+          });
+          return;
+        }
+
         options[key] = await fetchRelationOptionsForField(supabase, field, {
-          allValues: form.getFieldsValue(true),
+          allValues: currentValues,
         });
       } catch (error) {
         if (isAbortLikeError(error)) return;
@@ -564,6 +578,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         }
         const assigneeCombo = buildResolvedAssigneeCombo(data);
         nextValues = { ...nextValues, assignee_combo: assigneeCombo };
+        if (module.id === 'tasks') {
+          nextValues = normalizeTaskSourceValues(nextValues);
+        }
         form.setFieldsValue(nextValues);
         setFormData(nextValues);
         setInitialRecord(data);
@@ -786,6 +803,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
         description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
         task_type: String(stage?.task_type || stage?.metadata?.task_type || '').trim() || null,
+        automation_rules: Array.isArray(stage?.automation_rules)
+          ? stage.automation_rules
+          : (Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : []),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -964,6 +984,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
           delete values[field.key];
         }
       });
+      if (module.id === 'tasks') {
+        values = normalizeTaskSourceValues(values);
+      }
       if (module.id === 'customers') {
         if (values.auto_name_enabled === true) {
           const nextFullName = buildAutoCustomerName(values);
@@ -1257,10 +1280,29 @@ const SmartForm: React.FC<SmartFormProps> = ({
     }
   };
 
-  const handleValuesChange = (_: any, allValues: any) => {
-    const cleanedValues = Object.fromEntries(
+  const handleValuesChange = (changedValues: any, allValues: any) => {
+    if (module.id === 'tasks' && Object.prototype.hasOwnProperty.call(changedValues || {}, 'related_to_module')) {
+      const nextModuleId = String(changedValues?.related_to_module || '').trim();
+      const resetPatch: Record<string, any> = { source_record_id: null, source_module_id: nextModuleId || null };
+      form.setFieldsValue(resetPatch);
+      setRelationOptions((prev) => ({ ...prev, source_record_id: [] }));
+      if (nextModuleId) {
+        void fetchTaskSourceRecordOptions(supabase, nextModuleId).then((nextOptions) => {
+          setRelationOptions((prev) => ({ ...prev, source_record_id: nextOptions }));
+        }).catch((error) => {
+          if (!isAbortLikeError(error)) {
+            console.warn('Could not load task source record options', error);
+          }
+        });
+      }
+      allValues = { ...allValues, ...resetPatch };
+    }
+    let cleanedValues = Object.fromEntries(
       Object.entries(allValues || {}).filter(([, value]) => value !== undefined)
     );
+    if (module.id === 'tasks') {
+      cleanedValues = normalizeTaskSourceValues(cleanedValues);
+    }
     setFormData((prev: any) => ({ ...prev, ...cleanedValues }));
   };
   const checkVisibility = (logicOrRule: any, values?: any) => {
@@ -1343,6 +1385,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const getResolvedOptions = (field: any, relationKey?: string) => {
     if (module.id === 'process_templates' && field.key === 'module_id') {
       return getProjectModuleOptions();
+    }
+    if (module.id === 'tasks' && field.key === 'related_to_module') {
+      return getTaskModuleOptions();
     }
     if (field.type === FieldType.RELATION) {
       return relationOptions[relationKey || field.key];
@@ -1712,6 +1757,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       || module.id === 'invoices'
                       || module.id === 'purchase_invoices') || f.key !== 'process_template_id')
                     .filter(f => canViewField(f.key))
+                    .filter((f) => !(module.id === 'tasks' && isTaskLegacySourceField(f.key)))
                     .filter(f => f.key !== 'assignee_id' && f.key !== 'assignee_type')
                     .filter((f) => f.key !== 'auto_name_enabled')
                     .sort((a, b) => (a.order || 0) - (b.order || 0));

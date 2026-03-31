@@ -317,7 +317,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             {allTabs.map(tab => {
                 const isActive = activeKey === tab.key;
                 return (
-                    <Tooltip key={tab.key} title={tab.label} placement="right">
+                    <Tooltip key={tab.key} title={tab.label} placement="right" mouseEnterDelay={0.15} align={{ offset: [10, 0] }}>
                         <div 
                             onClick={() => toggleTab(tab.key)}
                             className={`

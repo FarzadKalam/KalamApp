@@ -17,6 +17,8 @@ import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../uti
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { RelationQuickCreateInline } from '../SmartFieldRenderer';
 import { attachTaskCompletionIfNeeded } from '../../utils/taskCompletion';
+import { applyTaskSourceRecordFilter, buildTaskSourceInitialValues } from '../../utils/taskMeta';
+import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import TaskSummaryCard from '../tasks/TaskSummaryCard';
 import {
   buildRelationValueMap,
@@ -67,17 +69,6 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
   const [changeRelationValueMap, setChangeRelationValueMap] = useState<RelationValueMap>({});
   const [quickTaskForm] = Form.useForm();
-
-  const taskRelationMap = useMemo<Record<string, string>>(() => ({
-    products: 'related_product',
-    customers: 'related_customer',
-    suppliers: 'related_supplier',
-    production_orders: 'related_production_order',
-    invoices: 'related_invoice',
-    purchase_invoices: 'purchase_invoice_id',
-    projects: 'project_id',
-    marketing_leads: 'marketing_lead_id',
-  }), []);
 
   const tasksModuleConfig = MODULES.tasks;
   const statusOptions = tasksModuleConfig?.fields?.find((field: any) => field.key === 'status')?.options || [];
@@ -189,13 +180,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       .join('\n');
   };
 
-  const buildTaskInitialValues = () => {
-    const relationField = taskRelationMap[moduleId];
-    return {
-      related_to_module: moduleId,
-      ...(relationField ? { [relationField]: recordId } : {}),
-    };
-  };
+  const buildTaskInitialValues = () => buildTaskSourceInitialValues(moduleId, recordId);
 
   useEffect(() => {
     void fetchData();
@@ -496,18 +481,14 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         return;
       }
 
-      const relationField = taskRelationMap[moduleId];
-      if (!relationField) {
-        setItems([]);
-        return;
-      }
-
-      const { data, error } = await supabase
+      let query = supabase
         .from('tasks')
         .select('*')
-        .eq(relationField, recordId)
         .order('created_at', { ascending: false })
         .limit(100);
+      query = applyTaskSourceRecordFilter(query, moduleId, recordId);
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setItems(data || []);
@@ -757,12 +738,15 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                     roleNameMap={roleNameMap}
                     recordTitle={recordName || null}
                     onStatusChange={async (taskId, status) => {
-                      const nextPayload = attachTaskCompletionIfNeeded({ ...item, status });
-                      const { error } = await supabase
-                        .from('tasks')
-                        .update({ status: nextPayload.status, completed_at: nextPayload.completed_at || null })
-                        .eq('id', taskId);
-                      if (error) throw error;
+                      await updateTaskStatusWithAutomation({
+                        taskId,
+                        nextStatus: status,
+                        previousTask: item,
+                        currentUser: {
+                          id: currentUser.id,
+                          fullName: currentUser.full_name,
+                        },
+                      });
                       await fetchData();
                     }}
                     onProducedQtyChange={async (taskId, value) => {

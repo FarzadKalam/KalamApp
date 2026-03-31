@@ -122,7 +122,7 @@ export const productBundlesConfig: ModuleDefinition = {
     {
       key: 'notes',
       labels: { fa: 'توضیحات', en: 'Description' },
-      type: FieldType.LONG_TEXT,
+      type: FieldType.SUPER_LONG_TEXT,
       location: FieldLocation.BLOCK,
       blockId: 'baseInfo',
       order: 3,

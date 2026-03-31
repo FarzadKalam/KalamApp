@@ -2,6 +2,25 @@
 
 این فایل یک cheat sheet سریع است. اگر فقط بخواهی بدانی برای هر کار چه دستوری باید بزنی، از همین فایل استفاده کن.
 
+## 0) مدل ساده‌شده‌ای که در این پروژه استفاده می‌کنیم
+
+برای ساده نگه داشتن کار تیمی، فعلا فقط این branchها را داریم:
+
+- `main` برای نسخه قابل deploy
+- `feature/current` برای توسعه قابلیت‌های جدید
+- `fix/current` برای رفع باگ‌ها و اصلاحات
+
+این مدل ساده است، ولی یک trade-off مهم دارد:
+
+- اگر چند نفر همزمان روی یک branch مشترک کار کنند، احتمال conflict و قاطی شدن commitها بالا می‌رود.
+
+پس این 4 rule را جدی بگیرید:
+
+- مستقیم روی `main` کار نکن
+- قبل از شروع هر کار، branch مشترک را pull کن
+- commitها را کوچک و با پیام واضح بزن
+- قبل از Merge Request، branch مشترک را با `main` sync کن
+
 ## 1) یک‌بار برای همیشه: clone و آماده‌سازی
 
 ### clone از Hamgit
@@ -24,28 +43,38 @@ git config --global user.email "your-email@example.com"
 ssh -T git@hamgit.ir
 ```
 
-## 2) شروع هر کار جدید
+## 2) شروع کار جدید
 
-همیشه از `main` شروع کن:
+### برای قابلیت جدید
+
+```powershell
+git checkout feature/current
+git pull origin feature/current
+```
+
+اگر branch هنوز روی سیستم یا remote ساخته نشده:
 
 ```powershell
 git checkout main
 git pull origin main
-git checkout -b feature/<task-name>
+git checkout -b feature/current
+git push -u origin feature/current
 ```
 
-مثال:
+### برای رفع باگ
 
 ```powershell
-git checkout -b feature/workflow-execution-mode
+git checkout fix/current
+git pull origin fix/current
 ```
 
-برای bug fix:
+اگر branch هنوز روی سیستم یا remote ساخته نشده:
 
 ```powershell
 git checkout main
 git pull origin main
-git checkout -b fix/<task-name>
+git checkout -b fix/current
+git push -u origin fix/current
 ```
 
 ## 3) دیدن وضعیت فایل‌ها
@@ -73,25 +102,47 @@ git commit -m "fix: update selected files"
 
 ## 5) ارسال branch به Hamgit
 
+برای feature:
+
 ```powershell
-git push -u origin feature/<task-name>
+git checkout feature/current
+git push
 ```
 
-بعد از بار اول، pushهای بعدی فقط:
+برای fix:
 
 ```powershell
+git checkout fix/current
 git push
+```
+
+اگر اولین بار است که branch را می‌فرستی:
+
+```powershell
+git push -u origin feature/current
+git push -u origin fix/current
 ```
 
 ## 6) قبل از Merge Request
 
-branch خودت را با `main` sync کن:
+### اگر می‌خواهی featureها را merge کنی
 
 ```powershell
 git checkout main
 git pull origin main
-git checkout feature/<task-name>
+git checkout feature/current
 git merge main
+git push
+```
+
+### اگر می‌خواهی fixها را merge کنی
+
+```powershell
+git checkout main
+git pull origin main
+git checkout fix/current
+git merge main
+git push
 ```
 
 اگر conflict داشتی:
@@ -108,18 +159,32 @@ git push
 
 ## 7) بعد از merge شدن branch
 
-### پاک کردن branch محلی
+در این مدل branchها را بعد از هر merge حذف نمی‌کنیم، چون branchها shared هستند.
+
+بعد از merge شدن به `main` این کار را بکن:
+
+### اگر MR از `feature/current` به `main` بوده
 
 ```powershell
+git checkout feature/current
+git pull origin feature/current
 git checkout main
 git pull origin main
-git branch -d feature/<task-name>
+git checkout feature/current
+git merge main
+git push
 ```
 
-### پاک کردن branch روی remote در صورت نیاز
+### اگر MR از `fix/current` به `main` بوده
 
 ```powershell
-git push origin --delete feature/<task-name>
+git checkout fix/current
+git pull origin fix/current
+git checkout main
+git pull origin main
+git checkout fix/current
+git merge main
+git push
 ```
 
 ## 8) deploy
@@ -139,12 +204,13 @@ git tag v2026.03.30-0215
 git push origin --tags
 ```
 
-## 9) ساخت hotfix
+## 9) برای باگ فوری production
+
+اگر نمی‌خواهی branch جدید بسازی، همان `fix/current` را استفاده کن:
 
 ```powershell
-git checkout main
-git pull origin main
-git checkout -b hotfix/<task-name>
+git checkout fix/current
+git pull origin fix/current
 ```
 
 بعد از fix:
@@ -152,8 +218,10 @@ git checkout -b hotfix/<task-name>
 ```powershell
 git add .
 git commit -m "fix: resolve production issue"
-git push -u origin hotfix/<task-name>
+git push
 ```
+
+بعد برای `fix/current` یک MR به `main` باز کن.
 
 ## 10) اگر لازم شد از GitHub هم backup بگیری
 
@@ -200,9 +268,52 @@ git bundle create kalamapp-backup.bundle --all
 ## 14) ruleهای سریع تیم
 
 - مستقیم روی `main` کار نکن
-- هر task روی branch جدا
-- قبل از شروع، `main` را pull کن
+- برای feature فقط روی `feature/current` کار کن
+- برای bugfix فقط روی `fix/current` کار کن
+- قبل از شروع، branch مشترک را pull کن
 - قبل از MR با `main` sync کن
 - اگر migration داری، داخل MR واضح اعلام کن
 - deploy فقط از `main`
 - فایل‌های کلید و secret را commit نکن
+
+## 15) 5 دستور اصلی که هر روز لازم داری
+
+### شروع کار feature
+
+```powershell
+git checkout feature/current
+git pull origin feature/current
+```
+
+### شروع کار bugfix
+
+```powershell
+git checkout fix/current
+git pull origin fix/current
+```
+
+### ثبت تغییرات
+
+```powershell
+git add .
+git commit -m "feat: short message"
+git push
+```
+
+### قبل از MR
+
+```powershell
+git checkout main
+git pull origin main
+git checkout feature/current
+git merge main
+git push
+```
+
+### deploy
+
+```powershell
+git checkout main
+git pull origin main
+npm run deploy:prod
+```

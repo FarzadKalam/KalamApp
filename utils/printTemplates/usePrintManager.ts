@@ -41,6 +41,7 @@ const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
+const MOBILE_PRINT_UA_PATTERN = /Android|iPhone|iPad|iPod|Mobile/i;
 
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
@@ -496,6 +497,130 @@ export const usePrintManager = ({
     setIsPrintModalOpen(false);
   }, []);
 
+  const printUsingIsolatedFrame = useCallback(async (pageSize: string, viewportPx?: { width: number; height: number }) => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return false;
+    const printRoot = document.getElementById('print-root');
+    const printHtml = String(printRoot?.innerHTML || '').trim();
+    if (!printHtml) return false;
+
+    const frameWidth = Math.max(240, Math.round(Number(viewportPx?.width || 0) || 0));
+    const frameHeight = Math.max(320, Math.round(Number(viewportPx?.height || 0) || 0));
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.position = 'fixed';
+    iframe.style.left = '-10000px';
+    iframe.style.top = '0';
+    iframe.style.width = `${frameWidth}px`;
+    iframe.style.height = `${frameHeight}px`;
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.visibility = 'hidden';
+    iframe.style.pointerEvents = 'none';
+    iframe.width = String(frameWidth);
+    iframe.height = String(frameHeight);
+
+    const headMarkup = Array.from(document.head.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((node) => node.outerHTML)
+      .join('\n');
+
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      window.setTimeout(() => {
+        iframe.remove();
+      }, 400);
+    };
+
+    try {
+      const frameDoc = iframe.contentDocument;
+      const frameWindow = iframe.contentWindow;
+      if (!frameDoc || !frameWindow) {
+        cleanup();
+        return false;
+      }
+
+      frameDoc.open();
+      frameDoc.write(`<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=${frameWidth}, initial-scale=1, maximum-scale=1" />
+    ${headMarkup}
+    <style media="print">@page { size: ${pageSize}; margin: 0; }</style>
+    <style>
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${frameWidth}px !important;
+        min-width: ${frameWidth}px !important;
+        background: #fff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      body.print-mode #print-root {
+        display: block !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${frameWidth}px !important;
+        min-width: ${frameWidth}px !important;
+        height: auto !important;
+        overflow: visible !important;
+        background: #fff !important;
+      }
+      body.print-mode > *:not(#print-root) {
+        display: none !important;
+      }
+      #print-root {
+        display: block !important;
+      }
+    </style>
+  </head>
+  <body class="print-mode">
+    <div id="print-root">${printHtml}</div>
+  </body>
+</html>`);
+      frameDoc.close();
+
+      await new Promise<void>((resolve) => {
+        const finalize = () => {
+          cleanup();
+          resolve();
+        };
+
+        const trigger = () => {
+          try {
+            frameWindow.focus();
+            frameWindow.print();
+          } catch (error) {
+            console.error('Isolated print dialog failed to open', error);
+            finalize();
+            return;
+          }
+          window.setTimeout(finalize, 1600);
+        };
+
+        frameWindow.addEventListener('afterprint', finalize, { once: true });
+
+        const fontsReady = (frameDoc as any).fonts?.ready;
+        if (fontsReady && typeof fontsReady.then === 'function') {
+          fontsReady.finally(() => {
+            window.setTimeout(trigger, 120);
+          });
+          return;
+        }
+
+        window.setTimeout(trigger, 180);
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Isolated print frame failed', error);
+      cleanup();
+      return false;
+    }
+  }, []);
+
   const handlePrint = useCallback(() => {
     if (!selectedTemplateId) return;
 
@@ -546,16 +671,24 @@ export const usePrintManager = ({
       : null;
     setForcedPrintPageCount(nextForcedPages);
 
-      if (typeof document !== 'undefined') {
-        document.body.classList.add('print-mode');
-      const currentTpl = selectedTemplateId.startsWith('custom:')
-        ? availableTemplates.find((tpl) => tpl.id === selectedTemplateId.replace('custom:', '')) || null
-        : null;
-      const pageSize = currentTpl
-        ? `${currentTpl.paperSize || 'A4'} ${currentTpl.orientation === 'landscape' ? 'landscape' : 'portrait'}`
-        : selectedTemplateId === 'product_label'
-          ? 'A6 portrait'
-          : 'A4 portrait';
+    const currentTpl = selectedTemplateId.startsWith('custom:')
+      ? availableTemplates.find((tpl) => tpl.id === selectedTemplateId.replace('custom:', '')) || null
+      : null;
+    const currentPaperSize = currentTpl?.paperSize || (selectedTemplateId === 'product_label' ? 'A6' : 'A4');
+    const currentOrientation = currentTpl?.orientation === 'landscape' ? 'landscape' : 'portrait';
+    const currentPaperMetrics = getPaperSizeMetrics(currentPaperSize, currentOrientation);
+    const printViewportPx = {
+      width: Math.ceil(mmToPx(currentPaperMetrics.widthMm)),
+      height: Math.ceil(mmToPx(currentPaperMetrics.heightMm)),
+    };
+    const pageSize = currentTpl
+      ? `${currentPaperSize} ${currentOrientation}`
+      : selectedTemplateId === 'product_label'
+        ? 'A6 portrait'
+        : 'A4 portrait';
+
+    if (typeof document !== 'undefined') {
+      document.body.classList.add('print-mode');
       const styleId = 'dynamic-print-page-style';
       let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
       if (!styleEl) {
@@ -599,6 +732,20 @@ export const usePrintManager = ({
 
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          const shouldUseIsolatedPrint =
+            MOBILE_PRINT_UA_PATTERN.test(window.navigator.userAgent || '') ||
+            window.innerWidth < 768;
+
+          if (shouldUseIsolatedPrint) {
+            void printUsingIsolatedFrame(pageSize, printViewportPx).finally(() => {
+              setPrintMode(false);
+              if (typeof document !== 'undefined') {
+                document.body.classList.remove('print-mode');
+              }
+            });
+            return;
+          }
+
           try {
             window.focus();
             window.print();
@@ -614,7 +761,7 @@ export const usePrintManager = ({
     };
 
     setTimeout(triggerPrint, 80);
-  }, [availableTemplates, renderedPageCount, selectedStoredTemplate, selectedTemplateId]);
+  }, [availableTemplates, printUsingIsolatedFrame, renderedPageCount, selectedStoredTemplate, selectedTemplateId]);
 
   useEffect(() => {
     if (printMode) return;

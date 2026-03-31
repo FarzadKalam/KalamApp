@@ -552,6 +552,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         optionFilterProp="label"
         getPopupContainer={resolvedPopupContainer}
         options={normalizedOptions}
+        placement="bottomRight"
         popupMatchSelectWidth={isMobileViewport}
         listHeight={isMobileViewport ? 208 : 320}
         notFoundContent={loading ? 'در حال بارگزاری...' : 'موردی وجود ندارد'}
@@ -636,7 +637,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
       />
 
       <Modal
-        title="Delete Dynamic Option"
+        title="حذف گزینه داینامیک"
         open={deleteModalOpen}
         onCancel={() => {
           if (loading) return;
@@ -645,15 +646,15 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
           setReplaceWithValue('');
         }}
         onOk={handleDeleteOption}
-        okText="Delete and Replace"
-        cancelText="Cancel"
+        okText="حذف و جایگزینی"
+        cancelText="انصراف"
         confirmLoading={loading}
         destroyOnHidden
         zIndex={modalZIndex}
       >
         <div className="space-y-3">
           <div className="text-sm">
-            Replace records with <span className="font-bold">"{deletingOption?.label || '-'}"</span> by:
+            مقدار <span className="font-bold">"{deletingOption?.label || '-'}"</span> در رکوردهای فعلی با این گزینه جایگزین شود:
           </div>
           <Select
             className="w-full"
@@ -662,8 +663,9 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
             onChange={(val) => setReplaceWithValue(String(val || ''))}
             showSearch
             optionFilterProp="label"
-            placeholder="Select replacement value"
+            placeholder="گزینه جایگزین را انتخاب کنید"
             getPopupContainer={(node) => node?.parentElement || document.body}
+            placement="bottomRight"
           />
         </div>
       </Modal>

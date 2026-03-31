@@ -14,13 +14,30 @@
 - مخزن مرکزی تیم: `Hamgit`
 - branch اصلی قابل استقرار: `main`
 - هیچ‌کس مستقیم روی `main` کار نکند
-- هر task روی branch جدا انجام شود
+- مدل ساده فعلی تیم:
+  - `feature/current` برای قابلیت‌های جدید
+  - `fix/current` برای رفع باگ‌ها
 - merge فقط بعد از review
 - deploy فقط از روی `main`
 - deploy فقط توسط یک نفر مشخص انجام شود
 - هر deploy با `tag` ثبت شود
 
 اگر این ruleها ثابت نباشند، مشکل اصلی شما GitHub یا Hamgit نیست؛ مشکل، شلوغ شدن merge و deploy اشتباه است.
+
+### نکته مهم درباره مدل ساده
+
+این مدل برای ساده‌سازی انتخاب شده، نه برای بهترین ایزوله‌سازی.
+
+trade-off آن این است:
+
+- اگر دو نفر همزمان روی `feature/current` کار کنند، احتمال conflict بالا می‌رود
+- اگر commitها بزرگ شوند، review و rollback سخت‌تر می‌شود
+
+پس این مدل فقط وقتی قابل مدیریت است که:
+
+- تیم قبل از شروع کار pull بگیرد
+- commitها کوچک بمانند
+- MRها زودبه‌زود به `main` merge شوند
 
 ## 2) مرحله اول: کارهایی که فقط یک‌بار باید انجام شود
 
@@ -132,28 +149,34 @@ git pull origin main
 
 ### 4.1) قبل از شروع هر task
 
-```powershell
-git checkout main
-git pull origin main
-git checkout -b feature/<short-name>
-```
-
-مثال:
+برای feature:
 
 ```powershell
-git checkout -b feature/workflow-execution-mode
+git checkout feature/current
+git pull origin feature/current
 ```
 
 برای bug fix:
 
 ```powershell
-git checkout -b fix/<short-name>
+git checkout fix/current
+git pull origin fix/current
 ```
 
-برای hotfix:
+اگر این branchها هنوز ساخته نشده‌اند، یک‌بار این‌ها را بزنید:
 
 ```powershell
-git checkout -b hotfix/<short-name>
+git checkout main
+git pull origin main
+git checkout -b feature/current
+git push -u origin feature/current
+```
+
+```powershell
+git checkout main
+git pull origin main
+git checkout -b fix/current
+git push -u origin fix/current
 ```
 
 ### 4.2) حین کار
@@ -172,19 +195,42 @@ git commit -m "feat: add workflow execution mode"
 
 ### 4.3) ارسال branch
 
+برای feature:
+
 ```powershell
-git push -u origin feature/workflow-execution-mode
+git checkout feature/current
+git push
+```
+
+برای fix:
+
+```powershell
+git checkout fix/current
+git push
 ```
 
 ### 4.4) قبل از merge
 
-branch را با `main` sync کن:
+branch مشترک را با `main` sync کن:
+
+برای feature:
 
 ```powershell
 git checkout main
 git pull origin main
-git checkout feature/workflow-execution-mode
+git checkout feature/current
 git merge main
+git push
+```
+
+برای fix:
+
+```powershell
+git checkout main
+git pull origin main
+git checkout fix/current
+git merge main
+git push
 ```
 
 اگر conflict داشتی، همان‌جا حل کن و دوباره push بزن.
@@ -200,6 +246,11 @@ git merge main
    - آیا migration دارد یا نه
    - آیا deploy خاصی لازم دارد یا نه
 
+در این مدل ساده:
+
+- source branch برای قابلیت جدید: `feature/current`
+- source branch برای رفع باگ: `fix/current`
+
 ## 5) ruleهای review و merge
 
 قبل از merge این 5 مورد باید چک شود:
@@ -213,7 +264,8 @@ git merge main
 بعد از تایید:
 
 - فقط branch مربوطه merge شود
-- branch بعد از merge حذف شود
+- چون branchها shared هستند، حذفشان نکنید
+- بعد از merge، branch مشترک را دوباره با `main` sync کنید
 
 ## 6) ruleهای مخصوص migration دیتابیس
 

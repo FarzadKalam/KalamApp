@@ -42,7 +42,7 @@ export const tasksModule: ModuleDefinition = {
   fields: [
     { key: 'name', labels: { fa: 'عنوان فعالیت', en: 'Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'انجام نشده', value: 'todo', color: 'red' }, { label: 'در حال انجام', value: 'in_progress', color: 'blue' }, { label: 'بازبینی', value: 'review', color: 'orange' }, { label: 'تکمیل شده', value: 'done', color: 'green' }, { label: 'لغو شده', value: 'canceled', color: 'gray' }], defaultValue: 'todo', nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'انجام نشده', value: 'todo', color: 'red' }, { label: 'در حال انجام', value: 'in_progress', color: 'blue' }, { label: 'بازبینی', value: 'review', color: 'orange' }, { label: 'تکمیل شده', value: 'done', color: 'green' }, { label: 'لغو شده', value: 'canceled', color: 'gray' }], defaultValue: 'todo', validation: { required: true }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'priority', labels: { fa: 'اولویت', en: 'Priority' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 5, options: [{ label: 'بسیار بالا', value: 'urgent', color: 'red' }, { label: 'بالا', value: 'high', color: 'orange' }, { label: 'متوسط', value: 'medium', color: 'blue' }, { label: 'پایین', value: 'low', color: 'gray' }], defaultValue: 'medium', nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'related_to_module',
@@ -124,6 +124,18 @@ export const tasksModule: ModuleDefinition = {
         visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'production_orders' },
       },
       isTableColumn: true,
+    },
+
+    {
+      key: 'source_record_id',
+      labels: { fa: 'رکورد مرتبط', en: 'Related Record' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'general',
+      order: 1.9,
+      relationConfig: { targetModule: '', dependsOn: 'related_to_module' },
+      nature: FieldNature.STANDARD,
+      logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.NOT_EQUALS, value: '' } },
     },
 
     { key: 'related_product', labels: { fa: 'محصول مرتبط', en: 'Related Product' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 2, relationConfig: { targetModule: 'products', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'products' } } },

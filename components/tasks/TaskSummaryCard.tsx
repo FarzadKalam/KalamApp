@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import ProductionStagesField from '../ProductionStagesField';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getResolvedAssigneeId } from '../../utils/assigneeValue';
+import { resolveTaskSourceLink } from '../../utils/taskMeta';
 
 interface TaskSummaryCardProps {
   task: any;
@@ -48,16 +49,9 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   onStatusChange,
   onProducedQtyChange,
 }) => {
-  const relatedModuleId = String(task?.related_to_module || '');
-  const relatedRecordId =
-    task?.related_product
-    || task?.related_customer
-    || task?.related_supplier
-    || task?.related_production_order
-    || task?.related_invoice
-    || task?.purchase_invoice_id
-    || task?.project_id
-    || task?.marketing_lead_id;
+  const sourceLink = resolveTaskSourceLink(task);
+  const relatedModuleId = String(sourceLink.moduleId || '');
+  const relatedRecordId = sourceLink.recordId;
 
   const statusColor = task.status === 'done'
     ? 'border-green-300'

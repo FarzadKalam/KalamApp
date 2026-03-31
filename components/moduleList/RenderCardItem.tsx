@@ -9,6 +9,7 @@ import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { getResolvedAssigneeId } from "../../utils/assigneeValue";
 import { formatRecordDisplayValue } from "../../utils/recordDisplayFormatter";
 import { getModuleCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
+import { resolveTaskSourceLink } from "../../utils/taskMeta";
 import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
 
@@ -93,6 +94,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const assigneeAllowed = canViewField ? canViewField('assignee_id') !== false : true;
   const dueAllowed = canViewField ? canViewField('due_date') !== false : true;
   const categoryAllowed = canViewField ? canViewField(categoryFieldConfig?.key || 'related_to_module') !== false : true;
+  const sourceLink = isTasks ? resolveTaskSourceLink(item) : { moduleId: null, recordId: null };
   const relatedRelationFields = isTasks
     ? (moduleConfig?.fields || []).filter(
         (f: any) => (
@@ -122,13 +124,17 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         )
       )
     : null;
-  const relatedRecordId = selectedRelationField ? item?.[selectedRelationField.key] : null;
+  const relatedRecordId = sourceLink.recordId || (selectedRelationField ? item?.[selectedRelationField.key] : null);
   const relatedModuleId = isTasks
-    ? (item?.related_to_module || selectedRelationField?.relationConfig?.targetModule || null)
+    ? (sourceLink.moduleId || item?.related_to_module || selectedRelationField?.relationConfig?.targetModule || null)
     : null;
-  const relatedFieldAllowed = selectedRelationField
-    ? (canViewField ? canViewField(selectedRelationField.key) !== false : true)
-    : false;
+  const relatedFieldAllowed = sourceLink.recordId
+    ? true
+    : (
+      selectedRelationField
+        ? (canViewField ? canViewField(selectedRelationField.key) !== false : true)
+        : false
+    );
   const relatedOptions = selectedRelationField ? relationOptions?.[selectedRelationField.key] || [] : [];
   const relatedOptionLabel = relatedRecordId
     ? relatedOptions.find((opt: any) => opt?.value === relatedRecordId)?.label

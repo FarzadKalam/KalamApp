@@ -53,6 +53,7 @@ import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleA
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { fetchTaskSourceRecordOptions, getTaskModuleOptions } from '../utils/taskMeta';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -358,6 +359,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const modalOverlayZIndex = overlayZIndexBase + 10;
   const scanModalZIndex = overlayZIndexBase + 15;
   const quickCreateModalZIndex = overlayZIndexBase + 20;
+  const selectPlacement = 'bottomRight' as const;
+  const selectPopupContainer = () => document.body;
 
   useEffect(() => {
     let cancelled = false;
@@ -426,6 +429,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const fieldOptions = (
     moduleId === 'process_templates' && field?.key === 'module_id'
       ? getProjectModuleOptions()
+      : moduleId === 'tasks' && field?.key === 'related_to_module'
+        ? getTaskModuleOptions()
       : (options || field?.options || [])
   );
   const relationResolvedOptions = useMemo(
@@ -435,7 +440,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const isReadonly = field?.readonly === true || field?.nature === FieldNature.SYSTEM;
   const parsedLocation = useMemo(() => parseLocationValue(value), [value]);
   const relationConfigAny = field.relationConfig as any;
-  const quickCreateTargetModuleId = relationConfigAny?.targetModule as string | undefined;
+  const isTaskSourceRecordField = moduleId === 'tasks' && field?.key === 'source_record_id';
+  const resolvedRelationTargetModuleId = (
+    isTaskSourceRecordField
+      ? String(allValues?.related_to_module || allValues?.source_module_id || '').trim()
+      : String(relationConfigAny?.targetModule || '').trim()
+  ) || undefined;
+  const quickCreateTargetModuleId = resolvedRelationTargetModuleId;
   const quickCreateTargetModule = quickCreateTargetModuleId ? MODULES[quickCreateTargetModuleId] : undefined;
   const configuredQuickCreateKeys = useMemo(
     () =>
@@ -654,6 +665,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
   const loadRelationOptions = async (searchText = '', exactId?: string | number | null) => {
     if (fieldType !== FieldType.RELATION || !field.relationConfig) return;
+    if (isTaskSourceRecordField && !resolvedRelationTargetModuleId) {
+      setRelationLiveOptions([]);
+      missingExactRelationValueRef.current = null;
+      return;
+    }
     if (field.relationConfig?.dependsOn) {
       const dependsOnValue = String(allValues?.[field.relationConfig.dependsOn] || '').trim();
       if (!dependsOnValue) {
@@ -678,12 +694,18 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     try {
       relationPendingCountRef.current += 1;
       setRelationLoading(true);
-      const remoteOptions = await fetchRelationOptionsForField(supabase, field, {
-        allValues,
-        search: isExactLookup ? '' : normalizedSearchText,
-        exactId: exactId ?? null,
-        limit: RELATION_DEFAULT_LIMIT,
-      });
+      const remoteOptions = isTaskSourceRecordField
+        ? await fetchTaskSourceRecordOptions(supabase, resolvedRelationTargetModuleId, {
+            search: isExactLookup ? '' : normalizedSearchText,
+            exactId: exactId ?? null,
+            limit: RELATION_DEFAULT_LIMIT,
+          })
+        : await fetchRelationOptionsForField(supabase, field, {
+            allValues,
+            search: isExactLookup ? '' : normalizedSearchText,
+            exactId: exactId ?? null,
+            limit: RELATION_DEFAULT_LIMIT,
+          });
       if (!isExactLookup && requestVersion !== relationRequestVersionRef.current) {
         return;
       }
@@ -700,7 +722,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 value: exactId,
                 label: 'رکورد حذف شده',
                 searchText: `رکورد حذف شده ${normalizedExactId}`.trim(),
-                module: field.relationConfig?.targetModule,
+                module: resolvedRelationTargetModuleId || field.relationConfig?.targetModule,
                 missing: true,
               },
             ];
@@ -1406,11 +1428,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   return <Tag color={selectedOpt.color}>{selectedOpt.label}</Tag>;
               }
               const resolvedLabel = selectedOpt ? selectedOpt.label : getSafeOptionFallback(value);
-              if (fieldType === FieldType.RELATION && field.relationConfig?.targetModule && value) {
-                  const targetModule = String(selectedOpt?.module || field.relationConfig.targetModule || '').trim();
+              if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
+                  const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
                   return (
                      <RelatedRecordPopover
-                       moduleId={targetModule || field.relationConfig.targetModule}
+                       moduleId={targetModule || resolvedRelationTargetModuleId}
                        recordId={String(value)}
                        label={resolvedLabel}
                      />
@@ -1569,7 +1591,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     onOptionsUpdate={onOptionsUpdate}
                     disabled={!forceEditMode}
-                    getPopupContainer={(node) => node.parentElement || document.body}
+                    getPopupContainer={selectPopupContainer}
                     popupStyle={{ zIndex: selectPopupZIndex }}
                     modalZIndex={modalOverlayZIndex}
                 />
@@ -1582,7 +1604,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 options={fieldOptions}
                 allowClear
                 optionFilterProp="label"
-                getPopupContainer={(node) => node.parentElement || document.body}
+                getPopupContainer={selectPopupContainer}
+                placement={selectPlacement}
                 styles={{ popup: { root: { zIndex: selectPopupZIndex } } }}
             />
         );
@@ -1600,7 +1623,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     mode="multiple"
                     onOptionsUpdate={onOptionsUpdate}
                     disabled={!forceEditMode}
-                    getPopupContainer={(node) => node.parentElement || document.body}
+                    getPopupContainer={selectPopupContainer}
                     popupStyle={{ zIndex: selectPopupZIndex }}
                     modalZIndex={modalOverlayZIndex}
                 />
@@ -1614,19 +1637,24 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 options={fieldOptions}
                 allowClear
                 optionFilterProp="label"
-                getPopupContainer={(node) => node.parentElement || document.body}
+                getPopupContainer={selectPopupContainer}
+                placement={selectPlacement}
                 styles={{ popup: { root: { zIndex: selectPopupZIndex } } }}
             />
         );
 
       case FieldType.RELATION:
-        const canQuickCreate = !!field.relationConfig?.targetModule;
+        const canQuickCreate = !!resolvedRelationTargetModuleId;
         const normalizedRelationSearchQuery = String(relationSearchQuery || '').trim();
         const isRelationSearching = normalizedRelationSearchQuery.length > 0;
         let filteredOptions = isRelationSearching ? relationLiveOptions : relationResolvedOptions;
+
+        if (isTaskSourceRecordField && !resolvedRelationTargetModuleId) {
+          return <Select disabled placeholder="ابتدا بخش مرتبط را انتخاب کنید" style={{ width: '100%' }} value={value} options={[]} />;
+        }
         
         const relConfigAny = field.relationConfig as any;
-        if (relConfigAny?.dependsOn && allValues) {
+        if (!isTaskSourceRecordField && relConfigAny?.dependsOn && allValues) {
              const depVal = allValues[relConfigAny.dependsOn];
              if (!depVal) {
                  return <Select disabled placeholder="ابتدا فیلد مرتبط را انتخاب کنید" style={{width:'100%'}} value={value} options={[]} />;
@@ -1646,8 +1674,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     loading={relationLoading}
                     optionRender={renderSelectOption}
                     optionFilterProp="searchText"
-                    getPopupContainer={() => document.body}
-                    placement="bottomLeft"
+                    getPopupContainer={selectPopupContainer}
+                    placement={selectPlacement}
                     autoClearSearchValue
                     popupMatchSelectWidth={false}
                     virtual={false}
@@ -1698,7 +1726,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   label=""
                   buttonClassName="shrink-0"
                   onScan={({ raw, moduleId, recordId }) => {
-                    if (recordId && moduleId === field.relationConfig?.targetModule) {
+                    if (recordId && moduleId === resolvedRelationTargetModuleId) {
                       onChange(recordId);
                       return;
                     }
@@ -1717,9 +1745,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   />
                 )}
               </div>
-              {value && field.relationConfig?.targetModule && (
+              {value && resolvedRelationTargetModuleId && (
                 <RelatedRecordPopover
-                  moduleId={String(filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.module || field.relationConfig.targetModule || '')}
+                  moduleId={String(filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.module || resolvedRelationTargetModuleId || '')}
                   recordId={String(value)}
                   label={filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.label || getSafeOptionFallback(value)}
                 >
@@ -1919,7 +1947,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   };
 
   const canRelationQuickCreate = fieldType === FieldType.RELATION
-    && !!field.relationConfig?.targetModule;
+    && !!resolvedRelationTargetModuleId;
   const globalImageGalleryModalNode = (
     <Modal
       title="انتخاب تصویر از گالری"

@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
 import DynamicSelectField from './DynamicSelectField';
+import StageAutomationEditor from './production/StageAutomationEditor';
 import TaskHandoverModal, { type StageHandoverConfirm, type StageHandoverGroup, type StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import TaskHandoverFormsModal, {
   type StageHandoverFormListRow,
@@ -19,6 +20,18 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/inventoryTransactions';
 import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import {
+  applyTaskSourceRecordFilter,
+  buildTaskSourceInitialValues,
+  getMergedTaskTypeOptions,
+  getTaskTypeProtectedValues,
+} from '../utils/taskMeta';
+import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
+import {
+  getProcessAutomationRuleSummary,
+  normalizeProcessAutomationRules,
+  type ProcessAutomationRule,
+} from '../utils/processAutomationTypes';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -95,6 +108,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [draftForm] = Form.useForm();
   const [draftToCreate, setDraftToCreate] = useState<any | null>(null);
   const [editingDraft, setEditingDraft] = useState<any | null>(null);
+  const [draftAutomationRules, setDraftAutomationRules] = useState<ProcessAutomationRule[]>([]);
+  const [automationStageTarget, setAutomationStageTarget] = useState<any | null>(null);
   const [isReadyToLoad, setIsReadyToLoad] = useState(!lazyLoad);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isBom = moduleId === 'production_boms';
@@ -115,6 +130,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [processTemplateOptions, setProcessTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [processTemplateOptionsLoading, setProcessTemplateOptionsLoading] = useState(false);
   const [appendProcessModalOpen, setAppendProcessModalOpen] = useState(false);
+  const [isStageAutomationModalOpen, setIsStageAutomationModalOpen] = useState(false);
   const [appendProcessTemplateId, setAppendProcessTemplateId] = useState<string | null>(null);
   const [showEmptyProcessDetails, setShowEmptyProcessDetails] = useState(false);
   const [activeProcessGroupMeta, setActiveProcessGroupMeta] = useState<{
@@ -127,6 +143,52 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
   const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
   const autoOpenedTaskIdRef = useRef<string | null>(null);
+  const modalSelectProps = useMemo(
+    () => ({
+      allowClear: true,
+      showSearch: true,
+      optionFilterProp: 'label' as const,
+      getPopupContainer: (node?: HTMLElement | null) => node?.parentElement || document.body,
+      placement: 'bottomRight' as const,
+    }),
+    []
+  );
+  const taskStatusOptions = useMemo(
+    () => (MODULES.tasks?.fields || []).find((field: any) => String(field?.key || '') === 'status')?.options || [],
+    []
+  );
+  const assigneeUserOptions = useMemo(
+    () => assignees.users.map((user: any) => ({
+      value: String(user.id),
+      label: user.display_name || user.full_name || user.email || user.mobile_1 || String(user.id),
+    })),
+    [assignees.users]
+  );
+  const assigneeRoleOptions = useMemo(
+    () => assignees.roles.map((role: any) => ({
+      value: String(role.id),
+      label: role.title || role.name || String(role.id),
+    })),
+    [assignees.roles]
+  );
+  const stageModalStyles = useMemo(
+    () => ({
+      header: {
+        padding: '16px 20px 12px',
+        borderBottom: '1px solid rgba(148, 163, 184, 0.18)',
+        background: 'linear-gradient(180deg, rgba(245, 158, 11, 0.12) 0%, rgba(255,255,255,0) 100%)',
+      },
+      body: {
+        padding: '16px 20px 20px',
+        background: 'transparent',
+      },
+      content: {
+        overflow: 'hidden',
+        borderRadius: 24,
+      },
+    }),
+    []
+  );
 
   const onQuantityChangeRef = useRef<((qty: number) => void) | undefined>();
 
@@ -427,6 +489,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'project_id',
       'purchase_invoice_id',
       'marketing_lead_id',
+      'source_module_id',
+      'source_record_id',
+      'source_template_id',
+      'source_stage_sort_order',
+      'process_group_id',
+      'blocked_reason',
+      'waiting_for_task_type',
+      'escalation_level',
       'production_line_id',
       'production_shelf_id',
       'recurrence_info',
@@ -484,6 +554,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'project_id',
       'purchase_invoice_id',
       'marketing_lead_id',
+      'source_module_id',
+      'source_record_id',
+      'source_template_id',
+      'source_stage_sort_order',
+      'process_group_id',
+      'blocked_reason',
+      'waiting_for_task_type',
+      'escalation_level',
       'production_line_id',
       'production_shelf_id',
       'recurrence_info',
@@ -563,10 +641,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           value: String(row?.value || row?.label || ''),
         }))
         .filter((row) => row.label && row.value);
-      setTaskTypeOptions(options);
+      setTaskTypeOptions(getMergedTaskTypeOptions(options));
     } catch (error) {
       if (String((error as any)?.name || '') === 'AbortError') return;
-      setTaskTypeOptions([]);
+      setTaskTypeOptions(getMergedTaskTypeOptions([]));
     }
   }, []);
 
@@ -650,20 +728,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       if (isProcessRecordModule) {
-        query = query.eq('related_to_module', String(moduleId || ''));
-        if (moduleId === 'projects') {
-          query = query.eq('project_id', recordId);
-        } else if (moduleId === 'marketing_leads') {
-          query = query.eq('marketing_lead_id', recordId);
-        } else if (moduleId === 'customers') {
-          query = query.eq('related_customer', recordId);
-        } else if (moduleId === 'invoices') {
-          query = query.eq('related_invoice', recordId);
-        } else if (moduleId === 'purchase_invoices') {
-          query = query.eq('purchase_invoice_id', recordId);
-        }
+        query = applyTaskSourceRecordFilter(query, moduleId, recordId);
       } else {
-        query = query.eq('related_production_order', recordId);
+        query = applyTaskSourceRecordFilter(query, 'production_orders', recordId);
       }
 
       const { data, error } = await query.order('sort_order', { ascending: true });
@@ -1954,6 +2021,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       let dueDate = normalizeDueDateValue(values.due_date);
       const taskDescription = String(values?.description || '').trim() || null;
       const taskType = String(values?.task_type || '').trim() || null;
+      const stageAutomationRules = normalizeProcessAutomationRules(draftToCreate?.automation_rules);
       const durationValue = Math.max(0, Number(values?.duration_value || 0));
       const durationUnit = String(values?.duration_unit || 'day') === 'hour' ? 'hour' : 'day';
       const durationFrom = String(values?.duration_from || 'project_start') === 'previous_stage_end'
@@ -1999,17 +2067,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         weight: values.weight || 0,
         sort_order: values.sort_order || ((tasks.length + 1) * 10),
         created_by: user?.id,
+        source_template_id: activeProcessGroupMeta?.templateId || null,
+        source_stage_sort_order: values.sort_order || draftToCreate?.sort_order || null,
+        process_group_id: activeProcessGroupMeta?.id || null,
+        ...buildTaskSourceInitialValues(isProductionOrder ? 'production_orders' : moduleId, recordId),
       };
 
       if (isProductionOrder) {
         payload.produced_qty = 0;
-        payload.related_production_order = recordId;
-        payload.related_to_module = 'production_orders';
         payload.production_line_id = activeLineId;
         payload.production_shelf_id = values.production_shelf_id || null;
       } else if (isProcessRecordModule) {
         payload.produced_qty = 0;
-        payload.related_to_module = moduleId;
         payload.production_line_id = null;
         payload.production_shelf_id = null;
         const currentRecurrence = values?.recurrence_info && typeof values.recurrence_info === 'object'
@@ -2018,6 +2087,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         payload.recurrence_info = {
           ...currentRecurrence,
           ...(taskType ? { task_type: taskType } : {}),
+          process_automation_rules: stageAutomationRules,
         };
         if (activeProcessGroupMeta?.id) {
           payload.recurrence_info = {
@@ -2030,11 +2100,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             },
           };
         }
-        if (moduleId === 'projects') payload.project_id = recordId;
-        if (moduleId === 'marketing_leads') payload.marketing_lead_id = recordId;
-        if (moduleId === 'customers') payload.related_customer = recordId;
-        if (moduleId === 'invoices') payload.related_invoice = recordId;
-        if (moduleId === 'purchase_invoices') payload.purchase_invoice_id = recordId;
       }
 
       await insertTasksWithFallback([payload]);
@@ -2061,7 +2126,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const handleStatusChange = async (taskId: string, newStatus: string) => {
     try {
-      await updateTaskWithFallback(taskId, { status: newStatus });
+      const currentTask = tasks.find((item: any) => String(item?.id) === String(taskId)) || null;
+      const updatedTask = await updateTaskStatusWithAutomation({
+        taskId,
+        nextStatus: newStatus,
+        previousTask: currentTask,
+        currentUser: {
+          id: currentUser.id,
+          fullName: currentUser.fullName,
+        },
+      });
+      setTasks((prev) => prev.map((item: any) => (
+        String(item?.id) === String(taskId)
+          ? { ...item, ...updatedTask }
+          : item
+      )));
       message.success('وضعیت بروزرسانی شد');
       const nextTasks = await fetchTasks();
       await maybeOpenHandoverByStatus(taskId, newStatus, nextTasks);
@@ -2614,6 +2693,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           name: stageName,
           description: String(metadata?.description || '').trim() || null,
           task_type: String(metadata?.task_type || '').trim() || null,
+          automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -2670,6 +2750,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           name: 'مرحله 1',
           description: null,
           task_type: null,
+          automation_rules: [],
           sort_order: maxSortOrder > 0 ? maxSortOrder + 10 : ((existing.length + 1) * 10),
           wage: 0,
           weight: 0,
@@ -2747,6 +2828,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           name: stageName,
           description: String(metadata?.description || '').trim() || null,
           task_type: String(metadata?.task_type || '').trim() || null,
+          automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -2972,10 +3054,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             : {};
           const stageTaskType = String(stage?.task_type || '').trim() || null;
           const stageDescription = String(stage?.description || '').trim() || null;
+          const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
           const taskRow: any = {
             name: stageName,
             status: 'todo',
-            related_to_module: moduleId,
+            source_template_id: stageMeta.templateId,
+            source_stage_sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+            process_group_id: stageMeta.groupId,
             production_line_id: null,
             production_shelf_id: null,
             produced_qty: 0,
@@ -2992,6 +3077,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             recurrence_info: {
               ...recurrenceBase,
               ...(stageTaskType ? { task_type: stageTaskType } : {}),
+              process_automation_rules: stageAutomationRules,
               process_group: {
                 id: stageMeta.groupId,
                 name: stageMeta.groupLabel,
@@ -2999,12 +3085,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 template_name: stageMeta.templateName,
               },
             },
+            ...buildTaskSourceInitialValues(moduleId, recordId),
           };
-          if (moduleId === 'projects') taskRow.project_id = recordId;
-          if (moduleId === 'marketing_leads') taskRow.marketing_lead_id = recordId;
-          if (moduleId === 'customers') taskRow.related_customer = recordId;
-          if (moduleId === 'invoices') taskRow.related_invoice = recordId;
-          if (moduleId === 'purchase_invoices') taskRow.purchase_invoice_id = recordId;
           return taskRow;
         });
 
@@ -3040,6 +3122,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const assigneeRaw = String(values?.default_assignee_combo || '');
     const assigneeType = assigneeRaw.startsWith('role:') ? 'role' : (assigneeRaw.startsWith('user:') ? 'user' : null);
     const assigneeId = assigneeType ? assigneeRaw.split(':')[1] : null;
+    const automationRules = normalizeProcessAutomationRules(draftAutomationRules);
     let next = [...draftLocal];
     if (editingDraft?.id) {
       next = next.map((stage: any) =>
@@ -3057,6 +3140,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               duration_value: Number(values?.duration_value || 0),
               duration_unit: values?.duration_unit || 'day',
               duration_from: values?.duration_from || 'project_start',
+              automation_rules: automationRules,
             }
           : stage
       );
@@ -3074,13 +3158,40 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: Number(values?.duration_value || 0),
         duration_unit: values?.duration_unit || 'day',
         duration_from: values?.duration_from || 'project_start',
+        automation_rules: automationRules,
       });
     }
     await saveDraftStages(next);
     setIsDraftModalOpen(false);
     setEditingDraft(null);
+    setAutomationStageTarget(null);
     draftForm.resetFields();
   };
+
+  const openStageAutomationEditor = useCallback((stage?: any | null) => {
+    const nextStage = stage || null;
+    setAutomationStageTarget(nextStage);
+    setDraftAutomationRules(normalizeProcessAutomationRules(nextStage?.automation_rules));
+    setIsStageAutomationModalOpen(true);
+  }, []);
+
+  const handleSaveStageAutomationRules = useCallback(async (rules: ProcessAutomationRule[]) => {
+    if (automationStageTarget?.id) {
+      const nextStages = (Array.isArray(draftLocal) ? draftLocal : []).map((stage: any) => (
+        String(stage?.id || '') === String(automationStageTarget.id)
+          ? { ...stage, automation_rules: rules }
+          : stage
+      ));
+      await saveDraftStages(nextStages);
+      if (editingDraft?.id && String(editingDraft.id) === String(automationStageTarget.id)) {
+        setEditingDraft((prev: any) => (prev ? { ...prev, automation_rules: rules } : prev));
+      }
+    } else {
+      setDraftAutomationRules(rules);
+    }
+    setAutomationStageTarget(null);
+    setIsStageAutomationModalOpen(false);
+  }, [automationStageTarget, draftLocal, editingDraft?.id, saveDraftStages]);
 
   const handleRemoveDraftStage = async (id: any) => {
     Modal.confirm({
@@ -3114,6 +3225,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_unit: editingDraft.duration_unit || 'day',
         duration_from: editingDraft.duration_from || 'project_start',
       });
+      setDraftAutomationRules(normalizeProcessAutomationRules(editingDraft?.automation_rules));
     } else {
       draftForm.setFieldsValue({
         description: '',
@@ -3125,6 +3237,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_unit: 'day',
         duration_from: 'project_start',
       });
+      setDraftAutomationRules([]);
     }
   }, [isDraftModalOpen, editingDraft, draftForm, draftLocal.length]);
 
@@ -3330,6 +3443,56 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     <div ref={containerRef} className="w-full flex flex-col gap-4 select-none" dir="rtl">
       {isDraftOnlyModule && (
         <div className="space-y-2">
+          {isProcessTemplateModule && (
+            <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.55)] p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.58)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">اتوماسیون مراحل الگو</div>
+                  <div className="text-xs leading-6 text-gray-500 dark:text-gray-400">
+                    قانون‌های هر مرحله از همین الگو ذخیره می‌شوند و بعدا چه در کپی از الگو و چه در اجرای خودکار فرآیند، همراه همان مرحله به فعالیت‌های ساخته‌شده منتقل می‌شوند.
+                  </div>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-100">
+                  مجموع قوانین: {toPersianNumber(
+                    draftSegments.reduce((sum: number, stage: any) => sum + normalizeProcessAutomationRules(stage?.automation_rules).length, 0)
+                  )}
+                </div>
+              </div>
+              <div className="mt-4 flex flex-col gap-2">
+                {draftSegments.length > 0 ? draftSegments.map((stage: any) => {
+                  const automationCount = normalizeProcessAutomationRules(stage?.automation_rules).length;
+                  return (
+                    <div
+                      key={`template-auto-${stage.id}`}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/70 bg-white/80 px-3 py-2 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">{stage.label}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                          {automationCount > 0
+                            ? `${toPersianNumber(automationCount)} قانون ثبت شده`
+                            : 'هنوز اتوماسیونی برای این مرحله ثبت نشده است'}
+                        </div>
+                      </div>
+                      {!readOnly ? (
+                        <Button
+                          size="small"
+                          className="rounded-xl"
+                          onClick={() => { void openStageAutomationEditor(stage); }}
+                        >
+                          {automationCount > 0 ? 'مدیریت اتوماسیون' : 'افزودن اتوماسیون'}
+                        </Button>
+                      ) : null}
+                    </div>
+                  );
+                }) : (
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    بعد از افزودن مرحله، تنظیم اتوماسیون هر مرحله از همین بخش در دسترس خواهد بود.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="text-xs text-gray-500 dark:text-gray-400">
             {isProcessTemplateModule ? 'مراحل پیش‌نویس فرآیند' : 'مراحل پیش‌نویس (BOM)'}
           </div>
@@ -3347,10 +3510,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       <div>مسئول: {getDraftAssigneeLabel(stage)}</div>
                       {String(stage?.task_type || '').trim() && <div>نوع فعالیت: {stage.task_type}</div>}
                       {String(stage?.description || '').trim() && <div>توضیحات: {stage.description}</div>}
+                      <div>اتوماسیون‌ها: {toPersianNumber(normalizeProcessAutomationRules(stage?.automation_rules).length || 0)}</div>
                       <div>زمان انجام: {formatDraftDuration(stage)}</div>
                       {!readOnly && (
                         <div className="flex gap-2">
                           <Button size="small" onClick={() => { setEditingDraft(stage); setIsDraftModalOpen(true); }}>ویرایش</Button>
+                          {isProcessTemplateModule && (
+                            <Button size="small" onClick={() => { void openStageAutomationEditor(stage); }}>اتوماسیون</Button>
+                          )}
                           <Button size="small" danger onClick={() => handleRemoveDraftStage(stage.id)}>حذف</Button>
                         </div>
                       )}
@@ -3475,6 +3642,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
                       {String(segment?.task_type || '').trim() && <div>نوع فعالیت: {segment.task_type}</div>}
                       {String(segment?.description || '').trim() && <div>توضیحات: {segment.description}</div>}
+                      <div>اتوماسیون‌ها: {toPersianNumber(normalizeProcessAutomationRules(segment?.automation_rules).length || 0)}</div>
                       <div>زمان انجام: {formatDraftDuration(segment)}</div>
                       {!readOnly && (
                         <div className="flex items-center gap-2">
@@ -3487,6 +3655,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               ایجاد فعالیت
                             </Button>
                           )}
+                          <Button
+                            size="small"
+                            onClick={() => { void openStageAutomationEditor(segment); }}
+                          >
+                            اتوماسیون
+                          </Button>
                           <Button
                             size="small"
                             danger
@@ -3794,8 +3968,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         width={480}
         centered
         destroyOnHidden
+        styles={stageModalStyles}
       >
-        <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-2">
+        <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-1">
           <div className="grid grid-cols-12 gap-3">
             <div className="col-span-9">
               <Form.Item name="name" label="عنوان مرحله" rules={[{ required: true, message: 'الزامی' }]}> 
@@ -3825,6 +4000,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   options={taskTypeOptions}
                   category="task_type"
                   onOptionsUpdate={fetchTaskTypeOptions}
+                  protectedValues={getTaskTypeProtectedValues()}
                   placeholder="انتخاب نوع فعالیت"
                   className="w-full"
                   getPopupContainer={(node) => node?.parentElement || document.body}
@@ -3834,7 +4010,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             <div className="col-span-12">
               <Form.Item name="assignee_combo" label="مسئول انجام">
-                <Select placeholder="انتخاب کنید..." allowClear showSearch optionFilterProp="label">
+                <Select placeholder="انتخاب کنید..." {...modalSelectProps}>
                   <Select.OptGroup label="کاربران">
                     {assignees.users.map(u => (
                       <Select.Option key={`user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
@@ -3864,11 +4040,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Form.Item name="production_shelf_id" label="قفسه مرحله">
                   <Select
                     placeholder="انتخاب قفسه از انبار تولید"
-                    allowClear
-                    showSearch
-                    optionFilterProp="label"
                     options={productionShelfOptions}
-                    getPopupContainer={(node) => node?.parentElement || document.body}
+                    {...modalSelectProps}
                   />
                 </Form.Item>
               </div>
@@ -3882,6 +4055,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="col-span-5">
                   <Form.Item name="duration_from" label="بعد از">
                     <Select
+                      {...modalSelectProps}
                       options={[
                         { label: 'شروع پروژه', value: 'project_start' },
                         { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
@@ -3897,6 +4071,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="col-span-3">
                   <Form.Item name="duration_unit" label="واحد">
                     <Select
+                      {...modalSelectProps}
                       options={[
                         { label: 'روز', value: 'day' },
                         { label: 'ساعت', value: 'hour' },
@@ -3929,16 +4104,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
-        title={<div className="flex items-center gap-2 text-amber-800"><div className="bg-amber-50 p-1 rounded text-amber-600"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس'}</div>}
+        title={<div className="flex items-center gap-2 text-amber-800"><div className="bg-amber-50 p-1 rounded text-amber-600"><PlusOutlined /></div> {editingDraft ? 'ویرایش مرحله پیش‌نویس' : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس')}</div>}
         open={isDraftModalOpen}
-        onCancel={() => setIsDraftModalOpen(false)}
+        onCancel={() => {
+          setIsDraftModalOpen(false);
+          setEditingDraft(null);
+          setAutomationStageTarget(null);
+          setIsStageAutomationModalOpen(false);
+          setDraftAutomationRules([]);
+          draftForm.resetFields();
+        }}
         footer={null}
         zIndex={10001}
-        width={420}
+        width={460}
         centered
         destroyOnHidden
+        styles={stageModalStyles}
       >
-        <Form form={draftForm} onFinish={handleAddDraftStage} layout="vertical" className="pt-2">
+        <Form form={draftForm} onFinish={handleAddDraftStage} layout="vertical" className="pt-1">
+          <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-xs leading-6 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
+            این مرحله فقط در پیش‌نمایش الگو ذخیره می‌شود. بعدا موقع ساخت یا کپی فرآیند، همین تنظیمات برای ایجاد فعالیت‌ها استفاده می‌شود.
+          </div>
           <div className="grid grid-cols-12 gap-3">
             <div className="col-span-9">
               <Form.Item name="name" label="عنوان مرحله" rules={[{ required: true, message: 'الزامی' }]}> 
@@ -3969,6 +4155,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       options={taskTypeOptions}
                       category="task_type"
                       onOptionsUpdate={fetchTaskTypeOptions}
+                      protectedValues={getTaskTypeProtectedValues()}
                       placeholder="انتخاب نوع فعالیت"
                       className="w-full"
                       getPopupContainer={(node) => node?.parentElement || document.body}
@@ -3981,8 +4168,42 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   </Form.Item>
                 </div>
                 <div className="col-span-12">
+                  <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.6)] px-4 py-3 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.6)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">اتوماسیون‌های این مرحله</div>
+                        <div className="mt-1 text-xs leading-6 text-gray-500 dark:text-gray-400">
+                          برای مرحله می‌توانی قانون‌های سبک تعریف کنی تا هنگام تغییر وضعیت فعالیت، روی رکورد مرتبط یادداشت و منشن خودکار ثبت شود.
+                        </div>
+                      </div>
+                      <Button
+                        type="default"
+                        className="shrink-0 rounded-xl"
+                        onClick={() => {
+                          setAutomationStageTarget(null);
+                          setIsStageAutomationModalOpen(true);
+                        }}
+                      >
+                        تنظیم اتوماسیون
+                      </Button>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {draftAutomationRules.length > 0 ? draftAutomationRules.map((rule) => (
+                        <span
+                          key={rule.id}
+                          className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-100"
+                        >
+                          {getProcessAutomationRuleSummary(rule)}
+                        </span>
+                      )) : (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">هنوز قانونی برای این مرحله ثبت نشده است.</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="col-span-12">
                   <Form.Item name="default_assignee_combo" label="مسئول انجام پیش‌فرض">
-                    <Select placeholder="انتخاب کنید..." allowClear showSearch optionFilterProp="label">
+                    <Select placeholder="انتخاب کنید..." {...modalSelectProps}>
                       <Select.OptGroup label="کاربران">
                         {assignees.users.map(u => (
                           <Select.Option key={`draft-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
@@ -4006,6 +4227,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="col-span-5">
                   <Form.Item name="duration_from" label="بعد از">
                     <Select
+                      {...modalSelectProps}
                       options={[
                         { label: 'شروع پروژه', value: 'project_start' },
                         { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
@@ -4021,6 +4243,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="col-span-3">
                   <Form.Item name="duration_unit" label="واحد">
                     <Select
+                      {...modalSelectProps}
                       options={[
                         { label: 'روز', value: 'day' },
                         { label: 'ساعت', value: 'hour' },
@@ -4033,13 +4256,34 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
 
           <div className="flex justify-end gap-2 mt-4 border-t pt-4">
-            <Button onClick={() => setIsDraftModalOpen(false)} className="rounded-lg">انصراف</Button>
+            <Button onClick={() => {
+              setIsDraftModalOpen(false);
+              setEditingDraft(null);
+              setAutomationStageTarget(null);
+              setIsStageAutomationModalOpen(false);
+              setDraftAutomationRules([]);
+              draftForm.resetFields();
+            }} className="rounded-lg">انصراف</Button>
             <Button type="primary" htmlType="submit" className="rounded-lg bg-amber-700 hover:!bg-amber-600 border-none shadow-md">
-              ثبت مرحله
+              {editingDraft ? 'بروزرسانی مرحله' : 'ثبت مرحله'}
             </Button>
           </div>
         </Form>
       </Modal>
+
+      <StageAutomationEditor
+        open={isStageAutomationModalOpen}
+        value={draftAutomationRules}
+        statusOptions={taskStatusOptions}
+        taskTypeOptions={taskTypeOptions}
+        userOptions={assigneeUserOptions}
+        roleOptions={assigneeRoleOptions}
+        onCancel={() => {
+          setAutomationStageTarget(null);
+          setIsStageAutomationModalOpen(false);
+        }}
+        onSave={(rules) => { void handleSaveStageAutomationRules(rules); }}
+      />
 
       <Modal
         title="افزودن فرآیند جدید"

@@ -158,7 +158,8 @@ echo "Deployed $RELEASE_DIR"
 '@
 
   Write-Step "Activating release on server"
-  $remoteScript | & ssh -p $deployPort $target "bash -s -- '$deployPath' '$remoteArchive' '$keepReleases'"
+  $remoteScriptLf = $remoteScript -replace "`r", ""
+  $remoteScriptLf | & ssh -p $deployPort $target "bash -s -- '$deployPath' '$remoteArchive' '$keepReleases'"
   if ($LASTEXITCODE -ne 0) {
     throw "Remote activation failed."
   }

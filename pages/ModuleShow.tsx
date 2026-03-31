@@ -52,6 +52,8 @@ import { supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/ass
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { syncRecordTags } from '../utils/recordTags';
 import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
+import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -257,7 +259,7 @@ const ModuleShow: React.FC = () => {
       map.set(key, category?.label || key);
     });
     return map;
-  }, [moduleConfig]);
+  }, [moduleConfig, moduleId]);
 
   const productMetaMap = useMemo(() => {
     const map = new Map<string, { name: string; system_code: string }>();
@@ -919,6 +921,9 @@ const ModuleShow: React.FC = () => {
             })),
           };
         }
+        if (moduleId === 'tasks') {
+          nextRecord = normalizeTaskSourceValues(nextRecord);
+        }
         if (activeRecordRequestRef.current !== requestId) return;
         skipNextOptionsFetchRef.current = true;
         setData(nextRecord);
@@ -1374,19 +1379,31 @@ const ModuleShow: React.FC = () => {
       setDynamicOptions(dynOpts);
 
       const relOpts: Record<string, any[]> = {};
+      const normalizedRecordData = moduleId === 'tasks'
+        ? normalizeTaskSourceValues(recordData || {})
+        : (recordData || {});
       const relationFieldsWithValue = moduleConfig.fields.filter((field) => {
         if (field.type !== FieldType.RELATION || !field.relationConfig) return false;
-        const rawValue = recordData?.[field.key];
+        const rawValue = normalizedRecordData?.[field.key];
         return rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
       });
 
       const relationResults = await Promise.allSettled(
         relationFieldsWithValue.map(async (field) => {
-          const options = await fetchRelationOptionsForField(supabase, field, {
-            allValues: recordData || {},
-            exactId: recordData?.[field.key],
-            limit: 1,
-          });
+          const options = moduleId === 'tasks' && field.key === 'source_record_id'
+            ? await fetchTaskSourceRecordOptions(
+                supabase,
+                String(normalizedRecordData?.related_to_module || normalizedRecordData?.source_module_id || '').trim(),
+                {
+                  exactId: normalizedRecordData?.[field.key],
+                  limit: 1,
+                }
+              )
+            : await fetchRelationOptionsForField(supabase, field, {
+                allValues: normalizedRecordData,
+                exactId: normalizedRecordData?.[field.key],
+                limit: 1,
+              });
           return { fieldKey: field.key, options };
         })
       );
@@ -2196,7 +2213,45 @@ const ModuleShow: React.FC = () => {
     let newValue = tempValues[key];
     if (newValue === '' || newValue === undefined) newValue = null;
     try {
-      const { error } = await supabase.from(moduleId).update({ [key]: newValue }).eq('id', id);
+      const taskSourceEditKeys = new Set([
+        'related_to_module',
+        'source_record_id',
+        'related_product',
+        'related_customer',
+        'related_supplier',
+        'related_production_order',
+        'related_invoice',
+        'project_id',
+        'purchase_invoice_id',
+        'marketing_lead_id',
+      ]);
+      if (moduleId === 'tasks' && key === 'status') {
+        const updatedTask = await updateTaskStatusWithAutomation({
+          taskId: String(id),
+          nextStatus: String(newValue || ''),
+          previousTask: data || null,
+          currentUser: {
+            id: currentUserId,
+            fullName: null,
+          },
+        });
+        setData((prev: any) => ({ ...(prev || {}), ...updatedTask }));
+        setTempValues((prev) => ({ ...(prev || {}), status: updatedTask.status }));
+        await insertChangelog({
+          action: 'update',
+          fieldName: key,
+          fieldLabel: getFieldLabel(key),
+          oldValue: data?.[key],
+          newValue: updatedTask.status,
+        });
+        msg.success('ذخیره شد');
+        setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
+        return;
+      }
+      const updatePayload = moduleId === 'tasks' && taskSourceEditKeys.has(key)
+        ? buildTaskSourcePatch({ ...(data || {}), ...tempValues, [key]: newValue })
+        : { [key]: newValue };
+      const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', id);
       if (error) throw error;
       if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && key === 'status') {
         const authUser = await getCachedAuthUser(supabase);
@@ -2225,7 +2280,11 @@ const ModuleShow: React.FC = () => {
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
       }
-      setData((prev: any) => ({ ...prev, [key]: newValue }));
+      setData((prev: any) => (
+        moduleId === 'tasks' && taskSourceEditKeys.has(key)
+          ? { ...(prev || {}), ...updatePayload }
+          : { ...(prev || {}), [key]: newValue }
+      ));
       await insertChangelog({
         action: 'update',
         fieldName: key,
@@ -2262,6 +2321,11 @@ const ModuleShow: React.FC = () => {
       wage: Number(stage?.wage || 0),
       metadata: {
         ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+        description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
+        task_type: String(stage?.task_type || stage?.metadata?.task_type || '').trim() || null,
+        automation_rules: Array.isArray(stage?.automation_rules)
+          ? stage.automation_rules
+          : (Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : []),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -3277,6 +3341,7 @@ const ModuleShow: React.FC = () => {
     if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {
       let options = field.options;
       if (moduleId === 'process_templates' && field.key === 'module_id') options = getProjectModuleOptions();
+      else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
       else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
       else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
 
@@ -3323,6 +3388,7 @@ const ModuleShow: React.FC = () => {
     const tempValue = tempValues[field.key] !== undefined ? tempValues[field.key] : baseValue;
     let options = field.options;
     if (moduleId === 'process_templates' && field.key === 'module_id') options = getProjectModuleOptions();
+    else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
 

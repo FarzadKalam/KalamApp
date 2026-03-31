@@ -14,6 +14,8 @@ import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import { uploadNoteAttachments } from '../utils/noteAttachments';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { FieldType } from '../types';
+import { resolveTaskSourceLink } from '../utils/taskMeta';
+import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import TaskSummaryCard from './tasks/TaskSummaryCard';
 import SharedNoteCard from './notes/SharedNoteCard';
 import SharedNoteComposer from './notes/SharedNoteComposer';
@@ -595,7 +597,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const buildTasksQuery = () =>
       supabase
         .from('tasks')
-        .select('id, name, status, priority, produced_qty, created_at, start_date, due_date, assignee_id, assignee_role_id, assignee_type, production_line_id, related_to_module, related_product, related_customer, related_supplier, related_production_order, related_invoice, purchase_invoice_id, project_id, marketing_lead_id')
+        .select('id, name, status, priority, produced_qty, created_at, start_date, due_date, assignee_id, assignee_role_id, assignee_type, production_line_id, related_to_module, related_product, related_customer, related_supplier, related_production_order, related_invoice, purchase_invoice_id, project_id, marketing_lead_id, source_module_id, source_record_id')
         .in('status', queryStatuses.length ? queryStatuses : fallbackStatuses)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -623,17 +625,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
     const relatedPairs: { module_id: string; record_id: string }[] = [];
     tasksList.forEach((task) => {
-      const moduleId = task.related_to_module;
-      const recordId =
-        task.related_product
-        || task.related_customer
-        || task.related_supplier
-        || task.related_production_order
-        || task.related_invoice
-        || task.purchase_invoice_id
-        || task.project_id
-        || task.marketing_lead_id;
-      if (moduleId && recordId) relatedPairs.push({ module_id: moduleId, record_id: recordId });
+      const sourceLink = resolveTaskSourceLink(task);
+      if (sourceLink.moduleId && sourceLink.recordId) {
+        relatedPairs.push({ module_id: sourceLink.moduleId, record_id: sourceLink.recordId });
+      }
     });
     const assigneeIds = Array.from(
       new Set(tasksList.filter((task: any) => task.assignee_type !== 'role').map((task: any) => task.assignee_id).filter(Boolean))
@@ -1917,17 +1912,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             <List
               dataSource={data}
               renderItem={(task: any) => {
-                const moduleId = task.related_to_module;
-                const recordId =
-                  task.related_product
-                  || task.related_customer
-                  || task.related_supplier
-                  || task.related_production_order
-                  || task.related_invoice
-                  || task.purchase_invoice_id
-                  || task.project_id
-                  || task.marketing_lead_id;
-                const recordKey = moduleId && recordId ? `${moduleId}:${recordId}` : null;
+                const sourceLink = resolveTaskSourceLink(task);
+                const recordKey = sourceLink.moduleId && sourceLink.recordId ? `${sourceLink.moduleId}:${sourceLink.recordId}` : null;
                 const recordTitle = recordKey ? recordTitleMap[recordKey] : null;
                 return (
                   <TaskSummaryCard
@@ -1939,8 +1925,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                     recordTitle={recordTitle}
                     onClose={handleClose}
                     onStatusChange={async (taskId, status) => {
-                      await supabase.from('tasks').update({ status }).eq('id', taskId);
-                      setTasks((prev) => prev.map((row: any) => (row.id === taskId ? { ...row, status } : row)));
+                      const currentTask = tasks.find((row: any) => String(row?.id) === String(taskId)) || null;
+                      const updatedTask = await updateTaskStatusWithAutomation({
+                        taskId,
+                        nextStatus: status,
+                        previousTask: currentTask,
+                        currentUser: {
+                          id: profile.id,
+                          fullName: createdByNameMap[String(profile.id || '')] || null,
+                        },
+                      });
+                      setTasks((prev) => prev.map((row: any) => (
+                        row.id === taskId ? { ...row, ...updatedTask } : row
+                      )));
                     }}
                     onProducedQtyChange={async (taskId, value) => {
                       await handleTaskProducedQtyChange(taskId, value);
@@ -2006,17 +2003,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           <List
             dataSource={data}
             renderItem={(task: any) => {
-              const moduleId = task.related_to_module;
-              const recordId =
-                task.related_product
-                || task.related_customer
-                || task.related_supplier
-                || task.related_production_order
-                || task.related_invoice
-                || task.purchase_invoice_id
-                || task.project_id
-                || task.marketing_lead_id;
-              const recordKey = moduleId && recordId ? `${moduleId}:${recordId}` : null;
+              const sourceLink = resolveTaskSourceLink(task);
+              const recordKey = sourceLink.moduleId && sourceLink.recordId ? `${sourceLink.moduleId}:${sourceLink.recordId}` : null;
               const recordTitle = recordKey ? recordTitleMap[recordKey] : null;
               return (
                 <TaskSummaryCard
@@ -2028,8 +2016,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                   recordTitle={recordTitle}
                   onClose={handleClose}
                   onStatusChange={async (taskId, status) => {
-                    await supabase.from('tasks').update({ status }).eq('id', taskId);
-                    setTasks((prev) => prev.map((row: any) => (row.id === taskId ? { ...row, status } : row)));
+                    const currentTask = filteredTasks.find((row: any) => String(row?.id) === String(taskId)) || null;
+                    const updatedTask = await updateTaskStatusWithAutomation({
+                      taskId,
+                      nextStatus: status,
+                      previousTask: currentTask,
+                      currentUser: {
+                        id: profile.id,
+                        fullName: createdByNameMap[String(profile.id || '')] || null,
+                      },
+                    });
+                    setTasks((prev) => prev.map((row: any) => (
+                      row.id === taskId ? { ...row, ...updatedTask } : row
+                    )));
                   }}
                   onProducedQtyChange={async (taskId, value) => {
                     await handleTaskProducedQtyChange(taskId, value);

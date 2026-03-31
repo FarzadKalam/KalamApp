@@ -1,7 +1,7 @@
 # Documentation Index
 
-**Last Updated:** 2026-02-25  
-**Purpose:** مرجع وضعیت اسناد پروژه برای جلوگیری از استفاده از فایل‌های قدیمی.
+**Last Updated:** 2026-03-31  
+**Purpose:** مرجع وضعیت اسناد پروژه برای جلوگیری از استفاده از فایل‌های قدیمی
 
 ## 1) Current (Primary Sources)
 
@@ -13,6 +13,7 @@
 4. `ARCHITECTURE.md` - معماری فنی و الگوها
 5. `DEPLOYMENT.md` - استقرار
 6. `DATABASE_V1_FULL.md` - پایگاه داده کامل هماهنگ با کانفیگ ماژول‌ها
+7. `WORKFLOWS_PROCESS_AUTOMATION_FA.md` - مرجع طراحی workflow های عمومی و process automation
 
 ## 2) Needs Update (Not Fully Aligned With v1)
 

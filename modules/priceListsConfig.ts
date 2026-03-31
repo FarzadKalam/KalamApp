@@ -97,7 +97,7 @@ export const priceListsConfig: ModuleDefinition = {
     {
       key: 'description',
       labels: { fa: 'توضیحات', en: 'Description' },
-      type: FieldType.LONG_TEXT,
+      type: FieldType.SUPER_LONG_TEXT,
       location: FieldLocation.BLOCK,
       blockId: 'baseInfo',
       order: 3,
@@ -113,6 +113,6 @@ export const priceListsConfig: ModuleDefinition = {
       readonly: true,
       nature: FieldNature.SYSTEM,
     },
-  ],
+  ].filter((field) => field.key !== 'created_at'),
   blocks: [BLOCKS.baseInfo, BLOCKS.items],
 };

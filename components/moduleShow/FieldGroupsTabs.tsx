@@ -5,6 +5,7 @@ import { FieldType } from '../../types';
 import ProductStockMovementsPanel from '../products/ProductStockMovementsPanel';
 import ShelfInventoryPanel from '../shelves/ShelfInventoryPanel';
 import ShelfStockMovementsPanel from '../shelves/ShelfStockMovementsPanel';
+import { isTaskLegacySourceField } from '../../utils/taskMeta';
 
 interface FieldGroupsTabsProps {
   fieldGroups: any[];
@@ -85,6 +86,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
             return !hasProcessBarsInSameBlock;
           })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
           .some((f: any) => (!f.logic || checkVisibility(f.logic)));
 
         const hasBlockTable =
@@ -116,6 +118,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
             return !hasProcessBarsInSameBlock;
           })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
           .map((f: any) => (!f.logic || checkVisibility(f.logic)) && (
             <div
               key={f.key}
