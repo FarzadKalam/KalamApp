@@ -1,11 +1,14 @@
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { normalizeNoteScope } from './noteScope';
+import { createProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveTaskSourceLink } from './taskMeta';
+import { evaluateWorkflowCondition, executeWorkflowAction } from './workflowRuntime';
 import {
   normalizeProcessAutomationRules,
   ProcessAutomationRule,
 } from './processAutomationTypes';
+import { WorkflowCondition } from './workflowTypes';
 
 type AutomationActor = {
   id?: string | null;
@@ -23,7 +26,20 @@ type MentionTarget = {
   roleIds: string[];
 };
 
+type CommunicationTarget = {
+  phones: string[];
+  emails: string[];
+  baleChatIds: string[];
+};
+
+const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
+const isTaskAutomationFieldKey = (fieldKey?: string | null) =>
+  String(fieldKey || '').startsWith(TASK_AUTOMATION_FIELD_PREFIX);
+const getTaskAutomationBaseFieldKey = (fieldKey?: string | null) =>
+  String(fieldKey || '').replace(TASK_AUTOMATION_FIELD_PREFIX, '');
+
 const normalizeTaskStatus = (value: unknown) => String(value || '').trim().toLowerCase();
+const COMPLETED_TASK_STATUSES = new Set(['done', 'completed']);
 
 const parseRecurrenceInfo = (value: any): Record<string, any> => {
   if (value && typeof value === 'object') return value;
@@ -43,25 +59,42 @@ const getTaskStatusLabel = (status: unknown) => {
   return String(matched?.label || status || '').trim();
 };
 
-const renderTaskAutomationTemplate = (template: string, task: Record<string, any>) => {
+const buildAutomationActionRecord = (
+  task: Record<string, any>,
+  sourceRecord?: Record<string, any> | null,
+  sourceModuleId?: string | null
+) => {
+  const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+  const processLinks = parseProcessLinkMap(recurrence?.process_links);
   const sourceLink = resolveTaskSourceLink(task);
-  const values: Record<string, any> = {
+  const merged: Record<string, any> = {
+    ...(sourceRecord || {}),
     task_name: task?.name ?? '',
     task_type: task?.task_type ?? parseRecurrenceInfo(task?.recurrence_info)?.task_type ?? '',
-    status: task?.status ?? '',
+    task_status: task?.status ?? '',
     status_label: getTaskStatusLabel(task?.status),
-    due_date: task?.due_date ?? '',
-    source_module_id: sourceLink.moduleId ?? '',
+    task_status_label: getTaskStatusLabel(task?.status),
+    task_due_date: task?.due_date ?? '',
+    source_module_id: sourceModuleId || sourceLink.moduleId || '',
     source_record_id: sourceLink.recordId ?? '',
     process_group_id: task?.process_group_id ?? parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id ?? '',
+    process_links: processLinks,
   };
-
-  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
-    const normalizedKey = String(key || '').trim().replace(/\./g, '_');
-    const nextValue = values[normalizedKey];
-    return nextValue === null || nextValue === undefined ? '' : String(nextValue);
-  });
+  if (merged.status === undefined) {
+    merged.status = task?.status ?? '';
+  }
+  if (merged.due_date === undefined) {
+    merged.due_date = task?.due_date ?? '';
+  }
+  return merged;
 };
+
+const renderAutomationTemplateFromRecord = (template: string, record: Record<string, any>) =>
+  String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
+    const fieldKey = String(key || '').trim();
+    const value = record?.[fieldKey];
+    return value === null || value === undefined ? '' : String(value);
+  });
 
 const buildMentionTargetFromTask = (task: Record<string, any> | null | undefined): MentionTarget => {
   if (!task) return { userIds: [], roleIds: [] };
@@ -72,10 +105,44 @@ const buildMentionTargetFromTask = (task: Record<string, any> | null | undefined
   return { userIds: [], roleIds: [] };
 };
 
+const isTaskCompleted = (status: unknown) => COMPLETED_TASK_STATUSES.has(normalizeTaskStatus(status));
+
 const mergeMentionTargets = (...targets: MentionTarget[]): MentionTarget => ({
   userIds: Array.from(new Set(targets.flatMap((item) => item.userIds).filter(Boolean))),
   roleIds: Array.from(new Set(targets.flatMap((item) => item.roleIds).filter(Boolean))),
 });
+
+const resolveCommunicationTargets = async (target: MentionTarget): Promise<CommunicationTarget> => {
+  const userIds = Array.from(new Set((target?.userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  const roleIds = Array.from(new Set((target?.roleIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+
+  let directUsers: any[] = [];
+  if (userIds.length > 0) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, mobile_1, email, bale_chat_id')
+      .in('id', userIds);
+    if (error) throw error;
+    directUsers = Array.isArray(data) ? data : [];
+  }
+
+  let roleUsers: any[] = [];
+  if (roleIds.length > 0) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, role_id, mobile_1, email, bale_chat_id')
+      .in('role_id', roleIds);
+    if (error) throw error;
+    roleUsers = Array.isArray(data) ? data : [];
+  }
+
+  const allUsers = [...directUsers, ...roleUsers];
+  return {
+    phones: Array.from(new Set(allUsers.map((row) => String(row?.mobile_1 || '').trim()).filter(Boolean))),
+    emails: Array.from(new Set(allUsers.map((row) => String(row?.email || '').trim()).filter(Boolean))),
+    baleChatIds: Array.from(new Set(allUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
+  };
+};
 
 const getSameProcessTasks = async (task: Record<string, any>) => {
   const recurrence = parseRecurrenceInfo(task?.recurrence_info);
@@ -105,6 +172,152 @@ const getSameProcessTasks = async (task: Record<string, any>) => {
   return Array.isArray(data) ? data : [];
 };
 
+const fetchSourceRecord = async (task: Record<string, any>) => {
+  const sourceLink = resolveTaskSourceLink(task);
+  if (!sourceLink.moduleId || !sourceLink.recordId) return null;
+  const table = MODULES[sourceLink.moduleId]?.table || sourceLink.moduleId;
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .eq('id', sourceLink.recordId)
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    moduleId: sourceLink.moduleId,
+    record: data || null,
+  };
+};
+
+const buildSourceRecordWithProcessLinks = (
+  task: Record<string, any>,
+  sourceRecord: Record<string, any> | null | undefined,
+) => ({
+  ...(sourceRecord || {}),
+  process_links: parseProcessLinkMap(parseRecurrenceInfo(task?.recurrence_info)?.process_links),
+});
+
+const buildAutomationActionRecordWithLinks = async (
+  task: Record<string, any>,
+  sourceRecord?: Record<string, any> | null,
+  sourceModuleId?: string | null,
+  siblingTasks: Record<string, any>[] = []
+) => {
+  const actionRecord = buildAutomationActionRecord(task, sourceRecord, sourceModuleId);
+  const processLinks = parseProcessLinkMap(actionRecord.process_links);
+  const linkedRecordEntries = await Promise.all(
+    Object.entries(processLinks).map(async ([linkedModuleId, linkedRecordId]) => {
+      const normalizedModuleId = String(linkedModuleId || '').trim();
+      const normalizedRecordId = String(linkedRecordId || '').trim();
+      if (!normalizedModuleId || !normalizedRecordId) return null;
+      if (normalizedModuleId === sourceModuleId && sourceRecord) {
+        return { moduleId: normalizedModuleId, record: sourceRecord };
+      }
+      const table = MODULES[normalizedModuleId]?.table || normalizedModuleId;
+      const { data, error } = await supabase
+        .from(table)
+        .select('*')
+        .eq('id', normalizedRecordId)
+        .maybeSingle();
+      if (error) throw error;
+      return { moduleId: normalizedModuleId, record: data || null };
+    })
+  );
+
+  linkedRecordEntries.forEach((entry) => {
+    if (!entry?.record) return;
+    Object.entries(entry.record).forEach(([fieldKey, value]) => {
+      actionRecord[createProcessLinkedFieldKey(entry.moduleId, fieldKey)] = value;
+    });
+    const linkedAssignee = entry.record ? `${String(entry.record?.assignee_role_id ? 'role' : 'user')}_${String(entry.record?.assignee_role_id || entry.record?.assignee_id || '').trim()}` : '';
+    if (linkedAssignee && !linkedAssignee.endsWith('_')) {
+      actionRecord[createProcessLinkedFieldKey(entry.moduleId, '__workflow_assignee')] = linkedAssignee;
+    }
+  });
+
+  const currentSort = Number(task?.sort_order || 0);
+  const previousTask = siblingTasks
+    .filter((row) => Number(row?.sort_order || 0) < currentSort)
+    .sort((a, b) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0];
+  const nextTask = siblingTasks
+    .filter((row) => Number(row?.sort_order || 0) > currentSort)
+    .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))[0];
+  const toCombo = (row?: Record<string, any> | null) => {
+    if (!row) return '';
+    const roleId = String(row?.assignee_role_id || '').trim();
+    if (roleId) return `role_${roleId}`;
+    const userId = String(row?.assignee_id || '').trim();
+    return userId ? `user_${userId}` : '';
+  };
+  actionRecord.__comm_recipient__current_task_assignee = toCombo(task);
+  actionRecord.__comm_recipient__previous_stage_assignee = toCombo(previousTask);
+  actionRecord.__comm_recipient__next_stage_assignee = toCombo(nextTask);
+
+  return actionRecord;
+};
+
+const evaluateProcessAutomationConditions = async ({
+  conditionsAll = [],
+  conditionsAny = [],
+  taskCurrentRecord,
+  taskPreviousRecord = null,
+  sourceCurrentRecord = null,
+  sourcePreviousRecord = null,
+  sourceModuleId = null,
+}: {
+  conditionsAll?: WorkflowCondition[] | null;
+  conditionsAny?: WorkflowCondition[] | null;
+  taskCurrentRecord: Record<string, any>;
+  taskPreviousRecord?: Record<string, any> | null | undefined;
+  sourceCurrentRecord?: Record<string, any> | null | undefined;
+  sourcePreviousRecord?: Record<string, any> | null | undefined;
+  sourceModuleId?: string | null | undefined;
+}) => {
+  const all = Array.isArray(conditionsAll) ? conditionsAll : [];
+  const any = Array.isArray(conditionsAny) ? conditionsAny : [];
+
+  const evaluateOne = async (condition: WorkflowCondition) => {
+    const rawField = String(condition?.field || '').trim();
+    if (!rawField) return false;
+
+    if (isTaskAutomationFieldKey(rawField)) {
+      return evaluateWorkflowCondition({
+        condition: { ...condition, field: getTaskAutomationBaseFieldKey(rawField) },
+        currentRecord: taskCurrentRecord,
+        previousRecord: taskPreviousRecord,
+        moduleId: 'tasks',
+      });
+    }
+
+    if (!sourceCurrentRecord || !sourceModuleId) return false;
+
+    return evaluateWorkflowCondition({
+      condition,
+      currentRecord: sourceCurrentRecord,
+      previousRecord: sourcePreviousRecord,
+      moduleId: sourceModuleId,
+    });
+  };
+
+  for (const condition of all) {
+    if (!await evaluateOne(condition as WorkflowCondition)) return false;
+  }
+
+  if (any.length === 0) return true;
+
+  for (const condition of any) {
+    if (await evaluateOne(condition as WorkflowCondition)) return true;
+  }
+
+  return false;
+};
+
+const getRuleNoteText = (rule: ProcessAutomationRule) =>
+  String(
+    rule?.actions?.find((action) => String(action?.type || '') === 'send_note')?.config?.note_text
+    || rule?.note_text
+    || ''
+  ).trim();
+
 const resolveRuleTarget = async (
   rule: ProcessAutomationRule,
   task: Record<string, any>,
@@ -113,6 +326,13 @@ const resolveRuleTarget = async (
   switch (rule.target_type) {
     case 'current_task_assignee':
       return buildMentionTargetFromTask(task);
+    case 'previous_stage_assignee': {
+      const currentSort = Number(task?.sort_order || 0);
+      const previousTask = siblingTasks
+        .filter((row) => Number(row?.sort_order || 0) < currentSort)
+        .sort((a, b) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0];
+      return buildMentionTargetFromTask(previousTask);
+    }
     case 'next_stage_assignee': {
       const currentSort = Number(task?.sort_order || 0);
       const nextTask = siblingTasks
@@ -145,9 +365,10 @@ const insertAutomationNote = async (
   task: Record<string, any>,
   rule: ProcessAutomationRule,
   target: MentionTarget,
+  actionRecord: Record<string, any>,
   currentUser?: AutomationActor | null
 ) => {
-  const noteText = renderTaskAutomationTemplate(String(rule?.note_text || ''), task).trim();
+  const noteText = renderAutomationTemplateFromRecord(getRuleNoteText(rule), actionRecord).trim();
   if (!noteText) return;
 
   const sourceLink = resolveTaskSourceLink(task);
@@ -190,28 +411,160 @@ export const runProcessAutomationsForTaskStatusChange = async ({
   const previousNormalizedStatus = normalizeTaskStatus(previousStatus);
   if (!nextStatus || nextStatus === previousNormalizedStatus) return;
 
-  const candidateRules = rules.filter((rule) =>
-    rule?.is_active !== false
-    && rule?.trigger_type === 'status_changed_to'
-    && normalizeTaskStatus(rule?.trigger_status) === nextStatus
-    && String(rule?.action_type || 'send_note') === 'send_note'
-  );
-  if (candidateRules.length === 0) return;
-
   let siblingTasks: Record<string, any>[] | null = null;
+  let sourceRecordContext: { moduleId: string; record: Record<string, any> | null } | null | undefined;
 
-  for (const rule of candidateRules) {
-    try {
-      const requiresSiblingLookup =
-        rule.target_type === 'next_stage_assignee'
-        || rule.target_type === 'task_type_assignee';
-      if (requiresSiblingLookup && siblingTasks === null) {
-        siblingTasks = await getSameProcessTasks(task);
+  const getSiblingTasks = async () => {
+    if (siblingTasks !== null) return siblingTasks;
+    siblingTasks = await getSameProcessTasks(task);
+    return siblingTasks;
+  };
+
+  const getSourceRecordContext = async () => {
+    if (sourceRecordContext !== undefined) return sourceRecordContext;
+    sourceRecordContext = await fetchSourceRecord(task);
+    return sourceRecordContext;
+  };
+
+  const shouldRunRule = async (rule: ProcessAutomationRule) => {
+    if (rule?.is_active === false) return false;
+
+    const triggerType = String(rule?.trigger_type || '').trim();
+    let matchedTrigger = false;
+
+    if (triggerType === 'current_stage_completed') {
+      matchedTrigger = isTaskCompleted(task?.status);
+    } else if (triggerType === 'current_stage_in_progress') {
+      matchedTrigger = nextStatus === 'in_progress';
+    } else if (triggerType === 'process_started') {
+      const siblings = await getSiblingTasks();
+      const currentSort = Number(task?.sort_order || 0);
+      const hasPreviousTask = siblings.some((row) => Number(row?.sort_order || 0) < currentSort);
+      matchedTrigger = !hasPreviousTask && nextStatus === 'in_progress';
+    } else {
+      matchedTrigger = false;
+    }
+
+    if (!matchedTrigger) return false;
+
+    const sourceContext = await getSourceRecordContext();
+    const previousTaskRecord = previousNormalizedStatus
+      ? { ...task, status: previousStatus }
+      : null;
+
+    return evaluateProcessAutomationConditions({
+      conditionsAll: rule?.conditions_all || [],
+      conditionsAny: rule?.conditions_any || [],
+      taskCurrentRecord: task,
+      taskPreviousRecord: previousTaskRecord,
+      sourceCurrentRecord: buildSourceRecordWithProcessLinks(task, sourceContext?.record || null),
+      sourcePreviousRecord: null,
+      sourceModuleId: sourceContext?.moduleId || null,
+    });
+  };
+
+  const runRulesForTask = async (targetTask: Record<string, any>, candidateRules: ProcessAutomationRule[]) => {
+    if (candidateRules.length === 0) return;
+
+    for (const rule of candidateRules) {
+      try {
+        const sourceContext = await fetchSourceRecord(targetTask);
+        if (!await evaluateProcessAutomationConditions({
+          conditionsAll: rule?.conditions_all || [],
+          conditionsAny: rule?.conditions_any || [],
+          taskCurrentRecord: targetTask,
+          taskPreviousRecord: null,
+          sourceCurrentRecord: buildSourceRecordWithProcessLinks(targetTask, sourceContext?.record || null),
+          sourcePreviousRecord: null,
+          sourceModuleId: sourceContext?.moduleId || null,
+        })) {
+          continue;
+        }
+        const target = await resolveRuleTarget(rule, targetTask, (await getSiblingTasks()) || []);
+        const actions = Array.isArray(rule?.actions) ? rule.actions : [];
+        const actionRecord = await buildAutomationActionRecordWithLinks(
+          targetTask,
+          sourceContext?.record || null,
+          sourceContext?.moduleId || null,
+          (await getSiblingTasks()) || [],
+        );
+        const communicationTargets = await resolveCommunicationTargets(target);
+
+        for (const action of actions) {
+          if (String(action?.type || '') === 'send_note') {
+            await insertAutomationNote(
+              targetTask,
+              {
+                ...rule,
+                actions: [action],
+                note_text: String(action?.config?.note_text || rule?.note_text || ''),
+              },
+              target,
+              actionRecord,
+              currentUser
+            );
+            continue;
+          }
+
+          if (!sourceContext?.moduleId || !sourceContext?.record) continue;
+          const actionType = String(action?.type || '');
+          const directConfigPatch: Record<string, any> = {};
+
+          if (actionType === 'send_sms' && communicationTargets.phones.length > 0) {
+            directConfigPatch.manual_numbers = Array.from(new Set([
+              ...communicationTargets.phones,
+              ...((Array.isArray((action as any)?.config?.manual_numbers) ? (action as any).config.manual_numbers : []) as string[]),
+            ]));
+          }
+
+          if (actionType === 'send_email' && communicationTargets.emails.length > 0) {
+            directConfigPatch.manual_emails = Array.from(new Set([
+              ...communicationTargets.emails,
+              ...((Array.isArray((action as any)?.config?.manual_emails) ? (action as any).config.manual_emails : []) as string[]),
+            ]));
+          }
+
+          if (actionType === 'send_bale_bot' && communicationTargets.baleChatIds.length > 0) {
+            directConfigPatch.manual_chat_ids = Array.from(new Set([
+              ...communicationTargets.baleChatIds,
+              ...((Array.isArray((action as any)?.config?.manual_chat_ids) ? (action as any).config.manual_chat_ids : []) as string[]),
+            ]));
+          }
+
+          await executeWorkflowAction(
+            Object.keys(directConfigPatch).length > 0
+              ? { ...(action as any), config: { ...((action as any)?.config || {}), ...directConfigPatch } }
+              : (action as any),
+            sourceContext.moduleId,
+            actionRecord
+          );
+        }
+      } catch (error) {
+        console.warn('Process automation rule failed', rule?.id, error);
       }
-      const target = await resolveRuleTarget(rule, task, siblingTasks || []);
-      await insertAutomationNote(task, rule, target, currentUser);
-    } catch (error) {
-      console.warn('Process automation rule failed', rule?.id, error);
+    }
+  };
+
+  const currentTaskRules = [] as ProcessAutomationRule[];
+  for (const rule of rules) {
+    if (await shouldRunRule(rule)) {
+      currentTaskRules.push(rule);
+    }
+  }
+  await runRulesForTask(task, currentTaskRules);
+
+  if (isTaskCompleted(task?.status)) {
+    const siblings = await getSiblingTasks();
+    const currentSort = Number(task?.sort_order || 0);
+    const nextTask = siblings
+      .filter((row) => Number(row?.sort_order || 0) > currentSort)
+      .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))[0];
+    if (nextTask) {
+      const nextTaskRules = normalizeProcessAutomationRules(parseRecurrenceInfo(nextTask?.recurrence_info)?.process_automation_rules)
+        .filter((rule) => rule?.is_active !== false && rule?.trigger_type === 'previous_stage_completed');
+      if (nextTaskRules.length > 0) {
+        await runRulesForTask(nextTask, nextTaskRules);
+      }
     }
   }
 };

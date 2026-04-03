@@ -83,6 +83,13 @@ interface SyncResult {
   createdEventKeys: string[];
   errors: string[];
   createdJournalEntryIds: string[];
+  resolvedJournalEntries: ResolvedJournalEntry[];
+}
+
+export interface ResolvedJournalEntry {
+  eventKey: string;
+  journalEntryId: string;
+  state: 'created' | 'existing';
 }
 
 type Notifier = {
@@ -116,6 +123,11 @@ const EVENT_LABELS_FA: Record<string, string> = {
   purchase_invoice_finalized: 'نهایی‌سازی فاکتور خرید',
   sales_payment_received: 'دریافت وجه فاکتور فروش',
   purchase_payment_paid: 'پرداخت وجه فاکتور خرید',
+};
+
+export const getAccountingEventLabelFa = (eventKey: string): string => {
+  const normalized = String(eventKey || '').trim();
+  return EVENT_LABELS_FA[normalized] || normalized;
 };
 
 const toNumber = (value: unknown): number => {
@@ -185,6 +197,21 @@ const pushSyncError = (
   fallback = 'خطا در صدور سند حسابداری.'
 ) => {
   result.errors.push(normalizePostingMessage(errorMessage, fallback));
+};
+
+const pushResolvedJournalEntry = (
+  result: SyncResult,
+  entry: ResolvedJournalEntry
+) => {
+  const eventKey = String(entry?.eventKey || '').trim();
+  const journalEntryId = String(entry?.journalEntryId || '').trim();
+  const state = entry?.state === 'existing' ? 'existing' : 'created';
+  if (!eventKey || !journalEntryId) return;
+  const exists = result.resolvedJournalEntries.some(
+    (item) => item.eventKey === eventKey && item.journalEntryId === journalEntryId
+  );
+  if (exists) return;
+  result.resolvedJournalEntries.push({ eventKey, journalEntryId, state });
 };
 
 const toFaPostingError = (error: any, fallback: string): string => {
@@ -733,7 +760,7 @@ const createJournalEntry = async ({
   moduleId,
   recordId,
   invoice,
-  eventKeys,
+  eventKey,
   description,
   lines,
   result,
@@ -742,21 +769,15 @@ const createJournalEntry = async ({
   moduleId: SupportedInvoiceModule;
   recordId: string;
   invoice: InvoiceRow;
-  eventKeys: string[];
+  eventKey: string;
   description: string;
   lines: JournalLine[];
   result: SyncResult;
-}): Promise<string | null> => {
-  const normalizedEventKeys = Array.from(
-    new Set(
-      (eventKeys || [])
-        .map((value) => String(value || '').trim())
-        .filter(Boolean)
-    )
-  );
-
+}): Promise<ResolvedJournalEntry | null> => {
+  const normalizedEventKey = String(eventKey || '').trim();
+  const normalizedEventKeys = normalizedEventKey ? [normalizedEventKey] : [];
   if (lines.length === 0) return null;
-  if (normalizedEventKeys.length === 0) return null;
+  if (!normalizedEventKey) return null;
 
   if (!isBalanced(lines)) {
     const eventLabel = normalizedEventKeys.map((key) => EVENT_LABELS_FA[key] || key).join('، ');
@@ -764,9 +785,15 @@ const createJournalEntry = async ({
     return null;
   }
 
-  for (const eventKey of normalizedEventKeys) {
-    const existingId = await findExistingEntry(supabase, moduleId, recordId, eventKey);
-    if (existingId) return null;
+  const existingId = await findExistingEntry(supabase, moduleId, recordId, normalizedEventKey);
+  if (existingId) {
+    const existingEntry: ResolvedJournalEntry = {
+      eventKey: normalizedEventKey,
+      journalEntryId: existingId,
+      state: 'existing',
+    };
+    pushResolvedJournalEntry(result, existingEntry);
+    return existingEntry;
   }
 
   const sourceRecordTitle = getInvoiceLabel(invoice, recordId);
@@ -799,32 +826,51 @@ const createJournalEntry = async ({
     throw linesError;
   }
 
-  const linkRows = normalizedEventKeys.map((eventKey) => ({
-    event_key: eventKey,
+  const linkRow = {
+    event_key: normalizedEventKey,
     source_table: moduleId,
     source_record_id: recordId,
     journal_entry_id: journalEntry.id,
-  }));
-  const { error: linkError } = await supabase.from('journal_entry_links').insert(linkRows);
+  };
+  const { error: linkError } = await supabase.from('journal_entry_links').insert(linkRow);
   if (linkError) {
     await supabase.from('journal_lines').delete().eq('entry_id', journalEntry.id);
     await supabase.from('journal_entries').delete().eq('id', journalEntry.id);
     if (String(linkError.code || '') === '23505') {
-      return null;
+      const duplicateId = await findExistingEntry(supabase, moduleId, recordId, normalizedEventKey);
+      if (!duplicateId) return null;
+      const duplicateEntry: ResolvedJournalEntry = {
+        eventKey: normalizedEventKey,
+        journalEntryId: duplicateId,
+        state: 'existing',
+      };
+      pushResolvedJournalEntry(result, duplicateEntry);
+      return duplicateEntry;
     }
     throw linkError;
   }
 
-  result.createdEventKeys.push(...normalizedEventKeys);
+  result.createdEventKeys.push(normalizedEventKey);
   result.createdJournalEntryIds.push(String(journalEntry.id));
-  return String(journalEntry.id);
+  const createdEntry: ResolvedJournalEntry = {
+    eventKey: normalizedEventKey,
+    journalEntryId: String(journalEntry.id),
+    state: 'created',
+  };
+  pushResolvedJournalEntry(result, createdEntry);
+  return createdEntry;
 };
 
 export const syncInvoiceAccountingEntries = async (
   args: SyncInvoiceAccountingEntriesArgs
 ): Promise<SyncResult> => {
   const { supabase, moduleId, recordId, includePayments = false } = args;
-  const result: SyncResult = { createdEventKeys: [], errors: [], createdJournalEntryIds: [] };
+  const result: SyncResult = {
+    createdEventKeys: [],
+    errors: [],
+    createdJournalEntryIds: [],
+    resolvedJournalEntries: [],
+  };
 
   if (!recordId) {
     pushSyncError(result, 'شناسه رکورد معتبر نیست.');
@@ -873,13 +919,28 @@ export const syncInvoiceAccountingEntries = async (
       paymentLines.length > 0 ? findExistingEntry(supabase, moduleId, recordId, paymentEventKey) : Promise.resolve(null),
     ]);
 
-    if (includePayments && finalizedLines.length > 0 && paymentLines.length > 0 && !existingFinalizedEntryId && !existingPaymentEntryId) {
+    if (existingFinalizedEntryId) {
+      pushResolvedJournalEntry(result, {
+        eventKey: finalizedEventKey,
+        journalEntryId: existingFinalizedEntryId,
+        state: 'existing',
+      });
+    }
+    if (existingPaymentEntryId) {
+      pushResolvedJournalEntry(result, {
+        eventKey: paymentEventKey,
+        journalEntryId: existingPaymentEntryId,
+        state: 'existing',
+      });
+    }
+
+    if (false && includePayments && finalizedLines.length > 0 && paymentLines.length > 0 && !existingFinalizedEntryId && !existingPaymentEntryId) {
       await createJournalEntry({
         supabase,
         moduleId,
         recordId,
         invoice,
-        eventKeys: [finalizedEventKey, paymentEventKey],
+        eventKey: finalizedEventKey,
         description: moduleId === 'invoices'
           ? `صدور خودکار سند فروش و دریافت وجه - ${invoiceLabel}`
           : `صدور خودکار سند خرید و پرداخت وجه - ${invoiceLabel}`,
@@ -893,7 +954,7 @@ export const syncInvoiceAccountingEntries = async (
           moduleId,
           recordId,
           invoice,
-          eventKeys: [finalizedEventKey],
+          eventKey: finalizedEventKey,
           description: moduleId === 'invoices'
             ? `صدور خودکار سند فروش - ${invoiceLabel}`
             : `صدور خودکار سند خرید - ${invoiceLabel}`,
@@ -908,7 +969,7 @@ export const syncInvoiceAccountingEntries = async (
           moduleId,
           recordId,
           invoice,
-          eventKeys: [paymentEventKey],
+          eventKey: paymentEventKey,
           description: moduleId === 'invoices'
             ? `صدور خودکار سند دریافت وجه - ${invoiceLabel}`
             : `صدور خودکار سند پرداخت وجه - ${invoiceLabel}`,
@@ -939,11 +1000,13 @@ export const createJournalFromInvoice = async (
       includePayments: true,
     });
 
-    if (syncResult.createdJournalEntryIds.length > 0) {
-      const lastJournalId = syncResult.createdJournalEntryIds[syncResult.createdJournalEntryIds.length - 1];
+    if (syncResult.resolvedJournalEntries.length > 0) {
+      const lastJournalId = syncResult.resolvedJournalEntries[syncResult.resolvedJournalEntries.length - 1]?.journalEntryId;
       const journalModule = MODULES.journal_entries;
       notifier?.success?.('سند حسابداری با موفقیت ایجاد شد.');
-      navigate(`/${journalModule.table}/${lastJournalId}`);
+      if (lastJournalId) {
+        navigate(`/${journalModule.table}/${lastJournalId}`);
+      }
       if (syncResult.errors.length > 0) {
         notifier?.warning?.('صدور سند با هشدار همراه بود.');
       }

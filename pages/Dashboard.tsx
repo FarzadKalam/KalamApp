@@ -25,7 +25,10 @@ import { DASHBOARD_PERMISSION_KEY, resolvePreferredRoleModuleIds } from '../util
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { readCurrencyConfig, useCurrencyConfig } from '../utils/currency';
-import { BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
+import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
+import { readRuntimeBranding } from '../utils/brandingRuntime';
+import PhoneDisplay from '../components/PhoneDisplay';
+import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -195,9 +198,11 @@ const renderFieldValue = (module: ModuleDefinition, fieldKey: string, value: any
       return field.type === FieldType.STATUS ? <Tag color={option?.color || 'default'}>{text}</Tag> : text;
     }
     case FieldType.PRICE:
-      return `${formatPersianPrice(Number(value || 0), false)} ${readCurrencyConfig().label}`;
+      return `${formatPersianPrice(Number(value || 0), true)} ${readCurrencyConfig().label}`;
     case FieldType.NUMBER:
       return toPersianNumber(value);
+    case FieldType.PHONE:
+      return <PhoneDisplay value={value} size="sm" />;
     case FieldType.DATE:
       return formatPersianDate(value, 'YYYY/MM/DD');
     case FieldType.DATETIME:
@@ -460,21 +465,23 @@ const Dashboard: React.FC = () => {
   const currency = useCurrencyConfig();
   const [loading, setLoading] = useState(true);
   const [dashboardReady, setDashboardReady] = useState(false);
-  const [brandTitle, setBrandTitle] = useState(DEFAULT_BRANDING.brandName);
+  const [brandTitle, setBrandTitle] = useState(() => readRuntimeBranding().appTitle || DEFAULT_BRANDING.brandName);
+  const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(() => readRuntimeBranding().logoUrl || null);
   const [widgetPermissions, setWidgetPermissions] = useState<Record<string, boolean>>({});
   const [quickActions, setQuickActions] = useState<DashboardQuickAction[]>([]);
   const [cards, setCards] = useState<DashboardCardItem[]>([]);
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
 
   useEffect(() => {
-    const readBrandTitle = () => {
-      const value = document.documentElement.getAttribute('data-brand-title');
-      setBrandTitle(value?.trim() || DEFAULT_BRANDING.brandName);
+    const syncBranding = () => {
+      const branding = readRuntimeBranding();
+      setBrandTitle(branding.appTitle || DEFAULT_BRANDING.brandName);
+      setBrandLogoUrl(branding.logoUrl || null);
     };
-    readBrandTitle();
-    window.addEventListener(BRANDING_UPDATED_EVENT, readBrandTitle as EventListener);
+    syncBranding();
+    window.addEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
     return () => {
-      window.removeEventListener(BRANDING_UPDATED_EVENT, readBrandTitle as EventListener);
+      window.removeEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
     };
   }, []);
 
@@ -521,13 +528,21 @@ const Dashboard: React.FC = () => {
     <div className="min-h-screen bg-gray-50 dark:bg-dark-bg p-4 md:p-6">
       <div className="mb-6">
         <div className="bg-white dark:bg-dark-surface rounded-lg shadow-sm p-6 border border-gray-200 dark:border-dark-border">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-              <h1 className="text-3xl font-black text-leather-500 mb-2">{brandTitle}</h1>
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch xl:justify-between">
+            <div className="flex-1">
+              <div className="mb-2 flex items-center gap-3">
+                {brandLogoUrl ? (
+                  <img src={brandLogoUrl} alt={brandTitle} className="h-12 w-12 rounded-xl object-contain ring-1 ring-gray-200 dark:ring-dark-border" />
+                ) : null}
+                <h1 className="text-3xl font-black text-leather-500">{brandTitle}</h1>
+              </div>
               <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                 <CalendarOutlined />
                 <span className="text-sm">{getTodayPersianDate()}</span>
               </div>
+            </div>
+            <div className="w-full xl:max-w-[430px]">
+              <GoalProgressSlider placement="dashboard" />
             </div>
           </div>
         </div>
@@ -592,7 +607,7 @@ const Dashboard: React.FC = () => {
                   value={card.value}
                   formatter={(value) =>
                     card.kind === 'price'
-                      ? formatPersianPrice(Number(value || 0), false)
+                      ? formatPersianPrice(Number(value || 0), true)
                       : toPersianNumber(Number(value || 0))
                   }
                   suffix={card.kind === 'price' ? currency.label : undefined}

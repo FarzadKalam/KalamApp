@@ -21,6 +21,7 @@ import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 import { useCurrencyConfig } from '../utils/currency';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
+import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import {
   buildSalesPackageDescription,
   calculateSalesPackageTotal,
@@ -1499,7 +1500,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
   const copyRow = (index: number) => {
     if (isReadOnly) return;
-    const sourceRow = tempData[index];
+    const source = isEditing ? tempData : data;
+    const sourceRow = source[index];
     if (!sourceRow) return;
     if (isProductStockMovements && sourceRow?._readonly) return;
 
@@ -1507,9 +1509,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
       ...sourceRow,
       key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     };
-    const newData = [...tempData];
+    const newData = [...source];
     newData.splice(index + 1, 0, copiedRow);
-    setTempData(newData);
+    if (isEditing) setTempData(newData);
+    else setData(newData);
     if (mode === 'local' && onChange) onChange(newData);
   };
 
@@ -2761,6 +2764,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
         (moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
         (block?.id === 'payments' || block?.id === 'invoiceItems')
       ) {
+        const previousInvoiceRecord = {
+          ...(currentInvoiceRow || {}),
+          id: recordId,
+        } as Record<string, any>;
+        const nextInvoiceRecord = {
+          ...previousInvoiceRecord,
+          ...updatePayload,
+          id: recordId,
+        } as Record<string, any>;
         const accountingSync = await syncInvoiceAccountingEntries({
           supabase: supabase as any,
           moduleId,
@@ -2770,6 +2782,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (accountingSync.errors.length > 0) {
           console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
         }
+        await runWorkflowsForEvent({
+          moduleId,
+          event: 'upsert',
+          currentRecord: nextInvoiceRecord,
+          previousRecord: previousInvoiceRecord,
+        });
       }
 
       const oldValue = data.map(({ key, ...rest }) => rest);
@@ -3574,6 +3592,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     (isAnyInvoiceItems || isPriceListItems || isSalesPackageItems) &&
     !isReadOnly &&
     (isEditing || mode === 'local');
+  const canCopyRows = !isReadOnly && (isEditing || mode === 'local');
   const resolveColumnTitle = (col: any) => {
     if (isAnyInvoicePayments && col?.key === 'amount') {
       return `${col.title} (${currencyLabel})`;
@@ -3627,10 +3646,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
           {
             title: '',
             key: 'actions',
-            width: block?.allowRowCopy ? 84 : 50,
+            width: canCopyRows ? 84 : 50,
             render: (_: any, row: any, i: number) => (
               <Space size={0}>
-                {block?.allowRowCopy ? (
+                {canCopyRows ? (
                   <Button
                     type="text"
                     icon={<CopyOutlined />}
@@ -3822,12 +3841,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
         </div>
         <Space>
           {mode === 'db' && !isEditing && !isReadOnly && <Button size="small" icon={<EditOutlined />} onClick={startEdit}>ویرایش لیست</Button>}
-          {isEditing && mode !== 'local' && (
-            <>
-              <Button type="primary" onClick={handleSave} loading={saving} icon={<SaveOutlined />}>ذخیره</Button>
-              <Button onClick={cancelEdit} disabled={saving} icon={<CloseOutlined />}>انصراف</Button>
-            </>
-          )}
         </Space>
       </div>
 
@@ -3846,7 +3859,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     <Text className="text-xs text-gray-500 dark:text-gray-300">ردیف {toPersianNumber(rowIndex + 1)}</Text>
                     {isEditing && (
                       <Space size={0}>
-                        {block?.allowRowCopy ? (
+                        {canCopyRows ? (
                           <Button
                             type="text"
                             icon={<CopyOutlined />}
@@ -3994,6 +4007,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
           }}
         />
         )
+      )}
+      {isEditing && mode !== 'local' && !isCollapsed && (
+        <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4 dark:border-gray-800">
+          <Button type="primary" onClick={handleSave} loading={saving} icon={<SaveOutlined />}>ذخیره</Button>
+          <Button onClick={cancelEdit} disabled={saving} icon={<CloseOutlined />}>انصراف</Button>
+        </div>
       )}
       <Modal
         open={!!previewAttachmentUrl}

@@ -25,10 +25,12 @@ export const supportsSystemCode = (moduleName?: string | null) => {
 const SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE = 'module_settings';
 
 const DEFAULT_SYSTEM_CODE_START_NUMBER = 100;
+const DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER = 234;
 
 type ResolvedSystemCodeConfig = {
-  prefixLetter: string;
+  prefix: string;
   startNumber: number;
+  numberWidth: number | null;
 };
 
 let moduleSettingsCache: Record<string, any> | null = null;
@@ -39,10 +41,67 @@ const getDefaultSystemCodePrefix = (moduleName?: string | null) => {
   return (normalized ? normalized[0] : 'M').toUpperCase();
 };
 
+const getDefaultSystemCodeStartNumber = (moduleName?: string | null) => {
+  const normalized = String(moduleName || '').trim();
+  return normalized === 'customers' ? DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER : DEFAULT_SYSTEM_CODE_START_NUMBER;
+};
+
+const getDefaultSystemCodeNumberWidth = (moduleName?: string | null) => {
+  const normalized = String(moduleName || '').trim();
+  return normalized === 'customers' ? 3 : null;
+};
+
 const normalizeSystemCodeStartNumber = (value: unknown) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return DEFAULT_SYSTEM_CODE_START_NUMBER;
   return Math.max(Math.trunc(numeric), 0);
+};
+
+const normalizeSystemCodeNumberWidth = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = Math.max(Math.trunc(numeric), 0);
+  return normalized > 0 ? normalized : null;
+};
+
+const normalizeSystemCodePrefix = (value: unknown, fallback: string) => {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  return normalized || fallback;
+};
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const formatSystemCodeValue = (prefix: string, numericValue: number, numberWidth: number | null) => {
+  const normalizedNumber = Math.max(0, Math.trunc(numericValue));
+  const suffix = numberWidth ? String(normalizedNumber).padStart(numberWidth, '0') : String(normalizedNumber);
+  return `${prefix}${suffix}`;
+};
+
+const normalizeLegacyCustomerDefaults = (config: ResolvedSystemCodeConfig, namingSettings: any, moduleName?: string | null) => {
+  if (String(moduleName || '').trim() !== 'customers') return config;
+
+  const hasExplicitWidth = namingSettings?.numberWidth !== undefined && namingSettings?.numberWidth !== null;
+  const normalizedPrefix = String(config.prefix || '').trim().toUpperCase();
+  const isCustomerDefaultPrefix = !normalizedPrefix || normalizedPrefix === 'C';
+
+  if (!hasExplicitWidth && isCustomerDefaultPrefix && Number(config.startNumber) === DEFAULT_SYSTEM_CODE_START_NUMBER) {
+    return {
+      prefix: 'C',
+      startNumber: DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER,
+      numberWidth: 3,
+    };
+  }
+
+  if (!hasExplicitWidth && isCustomerDefaultPrefix) {
+    return {
+      ...config,
+      prefix: normalizedPrefix || 'C',
+      numberWidth: 3,
+    };
+  }
+
+  return config;
 };
 
 const loadModuleSettings = async (supabaseClient: any) => {
@@ -84,10 +143,13 @@ export const resolveSystemCodeConfig = async (
 ) : Promise<ResolvedSystemCodeConfig> => {
   const normalizedModule = String(moduleName || '').trim();
   const fallbackPrefix = getDefaultSystemCodePrefix(normalizedModule);
+  const fallbackStartNumber = getDefaultSystemCodeStartNumber(normalizedModule);
+  const fallbackNumberWidth = getDefaultSystemCodeNumberWidth(normalizedModule);
   if (!normalizedModule) {
     return {
-      prefixLetter: 'M',
+      prefix: 'M',
       startNumber: DEFAULT_SYSTEM_CODE_START_NUMBER,
+      numberWidth: null,
     };
   }
 
@@ -95,20 +157,28 @@ export const resolveSystemCodeConfig = async (
     const modules = await loadModuleSettings(supabaseClient);
     const namingSettings = modules?.[normalizedModule]?.general?.systemCodeNaming || {};
 
-    const configuredPrefix = String(namingSettings?.prefixLetter || '')
-      .trim()
-      .slice(0, 1)
-      .toUpperCase();
-    const startNumber = normalizeSystemCodeStartNumber(namingSettings?.startNumber);
+    const configuredPrefix = normalizeSystemCodePrefix(
+      namingSettings?.prefix ?? namingSettings?.prefixLetter,
+      fallbackPrefix
+    );
+    const startNumber = normalizeSystemCodeStartNumber(
+      namingSettings?.startNumber ?? fallbackStartNumber
+    );
+    const numberWidth = normalizeSystemCodeNumberWidth(
+      namingSettings?.numberWidth ?? fallbackNumberWidth
+    );
 
-    return {
-      prefixLetter: configuredPrefix || fallbackPrefix,
+    const resolvedConfig = {
+      prefix: configuredPrefix || fallbackPrefix,
       startNumber,
+      numberWidth,
     };
+    return normalizeLegacyCustomerDefaults(resolvedConfig, namingSettings, normalizedModule);
   } catch {
     return {
-      prefixLetter: fallbackPrefix,
-      startNumber: DEFAULT_SYSTEM_CODE_START_NUMBER,
+      prefix: fallbackPrefix,
+      startNumber: fallbackStartNumber,
+      numberWidth: fallbackNumberWidth,
     };
   }
 };
@@ -118,7 +188,7 @@ export const resolveSystemCodePrefix = async (
   moduleName?: string | null
 ) => {
   const config = await resolveSystemCodeConfig(supabaseClient, moduleName);
-  return config.prefixLetter;
+  return config.prefix;
 };
 
 export const buildClientFallbackSystemCode = async (
@@ -126,30 +196,38 @@ export const buildClientFallbackSystemCode = async (
   moduleName?: string | null,
   tableName?: string | null
 ) => {
-  const { prefixLetter, startNumber } = await resolveSystemCodeConfig(supabaseClient, moduleName);
+  const { prefix, startNumber, numberWidth } = await resolveSystemCodeConfig(supabaseClient, moduleName);
   const sourceTable = String(tableName || moduleName || '').trim();
   if (!sourceTable) {
-    return `${prefixLetter}${startNumber}`;
+    return formatSystemCodeValue(prefix, startNumber, numberWidth);
   }
 
   try {
     const { data } = await supabaseClient
       .from(sourceTable)
       .select('system_code')
-      .ilike('system_code', `${prefixLetter}%`)
+      .ilike('system_code', `${prefix}%`)
       .limit(5000);
 
-    const maxExistingNumber = (data || []).reduce((maxValue: number, row: any) => {
+    const suffixPattern = new RegExp(`^${escapeRegExp(prefix)}(\\d+)$`);
+    const matchingNumbers = (data || []).reduce<number[]>((acc, row: any) => {
       const code = String(row?.system_code || '').trim().toUpperCase();
-      const match = code.match(new RegExp(`^${prefixLetter}(\\d+)$`));
-      if (!match) return maxValue;
+      const match = code.match(suffixPattern);
+      if (!match) return acc;
+      const numericText = String(match[1] || '').trim();
+      if (numberWidth && numericText.length > numberWidth) return acc;
       const numeric = Number(match[1]);
-      if (!Number.isFinite(numeric)) return maxValue;
-      return Math.max(maxValue, numeric);
-    }, startNumber - 1);
+      if (!Number.isFinite(numeric)) return acc;
+      acc.push(numeric);
+      return acc;
+    }, []);
 
-    return `${prefixLetter}${Math.max(startNumber, maxExistingNumber + 1)}`;
+    const maxExistingNumber = matchingNumbers.reduce((maxValue, currentValue) => (
+      Math.max(maxValue, currentValue)
+    ), startNumber - 1);
+
+    return formatSystemCodeValue(prefix, Math.max(startNumber, maxExistingNumber + 1), numberWidth);
   } catch {
-    return `${prefixLetter}${startNumber}`;
+    return formatSystemCodeValue(prefix, startNumber, numberWidth);
   }
 };

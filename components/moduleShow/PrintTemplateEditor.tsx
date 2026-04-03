@@ -40,6 +40,8 @@ interface PrintTemplateEditorProps {
   onChange: (html: string) => void;
   placeholder?: string;
   minHeight?: number;
+  fixedHeight?: number;
+  contentPadding?: string;
   onEditorReady?: (editor: any | null) => void;
   onFocusSection?: () => void;
 }
@@ -71,6 +73,74 @@ const setStyleProperty = (styleText: unknown, propertyName: string, value: strin
     segments.push(`${propertyName}: ${String(value).trim()}`);
   }
   return segments.join('; ');
+};
+
+const getTableCellWidthValue = (cell: Element | null) => {
+  if (!cell) return '';
+  const styleWidth = extractStyleValue(cell.getAttribute('style') || '', ['width']);
+  const widthAttr = String(cell.getAttribute('width') || '').trim();
+  return styleWidth || widthAttr;
+};
+
+const normalizeTableMarkup = (html: string) => {
+  if (typeof window === 'undefined' || typeof window.DOMParser === 'undefined' || !html || !/<table/i.test(html)) {
+    return html;
+  }
+
+  try {
+    const parser = new window.DOMParser();
+    const doc = parser.parseFromString(`<div id="print-editor-root">${html}</div>`, 'text/html');
+    const root = doc.getElementById('print-editor-root');
+    if (!root) return html;
+
+    root.querySelectorAll('table').forEach((table) => {
+      const firstRow = table.querySelector('tr');
+      const cells = Array.from(firstRow?.children || []).filter((node) => {
+        const tagName = String((node as Element)?.tagName || '').toLowerCase();
+        return tagName === 'td' || tagName === 'th';
+      }) as Element[];
+      if (!cells.length) return;
+
+      const widthValues = cells.map((cell) => getTableCellWidthValue(cell));
+      const hasExplicitWidths = widthValues.some(Boolean);
+      const existingColgroup = Array.from(table.children).find(
+        (child) => String((child as Element).tagName || '').toLowerCase() === 'colgroup'
+      ) as HTMLElement | undefined;
+      if (!hasExplicitWidths && !existingColgroup) return;
+
+      const colgroup = existingColgroup || doc.createElement('colgroup');
+      if (!existingColgroup) {
+        table.insertBefore(colgroup, table.firstChild);
+      }
+
+      while (colgroup.children.length < cells.length) {
+        colgroup.appendChild(doc.createElement('col'));
+      }
+      while (colgroup.children.length > cells.length) {
+        colgroup.removeChild(colgroup.lastElementChild as Element);
+      }
+
+      widthValues.forEach((widthValue, index) => {
+        const col = colgroup.children[index] as HTMLElement | undefined;
+        const cell = cells[index] as HTMLElement | undefined;
+        if (!col || !cell || !widthValue) return;
+
+        col.setAttribute('style', setStyleProperty(col.getAttribute('style') || '', 'width', widthValue));
+        cell.setAttribute('style', setStyleProperty(cell.getAttribute('style') || '', 'width', widthValue));
+
+        const pxMatch = widthValue.match(/^(\d+(?:\.\d+)?)px$/i);
+        if (pxMatch?.[1]) {
+          const pxWidth = `${Math.max(1, Math.round(Number(pxMatch[1])))}`;
+          col.setAttribute('width', pxWidth);
+          cell.setAttribute('data-colwidth', pxWidth);
+        }
+      });
+    });
+
+    return root.innerHTML;
+  } catch {
+    return html;
+  }
 };
 
 const toPixelSize = (value: unknown, fallback: number) => {
@@ -521,6 +591,8 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   onChange,
   placeholder = 'قالب چاپ را اینجا طراحی کنید...',
   minHeight = 240,
+  fixedHeight,
+  contentPadding = '14px 16px',
   onEditorReady,
   onFocusSection,
 }) => {
@@ -532,6 +604,8 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     () => normalizeColorForInput(tableBorderColor, '#d1d5db'),
     [tableBorderColor]
   );
+  const normalizedValue = useMemo(() => normalizeTableMarkup(value || ''), [value]);
+  const resolvedEditorHeight = fixedHeight ? Math.max(36, Math.round(fixedHeight)) : null;
   const cellDragSelectionRef = useRef<null | {
     table: HTMLTableElement;
     startCell: HTMLElement;
@@ -724,7 +798,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       CustomTableHeader,
       CustomTableCell,
     ],
-    content: value,
+    content: normalizedValue,
     onUpdate: ({ editor: currentEditor }) => onChange(currentEditor.getHTML()),
     editorProps: {
       attributes: { class: 'print-template-editor-content' },
@@ -737,6 +811,12 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           const mouseEvent = event as MouseEvent;
           if (mouseEvent.button !== 0) return false;
           const target = mouseEvent.target as HTMLElement | null;
+          if (target?.closest?.('.column-resize-handle')) {
+            cellDragSelectionRef.current = null;
+            rowResizeStateRef.current = null;
+            setEditorResizeCursor(view, 'column');
+            return false;
+          }
           const cell = target?.closest?.('td,th') as HTMLElement | null;
           const table = target?.closest?.('table') as HTMLTableElement | null;
           if (!cell || !table) {
@@ -828,10 +908,16 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   useEffect(() => {
     if (!editor) return;
     const currentHtml = editor.getHTML();
-    if (value !== currentHtml) {
-      editor.commands.setContent(value || '', { emitUpdate: false });
+    if (normalizedValue !== currentHtml) {
+      editor.commands.setContent(normalizedValue || '', { emitUpdate: false });
     }
-  }, [editor, value]);
+  }, [editor, normalizedValue]);
+
+  useEffect(() => {
+    if (normalizedValue !== value) {
+      onChange(normalizedValue);
+    }
+  }, [normalizedValue, onChange, value]);
 
   useEffect(() => {
     if (!editor || !editor.isActive('table')) return;
@@ -947,10 +1033,12 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           position: relative;
           background: transparent;
           overflow: visible;
+          ${resolvedEditorHeight ? `height: ${resolvedEditorHeight}px;` : ''}
         }
         .print-template-editor-content {
-          min-height: ${Math.max(minHeight, 120)}px;
-          padding: 14px 16px;
+          min-height: ${resolvedEditorHeight ?? Math.max(minHeight, 120)}px;
+          ${resolvedEditorHeight ? `height: ${resolvedEditorHeight}px;` : ''}
+          padding: ${contentPadding};
           outline: none;
           direction: rtl;
           text-align: right;
@@ -960,6 +1048,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           background: transparent;
           user-select: text;
           -webkit-user-select: text;
+          box-sizing: border-box;
+          overflow: ${resolvedEditorHeight ? 'auto' : 'visible'};
+          overscroll-behavior: contain;
         }
         .print-template-editor-content * {
           user-select: text;
@@ -1133,6 +1224,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           inset-inline-end: -2px;
           width: 5px;
           background: rgba(var(--brand-500-rgb), 0.55);
+          z-index: 3;
+          cursor: col-resize;
+          touch-action: none;
         }
         .print-template-editor-content.resize-cursor {
           cursor: col-resize;

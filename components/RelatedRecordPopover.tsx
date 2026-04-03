@@ -81,6 +81,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   const [record, setRecord] = useState<any>(null);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, { label: string; value: string }[]>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, { label: string; value: string }[]>>({});
+  const isMobileViewport = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
 
   const moduleConfig = MODULES[moduleId];
   const isControlled = controlledOpen !== undefined;
@@ -405,8 +406,9 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         title={null}
         centered
         destroyOnHidden
-        width={460}
+        width={isMobileViewport ? '92vw' : 460}
         zIndex={overlayZIndex}
+        styles={{ body: { paddingTop: 8 } }}
       >
         {content}
       </Modal>
@@ -419,8 +421,11 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       trigger="click"
       open={open}
       onOpenChange={setOpen}
-      getPopupContainer={(node) => node?.parentElement || document.body}
-      overlayStyle={{ zIndex: overlayZIndex }}
+      placement={isMobileViewport ? 'bottom' : 'leftTop'}
+      getPopupContainer={() => document.body}
+      destroyOnHidden
+      styles={{ body: { padding: 0 } }}
+      overlayStyle={{ zIndex: overlayZIndex, maxWidth: 'min(92vw, 460px)' }}
     >
       {children || (
         <span className="text-leather-600 cursor-pointer hover:underline">

@@ -19,7 +19,7 @@ export const processRunsModule: ModuleDefinition = {
     {
       key: 'process_name',
       labels: { fa: 'نام فرآیند', en: 'Process Name' },
-      type: FieldType.TEXT,
+      type: FieldType.SELECT,
       location: FieldLocation.HEADER,
       order: 1,
       isKey: true,
@@ -128,4 +128,3 @@ export const processRunsModule: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
-

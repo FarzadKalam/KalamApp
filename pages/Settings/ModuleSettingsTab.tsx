@@ -70,15 +70,39 @@ const normalizeSchema = (schema: EditableModuleSchema): EditableModuleSchema => 
   return { blocks, fields };
 };
 
-const buildDefaultModuleSettings = (moduleDef: ModuleDefinition): ModuleSettingsConfig => {
-  const firstLetter = String(moduleDef.id || '').trim().charAt(0).toUpperCase() || 'M';
+const buildDefaultSystemCodeNaming = (moduleDef: ModuleDefinition) => {
+  const defaultPrefix = String(moduleDef.id || '').trim().charAt(0).toUpperCase() || 'M';
+  if (moduleDef.id === 'customers') {
+    return {
+      prefix: 'C',
+      prefixLetter: 'C',
+      startNumber: 234,
+      numberWidth: 3,
+    };
+  }
 
   return {
+    prefix: defaultPrefix,
+    prefixLetter: defaultPrefix,
+    startNumber: 100,
+    numberWidth: null,
+  };
+};
+
+const formatSystemCodePreview = (prefix: string, startNumber: number, numberWidth?: number | null) => {
+  const normalizedPrefix = String(prefix || '').trim().toUpperCase() || 'M';
+  const normalizedStart = Math.max(0, Math.trunc(Number(startNumber || 0)));
+  const normalizedWidth = Number(numberWidth);
+  const suffix = Number.isFinite(normalizedWidth) && normalizedWidth > 0
+    ? String(normalizedStart).padStart(normalizedWidth, '0')
+    : String(normalizedStart);
+  return `${normalizedPrefix}${suffix}`;
+};
+
+const buildDefaultModuleSettings = (moduleDef: ModuleDefinition): ModuleSettingsConfig => {
+  return {
     general: {
-      systemCodeNaming: {
-        prefixLetter: firstLetter,
-        startNumber: 100,
-      },
+      systemCodeNaming: buildDefaultSystemCodeNaming(moduleDef),
     },
     specific:
       moduleDef.id === 'products'
@@ -97,7 +121,41 @@ const buildDefaultModuleSettings = (moduleDef: ModuleDefinition): ModuleSettings
   };
 };
 
+const upgradeLegacySystemCodeNaming = (
+  moduleId: string,
+  naming: ModuleSettingsConfig['general']['systemCodeNaming']
+) => {
+  if (moduleId !== 'customers') return naming;
+
+  const normalizedPrefix = String(naming.prefix || naming.prefixLetter || '').trim().toUpperCase();
+  const hasExplicitWidth = naming.numberWidth !== undefined && naming.numberWidth !== null;
+  const isLegacyDefaultStart = Number(naming.startNumber) === 100;
+  const isCustomerDefaultPrefix = !normalizedPrefix || normalizedPrefix === 'C';
+
+  if (isLegacyDefaultStart && !hasExplicitWidth && isCustomerDefaultPrefix) {
+    return {
+      ...naming,
+      prefix: 'C',
+      prefixLetter: 'C',
+      startNumber: 234,
+      numberWidth: 3,
+    };
+  }
+
+  if (!hasExplicitWidth && isCustomerDefaultPrefix) {
+    return {
+      ...naming,
+      prefix: normalizedPrefix || 'C',
+      prefixLetter: normalizedPrefix || 'C',
+      numberWidth: 3,
+    };
+  }
+
+  return naming;
+};
+
 const mergeModuleSettings = (
+  moduleId: string,
   base: ModuleSettingsConfig,
   incoming: ModuleSettingsConfig | undefined
 ): ModuleSettingsConfig => {
@@ -111,6 +169,10 @@ const mergeModuleSettings = (
       ...(incoming.general?.systemCodeNaming || {}),
     },
   };
+  mergedGeneral.systemCodeNaming = upgradeLegacySystemCodeNaming(
+    moduleId,
+    mergedGeneral.systemCodeNaming
+  );
 
   const mergedSpecific = {
     ...base.specific,
@@ -399,7 +461,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     }
 
     const defaultConfig = buildDefaultModuleSettings(moduleDef);
-    const merged = mergeModuleSettings(defaultConfig, settingsByModule[selectedModuleId]);
+    const merged = mergeModuleSettings(selectedModuleId, defaultConfig, settingsByModule[selectedModuleId]);
     setCurrentConfig(merged);
     setIsDirty(false);
   }, [selectedModuleId, settingsByModule]);
@@ -752,11 +814,11 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                       <Row gutter={[12, 12]}>
                         <Col xs={24} md={8}>
                           <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
-                            حرف کد سیستمی
+                            پیشوند کد سیستمی
                           </Typography.Text>
                           <Input
-                            maxLength={1}
-                            value={currentConfig.general.systemCodeNaming.prefixLetter}
+                            maxLength={12}
+                            value={currentConfig.general.systemCodeNaming.prefix || currentConfig.general.systemCodeNaming.prefixLetter || ''}
                             onChange={(e) =>
                               updateCurrentConfig((prev) => ({
                                 ...prev,
@@ -764,7 +826,8 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                   ...prev.general,
                                   systemCodeNaming: {
                                     ...prev.general.systemCodeNaming,
-                                    prefixLetter: String(e.target.value || '').trim().slice(0, 1).toUpperCase(),
+                                    prefix: String(e.target.value || '').trim().toUpperCase().replace(/\s+/g, ''),
+                                    prefixLetter: String(e.target.value || '').trim().toUpperCase().replace(/\s+/g, ''),
                                   },
                                 },
                               }))
@@ -773,12 +836,12 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                         </Col>
                         <Col xs={24} md={8}>
                           <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
-                            سه رقم اول اعداد
+                            عدد شروع
                           </Typography.Text>
                           <InputNumber
                             className="w-full"
                             min={0}
-                            max={999}
+                            max={999999}
                             value={currentConfig.general.systemCodeNaming.startNumber}
                             onChange={(value) =>
                               updateCurrentConfig((prev) => ({
@@ -794,13 +857,39 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                             }
                           />
                         </Col>
-                        <Col xs={24} md={8} className="flex items-end">
+                        <Col xs={24} md={8}>
+                          <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                            طول بخش عددی
+                          </Typography.Text>
+                          <InputNumber
+                            className="w-full"
+                            min={0}
+                            max={12}
+                            value={currentConfig.general.systemCodeNaming.numberWidth ?? undefined}
+                            placeholder="بدون محدودیت"
+                            onChange={(value) =>
+                              updateCurrentConfig((prev) => ({
+                                ...prev,
+                                general: {
+                                  ...prev.general,
+                                  systemCodeNaming: {
+                                    ...prev.general.systemCodeNaming,
+                                    numberWidth: Number(value ?? 0) > 0 ? Number(value) : null,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={24} className="flex items-end">
                           <div className="text-sm text-gray-600 dark:text-gray-300">
                             نمونه:{' '}
                             <span className="font-mono font-bold">
-                              {`${currentConfig.general.systemCodeNaming.prefixLetter || 'M'}${String(
-                                currentConfig.general.systemCodeNaming.startNumber || 0
-                              ).padStart(3, '0')}`}
+                              {formatSystemCodePreview(
+                                currentConfig.general.systemCodeNaming.prefix || currentConfig.general.systemCodeNaming.prefixLetter || 'M',
+                                currentConfig.general.systemCodeNaming.startNumber || 0,
+                                currentConfig.general.systemCodeNaming.numberWidth
+                              )}
                             </span>
                           </div>
                         </Col>

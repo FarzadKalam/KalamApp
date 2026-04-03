@@ -25,6 +25,7 @@ const bootstrapAndRender = async () => {
   } catch {
     // keep cached/default branding when public bootstrap is unavailable
   }
+  root.render(<App />);
 };
 
 const cached = readCachedBranding();
@@ -33,7 +34,5 @@ applyBrandingRuntime(cached || DEFAULT_BRANDING);
 const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 const initialDarkMode = savedTheme === "dark" || (savedTheme !== "light" && resolveSmartThemeMode() === "dark");
 document.documentElement.classList.toggle("dark", initialDarkMode);
-
-root.render(<App />);
 
 void bootstrapAndRender();

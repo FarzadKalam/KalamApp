@@ -6,6 +6,7 @@ import {
   DeleteOutlined,
   EnterOutlined,
   EditOutlined,
+  ForwardOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
@@ -32,6 +33,7 @@ interface SharedNoteCardProps {
   onReply?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onForward?: () => void;
 }
 
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
@@ -56,6 +58,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onReply,
   onEdit,
   onDelete,
+  onForward,
 }) => (
   <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -70,8 +73,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         dir="rtl"
         className={`min-w-0 max-w-[calc(100%-2.3rem)] text-right rounded-2xl px-2.5 py-2 border shadow-sm ${
           isMine
-            ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-br-sm'
-            : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-bl-sm'
+            ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-tr-sm'
+            : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-tl-sm'
         }`}
       >
         <div className="mb-1 flex items-center justify-between gap-2 text-[9px] text-gray-400">
@@ -146,6 +149,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         {isEdited ? <div className="mt-1.5 text-[9px] text-gray-400">ویرایش شده</div> : null}
 
         <div className="mt-1.5 flex items-center gap-0.5">
+          {onForward ? <Button type="text" size="small" icon={<ForwardOutlined />} onClick={onForward} /> : null}
           {onReply ? <Button type="text" size="small" icon={<EnterOutlined />} onClick={onReply} /> : null}
           {onEdit ? <Button type="text" size="small" icon={<EditOutlined />} onClick={onEdit} /> : null}
           {onDelete ? <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete} /> : null}

@@ -17,6 +17,7 @@ import { JalaliLocaleListener } from "antd-jalali";
 import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
 import Layout from "./components/Layout";
+import UploadProgressOverlay from "./components/UploadProgressOverlay";
 import { ModuleListRefine } from "./pages/ModuleList_Refine";
 import ModuleShow from "./pages/ModuleShow";
 import "./App.css";
@@ -38,6 +39,11 @@ import ProductionGroupOrdersList from "./pages/ProductionGroupOrdersList";
 import ProductionGroupOrderWizard from "./pages/ProductionGroupOrderWizard";
 import HRPage from "./pages/HRPage";
 import FilesGalleryPage from "./pages/FilesGalleryPage";
+import WebFormsHubPage from "./pages/WebFormsHubPage";
+import WebFormBuilderPage from "./pages/WebFormBuilderPage";
+import ReportsHubPage from "./pages/ReportsHubPage";
+import ReportBuilderPage from "./pages/ReportBuilderPage";
+import ReportViewerPage from "./pages/ReportViewerPage";
 import WorkSchedulesPage from "./pages/WorkSchedulesPage";
 import HrQuickRequestPage from "./pages/HrQuickRequestPage";
 import {
@@ -45,12 +51,12 @@ import {
   BRANDING_UPDATED_EVENT,
   DEFAULT_BRANDING,
   THEME_STORAGE_KEY,
-  applyBrandCssVariables,
   resolveSmartThemeMode,
   type BrandingConfig,
 } from "./theme/brandTheme";
 import { isAccountingMinimalModule } from "./utils/accountingModules";
 import {
+  applyBrandingRuntime,
   clearRuntimeBrandingCache,
   persistRuntimeBranding,
   loadRuntimeBranding,
@@ -132,8 +138,7 @@ function App() {
   }, [loadBranding]);
 
   useEffect(() => {
-    applyBrandCssVariables(branding);
-    document.documentElement.setAttribute('data-brand-title', branding.appTitle);
+    applyBrandingRuntime(branding);
     window.dispatchEvent(new CustomEvent(BRANDING_APPLIED_EVENT));
   }, [branding]);
 
@@ -203,11 +208,19 @@ function App() {
     if (pathname === "/") return "داشبورد";
     if (pathname.startsWith("/login")) return "ورود";
     if (pathname.startsWith("/inquiry")) return "فرم استعلام";
+    if (pathname === "/web_forms") return "وب فرم‌ها";
+    if (pathname === "/web_forms/create") return "وب فرم جدید";
+    if (/^\/web_forms\/[^/]+$/.test(pathname)) return "ویرایش وب فرم";
+    if (/^\/web_forms\/[^/]+\/edit$/.test(pathname)) return "ویرایش وب فرم";
     if (pathname.startsWith("/settings")) return "تنظیمات";
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
     if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
+    if (pathname === "/reports") return "گزارشات";
+    if (pathname === "/reports/create") return "گزارش جدید";
+    if (/^\/reports\/[^/]+$/.test(pathname)) return "نمایش گزارش";
+    if (/^\/reports\/[^/]+\/edit$/.test(pathname)) return "ویرایش گزارش";
     if (pathname.startsWith("/accounting/settings")) return "تنظیمات حسابداری";
     if (pathname === "/accounting/reports") return "گزارشات حسابداری";
     if (pathname.startsWith("/accounting/reports/")) return "گزارش حسابداری";
@@ -261,7 +274,7 @@ function App() {
     if (routeModuleId === "chart_of_accounts") {
       return <ChartOfAccountsTreePage />;
     }
-    return <ModuleListRefine />;
+    return <ModuleListRefine key={`module-list:${routeModuleId || "unknown"}`} />;
   };
 
   const ModuleCreateRouteResolver: React.FC = () => {
@@ -342,7 +355,15 @@ function App() {
             <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
             <Route path="/hr" element={<HRPage />} />
             <Route path="/hr/:employeeId" element={<HRPage />} />
-                <Route path="/gallery" element={<FilesGalleryPage />} />
+            <Route path="/gallery" element={<FilesGalleryPage />} />
+            <Route path="/web_forms" element={<WebFormsHubPage />} />
+            <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
+            <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
+            <Route path="/web_forms/:id/edit" element={<WebFormBuilderPage />} />
+            <Route path="/reports" element={<ReportsHubPage />} />
+            <Route path="/reports/create" element={<ReportBuilderPage />} />
+            <Route path="/reports/:reportId" element={<ReportViewerPage />} />
+            <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
             <Route path="/accounting" element={<AccountingPage />} />
             <Route path="/accounting/reports" element={<AccountingReportsPage />} />
             <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
@@ -389,6 +410,7 @@ function App() {
         <JalaliLocaleListener />
         <AntdApp>
           <RefineAppContent />
+          <UploadProgressOverlay />
         </AntdApp>
       </ConfigProvider>
     </BrowserRouter>

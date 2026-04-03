@@ -15,6 +15,7 @@ interface TagInputProps {
   initialTags?: TagItem[];
   onChange?: (tags?: TagItem[]) => void;
   disabled?: boolean;
+  popupZIndex?: number;
 }
 
 const TagInput: React.FC<TagInputProps> = ({
@@ -23,6 +24,7 @@ const TagInput: React.FC<TagInputProps> = ({
   initialTags = [],
   onChange,
   disabled = false,
+  popupZIndex = 1600,
 }) => {
   const [tags, setTags] = useState<TagItem[]>(initialTags);
   const [allTags, setAllTags] = useState<TagItem[]>([]);
@@ -215,6 +217,8 @@ const TagInput: React.FC<TagInputProps> = ({
         popupRender={dropdownRender}
         trigger={['click']}
         placement="bottomLeft"
+        getPopupContainer={(node) => node.parentElement || document.body}
+        overlayStyle={{ zIndex: popupZIndex }}
       >
         <Tag
           onClick={() => {

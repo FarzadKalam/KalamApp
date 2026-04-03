@@ -4,6 +4,7 @@ import { SaveOutlined, UploadOutlined, CloudUploadOutlined, GlobalOutlined } fro
 import { supabase } from '../../supabaseClient';
 import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../../theme/brandTheme';
 import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCurrencyConfig } from '../../utils/currency';
+import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 
 const CompanyTab: React.FC = () => {
   const { message } = App.useApp();
@@ -60,8 +61,15 @@ const CompanyTab: React.FC = () => {
   const handleUpload = async (file: File, type: 'logo' | 'icon') => {
     try {
       const fileName = `company-${type}-${Date.now()}.${file.name.split('.').pop()}`;
-      const { error } = await supabase.storage.from('images').upload(fileName, file, { upsert: true });
-      if (error) throw error;
+      await uploadFileWithProgress({
+        client: supabase,
+        bucket: 'images',
+        path: fileName,
+        file,
+        upsert: true,
+        label: file.name || `company-${type}`,
+        detail: type === 'logo' ? 'لوگوی شرکت' : 'آیکون سایت',
+      });
       const { data } = supabase.storage.from('images').getPublicUrl(fileName);
 
       if (type === 'logo') {
@@ -72,7 +80,8 @@ const CompanyTab: React.FC = () => {
         form.setFieldValue('icon_url', data.publicUrl);
       }
       message.success('آپلود شد');
-    } catch {
+    } catch (error) {
+      if (isUploadCanceledError(error)) return false;
       message.error('خطا در آپلود');
     }
     return false;
@@ -219,6 +228,27 @@ const CompanyTab: React.FC = () => {
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">آدرس وب‌سایت</span>} name="website">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">آیدی اینستاگرام</span>} name="instagram_id">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="@brandname" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">آیدی تلگرام</span>} name="telegram_id">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="@brandname" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">یوتیوب</span>} name="youtube_url">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="@channel یا لینک کانال" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">واتساپ</span>} name="whatsapp_number">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="شماره یا لینک واتساپ" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">آیدی ایتا</span>} name="eitaa_id">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="@brandname" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">آیدی روبیکا</span>} name="rubika_id">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="@brandname" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">آیدی بله</span>} name="bale_id">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="@brandname" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">آدرس پستی</span>} name="address" className="md:col-span-2">
           <Input.TextArea rows={3} className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />

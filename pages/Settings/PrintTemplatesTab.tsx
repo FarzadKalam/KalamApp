@@ -48,6 +48,12 @@ import { buildListPrintableFields } from '../../utils/listPrintExport';
 const createTemplateId = () => `tpl_${Math.random().toString(36).slice(2, 10)}`;
 const nowIso = () => new Date().toISOString();
 const DEFAULT_PAGE_MARGINS = { top: 12, right: 10, bottom: 12, left: 10 } as const;
+const HEADER_HEIGHT_FALLBACK = 84;
+const FOOTER_HEIGHT_FALLBACK = 62;
+const HEADER_HEIGHT_MIN = 42;
+const HEADER_HEIGHT_MAX = 220;
+const FOOTER_HEIGHT_MIN = 28;
+const FOOTER_HEIGHT_MAX = 160;
 
 const getPageFrame = (paperSize: 'A4' | 'A5' | 'A6' = 'A4', orientation: 'portrait' | 'landscape' = 'portrait') => {
   const base =
@@ -151,8 +157,8 @@ const PrintTemplatesTab: React.FC = () => {
       const delta = event.clientY - startY;
       const nextHeight =
         section === 'header'
-          ? Math.min(260, Math.max(80, startHeight + delta))
-          : Math.min(220, Math.max(76, startHeight - delta));
+          ? Math.min(HEADER_HEIGHT_MAX, Math.max(HEADER_HEIGHT_MIN, startHeight + delta))
+          : Math.min(FOOTER_HEIGHT_MAX, Math.max(FOOTER_HEIGHT_MIN, startHeight - delta));
 
       setEditingTemplate((prev) => {
         if (!prev) return prev;
@@ -187,8 +193,8 @@ const PrintTemplatesTab: React.FC = () => {
       startY: event.clientY,
       startHeight:
         section === 'header'
-          ? Number(editingTemplate?.headerHeight || 136)
-          : Number(editingTemplate?.footerHeight || 116),
+          ? Number(editingTemplate?.headerHeight || HEADER_HEIGHT_FALLBACK)
+          : Number(editingTemplate?.footerHeight || FOOTER_HEIGHT_FALLBACK),
     };
   };
 
@@ -266,8 +272,8 @@ const PrintTemplatesTab: React.FC = () => {
       isActive: true,
       showHeader: true,
       showFooter: true,
-      headerHeight: 136,
-      footerHeight: 116,
+      headerHeight: HEADER_HEIGHT_FALLBACK,
+      footerHeight: FOOTER_HEIGHT_FALLBACK,
       pageMarginTop: DEFAULT_PAGE_MARGINS.top,
       pageMarginRight: DEFAULT_PAGE_MARGINS.right,
       pageMarginBottom: DEFAULT_PAGE_MARGINS.bottom,
@@ -290,8 +296,8 @@ const PrintTemplatesTab: React.FC = () => {
       footerHtml: template.footerHtml || buildDefaultFooterTemplateForModule(),
       showHeader: template.showHeader !== false,
       showFooter: template.showFooter !== false,
-      headerHeight: template.headerHeight || 136,
-      footerHeight: template.footerHeight || 116,
+      headerHeight: template.headerHeight || HEADER_HEIGHT_FALLBACK,
+      footerHeight: template.footerHeight || FOOTER_HEIGHT_FALLBACK,
       pageMarginTop: template.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top,
       pageMarginRight: template.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right,
       pageMarginBottom: template.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom,
@@ -434,8 +440,8 @@ const PrintTemplatesTab: React.FC = () => {
       isSystem: editingTemplate.isSystem === true,
       showHeader: editingTemplate.showHeader !== false,
       showFooter: editingTemplate.showFooter !== false,
-      headerHeight: Number(editingTemplate.headerHeight || 136),
-      footerHeight: Number(editingTemplate.footerHeight || 116),
+      headerHeight: Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK),
+      footerHeight: Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK),
       pageMarginTop: Number(editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
       pageMarginRight: Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
       pageMarginBottom: Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
@@ -723,9 +729,9 @@ const PrintTemplatesTab: React.FC = () => {
               >
                 {editingTemplate.showHeader !== false ? (
                   <section
-                    className={`relative border-b border-dashed border-slate-300/80 ${activeSection === 'header' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
+                    className={`relative flex-none border-b border-dashed border-slate-300/80 ${activeSection === 'header' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
                     onClick={() => setActiveSection('header')}
-                    style={{ minHeight: editingTemplate.headerHeight || 136 }}
+                    style={{ height: editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK }}
                   >
                     <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                       سربرگ
@@ -735,7 +741,9 @@ const PrintTemplatesTab: React.FC = () => {
                       value={editingTemplate.headerHtml || ''}
                       onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, headerHtml: html } : prev))}
                       placeholder="سربرگ هر برگه را اینجا تنظیم کنید..."
-                      minHeight={Math.max(80, Number(editingTemplate.headerHeight || 136))}
+                      minHeight={HEADER_HEIGHT_MIN}
+                      fixedHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
+                      contentPadding="8px 10px"
                       onEditorReady={setHeaderEditor}
                       onFocusSection={() => setActiveSection('header')}
                     />
@@ -771,9 +779,9 @@ const PrintTemplatesTab: React.FC = () => {
 
                 {editingTemplate.showFooter !== false ? (
                   <section
-                    className={`relative border-t border-dashed border-slate-300/80 ${activeSection === 'footer' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
+                    className={`relative flex-none border-t border-dashed border-slate-300/80 ${activeSection === 'footer' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
                     onClick={() => setActiveSection('footer')}
-                    style={{ minHeight: editingTemplate.footerHeight || 116 }}
+                    style={{ height: editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK }}
                   >
                     <button
                       type="button"
@@ -792,7 +800,9 @@ const PrintTemplatesTab: React.FC = () => {
                       value={editingTemplate.footerHtml || ''}
                       onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, footerHtml: html } : prev))}
                       placeholder="پاورقی هر برگه را اینجا تنظیم کنید..."
-                      minHeight={Math.max(76, Number(editingTemplate.footerHeight || 116))}
+                      minHeight={FOOTER_HEIGHT_MIN}
+                      fixedHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
+                      contentPadding="8px 10px"
                       onEditorReady={setFooterEditor}
                       onFocusSection={() => setActiveSection('footer')}
                     />

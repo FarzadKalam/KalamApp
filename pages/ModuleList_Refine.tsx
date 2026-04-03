@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useTable } from "@refinedev/antd";
-import { CrudFilter, CrudFilters, CrudSort, useDeleteMany, useUpdate } from "@refinedev/core";
+import { CrudFilter, CrudFilters, CrudSort, useDeleteMany } from "@refinedev/core";
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
@@ -18,11 +18,12 @@ import ViewWrapper from "../components/moduleList/ViewWrapper";
 import GridView from "../components/moduleList/GridView";
 import MapView from "../components/moduleList/MapView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
-import { canAccessAssignedRecord, fetchCurrentUserRoleContext, WORKFLOWS_PERMISSION_KEY } from "../utils/permissions";
+import { canAccessAssignedRecord, fetchCurrentUserRoleContext, GOALS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY } from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
+import { fetchTaskSourceRecordOptions, getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
 import ExcelImportWizard from "../components/moduleList/ExcelImportWizard";
 import { supportsSystemCode } from "../utils/systemCode";
 import { buildCustomerRelationSearchText } from "../utils/customerRelation";
@@ -31,10 +32,15 @@ import PrintSection from "../components/moduleShow/PrintSection";
 import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
 import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
 import { readCurrencyConfig } from "../utils/currency";
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from "../utils/referenceData";
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions, fetchRecordTagsMap } from "../utils/referenceData";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
+import { syncRecordTags } from "../utils/recordTags";
+import { writeModuleOptionSnapshot } from "../utils/moduleOptionSnapshot";
+import { isWebFormTargetModule } from "../utils/webForms";
+import GoalsManager from "../components/goals/GoalsManager";
+import GoalProgressSlider from "../components/goals/GoalProgressSlider";
 
 const getDefaultGridPageSize = () => 16;
 const getGridLoadStep = () => 16;
@@ -64,12 +70,27 @@ interface PersistedModuleListState {
   sorters?: CrudSort[];
 }
 
-const buildModuleListStateKey = (moduleId?: string | null) => `module_list_state:${String(moduleId || "").trim()}`;
+interface ModuleListOptionsSnapshot {
+  dynamicOptions: Record<string, any[]>;
+  relationOptions: Record<string, any[]>;
+  allUsers: any[];
+  allRoles: any[];
+}
 
-const readPersistedModuleListState = (moduleId?: string | null): PersistedModuleListState | null => {
+const moduleListOptionsCache = new Map<string, ModuleListOptionsSnapshot>();
+
+const buildModuleListStateKey = (moduleId?: string | null, suffix?: string | null) => {
+  const normalizedModuleId = String(moduleId || "").trim();
+  const normalizedSuffix = String(suffix || "").trim();
+  return normalizedSuffix
+    ? `module_list_state:${normalizedModuleId}:${normalizedSuffix}`
+    : `module_list_state:${normalizedModuleId}`;
+};
+
+const readPersistedModuleListState = (moduleId?: string | null, suffix?: string | null): PersistedModuleListState | null => {
   if (typeof window === "undefined" || !moduleId) return null;
   try {
-    const raw = window.localStorage.getItem(buildModuleListStateKey(moduleId));
+    const raw = window.localStorage.getItem(buildModuleListStateKey(moduleId, suffix));
     if (!raw) return null;
     return JSON.parse(raw) as PersistedModuleListState;
   } catch {
@@ -178,7 +199,11 @@ const ModuleListContentSkeleton: React.FC<{ viewMode: ViewMode }> = ({ viewMode 
   );
 };
 
-export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ moduleIdOverride }) => {
+export const ModuleListRefine: React.FC<{
+  moduleIdOverride?: string;
+  initialViewFiltersOverride?: CrudFilters;
+  storageKeySuffix?: string;
+}> = ({ moduleIdOverride, initialViewFiltersOverride, storageKeySuffix }) => {
   const { moduleId } = useParams();
   const resolvedModuleId = moduleIdOverride || moduleId;
   const navigate = useNavigate();
@@ -228,7 +253,17 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   );
   
   const moduleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
-  const persistedState = useMemo(() => readPersistedModuleListState(resolvedModuleId), [resolvedModuleId]);
+  const persistedState = useMemo(
+    () => readPersistedModuleListState(resolvedModuleId, storageKeySuffix),
+    [resolvedModuleId, storageKeySuffix]
+  );
+  const effectiveInitialViewFilters = useMemo(
+    () =>
+      Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
+        ? initialViewFiltersOverride
+        : (persistedState?.viewFilters || []),
+    [initialViewFiltersOverride, persistedState?.viewFilters]
+  );
   const defaultSorters = useMemo(
     () => (persistedState?.sorters?.length ? persistedState.sorters : getDefaultSorters(moduleConfig)),
     [moduleConfig, persistedState?.sorters]
@@ -240,18 +275,23 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [selectedRowsMap, setSelectedRowsMap] = useState<Record<string, any>>({});
   const [listVisibleRowKeys, setListVisibleRowKeys] = useState<React.Key[] | null>(null);
-  const [currentView, setCurrentView] = useState<SavedView | null>(persistedState?.currentView || null);
+  const [currentView, setCurrentView] = useState<SavedView | null>(
+    Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
+      ? null
+      : (persistedState?.currentView || null)
+  );
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [editRecordId, setEditRecordId] = useState<string | null>(null);
   const [isBulkEditMode, setIsBulkEditMode] = useState(false);
   const [kanbanGroupBy, setKanbanGroupBy] = useState<string>("");
-  const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(persistedState?.viewFilters || []);
+  const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(effectiveInitialViewFilters);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(persistedState?.columnFilters || {});
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);  // ✅ ستون‌های انتخاب‌شده
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});  // ✅ اضافه شد
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});  // ✅ اضافه شد
-  const [, setOptionsReady] = useState(false);
+  const [optionsReady, setOptionsReady] = useState(false);
   const [tagsMap, setTagsMap] = useState<Record<string, any[]>>({});  // ✅ Map of record id to tags
+  const [tagsLoading, setTagsLoading] = useState(false);
   const [gridPageSize, setGridPageSize] = useState<number>(() => getDefaultGridPageSize()); // ✅ Grid pagination
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
@@ -261,10 +301,15 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
   const [isBulkProductsModalOpen, setIsBulkProductsModalOpen] = useState(false);
   const [isWorkflowsModalOpen, setIsWorkflowsModalOpen] = useState(false);
+  const [isGoalsModalOpen, setIsGoalsModalOpen] = useState(false);
   const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState(false);
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
+  const [canOpenGoals, setCanOpenGoals] = useState(true);
+  const [canShowGoalCards, setCanShowGoalCards] = useState(true);
   const [listPrintRows, setListPrintRows] = useState<any[]>([]);
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
+  const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
+  const hasInitializedModuleStateRef = useRef(false);
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, setCurrent } = useTable({
     resource: resolvedModuleId,
@@ -272,17 +317,18 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     pagination: { pageSize: 10 }, 
     queryOptions: {
       enabled: !!resolvedModuleId,
+      staleTime: 30_000,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
-    filters: { initial: persistedState?.viewFilters || [] },
+    filters: { initial: effectiveInitialViewFilters },
     syncWithLocation: false,
   });
 
   const { mutate: deleteMany } = useDeleteMany();
-  const { mutate: updateRecord } = useUpdate();
 
   const loading = tableQueryResult.isLoading;
+  const queryPending = loading || tableQueryResult.isFetching;
   const allData = tableQueryResult.data?.data || [];
   const hasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
   const selectedRows = useMemo(
@@ -297,13 +343,27 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     if (!selectedRows.length) return false;
     return selectedRows.every((row: any) => String(row?.status || '') === 'pending');
   }, [resolvedModuleId, selectedRows]);
-  const showContentSkeleton = loading && !hasQueryResult;
+  const showContentSkeleton = queryPending && !hasQueryResult;
 
   useEffect(() => {
-    const restoredState = readPersistedModuleListState(resolvedModuleId);
+    if (!hasInitializedModuleStateRef.current) {
+      hasInitializedModuleStateRef.current = true;
+      return;
+    }
+
+    const restoredState = readPersistedModuleListState(resolvedModuleId, storageKeySuffix);
     const restoredSorters = restoredState?.sorters?.length ? restoredState.sorters : getDefaultSorters(moduleConfig);
+    const restoredViewFilters =
+      Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
+        ? initialViewFiltersOverride
+        : (restoredState?.viewFilters || []);
+    const cachedOptions = resolvedModuleId ? moduleListOptionsCache.get(resolvedModuleId) : null;
     setViewMode(restoredState?.viewMode || moduleConfig?.defaultViewMode || ViewMode.LIST);
-    setCurrentView(restoredState?.currentView || null);
+    setCurrentView(
+      Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
+        ? null
+        : (restoredState?.currentView || null)
+    );
     setSelectedRowKeys([]);
     setSelectedRowsMap({});
     setListVisibleRowKeys(null);
@@ -311,28 +371,36 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     setGridPageSize(getDefaultGridPageSize());
     setKanbanGroupBy("");
     setSearchTerm(restoredState?.searchTerm || "");
-    setViewFiltersState(restoredState?.viewFilters || []);
+    setViewFiltersState(restoredViewFilters);
     setColumnFilters(restoredState?.columnFilters || {});
-    setDynamicOptions({});
-    setRelationOptions({});
-    setOptionsReady(false);
+    setDynamicOptions(cachedOptions?.dynamicOptions || {});
+    setRelationOptions(cachedOptions?.relationOptions || {});
+    setAllUsers(cachedOptions?.allUsers || []);
+    setAllRoles(cachedOptions?.allRoles || []);
+    setOptionsReady(!!cachedOptions);
+    setTagsMap({});
+    setTagsLoading(false);
     setEditRecordId(null);
     setIsBulkEditOpen(false);
     setIsBulkEditMode(false);
     setIsBulkProductsModalOpen(false);
     setIsWorkflowsModalOpen(false);
+    setIsGoalsModalOpen(false);
     setIsExcelImportModalOpen(false);
     setCanOpenWorkflows(true);
+    setCanOpenGoals(true);
+    setCanShowGoalCards(true);
     setListPrintRows([]);
     setBulkBuildTarget(null);
     applyCombinedFilters(
-      restoredState?.viewFilters || [],
+      restoredViewFilters,
       restoredState?.searchTerm || "",
       restoredState?.columnFilters || {},
       false,
     );
+    setCurrent?.(1);
     setSorters(restoredSorters);
-  }, [moduleConfig, resolvedModuleId, setSorters]);
+  }, [initialViewFiltersOverride, moduleConfig, resolvedModuleId, setCurrent, setSorters, storageKeySuffix]);
 
   const fetchPermissions = useCallback(async () => {
     if (!resolvedModuleId) return;
@@ -352,6 +420,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       const permissions = context.permissions || {};
       const modulePerms = permissions?.[resolvedModuleId] || {};
       const workflowPerms = permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
+      const goalPerms = permissions?.[GOALS_PERMISSION_KEY] || {};
       setModulePermissions({
         view: modulePerms.view,
         edit: modulePerms.edit,
@@ -362,12 +431,20 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       setCanOpenWorkflows(
         workflowPerms.view !== false && (workflowPerms?.fields?.module_list_button !== false)
       );
+      setCanOpenGoals(
+        goalPerms.view !== false && (goalPerms?.fields?.module_list_button !== false)
+      );
+      setCanShowGoalCards(
+        goalPerms.view !== false && (goalPerms?.fields?.module_list_cards !== false)
+      );
     } catch (err: any) {
       if (String(err?.name || '') === 'AbortError') {
         return;
       }
       console.warn('Could not fetch permissions:', err);
       setCanOpenWorkflows(true);
+      setCanOpenGoals(true);
+      setCanShowGoalCards(true);
     }
   }, [resolvedModuleId]);
 
@@ -441,6 +518,26 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       [tf]: tagsMap[record.id as string] || []
     }));
   }, [accessibleData, tagsMap, tagsField]);
+  const accessibleRecordIds = useMemo(
+    () => accessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
+    [accessibleData]
+  );
+  const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (!optionsReady || tagsLoading);
+  const effectiveRelationOptions = useMemo(() => {
+    if (resolvedModuleId !== "tasks") return relationOptions;
+    const merged: Record<string, any[]> = { ...relationOptions };
+    Object.entries(taskRelationOptionsByField).forEach(([fieldKey, options]) => {
+      const current = Array.isArray(merged[fieldKey]) ? merged[fieldKey] : [];
+      const next = [...current];
+      (options || []).forEach((option: any) => {
+        if (!next.some((item: any) => String(item?.value || "") === String(option?.value || ""))) {
+          next.push(option);
+        }
+      });
+      merged[fieldKey] = next;
+    });
+    return merged;
+  }, [relationOptions, resolvedModuleId, taskRelationOptionsByField]);
 
   useEffect(() => {
     if (!selectedRowKeys.length) {
@@ -462,6 +559,79 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       return nextMap;
     });
   }, [enrichedData, selectedRowKeys]);
+
+  useEffect(() => {
+    if (resolvedModuleId !== "tasks" || !enrichedData.length) {
+      setTaskRelationOptionsByField({});
+      return;
+    }
+
+    let isActive = true;
+
+    const loadTaskRelationLabels = async () => {
+      const requests = new Map<string, { fieldKey: string; moduleId: string; recordId: string }>();
+
+      enrichedData.forEach((task: any) => {
+        const sourceLink = resolveTaskSourceLink(task);
+        const relatedModuleId = String(sourceLink.moduleId || task?.related_to_module || "").trim();
+        const relatedRecordId = String(sourceLink.recordId || "").trim();
+        const fieldKey = getTaskRelationFieldKey(relatedModuleId);
+        if (!relatedModuleId || !relatedRecordId || !fieldKey) return;
+        requests.set(`${fieldKey}:${relatedModuleId}:${relatedRecordId}`, {
+          fieldKey,
+          moduleId: relatedModuleId,
+          recordId: relatedRecordId,
+        });
+      });
+
+      if (!requests.size) {
+        if (isActive) setTaskRelationOptionsByField({});
+        return;
+      }
+
+      const loaded = await Promise.all(
+        Array.from(requests.values()).map(async (request) => {
+          try {
+            const options = await fetchTaskSourceRecordOptions(supabase, request.moduleId, {
+              exactId: request.recordId,
+              limit: 20,
+            });
+            const exactOption = (options || []).find((option: any) => String(option?.value || "") === request.recordId);
+            if (!exactOption) return null;
+            return {
+              fieldKey: request.fieldKey,
+              option: {
+                label: exactOption.label,
+                value: String(exactOption.value),
+              },
+            };
+          } catch (error) {
+            console.warn("Could not load exact task relation option for module list", request, error);
+            return null;
+          }
+        })
+      );
+
+      if (!isActive) return;
+
+      const next: Record<string, any[]> = {};
+      loaded.forEach((entry) => {
+        if (!entry) return;
+        const current = next[entry.fieldKey] || [];
+        if (!current.some((item: any) => String(item?.value || "") === String(entry.option.value))) {
+          current.push(entry.option);
+        }
+        next[entry.fieldKey] = current;
+      });
+      setTaskRelationOptionsByField(next);
+    };
+
+    void loadTaskRelationLabels();
+
+    return () => {
+      isActive = false;
+    };
+  }, [enrichedData, resolvedModuleId]);
   const showListSkeleton = false;
   const gridLoadStep = getGridLoadStep();
 
@@ -518,8 +688,11 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       columnFilters,
       sorters: sorters as CrudSort[],
     };
-    window.localStorage.setItem(buildModuleListStateKey(resolvedModuleId), JSON.stringify(stateToPersist));
-  }, [columnFilters, currentView, resolvedModuleId, searchTerm, sorters, viewFiltersState, viewMode, visibleColumns]);
+    window.localStorage.setItem(
+      buildModuleListStateKey(resolvedModuleId, storageKeySuffix),
+      JSON.stringify(stateToPersist)
+    );
+  }, [columnFilters, currentView, resolvedModuleId, searchTerm, sorters, storageKeySuffix, viewFiltersState, viewMode, visibleColumns]);
 
   // ✅ اضافه شد: Fetch dynamic و relation options
   useEffect(() => {
@@ -693,6 +866,14 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           }
         });
         setRelationOptions(relOpts);
+        if (resolvedModuleId) {
+          moduleListOptionsCache.set(resolvedModuleId, {
+            dynamicOptions: dynOpts,
+            relationOptions: relOpts,
+            allUsers: directory.users,
+            allRoles: directory.roles,
+          });
+        }
       } catch (error) {
         console.error("Error fetching options", error);
       } finally {
@@ -709,37 +890,39 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
 
   // ✅ Fetch tags for all records
   useEffect(() => {
-    if (!tagsField || !resolvedModuleId || accessibleData.length === 0) return;
+    if (!tagsField || !resolvedModuleId || accessibleRecordIds.length === 0) {
+      setTagsMap({});
+      setTagsLoading(false);
+      return;
+    }
+
+    let isActive = true;
 
     const fetchTags = async () => {
       try {
-        // Get all tags for records in this module
-        const recordIds = accessibleData.map(r => r.id);
-        const { data: tagsData } = await supabase
-          .from('record_tags')
-          .select('record_id, tags(id, title, color)')
-          .in('record_id', recordIds);
+        setTagsLoading(true);
+        const nextTagsMap = await fetchRecordTagsMap(supabase, resolvedModuleId, accessibleRecordIds);
 
-        // Map tags to records
-        if (tagsData) {
-          const newTagsMap: Record<string, any[]> = {};
-          tagsData.forEach((item: any) => {
-            if (!newTagsMap[item.record_id]) {
-              newTagsMap[item.record_id] = [];
-            }
-            if (item.tags) {
-              newTagsMap[item.record_id].push(item.tags);
-            }
-          });
-          setTagsMap(newTagsMap);
-        }
+        if (!isActive) return;
+
+        setTagsMap(nextTagsMap);
       } catch (err) {
+        if (!isActive) return;
         console.error('Error fetching tags:', err);
+        setTagsMap({});
+      } finally {
+        if (isActive) {
+          setTagsLoading(false);
+        }
       }
     };
 
-    fetchTags();
-  }, [resolvedModuleId, tagsField, accessibleData.length]);
+    void fetchTags();
+
+    return () => {
+      isActive = false;
+    };
+  }, [accessibleRecordIds, resolvedModuleId, tagsField]);
 
   const searchTargetField = useMemo(() => {
     if (!moduleConfig) return null;
@@ -1139,7 +1322,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       const rows = recordsToExport
         .map((row: any) =>
           exportFields
-            .map((field) => escapeCsvCell(formatListCellValue(field, row, relationOptions, currencyLabel)))
+            .map((field) => escapeCsvCell(formatListCellValue(field, row, relationOptions, currencyLabel, 'en')))
             .join(',')
         )
         .join('\n');
@@ -1237,6 +1420,61 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       }
     });
   };
+  void handleBulkCopy;
+
+  const handleCopyViaCreateForm = () => {
+    if (!selectedRowKeys.length || !resolvedModuleId || !moduleConfig) return;
+    if (selectedRowKeys.length > 1) {
+      showListMessage("warning", "برای کپی از طریق فرم، فقط یک رکورد را انتخاب کنید.");
+      return;
+    }
+    modal.confirm({
+      title: "کپی رکورد",
+      content: "فرم ایجاد رکورد جدید با مقادیر کپی‌شده باز شود؟",
+      okText: "بله، فرم را باز کن",
+      cancelText: "انصراف",
+      onOk: async () => {
+        const tableName = moduleConfig.table || resolvedModuleId;
+        const selectedId = String(selectedRowKeys[0]);
+        const hide = showListMessage("loading", "در حال آماده‌سازی کپی...", 0);
+        try {
+          const { data: record, error: sourceError } = await supabase
+            .from(tableName)
+            .select("*")
+            .eq("id", selectedId)
+            .maybeSingle();
+          if (sourceError) throw sourceError;
+          if (!record) {
+            showListMessage("warning", "رکوردی برای کپی یافت نشد.");
+            return;
+          }
+          const nameField = detectCopyNameField(moduleConfig);
+          const payload = buildCopyPayload(record, { nameField, moduleId: resolvedModuleId });
+          writeModuleOptionSnapshot(resolvedModuleId, {
+            dynamicOptions,
+            relationOptions,
+            allUsers,
+            allRoles,
+          });
+          setSelectedRowKeys([]);
+          navigate(`/${resolvedModuleId}/create`, {
+            state: {
+              initialValues: payload,
+              copySource: {
+                sourceRecordId: String(record.id),
+                copyRelations: resolvedModuleId === "production_orders",
+              },
+            },
+          });
+          showListMessage("success", "فرم ایجاد با اطلاعات کپی‌شده باز شد.");
+        } catch (err: any) {
+          showListMessage("error", toFaErrorMessage(err, "آماده‌سازی کپی ناموفق بود."));
+        } finally {
+          hide();
+        }
+      }
+    });
+  };
 
   const handleCreateGroupOrderFromSelection = () => {
     if (resolvedModuleId !== 'production_orders') return;
@@ -1251,7 +1489,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     });
   };
 
-  const handleBulkSave = (values: any) => {
+  const handleBulkSave = async (values: any, meta?: { selectedTags?: any[] }) => {
       const changes: any = {};
       Object.keys(values).forEach(key => {
           const currentValue = values[key];
@@ -1265,37 +1503,44 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
               changes[key] = values[key];
           }
       });
-      if (Object.keys(changes).length === 0) return;
-      const normalizedChanges = resolvedModuleId === 'tasks'
+      const selectedTags = Array.isArray(meta?.selectedTags)
+        ? meta.selectedTags.filter(Boolean)
+        : [];
+      const hasTagChanges = selectedTags.length > 0;
+      if (Object.keys(changes).length === 0 && !hasTagChanges) return;
+      if (!moduleConfig?.table) return;
+      const normalizedChanges = Object.keys(changes).length > 0 && resolvedModuleId === 'tasks'
         ? attachTaskCompletionIfNeeded(changes)
         : changes;
+      const selectedIds = selectedRowKeys.map((id) => String(id)).filter(Boolean);
+      if (!selectedIds.length) return;
 
-      let completed = 0;
-      selectedRowKeys.forEach(id => {
-          updateRecord(
-            {
-              resource: resolvedModuleId!,
-              id: id as string,
-              values: normalizedChanges,
-              successNotification: false,
-              errorNotification: false,
-            },
-            {
-              onSuccess: () => {
-                completed++;
-                if (completed === selectedRowKeys.length) {
-                  showListMessage('success', 'رکوردهای انتخاب‌شده بروزرسانی شدند.');
-                  setIsBulkEditOpen(false);
-                  setSelectedRowKeys([]);
-                  tableQueryResult.refetch();
-                }
-              },
-              onError: (error: any) => {
-                showListMessage('error', toFaErrorMessage(error, 'بروزرسانی رکورد ناموفق بود.'));
-              },
-            }
-          );
-      });
+      const hide = showListMessage('loading', 'در حال بروزرسانی موارد انتخاب‌شده...', 0);
+      try {
+        for (const id of selectedIds) {
+          if (Object.keys(normalizedChanges).length > 0) {
+            const { error } = await supabase
+              .from(moduleConfig.table)
+              .update(normalizedChanges)
+              .eq('id', id);
+            if (error) throw error;
+          }
+
+          if (hasTagChanges && resolvedModuleId) {
+            await syncRecordTags(supabase, resolvedModuleId, id, selectedTags);
+          }
+        }
+
+        showListMessage('success', 'رکوردهای انتخاب‌شده بروزرسانی شدند.');
+        setIsBulkEditOpen(false);
+        setSelectedRowKeys([]);
+        setSelectedRowsMap({});
+        tableQueryResult.refetch();
+      } catch (error: any) {
+        showListMessage('error', toFaErrorMessage(error, 'بروزرسانی رکورد ناموفق بود.'));
+      } finally {
+        hide?.();
+      }
   };
 
   const handleExport = handleExportExcel;
@@ -1325,6 +1570,9 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
   const moduleActionItems: MenuProps["items"] = useMemo(() => {
     const items: MenuProps["items"] = [];
 
+    if (canOpenGoals) {
+      items.push({ key: "goals", label: "هدف‌گذاری" });
+    }
     if (canOpenWorkflows) {
       items.push({ key: "workflows", label: "گردش کارها" });
     }
@@ -1338,6 +1586,9 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
       items.push({ key: "group_orders", label: "سفارشات گروهی" });
     }
 
+    if (isWebFormTargetModule(resolvedModuleId)) {
+      items.push({ key: "web_forms", label: "وب فرم‌ها" });
+    }
     if (canOpenModuleSettings && items.length > 0) {
       items.push({ type: "divider" });
     }
@@ -1351,10 +1602,14 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     }
 
     return items;
-  }, [canOpenWorkflows, canEditModule, canOpenModuleSettings, resolvedModuleId, moduleConfig?.titles.fa]);
+  }, [canEditModule, canOpenGoals, canOpenModuleSettings, canOpenWorkflows, resolvedModuleId, moduleConfig?.titles.fa]);
   const hasModuleActionItems = Array.isArray(moduleActionItems) && moduleActionItems.length > 0;
 
   const handleModuleActionClick: MenuProps["onClick"] = ({ key }) => {
+    if (key === "goals") {
+      setIsGoalsModalOpen(true);
+      return;
+    }
     if (key === "workflows") {
       setIsWorkflowsModalOpen(true);
       return;
@@ -1369,6 +1624,10 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
     }
     if (key === "group_orders") {
       navigate("/production_group_orders");
+      return;
+    }
+    if (key === "web_forms") {
+      navigate(`/web_forms?targetModule=${resolvedModuleId}`);
       return;
     }
     if (key === "module_settings") {
@@ -1434,6 +1693,14 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
             )}
         </div>
 
+        {canShowGoalCards ? (
+          <GoalProgressSlider
+            moduleId={resolvedModuleId}
+            placement="module_list"
+            className="mt-1"
+          />
+        ) : null}
+
         <Toolbar
           viewMode={viewMode}
           setViewMode={setViewMode}
@@ -1456,7 +1723,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           onSelectAll={visibleSelectableRowKeys.length > 0 ? handleSelectAllVisible : undefined}
           selectAllDisabled={allVisibleRowsSelected}
           onEdit={selectedRowKeys.length && canEditModule ? handleBulkEditOpen : undefined}
-          onCopy={selectedRowKeys.length && canEditModule ? handleBulkCopy : undefined}
+          onCopy={selectedRowKeys.length && canEditModule ? handleCopyViaCreateForm : undefined}
           onDelete={selectedRowKeys.length && canDeleteModule ? handleBulkDelete : undefined}
           onExport={selectedRowKeys.length ? handleExport : undefined}
           exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
@@ -1527,7 +1794,9 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                   <SmartTableRenderer 
                     moduleConfig={moduleConfig}
                      data={enrichedData} 
-                     loading={false}
+                     loading={queryPending}
+                     deferredDataLoading={deferredListDataLoading}
+                     tableLayout="fixed"
                      visibleColumns={visibleColumns.length > 0 ? visibleColumns : undefined}
                      pagination={tableProps.pagination}
                      onChange={handleTableChange}
@@ -1538,7 +1807,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                       style: { cursor: 'pointer' } 
                     })}
                     dynamicOptions={dynamicOptions}
-                    relationOptions={relationOptions}
+                    relationOptions={effectiveRelationOptions}
                     allUsers={allUsers}
                     allRoles={allRoles}
                     canViewField={canViewField}
@@ -1566,7 +1835,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                               canViewField={canViewField}
                               allUsers={allUsers}
                               allRoles={allRoles}
-                              relationOptions={relationOptions}
+                              relationOptions={effectiveRelationOptions}
                             />
                             
                    {/* Load More Button */}
@@ -1626,7 +1895,7 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
                               canViewField={canViewField}
                               allUsers={allUsers}
                               allRoles={allRoles}
-                              relationOptions={relationOptions}
+                              relationOptions={effectiveRelationOptions}
                             />
                           ))}
                         </div>
@@ -1698,6 +1967,14 @@ export const ModuleListRefine: React.FC<{ moduleIdOverride?: string }> = ({ modu
           onClose={() => setIsWorkflowsModalOpen(false)}
           defaultModuleId={resolvedModuleId}
           context="module_list"
+        />
+      ) : null}
+      {isGoalsModalOpen ? (
+        <GoalsManager
+          inline={false}
+          open={isGoalsModalOpen}
+          onClose={() => setIsGoalsModalOpen(false)}
+          defaultModuleId={resolvedModuleId}
         />
       ) : null}
       <ExcelImportWizard

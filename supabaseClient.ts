@@ -31,6 +31,8 @@ if (!globalStore.__kalam_supabase_signup_client__) {
 
 export const supabase = globalStore.__kalam_supabase_client__;
 export const supabaseSignUpClient = globalStore.__kalam_supabase_signup_client__;
+export const SUPABASE_URL = supabaseUrl;
+export const SUPABASE_ANON_KEY = supabaseAnonKey;
 
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as any).__kalamSupabase = supabase;

@@ -1,7 +1,9 @@
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
+import { sendBotMessageViaGateway } from './botGateway';
 import { normalizeNoteScope } from './noteScope';
+import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
 import {
   parseWorkflowRelatedFieldKey,
@@ -21,11 +23,17 @@ type RunWorkflowArgs = {
   previousRecord?: Record<string, any> | null;
 };
 
-type WorkflowEvaluationContext = {
+export type WorkflowEvaluationContext = {
   moduleId: string;
   relatedRecordCache: Map<string, Record<string, any> | null>;
   tagsCache: Map<string, string[]>;
 };
+
+export const createWorkflowEvaluationContext = (moduleId: string): WorkflowEvaluationContext => ({
+  moduleId,
+  relatedRecordCache: new Map(),
+  tagsCache: new Map(),
+});
 
 const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
 
@@ -164,6 +172,18 @@ const fetchRelatedRecord = async (
   return normalized;
 };
 
+const getProcessLinkMapFromRecord = (record: Record<string, any> | null | undefined) => {
+  if (!record) return {};
+  const recurrenceInfo = record?.recurrence_info && typeof record.recurrence_info === 'object'
+    ? record.recurrence_info
+    : null;
+  return parseProcessLinkMap(
+    record?.process_links
+    || record?.process_link_map
+    || recurrenceInfo?.process_links
+  );
+};
+
 const resolveConditionFieldValue = async (
   fieldKey: string,
   record: Record<string, any> | null | undefined,
@@ -180,6 +200,34 @@ const resolveConditionFieldValue = async (
     const recordId = String(record?.id || '').trim();
     if (!recordId) return [];
     return fetchRecordTags(moduleId, recordId, context);
+  }
+
+  const processLinkedMeta = parseProcessLinkedFieldKey(fieldKey);
+  if (processLinkedMeta) {
+    const processLinks = getProcessLinkMapFromRecord(record);
+    const linkedRecordId = String(processLinks?.[processLinkedMeta.moduleId] || '').trim();
+    if (!linkedRecordId) {
+      return processLinkedMeta.targetFieldKey === 'tags' ? [] : null;
+    }
+
+    const linkedRecord = await fetchRelatedRecord(
+      processLinkedMeta.moduleId,
+      linkedRecordId,
+      context
+    );
+    if (!linkedRecord) {
+      return processLinkedMeta.targetFieldKey === 'tags' ? [] : null;
+    }
+
+    if (processLinkedMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+      return buildResolvedAssigneeCombo(linkedRecord);
+    }
+
+    if (processLinkedMeta.targetFieldKey === 'tags') {
+      return fetchRecordTags(processLinkedMeta.moduleId, linkedRecordId, context);
+    }
+
+    return linkedRecord?.[processLinkedMeta.targetFieldKey];
   }
 
   const relatedFieldMeta = parseWorkflowRelatedFieldKey(fieldKey);
@@ -355,6 +403,28 @@ const evaluateResolvedCondition = (
   }
 };
 
+export const evaluateWorkflowCondition = async ({
+  condition,
+  currentRecord,
+  previousRecord = null,
+  moduleId,
+}: {
+  condition: WorkflowCondition;
+  currentRecord: Record<string, any>;
+  previousRecord?: Record<string, any> | null | undefined;
+  moduleId: string;
+}) => {
+  const context = createWorkflowEvaluationContext(moduleId);
+
+  return evaluateCondition(
+    condition,
+    currentRecord,
+    previousRecord,
+    moduleId,
+    context
+  );
+};
+
 const evaluateCondition = async (
   condition: WorkflowCondition,
   currentRecord: Record<string, any>,
@@ -373,19 +443,22 @@ const evaluateCondition = async (
   return evaluateResolvedCondition(condition, currentValue, previousValue);
 };
 
-const evaluateWorkflow = async (
-  workflow: WorkflowRecord,
-  currentRecord: Record<string, any>,
-  previousRecord: Record<string, any> | null | undefined,
-  moduleId: string
-) => {
-  const all = Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [];
-  const any = Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [];
-  const context: WorkflowEvaluationContext = {
-    moduleId,
-    relatedRecordCache: new Map(),
-    tagsCache: new Map(),
-  };
+export const evaluateWorkflowConditions = async ({
+  conditionsAll = [],
+  conditionsAny = [],
+  currentRecord,
+  previousRecord = null,
+  moduleId,
+}: {
+  conditionsAll?: WorkflowCondition[] | null;
+  conditionsAny?: WorkflowCondition[] | null;
+  currentRecord: Record<string, any>;
+  previousRecord?: Record<string, any> | null | undefined;
+  moduleId: string;
+}) => {
+  const all = Array.isArray(conditionsAll) ? conditionsAll : [];
+  const any = Array.isArray(conditionsAny) ? conditionsAny : [];
+  const context = createWorkflowEvaluationContext(moduleId);
 
   for (const condition of all) {
     const passed = await evaluateCondition(
@@ -412,6 +485,36 @@ const evaluateWorkflow = async (
   }
 
   return false;
+};
+
+export const resolveWorkflowFieldValue = async ({
+  fieldKey,
+  currentRecord,
+  moduleId,
+  context,
+}: {
+  fieldKey: string;
+  currentRecord: Record<string, any> | null | undefined;
+  moduleId: string;
+  context?: WorkflowEvaluationContext;
+}) => {
+  const resolvedContext = context || createWorkflowEvaluationContext(moduleId);
+  return resolveConditionFieldValue(fieldKey, currentRecord, moduleId, resolvedContext);
+};
+
+const evaluateWorkflow = async (
+  workflow: WorkflowRecord,
+  currentRecord: Record<string, any>,
+  previousRecord: Record<string, any> | null | undefined,
+  moduleId: string
+) => {
+  return evaluateWorkflowConditions({
+    conditionsAll: workflow.conditions_all || [],
+    conditionsAny: workflow.conditions_any || [],
+    currentRecord,
+    previousRecord,
+    moduleId,
+  });
 };
 
 const resolveSmsRequestUrl = (url: string) => {
@@ -538,6 +641,119 @@ const sendSms = async (to: string[], text: string) => {
   }
 };
 
+type CommunicationChannel = 'sms' | 'email' | 'bale';
+
+const parseCommunicationRecipientToken = (value: any) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(user|role)[:_](.+)$/i);
+  if (!match) return null;
+  const kind = String(match[1] || '').toLowerCase();
+  const id = String(match[2] || '').trim();
+  if (!id || (kind !== 'user' && kind !== 'role')) return null;
+  return { kind: kind as 'user' | 'role', id };
+};
+
+const resolveCommunicationValuesFromFields = async ({
+  currentRecord,
+  moduleId,
+  recipientFields,
+  channel,
+}: {
+  currentRecord: Record<string, any>;
+  moduleId: string;
+  recipientFields: any[];
+  channel: CommunicationChannel;
+}) => {
+  const directValues: string[] = [];
+  const userIds = new Set<string>();
+  const roleIds = new Set<string>();
+  const context: WorkflowEvaluationContext = {
+    moduleId,
+    relatedRecordCache: new Map(),
+    tagsCache: new Map(),
+  };
+
+  for (const fieldKey of asArray(recipientFields)) {
+    const rawValue = await resolveConditionFieldValue(
+      String(fieldKey || ''),
+      currentRecord,
+      moduleId,
+      context
+    );
+    asArray(rawValue).forEach((entry) => {
+      const token = parseCommunicationRecipientToken(entry);
+      if (token?.kind === 'user') {
+        userIds.add(token.id);
+        return;
+      }
+      if (token?.kind === 'role') {
+        roleIds.add(token.id);
+        return;
+      }
+      const normalized = String(entry || '').trim();
+      if (normalized) directValues.push(normalized);
+    });
+  }
+
+  const profileRows: Array<Record<string, any>> = [];
+  if (userIds.size > 0) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, role_id, mobile_1, email, bale_chat_id')
+      .in('id', Array.from(userIds));
+    if (error) throw error;
+    profileRows.push(...((data || []) as Array<Record<string, any>>));
+  }
+  if (roleIds.size > 0) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, role_id, mobile_1, email, bale_chat_id')
+      .in('role_id', Array.from(roleIds));
+    if (error) throw error;
+    profileRows.push(...((data || []) as Array<Record<string, any>>));
+  }
+
+  const resolvedValues = (() => {
+    if (channel === 'sms') {
+      return [
+        ...directValues.map((value) => normalizePhone(value)).filter(Boolean),
+        ...profileRows.map((row) => normalizePhone(row?.mobile_1)).filter(Boolean),
+      ];
+    }
+    if (channel === 'email') {
+      return [
+        ...directValues.map((value) => String(value || '').trim()).filter(Boolean),
+        ...profileRows.map((row) => String(row?.email || '').trim()).filter(Boolean),
+      ];
+    }
+    return [
+      ...directValues.map((value) => String(value || '').trim()).filter(Boolean),
+      ...profileRows.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean),
+    ];
+  })();
+
+  return Array.from(new Set(resolvedValues));
+};
+
+const resolveConfiguredActionValue = async (
+  moduleId: string,
+  config: Record<string, any>,
+  currentRecord: Record<string, any>
+) => {
+  const valueMode = String(config?.value_mode || 'static');
+  if (valueMode === 'from_source' || valueMode === 'from_related') {
+    const sourceField = String(config?.source_field || '').trim();
+    if (!sourceField) return null;
+    const context: WorkflowEvaluationContext = {
+      moduleId,
+      relatedRecordCache: new Map(),
+      tagsCache: new Map(),
+    };
+    return resolveConditionFieldValue(sourceField, currentRecord, moduleId, context);
+  }
+  return config?.value ?? null;
+};
+
 const getCurrentAuthUser = async () => {
   const { data } = await supabase.auth.getUser();
   return data?.user || null;
@@ -583,7 +799,7 @@ const mapTemplateStagesToDraft = (templateId: string, stages: any[]) =>
     template_stage_id: stage?.id || null,
   }));
 
-const executeAction = async (
+export const executeWorkflowAction = async (
   action: WorkflowAction,
   moduleId: string,
   currentRecord: Record<string, any>
@@ -593,9 +809,12 @@ const executeAction = async (
   if (action.type === 'send_sms') {
     const messageText = renderTemplate(String(config.message || ''), currentRecord).trim();
     if (!messageText) return;
-    const recipientsFromFields = asArray(config.recipient_fields)
-      .map((fieldKey) => normalizePhone(currentRecord?.[String(fieldKey)]))
-      .filter(Boolean);
+    const recipientsFromFields = await resolveCommunicationValuesFromFields({
+      currentRecord,
+      moduleId,
+      recipientFields: asArray(config.recipient_fields),
+      channel: 'sms',
+    });
     const recipientsManual = asArray(config.manual_numbers)
       .map((phone) => normalizePhone(phone))
       .filter(Boolean);
@@ -627,28 +846,79 @@ const executeAction = async (
     return;
   }
 
+  if (action.type === 'send_bale_bot') {
+    const messageText = renderTemplate(String(config.message || ''), currentRecord).trim();
+    if (!messageText) return;
+    const titleText = renderTemplate(String(config.title || ''), currentRecord).trim();
+    const recipientsFromFields = await resolveCommunicationValuesFromFields({
+      currentRecord,
+      moduleId,
+      recipientFields: asArray(config.recipient_fields),
+      channel: 'bale',
+    });
+    const recipientsManual = asArray(config.manual_chat_ids)
+      .map((chatId) => String(chatId || '').trim())
+      .filter(Boolean);
+    const fallbackRecipients =
+      recipientsFromFields.length > 0 || recipientsManual.length > 0
+        ? []
+        : [String(currentRecord?.bale_chat_id || '').trim()].filter(Boolean);
+    const recipients = Array.from(
+      new Set([...recipientsFromFields, ...recipientsManual, ...fallbackRecipients])
+    ).filter(Boolean);
+    if (recipients.length === 0) return;
+
+    for (const chatId of recipients) {
+      await sendBotMessageViaGateway({
+        channel: 'bale',
+        chatId,
+        text: messageText,
+        title: titleText || undefined,
+        moduleId,
+        recordId: currentRecord?.id ? String(currentRecord.id) : undefined,
+        customerId: moduleId === 'customers' && currentRecord?.id ? String(currentRecord.id) : undefined,
+      });
+    }
+    return;
+  }
+
   if (action.type === 'update_record') {
     const fieldKey = String(config.field || '').trim();
     if (!fieldKey || !currentRecord?.id) return;
-    const nextValue = config.value ?? null;
-    const patch = { [fieldKey]: nextValue, updated_at: new Date().toISOString() } as Record<string, any>;
+    const nextValue = await resolveConfiguredActionValue(moduleId, config, currentRecord);
+    const processLinkedMeta = parseProcessLinkedFieldKey(fieldKey);
+    const patchFieldKey = processLinkedMeta?.targetFieldKey || fieldKey;
+    const processLinks = getProcessLinkMapFromRecord(currentRecord);
+    const targetModuleId = processLinkedMeta?.moduleId || moduleId;
+    const targetRecordId = processLinkedMeta
+      ? String(processLinks?.[processLinkedMeta.moduleId] || '').trim()
+      : String(currentRecord.id || '').trim();
+    if (!targetRecordId) return;
+
+    const patch = { [patchFieldKey]: nextValue, updated_at: new Date().toISOString() } as Record<string, any>;
     const { error } = await supabase
-      .from(getModuleTable(moduleId))
+      .from(getModuleTable(targetModuleId))
       .update(patch)
-      .eq('id', currentRecord.id);
+      .eq('id', targetRecordId);
     if (error) throw error;
     currentRecord[fieldKey] = nextValue;
+    currentRecord[patchFieldKey] = nextValue;
     return;
   }
 
   if (action.type === 'create_related_record') {
     const targetModuleId = String(config.target_module_id || '').trim();
     const relationFieldKey = String(config.relation_field_key || '').trim();
-    if (!targetModuleId || !relationFieldKey || !currentRecord?.id) return;
+    const sourceModuleId = String(config.source_module_id || '').trim() || moduleId;
+    const processLinks = getProcessLinkMapFromRecord(currentRecord);
+    const sourceRecordId = sourceModuleId === moduleId
+      ? String(currentRecord?.id || '').trim()
+      : String(processLinks?.[sourceModuleId] || '').trim();
+    if (!targetModuleId || !relationFieldKey || !sourceRecordId) return;
 
     const user = await getCurrentAuthUser();
     const payload: Record<string, any> = {
-      [relationFieldKey]: currentRecord.id,
+      [relationFieldKey]: sourceRecordId,
     };
 
     const orgId = await resolveWorkflowOrgId(currentRecord);
@@ -659,16 +929,23 @@ const executeAction = async (
     }
 
     const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
-    mappings.forEach((mapping: any) => {
+    const mappingContext: WorkflowEvaluationContext = {
+      moduleId,
+      relatedRecordCache: new Map(),
+      tagsCache: new Map(),
+    };
+    for (const mapping of mappings) {
       const targetField = String(mapping?.field || '').trim();
-      if (!targetField) return;
-      if (mapping?.mode === 'from_source') {
+      if (!targetField) continue;
+      if (mapping?.mode === 'from_source' || mapping?.mode === 'from_related') {
         const sourceField = String(mapping?.source_field || '').trim();
-        payload[targetField] = sourceField ? currentRecord?.[sourceField] ?? null : null;
-        return;
+        payload[targetField] = sourceField
+          ? await resolveConditionFieldValue(sourceField, currentRecord, moduleId, mappingContext)
+          : null;
+        continue;
       }
       payload[targetField] = mapping?.value ?? null;
-    });
+    }
 
     const { error } = await supabase.from(getModuleTable(targetModuleId)).insert(payload);
     if (error) throw error;
@@ -805,7 +1082,7 @@ export const runWorkflowsForEvent = async ({
       const actionErrors: string[] = [];
       for (const action of actions) {
         try {
-          await executeAction(action as WorkflowAction, moduleId, currentRecord);
+          await executeWorkflowAction(action as WorkflowAction, moduleId, currentRecord);
         } catch (actionErr) {
           actionErrors.push(
             String((actionErr as any)?.message || (action as any)?.type || 'workflow action failed')

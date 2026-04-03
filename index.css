@@ -69,6 +69,44 @@
   scrollbar-gutter: stable;
 }
 
+.app-main-sider .sidebar-menu-label,
+.app-main-sider .sidebar-menu-link {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-main-sider .sidebar-menu-link:hover,
+.app-main-sider .sidebar-menu-link:focus-visible {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-main-sider .sidebar-menu-link.is-disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.app-main-sider .sidebar-menu-link__text,
+.app-main-sider .sidebar-menu-label {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.app-main-sider-submenu-popup {
+  direction: rtl;
+  z-index: 1200 !important;
+}
+
+.app-main-sider-submenu-popup .ant-menu {
+  direction: rtl;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
 /* Ant body lock compensation can create white gutters on modal open. */
 body.ant-scrolling-effect {
   width: 100% !important;

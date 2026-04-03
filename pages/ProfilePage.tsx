@@ -24,6 +24,7 @@ import { fetchCurrentUserRoleContext } from '../utils/permissions';
 import { fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
 import { SOFTWARE_ROLE_OPTIONS, getSoftwareRoleLabel } from '../utils/softwareRoles';
 import PhoneActionsPopover from '../components/PhoneActionsPopover';
+import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 
 const ProfilePage: React.FC = () => {
   const { id } = useParams();
@@ -303,12 +304,19 @@ const ProfilePage: React.FC = () => {
     const handleAvatarUpload = async (file: File) => {
         try {
             const fileName = `avatar-${Date.now()}.${file.name.split('.').pop()}`;
-            const { error } = await supabase.storage.from('images').upload(fileName, file);
-            if (error) throw error;
+            await uploadFileWithProgress({
+                client: supabase,
+                bucket: 'images',
+                path: fileName,
+                file,
+                label: file.name || 'آواتار',
+                detail: 'تصویر پروفایل',
+            });
             const { data } = supabase.storage.from('images').getPublicUrl(fileName);
             setAvatarUrl(data.publicUrl);
             return false;
-        } catch {
+        } catch (error) {
+            if (isUploadCanceledError(error)) return false;
             message.error('خطا در آپلود عکس');
             return false;
         }

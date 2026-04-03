@@ -41,8 +41,6 @@ const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
-const MOBILE_PRINT_UA_PATTERN = /Android|iPhone|iPad|iPod|Mobile/i;
-
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -257,6 +255,34 @@ const hasMeaningfulCellValue = (cell: Element | null) => {
     .replace(/\s+/g, ' ')
     .trim();
   return Boolean(text && text !== '-' && text !== '---');
+};
+
+const applyHiddenColumnIndexes = (table: HTMLTableElement, indexesToHide: number[]) => {
+  if (!indexesToHide.length) return;
+  const hiddenSet = new Set(indexesToHide);
+
+  Array.from(table.rows || []).forEach((row) => {
+    let virtualColumnIndex = 0;
+    Array.from(row.cells || []).forEach((cell) => {
+      const originalColSpan = Math.max(1, Number(cell.colSpan || 1));
+      let visibleSpan = 0;
+      for (let offset = 0; offset < originalColSpan; offset += 1) {
+        if (!hiddenSet.has(virtualColumnIndex + offset)) {
+          visibleSpan += 1;
+        }
+      }
+      virtualColumnIndex += originalColSpan;
+
+      if (visibleSpan <= 0) {
+        cell.remove();
+        return;
+      }
+
+      if (visibleSpan !== originalColSpan) {
+        cell.colSpan = visibleSpan;
+      }
+    });
+  });
 };
 const getCompactPrintColumns = (columns: any[] = []) => {
   const filtered = columns.filter((column) => {
@@ -497,130 +523,6 @@ export const usePrintManager = ({
     setIsPrintModalOpen(false);
   }, []);
 
-  const printUsingIsolatedFrame = useCallback(async (pageSize: string, viewportPx?: { width: number; height: number }) => {
-    if (typeof document === 'undefined' || typeof window === 'undefined') return false;
-    const printRoot = document.getElementById('print-root');
-    const printHtml = String(printRoot?.innerHTML || '').trim();
-    if (!printHtml) return false;
-
-    const frameWidth = Math.max(240, Math.round(Number(viewportPx?.width || 0) || 0));
-    const frameHeight = Math.max(320, Math.round(Number(viewportPx?.height || 0) || 0));
-
-    const iframe = document.createElement('iframe');
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.style.position = 'fixed';
-    iframe.style.left = '-10000px';
-    iframe.style.top = '0';
-    iframe.style.width = `${frameWidth}px`;
-    iframe.style.height = `${frameHeight}px`;
-    iframe.style.border = '0';
-    iframe.style.opacity = '0';
-    iframe.style.visibility = 'hidden';
-    iframe.style.pointerEvents = 'none';
-    iframe.width = String(frameWidth);
-    iframe.height = String(frameHeight);
-
-    const headMarkup = Array.from(document.head.querySelectorAll('style, link[rel="stylesheet"]'))
-      .map((node) => node.outerHTML)
-      .join('\n');
-
-    document.body.appendChild(iframe);
-
-    const cleanup = () => {
-      window.setTimeout(() => {
-        iframe.remove();
-      }, 400);
-    };
-
-    try {
-      const frameDoc = iframe.contentDocument;
-      const frameWindow = iframe.contentWindow;
-      if (!frameDoc || !frameWindow) {
-        cleanup();
-        return false;
-      }
-
-      frameDoc.open();
-      frameDoc.write(`<!doctype html>
-<html lang="fa" dir="rtl">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=${frameWidth}, initial-scale=1, maximum-scale=1" />
-    ${headMarkup}
-    <style media="print">@page { size: ${pageSize}; margin: 0; }</style>
-    <style>
-      html, body {
-        margin: 0 !important;
-        padding: 0 !important;
-        width: ${frameWidth}px !important;
-        min-width: ${frameWidth}px !important;
-        background: #fff !important;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-      }
-      body.print-mode #print-root {
-        display: block !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        width: ${frameWidth}px !important;
-        min-width: ${frameWidth}px !important;
-        height: auto !important;
-        overflow: visible !important;
-        background: #fff !important;
-      }
-      body.print-mode > *:not(#print-root) {
-        display: none !important;
-      }
-      #print-root {
-        display: block !important;
-      }
-    </style>
-  </head>
-  <body class="print-mode">
-    <div id="print-root">${printHtml}</div>
-  </body>
-</html>`);
-      frameDoc.close();
-
-      await new Promise<void>((resolve) => {
-        const finalize = () => {
-          cleanup();
-          resolve();
-        };
-
-        const trigger = () => {
-          try {
-            frameWindow.focus();
-            frameWindow.print();
-          } catch (error) {
-            console.error('Isolated print dialog failed to open', error);
-            finalize();
-            return;
-          }
-          window.setTimeout(finalize, 1600);
-        };
-
-        frameWindow.addEventListener('afterprint', finalize, { once: true });
-
-        const fontsReady = (frameDoc as any).fonts?.ready;
-        if (fontsReady && typeof fontsReady.then === 'function') {
-          fontsReady.finally(() => {
-            window.setTimeout(trigger, 120);
-          });
-          return;
-        }
-
-        window.setTimeout(trigger, 180);
-      });
-
-      return true;
-    } catch (error) {
-      console.error('Isolated print frame failed', error);
-      cleanup();
-      return false;
-    }
-  }, []);
-
   const handlePrint = useCallback(() => {
     if (!selectedTemplateId) return;
 
@@ -676,11 +578,6 @@ export const usePrintManager = ({
       : null;
     const currentPaperSize = currentTpl?.paperSize || (selectedTemplateId === 'product_label' ? 'A6' : 'A4');
     const currentOrientation = currentTpl?.orientation === 'landscape' ? 'landscape' : 'portrait';
-    const currentPaperMetrics = getPaperSizeMetrics(currentPaperSize, currentOrientation);
-    const printViewportPx = {
-      width: Math.ceil(mmToPx(currentPaperMetrics.widthMm)),
-      height: Math.ceil(mmToPx(currentPaperMetrics.heightMm)),
-    };
     const pageSize = currentTpl
       ? `${currentPaperSize} ${currentOrientation}`
       : selectedTemplateId === 'product_label'
@@ -732,20 +629,6 @@ export const usePrintManager = ({
 
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          const shouldUseIsolatedPrint =
-            MOBILE_PRINT_UA_PATTERN.test(window.navigator.userAgent || '') ||
-            window.innerWidth < 768;
-
-          if (shouldUseIsolatedPrint) {
-            void printUsingIsolatedFrame(pageSize, printViewportPx).finally(() => {
-              setPrintMode(false);
-              if (typeof document !== 'undefined') {
-                document.body.classList.remove('print-mode');
-              }
-            });
-            return;
-          }
-
           try {
             window.focus();
             window.print();
@@ -761,7 +644,7 @@ export const usePrintManager = ({
     };
 
     setTimeout(triggerPrint, 80);
-  }, [availableTemplates, printUsingIsolatedFrame, renderedPageCount, selectedStoredTemplate, selectedTemplateId]);
+  }, [availableTemplates, renderedPageCount, selectedStoredTemplate, selectedTemplateId]);
 
   useEffect(() => {
     if (printMode) return;
@@ -1032,12 +915,14 @@ export const usePrintManager = ({
         const productName = getInvoiceItemTitle(item);
         const quantity = toPersianNumber(String(item?.quantity || 0));
         const unitPrice = formatPersianPrice(Number(item?.unit_price || 0));
+        const vat = item?.vat === null || item?.vat === undefined || item?.vat === '' ? '' : getDisplayValue(item.vat);
         const total = formatPersianPrice(Number(item?.quantity || 0) * Number(item?.unit_price || 0));
         return `
           <tr>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">${productName}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${quantity}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${unitPrice}</td>
+            <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${vat || '-'}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${total}</td>
           </tr>
         `;
@@ -1051,6 +936,7 @@ export const usePrintManager = ({
             <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">کالا</th>
             <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">تعداد</th>
             <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">قیمت واحد</th>
+            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">ارزش افزوده</th>
             <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">جمع</th>
           </tr>
         </thead>
@@ -1229,6 +1115,9 @@ export const usePrintManager = ({
           templateRows.find((row) => Array.from(row.cells || []).length > 0) ||
           null;
         if (!templateRow) return;
+        const templateRowIndex = templateRows.indexOf(templateRow);
+        const staticRowsBefore = templateRows.slice(0, templateRowIndex).map((row) => row.outerHTML).join('');
+        const staticRowsAfter = templateRows.slice(templateRowIndex + 1).map((row) => row.outerHTML).join('');
 
         const rowTemplate = templateRow.outerHTML;
         const templateCells = Array.from(templateRow.cells || []);
@@ -1264,7 +1153,7 @@ export const usePrintManager = ({
           );
           tbody.innerHTML = `<tr><td colspan="${colspan}" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">موردی ثبت نشده است.</td></tr>`;
         } else {
-          tbody.innerHTML = rows
+          const renderedRows = rows
             .map((row: any, rowIndex: number) =>
               rowTemplate.replace(/{{\s*row\.([a-zA-Z0-9_]+)\s*}}/g, (_match, key: string) => {
                 if (key === '__row_index__') {
@@ -1304,6 +1193,7 @@ export const usePrintManager = ({
               })
             )
             .join('');
+          tbody.innerHTML = `${staticRowsBefore}${renderedRows}${staticRowsAfter}`;
         }
 
         const autoHiddenIndexes: number[] = [];
@@ -1324,13 +1214,7 @@ export const usePrintManager = ({
 
         const allHiddenIndexes = Array.from(new Set([...hiddenColumnIndexes, ...autoHiddenIndexes]));
         if (allHiddenIndexes.length > 0) {
-          const indexes = [...allHiddenIndexes].sort((a, b) => b - a);
-          Array.from(table.rows || []).forEach((row) => {
-            const cells = Array.from(row.cells || []);
-            indexes.forEach((index) => {
-              if (index < cells.length) cells[index].remove();
-            });
-          });
+          applyHiddenColumnIndexes(table, allHiddenIndexes);
         }
 
         const summaryMap = buildBlockSummaryMap(blockId, rows);
@@ -1468,13 +1352,25 @@ export const usePrintManager = ({
       }
       if (path === 'invoice.items_table') return buildInvoiceItemsTable(data?.invoiceItems || []);
       if (path.startsWith('block.')) return buildBlockTableHtml(path.replace(/^block\./, ''));
-      if (path === 'record.total_invoice_amount') return formatPersianPrice(invoiceSummary.total);
-      if (path === 'record.total_received_amount') return formatPersianPrice(invoiceSummary.received);
-      if (path === 'record.remaining_balance') return formatPersianPrice(invoiceSummary.remaining);
+      if (path === 'record.total_invoice_amount') {
+        const rawTotal = data?.total_invoice_amount;
+        return rawTotal === null || rawTotal === undefined || rawTotal === '' ? '' : formatPersianPrice(rawTotal);
+      }
+      if (path === 'record.total_received_amount') {
+        const rawReceived = data?.total_received_amount;
+        return rawReceived === null || rawReceived === undefined || rawReceived === '' ? formatPersianPrice(invoiceSummary.received) : formatPersianPrice(rawReceived);
+      }
+      if (path === 'record.remaining_balance') {
+        const rawRemaining = data?.remaining_balance;
+        return rawRemaining === null || rawRemaining === undefined || rawRemaining === '' ? formatPersianPrice(invoiceSummary.remaining) : formatPersianPrice(rawRemaining);
+      }
       if (path === 'record.package_gross_total') return formatPersianPrice(packageSummary.gross);
       if (path === 'record.package_discount_total') return formatPersianPrice(packageSummary.discount);
       if (path === 'record.package_final_total') return formatPersianPrice(packageSummary.final);
-      if (path === 'record.total_invoice_amount_words') return `${toPersianWords(invoiceSummary.total)} ریال`;
+      if (path === 'record.total_invoice_amount_words') {
+        const rawWords = String(data?.total_invoice_amount_words || '').trim();
+        return rawWords ? localizePlainText(rawWords) : '';
+      }
       if (path === 'responsible.name') {
         return localizePlainText(data?.assignee_name || data?.responsible_name || data?.created_by_name || '');
       }

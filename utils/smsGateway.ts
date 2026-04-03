@@ -17,6 +17,19 @@ export type SmsSettings = {
   is_flash?: boolean;
 };
 
+export type SmsProviderResult = {
+  recipient: string;
+  raw?: string;
+  result?: string;
+};
+
+export type SmsGatewaySendResult = {
+  success?: boolean;
+  sent?: number;
+  provider_results?: SmsProviderResult[];
+  build?: string;
+};
+
 type SendSmsViaGatewayArgs = {
   to: string[];
   text: string;
@@ -65,6 +78,22 @@ const getErrorMessage = (value: any, fallback: string) => {
   return String(value.message || value.error || fallback);
 };
 
+const decodeSoapScalar = (raw: string) => {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+
+  const xmlMatch = text.match(/<[^>]+>([^<]*)<\/[^>]+>\s*$/s);
+  if (xmlMatch && typeof xmlMatch[1] === 'string') {
+    const candidate = xmlMatch[1].trim();
+    if (candidate) return candidate;
+  }
+
+  const numericMatch = text.match(/>(-?\d+(?:\.\d+)?)</);
+  if (numericMatch?.[1]) return numericMatch[1];
+
+  return text;
+};
+
 const getActiveSmsSettings = async (): Promise<SmsSettings> => {
   const data = await getActiveChannelSettings('sms');
   if (!data) throw new Error('تنظیمات سامانه پیامک فعال نیست.');
@@ -72,7 +101,11 @@ const getActiveSmsSettings = async (): Promise<SmsSettings> => {
   return (data.settings || {}) as SmsSettings;
 };
 
-const sendSmsDirect = async (to: string[], text: string, settings: SmsSettings) => {
+const sendSmsDirect = async (
+  to: string[],
+  text: string,
+  settings: SmsSettings
+): Promise<SmsGatewaySendResult> => {
   const mode = toMode(settings.mode);
   const baseUrl = normalizeSmsUrl(
     String(
@@ -102,6 +135,8 @@ const sendSmsDirect = async (to: string[], text: string, settings: SmsSettings) 
   if (recipients.length === 0) {
     throw new Error('گیرنده پیامک مشخص نشده است.');
   }
+
+  const providerResults: SmsProviderResult[] = [];
 
   for (const recipient of recipients) {
     let response: Response;
@@ -147,10 +182,26 @@ const sendSmsDirect = async (to: string[], text: string, settings: SmsSettings) 
     if (!response.ok) {
       throw new Error(raw || `HTTP ${response.status}`);
     }
+
+    providerResults.push({
+      recipient,
+      raw,
+      result: useSoapRequest ? decodeSoapScalar(raw) : '',
+    });
   }
+
+  return {
+    success: true,
+    sent: recipients.length,
+    provider_results: providerResults,
+  };
 };
 
-const invokeSmsFunction = async (to: string[], text: string, overrideSettings?: SmsSettings) => {
+const invokeSmsFunction = async (
+  to: string[],
+  text: string,
+  overrideSettings?: SmsSettings
+): Promise<SmsGatewaySendResult> => {
   const payload: Record<string, any> = { action: 'send', to, text };
   if (overrideSettings && Object.keys(overrideSettings).length > 0) {
     payload.overrideSettings = overrideSettings;
@@ -161,6 +212,7 @@ const invokeSmsFunction = async (to: string[], text: string, overrideSettings?: 
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'ارسال پیامک ناموفق بود.'));
   }
+  return (data || { success: true }) as SmsGatewaySendResult;
 };
 
 export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) => {
@@ -186,7 +238,7 @@ export const sendSmsViaGateway = async ({
   text,
   overrideSettings,
   allowDirectFallback = true,
-}: SendSmsViaGatewayArgs) => {
+}: SendSmsViaGatewayArgs): Promise<SmsGatewaySendResult> => {
   const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
   const messageText = String(text || '').trim();
 
@@ -198,8 +250,7 @@ export const sendSmsViaGateway = async ({
   }
 
   try {
-    await invokeSmsFunction(recipients, messageText, overrideSettings);
-    return;
+    return await invokeSmsFunction(recipients, messageText, overrideSettings);
   } catch (edgeError) {
     if (!allowDirectFallback) throw edgeError;
   }
@@ -208,5 +259,5 @@ export const sendSmsViaGateway = async ({
     ? overrideSettings
     : await getActiveSmsSettings();
 
-  await sendSmsDirect(recipients, messageText, smsSettings);
+  return await sendSmsDirect(recipients, messageText, smsSettings);
 };

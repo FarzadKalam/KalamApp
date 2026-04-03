@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { supabase } from '../supabaseClient';
+import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../supabaseClient';
 
 const fileStorageUrl = String(import.meta.env.VITE_FILE_STORAGE_URL || '').trim();
 const fileStorageAnonKey = String(import.meta.env.VITE_FILE_STORAGE_ANON_KEY || '').trim();
@@ -7,8 +7,9 @@ const fileStorageAnonKey = String(import.meta.env.VITE_FILE_STORAGE_ANON_KEY || 
 const hasDedicatedStorage = Boolean(fileStorageUrl && fileStorageAnonKey);
 
 export const FILE_STORAGE_BUCKET = String(import.meta.env.VITE_FILE_STORAGE_BUCKET || 'images').trim() || 'images';
+export const FILE_STORAGE_URL = hasDedicatedStorage ? fileStorageUrl : SUPABASE_URL;
+export const FILE_STORAGE_ANON_KEY = hasDedicatedStorage ? fileStorageAnonKey : SUPABASE_ANON_KEY;
 
 export const fileStorageClient = hasDedicatedStorage
   ? createClient<any>(fileStorageUrl, fileStorageAnonKey)
   : supabase;
-

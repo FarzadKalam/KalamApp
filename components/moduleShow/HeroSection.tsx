@@ -20,6 +20,7 @@ import RecordFilesManager from '../RecordFilesManager';
 import TagInput from '../TagInput';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { buildResolvedAssigneeCombo } from '../../utils/assigneeValue';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
 interface HeroSectionProps {
   data: any;
@@ -79,6 +80,15 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   const shouldOpenGalleryFromQuery = queryParams.get('gallery') === '1';
   const highlightFileId = queryParams.get('fileId');
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const displayRecordTitle = useMemo(
+    () => toPersianNumber(String(recordTitle || data.name || data.system_code || '-')),
+    [data.name, data.system_code, recordTitle]
+  );
+  const displaySystemCode = useMemo(() => {
+    const raw = data.system_code || data.custom_code;
+    if (!raw) return null;
+    return String(raw);
+  }, [data.custom_code, data.system_code]);
 
   useEffect(() => {
     if (canOpenFilesGallery && shouldOpenGalleryFromQuery) {
@@ -168,10 +178,10 @@ const HeroSection: React.FC<HeroSectionProps> = ({
           <div>
             <div className="flex flex-wrap items-start justify-between gap-4 mb-4 mt-2">
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-2xl md:text-3xl font-black m-0 text-gray-800 dark:text-white">{recordTitle || data.name || data.system_code || '-'}</h1>
-                {(data.system_code || data.custom_code) && (
+                <h1 className="text-2xl md:text-3xl font-black m-0 text-gray-800 dark:text-white">{displayRecordTitle}</h1>
+                {displaySystemCode && (
                   <Tag className="font-mono dir-ltr bg-gray-100 dark:bg-white/10 border-none text-gray-500 px-2 py-1">
-                    {data.system_code || data.custom_code}
+                    {displaySystemCode}
                   </Tag>
                 )}
               </div>

@@ -8,6 +8,7 @@ export type WorkflowActionType =
   | 'send_note'
   | 'send_sms'
   | 'send_email'
+  | 'send_bale_bot'
   | 'update_record'
   | 'create_related_record'
   | 'copy_process_template'
@@ -83,6 +84,7 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال یادداشت', value: 'send_note' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال ایمیل', value: 'send_email' },
+  { label: 'ارسال در بله', value: 'send_bale_bot' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ایجاد رکورد مرتبط', value: 'create_related_record' },
   { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },

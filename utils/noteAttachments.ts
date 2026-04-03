@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from './storageClient';
 import type { NoteAttachment } from './noteContent';
+import { uploadFileWithProgress } from './uploadFileWithProgress';
 
 const normalizeFileName = (file: File) => {
   const ext = String(file.name.split('.').pop() || '').trim();
@@ -30,8 +31,14 @@ export const uploadNoteAttachments = async (
       ? `record_files/${normalizedModuleId}/${normalizedRecordId}/${storedName}`
       : `record_files/notes/unlinked/${storedName}`;
 
-    const { error: uploadError } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
-    if (uploadError) throw uploadError;
+    await uploadFileWithProgress({
+      client: fileStorageClient,
+      bucket: FILE_STORAGE_BUCKET,
+      path: filePath,
+      file,
+      label: file.name || 'پیوست',
+      detail: 'پیوست یادداشت',
+    });
 
     const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
     const fileUrl = String(data?.publicUrl || '').trim();

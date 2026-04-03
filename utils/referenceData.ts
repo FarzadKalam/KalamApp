@@ -1,6 +1,14 @@
 type DynamicOptionRow = { label: string; value: string };
 type AssigneeDirectory = {
-  users: Array<{ id: string; full_name?: string | null; email?: string | null; mobile_1?: string | null; avatar_url?: string | null; display_name: string }>;
+  users: Array<{
+    id: string;
+    full_name?: string | null;
+    email?: string | null;
+    mobile_1?: string | null;
+    avatar_url?: string | null;
+    role_id?: string | null;
+    display_name: string;
+  }>;
   roles: Array<{ id: string; title: string }>;
 };
 
@@ -18,6 +26,8 @@ const assigneeDirectoryCache: {
 
 const dynamicOptionsCache = new Map<string, { data: DynamicOptionRow[]; expiresAt: number }>();
 const dynamicOptionsPromiseCache = new Map<string, Promise<DynamicOptionRow[]>>();
+const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
+const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
 
 const formulaOptionsCache: {
   data: DynamicOptionRow[] | null;
@@ -42,6 +52,7 @@ const normalizeUsers = (rows: any[]) =>
   (rows || []).map((user: any) => ({
     ...user,
     id: String(user?.id || ''),
+    role_id: user?.role_id ? String(user.role_id) : null,
     display_name:
       String(user?.full_name || '').trim() ||
       String(user?.email || '').trim() ||
@@ -62,10 +73,70 @@ export const clearReferenceDataCache = () => {
 
   dynamicOptionsCache.clear();
   dynamicOptionsPromiseCache.clear();
+  recordTagsCache.clear();
+  recordTagsPromiseCache.clear();
 
   formulaOptionsCache.data = null;
   formulaOptionsCache.expiresAt = 0;
   formulaOptionsCache.promise = null;
+};
+
+const buildRecordTagsCacheKey = (moduleId: string, recordIds: string[]) =>
+  `${String(moduleId || '').trim()}::${recordIds.map((id) => String(id || '').trim()).filter(Boolean).sort().join(',')}`;
+
+export const fetchRecordTagsMap = async (
+  supabaseClient: any,
+  moduleId: string,
+  recordIds: string[],
+  options?: { force?: boolean }
+): Promise<Record<string, any[]>> => {
+  const uniqueRecordIds = Array.from(new Set((recordIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!moduleId || uniqueRecordIds.length === 0) {
+    return {};
+  }
+
+  const cacheKey = buildRecordTagsCacheKey(moduleId, uniqueRecordIds);
+  const now = Date.now();
+  const cached = recordTagsCache.get(cacheKey);
+  if (!options?.force && cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  if (!options?.force && recordTagsPromiseCache.has(cacheKey)) {
+    return recordTagsPromiseCache.get(cacheKey)!;
+  }
+
+  const pending = (async () => {
+    const { data } = await supabaseClient
+      .from('record_tags')
+      .select('record_id, tags(id, title, color)')
+      .in('record_id', uniqueRecordIds);
+
+    const normalized: Record<string, any[]> = {};
+    (data || []).forEach((item: any) => {
+      const recordId = String(item?.record_id || '').trim();
+      if (!recordId) return;
+      if (!normalized[recordId]) {
+        normalized[recordId] = [];
+      }
+      if (item?.tags) {
+        normalized[recordId].push(item.tags);
+      }
+    });
+
+    recordTagsCache.set(cacheKey, {
+      data: normalized,
+      expiresAt: Date.now() + REFERENCE_TTL_MS,
+    });
+    recordTagsPromiseCache.delete(cacheKey);
+    return normalized;
+  })().catch((error) => {
+    recordTagsPromiseCache.delete(cacheKey);
+    throw error;
+  });
+
+  recordTagsPromiseCache.set(cacheKey, pending);
+  return pending;
 };
 
 export const fetchAssigneeDirectory = async (
@@ -83,7 +154,7 @@ export const fetchAssigneeDirectory = async (
 
   assigneeDirectoryCache.promise = (async () => {
     const [{ data: users }, rolesResult] = await Promise.all([
-      supabaseClient.from('profiles').select('id, full_name, email, mobile_1, avatar_url'),
+      supabaseClient.from('profiles').select('id, full_name, email, mobile_1, avatar_url, role_id'),
       supabaseClient.from('org_roles').select('id, title').limit(400),
     ]);
 

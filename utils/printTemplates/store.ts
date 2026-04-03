@@ -199,28 +199,23 @@ const getInvoiceTemplateConfig = (moduleId: string) => {
   };
 };
 
-const buildInvoiceItemsSummaryFooter = () => `
-  <tfoot>
+const buildInvoiceItemsSummaryRow = () => `
     <tr>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.68); vertical-align:middle; text-align:center;">جمع کل</td>
-      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.38); vertical-align:top; text-align:center;">
+      <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.68); vertical-align:middle; text-align:center;">جمع کل</td>
+      <td colspan="5" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.38); vertical-align:middle; text-align:center;">
         <div style="${MULTILINE_PRINT_STYLE}">{{record.total_invoice_amount_words}}</div>
       </td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:900; background:rgba(var(--brand-500-rgb),0.08); text-align:center; vertical-align:middle;">{{record.total_invoice_amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
-      <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; background:#fff;"></td>
     </tr>
-  </tfoot>
 `;
 
-const buildInvoicePaymentsSummaryFooter = (paymentSummaryTitle: string, remainingSummaryTitle: string) => `
-  <tfoot>
+const buildInvoicePaymentsSummaryRow = (paymentSummaryTitle: string, remainingSummaryTitle: string) => `
     <tr>
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">${paymentSummaryTitle}</td>
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08); text-align:center;">{{record.total_received_amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-50-rgb),0.62);">${remainingSummaryTitle}</td>
       <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 5px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08); text-align:center;">{{record.remaining_balance}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
     </tr>
-  </tfoot>
 `;
 
 const readLocalStore = (): PrintTemplatesStore => {
@@ -306,11 +301,12 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   <thead>
     <tr style="background:rgba(var(--brand-500-rgb),0.12);">
       <th style="width:5%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
-      <th style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
-      <th style="width:9%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تعداد</th>
-      <th style="width:9%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
+      <th style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
+      <th style="width:8%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تعداد</th>
+      <th style="width:8%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
       <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">قیمت واحد</th>
       <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">تخفیف</th>
+      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ارزش افزوده</th>
       <th style="width:15%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">جمع ردیف</th>
     </tr>
   </thead>
@@ -325,10 +321,11 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.main_unit}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.unit_price}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.discount}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.vat}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.total_price}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
     </tr>
+    ${buildInvoiceItemsSummaryRow()}
   </tbody>
-  ${buildInvoiceItemsSummaryFooter()}
 </table>
 `;
   }
@@ -362,8 +359,8 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.cheque_status}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; word-break:break-word; overflow-wrap:anywhere; ${getLongTextPrintStyle(9.6)}">{{row.description}}</td>
     </tr>
+    ${buildInvoicePaymentsSummaryRow(paymentSummaryTitle, 'جمع باقیمانده')}
   </tbody>
-  ${buildInvoicePaymentsSummaryFooter(paymentSummaryTitle, 'جمع باقیمانده')}
 </table>
 `;
   }
@@ -1074,20 +1071,20 @@ export const buildDefaultTemplatesForModule = (
       isSystem: true,
       showHeader: true,
       showFooter: true,
-      headerHeight: 84,
-      footerHeight: 62,
-      pageMarginTop: DEFAULT_PAGE_MARGINS.top,
-      pageMarginRight: DEFAULT_PAGE_MARGINS.right,
-      pageMarginBottom: DEFAULT_PAGE_MARGINS.bottom,
-      pageMarginLeft: DEFAULT_PAGE_MARGINS.left,
+      headerHeight: 74,
+      footerHeight: 50,
+      pageMarginTop: 8,
+      pageMarginRight: 8,
+      pageMarginBottom: 8,
+      pageMarginLeft: 8,
       headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
       contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit;">
-  <table style="width:100%; border-collapse:collapse; font-size:12px; line-height:1.9;">
+  <table style="width:100%; border-collapse:collapse; font-size:11px; line-height:1.8;">
     <tbody>
       <tr>
-        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; background:rgba(var(--brand-50-rgb),0.18); vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
-          <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; background:rgba(var(--brand-50-rgb),0.18); vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:3px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
+          <table style="width:100%; border-collapse:collapse; font-size:10px;">
             <tbody>
               <tr>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نام</td>
@@ -1102,9 +1099,9 @@ export const buildDefaultTemplatesForModule = (
             </tbody>
           </table>
         </td>
-        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
-          <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:3px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
+          <table style="width:100%; border-collapse:collapse; font-size:10px;">
             <tbody>
               <tr>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نام</td>
@@ -1124,16 +1121,16 @@ export const buildDefaultTemplatesForModule = (
       </tr>
     </tbody>
   </table>
-  <div style="margin-top:8px;">${invoiceItemsBlock}</div>
-  <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
+  <div style="margin-top:6px;">${invoiceItemsBlock}</div>
+  <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
     <tbody>
       <tr>
-        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">توضیحات</div>
-          <div style="min-height:64px; ${getLongTextPrintStyle(12)}">{{record.description}}</div>
+        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">توضیحات</div>
+          <div style="min-height:52px; ${getLongTextPrintStyle(11)}">{{record.description}}</div>
         </td>
-        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
+        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
           ${paymentsBlock}
         </td>
       </tr>
@@ -1156,20 +1153,20 @@ export const buildDefaultTemplatesForModule = (
       isSystem: true,
       showHeader: true,
       showFooter: true,
-      headerHeight: 84,
-      footerHeight: 62,
-      pageMarginTop: DEFAULT_PAGE_MARGINS.top,
-      pageMarginRight: DEFAULT_PAGE_MARGINS.right,
-      pageMarginBottom: DEFAULT_PAGE_MARGINS.bottom,
-      pageMarginLeft: DEFAULT_PAGE_MARGINS.left,
+      headerHeight: 74,
+      footerHeight: 50,
+      pageMarginTop: 8,
+      pageMarginRight: 8,
+      pageMarginBottom: 8,
+      pageMarginLeft: 8,
       headerHtml: buildDefaultHeaderTemplateForModule(moduleId).trim(),
       contentHtml: `<div style="direction:rtl; color:#111827; font-family:inherit;">
-  <table style="width:100%; border-collapse:collapse; font-size:12px; line-height:1.9;">
+  <table style="width:100%; border-collapse:collapse; font-size:11px; line-height:1.8;">
     <tbody>
       <tr>
-        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; background:rgba(var(--brand-50-rgb),0.18);">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
-          <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top; background:rgba(var(--brand-50-rgb),0.18);">
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات ${companyPartyTitle}</div>
+          <table style="width:100%; border-collapse:collapse; font-size:10px;">
             <tbody>
               <tr>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نام</td>
@@ -1196,9 +1193,9 @@ export const buildDefaultTemplatesForModule = (
             </tbody>
           </table>
         </td>
-        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
-          <table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <td style="width:50%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">مشخصات ${counterpartyTitle}</div>
+          <table style="width:100%; border-collapse:collapse; font-size:10px;">
             <tbody>
               <tr>
                 <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:4px; background:rgba(var(--brand-50-rgb),0.32); font-weight:700;">نوع</td>
@@ -1234,16 +1231,16 @@ export const buildDefaultTemplatesForModule = (
       </tr>
     </tbody>
   </table>
-  <div style="margin-top:8px;">${invoiceItemsBlock}</div>
-  <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:12px;">
+  <div style="margin-top:6px;">${invoiceItemsBlock}</div>
+  <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:11px;">
     <tbody>
       <tr>
-        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">شرح / توضیحات</div>
-          <div style="min-height:64px; ${getLongTextPrintStyle(12)}">{{record.description}}</div>
+        <td style="width:54%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">شرح / توضیحات</div>
+          <div style="min-height:52px; ${getLongTextPrintStyle(11)}">{{record.description}}</div>
         </td>
-        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top;">
-          <div style="font-weight:800; margin-bottom:6px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
+        <td style="width:46%; border:1px solid var(--table-border-color, #d1d5db); padding:5px; vertical-align:top;">
+          <div style="font-weight:800; margin-bottom:4px; color:rgb(var(--brand-500-rgb));">${paymentsPanelTitle}</div>
           ${paymentsBlock}
         </td>
       </tr>

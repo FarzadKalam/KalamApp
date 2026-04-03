@@ -12,6 +12,10 @@ import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } f
 
 export const BRANDING_CACHE_KEY = "erp:branding-cache";
 
+const BRAND_TITLE_ATTRIBUTE = "data-brand-title";
+const BRAND_LOGO_ATTRIBUTE = "data-brand-logo";
+const BRAND_ICON_ATTRIBUTE = "data-brand-icon";
+
 type RuntimeBrandingResult = {
   branding: BrandingConfig;
   currency: CurrencyConfig;
@@ -50,6 +54,8 @@ const buildRuntimeBranding = (
     app_title: String(rawBranding?.app_title || companyFullName || tradeName || DEFAULT_BRANDING.appTitle),
     short_name: String(rawBranding?.short_name || tradeName || companyFullName || DEFAULT_BRANDING.shortName),
   });
+  branding.logoUrl = String(companyRow.logo_url || "").trim() || null;
+  branding.iconUrl = String(companyRow.icon_url || "").trim() || null;
 
   const currency = normalizeCurrencyConfig({
     code: String(companyRow.currency_code || "").trim().toUpperCase() as any,
@@ -67,21 +73,73 @@ export const readCachedBranding = (): BrandingConfig | null => {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
     const snapshot = parsed as Partial<BrandingConfig>;
-    return mergeBrandingConfig(DEFAULT_BRANDING, {
+    const branding = mergeBrandingConfig(DEFAULT_BRANDING, {
       brand_name: String(snapshot.brandName || DEFAULT_BRANDING.brandName),
       short_name: String(snapshot.shortName || DEFAULT_BRANDING.shortName),
       app_title: String(snapshot.appTitle || DEFAULT_BRANDING.appTitle),
       palette_key: String(snapshot.paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload["palette_key"],
     });
+    branding.logoUrl = String(snapshot.logoUrl || "").trim() || null;
+    branding.iconUrl = String(snapshot.iconUrl || "").trim() || null;
+    return branding;
   } catch {
     return null;
   }
 };
 
+const setRuntimeAttribute = (name: string, value?: string | null) => {
+  if (typeof document === "undefined") return;
+  if (value && value.trim()) {
+    document.documentElement.setAttribute(name, value.trim());
+    return;
+  }
+  document.documentElement.removeAttribute(name);
+};
+
+const upsertFaviconLink = () => {
+  if (typeof document === "undefined") return null;
+  const existing = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (existing) return existing;
+  const next = document.createElement("link");
+  next.rel = "icon";
+  document.head.appendChild(next);
+  return next;
+};
+
+const applyFavicon = (iconUrl?: string | null) => {
+  if (typeof document === "undefined") return;
+  const favicon = upsertFaviconLink();
+  if (!favicon) return;
+  if (iconUrl && iconUrl.trim()) {
+    favicon.href = iconUrl.trim();
+  } else {
+    favicon.removeAttribute("href");
+  }
+};
+
+export const readRuntimeBranding = (): BrandingConfig => {
+  const cached = readCachedBranding() || DEFAULT_BRANDING;
+  if (typeof document === "undefined") return cached;
+
+  const runtimeTitle = document.documentElement.getAttribute(BRAND_TITLE_ATTRIBUTE);
+  const runtimeLogo = document.documentElement.getAttribute(BRAND_LOGO_ATTRIBUTE);
+  const runtimeIcon = document.documentElement.getAttribute(BRAND_ICON_ATTRIBUTE);
+
+  return {
+    ...cached,
+    appTitle: runtimeTitle?.trim() || cached.appTitle,
+    logoUrl: runtimeLogo?.trim() || cached.logoUrl || null,
+    iconUrl: runtimeIcon?.trim() || cached.iconUrl || null,
+  };
+};
+
 export const applyBrandingRuntime = (branding: BrandingConfig) => {
   if (typeof window === "undefined") return;
   applyBrandCssVariables(branding);
-  document.documentElement.setAttribute("data-brand-title", branding.appTitle);
+  setRuntimeAttribute(BRAND_TITLE_ATTRIBUTE, branding.appTitle);
+  setRuntimeAttribute(BRAND_LOGO_ATTRIBUTE, branding.logoUrl);
+  setRuntimeAttribute(BRAND_ICON_ATTRIBUTE, branding.iconUrl);
+  applyFavicon(branding.iconUrl);
   window.localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify(branding));
 };
 

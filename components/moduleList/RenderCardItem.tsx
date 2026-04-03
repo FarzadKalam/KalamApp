@@ -4,7 +4,6 @@ import { AppstoreOutlined } from "@ant-design/icons";
 import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
 import { getRecordTitle } from "../../utils/recordTitle";
-import { getSafeOptionFallback } from "../../utils/optionHelpers";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { getResolvedAssigneeId } from "../../utils/assigneeValue";
 import { formatRecordDisplayValue } from "../../utils/recordDisplayFormatter";
@@ -50,6 +49,8 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   canViewField,
   relationOptions = {},
 }) => {
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const [standaloneTaskPopoverOpen, setStandaloneTaskPopoverOpen] = React.useState(false);
   const isSelected = selectedRowKeys.includes(item.id);
   const imageUrl = imageField ? item[imageField] : null;
   const title = getRecordTitle(item, moduleConfig, { fallback: "-" });
@@ -76,6 +77,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     && !!relatedProcessRecordId
     && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedProcessModuleId)
   );
+  const isStandaloneTask = isTasks && !isProductionTask && !isExecutionProcessTask;
 
   const statusFieldConfig = moduleConfig?.fields.find(
     (f: any) => f.type === FieldType.STATUS || f.key === statusField,
@@ -139,11 +141,19 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const relatedOptionLabel = relatedRecordId
     ? relatedOptions.find((opt: any) => opt?.value === relatedRecordId)?.label
     : null;
-  const relatedRecordLabel = relatedOptionLabel || (relatedRecordId ? getSafeOptionFallback(relatedRecordId, '') : null);
+  const anyRelatedOptionLabel = relatedRecordId
+    ? Object.values(relationOptions || {})
+        .flat()
+        .find((opt: any) => String(opt?.value || '') === String(relatedRecordId))?.label
+    : null;
+  const relatedRecordLabel = relatedOptionLabel
+    || anyRelatedOptionLabel
+    || (relatedRecordId ? String(relatedRecordId) : null);
   const relatedModuleTitle = relatedModuleId
     ? (MODULES as Record<string, any>)?.[String(relatedModuleId)]?.titles?.fa || String(relatedModuleId)
     : null;
   const showRelatedRecord = isTasks && relatedRecordId && relatedModuleId && relatedFieldAllowed;
+  const recordCode = item.system_code || item.manual_code || null;
   const cardStatusMeta = resolveCardStatusMeta(item, moduleConfig, statusField);
   const cardTags = getRecordCardTags(item, tagsField);
   const summaryExcludedKeys = [
@@ -214,6 +224,89 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       : [...selectedRowKeys, item.id];
     setSelectedRowKeys(newSelected);
   };
+  const handleCardClick = () => {
+    if (isTasks && (isProductionTask || isExecutionProcessTask) && cardRef.current) {
+      const segment = cardRef.current.querySelector<HTMLElement>(`[data-task-segment-id="${String(item.id)}"]`);
+      if (segment) {
+        segment.click();
+        return;
+      }
+    }
+    if (isStandaloneTask) {
+      setStandaloneTaskPopoverOpen(true);
+      return;
+    }
+    navigate(`/${moduleId}/${item.id}`);
+  };
+  const standaloneAssigneeLabel = React.useMemo(() => {
+    if (!assigneeId) return 'نامشخص';
+    if (assigneeType === 'user') {
+      const user = allUsers.find((u: any) => String(u?.id || '') === String(assigneeId));
+      return user?.full_name || user?.display_name || user?.email || 'کاربر';
+    }
+    if (assigneeType === 'role') {
+      const role = allRoles.find((r: any) => String(r?.id || '') === String(assigneeId));
+      return role?.title || role?.name || 'نقش';
+    }
+    return 'نامشخص';
+  }, [allRoles, allUsers, assigneeId, assigneeType]);
+  const standaloneTaskPopoverContent = isStandaloneTask ? (
+    <div className="w-80 max-w-[80vw] p-1">
+      <div className="mb-3 border-b border-[rgba(var(--brand-200-rgb),0.55)] pb-2">
+        <div className="text-sm font-bold text-gray-800 dark:text-gray-100 break-words">
+          {title}
+        </div>
+        {recordCode ? (
+          <div className="mt-1 text-[10px] text-gray-400 font-mono">{recordCode}</div>
+        ) : null}
+      </div>
+      <div className="space-y-2 text-xs text-gray-600 dark:text-gray-300">
+        {cardStatusMeta ? (
+          <div className="flex items-center justify-between gap-3">
+            <span>وضعیت</span>
+            <Tag color={cardStatusMeta.color || "default"} className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold">
+              {cardStatusMeta.label}
+            </Tag>
+          </div>
+        ) : null}
+        {category && categoryAllowed ? (
+          <div className="flex items-center justify-between gap-3">
+            <span>نوع فعالیت</span>
+            <span>{categoryLabel}</span>
+          </div>
+        ) : null}
+        <div className="flex items-center justify-between gap-3">
+          <span>{assigneeLabel}</span>
+          <span className="truncate max-w-[180px]">{standaloneAssigneeLabel}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span>موعد انجام</span>
+          {renderDueDate()}
+        </div>
+        {String(item?.description || '').trim() ? (
+          <div className="pt-1">
+            <div className="mb-1 text-gray-500">شرح فعالیت</div>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 px-2 py-2 leading-6 text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 whitespace-pre-wrap break-words">
+              {String(item.description).trim()}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="mt-3 flex justify-end border-t border-[rgba(var(--brand-200-rgb),0.55)] pt-2">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setStandaloneTaskPopoverOpen(false);
+            navigate(`/tasks/${item.id}`);
+          }}
+          className="text-xs font-medium text-[rgba(var(--brand-700-rgb),1)] hover:underline"
+        >
+          جزئیات کامل
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   if (!isTasks) {
     const renderFieldValue = (field: any, value: any) => {
@@ -233,7 +326,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 
     return (
       <div
-        onClick={() => navigate(`/${moduleId}/${item.id}`)}
+        onClick={handleCardClick}
         className={`
           group relative flex h-full cursor-pointer flex-col rounded-2xl border bg-gradient-to-b from-white to-gray-50 shadow-sm transition-all
           dark:from-[#1d1d1d] dark:to-[#171717]
@@ -266,7 +359,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                   {title}
                 </h4>
                 <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : ""}`}>
-                  {item.system_code || item.manual_code || "---"}
+                  {recordCode || "---"}
                 </div>
               </div>
 
@@ -378,9 +471,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     );
   }
 
-  return (
+  const taskCardNode = (
     <div
-      onClick={() => navigate(`/${moduleId}/${item.id}`)}
+      ref={cardRef}
+      onClick={handleCardClick}
       className={`
         bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] rounded-2xl border shadow-sm cursor-pointer transition-all flex flex-col group relative
         ${isSelected ? "border-leather-500 ring-1 ring-leather-500 bg-leather-50 dark:bg-leather-900/20" : "border-[rgba(var(--brand-200-rgb),0.75)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)]"}
@@ -410,9 +504,34 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           >
             {title}
           </h4>
-          <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : "mb-1"}`}>
-            {item.system_code || item.manual_code || "---"}
-          </div>
+          {isTasks ? (
+            cardTags.length > 0 ? (
+              <div className={`mt-1 flex flex-wrap gap-1 ${minimal ? "" : "mb-1"}`}>
+                {cardTags.slice(0, 2).map((tag, index) => (
+                  <Tag
+                    key={`${tag.label}-${index}`}
+                    color={tag.color || 'blue'}
+                    className="!m-0 !rounded-full !px-1.5 !py-0 !text-[9px] !leading-4"
+                  >
+                    {tag.label}
+                  </Tag>
+                ))}
+                {cardTags.length > 2 ? (
+                  <span className="rounded-full bg-gray-100 px-1.5 py-0 text-[9px] leading-4 text-gray-500 dark:bg-gray-800 dark:text-gray-300">
+                    +{cardTags.length - 2}
+                  </span>
+                ) : null}
+              </div>
+            ) : recordCode ? (
+              <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : "mb-1"}`}>
+                {recordCode}
+              </div>
+            ) : null
+          ) : (
+            <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : "mb-1"}`}>
+              {recordCode || "---"}
+            </div>
+          )}
           {isTasks && category && categoryAllowed && (
             <Tag
               color="default"
@@ -458,7 +577,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               )}
             </div>
 
-            {tagsField && item[tagsField] && (
+            {!isTasks && tagsField && item[tagsField] && (
               <div className="flex flex-wrap gap-1 justify-end flex-1">
                 {(Array.isArray(item[tagsField]) ? item[tagsField] : [item[tagsField]]).slice(0, 1).map((t: any, idx: number) => {
                   const tagTitle = typeof t === "string" ? t : t.title || t.label;
@@ -597,7 +716,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             compact
             cardCompact
             allowReportEditInReadOnly
-            lazyLoad
             onlyLineId={String(item.production_line_id)}
           />
         </div>
@@ -614,12 +732,30 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             compact
             cardCompact
             allowReportEditInReadOnly
-            lazyLoad
           />
         </div>
       )}
     </div>
   );
+
+  if (isStandaloneTask) {
+    return (
+      <Popover
+        trigger="click"
+        open={standaloneTaskPopoverOpen}
+        onOpenChange={setStandaloneTaskPopoverOpen}
+        content={standaloneTaskPopoverContent}
+        title={null}
+        getPopupContainer={() => document.body}
+        placement="bottomRight"
+        overlayStyle={{ zIndex: 12000, maxWidth: 'min(92vw, 360px)' }}
+      >
+        {taskCardNode}
+      </Popover>
+    );
+  }
+
+  return taskCardNode;
 };
 
 export default RenderCardItem;

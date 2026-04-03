@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Dropdown, Space, Tag, Tooltip } from 'antd';
+import { Button, Dropdown, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { CopyOutlined, DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons';
 
@@ -59,8 +59,8 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
     ) : null;
 
   return (
-    <div className="flex items-center justify-between bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-3 mb-3 shadow-sm">
-      <Space size="middle">
+    <div className="flex flex-col gap-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-3 mb-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center gap-2 min-w-0">
         <Tag color="blue">{selectedCount} انتخاب شده</Tag>
         <Button onClick={onClear} size="small" type="text" danger>
           لغو انتخاب
@@ -76,9 +76,9 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
           ) : (
             primaryActionButton
           ))}
-      </Space>
+      </div>
 
-      <Space size="small">
+      <div className="flex flex-wrap items-center justify-end gap-1 w-full sm:w-auto">
         {extraActions.map((action) => (
           <Tooltip key={action.key} title={action.tooltip}>
             <Button
@@ -118,7 +118,7 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
             <Button danger type="text" icon={<DeleteOutlined />} size="small" onClick={onDelete} aria-label="حذف" />
           </Tooltip>
         )}
-      </Space>
+      </div>
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Button, Spin, Divider, Select, Space, Modal, Checkbox, App } from 'antd';
 import { UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
@@ -30,7 +30,9 @@ import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/syst
 import { syncRecordTags } from '../utils/recordTags';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { syncProcessTemplateTargetModules } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
+import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -117,26 +119,21 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const [type, id] = String(val).split('_');
     return { assignee_type: type || 'user', assignee_id: id || null };
   };
+
+  const getRelationFieldValueSignature = useMemo(() => {
+    const combinedValues = { ...(formData || {}), ...((watchedValues as Record<string, any>) || {}) };
+    return module.fields
+      .filter((field) => field.type === FieldType.RELATION || (field as any)?.relationConfig?.dependsOn)
+      .map((field) => {
+        const rawValue = combinedValues[field.key];
+        const normalized = Array.isArray(rawValue)
+          ? rawValue.map((item) => String(item ?? '').trim()).join(',')
+          : String(rawValue ?? '').trim();
+        return `${field.key}:${normalized}`;
+      })
+      .join('|');
+  }, [formData, module.fields, watchedValues]);
   
-  const fetchAllRelationOptionsWrapper = async () => {
-    setOptionsBootstrapping(true);
-    try {
-      await Promise.all([
-        fetchRelationOptions(),
-        loadDynamicOptions(),
-        supportsAssignee ? fetchAssignees() : Promise.resolve(),
-      ]);
-    } finally {
-      setOptionsBootstrapping(false);
-    }
-  };
-
-  useEffect(() => {
-    if (visible) {
-      fetchAllRelationOptionsWrapper();
-    }
-  }, [visible, module.id]);
-
   useEffect(() => {
     if (visible) {
       if (recordId && !isBulkEdit) {
@@ -211,10 +208,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
     }
   }, [visible, recordId, isBulkEdit, module, initialValues, supportsAssignee, supportsAssigneeType]);
 
-  const fetchAssignees = async () => {
+  const fetchAssignees = useCallback(async () => {
     try {
       if (assigneesCache) {
         setAssignees(assigneesCache);
+        writeModuleOptionSnapshot(module.id, {
+          allUsers: assigneesCache.users,
+          allRoles: assigneesCache.roles,
+        });
         return;
       }
       setAssigneesLoading(true);
@@ -226,6 +227,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
       const nextAssignees = await assigneesPromise;
       assigneesCache = nextAssignees;
       setAssignees(nextAssignees);
+      writeModuleOptionSnapshot(module.id, {
+        allUsers: nextAssignees.users,
+        allRoles: nextAssignees.roles,
+      });
     } catch (e) {
       if (isAbortLikeError(e)) return;
       console.warn('Could not fetch assignees', e);
@@ -233,7 +238,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       setAssigneesLoading(false);
       assigneesPromise = null;
     }
-  };
+  }, [module.id]);
 
   const currentAssigneeComboValue = String(
     watchedValues?.assignee_combo ??
@@ -328,22 +333,46 @@ const SmartForm: React.FC<SmartFormProps> = ({
   };
   
   // --- 2. دریافت آپشن‌های ارتباطی (Relation) ---
-  const fetchRelationOptions = async () => {
+  const fetchRelationOptions = useCallback(async () => {
     const options: Record<string, any[]> = {};
     const currentValues = form.getFieldsValue(true);
-    const fetchOptionsForField = async (field: any, key: string) => {
+    const cachedSnapshot = readModuleOptionSnapshot(module.id);
+    const collectExactIds = (rawValue: any) => {
+      if (rawValue === undefined || rawValue === null || rawValue === '') return [] as string[];
+      const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+      return Array.from(new Set(values.map((item) => String(item ?? '').trim()).filter(Boolean)));
+    };
+    const fetchOptionsForField = async (field: any, key: string, exactIds: string[] = []) => {
       try {
+        let nextOptions: any[] = [];
         if (module.id === 'tasks' && field.key === 'source_record_id') {
           const sourceModuleId = String(currentValues?.related_to_module || currentValues?.source_module_id || '').trim();
-          options[key] = await fetchTaskSourceRecordOptions(supabase, sourceModuleId, {
+          nextOptions = await fetchTaskSourceRecordOptions(supabase, sourceModuleId, {
             exactId: currentValues?.source_record_id ?? null,
           });
-          return;
+        } else {
+          nextOptions = await fetchRelationOptionsForField(supabase, field, {
+            allValues: currentValues,
+          });
+
+          const missingExactIds = exactIds.filter(
+            (exactId) => !nextOptions.some((option: any) => String(option?.value || '') === exactId)
+          );
+          if (missingExactIds.length > 0) {
+            const exactResults = await Promise.all(
+              missingExactIds.map((exactId) =>
+                fetchRelationOptionsForField(supabase, field, {
+                  allValues: currentValues,
+                  exactId,
+                  limit: 1,
+                }).catch(() => [])
+              )
+            );
+            nextOptions = mergeOptionLists(nextOptions, ...exactResults);
+          }
         }
 
-        options[key] = await fetchRelationOptionsForField(supabase, field, {
-          allValues: currentValues,
-        });
+        options[key] = mergeOptionLists(cachedSnapshot?.relationOptions?.[key], nextOptions);
       } catch (error) {
         if (isAbortLikeError(error)) return;
         const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
@@ -353,14 +382,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
     };
 
-    // پیمایش فیلدهای اصلی
     for (const field of module.fields) {
       if (field.type === FieldType.RELATION && field.relationConfig) {
-        await fetchOptionsForField(field, field.key);
+        await fetchOptionsForField(field, field.key, collectExactIds(currentValues?.[field.key]));
       }
     }
 
-    // پیمایش ستون‌های جداول
     if (module.blocks) {
       for (const block of module.blocks) {
         if (block.tableColumns) {
@@ -368,18 +395,26 @@ const SmartForm: React.FC<SmartFormProps> = ({
             if (col.type === FieldType.RELATION && col.relationConfig) {
               const key = `${block.id}_${col.key}`;
               await fetchOptionsForField(col, key);
-              // کپی برای دسترسی راحت‌تر
-              if (!options[col.key]) options[col.key] = options[key];
+              options[col.key] = mergeOptionLists(
+                cachedSnapshot?.relationOptions?.[col.key],
+                options[col.key],
+                options[key]
+              );
             }
           }
         }
       }
     }
-    setRelationOptions(options);
-  };
+
+    setRelationOptions((prev) => {
+      const mergedOptions = mergeOptionMaps(cachedSnapshot?.relationOptions, prev, options);
+      writeModuleOptionSnapshot(module.id, { relationOptions: mergedOptions });
+      return mergedOptions;
+    });
+  }, [form, module]);
 
   // --- 3. دریافت آپشن‌های داینامیک ---
-  const loadDynamicOptions = async () => {
+  const loadDynamicOptions = useCallback(async () => {
     const categoriesToFetch = new Set<string>();
 
     // جمع‌آوری دسته‌ها از فیلدها و ستون‌های جدول
@@ -404,8 +439,46 @@ const SmartForm: React.FC<SmartFormProps> = ({
     } catch (err) {
       console.warn('Could not load active notification bots', err);
     }
-    setDynamicOptions(newOptions);
-  };
+    setDynamicOptions((prev) => {
+      const mergedDynamicOptions = mergeOptionMaps(readModuleOptionSnapshot(module.id)?.dynamicOptions, prev, newOptions);
+      writeModuleOptionSnapshot(module.id, { dynamicOptions: mergedDynamicOptions });
+      return mergedDynamicOptions;
+    });
+  }, [module.blocks, module.fields, module.id]);
+
+  const fetchAllRelationOptionsWrapper = useCallback(async () => {
+    setOptionsBootstrapping(true);
+    try {
+      await Promise.all([
+        fetchRelationOptions(),
+        loadDynamicOptions(),
+        supportsAssignee ? fetchAssignees() : Promise.resolve(),
+      ]);
+    } finally {
+      setOptionsBootstrapping(false);
+    }
+  }, [fetchAssignees, fetchRelationOptions, loadDynamicOptions, supportsAssignee]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const cachedSnapshot = readModuleOptionSnapshot(module.id);
+    if (cachedSnapshot) {
+      setRelationOptions(cachedSnapshot.relationOptions || {});
+      setDynamicOptions(cachedSnapshot.dynamicOptions || {});
+      if ((cachedSnapshot.allUsers?.length || 0) > 0 || (cachedSnapshot.allRoles?.length || 0) > 0) {
+        setAssignees({
+          users: cachedSnapshot.allUsers || [],
+          roles: cachedSnapshot.allRoles || [],
+        });
+      }
+    }
+    void fetchAllRelationOptionsWrapper();
+  }, [fetchAllRelationOptionsWrapper, module.id, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    void fetchRelationOptions();
+  }, [fetchRelationOptions, getRelationFieldValueSignature, visible]);
 
   const getFieldValueLabel = (fieldKey: string, value: any) => {
     if (value === undefined || value === null) return '';
@@ -532,6 +605,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       if (data) {
         let nextValues: any = { ...data };
         if (module.id === 'process_templates') {
+          nextValues = syncProcessTemplateTargetModules(nextValues);
           const { data: templateStages } = await supabase
             .from('process_template_stages')
             .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
@@ -1090,6 +1164,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
           previousStartDate: initialRecord?.start_date ?? null,
         }) as any;
       }
+      if (module.id === 'process_templates') {
+        values = syncProcessTemplateTargetModules(values);
+      }
 
       if (onSave) {
         await onSave(values, {
@@ -1297,11 +1374,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
       allValues = { ...allValues, ...resetPatch };
     }
+    if (module.id === 'process_templates' && Object.prototype.hasOwnProperty.call(changedValues || {}, 'module_ids')) {
+      const syncedValues = syncProcessTemplateTargetModules(allValues || {});
+      form.setFieldsValue({ module_ids: syncedValues.module_ids, module_id: syncedValues.module_id });
+      allValues = { ...allValues, module_ids: syncedValues.module_ids, module_id: syncedValues.module_id };
+    }
     let cleanedValues = Object.fromEntries(
       Object.entries(allValues || {}).filter(([, value]) => value !== undefined)
     );
     if (module.id === 'tasks') {
       cleanedValues = normalizeTaskSourceValues(cleanedValues);
+    }
+    if (module.id === 'process_templates') {
+      cleanedValues = syncProcessTemplateTargetModules(cleanedValues);
     }
     setFormData((prev: any) => ({ ...prev, ...cleanedValues }));
   };
@@ -1383,7 +1468,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const statusField = headerFields.find((f) => f.key === 'status');
   const headerFieldsWithoutStatus = headerFields.filter((f) => f.key !== 'status');
   const getResolvedOptions = (field: any, relationKey?: string) => {
-    if (module.id === 'process_templates' && field.key === 'module_id') {
+    if (
+      (module.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
+      || (module.id === 'process_runs' && field.key === 'module_id')
+    ) {
       return getProjectModuleOptions();
     }
     if (module.id === 'tasks' && field.key === 'related_to_module') {
@@ -1406,6 +1494,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     : formData;
   const currentSummaryData = getSummaryData(currentValues);
   const summaryConfigObj = module.blocks?.find(b => b.summaryConfig)?.summaryConfig;
+  const isFieldRequired = (field?: any) => !isBulkEdit && field?.validation?.required === true;
   const renderInlineFieldLabel = (labelText: string, required?: boolean) => (
     <span className="inline-flex items-center gap-1">
       <span>{labelText}</span>
@@ -1561,7 +1650,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     <div className="w-full lg:flex-1 lg:max-w-[320px]">
                       <div className="smartform-inline-status h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
                         <span className="text-xs text-gray-400 shrink-0">
-                          {renderInlineFieldLabel(autoNameToggleField.labels?.fa || 'نامگذاری خودکار', autoNameToggleField.validation?.required === true)}
+                          {renderInlineFieldLabel(autoNameToggleField.labels?.fa || 'نامگذاری خودکار', isFieldRequired(autoNameToggleField))}
                         </span>
                         <div className="flex-1 min-w-0">
                           <SmartFieldRenderer
@@ -1638,7 +1727,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     <div className="w-full lg:flex-1 lg:max-w-[320px]">
                       <div className="smartform-inline-status h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
                         <span className="text-xs text-gray-400 shrink-0">
-                          {renderInlineFieldLabel('وضعیت', statusField.validation?.required === true)}
+                          {renderInlineFieldLabel('وضعیت', isFieldRequired(statusField))}
                         </span>
                         <div className="flex-1 min-w-0">
                           <SmartFieldRenderer
@@ -1715,6 +1804,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   <ProductionStagesField
                     recordId={recordId}
                     moduleId={module.id}
+                    automationContextModuleId={null}
                     readOnly={!canEditModule}
                     compact={true}
                     orderStatus={module.id === 'production_orders' ? (currentValues as any)?.status : null}

@@ -20,6 +20,12 @@ interface WorkflowConditionsGroupProps {
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
   relationOptions: Record<string, Array<{ label: string; value: string }>>;
   disabled?: boolean;
+  lockedConditionIds?: string[];
+  requiredConditionIds?: string[];
+  dynamicFieldProps?: Record<string, {
+    onOptionsUpdate?: () => void;
+    protectedValues?: string[];
+  }>;
 }
 
 const getFieldOptions = (
@@ -57,8 +63,13 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   dynamicOptions,
   relationOptions,
   disabled = false,
+  lockedConditionIds = [],
+  requiredConditionIds = [],
+  dynamicFieldProps = {},
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
+  const requiredConditionIdSet = useMemo(() => new Set(requiredConditionIds), [requiredConditionIds]);
 
   const fieldOptions = useMemo(
     () =>
@@ -162,6 +173,8 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           showSearch
           getPopupContainer={popupContainer as any}
           popupStyle={{ zIndex: 12600 }}
+          onOptionsUpdate={dynamicFieldProps[field.dynamicOptionsCategory]?.onOptionsUpdate}
+          protectedValues={dynamicFieldProps[field.dynamicOptionsCategory]?.protectedValues}
         />
       );
     }
@@ -292,16 +305,19 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       ) : (
         safeValue.map((condition) => {
           const field = fields.find((f) => f.key === condition.field);
+          const isLocked = lockedConditionIdSet.has(String(condition.id || ''));
+          const isRequired = requiredConditionIdSet.has(String(condition.id || ''));
           return (
             <div
               key={condition.id}
               className="grid grid-cols-1 items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/70 p-3 md:grid-cols-12 dark:border-gray-700 dark:bg-white/5"
             >
               <div className="md:col-span-4">
+                <div className="flex items-center gap-1">
                 <Select
                   showSearch
                   optionFilterProp="label"
-                  disabled={disabled}
+                  disabled={disabled || isLocked}
                   options={fieldOptions}
                   getPopupContainer={popupContainer}
                   popupMatchSelectWidth={false}
@@ -320,10 +336,12 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   placeholder="فیلد"
                   className="w-full"
                 />
+                {isRequired ? <span className="text-base font-semibold leading-none text-red-500">*</span> : null}
+                </div>
               </div>
               <div className="md:col-span-3">
                 <Select
-                  disabled={disabled}
+                  disabled={disabled || isLocked}
                   options={getWorkflowOperatorOptions(field)}
                   getPopupContainer={popupContainer}
                   popupMatchSelectWidth={false}
@@ -347,7 +365,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   danger
                   icon={<DeleteOutlined />}
                   onClick={() => removeCondition(condition.id)}
-                  disabled={disabled}
+                  disabled={disabled || isLocked}
                 />
               </div>
             </div>

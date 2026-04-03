@@ -40,6 +40,7 @@ interface ViewManagerProps {
 }
 
 const savedViewsCache = new Map<string, SavedView[]>();
+const savedViewsPromiseCache = new Map<string, Promise<SavedView[]>>();
 
 const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onViewChange, onRefresh }) => {
   const { message } = App.useApp();
@@ -78,16 +79,28 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
       setLoadingViews(!cachedViews?.length);
 
       try {
-        const { data } = await supabase
-          .from('saved_views')
-          .select('*')
-          .eq('module_id', moduleId)
-          .order('created_at', { ascending: false });
+        const pending =
+          savedViewsPromiseCache.get(moduleId) ||
+          (async () => {
+            const { data } = await supabase
+              .from('saved_views')
+              .select('*')
+              .eq('module_id', moduleId)
+              .order('created_at', { ascending: false });
+            return [defaultView, ...(data || [])] as SavedView[];
+          })();
+
+        if (!savedViewsPromiseCache.has(moduleId)) {
+          savedViewsPromiseCache.set(moduleId, pending);
+        }
+
+        const nextViews = await pending;
+        savedViewsPromiseCache.delete(moduleId);
         if (!active) return;
-        const nextViews = [defaultView, ...(data || [])];
         savedViewsCache.set(moduleId, nextViews);
         setViews(nextViews);
       } catch {
+        savedViewsPromiseCache.delete(moduleId);
         if (!active) return;
         setViews(savedViewsCache.get(moduleId) || [defaultView]);
       } finally {

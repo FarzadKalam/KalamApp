@@ -25,16 +25,19 @@ interface WorkflowActionsBuilderProps {
   onChange: (next: WorkflowAction[]) => void;
   currentModuleId: string;
   currentModuleFields: ModuleField[];
+  variableFields?: ModuleField[];
   moduleOptions: WorkflowModuleOption[];
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
   relationOptions: Record<string, Array<{ label: string; value: string }>>;
+  relationSourceModuleOptions?: WorkflowModuleOption[];
+  additionalRecipientFieldOptions?: Array<{ label: string; value: string }>;
   disabled?: boolean;
 }
 
 type CreateRelatedFieldMapping = {
   id: string;
   field: string;
-  mode: 'static' | 'from_source';
+  mode: 'static' | 'from_source' | 'from_related';
   value?: any;
   source_field?: string;
 };
@@ -60,10 +63,19 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_field: '',
         variable_target: 'body',
       };
+    case 'send_bale_bot':
+      return {
+        recipient_fields: [],
+        manual_chat_ids: [],
+        title: '',
+        message: '',
+        variable_field: '',
+        variable_target: 'message',
+      };
     case 'update_record':
-      return { field: '', value: null };
+      return { field: '', value_mode: 'static', value: null, source_field: '' };
     case 'create_related_record':
-      return { target_module_id: '', relation_field_key: '', field_mappings: [] };
+      return { source_module_id: '', target_module_id: '', relation_field_key: '', field_mappings: [] };
     case 'copy_process_template':
     case 'execute_process':
       return { template_id: '' };
@@ -97,9 +109,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   onChange,
   currentModuleId,
   currentModuleFields,
+  variableFields,
   moduleOptions,
   dynamicOptions,
   relationOptions,
+  relationSourceModuleOptions,
+  additionalRecipientFieldOptions,
   disabled = false,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
@@ -129,26 +144,65 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   const variableFieldOptions = useMemo(
     () =>
-      currentModuleFields
+      (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
         .filter((f) => !!f?.key && f?.nature !== 'system')
         .map((field) => ({
           label: getFieldLabel(field),
           value: field.key,
         })),
+    [currentModuleFields, variableFields]
+  );
+  const relatedVariableFieldOptions = useMemo(
+    () => variableFieldOptions.filter((item) => {
+      const value = String(item.value || '');
+      return value.startsWith('__linked__') || value.startsWith('__workflow_related__');
+    }),
+    [variableFieldOptions]
+  );
+  const sourceVariableFieldOptions = useMemo(
+    () => variableFieldOptions.filter((item) => {
+      const value = String(item.value || '');
+      return !value.startsWith('__linked__') && !value.startsWith('__workflow_related__');
+    }),
+    [variableFieldOptions]
+  );
+  const assigneeRecipientFieldOptions = useMemo(
+    () =>
+      currentModuleFields
+        .filter((field) => {
+          const key = String(field?.key || '');
+          return key === '__workflow_assignee'
+            || key === '__task____workflow_assignee'
+            || key.endsWith('____workflow_assignee')
+            || key.startsWith('__comm_recipient__');
+        })
+        .map((field) => ({ label: getFieldLabel(field), value: field.key })),
     [currentModuleFields]
+  );
+  const recipientFieldOptions = useMemo(
+    () => Array.from(new Map([
+      ...((additionalRecipientFieldOptions || []).map((item) => [String(item.value), item] as const)),
+      ...assigneeRecipientFieldOptions.map((item) => [String(item.value), item] as const),
+    ]).values()),
+    [additionalRecipientFieldOptions, assigneeRecipientFieldOptions]
   );
 
   const relatedTargetModuleOptions = useMemo(() => {
+    const allowedSourceModuleIds = new Set(
+      ((relationSourceModuleOptions && relationSourceModuleOptions.length > 0 ? relationSourceModuleOptions : [{ value: currentModuleId, label: currentModuleId }]) || [])
+        .map((item) => String(item?.value || '').trim())
+        .filter(Boolean)
+    );
     return moduleOptions.filter((option) => {
       const target = MODULES[option.value];
       if (!target) return false;
       return (target.fields || []).some(
         (field) =>
           field.type === FieldType.RELATION &&
-          String((field.relationConfig as any)?.targetModule || '') === currentModuleId
+          allowedSourceModuleIds.has(String((field.relationConfig as any)?.targetModule || ''))
       );
     });
-  }, [moduleOptions, currentModuleId]);
+  }, [moduleOptions, currentModuleId, relationSourceModuleOptions]);
 
   const processTemplateOptions = relationOptions.process_template_id || [];
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
@@ -365,7 +419,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     return (
       <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-2">
         <div className="text-xs text-gray-500 mb-2">انتخاب فیلد برای متغیر</div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <Select
             {...commonSelectProps}
             value={config.variable_field}
@@ -407,6 +461,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   const renderUpdateValueInput = (action: WorkflowAction) => {
     const targetFieldKey = String(action?.config?.field || '');
     const targetField = currentModuleFields.find((f) => f.key === targetFieldKey);
+    const valueMode = String(action?.config?.value_mode || 'static');
+    if (valueMode === 'from_source' || valueMode === 'from_related') {
+      const options = valueMode === 'from_related' ? relatedVariableFieldOptions : sourceVariableFieldOptions;
+      return (
+        <Select
+          {...commonSelectProps}
+          value={action?.config?.source_field}
+          options={options}
+          disabled={disabled}
+          onChange={(nextVal) => updateActionConfig(action.id, { source_field: nextVal })}
+          placeholder={valueMode === 'from_related' ? 'فیلد رکورد مرتبط' : 'فیلد رکورد جاری'}
+        />
+      );
+    }
     return renderTypedValueInput(targetField, action?.config?.value, (nextVal) =>
       updateActionConfig(action.id, { value: nextVal })
     );
@@ -475,13 +543,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       if (action.type !== 'create_related_record') return action;
       const config = action.config || {};
       const targetModuleId = String(config.target_module_id || '');
+      const sourceModuleId = String(
+        config.source_module_id
+        || relationSourceModuleOptions?.[0]?.value
+        || currentModuleId
+      );
       if (!targetModuleId) return action;
 
       const targetModule = MODULES[targetModuleId];
       const relationFields = (targetModule?.fields || []).filter(
         (field) =>
           field.type === FieldType.RELATION &&
-          String((field.relationConfig as any)?.targetModule || '') === currentModuleId
+          String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
       );
       const defaultRelationFieldKey = relationFields[0]?.key || '';
       const relationFieldKey = String(config.relation_field_key || defaultRelationFieldKey || '');
@@ -497,12 +570,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
       const relationChanged = relationFieldKey !== String(config.relation_field_key || '');
       const mappingsChanged = ensuredMappings.length !== rawMappings.length;
-      if (!relationChanged && !mappingsChanged) return action;
+      const sourceChanged = sourceModuleId !== String(config.source_module_id || '');
+      if (!relationChanged && !mappingsChanged && !sourceChanged) return action;
       hasChanges = true;
       return {
         ...action,
         config: {
           ...config,
+          source_module_id: sourceModuleId,
           relation_field_key: relationFieldKey,
           field_mappings: ensuredMappings,
         },
@@ -537,6 +612,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const phoneFields = currentModuleFields
         .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
         .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const smsRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...phoneFields.map((item) => [String(item.value), item] as const),
+      ]).values());
 
       return (
         <div className="space-y-2">
@@ -546,7 +625,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={phoneFields}
+              options={smsRecipientOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
               placeholder="فیلد(های) شماره مقصد"
             />
@@ -576,6 +655,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const emailFields = currentModuleFields
         .filter((f) => /email/i.test(f.key))
         .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const emailRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...emailFields.map((item) => [String(item.value), item] as const),
+      ]).values());
 
       return (
         <div className="space-y-2">
@@ -585,7 +668,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={emailFields}
+              options={emailRecipientOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
               placeholder="فیلد(های) ایمیل مقصد"
             />
@@ -620,6 +703,58 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
 
+    if (actionType === 'send_bale_bot') {
+      const chatIdFields = currentModuleFields
+        .filter((f) => /bale.*chat|chat.*bale|bale_chat_id/i.test(f.key))
+        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const baleRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...chatIdFields.map((item) => [String(item.value), item] as const),
+      ]).values());
+
+      return (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+              disabled={disabled}
+              options={baleRecipientOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+              placeholder="فیلد(های) شناسه چت بله"
+            />
+            <Select
+              {...commonSelectProps}
+              mode="tags"
+              value={Array.isArray(config.manual_chat_ids) ? config.manual_chat_ids : []}
+              disabled={disabled}
+              onChange={(nextVal) => updateActionConfig(action.id, { manual_chat_ids: nextVal })}
+              tokenSeparators={[',', ';', ' ']}
+              placeholder="شناسه چت اختیاری"
+            />
+          </div>
+          <Input
+            value={config.title}
+            disabled={disabled}
+            onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
+            placeholder="عنوان پیام بله"
+          />
+          <Input.TextArea
+            rows={4}
+            value={config.message}
+            disabled={disabled}
+            onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
+            placeholder="متن پیام بله"
+          />
+          {renderVariableTools(action, [
+            { key: 'title', label: 'عنوان پیام بله' },
+            { key: 'message', label: 'متن پیام بله' },
+          ])}
+        </div>
+      );
+    }
+
     if (actionType === 'update_record') {
       return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -630,6 +765,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             options={updatableFieldOptions}
             onChange={(nextVal) => updateActionConfig(action.id, { field: nextVal, value: null })}
             placeholder="فیلد مقصد"
+          />
+          <Select
+            {...commonSelectProps}
+            value={config.value_mode || 'static'}
+            disabled={disabled}
+            options={[
+              { label: 'مقدار ثابت', value: 'static' },
+              { label: 'از فیلد رکورد جاری', value: 'from_source' },
+              { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
+            ]}
+            onChange={(nextVal) => updateActionConfig(action.id, {
+              value_mode: nextVal,
+              value: null,
+              source_field: '',
+            })}
+            placeholder="نوع مقدار"
           />
           {renderUpdateValueInput(action)}
         </div>
@@ -668,6 +819,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
     if (actionType === 'create_related_record') {
       const targetModuleId = String(config.target_module_id || '');
+      const sourceModuleId = String(
+        config.source_module_id
+        || relationSourceModuleOptions?.[0]?.value
+        || currentModuleId
+      );
       const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
       const targetFields = (targetModule?.fields || []).filter(
         (field) => !!field?.key && field?.nature !== 'system'
@@ -676,7 +832,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         .filter(
           (field) =>
             field.type === FieldType.RELATION &&
-            String((field.relationConfig as any)?.targetModule || '') === currentModuleId
+            String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
         )
         .map((field) => ({ label: getFieldLabel(field), value: field.key }));
       const targetWritableOptions = targetFields.map((field) => ({
@@ -699,6 +855,31 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Select
               {...commonSelectProps}
+              value={config.source_module_id || sourceModuleId}
+              disabled={disabled}
+              options={relationSourceModuleOptions && relationSourceModuleOptions.length > 0 ? relationSourceModuleOptions : [{ label: currentModuleId, value: currentModuleId }]}
+              onChange={(nextVal) => {
+                const nextSourceModuleId = String(nextVal || '');
+                const defaultRelationField =
+                  (MODULES[targetModuleId]?.fields || []).find(
+                    (field) =>
+                      field.type === FieldType.RELATION &&
+                      String((field.relationConfig as any)?.targetModule || '') === nextSourceModuleId
+                  )?.key || '';
+                updateActionConfig(action.id, {
+                  source_module_id: nextSourceModuleId,
+                  relation_field_key: defaultRelationField,
+                  field_mappings: ensureRequiredMappings(
+                    targetModuleId,
+                    defaultRelationField,
+                    getRelatedFieldMappings(action)
+                  ),
+                });
+              }}
+              placeholder="ماژول رکورد مرجع"
+            />
+            <Select
+              {...commonSelectProps}
               value={config.target_module_id}
               disabled={disabled}
               options={relatedTargetModuleOptions}
@@ -708,9 +889,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   (MODULES[nextTargetModuleId]?.fields || []).find(
                     (field) =>
                       field.type === FieldType.RELATION &&
-                      String((field.relationConfig as any)?.targetModule || '') === currentModuleId
+                      String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
                   )?.key || '';
                 updateActionConfig(action.id, {
+                  source_module_id: sourceModuleId,
                   target_module_id: nextVal,
                   relation_field_key: defaultRelationField,
                   field_mappings: ensureRequiredMappings(
@@ -720,7 +902,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   ),
                 });
               }}
-              placeholder="ماژول مقصد"
+              placeholder="ماژول رکورد جدید"
             />
             <Select
               {...commonSelectProps}
@@ -738,7 +920,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   ),
                 });
               }}
-              placeholder="فیلد ارتباط با رکورد فعلی"
+              placeholder="فیلد ارتباط با رکورد مرجع"
             />
           </div>
 
@@ -803,6 +985,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                         options={[
                           { label: 'مقدار ثابت', value: 'static' },
                           { label: 'از فیلد رکورد جاری', value: 'from_source' },
+                          { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
                         ]}
                         onChange={(nextVal) =>
                           updateRelatedFieldMappings(action.id, (current) =>
@@ -817,12 +1000,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                       />
                     </div>
                     <div className="md:col-span-4">
-                      {mapping.mode === 'from_source' ? (
+                      {mapping.mode === 'from_source' || mapping.mode === 'from_related' ? (
                         <Select
                           {...commonSelectProps}
                           value={mapping.source_field}
                           disabled={disabled || !mapping.field}
-                          options={variableFieldOptions}
+                          options={mapping.mode === 'from_related' ? relatedVariableFieldOptions : sourceVariableFieldOptions}
                           onChange={(nextVal) =>
                             updateRelatedFieldMappings(action.id, (current) =>
                               current.map((item) =>
@@ -830,7 +1013,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                               )
                             )
                           }
-                          placeholder="فیلد منبع از رکورد جاری"
+                          placeholder={mapping.mode === 'from_related' ? 'فیلد از رکورد مرتبط' : 'فیلد از رکورد جاری'}
                         />
                       ) : (
                         renderTypedValueInput(targetField, mapping.value, (nextVal) =>

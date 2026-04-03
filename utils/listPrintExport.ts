@@ -27,6 +27,21 @@ const resolveOptionLabel = (options: any[] = [], value: any) => {
   return String(match?.label || match?.name || match?.title || '').trim();
 };
 
+const toEnglishDigits = (value: any): string =>
+  String(value ?? '')
+    .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+
+const formatDigitsForLocale = (value: any, digitLocale: 'fa' | 'en') =>
+  digitLocale === 'fa' ? toPersianNumber(value) : toEnglishDigits(value);
+
+const formatEnglishPrice = (value: any): string => {
+  const normalized = toEnglishDigits(value).replace(/,/g, '').trim();
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) return toEnglishDigits(String(value ?? ''));
+  return number.toLocaleString('en-US');
+};
+
 export const buildListPrintableFields = (
   moduleConfig: any,
   canViewField?: (fieldKey: string) => boolean,
@@ -67,6 +82,7 @@ export const formatListCellValue = (
   row: Record<string, any>,
   relationOptions: Record<string, any[]> = {},
   currencyLabel: string = '',
+  digitLocale: 'fa' | 'en' = 'fa',
 ): string => {
   const key = String(field?.key || '').trim();
   if (key === ASSIGNEE_DISPLAY_FIELD_KEY) {
@@ -98,26 +114,28 @@ export const formatListCellValue = (
   }
 
   if (field?.type === FieldType.PRICE) {
-    const formatted = formatPersianPrice(rawValue);
+    const formatted = digitLocale === 'fa' ? formatPersianPrice(rawValue) : formatEnglishPrice(rawValue);
     return currencyLabel ? `${formatted} ${currencyLabel}` : formatted;
   }
 
   if (field?.type === FieldType.NUMBER || field?.type === FieldType.STOCK || field?.type === FieldType.PERCENTAGE) {
-    return toPersianNumber(rawValue);
+    return formatDigitsForLocale(rawValue, digitLocale);
   }
 
   if (field?.type === FieldType.DATE) {
-    return safeJalaliFormat(rawValue, 'YYYY/MM/DD') ? toPersianNumber(safeJalaliFormat(rawValue, 'YYYY/MM/DD')) : String(rawValue);
+    return safeJalaliFormat(rawValue, 'YYYY/MM/DD')
+      ? formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD'), digitLocale)
+      : toEnglishDigits(String(rawValue));
   }
 
   if (field?.type === FieldType.DATETIME) {
     return safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm')
-      ? toPersianNumber(safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm'))
-      : String(rawValue);
+      ? formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm'), digitLocale)
+      : toEnglishDigits(String(rawValue));
   }
 
   if (field?.type === FieldType.TIME) {
-    return toPersianNumber(String(rawValue));
+    return formatDigitsForLocale(String(rawValue), digitLocale);
   }
 
   if (field?.type === FieldType.RELATION || field?.type === FieldType.SELECT || field?.type === FieldType.STATUS) {
@@ -129,14 +147,19 @@ export const formatListCellValue = (
   }
 
   if (Array.isArray(rawValue)) {
-    return rawValue.map((item) => formatListCellValue({ ...field, type: FieldType.TEXT }, { [key]: item }, relationOptions, currencyLabel)).join('، ');
+    return rawValue
+      .map((item) => formatListCellValue({ ...field, type: FieldType.TEXT }, { [key]: item }, relationOptions, currencyLabel, digitLocale))
+      .join('، ');
   }
 
   if (typeof rawValue === 'object') {
-    return String(rawValue?.name || rawValue?.title || rawValue?.full_name || rawValue?.label || rawValue?.id || '-');
+    return formatDigitsForLocale(
+      String(rawValue?.name || rawValue?.title || rawValue?.full_name || rawValue?.label || rawValue?.id || '-'),
+      digitLocale
+    );
   }
 
-  return toPersianNumber(String(rawValue));
+  return formatDigitsForLocale(String(rawValue), digitLocale);
 };
 
 export const buildListTableHtml = (

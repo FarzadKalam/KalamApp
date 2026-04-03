@@ -135,7 +135,7 @@ export const fetchSessionBootstrap = async (
     }
 
     sessionBootstrapCache.cacheKey = cacheKey;
-    sessionBootstrapCache.promise = (async () => {
+    const pending = (async () => {
       const { data: profile } = await supabaseClient
         .from('profiles')
         .select('id, full_name, avatar_url, role, role_id, org_id, is_active')
@@ -167,15 +167,19 @@ export const fetchSessionBootstrap = async (
 
       sessionBootstrapCache.snapshot = snapshot;
       sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
-      sessionBootstrapCache.promise = null;
       return snapshot;
     })();
 
-    return await sessionBootstrapCache.promise;
+    sessionBootstrapCache.promise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (sessionBootstrapCache.promise === pending) {
+        sessionBootstrapCache.promise = null;
+      }
+    }
   } catch {
     return EMPTY_SNAPSHOT;
-  } finally {
-    sessionBootstrapCache.promise = null;
   }
 };
 

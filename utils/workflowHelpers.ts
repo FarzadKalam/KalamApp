@@ -3,6 +3,10 @@ import { FieldType, ModuleField } from '../types';
 import { getAssigneeLabel } from './assigneeLabel';
 import { supportsGlobalAssignee } from './assigneeSupport';
 import {
+  getProcessTargetModuleFields,
+  normalizeProcessTargetModuleIds,
+} from './processTargets';
+import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   createWorkflowRelatedFieldKey,
 } from './workflowTypes';
@@ -49,13 +53,16 @@ const buildSyntheticAssigneeField = (moduleId: string): ModuleField => ({
   ...( { workflowOptionScopeModuleId: moduleId } as any ),
 });
 
-const getVisibleModuleFields = (moduleId: string) =>
+export const getSyntheticWorkflowAssigneeField = (moduleId: string) =>
+  supportsGlobalAssignee(moduleId) ? buildSyntheticAssigneeField(moduleId) : null;
+
+export const getVisibleWorkflowModuleFields = (moduleId: string) =>
   (MODULES[moduleId]?.fields || []).filter((field) => shouldIncludeWorkflowField(field));
 
 export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
   if (!moduleId || !MODULES[moduleId]) return [];
 
-  const currentFields = getVisibleModuleFields(moduleId);
+  const currentFields = getVisibleWorkflowModuleFields(moduleId);
   const result: ModuleField[] = [...currentFields];
 
   if (supportsGlobalAssignee(moduleId)) {
@@ -69,7 +76,7 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
       if (!targetModuleId || !MODULES[targetModuleId]) return;
 
       const targetTitle = MODULES[targetModuleId]?.titles?.fa || targetModuleId;
-      const relatedFields = getVisibleModuleFields(targetModuleId).map((targetField) => ({
+      const relatedFields = getVisibleWorkflowModuleFields(targetModuleId).map((targetField) => ({
         ...targetField,
         ...( { workflowOptionScopeModuleId: targetModuleId } as any ),
         key: createWorkflowRelatedFieldKey(relationField.key, targetModuleId, targetField.key),
@@ -98,6 +105,72 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
     });
 
   return result;
+};
+
+export const getProcessAutomationTaskFields = () => {
+  const hiddenTaskFieldKeys = new Set([
+    'related_to_module',
+    'source_record_id',
+    'related_product',
+    'related_customer',
+    'related_supplier',
+    'related_production_order',
+    'related_invoice',
+    'project_id',
+    'purchase_invoice_id',
+    'marketing_lead_id',
+  ]);
+
+  const taskFields = getVisibleWorkflowModuleFields('tasks')
+    .filter((field) => !hiddenTaskFieldKeys.has(String(field.key || '').trim()))
+    .map((field) => ({
+      ...field,
+      key: `__task__${field.key}`,
+      labels: {
+        ...field.labels,
+        fa: `${field.labels?.fa || field.key} (فعالیت)`,
+      },
+      ...( { workflowOptionScopeModuleId: 'tasks' } as any ),
+    }));
+
+  const preferredOrder = ['__task__task_type', '__task__status'];
+
+  const prioritized = preferredOrder
+    .map((key) => taskFields.find((field) => field.key === key))
+    .filter((field): field is ModuleField => Boolean(field));
+
+  const remaining = taskFields.filter((field) => !preferredOrder.includes(field.key));
+  const result: ModuleField[] = [...prioritized, ...remaining];
+
+  if (supportsGlobalAssignee('tasks')) {
+    result.push({
+      ...buildSyntheticAssigneeField('tasks'),
+      key: '__task__' + WORKFLOW_ASSIGNEE_FIELD_KEY,
+      labels: { fa: `${getAssigneeLabel('tasks')} (فعالیت)`, en: 'Task Assignee' },
+    });
+  }
+
+  return result;
+};
+
+export const getProcessAutomationConditionFields = (moduleId?: string | null): ModuleField[] => {
+  const taskFields = getProcessAutomationTaskFields();
+  if (!moduleId || !MODULES[moduleId]) return taskFields;
+  return [...taskFields, ...getWorkflowConditionFields(moduleId)];
+};
+
+export const getProcessAutomationConditionFieldsForModules = (moduleIds?: Array<string | null | undefined>) => {
+  const taskFields = getProcessAutomationTaskFields();
+  const normalizedModuleIds = normalizeProcessTargetModuleIds(moduleIds || []);
+  if (normalizedModuleIds.length === 0) return taskFields;
+  return [
+    ...taskFields,
+    ...getProcessTargetModuleFields(
+      normalizedModuleIds,
+      getWorkflowConditionFields,
+      getSyntheticWorkflowAssigneeField
+    ),
+  ];
 };
 
 export const resolveWorkflowProcessDraftFieldKey = (moduleId: string) => {

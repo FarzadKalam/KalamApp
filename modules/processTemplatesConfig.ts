@@ -28,29 +28,32 @@ export const processTemplatesModule: ModuleDefinition = {
       nature: FieldNature.PREDEFINED,
     },
     {
-      key: 'module_id',
-      labels: { fa: 'ماژول هدف', en: 'Target Module' },
-      type: FieldType.SELECT,
+      key: 'module_ids',
+      labels: { fa: 'ماژول‌های هدف', en: 'Target Modules' },
+      type: FieldType.MULTI_SELECT,
+      mode: 'multiple',
       location: FieldLocation.HEADER,
       order: 2,
-      options: [
-        { label: 'سفارشات تولید', value: 'production_orders' },
-        { label: 'پروژه‌ها', value: 'projects' },
-        { label: 'فاکتورهای فروش', value: 'invoices' },
-        { label: 'فاکتورهای خرید', value: 'purchase_invoices' },
-        { label: 'لیدهای بازاریابی', value: 'marketing_leads' },
-        { label: 'مشتریان', value: 'customers' },
-      ],
       validation: { required: true },
       isTableColumn: true,
       nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'module_id',
+      labels: { fa: 'ماژول اصلی', en: 'Primary Module' },
+      type: FieldType.SELECT,
+      location: FieldLocation.HEADER,
+      order: 3,
+      readonly: true,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
     },
     {
       key: 'is_active',
       labels: { fa: 'فعال', en: 'Active' },
       type: FieldType.CHECKBOX,
       location: FieldLocation.HEADER,
-      order: 3,
+      order: 4,
       defaultValue: true,
       isTableColumn: true,
       nature: FieldNature.STANDARD,
@@ -85,6 +88,3 @@ export const processTemplatesModule: ModuleDefinition = {
   ],
   relatedTabs: [],
 };
-
-
-

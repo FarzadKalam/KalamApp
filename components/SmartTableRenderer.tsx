@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover } from 'antd';
+import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip } from 'antd';
 import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
@@ -19,11 +19,13 @@ import PhoneActionsPopover from './PhoneActionsPopover';
 import PersianDatePicker from './PersianDatePicker';
 import { useCurrencyConfig } from '../utils/currency';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
+import { getProjectModuleOptions } from '../utils/workflowHelpers';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
   data: any[];
   loading: boolean;
+  deferredDataLoading?: boolean;
   visibleColumns?: string[];  // ✅ ستون‌های انتخاب‌شده از View
   rowSelection?: any;
   onRow?: (record: any) => any;
@@ -55,10 +57,63 @@ const getInitialScrollHeight = () => {
   return Math.min(700, Math.max(440, viewportHeight - 320));
 };
 
+const OverflowTooltipText: React.FC<{ label: string; className: string }> = ({ label, className }) => {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  useEffect(() => {
+    const node = textRef.current;
+    if (!node) return;
+
+    const measure = () => {
+      setIsOverflowing((node.scrollWidth - node.clientWidth) > 1 || (node.scrollHeight - node.clientHeight) > 1);
+    };
+
+    measure();
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => measure())
+        : null;
+
+    resizeObserver?.observe(node);
+    window.addEventListener('resize', measure);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [label]);
+
+  return (
+    <Tooltip
+      title={isOverflowing ? label : null}
+      mouseEnterDelay={0.2}
+      zIndex={2600}
+      getPopupContainer={() => document.body}
+      styles={{
+        body: {
+          maxWidth: 'min(72vw, 720px)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          overflowWrap: 'anywhere',
+          direction: 'rtl',
+          textAlign: 'right',
+        },
+      }}
+    >
+      <span ref={textRef} className={`${className} inline-block align-top`}>
+        {label}
+      </span>
+    </Tooltip>
+  );
+};
+
 const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({ 
   moduleConfig, 
   data, 
   loading, 
+  deferredDataLoading = false,
   visibleColumns,  // ✅ اضافه شد
   rowSelection, 
   onRow,
@@ -89,6 +144,44 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const { label: currencyLabel } = useCurrencyConfig();
   const activeColumnFilters = controlledColumnFilters ?? internalColumnFilters;
   const isColumnFiltersControlled = controlledColumnFilters !== undefined;
+  const renderDeferredInlinePlaceholder = useCallback(
+    (widthClass = 'w-[72%]') => (
+      <div className="flex min-h-[22px] w-full items-center overflow-hidden">
+        <span className={`inline-block h-4 rounded-md bg-gray-100 dark:bg-gray-700 animate-pulse ${widthClass}`} />
+      </div>
+    ),
+    []
+  );
+  const renderDeferredTagPlaceholder = useCallback(
+    () => (
+      <div className="flex min-h-[22px] items-center gap-1">
+        <span className="inline-block h-[18px] w-16 rounded-md bg-gray-100 dark:bg-gray-700 animate-pulse" />
+        <span className="inline-block h-[18px] w-8 rounded-md bg-gray-100 dark:bg-gray-700 animate-pulse" />
+      </div>
+    ),
+    []
+  );
+  const renderDeferredAssigneePlaceholder = useCallback(
+    () => (
+      <div className="flex min-h-[24px] items-center gap-2">
+        <span className="inline-block h-6 w-6 rounded-full bg-gray-100 dark:bg-gray-700 animate-pulse" />
+        <span className="inline-block h-4 w-20 rounded-md bg-gray-100 dark:bg-gray-700 animate-pulse" />
+      </div>
+    ),
+    []
+  );
+  const renderStableTextCell = useCallback(
+    (label: string, className: string) => (
+      <div className="flex min-h-[22px] w-full items-center overflow-hidden">
+        <OverflowTooltipText label={label} className={className} />
+      </div>
+    ),
+    []
+  );
+  const formatDisplayText = useCallback((value: any) => {
+    if (value === null || value === undefined || value === '') return '-';
+    return toPersianNumber(String(value));
+  }, []);
 
   const updateColumnFilters = useCallback((nextFilters: Record<string, FilterValue | null>) => {
     if (!isColumnFiltersControlled) {
@@ -464,7 +557,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   const resolveFieldFilterOptions = (field: any) => {
     let options: { text: string; value: string | number }[] = [];
-    if (field.options) {
+    if (
+      (moduleConfig?.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
+      || (moduleConfig?.id === 'process_runs' && field.key === 'module_id')
+    ) {
+      options = getProjectModuleOptions().map((o: any) => ({ text: o.label, value: o.value }));
+    } else if (field.options) {
       options = field.options.map((o: any) => ({ text: o.label, value: o.value }));
     } else if ((field as any).dynamicOptionsCategory) {
       const category = (field as any).dynamicOptionsCategory;
@@ -482,6 +580,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   };
 
   const columns: ColumnsType<any> = tableFields.map(field => {
+    const isKeyLikeField = field.isKey || ['name', 'title', 'business_name'].includes(field.key);
     const isSearchable = field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
     const isTagField = field.type === FieldType.TAGS;
     const hasChoiceFilter =
@@ -540,12 +639,40 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       FieldType.TAGS,
       FieldType.PROGRESS_STAGES,
     ].includes(field.type);
+    const shouldDeferFieldValue =
+      deferredDataLoading &&
+      [
+        FieldType.SELECT,
+        FieldType.MULTI_SELECT,
+        FieldType.RELATION,
+        FieldType.USER,
+        FieldType.TAGS,
+      ].includes(field.type);
 
     return {
       title: <span className="text-[11px] text-gray-500">{field.labels.fa}</span>,
       dataIndex: field.key,
       key: field.key,
-      width: field.key === 'id' ? 60 : isTagField ? 110 : undefined,
+      width:
+        field.key === 'id'
+          ? 60
+          : isKeyLikeField
+            ? (moduleConfig?.id === 'products' ? 380 : 340)
+            : isTagField
+              ? 120
+              : field.type === FieldType.RELATION || field.type === FieldType.USER
+                ? 180
+                : field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT
+                  ? 150
+                  : undefined,
+      ellipsis:
+        isKeyLikeField ||
+        field.type === FieldType.RELATION ||
+        field.type === FieldType.USER ||
+        field.type === FieldType.SELECT ||
+        field.type === FieldType.MULTI_SELECT
+          ? { showTitle: false }
+          : undefined,
       filteredValue: activeColumnFilters[field.key] ?? null,
       sorter: canSortField,
       sortOrder,
@@ -579,11 +706,29 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           : undefined),
 
       render: (value: any, record: any) => {
+        const effectiveField = (
+          ((moduleConfig?.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
+            || (moduleConfig?.id === 'process_runs' && field.key === 'module_id'))
+            ? { ...field, options: getProjectModuleOptions() }
+            : field
+        );
         // Shared fallback for empty/invalid dates
         const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[11px]">-</span>;
         
         if (field.type === FieldType.IMAGE) {
             return <Avatar src={value} icon={<AppstoreOutlined />} shape="square" size="default" className="bg-gray-100 border border-gray-200" />;
+        }
+        if (shouldDeferFieldValue) {
+          if (field.type === FieldType.TAGS || field.type === FieldType.MULTI_SELECT) {
+            return renderDeferredTagPlaceholder();
+          }
+          return renderDeferredInlinePlaceholder(
+            field.type === FieldType.RELATION || field.type === FieldType.USER
+              ? 'w-[82%]'
+              : field.type === FieldType.SELECT
+                ? 'w-[68%]'
+                : 'w-[64%]'
+          );
         }
         if (field.type === FieldType.DATE && value) {
           const formatted = formatPersianDate(value, 'DATE');
@@ -600,24 +745,43 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           if (!formatted) return emptyDateCell;
           return <span className="dir-ltr text-gray-500 font-medium text-[11px]">{formatted}</span>;
         }
+        if (field.type === FieldType.CHECKBOX) {
+            return (
+              <Tag
+                color={value ? 'green' : 'default'}
+                style={{ fontSize: '10px', marginRight: 0 }}
+              >
+                {value ? 'بله' : 'خیر'}
+              </Tag>
+            );
+        }
         if (field.type === FieldType.STATUS) {
             const opt = field.options?.find(o => o.value === value);
             const label = opt?.label || value;
             return <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>;
         }
         if (field.type === FieldType.SELECT) {
-            const label = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
-            return <span className="text-xs text-gray-600 dark:text-gray-300">{label}</span>;
+            const label = getSingleOptionLabel(effectiveField, value, dynamicOptions, relationOptions);
+            return renderStableTextCell(
+              formatDisplayText(label),
+              "block w-full truncate text-xs text-gray-600 dark:text-gray-300"
+            );
         }
         if (field.type === FieldType.RELATION) {
             const label = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
             const targetModule = (field as any)?.relationConfig?.targetModule;
             if (!targetModule || !value) {
-              return <span className="text-xs text-leather-600 hover:underline font-medium">{label}</span>;
+              return renderStableTextCell(
+                formatDisplayText(label),
+                "block w-full truncate text-xs text-leather-600 hover:underline font-medium"
+              );
             }
             return (
               <RelatedRecordPopover moduleId={targetModule} recordId={String(value)} label={String(label || value)}>
-                <span className="text-xs text-leather-600 hover:underline font-medium">{label}</span>
+                {renderStableTextCell(
+                  formatDisplayText(label),
+                  "block w-full truncate text-xs text-leather-600 hover:underline font-medium"
+                )}
               </RelatedRecordPopover>
             );
         }
@@ -630,7 +794,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
               getSafeOptionFallback(value);
             return (
               <RelatedRecordPopover moduleId="profiles" recordId={String(value)} label={String(userLabel)}>
-                <span className="text-xs text-leather-600 hover:underline font-medium">{userLabel}</span>
+                {renderStableTextCell(
+                  formatDisplayText(userLabel),
+                  "block w-full truncate text-xs text-leather-600 hover:underline font-medium"
+                )}
               </RelatedRecordPopover>
             );
         }
@@ -646,7 +813,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             : String(field.key || 'production_stages_draft');
           const draftStages = Array.isArray(record?.[draftKey]) ? record[draftKey] : [];
           return (
-            <div style={{ minWidth: 200 }}>
+            <div style={{ minWidth: 200, minHeight: 20 }}>
               <ProductionStagesField
                 recordId={record.id}
                 moduleId={moduleConfig?.id}
@@ -663,19 +830,19 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           
         if (field.type === FieldType.TAGS) {
             if (!Array.isArray(value) || value.length === 0) {
-              return <span className="inline-flex min-h-[18px] items-center text-xs text-gray-400">-</span>;
+              return <span className="inline-flex min-h-[22px] items-center text-xs text-gray-400">-</span>;
             }
             
             const firstTag = value.slice(0, 1);
             const remainingTags = value.slice(1);
             
             return (
-              <div className="flex min-h-[18px] flex-wrap gap-1 items-center">
+              <div className="flex min-h-[22px] max-w-[220px] items-center gap-1 overflow-hidden whitespace-nowrap">
                 {firstTag.map((tag: any, idx: number) => {
                   const tagTitle = typeof tag === 'string' ? tag : tag.title || tag.label;
                   const tagColor = typeof tag === 'string' ? 'blue' : (tag.color || 'blue');
                   return (
-                    <Tag key={idx} color={tagColor} style={{fontSize: '9px', marginRight: 0, padding: '1px 4px', lineHeight: '14px'}}>
+                    <Tag key={idx} color={tagColor} style={{fontSize: '9px', marginRight: 0, padding: '1px 4px', lineHeight: '14px', maxWidth: 120}} className="truncate">
                       {tagTitle}
                     </Tag>
                   );
@@ -708,16 +875,23 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         }
         if (field.type === FieldType.MULTI_SELECT) {
             if (!Array.isArray(value) || value.length === 0) return '-';
+            const visibleValues = value.slice(0, 1);
+            const hiddenCount = value.length - visibleValues.length;
             return (
-              <div className="flex flex-wrap gap-1">
-                {value.map((val: any, idx: number) => {
-                  const label = getSingleOptionLabel(field, val, dynamicOptions, relationOptions);
+              <div className="flex min-h-[22px] max-w-[220px] items-center gap-1 overflow-hidden whitespace-nowrap">
+                {visibleValues.map((val: any, idx: number) => {
+                  const label = getSingleOptionLabel(effectiveField, val, dynamicOptions, relationOptions);
                   return (
-                    <Tag key={idx} color="default" style={{fontSize: '9px', marginRight: 0, backgroundColor: '#fef3c7', borderColor: '#d97706', color: '#92400e'}} className="font-medium">
+                    <Tag key={idx} color="default" style={{fontSize: '9px', marginRight: 0, backgroundColor: '#fef3c7', borderColor: '#d97706', color: '#92400e', maxWidth: 120}} className="truncate font-medium">
                       {label}
                     </Tag>
                   );
                 })}
+                {hiddenCount > 0 && (
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+                    +{hiddenCount}
+                  </span>
+                )}
               </div>
             );
         }
@@ -755,14 +929,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                />
              );
         }
-        if (field.isKey || ['name', 'title', 'business_name'].includes(field.key)) {
-             return (
-                <span className="text-leather-600 font-bold text-sm hover:underline">
-                    {value}
-                </span>
-            );
+        if (isKeyLikeField) {
+             return renderStableTextCell(
+               formatDisplayText(value),
+               "block w-full truncate text-leather-600 font-bold text-sm hover:underline"
+             );
         }
-        return <span className="text-xs text-gray-600 dark:text-gray-300">{value}</span>;
+        return <span className="block max-w-[220px] truncate text-xs text-gray-600 dark:text-gray-300">{value}</span>;
       }
     };
   });
@@ -803,18 +976,21 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     filters: assigneeFilterOptions,
     onFilter: (value, record) => String(getResolvedAssigneeId(record) ?? '') === String(value ?? ''),
     render: (_: any, record: any) => {
+      if (deferredDataLoading) {
+        return renderDeferredAssigneePlaceholder();
+      }
       const assigneeId = getResolvedAssigneeId(record);
       const assigneeType = record.assignee_type;
       
       if (!assigneeId) {
-        return <span className="text-[10px] text-gray-300">-</span>;
+        return <span className="inline-flex min-h-[24px] items-center text-[10px] text-gray-300">-</span>;
       }
       
       if (assigneeType === 'user') {
         const user = allUsers.find(u => u.id === assigneeId);
         if (user) {
           return (
-            <div className="flex items-center gap-1">
+            <div className="flex min-h-[24px] items-center gap-1">
               {user.avatar_url ? (
                 <Avatar src={user.avatar_url} size="small" />
               ) : (
@@ -828,7 +1004,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         const role = allRoles.find(r => r.id === assigneeId);
         if (role) {
           return (
-            <div className="flex items-center gap-1">
+            <div className="flex min-h-[24px] items-center gap-1">
               <Avatar icon={<TeamOutlined />} size="small" className="bg-blue-100 text-blue-600" />
               <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]">{role.title}</span>
             </div>
@@ -1006,6 +1182,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     pagination === false
       ? false
       : {
+          ...(pagination || {}),
           pageSize: 10,
           position: ['bottomCenter'],
           size: 'small',
@@ -1019,7 +1196,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             }
             return originalElement;
           },
-          ...(pagination || {}),
         };
 
   return (

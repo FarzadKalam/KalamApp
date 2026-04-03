@@ -21,6 +21,7 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
 import { clearSessionBootstrapCache } from '../../utils/sessionCache';
+import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
 
@@ -239,12 +240,19 @@ const UsersTab: React.FC = () => {
   const handleAvatarUpload = async (file: File) => {
     try {
       const fileName = `avatar-${Date.now()}.${file.name.split('.').pop()}`;
-      const { error } = await supabase.storage.from('images').upload(fileName, file);
-      if (error) throw error;
+      await uploadFileWithProgress({
+        client: supabase,
+        bucket: 'images',
+        path: fileName,
+        file,
+        label: file.name || 'آواتار',
+        detail: 'تصویر کاربر',
+      });
       const { data } = supabase.storage.from('images').getPublicUrl(fileName);
       setAvatarUrl(data.publicUrl);
       return false;
     } catch (error) {
+      if (isUploadCanceledError(error)) return false;
       message.error(toFaErrorMessage(error as any, 'خطا در آپلود عکس'));
       return false;
     }

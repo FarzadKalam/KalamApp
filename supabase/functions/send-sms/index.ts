@@ -58,7 +58,7 @@ const DEFAULT_SMS_CREDIT_URL = 'https://api.payamak-panel.com/post/send.asmx/Get
 const DEFAULT_SMS_OTP_URL = 'https://rest.payamak-panel.com/api/SendSMS/SendOtp';
 const DEFAULT_SMS_OTP_SOAP_URL = 'https://api.payamak-panel.com/post/Send.asmx/SendOtp';
 
-const mergeEnvSmsSettings = (settings: SmsSettings | null | undefined): SmsSettings => ({
+const mergeEnvPreferredSmsSettings = (settings: SmsSettings | null | undefined): SmsSettings => ({
   ...(settings || {}),
   username: String(Deno.env.get('MELIPAYAMAK_USERNAME') || settings?.username || '').trim(),
   password: String(Deno.env.get('MELIPAYAMAK_PASSWORD') || settings?.password || '').trim(),
@@ -69,6 +69,19 @@ const mergeEnvSmsSettings = (settings: SmsSettings | null | undefined): SmsSetti
   otp_text_template: String(Deno.env.get('MELIPAYAMAK_OTP_TEXT_TEMPLATE') || settings?.otp_text_template || '').trim(),
   otp_soap_url: String(Deno.env.get('MELIPAYAMAK_OTP_SOAP_URL') || settings?.otp_soap_url || '').trim(),
   otp_shared_body_id: String(Deno.env.get('MELIPAYAMAK_OTP_SHARED_BODY_ID') || settings?.otp_shared_body_id || settings?.body_id || '').trim(),
+});
+
+const mergeEnvFallbackSmsSettings = (settings: SmsSettings | null | undefined): SmsSettings => ({
+  ...(settings || {}),
+  username: String(settings?.username || Deno.env.get('MELIPAYAMAK_USERNAME') || '').trim(),
+  password: String(settings?.password || Deno.env.get('MELIPAYAMAK_PASSWORD') || '').trim(),
+  api_key: String(settings?.api_key || Deno.env.get('MELIPAYAMAK_API_KEY') || '').trim(),
+  sender_number: String(settings?.sender_number || Deno.env.get('MELIPAYAMAK_SENDER_NUMBER') || '').trim(),
+  console_advanced_url: String(settings?.console_advanced_url || Deno.env.get('MELIPAYAMAK_CONSOLE_ADVANCED_URL') || '').trim(),
+  console_shared_url: String(settings?.console_shared_url || Deno.env.get('MELIPAYAMAK_CONSOLE_SHARED_URL') || '').trim(),
+  otp_text_template: String(settings?.otp_text_template || Deno.env.get('MELIPAYAMAK_OTP_TEXT_TEMPLATE') || '').trim(),
+  otp_soap_url: String(settings?.otp_soap_url || Deno.env.get('MELIPAYAMAK_OTP_SOAP_URL') || '').trim(),
+  otp_shared_body_id: String(settings?.otp_shared_body_id || settings?.body_id || Deno.env.get('MELIPAYAMAK_OTP_SHARED_BODY_ID') || '').trim(),
 });
 
 const getServiceHeaders = (serviceRoleKey: string) => ({
@@ -183,7 +196,7 @@ const normalizeSmsUrl = (url: string, mode: SmsMode) => {
 
 const getSmsSettings = async (supabaseUrl: string, serviceRoleKey: string, overrideSettings?: SmsSettings | null) => {
   if (overrideSettings && typeof overrideSettings === 'object') {
-    return mergeEnvSmsSettings(overrideSettings);
+    return mergeEnvFallbackSmsSettings(overrideSettings);
   }
 
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
@@ -204,11 +217,11 @@ const getSmsSettings = async (supabaseUrl: string, serviceRoleKey: string, overr
   const row = Array.isArray(parsed) ? parsed[0] : null;
   if (!row) throw new Error('تنظیمات پیامک فعال نیست.');
 
-  return mergeEnvSmsSettings((row.settings || {}) as SmsSettings);
+  return mergeEnvFallbackSmsSettings((row.settings || {}) as SmsSettings);
 };
 
 const getHookSmsSettings = (overrideSettings?: SmsSettings | null) => {
-  const settings = mergeEnvSmsSettings(overrideSettings);
+  const settings = mergeEnvPreferredSmsSettings(overrideSettings);
   const providerMode = getOtpProviderMode(settings);
   const username = String(settings.username || '').trim();
   const passwordOrApiKey = String(settings.password || settings.api_key || '').trim();

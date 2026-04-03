@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Input, Tabs, message, theme } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { Alert, App, Button, Card, Input, Tabs, theme } from 'antd';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
+import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
@@ -10,24 +11,17 @@ import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_RESEND_SECONDS = 90;
-const BRANDING_CACHE_KEY = 'erp:branding-cache';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
 const OTP_REQUESTED_FOR_STORAGE_KEY = 'kalam_login_otp_requested_for';
 const OTP_CODE_STORAGE_KEY = 'kalam_login_otp_code';
 const OTP_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_login_otp_cooldown_until';
 
-const readRuntimeBrandTitle = () => {
-  if (typeof window === 'undefined') return DEFAULT_BRANDING.brandName;
-  const runtimeTitle = document.documentElement.getAttribute('data-brand-title');
-  if (runtimeTitle?.trim()) return runtimeTitle.trim();
-  try {
-    const raw = window.localStorage.getItem(BRANDING_CACHE_KEY);
-    if (!raw) return DEFAULT_BRANDING.brandName;
-    const parsed = JSON.parse(raw) as { appTitle?: string; brandName?: string };
-    return String(parsed?.appTitle || parsed?.brandName || DEFAULT_BRANDING.brandName).trim() || DEFAULT_BRANDING.brandName;
-  } catch {
-    return DEFAULT_BRANDING.brandName;
-  }
+const readRuntimeBrandSnapshot = () => {
+  const branding = readRuntimeBranding();
+  return {
+    title: branding.appTitle || branding.brandName || DEFAULT_BRANDING.brandName,
+    logoUrl: branding.logoUrl || null,
+  };
 };
 
 const getOtpErrorMessage = (error: any) => {
@@ -78,6 +72,7 @@ const getOtpErrorMessage = (error: any) => {
 };
 
 const Login = () => {
+  const { message } = App.useApp();
   const [loginMode, setLoginMode] = useState<'password' | 'otp'>(() => {
     if (typeof window === 'undefined') return 'password';
     return window.localStorage.getItem(LOGIN_MODE_STORAGE_KEY) === 'otp' ? 'otp' : 'password';
@@ -93,9 +88,19 @@ const Login = () => {
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [otpLoading, setOtpLoading] = useState(false);
-  const [brandTitle, setBrandTitle] = useState(readRuntimeBrandTitle);
+  const [brandTitle, setBrandTitle] = useState(() => readRuntimeBrandSnapshot().title);
+  const [brandLogoUrl, setBrandLogoUrl] = useState<string | null>(() => readRuntimeBrandSnapshot().logoUrl);
   const navigate = useNavigate();
+  const location = useLocation();
   const { token } = theme.useToken();
+  const postLoginRedirect = useMemo(() => {
+    const params = new URLSearchParams(location.search || '');
+    const redirectTo = String(params.get('redirectTo') || '').trim();
+    if (redirectTo.startsWith('/') && !redirectTo.startsWith('//')) {
+      return redirectTo;
+    }
+    return '/';
+  }, [location.search]);
 
   const normalizedPhone = useMemo(() => normalizeIranMobile(phone), [phone]);
   const canVerifyOtp = !!otpRequestedFor && otpCode.trim().length >= 4;
@@ -109,10 +114,12 @@ const Login = () => {
   };
 
   useEffect(() => {
-    const syncBrandTitle = () => {
-      setBrandTitle(readRuntimeBrandTitle());
+    const syncBranding = () => {
+      const snapshot = readRuntimeBrandSnapshot();
+      setBrandTitle(snapshot.title);
+      setBrandLogoUrl(snapshot.logoUrl);
     };
-    syncBrandTitle();
+    syncBranding();
 
     const hash = window.location.hash || '';
     const search = window.location.search || '';
@@ -126,13 +133,13 @@ const Login = () => {
       }
     });
 
-    window.addEventListener(BRANDING_APPLIED_EVENT, syncBrandTitle as EventListener);
-    window.addEventListener('storage', syncBrandTitle);
+    window.addEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
+    window.addEventListener('storage', syncBranding);
 
     return () => {
       subscription?.subscription?.unsubscribe();
-      window.removeEventListener(BRANDING_APPLIED_EVENT, syncBrandTitle as EventListener);
-      window.removeEventListener('storage', syncBrandTitle);
+      window.removeEventListener(BRANDING_APPLIED_EVENT, syncBranding as EventListener);
+      window.removeEventListener('storage', syncBranding);
     };
   }, []);
 
@@ -475,7 +482,7 @@ const Login = () => {
       await trackSuccessfulLogin('password');
 
       message.success('خوش آمدید! در حال ورود...');
-      navigate('/');
+        navigate(postLoginRedirect, { replace: true });
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_user_inactive__')) {
@@ -574,7 +581,7 @@ const Login = () => {
       setOtpCooldown(0);
 
       message.success('ورود با موفقیت انجام شد.');
-      navigate('/');
+        navigate(postLoginRedirect, { replace: true });
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_phone_repaired_retry__')) {
@@ -624,7 +631,7 @@ const Login = () => {
       setNewPassword('');
       setConfirmNewPassword('');
       window.history.replaceState({}, document.title, '/login');
-      navigate('/');
+        navigate(postLoginRedirect, { replace: true });
     } catch (error: any) {
       message.error(`خطا در تغییر رمز: ${error.message}`);
     } finally {
@@ -649,6 +656,11 @@ const Login = () => {
               boxShadow: token.boxShadowSecondary,
             }}
           >
+            {brandLogoUrl ? (
+              <div className="mb-3 flex justify-center">
+                <img src={brandLogoUrl} alt={brandTitle} className="h-14 max-w-[180px] object-contain" />
+              </div>
+            ) : null}
             <div className="text-lg font-black text-leather-600">{brandTitle}</div>
             <div className="text-xs mt-1" style={{ color: token.colorTextTertiary }}>
               Business Automation Platform

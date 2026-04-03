@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Image, Input, List, Modal, Tag, Upload } from 'antd';
+import { App, Button, Image, Input, List, Modal, Tag, Typography, Upload } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -21,6 +21,7 @@ import {
   isMissingRecordFilesError,
   setRecordFilesTableAvailability,
 } from '../utils/recordFilesAvailability';
+import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 
 export type RecordFileType = 'image' | 'video' | 'file';
 
@@ -104,10 +105,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const { message: msg } = App.useApp();
   const [items, setItems] = useState<RecordFileItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [recordFilesEnabled, setRecordFilesEnabled] = useState<boolean>(recordFilesTableExistsCache !== false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pendingFileName, setPendingFileName] = useState('');
+  const [pendingFileExtension, setPendingFileExtension] = useState('');
   const [nameModalOpen, setNameModalOpen] = useState(false);
   const canDeleteFiles = canDelete ?? canEdit;
 
@@ -208,10 +209,12 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
   const buildStoredFileName = (file: File, desiredName: string) => {
     const ext = file.name.includes('.') ? String(file.name.split('.').pop() || '').trim() : '';
-    const cleanDesired = safeFileName(desiredName.trim() || file.name || 'file');
-    const lowerExt = ext.toLowerCase();
-    const hasExt = lowerExt ? cleanDesired.toLowerCase().endsWith(`.${lowerExt}`) : true;
-    const finalBase = hasExt || !ext ? cleanDesired : `${cleanDesired}.${ext}`;
+    const rawDesired = desiredName.trim() || file.name || 'file';
+    const desiredBase = ext && rawDesired.toLowerCase().endsWith(`.${ext.toLowerCase()}`)
+      ? rawDesired.slice(0, -1 * (ext.length + 1))
+      : rawDesired;
+    const cleanDesired = safeFileName(desiredBase || 'file');
+    const finalBase = ext ? `${cleanDesired}.${ext}` : cleanDesired;
     return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${finalBase}`;
   };
 
@@ -219,8 +222,14 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!recordId) throw new Error('Record id is required');
     const storedFileName = buildStoredFileName(file, desiredName);
     const filePath = `record_files/${moduleId}/${recordId}/${storedFileName}`;
-    const { error } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
-    if (error) throw error;
+    await uploadFileWithProgress({
+      client: fileStorageClient,
+      bucket: FILE_STORAGE_BUCKET,
+      path: filePath,
+      file,
+      label: desiredName || file.name || 'فایل',
+      detail: moduleId,
+    });
     return fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath).data.publicUrl;
   };
 
@@ -232,7 +241,6 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
     const type = getFileType(file);
     try {
-      setUploading(true);
       let useLegacy = !recordFilesEnabled || recordFilesTableExistsCache === false;
       if (useLegacy) {
         const tableExists = await detectRecordFilesTable(supabase, true);
@@ -312,6 +320,9 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       if (type === 'image' && !mainImage && onMainImageChange) onMainImageChange(url);
       msg.success('فایل اضافه شد');
     } catch (error: any) {
+      if (isUploadCanceledError(error)) {
+        return false;
+      }
       if (isMissingRecordFilesError(error)) {
         recordFilesTableExistsCache = false;
         setRecordFilesTableAvailability(false);
@@ -320,8 +331,6 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       } else {
         msg.error('خطا در ثبت فایل: ' + (error?.message || 'نامشخص'));
       }
-    } finally {
-      setUploading(false);
     }
     return false;
   };
@@ -331,31 +340,40 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return false;
     }
+    const fileName = String(file.name || '').trim();
+    const lastDotIndex = fileName.lastIndexOf('.');
+    const baseName = lastDotIndex > 0 ? fileName.slice(0, lastDotIndex) : fileName || 'file';
+    const extension = lastDotIndex > 0 ? fileName.slice(lastDotIndex + 1) : '';
     setPendingFile(file);
-    setPendingFileName(file.name || '');
+    setPendingFileName(baseName);
+    setPendingFileExtension(extension);
     setNameModalOpen(true);
     return false;
   };
 
-  const handleConfirmUpload = async () => {
-    if (!pendingFile) return;
+  const handleConfirmUpload = () => {
+    if (!pendingFile) return false;
     const finalName = pendingFileName.trim();
     if (!finalName) {
       msg.warning('نام فایل الزامی است');
-      return;
+      return false;
     }
 
-    await uploadFile(pendingFile, finalName);
+    const file = pendingFile;
+    const finalFileName = pendingFileExtension ? `${finalName}.${pendingFileExtension}` : finalName;
     setNameModalOpen(false);
     setPendingFile(null);
     setPendingFileName('');
+    setPendingFileExtension('');
+    void uploadFile(file, finalFileName);
+    return false;
   };
 
   const handleCancelUploadPrompt = () => {
-    if (uploading) return;
     setNameModalOpen(false);
     setPendingFile(null);
     setPendingFileName('');
+    setPendingFileExtension('');
   };
 
   const handleDelete = async (fileId: string) => {
@@ -526,8 +544,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       </div>
 
       <div className="mt-4 flex items-center justify-between">
-        <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={uploading || !recordId || !canEdit} fileList={[]}>
-          <Button icon={<UploadOutlined />} loading={uploading}>افزودن فایل (عکس، فیلم، فایل)</Button>
+        <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canEdit} fileList={[]}>
+          <Button icon={<UploadOutlined />}>افزودن فایل (عکس، فیلم، فایل)</Button>
         </Upload>
         <div className="text-xs text-gray-400 flex items-center gap-2">
           <PaperClipOutlined />
@@ -540,9 +558,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       <Modal
         title="نام فایل آپلودی"
         open={nameModalOpen}
-        onOk={() => void handleConfirmUpload()}
+        onOk={handleConfirmUpload}
         onCancel={handleCancelUploadPrompt}
-        confirmLoading={uploading}
         okText="آپلود"
         cancelText="انصراف"
         destroyOnHidden
@@ -552,8 +569,14 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           value={pendingFileName}
           onChange={(e) => setPendingFileName(e.target.value)}
           placeholder="نام فایل را وارد کنید"
-          onPressEnter={() => void handleConfirmUpload()}
+          onPressEnter={handleConfirmUpload}
         />
+        {pendingFileExtension ? (
+          <div className="mt-3 flex items-center gap-2 text-xs" style={{ color: 'var(--ant-color-text-secondary)' }}>
+            <span>پسوند:</span>
+            <Typography.Text code>.{pendingFileExtension}</Typography.Text>
+          </div>
+        ) : null}
       </Modal>
     </Modal>
   );

@@ -17,6 +17,7 @@ import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { supportsGlobalRoleAssignee } from '../../utils/assigneeSupport';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
+import { doesProcessTemplateSupportModule } from '../../utils/processTargets';
 import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { supportsSystemCode } from '../../utils/systemCode';
 import {
@@ -133,14 +134,12 @@ const loadWorkflowFieldOptions = async (
   if (targetModule === 'process_templates') {
     const { data, error } = await supabase
       .from('process_templates')
-      .select('id, name, module_id, is_active')
+      .select('id, name, module_id, module_ids, is_active')
       .order('name', { ascending: true });
     if (error) throw error;
 
     const scopedRows = (data || []).filter((row: any) => {
-      if (row?.is_active === false) return false;
-      const rowModuleId = String(row?.module_id || '').trim();
-      return !rowModuleId || rowModuleId === scopeModuleId;
+      return row?.is_active !== false && doesProcessTemplateSupportModule(row, scopeModuleId);
     });
 
     return scopedRows.map((row: any) => ({
@@ -504,6 +503,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
             onChange={setActions}
             currentModuleId={moduleId}
             currentModuleFields={selectedModuleFields}
+            variableFields={conditionFields}
             moduleOptions={moduleOptions}
             dynamicOptions={dynamicOptions}
             relationOptions={relationOptions}

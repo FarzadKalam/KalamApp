@@ -20,8 +20,10 @@ export type CurrentUserRoleContext = {
 export const SETTINGS_PERMISSION_KEY = '__settings_tabs';
 export const DASHBOARD_PERMISSION_KEY = '__dashboard_widgets';
 export const WORKFLOWS_PERMISSION_KEY = '__workflows';
+export const GOALS_PERMISSION_KEY = '__goals';
 export const FILES_PERMISSION_KEY = '__files_access';
 export const ACCOUNTING_PERMISSION_KEY = '__accounting';
+export const REPORTS_PERMISSION_KEY = '__reports';
 export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
@@ -52,6 +54,12 @@ export const WORKFLOWS_PERMISSION_FIELDS = [
   { key: 'module_list_button', label: 'نمایش در بالای لیست ماژول ها' },
 ];
 
+export const GOALS_PERMISSION_FIELDS = [
+  { key: 'module_list_button', label: 'نمایش مدیریت هدف‌ها در لیست ماژول' },
+  { key: 'module_list_cards', label: 'نمایش کارت‌های هدف در لیست ماژول' },
+  { key: 'dashboard_widget', label: 'نمایش کارت‌های هدف در داشبورد' },
+];
+
 export const FILES_PERMISSION_FIELDS = [
   { key: 'gallery_page', label: 'گالری فایل‌ها' },
   { key: 'record_files_manager', label: 'مدیریت فایل‌ها' },
@@ -66,6 +74,11 @@ export const ACCOUNTING_PERMISSION_FIELDS = [
   { key: 'journal_entry_lines_view', label: 'مشاهده ردیف های سند حسابداری' },
   { key: 'journal_entry_lines_edit', label: 'ویرایش/ایجاد ردیف های سند حسابداری' },
   { key: 'journal_entry_lines_delete', label: 'حذف ردیف های سند حسابداری' },
+];
+
+export const REPORTS_PERMISSION_FIELDS = [
+  { key: 'hub_page', label: 'صفحه گزارشات' },
+  { key: 'builder_page', label: 'گزارش ساز' },
 ];
 
 export const MOBILE_FOOTER_DEFAULT_MODULES = ['products', 'production_orders', 'invoices', 'customers'] as const;
@@ -204,6 +217,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     fields: createFieldsMap(WORKFLOWS_PERMISSION_FIELDS),
   };
 
+  defaults[GOALS_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    record_scope: 'all',
+    fields: createFieldsMap(GOALS_PERMISSION_FIELDS),
+  };
+
   defaults[FILES_PERMISSION_KEY] = {
     view: true,
     edit: true,
@@ -218,6 +239,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     delete: true,
     record_scope: 'all',
     fields: createFieldsMap(ACCOUNTING_PERMISSION_FIELDS),
+  };
+
+  defaults[REPORTS_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    record_scope: 'all',
+    fields: createFieldsMap(REPORTS_PERMISSION_FIELDS),
   };
 
   defaults[MOBILE_FOOTER_PERMISSION_KEY] = {
@@ -390,6 +419,39 @@ export const resolveFilesAccessPermissions = (permissions: PermissionMap | null 
     canViewRecordFilesManager,
     canEditRecordFilesManager: canViewRecordFilesManager && canEditRoot,
     canDeleteRecordFilesManager: canViewRecordFilesManager && canDeleteRoot,
+  };
+};
+
+export const resolveReportsAccessPermissions = (permissions: PermissionMap | null | undefined) => {
+  const perm = permissions?.[REPORTS_PERMISSION_KEY] || {};
+  const fields = perm.fields || {};
+  const canViewRoot = perm.view !== false;
+  const canEditRoot = perm.edit !== false;
+  const canDeleteRoot = perm.delete !== false;
+
+  const canViewHub = canViewRoot && fields.hub_page !== false;
+  const canUseBuilder = canViewHub && canEditRoot && fields.builder_page !== false;
+
+  return {
+    canViewHub,
+    canUseBuilder,
+    canDeleteReports: canViewHub && canDeleteRoot,
+  };
+};
+
+export const resolveGoalsAccessPermissions = (permissions: PermissionMap | null | undefined) => {
+  const perm = permissions?.[GOALS_PERMISSION_KEY] || {};
+  const fields = perm.fields || {};
+  const canViewRoot = perm.view !== false;
+  const canEditRoot = perm.edit !== false;
+  const canDeleteRoot = perm.delete !== false;
+
+  return {
+    canViewManager: canViewRoot && fields.module_list_button !== false,
+    canViewModuleCards: canViewRoot && fields.module_list_cards !== false,
+    canViewDashboardWidget: canViewRoot && fields.dashboard_widget !== false,
+    canEditGoals: canViewRoot && canEditRoot,
+    canDeleteGoals: canViewRoot && canDeleteRoot,
   };
 };
 

@@ -6,6 +6,7 @@ import ProductionStagesField from '../../components/ProductionStagesField';
 import { calculateSummary } from '../../utils/calculations';
 import { SummaryCalculationType, FieldType } from '../../types';
 import { supabase } from '../../supabaseClient';
+import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 
 // 👇 اینترفیس اصلاح شد: حذف linkedBomData و ...
 interface TablesSectionProps {
@@ -272,6 +273,12 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             <ProductionStagesField 
               recordId={data.id} 
               moduleId={module.id}
+              automationContextModuleId={null}
+              automationContextModuleIds={
+                module.id === 'process_templates' || module.id === 'process_runs'
+                  ? normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)
+                  : null
+              }
               readOnly={!canEditModule || productionLocked || isRunPreviewField}
               compact={true}
               onQuantityChange={isProductionOrder ? (qty) => onDataUpdate?.({ quantity: qty }) : undefined}

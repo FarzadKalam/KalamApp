@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Drawer, Empty, Input, List, Popover, Select, Skeleton, Tabs } from 'antd';
+import { Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs, message } from 'antd';
 import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -194,7 +194,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
   const [createdByNameMap, setCreatedByNameMap] = useState<Record<string, string>>({});
-  const [directoryUsers, setDirectoryUsers] = useState<Array<{ id: string; display_name: string; avatar_url?: string | null }>>([]);
+  const [directoryUsers, setDirectoryUsers] = useState<Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>>([]);
   const [directoryRoles, setDirectoryRoles] = useState<Array<{ id: string; title: string }>>([]);
   const [noteModuleId, setNoteModuleId] = useState<string | null>(null);
   const [noteRecordId, setNoteRecordId] = useState<string | null>(null);
@@ -204,12 +204,17 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
   const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(null);
   const [noteUserSearch, setNoteUserSearch] = useState('');
+  const [noteMessageSearch, setNoteMessageSearch] = useState('');
   const [noteMentionPickerOpen, setNoteMentionPickerOpen] = useState(false);
+  const [noteMessageSearchOpen, setNoteMessageSearchOpen] = useState(false);
   const [mobileNoteSearchOpen, setMobileNoteSearchOpen] = useState(false);
   const [mentionOptions, setMentionOptions] = useState<{ label: string; value: string }[]>([]);
   const [mentionValues, setMentionValues] = useState<string[]>([]);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteValue, setEditingNoteValue] = useState('');
+  const [forwardingNote, setForwardingNote] = useState<any | null>(null);
+  const [forwardTargetUserIds, setForwardTargetUserIds] = useState<string[]>([]);
+  const [forwardSubmitting, setForwardSubmitting] = useState(false);
   const [desktopActiveKey, setDesktopActiveKey] = useState<'notes' | 'tasks' | 'responsibilities'>('tasks');
   const [mobileActiveKey, setMobileActiveKey] = useState<'notes' | 'tasks' | 'responsibilities'>('tasks');
   const [responsibilityViewKey, setResponsibilityViewKey] = useState('all');
@@ -231,6 +236,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const notesPollingPausedRef = useRef(false);
   const notesPollingPauseLoggedRef = useRef(false);
   const mobileDrawerHistoryActiveRef = useRef(false);
+  const notesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const noteShouldStickToBottomRef = useRef(true);
+  const noteForceScrollToBottomRef = useRef(false);
   const lastLoadedAtRef = useRef<Record<NotificationSectionKey, number>>({
     notes: 0,
     tasks: 0,
@@ -986,11 +994,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     return next;
   }, [taskViewKey, tasks]);
   const directoryUserMap = useMemo(
-    () => directoryUsers.reduce<Record<string, { id: string; display_name: string; avatar_url?: string | null }>>((acc, user) => {
+    () => directoryUsers.reduce<Record<string, { id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>>((acc, user) => {
       acc[String(user.id)] = user;
       return acc;
     }, {}),
     [directoryUsers]
+  );
+  const roleLookup = useMemo(
+    () => directoryRoles.reduce<Record<string, string>>((acc, role) => {
+      acc[String(role.id)] = role.title;
+      return acc;
+    }, {}),
+    [directoryRoles]
   );
   const noteLookup = useMemo(
     () => new Map(notes.map((note: any) => [String(note.id), note])),
@@ -1044,6 +1059,46 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (!selectedNoteUserId) return null;
     return directoryUserMap[String(selectedNoteUserId)] || null;
   }, [directoryUserMap, selectedNoteUserId]);
+  const orderedFilteredNotes = useMemo(
+    () => [...filteredNotes].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+    [filteredNotes]
+  );
+  const normalizedNoteMessageSearch = useMemo(
+    () => String(noteMessageSearch || '').trim().toLowerCase(),
+    [noteMessageSearch]
+  );
+  const displayedChatNotes = useMemo(() => {
+    if (!normalizedNoteMessageSearch) return orderedFilteredNotes;
+    return orderedFilteredNotes.filter((note: any) => {
+      const parsedContent = parseNoteContent(note.content);
+      const authorLabel = String(
+        note.author_name
+        || directoryUserMap[String(note.author_id || '')]?.display_name
+        || authorNameMap[note.author_id]
+        || ''
+      ).toLowerCase();
+      const attachmentNames = parsedContent.attachments.map((attachment) => attachment.name).join(' ').toLowerCase();
+      const haystack = `${parsedContent.text || ''} ${authorLabel} ${attachmentNames}`.toLowerCase();
+      return haystack.includes(normalizedNoteMessageSearch);
+    });
+  }, [authorNameMap, directoryUserMap, normalizedNoteMessageSearch, orderedFilteredNotes]);
+  const activeConversationRoleLabel = useMemo(() => {
+    if (!selectedNoteUser?.role_id) return 'بدون نقش';
+    return roleLookup[String(selectedNoteUser.role_id)] || 'بدون نقش';
+  }, [roleLookup, selectedNoteUser]);
+  const forwardTargetOptions = useMemo(
+    () => directoryUsers
+      .filter((user) => String(user.id) !== String(profile.id || ''))
+      .map((user) => {
+        const roleLabel = user.role_id ? roleLookup[String(user.role_id)] : '';
+        return {
+          label: roleLabel ? `${user.display_name} - ${roleLabel}` : user.display_name,
+          value: String(user.id),
+          searchText: `${user.display_name} ${roleLabel || ''}`.toLowerCase(),
+        };
+      }),
+    [directoryUsers, profile.id, roleLookup]
+  );
   const responsibilityViews = useMemo(() => {
     const seen = new Set<string>();
     const items = [{ key: 'all', label: 'همه رکوردها' }];
@@ -1111,10 +1166,27 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     padding: 0,
     overflow: 'hidden',
   };
+  function scrollNotesToBottom(behavior: ScrollBehavior = 'auto') {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      const node = notesScrollContainerRef.current;
+      if (!node) return;
+      node.scrollTo({ top: node.scrollHeight, behavior });
+    });
+  }
+  const handleNotesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const node = event.currentTarget;
+    const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    noteShouldStickToBottomRef.current = distanceToBottom <= 80;
+  }, []);
 
   const handleClose = useCallback(() => {
     mobileDrawerHistoryActiveRef.current = false;
     setMobileNoteSearchOpen(false);
+    setNoteMessageSearch('');
+    setNoteMessageSearchOpen(false);
+    setForwardingNote(null);
+    setForwardTargetUserIds([]);
     setSeenNoteIds((prev) => new Set([...prev, ...notes.map((n: any) => String(n.id))]));
     setSeenTaskIds((prev) => new Set([...prev, ...tasks.map((t: any) => String(t.id))]));
     setSeenResponsibilityIds((prev) => new Set([...prev, ...responsibilities.map((r: any) => String(r.id))]));
@@ -1122,6 +1194,27 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     setTaskProcessModalTask(null);
     setOpen(false);
   }, [notes, responsibilities, tasks]);
+
+  useEffect(() => {
+    setNoteMessageSearch('');
+    setNoteMessageSearchOpen(false);
+    noteShouldStickToBottomRef.current = true;
+    noteForceScrollToBottomRef.current = true;
+  }, [selectedNoteUserId]);
+
+  useEffect(() => {
+    if (!open || activeDrawerSection !== 'notes') return;
+    noteShouldStickToBottomRef.current = true;
+    noteForceScrollToBottomRef.current = true;
+  }, [activeDrawerSection, open]);
+
+  useEffect(() => {
+    if (!open || activeDrawerSection !== 'notes') return;
+    const shouldForceScroll = noteForceScrollToBottomRef.current;
+    if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
+    scrollNotesToBottom(shouldForceScroll ? 'auto' : 'smooth');
+    noteForceScrollToBottomRef.current = false;
+  }, [activeDrawerSection, displayedChatNotes, open]);
 
   const requestDrawerClose = useCallback(() => {
     if (
@@ -1228,26 +1321,71 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const { error } = await supabase.from('notes').insert([payload]);
     if (error) throw error;
 
+    noteShouldStickToBottomRef.current = true;
+    noteForceScrollToBottomRef.current = true;
     resetNoteComposer();
     await refreshSection('notes', { force: true });
+  };
+
+  const openForwardModal = (note: any) => {
+    setForwardingNote(note);
+    setForwardTargetUserIds(selectedNoteUserId ? [String(selectedNoteUserId)] : []);
+  };
+
+  const submitForward = async () => {
+    if (!forwardingNote || forwardTargetUserIds.length === 0) return;
+
+    const targetUserIds = Array.from(
+      new Set(
+        forwardTargetUserIds
+          .map((id) => String(id || '').trim())
+          .filter((id) => id && id !== String(profile.id || ''))
+      )
+    );
+
+    if (targetUserIds.length === 0) {
+      message.warning('حداقل یک گیرنده معتبر انتخاب کنید.');
+      return;
+    }
+
+    const scope = normalizeNoteScope(forwardingNote.module_id, forwardingNote.record_id);
+    const parsedContent = parseNoteContent(forwardingNote.content);
+    const payload = {
+      module_id: scope.module_id,
+      record_id: scope.record_id,
+      content: serializeNoteContent(parsedContent.text, parsedContent.attachments),
+      reply_to: null,
+      mention_user_ids: targetUserIds,
+      mention_role_ids: [],
+      author_id: profile.id,
+      author_name: directoryUserMap[String(profile.id || '')]?.display_name || null,
+    };
+
+    setForwardSubmitting(true);
+    try {
+      const { error } = await supabase.from('notes').insert([payload]);
+      if (error) throw error;
+      noteShouldStickToBottomRef.current = true;
+      noteForceScrollToBottomRef.current = true;
+      setForwardingNote(null);
+      setForwardTargetUserIds([]);
+      message.success('پیام فوروارد شد.');
+      await refreshSection('notes', { force: true });
+    } catch (error: any) {
+      message.error(String(error?.message || 'فوروارد پیام ناموفق بود.'));
+    } finally {
+      setForwardSubmitting(false);
+    }
   };
 
   const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
     const withUserSidebar = layout === 'desktop';
     const withMobileUserRail = layout === 'mobile';
-    const shouldLimitNotes = !selectedNoteUserId;
-    const limitedNotes = showMore.notes || !shouldLimitNotes ? filteredNotes : filteredNotes.slice(0, MAX_ITEMS);
-    const data = selectedNoteUserId
-      ? [...limitedNotes].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-      : limitedNotes;
+    const data = displayedChatNotes;
     const noteMap = new Map(notes.map((note: any) => [note.id, note]));
-    const roleLookup = directoryRoles.reduce<Record<string, string>>((acc, role) => {
-      acc[String(role.id)] = role.title;
-      return acc;
-    }, {});
     const panelTitle = selectedNoteUser ? selectedNoteUser.display_name : 'همه پیام‌ها';
     const panelSubtitle = selectedNoteUser
-      ? 'پیام و منشن در این نما یک رفتار هستند'
+      ? activeConversationRoleLabel
       : `${toPersianNumber(String(notes.length || 0))} پیام`;
 
     return (
@@ -1321,26 +1459,52 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         ) : null}
 
         <div className="flex flex-col flex-1 min-h-0 bg-[rgba(255,255,255,0.74)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]">
-          <div className="flex items-center justify-between gap-3 border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.72)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.78)]">
-            <div className="min-w-0 flex items-center gap-3">
-              {selectedNoteUser ? (
-                <Avatar size={withMobileUserRail ? 34 : 36} src={selectedNoteUser.avatar_url || undefined}>
-                  {!selectedNoteUser.avatar_url && String(selectedNoteUser.display_name || '?').slice(0, 1)}
-                </Avatar>
-              ) : null}
-              <div className="min-w-0">
-                <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{panelTitle}</div>
-                <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">{panelSubtitle}</div>
+          <div className="border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.72)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.78)]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-3">
+                {selectedNoteUser ? (
+                  <Avatar size={withMobileUserRail ? 34 : 36} src={selectedNoteUser.avatar_url || undefined}>
+                    {!selectedNoteUser.avatar_url && String(selectedNoteUser.display_name || '?').slice(0, 1)}
+                  </Avatar>
+                ) : null}
+                <div className="min-w-0">
+                  <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{panelTitle}</div>
+                  <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">{panelSubtitle}</div>
+                </div>
               </div>
+              <Button
+                size="small"
+                type={noteMessageSearchOpen || normalizedNoteMessageSearch ? 'primary' : 'default'}
+                icon={<SearchOutlined />}
+                onClick={() => {
+                  setNoteMessageSearchOpen((prev) => {
+                    if (prev) {
+                      setNoteMessageSearch('');
+                    }
+                    return !prev;
+                  });
+                }}
+              />
             </div>
-            {selectedNoteUser ? (
-              <Button size="small" onClick={() => setSelectedNoteUserId(null)}>
-                همه
-              </Button>
+            {noteMessageSearchOpen ? (
+              <Input
+                size="small"
+                allowClear
+                autoFocus
+                value={noteMessageSearch}
+                onChange={(event) => setNoteMessageSearch(event.target.value)}
+                placeholder={selectedNoteUser ? 'جستجو در پیام های این گفتگو' : 'جستجو در پیام ها'}
+                prefix={<SearchOutlined className="text-gray-400" />}
+                className="mt-2"
+              />
             ) : null}
           </div>
 
-          <div className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-2.5 py-2.5' : 'px-2 py-2'} space-y-2.5`}>
+          <div
+            ref={notesScrollContainerRef}
+            onScroll={handleNotesScroll}
+            className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-2.5 py-2.5' : 'px-2 py-2'} space-y-2.5`}
+          >
             {loadingNotes ? (
               <div className="space-y-3">
                 <Skeleton active paragraph={{ rows: 2 }} />
@@ -1348,7 +1512,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                 <Skeleton active paragraph={{ rows: 2 }} />
               </div>
             ) : data.length === 0 ? (
-              <Empty description="پیامی یافت نشد" />
+              <Empty description={normalizedNoteMessageSearch ? 'پیامی با این جستجو پیدا نشد' : 'پیامی یافت نشد'} />
             ) : (
               data.map((note: any) => {
                 const recordKey = `${note.module_id}:${note.record_id}`;
@@ -1408,6 +1572,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                         setNoteModuleId(note.module_id || null);
                         setNoteRecordId(note.record_id || null);
                       }}
+                      onForward={() => openForwardModal(note)}
                       onEdit={isMine ? () => {
                         setEditingNoteId(note.id);
                         setEditingNoteValue(parsedContent.text || '');
@@ -1429,11 +1594,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                 );
               })
             )}
-            {!selectedNoteUserId && filteredNotes.length > MAX_ITEMS ? (
-              <Button type="link" onClick={() => setShowMore((prev) => ({ ...prev, notes: !prev.notes }))}>
-                {showMore.notes ? 'نمایش کمتر' : 'نمایش بیشتر'}
-              </Button>
-            ) : null}
           </div>
 
           <SharedNoteComposer
@@ -1453,7 +1613,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                     options={moduleOptions}
                     size="small"
                     className={withMobileUserRail ? 'min-w-[112px] max-w-[112px] shrink-0' : 'min-w-[120px]'}
-                    dropdownStyle={{ minWidth: 220 }}
+                    styles={{ popup: { root: { minWidth: 220 } } }}
                   />
                   <div className="flex min-w-0 items-center gap-1">
                     <Select
@@ -1467,7 +1627,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                       disabled={!noteModuleId}
                       className="min-w-0 flex-1"
                       style={{ width: '100%' }}
-                      dropdownStyle={{ minWidth: 280 }}
+                      styles={{ popup: { root: { minWidth: 280 } } }}
                     />
                     <div className="shrink-0">
                       <QrScanPopover
@@ -1620,8 +1780,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                   <div
                     className={`w-[92%] rounded-2xl px-3 py-2 border shadow-sm ${
                       isMine
-                        ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-br-sm'
-                        : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-bl-sm'
+                        ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-tr-sm'
+                        : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-tl-sm'
                     }`}
                   >
                     <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
@@ -2458,6 +2618,40 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           />
         </div>
       ) : null}
+      <Modal
+        title="فوروارد پیام"
+        open={Boolean(forwardingNote)}
+        onCancel={() => {
+          setForwardingNote(null);
+          setForwardTargetUserIds([]);
+        }}
+        onOk={submitForward}
+        confirmLoading={forwardSubmitting}
+        okText="فوروارد"
+        cancelText="انصراف"
+        okButtonProps={{ disabled: forwardTargetUserIds.length === 0 }}
+      >
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] px-3 py-2 text-sm text-gray-700">
+            {forwardingNote ? (parseNoteContent(forwardingNote.content).text || 'بدون متن') : ''}
+          </div>
+          <Select
+            mode="multiple"
+            showSearch
+            allowClear
+            value={forwardTargetUserIds}
+            onChange={(values) => setForwardTargetUserIds((values || []).map((value) => String(value)))}
+            placeholder="یک یا چند گیرنده انتخاب کنید"
+            optionFilterProp="searchText"
+            filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').trim().toLowerCase())}
+            getPopupContainer={(trigger) => trigger.parentElement || document.body}
+            styles={{ popup: { root: { zIndex: 1400 } } }}
+            options={forwardTargetOptions}
+            maxTagCount="responsive"
+            className="w-full"
+          />
+        </div>
+      </Modal>
     </>
   );
 };

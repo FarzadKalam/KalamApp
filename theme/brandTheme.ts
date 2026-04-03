@@ -19,6 +19,8 @@ export interface BrandingConfig {
   brandName: string;
   shortName: string;
   appTitle: string;
+  logoUrl?: string | null;
+  iconUrl?: string | null;
   paletteKey: BrandingPaletteKey;
   palette: BrandingPalette;
 }
@@ -126,9 +128,11 @@ const toRgbChannels = (hex: string) => {
 };
 
 export const DEFAULT_BRANDING: BrandingConfig = {
-  brandName: 'هلدینگ رسانه ای کلام تازه.',
+  brandName: 'هلدینگ رسانه ای کلام تازه',
   shortName: 'کلام تازه',
-  appTitle: 'هلدینگ رسانه ای کلام تازه.',
+  appTitle: 'هلدینگ رسانه ای کلام تازه',
+  logoUrl: null,
+  iconUrl: null,
   paletteKey: DEFAULT_PALETTE_KEY,
   palette: { ...BRAND_PALETTE_PRESETS[DEFAULT_PALETTE_KEY].palette },
 };
@@ -176,6 +180,8 @@ export const mergeBrandingConfig = (
     brandName,
     shortName,
     appTitle,
+    logoUrl: base.logoUrl || null,
+    iconUrl: base.iconUrl || null,
     paletteKey,
     palette,
   };

@@ -36,10 +36,10 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
-import { createJournalFromInvoice, syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
+import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
 import { canAccessAssignedRecord, fetchCurrentUserRoleContext } from '../utils/permissions';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
-import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from '../utils/recordCopy';
+import { buildCopyPayload, detectCopyNameField } from '../utils/recordCopy';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
@@ -52,8 +52,12 @@ import { supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/ass
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { syncRecordTags } from '../utils/recordTags';
 import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { runWorkflowsForEvent } from '../utils/workflowRuntime';
+import { doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
 import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
+import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
+import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -73,6 +77,27 @@ const toFaAccountingSyncError = (raw: unknown): string => {
     return 'خطا در صدور سند حسابداری.';
   }
   return text;
+};
+
+const buildAccountingEntryChoices = (entries: ResolvedJournalEntry[]): AccountingEntryChoice[] => {
+  const grouped = new Map<string, AccountingEntryChoice>();
+  (entries || []).forEach((entry) => {
+    const journalEntryId = String(entry?.journalEntryId || '').trim();
+    const eventKey = String(entry?.eventKey || '').trim();
+    if (!journalEntryId || !eventKey) return;
+    const current = grouped.get(journalEntryId);
+    if (current) {
+      if (!current.eventKeys.includes(eventKey)) current.eventKeys.push(eventKey);
+      if (entry.state === 'created') current.state = 'created';
+      return;
+    }
+    grouped.set(journalEntryId, {
+      journalEntryId,
+      eventKeys: [eventKey],
+      state: entry.state === 'created' ? 'created' : 'existing',
+    });
+  });
+  return Array.from(grouped.values());
 };
 
 const ModuleShowSkeleton: React.FC = () => {
@@ -119,6 +144,12 @@ type ModuleShowSnapshot = {
   record: any;
   tags: any[];
   cachedAt: number;
+};
+
+type AccountingEntryChoice = {
+  journalEntryId: string;
+  eventKeys: string[];
+  state: 'created' | 'existing';
 };
 
 const moduleShowSnapshotCache = new Map<string, ModuleShowSnapshot>();
@@ -182,13 +213,21 @@ const ModuleShow: React.FC = () => {
   const [productionQuantityPreview, setProductionQuantityPreview] = useState<number | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [issueAccountingLoading, setIssueAccountingLoading] = useState(false);
+  const [accountingEntryPickerOpen, setAccountingEntryPickerOpen] = useState(false);
+  const [accountingEntryChoices, setAccountingEntryChoices] = useState<AccountingEntryChoice[]>([]);
   const assigneeLabel = getAssigneeLabel(moduleId);
   const [stockMovementQuickAddSignal, setStockMovementQuickAddSignal] = useState(0);
   const [isQuickProjectModalOpen, setIsQuickProjectModalOpen] = useState(false);
   const [quickProjectLoading, setQuickProjectLoading] = useState(false);
   const [quickProjectCustomerOptions, setQuickProjectCustomerOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [quickProjectTemplateOptions, setQuickProjectTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [quickProjectTargetModuleIds, setQuickProjectTargetModuleIds] = useState<string[]>([]);
+  const [quickProjectLinkedRecords, setQuickProjectLinkedRecords] = useState<Record<string, string | null>>({});
+  const [quickProjectRelationOptions, setQuickProjectRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [quickProjectRelationLoading, setQuickProjectRelationLoading] = useState<Record<string, boolean>>({});
   const [quickProjectForm] = Form.useForm();
+  const quickProjectTemplateId = Form.useWatch('process_template_id', quickProjectForm);
+  const quickProjectCustomerId = Form.useWatch('customer_id', quickProjectForm);
   const startDraftStorageKey = useMemo(() => (id ? `production-start-draft:${id}` : null), [id]);
   const [canIssueAccountingEntry, setCanIssueAccountingEntry] = useState(true);
     const fetchProductionQuantity = useCallback(async () => {
@@ -207,6 +246,7 @@ const ModuleShow: React.FC = () => {
   useEffect(() => {
     const cacheKey = `${moduleId}:${id || ''}`;
     const cachedSnapshot = moduleShowSnapshotCache.get(cacheKey);
+    const cachedOptionSnapshot = readModuleOptionSnapshot(moduleId);
     const hasFreshSnapshot = !!cachedSnapshot && (Date.now() - cachedSnapshot.cachedAt) < MODULE_SHOW_CACHE_TTL_MS;
     hasRecordDataRef.current = false;
     skipNextOptionsFetchRef.current = false;
@@ -214,9 +254,9 @@ const ModuleShow: React.FC = () => {
     setLoading(!hasFreshSnapshot);
     setAutoSyncedBomId(null);
     setAutoSyncedProcessTemplateId(null);
-    setDynamicOptions({});
-    setRelationOptions({});
-    setOptionsReady(false);
+    setDynamicOptions(cachedOptionSnapshot?.dynamicOptions || {});
+    setRelationOptions(cachedOptionSnapshot?.relationOptions || {});
+    setOptionsReady(!!cachedOptionSnapshot);
     setCurrentTags(hasFreshSnapshot ? cachedSnapshot?.tags ?? [] : []);
     setAccessDenied(false);
     hasRecordDataRef.current = hasFreshSnapshot;
@@ -763,8 +803,13 @@ const ModuleShow: React.FC = () => {
 
   const fetchBaseInfo = useCallback(async () => {
       if (moduleShowBaseInfoCache) {
-        setAllUsers((prev) => mergeUsersById([...prev, ...moduleShowBaseInfoCache!.users]));
+        setAllUsers((prev) => {
+          const mergedUsers = mergeUsersById([...prev, ...moduleShowBaseInfoCache!.users]);
+          writeModuleOptionSnapshot(moduleId, { allUsers: mergedUsers });
+          return mergedUsers;
+        });
         setAllRoles(moduleShowBaseInfoCache.roles);
+        writeModuleOptionSnapshot(moduleId, { allRoles: moduleShowBaseInfoCache.roles });
         return;
       }
 
@@ -782,9 +827,14 @@ const ModuleShow: React.FC = () => {
       }
 
       const directory = await moduleShowBaseInfoPromise;
-      setAllUsers((prev) => mergeUsersById([...prev, ...directory.users]));
+      setAllUsers((prev) => {
+        const mergedUsers = mergeUsersById([...prev, ...directory.users]);
+        writeModuleOptionSnapshot(moduleId, { allUsers: mergedUsers });
+        return mergedUsers;
+      });
       setAllRoles(directory.roles);
-  }, []);
+      writeModuleOptionSnapshot(moduleId, { allRoles: directory.roles });
+  }, [moduleId]);
 
   const ensureUserLabels = useCallback(async (userIds: Array<string | null | undefined>) => {
     const normalizedIds = Array.from(
@@ -810,8 +860,12 @@ const ModuleShow: React.FC = () => {
         `کاربر ${String(user?.id || '').slice(0, 8)}`,
     }));
 
-    setAllUsers((prev) => mergeUsersById([...prev, ...normalizedProfiles]));
-  }, [allUsers]);
+    setAllUsers((prev) => {
+      const mergedUsers = mergeUsersById([...prev, ...normalizedProfiles]);
+      writeModuleOptionSnapshot(moduleId, { allUsers: mergedUsers });
+      return mergedUsers;
+    });
+  }, [allUsers, moduleId]);
 
   const fetchRecord = useCallback((force = false) => {
     if (!id || !moduleConfig) return;
@@ -871,6 +925,7 @@ const ModuleShow: React.FC = () => {
           }
         }
         if (moduleId === 'process_templates') {
+          nextRecord = syncProcessTemplateTargetModules(nextRecord);
           const { data: templateStages } = await supabase
             .from('process_template_stages')
             .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
@@ -1376,7 +1431,11 @@ const ModuleShow: React.FC = () => {
         console.warn('Could not load calculation formulas', err);
       }
       if (requestId && activeRecordRequestRef.current !== requestId) return;
-      setDynamicOptions(dynOpts);
+      setDynamicOptions((prev) => {
+        const mergedDynamic = mergeOptionMaps(readModuleOptionSnapshot(moduleId)?.dynamicOptions, prev, dynOpts);
+        writeModuleOptionSnapshot(moduleId, { dynamicOptions: mergedDynamic });
+        return mergedDynamic;
+      });
 
       const relOpts: Record<string, any[]> = {};
       const normalizedRecordData = moduleId === 'tasks'
@@ -1388,35 +1447,160 @@ const ModuleShow: React.FC = () => {
         return rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
       });
 
-      const relationResults = await Promise.allSettled(
-        relationFieldsWithValue.map(async (field) => {
-          const options = moduleId === 'tasks' && field.key === 'source_record_id'
-            ? await fetchTaskSourceRecordOptions(
-                supabase,
-                String(normalizedRecordData?.related_to_module || normalizedRecordData?.source_module_id || '').trim(),
-                {
-                  exactId: normalizedRecordData?.[field.key],
-                  limit: 1,
-                }
-              )
+      const relationRequests: Array<Promise<{
+        keys: string[];
+        options: any[];
+        fieldKey?: string;
+        blockId?: string;
+        rowIndex?: number;
+        relationConfig?: any;
+      }>> = relationFieldsWithValue.map(async (field) => {
+        const options = moduleId === 'tasks' && field.key === 'source_record_id'
+          ? await fetchTaskSourceRecordOptions(
+              supabase,
+              String(normalizedRecordData?.related_to_module || normalizedRecordData?.source_module_id || '').trim(),
+              {
+                exactId: normalizedRecordData?.[field.key],
+                limit: 1,
+              }
+            )
             : await fetchRelationOptionsForField(supabase, field, {
                 allValues: normalizedRecordData,
                 exactId: normalizedRecordData?.[field.key],
                 limit: 1,
               });
-          return { fieldKey: field.key, options };
+        return {
+          keys: [field.key],
+          options,
+          fieldKey: field.key,
+          relationConfig: field.relationConfig,
+        };
+      });
+
+      (moduleConfig.blocks || []).forEach((block: any) => {
+        const blockRows = Array.isArray(normalizedRecordData?.[block.id]) ? normalizedRecordData[block.id] : [];
+        if (!block.tableColumns || blockRows.length === 0) return;
+
+        block.tableColumns.forEach((column: any) => {
+          if (column?.type !== FieldType.RELATION || !column?.relationConfig) return;
+
+          const specificKey = `${block.id}_${column.key}`;
+          const handledValues = new Set<string>();
+
+          blockRows.forEach((row: any) => {
+            const exactValue = row?.[column.key];
+            const normalizedExactValue = String(exactValue ?? '').trim();
+            if (!normalizedExactValue || handledValues.has(normalizedExactValue)) return;
+            handledValues.add(normalizedExactValue);
+
+            relationRequests.push((async () => {
+              const options = await fetchRelationOptionsForField(supabase, column, {
+                allValues: row,
+                exactId: exactValue,
+                limit: 1,
+              });
+              return {
+                keys: [specificKey, column.key],
+                options,
+                fieldKey: column.key,
+                blockId: block.id,
+                rowIndex: blockRows.indexOf(row),
+                relationConfig: column.relationConfig,
+              };
+            })());
+          });
+        });
+      });
+
+      const relationResults = await Promise.allSettled(
+        relationRequests.map(async (request) => {
+          return request;
         })
       );
 
+      const relationDisplayPatch: Record<string, any> = {};
+      const relationBlockPatch: Record<string, any[]> = {};
+
+      const applyResolvedLabel = (
+        target: Record<string, any>,
+        fieldKey: string,
+        relationConfig: any,
+        options: any[],
+        rawValue: any,
+      ) => {
+        const normalizedValue = String(rawValue ?? '').trim();
+        if (!fieldKey || !normalizedValue) return;
+
+        const matchedOption = (options || []).find((item: any) => String(item?.value || '').trim() === normalizedValue);
+        const label = String(matchedOption?.label || '').trim() || 'رکورد حذف شده';
+        const baseKey = fieldKey.endsWith('_id') ? fieldKey.slice(0, -3) : fieldKey;
+        const targetField = String(relationConfig?.targetField || '').trim();
+
+        target[`${baseKey}_label`] = label;
+        target[`${baseKey}_name`] = label;
+        if (baseKey === 'customer') {
+          target.customer_name = label;
+          target.customer_full_name = label;
+        }
+        if (baseKey === 'product') {
+          target.product_name = label;
+          target.selected_product_name = target.selected_product_name || label;
+        }
+        if (targetField) {
+          target[`${baseKey}_${targetField}`] = label;
+        }
+      };
+
       relationResults.forEach((result) => {
         if (result.status === 'fulfilled') {
-          relOpts[result.value.fieldKey] = result.value.options;
+          result.value.keys.forEach((key) => {
+            relOpts[key] = mergeOptionLists(relOpts[key], result.value.options);
+          });
+
+          if (result.value.blockId && Number.isInteger(result.value.rowIndex)) {
+            const blockId = String(result.value.blockId);
+            const rowIndex = Number(result.value.rowIndex);
+            const sourceRows = relationBlockPatch[blockId]
+              || (Array.isArray(normalizedRecordData?.[blockId]) ? normalizedRecordData[blockId].map((row: any) => ({ ...(row || {}) })) : []);
+            if (sourceRows[rowIndex]) {
+              applyResolvedLabel(
+                sourceRows[rowIndex],
+                String(result.value.fieldKey || ''),
+                result.value.relationConfig,
+                result.value.options,
+                sourceRows[rowIndex]?.[String(result.value.fieldKey || '')],
+              );
+              relationBlockPatch[blockId] = sourceRows;
+            }
+          } else if (result.value.fieldKey) {
+            applyResolvedLabel(
+              relationDisplayPatch,
+              String(result.value.fieldKey),
+              result.value.relationConfig,
+              result.value.options,
+              normalizedRecordData?.[String(result.value.fieldKey)],
+            );
+          }
         } else {
           console.warn('Could not fetch exact relation option for ModuleShow field:', result.reason);
         }
       });
       if (requestId && activeRecordRequestRef.current !== requestId) return;
-      setRelationOptions(relOpts);
+      const relationDisplayPatchKeys = Object.keys(relationDisplayPatch);
+      const relationBlockPatchKeys = Object.keys(relationBlockPatch);
+      if (relationDisplayPatchKeys.length > 0 || relationBlockPatchKeys.length > 0) {
+        skipNextOptionsFetchRef.current = true;
+        setData((prev: any) => ({
+          ...(prev || {}),
+          ...relationDisplayPatch,
+          ...relationBlockPatch,
+        }));
+      }
+      setRelationOptions((prev) => {
+        const mergedRelation = mergeOptionMaps(readModuleOptionSnapshot(moduleId)?.relationOptions, prev, relOpts);
+        writeModuleOptionSnapshot(moduleId, { relationOptions: mergedRelation });
+        return mergedRelation;
+      });
     } finally {
       if (requestId && activeRecordRequestRef.current !== requestId) return;
       setOptionsReady(true);
@@ -1686,6 +1870,16 @@ const ModuleShow: React.FC = () => {
       },
       onOk: async () => {
         try {
+          const { data: templateRow } = await supabase
+            .from('process_templates')
+            .select('id, module_id, module_ids')
+            .eq('id', templateId)
+            .maybeSingle();
+          const targetModuleIds = normalizeProcessTargetModuleIds(templateRow?.module_ids, templateRow?.module_id);
+          const processLinkMap = {
+            ...(moduleId && id ? { [moduleId]: String(id) } : {}),
+            ...getRelationFieldLinksForModules(moduleId, data || null, targetModuleIds),
+          };
           const { data: stages, error } = await supabase
             .from('process_template_stages')
             .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
@@ -1703,9 +1897,11 @@ const ModuleShow: React.FC = () => {
               duration_value: Number(stage?.metadata?.duration_value || 0),
               duration_unit: stage?.metadata?.duration_unit || 'day',
               duration_from: stage?.metadata?.duration_from || 'project_start',
-              default_assignee_id: stage.default_assignee_id || null,
+            default_assignee_id: stage.default_assignee_id || null,
             default_assignee_role_id: stage.default_assignee_role_id || null,
             template_stage_id: stage.id || null,
+            process_target_module_ids: targetModuleIds,
+            process_link_map: processLinkMap,
           }));
 
           const patch: Record<string, any> = {
@@ -1735,31 +1931,35 @@ const ModuleShow: React.FC = () => {
     if (!data || !id || !moduleConfig) return;
     modal.confirm({
       title: 'کپی رکورد',
-      content: 'از این رکورد یک نسخه کپی ساخته شود؟',
-      okText: 'بله، کپی کن',
+      content: 'فرم ایجاد رکورد جدید با مقادیر کپی‌شده باز شود؟',
+      okText: 'بله، فرم را باز کن',
       cancelText: 'انصراف',
       onOk: async () => {
         try {
           const nameField = detectCopyNameField(moduleConfig);
           const payload = buildCopyPayload(data, { nameField, moduleId });
-          const tableName = moduleConfig.table || moduleId;
-          const { data: inserted, error } = await supabase
-            .from(tableName)
-            .insert(payload)
-            .select('id')
-            .single();
-          if (error) throw error;
-          if (moduleId === 'production_orders' && inserted?.id) {
-            await copyProductionOrderRelations(supabase, String(id), String(inserted.id));
-          }
-          msg.success('کپی رکورد با موفقیت ایجاد شد.');
-          if (inserted?.id) navigate(`/${moduleId}/${inserted.id}`);
+          writeModuleOptionSnapshot(moduleId, {
+            dynamicOptions,
+            relationOptions,
+            allUsers,
+            allRoles,
+          });
+          navigate(`/${moduleId}/create`, {
+            state: {
+              initialValues: payload,
+              copySource: {
+                sourceRecordId: String(id),
+                copyRelations: moduleId === 'production_orders',
+              },
+            },
+          });
+          msg.success('فرم ایجاد با اطلاعات کپی‌شده باز شد.');
         } catch (e: any) {
-          msg.error(`کپی رکورد ناموفق بود: ${e?.message || e}`);
+          msg.error(`آماده‌سازی کپی ناموفق بود: ${e?.message || e}`);
         }
       }
     });
-  }, [data, id, moduleConfig, modal, moduleId, msg, navigate]);
+  }, [allRoles, allUsers, data, dynamicOptions, id, moduleConfig, modal, moduleId, msg, navigate, relationOptions]);
 
   const isMissingColumnError = (error: any, columnName: string) => {
     const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
@@ -1798,7 +1998,7 @@ const ModuleShow: React.FC = () => {
           .limit(200),
         supabase
           .from('process_templates')
-          .select('id,name,module_id,is_active')
+          .select('id,name,module_id,module_ids,is_active')
           .order('name', { ascending: true }),
       ]);
       if (templatesError) throw templatesError;
@@ -1811,11 +2011,9 @@ const ModuleShow: React.FC = () => {
           || '-'
         )}`,
       }));
-      const scopedTemplates = (templates || []).filter((row: any) => {
-        const rowModule = String(row?.module_id || '').trim();
-        const isActive = row?.is_active !== false;
-        return isActive && (!rowModule || rowModule === 'projects');
-      });
+      const scopedTemplates = (templates || []).filter((row: any) =>
+        row?.is_active !== false && doesProcessTemplateSupportModule(row, 'projects')
+      );
       const templateOptions = scopedTemplates.map((row: any) => ({
         value: String(row.id),
         label: String(row?.name || row?.id),
@@ -1841,8 +2039,88 @@ const ModuleShow: React.FC = () => {
       customer_id: suggestedCustomerId,
       process_template_id: data?.process_template_id || undefined,
     });
+    setQuickProjectTargetModuleIds([]);
+    setQuickProjectLinkedRecords({});
+    setQuickProjectRelationOptions({});
+    setQuickProjectRelationLoading({});
     setIsQuickProjectModalOpen(true);
   }, [data, loadQuickProjectModalOptions, moduleConfig, moduleId, quickProjectForm]);
+
+  const loadQuickProjectRelationOptions = useCallback(async (targetModuleId: string, exactId?: string | null) => {
+    const normalizedTargetModuleId = String(targetModuleId || '').trim();
+    if (!normalizedTargetModuleId || !MODULES[normalizedTargetModuleId]) return;
+    setQuickProjectRelationLoading((prev) => ({ ...prev, [normalizedTargetModuleId]: true }));
+    try {
+      const options = await fetchRelationOptionsForField(
+        supabase,
+        {
+          key: 'quick_project_process_link_record_id',
+          type: FieldType.RELATION,
+          relationConfig: { targetModule: normalizedTargetModuleId },
+        } as any,
+        { exactId: exactId || null, limit: 200 }
+      );
+      setQuickProjectRelationOptions((prev) => ({ ...prev, [normalizedTargetModuleId]: options }));
+    } catch (error) {
+      console.warn('Could not load quick-project relation options', normalizedTargetModuleId, error);
+    } finally {
+      setQuickProjectRelationLoading((prev) => ({ ...prev, [normalizedTargetModuleId]: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    const selectedTemplateId = String(quickProjectTemplateId || '').trim();
+    if (!isQuickProjectModalOpen || !selectedTemplateId) {
+      setQuickProjectTargetModuleIds([]);
+      setQuickProjectLinkedRecords({});
+      setQuickProjectRelationOptions({});
+      setQuickProjectRelationLoading({});
+      return;
+    }
+
+    let cancelled = false;
+    const loadQuickProjectTemplateContext = async () => {
+      try {
+        const { data: templateRow, error: templateError } = await supabase
+          .from('process_templates')
+          .select('id, module_id, module_ids')
+          .eq('id', selectedTemplateId)
+          .maybeSingle();
+        if (templateError) throw templateError;
+
+        const targetModuleIds = normalizeProcessTargetModuleIds(templateRow?.module_ids, templateRow?.module_id);
+        if (cancelled) return;
+        setQuickProjectTargetModuleIds(targetModuleIds);
+
+        const inferredLinks: Record<string, string | null> = {};
+        if (id && moduleId && targetModuleIds.includes(moduleId)) {
+          inferredLinks[moduleId] = String(id);
+        }
+        const currentRecordLinks = getRelationFieldLinksForModules(moduleId, data || null, targetModuleIds);
+        Object.assign(inferredLinks, currentRecordLinks);
+        if (String(quickProjectCustomerId || '').trim()) {
+          inferredLinks.customers = String(quickProjectCustomerId);
+        }
+        if (cancelled) return;
+        setQuickProjectLinkedRecords(inferredLinks);
+
+        await Promise.all(
+          targetModuleIds
+            .filter((targetModuleId) => targetModuleId !== 'projects')
+            .map((targetModuleId) =>
+              loadQuickProjectRelationOptions(targetModuleId, inferredLinks[targetModuleId] || null)
+            )
+        );
+      } catch (error) {
+        console.warn('Could not load quick-project process targets', error);
+      }
+    };
+
+    void loadQuickProjectTemplateContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [data, id, isQuickProjectModalOpen, loadQuickProjectRelationOptions, moduleId, quickProjectCustomerId, quickProjectTemplateId]);
 
   const handleQuickProjectCreate = useCallback(async (values: any) => {
     if (!id) return;
@@ -1850,6 +2128,7 @@ const ModuleShow: React.FC = () => {
     try {
       const selectedTemplateId = String(values?.process_template_id || '').trim() || null;
       const selectedTemplateLabel = quickProjectTemplateOptions.find((item) => String(item.value) === selectedTemplateId)?.label || null;
+      const targetModuleIds = normalizeProcessTargetModuleIds(quickProjectTargetModuleIds, 'projects');
       let executionDraft: any[] = [];
       if (selectedTemplateId) {
         const { data: stages, error: stagesError } = await supabase
@@ -1881,6 +2160,11 @@ const ModuleShow: React.FC = () => {
             process_group_id: groupId,
             process_group_name: groupLabel,
             template_stage_id: stage.id || null,
+            process_target_module_ids: targetModuleIds,
+            process_link_map: {
+              ...quickProjectLinkedRecords,
+              ...(moduleId && id ? { [moduleId]: String(id) } : {}),
+            },
           };
         });
       }
@@ -1903,10 +2187,49 @@ const ModuleShow: React.FC = () => {
       }
       const projectId = await createProjectWithFallback(payload);
 
+      if (selectedTemplateId && executionDraft.length > 0) {
+        const enrichedDraft = executionDraft.map((stage) => ({
+          ...stage,
+          process_target_module_ids: targetModuleIds,
+          process_link_map: {
+            ...quickProjectLinkedRecords,
+            ...(moduleId && id ? { [moduleId]: String(id) } : {}),
+            projects: projectId,
+          },
+        }));
+        await supabase
+          .from('projects')
+          .update({ execution_process_draft: enrichedDraft })
+          .eq('id', projectId);
+        payload.execution_process_draft = enrichedDraft;
+      }
+
       if (moduleId === 'invoices') {
         await supabase.from('invoices').update({ project_id: projectId }).eq('id', id);
       } else if (moduleId === 'purchase_invoices') {
         await supabase.from('purchase_invoices').update({ project_id: projectId }).eq('id', id);
+      }
+
+      await runWorkflowsForEvent({
+        moduleId: 'projects',
+        event: 'create',
+        currentRecord: {
+          ...payload,
+          id: projectId,
+        } as Record<string, any>,
+      });
+
+      if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && id) {
+        await runWorkflowsForEvent({
+          moduleId,
+          event: 'upsert',
+          currentRecord: {
+            ...(data || {}),
+            project_id: projectId,
+            id,
+          } as Record<string, any>,
+          previousRecord: (data || null) as Record<string, any> | null,
+        });
       }
 
       setIsQuickProjectModalOpen(false);
@@ -1918,7 +2241,7 @@ const ModuleShow: React.FC = () => {
     } finally {
       setQuickProjectLoading(false);
     }
-  }, [id, moduleId, msg, navigate, quickProjectForm, quickProjectTemplateOptions]);
+  }, [id, moduleId, msg, navigate, quickProjectLinkedRecords, quickProjectTargetModuleIds, quickProjectForm, quickProjectTemplateOptions]);
 
 
 
@@ -2070,8 +2393,14 @@ const ModuleShow: React.FC = () => {
       const baseName = String(file.name || 'image').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
       const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${baseName}${ext && !baseName.toLowerCase().endsWith(`.${ext.toLowerCase()}`) ? `.${ext}` : ''}`;
       const filePath = `record_files/${moduleId}/${id}/${fileName}`;
-      const { error: upErr } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
-      if (upErr) throw upErr;
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: filePath,
+        file,
+        label: file.name || 'تصویر',
+        detail: 'تصویر اصلی رکورد',
+      });
       const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
       const { error: updateError } = await supabase
         .from(moduleId)
@@ -2096,7 +2425,10 @@ const ModuleShow: React.FC = () => {
       }
       setData((prev: any) => ({ ...prev, image_url: urlData.publicUrl }));
       msg.success('تصویر بروزرسانی شد');
-    } catch (e: any) { msg.error('خطا: ' + e.message); } finally { setUploadingImage(false); }
+    } catch (e: any) {
+      if (isUploadCanceledError(e)) return false;
+      msg.error('خطا: ' + e.message);
+    } finally { setUploadingImage(false); }
     return false;
   }, [canEditModule, id, moduleId, msg]);
 
@@ -2235,6 +2567,12 @@ const ModuleShow: React.FC = () => {
             fullName: null,
           },
         });
+        await runWorkflowsForEvent({
+          moduleId,
+          event: 'upsert',
+          currentRecord: updatedTask as Record<string, any>,
+          previousRecord: (data || null) as Record<string, any> | null,
+        });
         setData((prev: any) => ({ ...(prev || {}), ...updatedTask }));
         setTempValues((prev) => ({ ...(prev || {}), status: updatedTask.status }));
         await insertChangelog({
@@ -2280,6 +2618,16 @@ const ModuleShow: React.FC = () => {
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
       }
+      await runWorkflowsForEvent({
+        moduleId,
+        event: 'upsert',
+        currentRecord: {
+          ...(data || {}),
+          ...updatePayload,
+          id,
+        } as Record<string, any>,
+        previousRecord: (data || null) as Record<string, any> | null,
+      });
       setData((prev: any) => (
         moduleId === 'tasks' && taskSourceEditKeys.has(key)
           ? { ...(prev || {}), ...updatePayload }
@@ -2395,6 +2743,9 @@ const ModuleShow: React.FC = () => {
   ) => {
     try {
       if (!id) return;
+      if (moduleId === 'process_templates') {
+        values = syncProcessTemplateTargetModules(values);
+      }
       const previous = data || {};
 
       const changedKeys = Object.keys(values).filter((k) => !areValuesEqual(values[k], previous[k]));
@@ -2432,6 +2783,17 @@ const ModuleShow: React.FC = () => {
         }
       }
 
+      await runWorkflowsForEvent({
+        moduleId,
+        event: 'upsert',
+        currentRecord: {
+          ...previous,
+          ...values,
+          id,
+        } as Record<string, any>,
+        previousRecord: previous as Record<string, any>,
+      });
+
       for (const key of changedKeys) {
         await logFieldChange(key, previous[key], values[key]);
       }
@@ -2443,6 +2805,19 @@ const ModuleShow: React.FC = () => {
       msg.error(err.message);
     }
   }, [data, fetchRecord, id, logFieldChange, moduleId, msg, syncProcessTemplateStages]);
+
+  const openResolvedAccountingEntries = useCallback((entries: ResolvedJournalEntry[]) => {
+    const choices = buildAccountingEntryChoices(entries);
+    if (choices.length === 0) return false;
+    const journalModule = MODULES.journal_entries;
+    if (choices.length === 1) {
+      navigate(`/${journalModule.table}/${choices[0].journalEntryId}`);
+      return true;
+    }
+    setAccountingEntryChoices(choices);
+    setAccountingEntryPickerOpen(true);
+    return true;
+  }, [navigate]);
 
   const handleIssueAccountingEntry = useCallback(async () => {
     if (issueAccountingLoading) return;
@@ -2459,13 +2834,6 @@ const ModuleShow: React.FC = () => {
       return;
     }
 
-    const eventLabelMap: Record<string, string> = {
-      sales_invoice_finalized: 'سند فروش',
-      purchase_invoice_finalized: 'سند خرید',
-      sales_payment_received: 'سند دریافت وجه',
-      purchase_payment_paid: 'سند پرداخت وجه',
-    };
-
     setIssueAccountingLoading(true);
     try {
       const accountingSync = await syncInvoiceAccountingEntries({
@@ -2479,21 +2847,21 @@ const ModuleShow: React.FC = () => {
         console.warn('هشدارهای همگام‌سازی دستی سند حسابداری فاکتور:', accountingSync.errors);
       }
 
-      if (accountingSync.createdEventKeys.length > 0) {
-        const label = accountingSync.createdEventKeys
-          .map((key) => eventLabelMap[key] || key)
+      if (accountingSync.resolvedJournalEntries.length > 0) {
+        const opened = openResolvedAccountingEntries(accountingSync.resolvedJournalEntries);
+        const createdLabel = accountingSync.createdEventKeys
+          .map((key) => getAccountingEventLabelFa(key))
           .join('، ');
-        msg.success(`صدور سند انجام شد: ${label}`);
-        const lastJournalId = accountingSync.createdJournalEntryIds[accountingSync.createdJournalEntryIds.length - 1];
-        if (lastJournalId) {
-          const journalModule = MODULES.journal_entries;
-          navigate(`/${journalModule.table}/${lastJournalId}`);
+        if (accountingSync.createdEventKeys.length > 0 && createdLabel) {
+          msg.success(`پیش‌نویس سند آماده شد: ${createdLabel}`);
+        } else if (opened) {
+          msg.info('سند حسابداری مرتبط باز شد.');
         }
         if (accountingSync.errors.length > 0) {
           msg.warning(`صدور سند با هشدار: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
       } else if (accountingSync.errors.length === 0) {
-        msg.info('سندی صادر نشد (قبلا صادر شده یا قواعد حسابداری کامل نیست).');
+        msg.info('سندی برای این فاکتور آماده نشد.');
       } else {
         msg.warning(`صدور سند ناموفق: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
       }
@@ -2504,7 +2872,7 @@ const ModuleShow: React.FC = () => {
     } finally {
       setIssueAccountingLoading(false);
     }
-  }, [canIssueAccountingEntry, data?.status, fetchRecord, id, issueAccountingLoading, moduleId, msg, navigate]);
+  }, [canIssueAccountingEntry, data?.status, fetchRecord, id, issueAccountingLoading, moduleId, msg, openResolvedAccountingEntries]);
 
   const startEdit = (key: string, value: any) => {
     if (!canEditModule) return;
@@ -2532,10 +2900,17 @@ const ModuleShow: React.FC = () => {
 
     const getOptionLabel = (field: any, value: any) => {
       if (!field) return getSafeOptionFallback(value);
+      const effectiveOptions =
+        (
+          (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
+          || (moduleId === 'process_runs' && field.key === 'module_id')
+        )
+          ? getProjectModuleOptions()
+          : (field.options || []);
       // اگر MULTI_SELECT است و آرایه است
       if (field.type === FieldType.MULTI_SELECT && Array.isArray(value)) {
           return value.map(v => {
-              let opt = field.options?.find((o: any) => o.value === v);
+              let opt = effectiveOptions?.find((o: any) => o.value === v);
               if (opt) return opt.label;
               if ((field as any).dynamicOptionsCategory) {
                   const cat = (field as any).dynamicOptionsCategory;
@@ -2546,7 +2921,7 @@ const ModuleShow: React.FC = () => {
           }).join(', ');
       }
       
-      let opt = field.options?.find((o: any) => o.value === value);
+      let opt = effectiveOptions?.find((o: any) => o.value === value);
       if (opt) return opt.label;
       if ((field as any).dynamicOptionsCategory) {
           const cat = (field as any).dynamicOptionsCategory;
@@ -3340,7 +3715,10 @@ const ModuleShow: React.FC = () => {
 
     if (field.type === FieldType.PROGRESS_STAGES || isProcessDraftField) {
       let options = field.options;
-      if (moduleId === 'process_templates' && field.key === 'module_id') options = getProjectModuleOptions();
+      if (
+        (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
+        || (moduleId === 'process_runs' && field.key === 'module_id')
+      ) options = getProjectModuleOptions();
       else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
       else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
       else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
@@ -3387,7 +3765,10 @@ const ModuleShow: React.FC = () => {
 
     const tempValue = tempValues[field.key] !== undefined ? tempValues[field.key] : baseValue;
     let options = field.options;
-    if (moduleId === 'process_templates' && field.key === 'module_id') options = getProjectModuleOptions();
+    if (
+      (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
+      || (moduleId === 'process_runs' && field.key === 'module_id')
+    ) options = getProjectModuleOptions();
     else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
@@ -3720,6 +4101,10 @@ const ModuleShow: React.FC = () => {
         open={isQuickProjectModalOpen}
         onCancel={() => {
           setIsQuickProjectModalOpen(false);
+          setQuickProjectTargetModuleIds([]);
+          setQuickProjectLinkedRecords({});
+          setQuickProjectRelationOptions({});
+          setQuickProjectRelationLoading({});
           quickProjectForm.resetFields();
         }}
         footer={null}
@@ -3756,6 +4141,38 @@ const ModuleShow: React.FC = () => {
             />
           </Form.Item>
 
+          {quickProjectTargetModuleIds.length > 0 ? (
+            <div className="mb-4 rounded-xl border border-leather-200 bg-leather-50 px-3 py-3">
+              <div className="text-sm font-semibold text-leather-800">رکوردهای مرتبط فرآیند</div>
+              <div className="mt-1 text-xs text-leather-700">
+                رکوردهای شناخته‌شده به‌صورت خودکار پر شده‌اند. برای ماژول‌های دیگر در صورت نیاز رکورد انتخاب کنید.
+              </div>
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                {quickProjectTargetModuleIds
+                  .filter((targetModuleId) => targetModuleId !== 'projects')
+                  .map((targetModuleId) => (
+                    <div key={targetModuleId}>
+                      <div className="mb-1 text-xs text-gray-500">{MODULES[targetModuleId]?.titles?.fa || targetModuleId}</div>
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        value={quickProjectLinkedRecords[targetModuleId] || undefined}
+                        options={quickProjectRelationOptions[targetModuleId] || []}
+                        loading={!!quickProjectRelationLoading[targetModuleId]}
+                        placeholder={`انتخاب رکورد ${MODULES[targetModuleId]?.titles?.fa || targetModuleId}`}
+                        getPopupContainer={(node) => node?.parentElement || document.body}
+                        onChange={(value) => setQuickProjectLinkedRecords((prev) => ({
+                          ...prev,
+                          [targetModuleId]: value ? String(value) : null,
+                        }))}
+                      />
+                    </div>
+                  ))}
+              </div>
+            </div>
+          ) : null}
+
           {(moduleId === 'invoices' || moduleId === 'purchase_invoices') && (
             <div className="rounded-xl border border-leather-200 bg-leather-50 px-3 py-2 text-xs text-leather-700">
               {moduleId === 'invoices'
@@ -3765,7 +4182,14 @@ const ModuleShow: React.FC = () => {
           )}
 
           <div className="mt-4 flex justify-end gap-2 border-t pt-4">
-            <Button onClick={() => { setIsQuickProjectModalOpen(false); quickProjectForm.resetFields(); }}>
+            <Button onClick={() => {
+              setIsQuickProjectModalOpen(false);
+              setQuickProjectTargetModuleIds([]);
+              setQuickProjectLinkedRecords({});
+              setQuickProjectRelationOptions({});
+              setQuickProjectRelationLoading({});
+              quickProjectForm.resetFields();
+            }}>
               انصراف
             </Button>
             <Button type="primary" htmlType="submit" loading={quickProjectLoading} className="bg-leather-600 hover:!bg-leather-500 border-none">
@@ -3957,6 +4381,37 @@ const ModuleShow: React.FC = () => {
           )}
         </>
       )}
+
+      <Modal
+        open={accountingEntryPickerOpen}
+        title="انتخاب سند حسابداری"
+        onCancel={() => setAccountingEntryPickerOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <div className="space-y-3">
+          <div className="text-sm text-gray-500">
+            برای این فاکتور بیش از یک سند حسابداری مرتبط پیدا شد. سند موردنظر را باز کنید.
+          </div>
+          <div className="flex flex-col gap-2">
+            {accountingEntryChoices.map((choice) => {
+              const labels = choice.eventKeys.map((eventKey) => getAccountingEventLabelFa(eventKey)).join('، ');
+              return (
+                <Button
+                  key={choice.journalEntryId}
+                  block
+                  onClick={() => {
+                    setAccountingEntryPickerOpen(false);
+                    navigate(`/${MODULES.journal_entries.table}/${choice.journalEntryId}`);
+                  }}
+                >
+                  {`${labels}${choice.state === 'created' ? ' | پیش‌نویس جدید' : ' | سند موجود'}`}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+      </Modal>
 
       <PrintSection
         isPrintModalOpen={printManager.isPrintModalOpen}

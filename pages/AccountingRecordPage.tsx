@@ -32,6 +32,7 @@ import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
 import { isAccountingMinimalModule } from '../utils/accountingModules';
+import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import {
   formatNumericForInput,
   normalizeNumericString,
@@ -636,9 +637,14 @@ const AccountingRecordPage: React.FC = () => {
         const { data, error } = await supabase
           .from(moduleConfig.table)
           .insert([payload])
-          .select('id')
+          .select('*')
           .single();
         if (error) throw error;
+        await runWorkflowsForEvent({
+          moduleId,
+          event: 'create',
+          currentRecord: (data || { ...payload }) as Record<string, any>,
+        });
         message.success('رکورد ایجاد شد');
         navigate(`/${moduleId}/${data.id}`);
         return;
@@ -654,6 +660,16 @@ const AccountingRecordPage: React.FC = () => {
       if (!updatedRows || updatedRows.length === 0) {
         throw new Error('ویرایش ذخیره نشد. دسترسی یا رکورد را بررسی کنید.');
       }
+      await runWorkflowsForEvent({
+        moduleId,
+        event: 'upsert',
+        currentRecord: {
+          ...(formData || {}),
+          ...payload,
+          id,
+        } as Record<string, any>,
+        previousRecord: ((formData || null) as Record<string, any> | null),
+      });
       message.success('تغییرات ذخیره شد');
       navigate(`/${moduleId}/${id}`);
     } catch (err: any) {

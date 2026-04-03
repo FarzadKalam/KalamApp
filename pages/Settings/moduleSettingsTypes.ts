@@ -1,8 +1,10 @@
 import { BlockDefinition, FieldType, ModuleField } from '../../types';
 
 export type SystemCodeNamingSettings = {
-  prefixLetter: string;
+  prefix: string;
+  prefixLetter?: string;
   startNumber: number;
+  numberWidth?: number | null;
 };
 
 export type ModuleGeneralSettings = {

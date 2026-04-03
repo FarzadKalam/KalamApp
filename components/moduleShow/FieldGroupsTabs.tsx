@@ -43,22 +43,6 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   const handleStockUpdated = useCallback((stock: number) => {
     onDataUpdate?.({ stock });
   }, [onDataUpdate]);
-  const taskShelfId = moduleId === 'tasks'
-    ? (data?.production_shelf_id || data?.recurrence_info?.production_shelf_id || null)
-    : null;
-  const taskShelfLabel = useMemo(() => {
-    if (!taskShelfId) return null;
-    const shelfOptions = relationOptions?.production_shelf_id || relationOptions?.shelves || [];
-    const matched = (Array.isArray(shelfOptions) ? shelfOptions : []).find(
-      (item: any) => String(item?.value || '') === String(taskShelfId)
-    );
-    const directLabel =
-      data?.production_shelf_name
-      || data?.production_shelf_label
-      || data?.production_shelf?.name
-      || null;
-    return String(matched?.label || directLabel || taskShelfId);
-  }, [data?.production_shelf, data?.production_shelf_id, data?.production_shelf_label, data?.production_shelf_name, relationOptions, taskShelfId]);
   const processStageFieldKeys = new Set([
     'execution_process_draft',
     'marketing_process_draft',
@@ -92,8 +76,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
         const hasBlockTable =
           !!block.tableColumns
           || (moduleId === 'products' && block.id === 'product_inventory')
-          || (moduleId === 'shelves' && block.id === 'shelf_inventory')
-          || (moduleId === 'tasks' && block.id === 'task_shelf_inventory');
+          || (moduleId === 'shelves' && block.id === 'shelf_inventory');
         return hasVisibleField || hasBlockTable;
       })
   ), [canViewField, checkVisibility, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys]);
@@ -138,24 +121,6 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
               relationOptions={relationOptions}
               dynamicOptions={dynamicOptions}
             />
-          ) : (moduleId === 'tasks' && block.id === 'task_shelf_inventory') ? (
-            taskShelfId ? (
-              <div className="space-y-2">
-                <div className="text-xs text-gray-600">
-                  قفسه مرحله: <span className="font-semibold text-[#8b5e3c]">{taskShelfLabel || '-'}</span>
-                </div>
-                <ShelfInventoryPanel
-                  block={block}
-                  recordId={String(taskShelfId)}
-                  relationOptions={relationOptions}
-                  dynamicOptions={dynamicOptions}
-                />
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-gray-300 p-4 text-xs text-gray-500">
-                برای نمایش موجودی، ابتدا قفسه مرحله تولید را انتخاب کنید.
-              </div>
-            )
           ) : (
             <EditableTable
               block={block}
@@ -194,19 +159,18 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           </div>
         );
       })()}
-      {((moduleId === 'shelves' && block.id === 'shelf_inventory') || (moduleId === 'tasks' && block.id === 'task_shelf_inventory')) && (() => {
+      {(moduleId === 'shelves' && block.id === 'shelf_inventory') && (() => {
         const stockMovementsBlock = moduleConfig?.blocks?.find((b: any) =>
-          b.id === (moduleId === 'tasks' ? 'task_shelf_stock_movements' : 'shelf_stock_movements')
+          b.id === 'shelf_stock_movements'
         );
         if (!stockMovementsBlock) return null;
         if (stockMovementsBlock.visibleIf && !checkVisibility(stockMovementsBlock.visibleIf)) return null;
         if (canViewField && canViewField(String(stockMovementsBlock.id)) === false) return null;
-        if (moduleId === 'tasks' && !taskShelfId) return null;
         return (
           <div className="mt-6">
             <ShelfStockMovementsPanel
               block={stockMovementsBlock}
-              recordId={moduleId === 'tasks' ? String(taskShelfId) : recordId}
+              recordId={recordId}
               relationOptions={relationOptions}
               dynamicOptions={dynamicOptions}
               canEditModule={canEditModule}

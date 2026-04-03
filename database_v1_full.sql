@@ -120,6 +120,13 @@ alter table public.company_settings
   add column if not exists address text,
   add column if not exists website text,
   add column if not exists email text,
+  add column if not exists instagram_id text,
+  add column if not exists telegram_id text,
+  add column if not exists youtube_url text,
+  add column if not exists whatsapp_number text,
+  add column if not exists eitaa_id text,
+  add column if not exists rubika_id text,
+  add column if not exists bale_id text,
   add column if not exists logo_url text,
   add column if not exists icon_url text,
   add column if not exists updated_by uuid references auth.users(id) on delete set null,
@@ -1397,6 +1404,7 @@ create table if not exists public.process_templates (
 alter table public.process_templates
   add column if not exists org_id uuid references public.organizations(id) on delete cascade default public.current_org_id(),
   add column if not exists module_id text not null default '',
+  add column if not exists module_ids text[] not null default '{}'::text[],
   add column if not exists process_kind text not null default 'generic',
   add column if not exists name text not null default '',
   add column if not exists description text,
@@ -1428,6 +1436,9 @@ end $$;
 
 create unique index if not exists idx_process_templates_org_module_name
   on public.process_templates(org_id, module_id, lower(name));
+
+create index if not exists idx_process_templates_module_ids
+  on public.process_templates using gin(module_ids);
 
 create index if not exists idx_process_templates_org_kind
   on public.process_templates(org_id, process_kind, is_active);
@@ -1500,6 +1511,26 @@ end $$;
 
 create index if not exists idx_process_runs_org_module_record
   on public.process_runs(org_id, module_id, record_id, created_at desc);
+
+create table if not exists public.process_run_links (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.process_run_links
+  add column if not exists process_run_id uuid not null references public.process_runs(id) on delete cascade,
+  add column if not exists module_id text not null default '',
+  add column if not exists record_id uuid not null,
+  add column if not exists is_primary boolean not null default false,
+  add column if not exists created_at timestamptz not null default now();
+
+create unique index if not exists idx_process_run_links_unique
+  on public.process_run_links(process_run_id, module_id, record_id);
+
+create index if not exists idx_process_run_links_process
+  on public.process_run_links(process_run_id, is_primary);
+
+create index if not exists idx_process_run_links_module_record
+  on public.process_run_links(module_id, record_id);
 
 create table if not exists public.process_run_stages (
   id uuid primary key default gen_random_uuid()
@@ -1913,6 +1944,13 @@ begin
   )
   returning id into v_run_id;
 
+  if p_record_id is not null and nullif(trim(coalesce(p_module_id, '')), '') is not null then
+    insert into public.process_run_links (process_run_id, module_id, record_id, is_primary)
+    values (v_run_id, p_module_id, p_record_id, true)
+    on conflict (process_run_id, module_id, record_id) do update
+      set is_primary = excluded.is_primary;
+  end if;
+
   insert into public.process_run_stages (
     process_run_id,
     template_stage_id,
@@ -2230,6 +2268,182 @@ create policy p_mission_requests_org_all on public.mission_requests
 --    using (public.current_org_id() is null or org_id is null or org_id = public.current_org_id())
 --    with check (public.current_org_id() is null or org_id is null or org_id = public.current_org_id())
 -- 4) Avoid policy/function chains that query the same table under RLS unless function is SECURITY DEFINER.
+
+-- =====================================================
+-- Phase 62 - Goals / target setting
+-- =====================================================
+
+create table if not exists public.goals (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid references public.organizations(id) on delete cascade default public.current_org_id(),
+  module_id text not null,
+  name text not null,
+  description text,
+  goal_scope text not null default 'personal',
+  period_unit text not null default 'month',
+  subperiod_unit text not null default 'week',
+  metric_type text not null default 'count',
+  metric_field_key text,
+  date_field_key text default 'created_at',
+  target_value numeric,
+  levels_enabled boolean not null default false,
+  bronze_value numeric,
+  silver_value numeric,
+  gold_value numeric,
+  assignee_user_ids jsonb not null default '[]'::jsonb,
+  assignee_role_ids jsonb not null default '[]'::jsonb,
+  conditions_all jsonb not null default '[]'::jsonb,
+  conditions_any jsonb not null default '[]'::jsonb,
+  config jsonb not null default '{}'::jsonb,
+  is_active boolean not null default true,
+  created_by uuid references auth.users(id) on delete set null,
+  updated_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_goals_scope check (goal_scope in ('personal', 'team')),
+  constraint chk_goals_period_unit check (period_unit in ('day', 'week', 'month', 'quarter', 'half_year', 'year')),
+  constraint chk_goals_subperiod_unit check (subperiod_unit in ('day', 'week', 'month', 'quarter', 'half_year', 'year')),
+  constraint chk_goals_metric_type check (metric_type in ('count', 'sum', 'avg')),
+  constraint chk_goals_name check (length(trim(name)) > 0)
+);
+
+alter table public.goals
+  add column if not exists description text,
+  add column if not exists goal_scope text default 'personal',
+  add column if not exists period_unit text default 'month',
+  add column if not exists subperiod_unit text default 'week',
+  add column if not exists metric_type text default 'count',
+  add column if not exists metric_field_key text,
+  add column if not exists date_field_key text default 'created_at',
+  add column if not exists target_value numeric,
+  add column if not exists levels_enabled boolean not null default false,
+  add column if not exists bronze_value numeric,
+  add column if not exists silver_value numeric,
+  add column if not exists gold_value numeric,
+  add column if not exists assignee_user_ids jsonb not null default '[]'::jsonb,
+  add column if not exists assignee_role_ids jsonb not null default '[]'::jsonb,
+  add column if not exists conditions_all jsonb not null default '[]'::jsonb,
+  add column if not exists conditions_any jsonb not null default '[]'::jsonb,
+  add column if not exists config jsonb not null default '{}'::jsonb,
+  add column if not exists is_active boolean not null default true,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.goals
+set goal_scope = 'personal'
+where goal_scope is null
+   or trim(goal_scope) = '';
+
+update public.goals
+set period_unit = 'month'
+where period_unit is null
+   or trim(period_unit) = '';
+
+update public.goals
+set subperiod_unit = 'week'
+where subperiod_unit is null
+   or trim(subperiod_unit) = '';
+
+update public.goals
+set metric_type = 'count'
+where metric_type is null
+   or trim(metric_type) = '';
+
+update public.goals
+set date_field_key = 'created_at'
+where date_field_key is null
+   or trim(date_field_key) = '';
+
+update public.goals
+set assignee_user_ids = '[]'::jsonb
+where assignee_user_ids is null
+   or jsonb_typeof(assignee_user_ids) is distinct from 'array';
+
+update public.goals
+set assignee_role_ids = '[]'::jsonb
+where assignee_role_ids is null
+   or jsonb_typeof(assignee_role_ids) is distinct from 'array';
+
+update public.goals
+set conditions_all = '[]'::jsonb
+where conditions_all is null
+   or jsonb_typeof(conditions_all) is distinct from 'array';
+
+update public.goals
+set conditions_any = '[]'::jsonb
+where conditions_any is null
+   or jsonb_typeof(conditions_any) is distinct from 'array';
+
+update public.goals
+set config = '{}'::jsonb
+where config is null
+   or jsonb_typeof(config) is distinct from 'object';
+
+update public.goals
+set is_active = true
+where is_active is null;
+
+update public.goals
+set levels_enabled = false
+where levels_enabled is null;
+
+alter table public.goals alter column goal_scope set default 'personal';
+alter table public.goals alter column period_unit set default 'month';
+alter table public.goals alter column subperiod_unit set default 'week';
+alter table public.goals alter column metric_type set default 'count';
+alter table public.goals alter column date_field_key set default 'created_at';
+alter table public.goals alter column assignee_user_ids set default '[]'::jsonb;
+alter table public.goals alter column assignee_role_ids set default '[]'::jsonb;
+alter table public.goals alter column conditions_all set default '[]'::jsonb;
+alter table public.goals alter column conditions_any set default '[]'::jsonb;
+alter table public.goals alter column config set default '{}'::jsonb;
+alter table public.goals alter column is_active set default true;
+alter table public.goals alter column created_at set default now();
+alter table public.goals alter column updated_at set default now();
+
+alter table public.goals drop constraint if exists chk_goals_scope;
+alter table public.goals drop constraint if exists chk_goals_period_unit;
+alter table public.goals drop constraint if exists chk_goals_subperiod_unit;
+alter table public.goals drop constraint if exists chk_goals_metric_type;
+alter table public.goals drop constraint if exists chk_goals_name;
+
+alter table public.goals
+  add constraint chk_goals_scope check (goal_scope in ('personal', 'team'));
+
+alter table public.goals
+  add constraint chk_goals_period_unit check (period_unit in ('day', 'week', 'month', 'quarter', 'half_year', 'year'));
+
+alter table public.goals
+  add constraint chk_goals_subperiod_unit check (subperiod_unit in ('day', 'week', 'month', 'quarter', 'half_year', 'year'));
+
+alter table public.goals
+  add constraint chk_goals_metric_type check (metric_type in ('count', 'sum', 'avg'));
+
+alter table public.goals
+  add constraint chk_goals_name check (length(trim(name)) > 0);
+
+create index if not exists idx_goals_org_module_active
+  on public.goals(org_id, module_id, is_active);
+
+create index if not exists idx_goals_org_updated
+  on public.goals(org_id, updated_at desc);
+
+drop trigger if exists trg_goals_updated_at on public.goals;
+create trigger trg_goals_updated_at
+before update on public.goals
+for each row execute function public.set_updated_at();
+
+alter table public.goals enable row level security;
+
+drop policy if exists p_goals_org_all on public.goals;
+create policy p_goals_org_all
+on public.goals
+for all
+to authenticated
+using (org_id = public.current_org_id())
+with check (org_id = public.current_org_id());
 
 -- =====================================================
 -- Bootstrap seed data

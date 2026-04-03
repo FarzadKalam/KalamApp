@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin } from 'antd';
-import type { InputRef } from 'antd';
+import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
   DashboardOutlined, 
@@ -15,6 +15,7 @@ import {
   RightOutlined,
   HomeOutlined,
   BankOutlined,
+  BarChartOutlined,
   FileTextOutlined,
   CheckSquareOutlined,
   ExclamationCircleOutlined,
@@ -31,6 +32,7 @@ import NotificationsPopover from './NotificationsPopover';
 import { getRecordTitle } from '../utils/recordTitle';
 import {
   ACCOUNTING_PERMISSION_KEY,
+  REPORTS_PERMISSION_KEY,
   resolvePreferredRoleModuleIds,
   type PermissionMap,
 } from '../utils/permissions';
@@ -63,6 +65,78 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   
   const navigate = useNavigate();
   const location = useLocation();
+
+  const handleSidebarNavigate = (href: string) => {
+    if (!href) return;
+    navigate(href);
+    if (isMobile) setCollapsed(true);
+  };
+
+  const handleSidebarLinkClick = (
+    event: React.MouseEvent<HTMLAnchorElement>,
+    href: string,
+    disabled?: boolean
+  ) => {
+    if (disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    const isModifiedClick =
+      event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey;
+
+    if (isModifiedClick) {
+      event.stopPropagation();
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    handleSidebarNavigate(href);
+  };
+
+  const buildSidebarLabel = (label: React.ReactNode, href?: string, disabled?: boolean) => {
+    if (!href) {
+      return <span className="sidebar-menu-label">{label}</span>;
+    }
+
+    return (
+      <a
+        href={disabled ? undefined : href}
+        aria-disabled={disabled || undefined}
+        className={`sidebar-menu-link ${disabled ? 'is-disabled' : ''}`}
+        onClick={(event) => handleSidebarLinkClick(event, href, disabled)}
+        onAuxClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.stopPropagation()}
+      >
+        <span className="sidebar-menu-link__text">{label}</span>
+      </a>
+    );
+  };
+
+  const mapSidebarMenuItems = (items: NonNullable<MenuProps['items']>): MenuProps['items'] =>
+    items.map((item) => {
+      if (!item || typeof item !== 'object' || !('key' in item)) return item;
+
+      const href = typeof item.key === 'string' && item.key.startsWith('/') ? item.key : undefined;
+      const label = 'label' in item ? item.label : null;
+      const nextItem: any = {
+        ...item,
+        label: buildSidebarLabel(label, href, Boolean((item as any).disabled)),
+      };
+
+      if ('children' in item && Array.isArray(item.children) && item.children.length > 0) {
+        nextItem.popupClassName = 'app-main-sider-submenu-popup';
+        nextItem.popupOffset = [-8, 4];
+        nextItem.children = mapSidebarMenuItems(item.children);
+      }
+
+      return nextItem;
+    });
 
   useEffect(() => {
     let isMounted = true;
@@ -111,6 +185,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const canViewAccountingSettings =
     canViewAccountingDashboard &&
     rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.fields?.settings_links !== false;
+  const canViewReportsHub =
+    rolePermissions?.[REPORTS_PERMISSION_KEY]?.view !== false &&
+    rolePermissions?.[REPORTS_PERMISSION_KEY]?.fields?.hub_page !== false;
 
   // Collapse sidebar on route change
   useEffect(() => {
@@ -142,97 +219,102 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     });
   };
 
-  const menuItems = [
-    { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
-    {
-      key: 'resources',
-      icon: <SkinOutlined />,
-      label: 'منابع',
-      children: [
-        { key: '/products', label: 'کالاها و خدمات' },
-        { key: '/price_lists', label: 'لیست قیمت‌ها', disabled: !canViewModule('price_lists') },
-        { key: '/product_bundles', label: 'پکیج‌ها', disabled: !canViewModule('product_bundles') },
-        { key: '/customers', label: 'مشتریان' },
-        { key: '/suppliers', label: 'تامین کنندگان' },
-        { key: '/warehouses', label: 'انبارها' },
-        { key: '/shelves', label: 'قفسه‌ها' },
-        { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
-      ]
-    },
-    {
-      key: 'projects',
-      icon: <ProjectOutlined />,
-      label: 'پروژه‌ها',
-      children: [
-        { key: '/projects', label: 'پروژه‌ها' },
-      ]
-    },
-    {
-      key: 'sales_and_purchase',
-      icon: <FileTextOutlined />,
-      label: 'خرید و فروش',
-      children: [
-        { key: '/marketing_leads', label: 'بازاریابی' },
-        { key: '/invoices', label: 'فاکتورهای فروش' },
-        { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
-        { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
-        { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
-      ]
-    },
-    {
-      key: 'accounting',
-      icon: <BankOutlined />,
-      label: 'حسابداری',
-      children: [
-        { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
-        { key: '/cash_bank', label: 'نقد و بانک' },
-        { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
-        {
-          key: '/accounting/account-review',
-          label: 'مرور حساب ها',
-          disabled: !canViewModule('journal_entries') || !canViewModule('chart_of_accounts'),
-        },
-        { key: '/chart_of_accounts', label: 'جدول حساب ها', disabled: !canViewModule('chart_of_accounts') },
-        { key: '/cheques', label: 'چک ها', disabled: !canViewModule('cheques') },
-        { key: '/barters', label: 'تهاترها', disabled: !canViewModule('barters') },
-        { key: '/accounting/settings', label: 'تنظیمات حسابداری', disabled: !canViewAccountingSettings },
-      ]
-    },
-    {
-      key: 'hr',
-      icon: <TeamOutlined />,
-      label: 'منابع انسانی',
-      children: [
-        { key: '/hr', label: 'داشبورد منابع انسانی' },
-        { key: '/employees', label: 'کارکنان' },
-        { key: '/attendance_logs', label: 'تردد' },
-        { key: '/work_schedules', label: 'برنامه حضور' },
-        { key: '/leave_requests', label: 'مرخصی‌ها' },
-        { key: '/overtime_requests', label: 'اضافه‌کاری‌ها' },
-        { key: '/mission_requests', label: 'ماموریت‌ها' },
-        { key: '/tasks', label: 'فعالیت ها' },
-      ]
-    },
-    {
-      key: 'tools',
-      icon: <NodeIndexOutlined />,
-      label: 'ابزارها',
-      children: [
-        {
-          key: 'tools_processes',
-          label: 'فرآیندها',
-          children: [
-            { key: '/process_templates', label: 'الگوهای فرآیند' },
-            { key: '/process_runs', label: 'اجرای فرآیندها' },
-          ],
-        },
-        { key: '/production_orders', label: 'سفارشات تولید' },
-        { key: '/gallery', label: 'گالری فایل‌ها' },
-      ]
-    },
-    { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
-    
-  ];
+  const menuItems = useMemo<MenuProps['items']>(() => {
+    const rawItems: NonNullable<MenuProps['items']> = [
+      { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
+      {
+        key: 'resources',
+        icon: <SkinOutlined />,
+        label: 'منابع',
+        children: [
+          { key: '/products', label: 'کالاها و خدمات' },
+          { key: '/price_lists', label: 'لیست قیمت‌ها', disabled: !canViewModule('price_lists') },
+          { key: '/product_bundles', label: 'پکیج‌ها', disabled: !canViewModule('product_bundles') },
+          { key: '/customers', label: 'مشتریان' },
+          { key: '/suppliers', label: 'تامین کنندگان' },
+          { key: '/warehouses', label: 'انبارها' },
+          { key: '/shelves', label: 'قفسه‌ها' },
+          { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
+        ]
+      },
+      {
+        key: 'projects',
+        icon: <ProjectOutlined />,
+        label: 'پروژه‌ها',
+        children: [
+          { key: '/projects', label: 'پروژه‌ها' },
+        ]
+      },
+      {
+        key: 'sales_and_purchase',
+        icon: <FileTextOutlined />,
+        label: 'خرید و فروش',
+        children: [
+          { key: '/marketing_leads', label: 'بازاریابی' },
+          { key: '/invoices', label: 'فاکتورهای فروش' },
+          { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
+          { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
+          { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
+        ]
+      },
+      {
+        key: 'accounting',
+        icon: <BankOutlined />,
+        label: 'حسابداری',
+        children: [
+          { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
+          { key: '/cash_bank', label: 'نقد و بانک' },
+          { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
+          {
+            key: '/accounting/account-review',
+            label: 'مرور حساب ها',
+            disabled: !canViewModule('journal_entries') || !canViewModule('chart_of_accounts'),
+          },
+          { key: '/chart_of_accounts', label: 'جدول حساب ها', disabled: !canViewModule('chart_of_accounts') },
+          { key: '/cheques', label: 'چک ها', disabled: !canViewModule('cheques') },
+          { key: '/barters', label: 'تهاترها', disabled: !canViewModule('barters') },
+          { key: '/accounting/settings', label: 'تنظیمات حسابداری', disabled: !canViewAccountingSettings },
+        ]
+      },
+      {
+        key: 'hr',
+        icon: <TeamOutlined />,
+        label: 'منابع انسانی',
+        children: [
+          { key: '/hr', label: 'داشبورد منابع انسانی' },
+          { key: '/employees', label: 'کارکنان' },
+          { key: '/attendance_logs', label: 'تردد' },
+          { key: '/work_schedules', label: 'برنامه حضور' },
+          { key: '/leave_requests', label: 'مرخصی‌ها' },
+          { key: '/overtime_requests', label: 'اضافه‌کاری‌ها' },
+          { key: '/mission_requests', label: 'ماموریت‌ها' },
+          { key: '/tasks', label: 'فعالیت ها' },
+        ]
+      },
+      {
+        key: 'tools',
+        icon: <NodeIndexOutlined />,
+        label: 'ابزارها',
+        children: [
+          { key: '/reports', icon: <BarChartOutlined />, label: 'گزارشات', disabled: !canViewReportsHub },
+          { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
+          {
+            key: 'tools_processes',
+            label: 'فرآیندها',
+            children: [
+              { key: '/process_templates', label: 'الگوهای فرآیند' },
+              { key: '/process_runs', label: 'اجرای فرآیندها' },
+            ],
+          },
+          { key: '/production_orders', label: 'سفارشات تولید' },
+          { key: '/gallery', label: 'گالری فایل‌ها' },
+        ]
+      },
+      { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
+    ];
+
+    return mapSidebarMenuItems(rawItems);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, rolePermissions, isMobile, collapsed]);
 
   const searchableModules = useMemo(() => {
     return Object.entries(MODULES).map(([id, config]) => {
@@ -439,13 +521,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             <Menu
             theme={isDarkMode ? 'dark' : 'light'}
             mode="inline"
+            direction="rtl"
+            inlineCollapsed={!isMobile && collapsed}
             selectedKeys={[location.pathname]}
             items={menuItems}
             onClick={({ key }) => { 
                 if (typeof key === 'string' && key.startsWith('/')) {
-                  navigate(key);
+                  handleSidebarNavigate(key);
                 }
-                if (isMobile) setCollapsed(true); 
             }} 
             className="mt-4 border-none bg-transparent font-medium"
             />

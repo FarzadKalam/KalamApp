@@ -608,12 +608,19 @@ const ConnectionsTab: React.FC = () => {
       }
 
       setSmsTesting(true);
-      await sendSmsViaGateway({
+      const result = await sendSmsViaGateway({
         to: [formatIranMobileForInput(testMobile.trim())],
         text: testText.trim(),
         overrideSettings: buildSmsOverrideSettings(smsValues),
         allowDirectFallback: true,
       });
+      const providerResult = Array.isArray(result?.provider_results) ? result.provider_results[0] : null;
+      const providerToken = String(providerResult?.result || '').trim();
+      message.info(
+        providerToken
+          ? `Ø®Ø±ÙˆØ¬ÛŒ provider: ${providerToken}. Ø§ÛŒÙ† Ù¾Ø§Ø³Ø® ÙÙ‚Ø· Ø«Ø¨Øª Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø±Ø§ Ù†Ø´Ø§Ù† Ù…ÛŒâ€ŒØ¯Ù‡Ø¯ Ùˆ Ø¨Ù‡ Ù…Ø¹Ù†ÛŒ ØªØ§ÛŒÛŒØ¯ ØªØ­ÙˆÛŒÙ„ Ù†Ù‡Ø§ÛŒÛŒ Ø¨Ù‡ Ú¯ÙˆØ´ÛŒ Ù†ÛŒØ³Øª.`
+          : 'Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø§Ø±Ø³Ø§Ù„ Ø¯Ø± provider Ø«Ø¨Øª Ø´Ø¯ØŒ Ø§Ù…Ø§ ØªØ­ÙˆÛŒÙ„ Ù†Ù‡Ø§ÛŒÛŒ Ø¨Ù‡ Ú¯ÙˆØ´ÛŒ Ø¯Ø± Ø§ÛŒÙ† Ù…Ø³ÛŒØ± ØªØ§ÛŒÛŒØ¯ Ù†Ù…ÛŒâ€ŒØ´ÙˆØ¯.'
+      );
       message.success('پیامک تست ارسال شد (درخواست ثبت شد).');
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در ارسال پیامک تست'));

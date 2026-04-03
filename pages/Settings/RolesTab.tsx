@@ -13,8 +13,12 @@ import {
   DASHBOARD_WIDGET_PERMISSIONS,
   WORKFLOWS_PERMISSION_KEY,
   WORKFLOWS_PERMISSION_FIELDS,
+  GOALS_PERMISSION_KEY,
+  GOALS_PERMISSION_FIELDS,
   ACCOUNTING_PERMISSION_KEY,
   ACCOUNTING_PERMISSION_FIELDS,
+  REPORTS_PERMISSION_KEY,
+  REPORTS_PERMISSION_FIELDS,
   MOBILE_FOOTER_PERMISSION_KEY,
   MOBILE_FOOTER_DEFAULT_MODULES,
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
@@ -604,6 +608,73 @@ const RolesTab: React.FC = () => {
                 </Panel>
 
                 <Panel
+                  key={GOALS_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <span className="font-bold">هدف‌گذاری</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(GOALS_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              GOALS_PERMISSION_KEY,
+                              'view',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(GOALS_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(GOALS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              GOALS_PERMISSION_KEY,
+                              'edit',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          ویرایش/ایجاد
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(GOALS_PERMISSION_KEY).delete !== false}
+                          disabled={getModulePerms(GOALS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              GOALS_PERMISSION_KEY,
+                              'delete',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          حذف
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی بخش‌های هدف‌گذاری
+                    </Divider>
+                    {renderFieldSwitches(
+                      GOALS_PERMISSION_KEY,
+                      GOALS_PERMISSION_FIELDS,
+                      getModulePerms(GOALS_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
                   key={ACCOUNTING_PERMISSION_KEY}
                   className="dark:border-gray-800"
                   header={
@@ -666,6 +737,73 @@ const RolesTab: React.FC = () => {
                       ACCOUNTING_PERMISSION_KEY,
                       ACCOUNTING_PERMISSION_FIELDS,
                       getModulePerms(ACCOUNTING_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
+                  key={REPORTS_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <span className="font-bold">گزارشات</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(REPORTS_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              REPORTS_PERMISSION_KEY,
+                              'view',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(REPORTS_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(REPORTS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              REPORTS_PERMISSION_KEY,
+                              'edit',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          ویرایش/ایجاد
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(REPORTS_PERMISSION_KEY).delete !== false}
+                          disabled={getModulePerms(REPORTS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              REPORTS_PERMISSION_KEY,
+                              'delete',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          حذف
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی بخش‌های گزارشات
+                    </Divider>
+                    {renderFieldSwitches(
+                      REPORTS_PERMISSION_KEY,
+                      REPORTS_PERMISSION_FIELDS,
+                      getModulePerms(REPORTS_PERMISSION_KEY).view === false
                     )}
                   </div>
                 </Panel>

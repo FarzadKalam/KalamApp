@@ -102,6 +102,17 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     () => printTemplates.find((template) => template.id === selectedTemplateId) || null,
     [printTemplates, selectedTemplateId]
   );
+  const mobileTemplateOptions = useMemo(
+    () =>
+      printTemplates.map((template) => ({
+        value: template.id,
+        label: template.title,
+        title: template.title,
+        description: template.description,
+        isSystem: template.isSystem,
+      })),
+    [printTemplates]
+  );
   const paperFrame = getPaperFrame(previewMeta?.paperSize || 'A4', previewMeta?.orientation || 'portrait');
   const paperWidthPx = (paperFrame.mmWidth * 96) / 25.4;
   const paperHeightPx = (paperFrame.mmHeight * 96) / 25.4;
@@ -162,7 +173,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         open={isPrintModalOpen}
         onCancel={onClose}
         onOk={onPrint}
-        okText="چاپ"
+        okText={isMobile ? 'ذخیره PDF' : 'چاپ'}
         cancelText="انصراف"
         width={isMobile ? '100vw' : 1180}
         destroyOnHidden
@@ -229,8 +240,21 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                 placeholder="انتخاب قالب چاپ"
                 size="large"
                 listHeight={320}
+                popupMatchSelectWidth
                 optionFilterProp="label"
-                getPopupContainer={(triggerNode) => triggerNode.parentElement || triggerNode}
+                getPopupContainer={() => document.body}
+                labelRender={() =>
+                  selectedTemplate ? (
+                    <div className="print-template-mobile-value">
+                      <div className="print-template-mobile-value-title">
+                        <span>{selectedTemplate.title}</span>
+                        {selectedTemplate.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <span>انتخاب قالب چاپ</span>
+                  )
+                }
                 filterOption={(input, option) => {
                   const search = input.trim().toLowerCase();
                   if (!search) return true;
@@ -238,12 +262,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                   const description = String(option?.description || '').toLowerCase();
                   return title.includes(search) || description.includes(search);
                 }}
-                options={printTemplates.map((template) => ({
-                  value: template.id,
-                  label: template.title,
-                  title: template.description || template.title,
-                  description: template.description,
-                }))}
+                options={mobileTemplateOptions}
                 optionRender={(option) => {
                   const data = option.data as {
                     title?: string;
@@ -256,20 +275,11 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                         <span>{data.title}</span>
                         {data.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
                       </div>
-                      <div className="print-template-mobile-option-desc">{data.description}</div>
+                      {data.description ? <div className="print-template-mobile-option-desc">{data.description}</div> : null}
                     </div>
                   );
                 }}
               />
-              {selectedTemplate ? (
-                <div className="print-template-mobile-current">
-                  <div className="print-template-mobile-current-title">
-                    <span>{selectedTemplate.title}</span>
-                    {selectedTemplate.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                  </div>
-                  <div className="print-template-mobile-current-desc">{selectedTemplate.description}</div>
-                </div>
-              ) : null}
             </div>
           ) : null}
           {!isMobile ? (
@@ -633,12 +643,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           direction: rtl;
         }
         .print-template-mobile-select .ant-select-selector {
-          min-height: 42px !important;
+          min-height: 48px !important;
           padding: 4px 11px !important;
-          border-radius: 10px !important;
+          border-radius: 14px !important;
           border-color: rgba(148,163,184,0.28) !important;
           background: #fff !important;
-          box-shadow: none !important;
+          box-shadow: 0 10px 24px rgba(15,23,42,0.06) !important;
           align-items: center;
         }
         .print-template-mobile-select .ant-select-selection-search-input,
@@ -647,51 +657,86 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           direction: rtl;
           text-align: right;
         }
-        .print-template-mobile-current {
-          display: none;
-          flex-direction: column;
-          gap: 4px;
-          margin-top: 8px;
-          padding: 10px 12px;
-          border-radius: 14px;
-          border: 1px solid rgba(148,163,184,0.18);
-          background: rgba(255,255,255,0.72);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.45);
+        .print-template-mobile-value {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+          max-width: 100%;
         }
-        .print-template-mobile-current-title,
+        .print-template-mobile-value-title {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: nowrap;
+          font-size: 13px;
+          font-weight: 700;
+          color: #0f172a;
+          line-height: 1.5;
+          max-width: 100%;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }
+        .print-template-mobile-value-title,
         .print-template-mobile-option-title {
           display: inline-flex;
           align-items: center;
           gap: 6px;
           flex-wrap: wrap;
-          font-size: 14px;
-          font-weight: 500;
+          font-size: 13px;
+          font-weight: 700;
           color: #111827;
           direction: rtl;
           text-align: right;
         }
-        .print-template-mobile-current-desc,
         .print-template-mobile-option-desc {
           font-size: 11px;
           line-height: 1.7;
           color: #64748b;
           direction: rtl;
           text-align: right;
-          display: none;
+          display: block;
         }
         .print-template-mobile-option {
           direction: rtl;
           text-align: right;
         }
-        .print-template-mobile-option .print-template-system-tag {
-          display: none;
+        .print-template-mobile-option .print-template-system-tag,
+        .print-template-mobile-value .print-template-system-tag {
+          display: inline-flex;
         }
         .print-template-mobile-popup .ant-select-dropdown {
-          padding: 4px 0;
+          padding: 6px 0;
+          background: #ffffff !important;
+          border: 1px solid rgba(148,163,184,0.2) !important;
+          border-radius: 14px !important;
+          box-shadow: 0 18px 40px rgba(15,23,42,0.18) !important;
+          backdrop-filter: none !important;
+          -webkit-backdrop-filter: none !important;
+          pointer-events: auto !important;
+        }
+        .print-template-mobile-popup {
+          z-index: 1400 !important;
+        }
+        .print-template-mobile-popup,
+        .print-template-mobile-popup * {
+          backdrop-filter: none !important;
+          -webkit-backdrop-filter: none !important;
+        }
+        .print-template-mobile-popup .ant-select-item-option {
+          background: transparent !important;
+          pointer-events: auto !important;
+        }
+        .print-template-mobile-popup .ant-select-item-option-active {
+          background: rgba(var(--brand-500-rgb), 0.08) !important;
+        }
+        .print-template-mobile-popup .ant-select-item-option-selected {
+          background: rgba(var(--brand-500-rgb), 0.12) !important;
         }
         .print-template-mobile-popup .ant-select-item {
-          padding: 8px 12px !important;
-          border-radius: 8px;
+          padding: 10px 12px !important;
+          border-radius: 12px;
           margin: 0 6px;
         }
         .dark .print-template-mobile-select-label {
@@ -700,20 +745,25 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .dark .print-template-mobile-select .ant-select-selector {
           background: rgba(15,23,42,0.92) !important;
           border-color: rgba(71,85,105,0.42) !important;
-          box-shadow: none;
+          box-shadow: none !important;
         }
-        .dark .print-template-mobile-current {
-          background: rgba(15,23,42,0.68);
-          border-color: rgba(71,85,105,0.36);
-          box-shadow: none;
+        .dark .print-template-mobile-popup .ant-select-dropdown {
+          background: #0f172a !important;
+          border-color: rgba(71,85,105,0.42) !important;
+          box-shadow: 0 18px 40px rgba(2,6,23,0.48) !important;
         }
-        .dark .print-template-mobile-current-title,
+        .dark .print-template-mobile-value-title,
         .dark .print-template-mobile-option-title {
           color: #f8fafc;
         }
-        .dark .print-template-mobile-current-desc,
         .dark .print-template-mobile-option-desc {
           color: #94a3b8;
+        }
+        .dark .print-template-mobile-popup .ant-select-item-option-active {
+          background: rgba(var(--brand-500-rgb), 0.16) !important;
+        }
+        .dark .print-template-mobile-popup .ant-select-item-option-selected {
+          background: rgba(var(--brand-500-rgb), 0.22) !important;
         }
         .print-preview-shell .ant-tabs,
         .print-preview-shell .ant-tabs-content-holder,

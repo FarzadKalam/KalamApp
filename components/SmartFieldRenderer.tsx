@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Input, InputNumber, Select, Switch, Upload, Image, Modal, App, Tag, Button, Space } from 'antd';
 import {
   UploadOutlined,
@@ -53,7 +53,9 @@ import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleA
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { normalizeProcessTargetModuleIds } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions } from '../utils/taskMeta';
+import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -281,7 +283,7 @@ type ReadyTextItem = {
 };
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1100
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1400
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -309,6 +311,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [updatingReadyText, setUpdatingReadyText] = useState(false);
   const [deletingReadyTextId, setDeletingReadyTextId] = useState<string | null>(null);
   const [relationLiveOptions, setRelationLiveOptions] = useState<any[]>([]);
+  const [relationExactOption, setRelationExactOption] = useState<any | null>(null);
   const [relationLoading, setRelationLoading] = useState(false);
   const [relationSearchQuery, setRelationSearchQuery] = useState('');
   const relationSearchTimerRef = useRef<number | null>(null);
@@ -427,16 +430,19 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   );
   const isRequired = !disableRequired && (field?.validation?.required || false);
   const fieldOptions = (
-    moduleId === 'process_templates' && field?.key === 'module_id'
+    ((moduleId === 'process_templates' && (field?.key === 'module_id' || field?.key === 'module_ids'))
+      || (moduleId === 'process_runs' && field?.key === 'module_id'))
       ? getProjectModuleOptions()
       : moduleId === 'tasks' && field?.key === 'related_to_module'
         ? getTaskModuleOptions()
       : (options || field?.options || [])
   );
-  const relationResolvedOptions = useMemo(
-    () => mergeSelectOptions(fieldOptions as any[], relationLiveOptions as any[]),
-    [fieldOptions, relationLiveOptions]
-  );
+  const relationResolvedOptions = useMemo(() => {
+    const merged = mergeSelectOptions(fieldOptions as any[], relationLiveOptions as any[]);
+    return relationExactOption
+      ? mergeSelectOptions(merged as any[], [relationExactOption] as any[])
+      : merged;
+  }, [fieldOptions, relationExactOption, relationLiveOptions]);
   const isReadonly = field?.readonly === true || field?.nature === FieldNature.SYSTEM;
   const parsedLocation = useMemo(() => parseLocationValue(value), [value]);
   const relationConfigAny = field.relationConfig as any;
@@ -446,8 +452,64 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       ? String(allValues?.related_to_module || allValues?.source_module_id || '').trim()
       : String(relationConfigAny?.targetModule || '').trim()
   ) || undefined;
+  const relationBaseKey = fieldKey.endsWith('_id') ? fieldKey.slice(0, -3) : fieldKey;
   const quickCreateTargetModuleId = resolvedRelationTargetModuleId;
   const quickCreateTargetModule = quickCreateTargetModuleId ? MODULES[quickCreateTargetModuleId] : undefined;
+  const resolveRelationDisplayLabel = useCallback(() => {
+    const matchedOption = relationResolvedOptions.find((item: any) => String(item?.value) === String(value))
+      || (fieldOptions as any[]).find((item: any) => String(item?.value) === String(value));
+    if (matchedOption?.label) {
+      return String(matchedOption.label);
+    }
+
+    const rawCandidates = [
+      allValues?.[`${fieldKey}_label`],
+      allValues?.[`${fieldKey}_name`],
+      allValues?.[`${fieldKey}_title`],
+      allValues?.[`${fieldKey}_full_name`],
+      allValues?.[`${fieldKey}_business_name`],
+      allValues?.[`${fieldKey}_system_code`],
+      allValues?.[`${relationBaseKey}_label`],
+      allValues?.[`${relationBaseKey}_name`],
+      allValues?.[`${relationBaseKey}_title`],
+      allValues?.[`${relationBaseKey}_full_name`],
+      allValues?.[`${relationBaseKey}_business_name`],
+      allValues?.[`${relationBaseKey}_legal_name`],
+      allValues?.[`${relationBaseKey}_system_code`],
+    ];
+
+    const relationValue = relationBaseKey ? allValues?.[relationBaseKey] : null;
+    if (relationValue !== null && relationValue !== undefined && typeof relationValue !== 'object') {
+      rawCandidates.push(relationValue);
+    }
+
+    const relationObject = relationValue && typeof relationValue === 'object' ? relationValue : null;
+    if (relationObject && typeof relationObject === 'object') {
+      rawCandidates.push(
+        relationObject?.label,
+        relationObject?.name,
+        relationObject?.title,
+        relationObject?.full_name,
+        relationObject?.business_name,
+        relationObject?.legal_name,
+        relationObject?.system_code,
+      );
+    }
+
+    const targetField = String(relationConfigAny?.targetField || '').trim();
+    if (targetField) {
+      rawCandidates.push(allValues?.[`${relationBaseKey}_${targetField}`]);
+      if (relationObject && typeof relationObject === 'object') {
+        rawCandidates.push(relationObject?.[targetField]);
+      }
+    }
+
+    const resolvedCandidate = rawCandidates
+      .map((item) => String(item ?? '').trim())
+      .find(Boolean);
+
+    return getSafeOptionFallback(resolvedCandidate || relationExactOption?.label || value);
+  }, [allValues, fieldKey, fieldOptions, relationBaseKey, relationConfigAny?.targetField, relationExactOption?.label, relationResolvedOptions, value]);
   const configuredQuickCreateKeys = useMemo(
     () =>
       Array.isArray(relationConfigAny?.quickCreateFieldKeys)
@@ -766,6 +828,73 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fieldType, value, relationResolvedOptions, relationSearchQuery]);
 
+  useEffect(() => {
+    if (fieldType !== FieldType.RELATION) {
+      setRelationExactOption(null);
+      return;
+    }
+    if (value === undefined || value === null || value === '') {
+      setRelationExactOption(null);
+      return;
+    }
+    if (isTaskSourceRecordField && !resolvedRelationTargetModuleId) {
+      setRelationExactOption(null);
+      return;
+    }
+    if (!isTaskSourceRecordField && relationConfigAny?.dependsOn) {
+      const dependsOnValue = String(allValues?.[relationConfigAny.dependsOn] || '').trim();
+      if (!dependsOnValue) {
+        setRelationExactOption(null);
+        return;
+      }
+    }
+
+    const existingOption = relationResolvedOptions.find((item: any) => String(item?.value) === String(value));
+    if (existingOption?.label) {
+      setRelationExactOption(existingOption);
+      return;
+    }
+
+    const localResolvedLabel = String(resolveRelationDisplayLabel() || '').trim();
+    const safeRawValue = String(value ?? '').trim();
+    if (localResolvedLabel && localResolvedLabel !== '-' && localResolvedLabel !== safeRawValue) {
+      setRelationExactOption({
+        value,
+        label: localResolvedLabel,
+        module: resolvedRelationTargetModuleId || relationConfigAny?.targetModule,
+      });
+      return;
+    }
+
+    let cancelled = false;
+    const loadExactOption = async () => {
+      try {
+        const remoteOptions = isTaskSourceRecordField
+          ? await fetchTaskSourceRecordOptions(supabase, resolvedRelationTargetModuleId, {
+              exactId: value,
+              limit: 1,
+            })
+          : await fetchRelationOptionsForField(supabase, field, {
+              allValues,
+              exactId: value,
+              limit: 1,
+            });
+        if (cancelled) return;
+        const matched = (remoteOptions || []).find((item: any) => String(item?.value) === String(value)) || null;
+        setRelationExactOption(matched);
+      } catch {
+        if (!cancelled) {
+          setRelationExactOption(null);
+        }
+      }
+    };
+
+    void loadExactOption();
+    return () => {
+      cancelled = true;
+    };
+  }, [allValues, field, fieldType, isTaskSourceRecordField, relationConfigAny?.dependsOn, relationConfigAny?.targetModule, relationResolvedOptions, resolveRelationDisplayLabel, resolvedRelationTargetModuleId, value]);
+
   useEffect(() => () => {
     if (relationSearchTimerRef.current) {
       window.clearTimeout(relationSearchTimerRef.current);
@@ -839,8 +968,14 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       const recordPath = recordId || 'draft';
       const filePath = `record_files/${modulePath}/${recordPath}/${fileName}`;
 
-      const { error: uploadError } = await fileStorageClient.storage.from(FILE_STORAGE_BUCKET).upload(filePath, file);
-      if (uploadError) throw uploadError;
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: filePath,
+        file,
+        label: file.name || 'تصویر',
+        detail: fieldLabel,
+      });
 
       const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
 
@@ -866,6 +1001,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       onChange(publicUrl);
       return publicUrl;
     } catch (error: any) {
+      if (isUploadCanceledError(error)) return null;
       console.error('خطا در آپلود تصویر:', error);
       msg.error(`خطا در آپلود: ${error.message}`);
       return null;
@@ -1377,6 +1513,19 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         <ProductionStagesField
           recordId={recordId}
           moduleId={moduleId}
+          automationContextModuleId={
+            moduleId === 'process_templates' || moduleId === 'process_runs'
+              ? null
+              : null
+          }
+          automationContextModuleIds={
+            moduleId === 'process_templates' || moduleId === 'process_runs'
+              ? normalizeProcessTargetModuleIds(
+                  (allValues as any)?.module_ids,
+                  (allValues as any)?.module_id
+                )
+              : null
+          }
           readOnly={!forceEditMode || (isReadonly && !allowTemplateStageEdit)}
           compact={compactMode}
           draftStages={nextDraftStages}
@@ -1426,20 +1575,41 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
              const selectedOpt = (fieldType === FieldType.RELATION ? relationResolvedOptions : fieldOptions).find((o: any) => String(o?.value) === String(value));
              if (fieldType === FieldType.STATUS && selectedOpt) {
                   return <Tag color={selectedOpt.color}>{selectedOpt.label}</Tag>;
-              }
-              const resolvedLabel = selectedOpt ? selectedOpt.label : getSafeOptionFallback(value);
-              if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
-                  const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
-                  return (
-                     <RelatedRecordPopover
-                       moduleId={targetModule || resolvedRelationTargetModuleId}
-                       recordId={String(value)}
-                       label={resolvedLabel}
-                     />
-                   );
-              }
-              return <span className="text-gray-800">{resolvedLabel}</span>;
-         }
+               }
+               const resolvedLabel = fieldType === FieldType.RELATION
+                 ? resolveRelationDisplayLabel()
+                 : (selectedOpt ? selectedOpt.label : getSafeOptionFallback(value));
+               if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
+                   const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
+                   return (
+                      <RelatedRecordPopover
+                        moduleId={targetModule || resolvedRelationTargetModuleId}
+                        recordId={String(value)}
+                        label={resolvedLabel}
+                        overlayZIndex={overlayZIndexBase + 40}
+                      >
+                        <span className="cursor-pointer break-words font-medium text-leather-600 transition-colors hover:text-leather-700 hover:underline">
+                          {resolvedLabel || getSafeOptionFallback(value)}
+                        </span>
+                      </RelatedRecordPopover>
+                    );
+               }
+               return <span className="text-gray-800">{resolvedLabel}</span>;
+          }
+        if (fieldType === FieldType.MULTI_SELECT) {
+             const values = Array.isArray(value)
+               ? value
+               : (value === null || value === undefined || value === '' ? [] : [value]);
+             if (values.length === 0) {
+               return <span>{compactMode ? '' : '-'}</span>;
+             }
+             const labels = values.map((item) => {
+               const selectedOpt = fieldOptions.find((o: any) => String(o?.value) === String(item));
+               if (selectedOpt?.label) return String(selectedOpt.label);
+               return getSafeOptionFallback(item);
+             });
+             return <span className="text-gray-800 break-words">{labels.join('، ')}</span>;
+        }
         if (fieldType === FieldType.TAGS) {
              if (Array.isArray(value) && value.length > 0) {
                  return <div className="flex gap-1">{value.map((t: string, i: number) => <Tag key={i}>{t}</Tag>)}</div>;
@@ -1750,6 +1920,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   moduleId={String(filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.module || resolvedRelationTargetModuleId || '')}
                   recordId={String(value)}
                   label={filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.label || getSafeOptionFallback(value)}
+                  overlayZIndex={overlayZIndexBase + 40}
                 >
                   <span className="text-xs text-leather-600 cursor-pointer hover:underline">
                     مشاهده سریع رکورد مرتبط
