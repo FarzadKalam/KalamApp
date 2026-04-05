@@ -75,6 +75,7 @@ export const createDefaultProcessAutomationRule = (): ProcessAutomationRule => (
       id: createWorkflowId(),
       type: 'send_note',
       config: {
+        recipient_fields: [],
         note_text: '{{task_name}} وارد وضعیت {{status_label}} شد.',
       },
     },
@@ -108,11 +109,26 @@ export const normalizeProcessAutomationRule = (value: any): ProcessAutomationRul
       || value?.actions?.[0]?.config?.note_text
       || ''
     ).trim() || null,
-    actions: Array.isArray(value?.actions) ? value.actions : [
+    actions: Array.isArray(value?.actions)
+      ? value.actions.map((action: any) => (
+          String(action?.type || '') === 'send_note'
+            ? {
+                ...action,
+                config: {
+                  ...(action?.config || {}),
+                  recipient_fields: Array.isArray(action?.config?.recipient_fields)
+                    ? action.config.recipient_fields
+                    : [],
+                },
+              }
+            : action
+        ))
+      : [
       {
         id: createWorkflowId(),
         type: 'send_note',
         config: {
+          recipient_fields: [],
           note_text: String(
             value?.note_text
             || value?.actions?.[0]?.config?.note_text
@@ -131,6 +147,14 @@ export const normalizeProcessAutomationRules = (value: any): ProcessAutomationRu
 
 export const getProcessAutomationRuleSummary = (rule: ProcessAutomationRule) => {
   const triggerLabel = PROCESS_AUTOMATION_TRIGGER_LABELS[rule?.trigger_type || 'current_stage_completed'] || 'اجرای نامشخص';
+  const actionRecipientFields = (rule?.actions || []).flatMap((action: any) =>
+    String(action?.type || '') === 'send_note' && Array.isArray(action?.config?.recipient_fields)
+      ? action.config.recipient_fields
+      : []
+  );
+  if (actionRecipientFields.length > 0) {
+    return `${triggerLabel}، گیرنده از داخل اقدام‌ها`;
+  }
   const targetLabel =
     PROCESS_AUTOMATION_TARGET_OPTIONS.find((item) => item.value === rule?.target_type)?.label
     || 'مقصد نامشخص';

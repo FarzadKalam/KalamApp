@@ -29,6 +29,7 @@ import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import PhoneDisplay from '../components/PhoneDisplay';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
+import OccasionsWidget from '../components/dashboard/OccasionsWidget';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -540,6 +541,7 @@ const Dashboard: React.FC = () => {
                 <CalendarOutlined />
                 <span className="text-sm">{getTodayPersianDate()}</span>
               </div>
+              <OccasionsWidget />
             </div>
             <div className="w-full xl:max-w-[430px]">
               <GoalProgressSlider placement="dashboard" />

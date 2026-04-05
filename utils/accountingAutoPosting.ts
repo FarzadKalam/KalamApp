@@ -883,18 +883,19 @@ export const syncInvoiceAccountingEntries = async (
       pushSyncError(result, 'فاکتور موردنظر یافت نشد.');
       return result;
     }
+    const resolvedInvoice: InvoiceRow = invoice;
 
-    if (!isFinalStatus(moduleId, invoice.status)) {
+    if (!isFinalStatus(moduleId, resolvedInvoice.status)) {
       return result;
     }
 
     const defaultAccounts = await fetchDefaultAccounts(supabase);
-    const invoiceLabel = getInvoiceLabel(invoice, recordId);
+    const invoiceLabel = getInvoiceLabel(resolvedInvoice, recordId);
 
     const finalizedEventKey = moduleId === 'invoices' ? 'sales_invoice_finalized' : 'purchase_invoice_finalized';
     const paymentEventKey = moduleId === 'invoices' ? 'sales_payment_received' : 'purchase_payment_paid';
 
-    const invoiceItems = moduleId === 'invoices' ? readInvoiceItems(invoice) : [];
+    const invoiceItems = moduleId === 'invoices' ? readInvoiceItems(resolvedInvoice) : [];
     const costCenterByProductId = moduleId === 'invoices'
       ? await fetchCostCentersByProduct(supabase, invoiceItems)
       : {};
@@ -902,16 +903,16 @@ export const syncInvoiceAccountingEntries = async (
     const finalizedLines =
       moduleId === 'invoices'
         ? buildSalesFinalizedLines(
-            invoice,
+            resolvedInvoice,
             invoiceItems,
             costCenterByProductId,
             defaultAccounts,
             result
           )
-        : buildPurchaseFinalizedLines(invoice, defaultAccounts, result);
+        : buildPurchaseFinalizedLines(resolvedInvoice, defaultAccounts, result);
 
     const paymentLines = includePayments
-      ? await buildPaymentLines(supabase, moduleId, invoice, defaultAccounts, result)
+      ? await buildPaymentLines(supabase, moduleId, resolvedInvoice, defaultAccounts, result)
       : [];
 
     const [existingFinalizedEntryId, existingPaymentEntryId] = await Promise.all([
@@ -939,7 +940,7 @@ export const syncInvoiceAccountingEntries = async (
         supabase,
         moduleId,
         recordId,
-        invoice,
+        invoice: resolvedInvoice,
         eventKey: finalizedEventKey,
         description: moduleId === 'invoices'
           ? `صدور خودکار سند فروش و دریافت وجه - ${invoiceLabel}`
@@ -953,7 +954,7 @@ export const syncInvoiceAccountingEntries = async (
           supabase,
           moduleId,
           recordId,
-          invoice,
+          invoice: resolvedInvoice,
           eventKey: finalizedEventKey,
           description: moduleId === 'invoices'
             ? `صدور خودکار سند فروش - ${invoiceLabel}`
@@ -968,7 +969,7 @@ export const syncInvoiceAccountingEntries = async (
           supabase,
           moduleId,
           recordId,
-          invoice,
+          invoice: resolvedInvoice,
           eventKey: paymentEventKey,
           description: moduleId === 'invoices'
             ? `صدور خودکار سند دریافت وجه - ${invoiceLabel}`

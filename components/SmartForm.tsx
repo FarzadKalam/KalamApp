@@ -3,6 +3,7 @@ import { Form, Button, Spin, Divider, Select, Space, Modal, Checkbox, App } from
 import { UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
+import { MODULES } from '../moduleRegistry';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
@@ -29,10 +30,11 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { syncRecordTags } from '../utils/recordTags';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
-import { getProjectModuleOptions } from '../utils/workflowHelpers';
-import { syncProcessTemplateTargetModules } from '../utils/processTargets';
+import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
+import { createProcessLinkedFieldKey, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
+import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -65,6 +67,15 @@ const isStatementTimeoutError = (error: any) =>
 type AssigneeOptionsState = { users: any[]; roles: any[] };
 let assigneesCache: AssigneeOptionsState | null = null;
 let assigneesPromise: Promise<AssigneeOptionsState> | null = null;
+const PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS = new Set([
+  'projects',
+  'tasks',
+  'process_templates',
+  'process_runs',
+  'customers',
+  'invoices',
+  'purchase_invoices',
+]);
 
 const SmartForm: React.FC<SmartFormProps> = ({ 
   module, visible, onCancel, onSave, recordId, title, isBulkEdit = false,
@@ -122,7 +133,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   const getRelationFieldValueSignature = useMemo(() => {
     const combinedValues = { ...(formData || {}), ...((watchedValues as Record<string, any>) || {}) };
-    return module.fields
+    const projectProcessRelationFields = module.id === 'projects' && processDraftFieldKey
+      ? normalizeProcessTargetModuleIds(
+          (Array.isArray(combinedValues?.[processDraftFieldKey]) ? combinedValues[processDraftFieldKey] : []).flatMap((stage: any) => (
+            Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []
+          )),
+          ''
+        )
+          .filter((targetModuleId) => !!MODULES[targetModuleId] && !PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId))
+          .map((targetModuleId) => ({
+            key: createProcessLinkedFieldKey(targetModuleId, 'id'),
+            type: FieldType.RELATION,
+          }))
+      : [];
+    return [...module.fields, ...projectProcessRelationFields]
       .filter((field) => field.type === FieldType.RELATION || (field as any)?.relationConfig?.dependsOn)
       .map((field) => {
         const rawValue = combinedValues[field.key];
@@ -132,7 +156,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         return `${field.key}:${normalized}`;
       })
       .join('|');
-  }, [formData, module.fields, watchedValues]);
+  }, [formData, module.fields, module.id, processDraftFieldKey, watchedValues]);
   
   useEffect(() => {
     if (visible) {
@@ -388,6 +412,45 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
     }
 
+    if (module.id === 'projects' && processDraftFieldKey) {
+      const draftStages = Array.isArray(currentValues?.[processDraftFieldKey])
+        ? currentValues[processDraftFieldKey]
+        : [];
+      const targetModuleIds = normalizeProcessTargetModuleIds(
+        draftStages.flatMap((stage: any) => (
+          Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []
+        )),
+        ''
+      );
+      const linkedRecordMap = draftStages.reduce<Record<string, string>>((acc, stage: any) => {
+        const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+          ? stage.process_link_map
+          : {};
+        Object.entries(rawMap).forEach(([targetModuleId, recordId]) => {
+          const normalizedTargetModuleId = String(targetModuleId || '').trim();
+          const normalizedRecordId = String(recordId || '').trim();
+          if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
+            acc[normalizedTargetModuleId] = normalizedRecordId;
+          }
+        });
+        return acc;
+      }, {});
+
+      for (const targetModuleId of targetModuleIds) {
+        if (!MODULES[targetModuleId] || PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId)) continue;
+        const fieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
+        await fetchOptionsForField(
+          {
+            key: fieldKey,
+            type: FieldType.RELATION,
+            relationConfig: { targetModule: targetModuleId },
+          } as any,
+          fieldKey,
+          collectExactIds(currentValues?.[fieldKey] || linkedRecordMap[targetModuleId])
+        );
+      }
+    }
+
     if (module.blocks) {
       for (const block of module.blocks) {
         if (block.tableColumns) {
@@ -411,7 +474,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       writeModuleOptionSnapshot(module.id, { relationOptions: mergedOptions });
       return mergedOptions;
     });
-  }, [form, module]);
+  }, [form, module, processDraftFieldKey]);
 
   // --- 3. دریافت آپشن‌های داینامیک ---
   const loadDynamicOptions = useCallback(async () => {
@@ -733,12 +796,34 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const applyProcessTemplate = async () => {
       setLoading(true);
       try {
-        const { data: stages, error } = await supabase
-          .from('process_template_stages')
-          .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
-          .eq('template_id', processTemplateId)
-          .order('sort_order', { ascending: true });
+        const currentValues = form.getFieldsValue(true);
+        const [{ data: templateRow, error: templateError }, { data: stages, error }] = await Promise.all([
+          supabase
+            .from('process_templates')
+            .select('id, module_id, module_ids')
+            .eq('id', processTemplateId)
+            .maybeSingle(),
+          supabase
+            .from('process_template_stages')
+            .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+            .eq('template_id', processTemplateId)
+            .order('sort_order', { ascending: true }),
+        ]);
+        if (templateError) throw templateError;
         if (error) throw error;
+
+        const targetModuleIds = normalizeProcessTargetModuleIds(templateRow?.module_ids, templateRow?.module_id);
+        const inferredProcessLinks = {
+          ...getRelationFieldLinksForModules(module.id, currentValues || {}, targetModuleIds),
+          ...targetModuleIds.reduce<Record<string, string>>((acc, targetModuleId) => {
+            const linkedFieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
+            const linkedRecordId = String(currentValues?.[linkedFieldKey] || formData?.[linkedFieldKey] || '').trim();
+            if (linkedRecordId) {
+              acc[targetModuleId] = linkedRecordId;
+            }
+            return acc;
+          }, {}),
+        };
 
         const mappedDraft = (stages || []).map((stage: any, index: number) => ({
           ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
@@ -753,11 +838,23 @@ const SmartForm: React.FC<SmartFormProps> = ({
             default_assignee_id: stage.default_assignee_id || null,
           default_assignee_role_id: stage.default_assignee_role_id || null,
           template_stage_id: stage.id || null,
+          process_target_module_ids: targetModuleIds,
+          process_link_map: inferredProcessLinks,
         }));
 
         const payload: Record<string, any> = {
           [processDraftFieldKey]: mappedDraft,
         };
+        if (module.id === 'projects') {
+          targetModuleIds
+            .filter((targetModuleId) => !PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId))
+            .forEach((targetModuleId) => {
+              const linkedRecordId = String(inferredProcessLinks[targetModuleId] || '').trim();
+              if (linkedRecordId) {
+                payload[createProcessLinkedFieldKey(targetModuleId, 'id')] = linkedRecordId;
+              }
+            });
+        }
         form.setFieldsValue(payload);
         setFormData((prev: any) => ({ ...prev, ...payload, process_template_id: processTemplateId }));
         setLastAppliedProcessTemplateId(processTemplateId);
@@ -880,6 +977,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         automation_rules: Array.isArray(stage?.automation_rules)
           ? stage.automation_rules
           : (Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : []),
+        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
+          stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
+        ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -1127,6 +1227,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
       if (processDraftFieldKey && values[processDraftFieldKey] === undefined) {
         values[processDraftFieldKey] = formData?.[processDraftFieldKey] || [];
+      }
+      if (module.id === 'projects') {
+        projectProcessLinkedFields.forEach(({ field }) => {
+          delete values[field.key];
+        });
       }
       const tagsFieldKey = module.fields.find((field) => field.type === FieldType.TAGS)?.key || null;
       const hasInlineTagsDraft = !!tagsFieldKey && Array.isArray(formData?.[tagsFieldKey]);
@@ -1472,7 +1577,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       (module.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
       || (module.id === 'process_runs' && field.key === 'module_id')
     ) {
-      return getProjectModuleOptions();
+      return getProcessTemplateModuleOptions();
     }
     if (module.id === 'tasks' && field.key === 'related_to_module') {
       return getTaskModuleOptions();
@@ -1492,6 +1597,56 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const currentValues = watchedValues && Object.keys(watchedValues).length > 0
     ? watchedValues
     : formData;
+  const projectProcessLinkedFields = useMemo(() => {
+    if (module.id !== 'projects' || !processDraftFieldKey) return [] as Array<{
+      moduleId: string;
+      field: any;
+      value?: string;
+    }>;
+
+    const draftStages = Array.isArray((currentValues as any)?.[processDraftFieldKey])
+      ? (currentValues as any)[processDraftFieldKey]
+      : [];
+    const targetModuleIds = normalizeProcessTargetModuleIds(
+      draftStages.flatMap((stage: any) => (
+        Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []
+      )),
+      ''
+    );
+    const linkedRecordMap = draftStages.reduce((acc: Record<string, string>, stage: any) => {
+      const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+        ? stage.process_link_map
+        : {};
+      Object.entries(rawMap).forEach(([targetModuleId, recordId]) => {
+        const normalizedTargetModuleId = String(targetModuleId || '').trim();
+        const normalizedRecordId = String(recordId || '').trim();
+        if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
+          acc[normalizedTargetModuleId] = normalizedRecordId;
+        }
+      });
+      return acc;
+    }, {});
+
+    return targetModuleIds
+      .filter((targetModuleId) => !!MODULES[targetModuleId] && !PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId))
+      .map((targetModuleId) => {
+        const fieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
+        return {
+          moduleId: targetModuleId,
+          field: {
+            key: fieldKey,
+            labels: {
+              fa: `${MODULES[targetModuleId]?.titles?.faSingular || MODULES[targetModuleId]?.titles?.fa || targetModuleId} مرتبط`,
+              en: `Linked ${targetModuleId}`,
+            },
+            type: FieldType.RELATION,
+            relationConfig: { targetModule: targetModuleId },
+            nature: 'standard',
+          },
+          value: String((currentValues as any)?.[fieldKey] || linkedRecordMap[targetModuleId] || '').trim() || undefined,
+        };
+      });
+  }, [currentValues, module.id, processDraftFieldKey]);
   const currentSummaryData = getSummaryData(currentValues);
   const summaryConfigObj = module.blocks?.find(b => b.summaryConfig)?.summaryConfig;
   const isFieldRequired = (field?: any) => !isBulkEdit && field?.validation?.required === true;
@@ -1841,8 +1996,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       if (f.nature !== 'system') return true;
                       return module.id === 'products' && !recordId && block.id === 'sales_info';
                     })
-                    .filter((f) => !(module.id === 'projects'
-                      || module.id === 'marketing_leads'
+                    .filter((f) => !(module.id === 'marketing_leads'
                       || module.id === 'customers'
                       || module.id === 'invoices'
                       || module.id === 'purchase_invoices') || f.key !== 'process_template_id')
@@ -1875,7 +2029,6 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                 key={preparedField.key}
                                 className={(preparedField.key === 'execution_process_draft' ||
                                   preparedField.key === 'marketing_process_draft' ||
-                                  preparedField.key === 'process_template_id' ||
                                   preparedField.key === 'template_stages_preview' ||
                                   preparedField.key === 'run_stages_preview' ||
                                   preparedField.type === FieldType.SUPER_LONG_TEXT)
@@ -1903,8 +2056,58 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                 />
                              </div>
                            );
-                        })}
+                         })}
                       </div>
+                      {module.id === 'projects' && block.id === 'process' && projectProcessLinkedFields.length > 0 && (
+                        <div className="mt-4 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.45)] p-4">
+                          <div className="mb-3 text-sm font-semibold text-[rgba(var(--brand-800-rgb),1)]">رکوردهای مرتبط فرآیند</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {projectProcessLinkedFields.map(({ moduleId: targetModuleId, field, value }) => (
+                              <div key={field.key}>
+                                <SmartFieldRenderer
+                                  field={field}
+                                  value={value}
+                                  forceEditMode={true}
+                                  options={relationOptions[field.key]}
+                                  onChange={(val) => {
+                                    const nextValue = val ? String(val) : null;
+                                    const currentDraftStages = processDraftFieldKey && Array.isArray(form.getFieldValue(processDraftFieldKey))
+                                      ? form.getFieldValue(processDraftFieldKey)
+                                      : [];
+                                    const nextDraftStages = processDraftFieldKey
+                                      ? currentDraftStages.map((stage: any) => {
+                                          const nextProcessLinkMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+                                            ? { ...stage.process_link_map }
+                                            : {};
+                                          if (nextValue) {
+                                            nextProcessLinkMap[targetModuleId] = nextValue;
+                                          } else {
+                                            delete nextProcessLinkMap[targetModuleId];
+                                          }
+                                          return {
+                                            ...stage,
+                                            process_link_map: nextProcessLinkMap,
+                                          };
+                                        })
+                                      : currentDraftStages;
+                                    const patch: Record<string, any> = {
+                                      [field.key]: nextValue,
+                                    };
+                                    if (processDraftFieldKey) {
+                                      patch[processDraftFieldKey] = nextDraftStages;
+                                    }
+                                    form.setFieldsValue(patch);
+                                    setFormData((prev: any) => ({ ...prev, ...patch }));
+                                  }}
+                                  onOptionsUpdate={loadDynamicOptions}
+                                  moduleId={module.id}
+                                  allValues={currentValues}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {block.tableColumns && (
                         <div className="mt-6">
                           {module.id === 'products' && block.id === 'product_inventory' ? (

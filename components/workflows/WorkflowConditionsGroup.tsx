@@ -70,6 +70,15 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   const safeValue = Array.isArray(value) ? value : [];
   const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
   const requiredConditionIdSet = useMemo(() => new Set(requiredConditionIds), [requiredConditionIds]);
+  const lockedFieldKeySet = useMemo(
+    () => new Set(
+      safeValue
+        .filter((condition) => lockedConditionIdSet.has(String(condition?.id || '')))
+        .map((condition) => String(condition?.field || '').trim())
+        .filter(Boolean)
+    ),
+    [lockedConditionIdSet, safeValue]
+  );
 
   const fieldOptions = useMemo(
     () =>
@@ -81,8 +90,15 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
         })),
     [fields]
   );
+  const editableFieldOptions = useMemo(() => {
+    const filtered = fieldOptions.filter((option) => !lockedFieldKeySet.has(String(option.value || '')));
+    return filtered.length > 0 ? filtered : fieldOptions;
+  }, [fieldOptions, lockedFieldKeySet]);
 
-  const firstField = fields[0];
+  const firstField = useMemo(() => {
+    const firstEditableFieldKey = String(editableFieldOptions[0]?.value || '').trim();
+    return fields.find((field) => String(field?.key || '').trim() === firstEditableFieldKey) || fields[0];
+  }, [editableFieldOptions, fields]);
 
   const addCondition = () => {
     if (!firstField) return;
@@ -127,7 +143,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     styles: selectPopupStyles,
   };
 
-  const renderValueInput = (condition: WorkflowCondition) => {
+  const renderValueInput = (condition: WorkflowCondition, isLocked = false) => {
     const field = fields.find((f) => f.key === condition.field);
     if (!field) {
       return <Input disabled placeholder="فیلد نامعتبر" />;
@@ -145,7 +161,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       return (
         <InputNumber
           className="w-full persian-number"
-          disabled={disabled}
+          disabled={disabled || isLocked}
           value={condition.value as any}
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
           placeholder="عدد"
@@ -167,7 +183,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           }
           options={options}
           category={field.dynamicOptionsCategory}
-          disabled={disabled}
+          disabled={disabled || isLocked}
           className="w-full"
           allowClear
           showSearch
@@ -190,6 +206,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           {...commonSelectProps}
           options={options}
           value={condition.value}
+          disabled={disabled || isLocked}
           onChange={(nextVal) =>
             updateCondition(condition.id, {
               value: normalizeWorkflowValueByFieldType(field, nextVal),
@@ -206,6 +223,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           mode="multiple"
           options={options}
           value={Array.isArray(condition.value) ? condition.value : []}
+          disabled={disabled || isLocked}
           onChange={(nextVal) =>
             updateCondition(condition.id, {
               value: normalizeWorkflowValueByFieldType(field, nextVal),
@@ -224,7 +242,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       return (
         <InputNumber
           className="w-full persian-number"
-          disabled={disabled}
+          disabled={disabled || isLocked}
           value={condition.value as any}
           onChange={(nextVal) =>
             updateCondition(condition.id, {
@@ -241,7 +259,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
         <div className="flex w-full items-center justify-start px-1">
           <Switch
             checked={!!condition.value}
-            disabled={disabled}
+            disabled={disabled || isLocked}
             onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
           />
         </div>
@@ -254,7 +272,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           type="DATE"
           value={condition.value || null}
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
-          disabled={disabled}
+          disabled={disabled || isLocked}
           placeholder="تاریخ"
         />
       );
@@ -266,7 +284,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           type="TIME"
           value={condition.value || null}
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
-          disabled={disabled}
+          disabled={disabled || isLocked}
           placeholder="ساعت"
         />
       );
@@ -278,7 +296,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           type="DATETIME"
           value={condition.value || null}
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
-          disabled={disabled}
+          disabled={disabled || isLocked}
           placeholder="تاریخ و زمان"
         />
       );
@@ -287,7 +305,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     return (
       <Input
         value={condition.value}
-        disabled={disabled}
+        disabled={disabled || isLocked}
         onChange={(e) =>
           updateCondition(condition.id, {
             value: normalizeWorkflowValueByFieldType(field, e.target.value),
@@ -318,7 +336,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   showSearch
                   optionFilterProp="label"
                   disabled={disabled || isLocked}
-                  options={fieldOptions}
+                  options={isLocked ? fieldOptions : editableFieldOptions}
                   getPopupContainer={popupContainer}
                   popupMatchSelectWidth={false}
                   listHeight={240}
@@ -358,7 +376,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   className="w-full"
                 />
               </div>
-              <div className="md:col-span-4">{renderValueInput(condition)}</div>
+              <div className="md:col-span-4">{renderValueInput(condition, isLocked)}</div>
               <div className="flex justify-end md:col-span-1">
                 <Button
                   type="text"

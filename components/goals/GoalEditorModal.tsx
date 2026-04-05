@@ -14,6 +14,8 @@ import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import {
+  GOAL_ALL_USERS_VALUE,
+  getGoalUserSelectionValue,
   getGoalDateFieldOptions,
   getGoalModuleOptions,
   getGoalNumericFieldOptions,
@@ -28,6 +30,7 @@ import {
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import PersianDatePicker from '../PersianDatePicker';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 
 type GoalEditorModalProps = {
@@ -48,6 +51,8 @@ type FormValues = {
   period_unit: GoalRecord['period_unit'];
   subperiod_unit: GoalRecord['subperiod_unit'];
   metric_type: GoalRecord['metric_type'];
+  goal_start_date?: string | null;
+  goal_end_date?: string | null;
   metric_field_key?: string | null;
   date_field_key?: string | null;
   target_value?: number | null;
@@ -88,12 +93,21 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const moduleOptions = useMemo(() => getGoalModuleOptions(permissions), [permissions]);
   const numericFieldOptions = useMemo(() => getGoalNumericFieldOptions(moduleId), [moduleId]);
   const dateFieldOptions = useMemo(() => getGoalDateFieldOptions(moduleId), [moduleId]);
+  const userSelectOptions = useMemo(
+    () => [
+      { label: 'همه کاربران', value: GOAL_ALL_USERS_VALUE },
+      ...userOptions,
+    ],
+    [userOptions]
+  );
   const availableSubperiodOptions = useMemo(() => {
     const selectedIndex = GOAL_PERIOD_UNIT_OPTIONS.findIndex((item) => item.value === periodUnit);
     if (selectedIndex < 0) return GOAL_PERIOD_UNIT_OPTIONS;
     return GOAL_PERIOD_UNIT_OPTIONS.slice(0, selectedIndex + 1);
   }, [periodUnit]);
   const conditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
+  const popupContainer = (triggerNode: HTMLElement | null) =>
+    triggerNode?.parentElement || document.body;
 
   useEffect(() => {
     if (!open) return;
@@ -108,6 +122,8 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       period_unit: normalized?.period_unit || 'month',
       subperiod_unit: normalized?.subperiod_unit || 'week',
       metric_type: normalized?.metric_type || 'count',
+      goal_start_date: normalized?.config?.goal_start_date || undefined,
+      goal_end_date: normalized?.config?.goal_end_date || undefined,
       metric_field_key: normalized?.metric_field_key || undefined,
       date_field_key: normalized?.date_field_key || 'created_at',
       target_value: normalized?.target_value ?? undefined,
@@ -115,7 +131,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       bronze_value: normalized?.bronze_value ?? undefined,
       silver_value: normalized?.silver_value ?? undefined,
       gold_value: normalized?.gold_value ?? undefined,
-      assignee_user_ids: Array.isArray(normalized?.assignee_user_ids) ? normalized!.assignee_user_ids! : [],
+      assignee_user_ids: getGoalUserSelectionValue(normalized),
       assignee_role_ids: Array.isArray(normalized?.assignee_role_ids) ? normalized!.assignee_role_ids! : [],
       is_active: normalized?.is_active !== false,
     });
@@ -209,6 +225,14 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
         message.error('برای جمع یا میانگین باید یک فیلد عددی انتخاب شود.');
         return;
       }
+      if (
+        values.goal_start_date &&
+        values.goal_end_date &&
+        values.goal_end_date < values.goal_start_date
+      ) {
+        message.error('تاریخ پایان نمی‌تواند کوچک‌تر از تاریخ شروع باشد.');
+        return;
+      }
       if (values.levels_enabled) {
         const hasAnyLevel = [values.bronze_value, values.silver_value, values.gold_value].some((item) => Number(item || 0) > 0);
         if (!hasAnyLevel) {
@@ -223,6 +247,11 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       setSubmitting(true);
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
+      const rawUserSelections = Array.isArray(values.assignee_user_ids) ? values.assignee_user_ids : [];
+      const useAllUsers = rawUserSelections.includes(GOAL_ALL_USERS_VALUE);
+      const normalizedUserIds = useAllUsers
+        ? []
+        : rawUserSelections.filter((item) => item !== GOAL_ALL_USERS_VALUE);
 
       const payload = {
         module_id: values.module_id,
@@ -239,10 +268,16 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
         bronze_value: values.levels_enabled ? Number(values.bronze_value || 0) || null : null,
         silver_value: values.levels_enabled ? Number(values.silver_value || 0) || null : null,
         gold_value: values.levels_enabled ? Number(values.gold_value || 0) || null : null,
-        assignee_user_ids: values.assignee_user_ids || [],
+        assignee_user_ids: normalizedUserIds,
         assignee_role_ids: values.assignee_role_ids || [],
         conditions_all: conditionsAll,
         conditions_any: conditionsAny,
+        config: {
+          ...(normalizeGoalRecord(record || {}).config || {}),
+          assignment_users_mode: useAllUsers ? 'all' : 'selected',
+          goal_start_date: values.goal_start_date || null,
+          goal_end_date: values.goal_end_date || null,
+        },
         is_active: values.is_active !== false,
         updated_by: userId,
       };
@@ -272,6 +307,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       open={open}
       onCancel={onClose}
       width={1120}
+      zIndex={1401}
       destroyOnHidden
       title={isEditMode ? 'ویرایش هدف' : 'ایجاد هدف جدید'}
       footer={[
@@ -299,6 +335,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 optionFilterProp="label"
                 options={moduleOptions}
                 onChange={(value) => setModuleId(String(value || ''))}
+                getPopupContainer={popupContainer}
                 placeholder="انتخاب ماژول"
               />
             </Form.Item>
@@ -323,18 +360,18 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           <h4 className="mb-3 font-bold">بازه و معیار محاسبه</h4>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <Form.Item label="بازه اصلی" name="period_unit" initialValue="month">
-              <Select options={GOAL_PERIOD_UNIT_OPTIONS} />
+              <Select options={GOAL_PERIOD_UNIT_OPTIONS} getPopupContainer={popupContainer} />
             </Form.Item>
             <Form.Item label="بازه فرعی پیش‌فرض" name="subperiod_unit" initialValue="week">
-              <Select options={availableSubperiodOptions} />
+              <Select options={availableSubperiodOptions} getPopupContainer={popupContainer} />
             </Form.Item>
             <Form.Item label="فیلد تاریخ" name="date_field_key" initialValue="created_at">
-              <Select options={dateFieldOptions} />
+              <Select options={dateFieldOptions} getPopupContainer={popupContainer} />
             </Form.Item>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <Form.Item label="نوع سنجش" name="metric_type" initialValue="count">
-              <Select options={GOAL_METRIC_TYPE_OPTIONS} />
+              <Select options={GOAL_METRIC_TYPE_OPTIONS} getPopupContainer={popupContainer} />
             </Form.Item>
             <Form.Item label="فیلد عددی" name="metric_field_key">
               <Select
@@ -342,7 +379,16 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 placeholder={metricType === 'count' ? 'برای تعداد نیاز نیست' : 'انتخاب فیلد عددی'}
                 disabled={metricType === 'count'}
                 allowClear
+                getPopupContainer={popupContainer}
               />
+            </Form.Item>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Form.Item label="تاریخ شروع بازه اصلی" name="goal_start_date">
+              <PersianDatePicker type="DATE" placeholder="اختیاری" />
+            </Form.Item>
+            <Form.Item label="تاریخ پایان بازه اصلی" name="goal_end_date">
+              <PersianDatePicker type="DATE" placeholder="اختیاری" />
             </Form.Item>
           </div>
         </div>
@@ -379,9 +425,10 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
             <Form.Item label="اشخاص" name="assignee_user_ids" initialValue={[]}>
               <Select
                 mode="multiple"
-                options={userOptions}
+                options={userSelectOptions}
                 optionFilterProp="label"
                 showSearch
+                getPopupContainer={popupContainer}
                 placeholder="انتخاب چند کاربر"
               />
             </Form.Item>
@@ -391,6 +438,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 options={roleOptions}
                 optionFilterProp="label"
                 showSearch
+                getPopupContainer={popupContainer}
                 placeholder="انتخاب چند نقش"
               />
             </Form.Item>

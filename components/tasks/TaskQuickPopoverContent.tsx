@@ -78,12 +78,28 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
   supportsHandover = false,
   onOpenHandover,
 }) => {
+  const normalizedStatusValue = String(statusValue || task?.status || '').trim();
+  const statusLabel = statusOptions.find((item) => String(item.value || '') === normalizedStatusValue)?.label || normalizedStatusValue;
+  const statusTagColor = normalizedStatusValue === 'done'
+    ? 'green'
+    : normalizedStatusValue === 'in_progress'
+      ? 'blue'
+      : normalizedStatusValue === 'review'
+        ? 'gold'
+        : 'default';
+
   return (
     <div className="w-80 max-w-[80vw] p-1 font-['Vazirmatn']">
-      <div className="mb-3 border-b border-leather-100 pb-2">
-        <h4 className="m-0 text-sm font-bold text-leather-900 dark:text-gray-100 line-clamp-2">
+      <div className="mb-3 border-b border-[rgba(var(--brand-200-rgb),0.45)] pb-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+        <h4 className="m-0 text-sm font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100 line-clamp-2">
           {task?.title || task?.name || 'بدون عنوان'}
         </h4>
+        {statusLabel || taskTypeValue ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {statusLabel ? <Tag color={statusTagColor}>{statusLabel}</Tag> : null}
+            {taskTypeValue ? <Tag>{taskTypeValue}</Tag> : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="mb-3 space-y-3">
@@ -160,30 +176,30 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
           </div>
         </div>
 
-        <div className="space-y-2 rounded-lg border border-leather-100 bg-leather-50/70 p-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-[#111827] dark:text-gray-300">
+        <div className="space-y-2 rounded-lg border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.55)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[#111827] dark:text-gray-300">
           <div className="flex items-center gap-2">
-            <OrderedListOutlined className="text-leather-700" />
+            <OrderedListOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
             <span>ترتیب: {toPersianNumber(sortOrder || '-')}</span>
           </div>
           <div className="flex items-center gap-2">
-            {assigneeType === 'role' ? <TeamOutlined className="text-leather-700" /> : <UserOutlined className="text-leather-700" />}
+            {assigneeType === 'role' ? <TeamOutlined className="text-[rgba(var(--brand-700-rgb),1)]" /> : <UserOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />}
             <span>مسئول: {assigneeDisplayLabel || 'تعیین نشده'}</span>
           </div>
           {hasWage && wageLabel ? (
             <div className="flex items-center gap-2">
-              <span className="text-leather-700">💰</span>
+              <span className="text-[rgba(var(--brand-700-rgb),1)]">💰</span>
               <span>دستمزد: {wageLabel}</span>
             </div>
           ) : null}
           {hasWeight && weightLabel ? (
             <div className="flex items-center gap-2">
-              <span className="text-leather-700">وزن:</span>
+              <span className="text-[rgba(var(--brand-700-rgb),1)]">وزن:</span>
               <span>{weightLabel}</span>
             </div>
           ) : null}
           {dueDateLabel ? (
             <div className="flex items-center gap-2">
-              <ClockCircleOutlined className="text-leather-700" />
+              <ClockCircleOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
               <span>موعد: {dueDateLabel}</span>
             </div>
           ) : null}
@@ -213,12 +229,12 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
         </div>
       </div>
 
-      <div className="flex justify-between border-t border-leather-100 pt-2">
+      <div className="flex justify-between border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
         {supportsHandover ? (
           <Button
             size="small"
             type="link"
-            className="px-0 text-xs text-leather-700 hover:text-leather-600"
+            className="px-0 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
             onClick={onOpenHandover}
           >
             فرم‌های تحویل کالا
@@ -227,7 +243,7 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
           <span />
         )}
         <Link to={`/tasks/${task?.id}`} target="_blank">
-          <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-leather-700 hover:text-leather-600">
+          <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]">
             جزئیات کامل
           </Button>
         </Link>

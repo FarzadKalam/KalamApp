@@ -3,15 +3,16 @@ import { Button, Empty, Select, Skeleton, Tag } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import {
+  buildGoalFallbackProgressSnapshot,
   canViewGoalPlacement,
+  dedupeGoalsForDisplay,
+  ensureDefaultSalesInvoiceGoal,
   executeGoalProgress,
   isGoalVisibleToUser,
   normalizeGoalRecord,
 } from '../../utils/goals';
 import { type FiscalYearSnapshot } from '../../utils/goalPeriods';
-import {
-  fetchCurrentUserRoleContext,
-} from '../../utils/permissions';
+import { fetchCurrentUserRoleContext } from '../../utils/permissions';
 import {
   GOAL_PERIOD_UNIT_OPTIONS,
   type GoalPeriodUnit,
@@ -23,6 +24,13 @@ type GoalProgressSliderProps = {
   moduleId?: string | null;
   placement: 'module_list' | 'dashboard';
   className?: string;
+};
+
+const canAccessGoalModule = (permissions: any, targetModuleId?: string | null) => {
+  if (!targetModuleId) return true;
+  const modulePerm = permissions?.[targetModuleId] || {};
+  const recordScope = modulePerm.record_scope ?? (modulePerm.view === false ? 'own' : 'all');
+  return modulePerm.view !== false || recordScope !== 'all';
 };
 
 const toneClassMap: Record<GoalProgressSnapshot['tone'], { shell: string; bar: string; subBar: string; tag: string }> = {
@@ -72,12 +80,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<GoalProgressSnapshot[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [visibleIndex, setVisibleIndex] = useState(0);
+  const [isSwitching, setIsSwitching] = useState(false);
   const [subperiodSelections, setSubperiodSelections] = useState<Record<string, GoalPeriodUnit>>({});
   const rowCacheRef = useRef<Map<string, any[]>>(new Map());
-  const permissionsRef = useRef<PermissionMap | null>(null);
-  const currentUserRef = useRef<string | null>(null);
-  const currentRoleRef = useRef<string | null>(null);
   const fiscalYearRef = useRef<FiscalYearSnapshot | null>(null);
+  const switchTimerRef = useRef<number | null>(null);
 
   const placementField = placement === 'dashboard' ? 'dashboard_widget' : 'module_list_cards';
 
@@ -114,9 +122,6 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     setLoading(true);
     try {
       const roleContext = await fetchCurrentUserRoleContext(supabase);
-      permissionsRef.current = roleContext.permissions;
-      currentUserRef.current = roleContext.userId;
-      currentRoleRef.current = roleContext.roleId;
 
       if (!canViewGoalPlacement(roleContext.permissions, placementField)) {
         setCards([]);
@@ -124,7 +129,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         return;
       }
 
-      if (moduleId && roleContext.permissions?.[moduleId]?.view === false) {
+      if (moduleId && !canAccessGoalModule(roleContext.permissions, moduleId)) {
         setCards([]);
         setLoading(false);
         return;
@@ -133,6 +138,8 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       if (!fiscalYearRef.current) {
         await loadFiscalYear();
       }
+
+      await ensureDefaultSalesInvoiceGoal({ userId: roleContext.userId });
 
       let query = supabase
         .from('goals')
@@ -147,22 +154,34 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       const { data, error } = await query;
       if (error) throw error;
 
-      const visibleGoals = (data || [])
-        .map((item) => normalizeGoalRecord(item))
-        .filter((goal) => roleContext.permissions?.[goal.module_id]?.view !== false)
-        .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId));
+      const visibleGoals = dedupeGoalsForDisplay(
+        (data || [])
+          .map((item) => normalizeGoalRecord(item))
+          .filter((goal) => canAccessGoalModule(roleContext.permissions, goal.module_id))
+          .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId))
+      );
 
       const prepared: GoalProgressSnapshot[] = [];
       for (const goal of visibleGoals) {
-        const snapshot = await executeGoalProgress(goal, {
-          userId: roleContext.userId,
-          roleId: roleContext.roleId,
-          permissions: roleContext.permissions,
-          fiscalYear: fiscalYearRef.current,
-          selectedSubperiodUnit: nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit,
-          cache: rowCacheRef.current,
-        });
-        if (snapshot) prepared.push(snapshot);
+        const selectedSubperiodUnit =
+          nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit;
+        try {
+          const snapshot = await executeGoalProgress(goal, {
+            userId: roleContext.userId,
+            roleId: roleContext.roleId,
+            permissions: roleContext.permissions,
+            fiscalYear: fiscalYearRef.current,
+            selectedSubperiodUnit,
+            cache: rowCacheRef.current,
+          });
+          if (snapshot) prepared.push(snapshot);
+        } catch {
+          const fallbackSnapshot = buildGoalFallbackProgressSnapshot(goal, {
+            fiscalYear: fiscalYearRef.current,
+            selectedSubperiodUnit,
+          });
+          if (fallbackSnapshot) prepared.push(fallbackSnapshot);
+        }
       }
 
       setCards(prepared);
@@ -180,6 +199,39 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }, [loadCards]);
 
   useEffect(() => {
+    setVisibleIndex((current) => {
+      if (cards.length === 0) return 0;
+      return Math.min(current, cards.length - 1);
+    });
+  }, [cards.length]);
+
+  useEffect(() => {
+    if (switchTimerRef.current) {
+      window.clearTimeout(switchTimerRef.current);
+      switchTimerRef.current = null;
+    }
+
+    if (activeIndex === visibleIndex) {
+      setIsSwitching(false);
+      return;
+    }
+
+    setIsSwitching(true);
+    switchTimerRef.current = window.setTimeout(() => {
+      setVisibleIndex(activeIndex);
+      setIsSwitching(false);
+      switchTimerRef.current = null;
+    }, 140);
+
+    return () => {
+      if (switchTimerRef.current) {
+        window.clearTimeout(switchTimerRef.current);
+        switchTimerRef.current = null;
+      }
+    };
+  }, [activeIndex, visibleIndex]);
+
+  useEffect(() => {
     if (cards.length <= 1) return;
     const handle = window.setInterval(() => {
       setActiveIndex((current) => (current + 1) % cards.length);
@@ -187,7 +239,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     return () => window.clearInterval(handle);
   }, [cards.length]);
 
-  const activeCard = cards[activeIndex] || null;
+  const activeCard = cards[visibleIndex] || null;
 
   const handleSubperiodChange = async (goalId: string, unit: GoalPeriodUnit) => {
     const nextSelections = {
@@ -223,6 +275,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }, [activeCard, shellClasses.tag]);
 
   if (loading) {
+    if (placement === 'module_list') {
+      return null;
+    }
+
     return (
       <div className={`rounded-[1.6rem] border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a] ${className}`}>
         <Skeleton active paragraph={{ rows: 4 }} />
@@ -238,8 +294,75 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     ) : null;
   }
 
+  if (placement === 'module_list') {
+    return (
+      <div className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gradient-to-br px-3.5 py-1.5 shadow-sm dark:border-gray-800 ${shellClasses.shell} ${className}`}>
+        <div className={`flex items-center gap-2.5 transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
+          <div className="min-w-0 w-[96px] shrink-0 md:w-[132px]">
+            <div className="truncate text-[8px] leading-3.5 text-gray-500 dark:text-gray-400">
+              <span className="truncate">{activeCard.goal.goal_scope === 'team' ? 'هدف تیمی' : 'هدف فردی'}</span>
+              <span>•</span>
+              <span className="truncate">{activeCard.mainRange.startLabel} - {activeCard.mainRange.endLabel}</span>
+            </div>
+            <div className="truncate text-[11px] font-black leading-4 text-gray-800 dark:text-gray-100">
+              {activeCard.goal.name}
+            </div>
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.bar}`}
+                  style={{ width: `${mainPercent}%` }}
+                />
+              </div>
+              <div className="shrink-0 whitespace-nowrap text-[9px] text-gray-600 dark:text-gray-300">
+                {formatMetricNumber(activeCard.achievedValue, activeCard.goal.metric_type)} / {formatMetricNumber(activeCard.targetValue, activeCard.goal.metric_type)}
+              </div>
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <div className="hidden shrink-0 whitespace-nowrap text-[8px] text-gray-500 dark:text-gray-400 md:block">
+                {activeCard.subRange.startLabel} - {activeCard.subRange.endLabel}
+              </div>
+              <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.subBar}`}
+                  style={{ width: `${subPercent}%` }}
+                />
+              </div>
+              <div className="truncate text-[8px] text-gray-500 dark:text-gray-400 md:hidden">
+                {activeCard.subRange.startLabel} - {activeCard.subRange.endLabel}
+              </div>
+            </div>
+          </div>
+
+          {cards.length > 1 ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                size="small"
+                shape="circle"
+                icon={<RightOutlined />}
+                onClick={() => setActiveIndex((current) => (current - 1 + cards.length) % cards.length)}
+                className="!h-6 !w-6 !min-w-6"
+              />
+              <Button
+                size="small"
+                shape="circle"
+                icon={<LeftOutlined />}
+                onClick={() => setActiveIndex((current) => (current + 1) % cards.length)}
+                className="!h-6 !w-6 !min-w-6"
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`relative overflow-hidden rounded-[1.7rem] border border-gray-200 bg-gradient-to-br p-4 shadow-sm dark:border-gray-800 ${shellClasses.shell} ${className}`}>
+      <div className={`transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
@@ -281,7 +404,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       </div>
       <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
         <div
-          className={`h-full rounded-full bg-gradient-to-r ${shellClasses.bar}`}
+          className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.bar}`}
           style={{ width: `${mainPercent}%` }}
         />
       </div>
@@ -309,7 +432,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
 
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
         <div
-          className={`h-full rounded-full bg-gradient-to-r ${shellClasses.subBar}`}
+          className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.subBar}`}
           style={{ width: `${subPercent}%` }}
         />
       </div>
@@ -337,6 +460,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
           ))}
         </div>
       ) : null}
+      </div>
     </div>
   );
 };

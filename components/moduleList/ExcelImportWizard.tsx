@@ -6,13 +6,16 @@ import {
   Checkbox,
   Empty,
   Input,
+  InputNumber,
   Modal,
   Select,
   Spin,
+  Switch,
   Table,
   Tag,
   Upload,
 } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import type { UploadFile } from "antd/es/upload/interface";
 import {
   CloseOutlined,
@@ -30,8 +33,12 @@ import { syncCustomerLevelsByInvoiceCustomers } from "../../utils/customerLeveli
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from "../../utils/assigneeSupport";
 import { supportsSystemCode } from "../../utils/systemCode";
-import { getPreferredRelationTargetField } from "../../utils/relationTargetField";
+import { getPreferredRelationTargetField, getRelationLabelFallbackFields } from "../../utils/relationTargetField";
 import { toFaErrorMessage } from "../../utils/errorMessageFa";
+import DynamicSelectField from "../DynamicSelectField";
+import PersianDatePicker from "../PersianDatePicker";
+import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from "../../utils/referenceData";
+import { fetchRelationOptionsForField } from "../../utils/relationOptions";
 
 type DuplicateStrategy = "skip" | "overwrite" | "merge";
 type EncodingType = "utf-8" | "windows-1256";
@@ -376,14 +383,26 @@ const normalizeImportedDateValue = (value: string, fieldType: FieldType.DATE | F
     return fieldType === FieldType.DATETIME ? excelDate.toISOString() : excelDate.toISOString().slice(0, 10);
   }
 
-  const normalizedSlash = buildNormalizedSlashDate(raw);
-  const normalized = normalizedSlash || raw;
-  const formatted = toGregorianDateString(
-    normalized,
-    fieldType === FieldType.DATETIME ? "YYYY-MM-DDTHH:mm:ss[Z]" : "YYYY-MM-DD",
-    fieldType === FieldType.DATE ? { setMidday: true } : undefined
+  const englishRaw = toEnglishDigits(raw).trim();
+  const normalizedSlash = buildNormalizedSlashDate(englishRaw);
+  const candidateValues = Array.from(
+    new Set(
+      [
+        englishRaw,
+        englishRaw.replace(/\./g, "/"),
+        normalizedSlash,
+      ].filter((item): item is string => Boolean(item && item.trim()))
+    )
   );
-  return formatted || raw;
+  const targetFormat = fieldType === FieldType.DATETIME ? "YYYY-MM-DDTHH:mm:ss[Z]" : "YYYY-MM-DD";
+  const formatOptions = fieldType === FieldType.DATE ? { setMidday: true } : undefined;
+
+  for (const candidate of candidateValues) {
+    const formatted = toGregorianDateString(candidate, targetFormat, formatOptions);
+    if (formatted) return formatted;
+  }
+
+  return englishRaw || raw;
 };
 
 const parseBoolean = (value: string): boolean | null => {
@@ -457,6 +476,18 @@ const isProbablyDuplicateInsertError = (error: unknown): boolean => {
   return code === "23505" || message.includes("duplicate key") || message.includes("unique constraint");
 };
 
+const isMissingColumnError = (error: unknown): boolean => {
+  const code = String((error as any)?.code || "").toUpperCase();
+  const text = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
+  return code === "42703" || code === "PGRST204" || text.includes("column");
+};
+
+const isIntegerOutOfRangeError = (error: unknown): boolean => {
+  const code = String((error as any)?.code || "").toUpperCase();
+  const text = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
+  return code === "22003" || text.includes("out of range for type integer");
+};
+
 const getRelationLookupColumns = (targetModule: string, targetField: string): string[] => {
   const columns = new Set<string>(["id", targetField]);
   if (supportsSystemCode(targetModule)) {
@@ -487,6 +518,34 @@ const getRelationLookupCandidates = (
   return [row[targetField], row.system_code]
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);
+};
+
+const getRelationLookupFields = (targetModule: string, targetField: string): string[] =>
+  Array.from(
+    new Set(
+      [
+        targetField,
+        ...getRelationLabelFallbackFields(targetModule),
+        ...(supportsSystemCode(targetModule) ? ["system_code"] : []),
+        ...(targetModule === "customers" ? ["legacy_contact_code", "mobile_1"] : []),
+      ]
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+const getRelationSelectVariants = (targetModule: string, targetField: string): string[] => {
+  const columns = getRelationLookupColumns(targetModule, targetField);
+  return Array.from(
+    new Set(
+      [
+        columns.join(", "),
+        columns.filter((column) => column !== "system_code").join(", "),
+        Array.from(new Set(["id", targetField])).join(", "),
+        "id",
+      ].filter(Boolean)
+    )
+  );
 };
 
 const buildRelationAutoCreatePayload = (
@@ -674,6 +733,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const [saveCustomMapping, setSaveCustomMapping] = useState<boolean>(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [autoSyncCustomerStats, setAutoSyncCustomerStats] = useState<boolean>(moduleId === "invoices");
+  const [duplicateFieldSearch, setDuplicateFieldSearch] = useState<string>("");
+  const [defaultEditorRelationOptions, setDefaultEditorRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [defaultEditorDynamicOptions, setDefaultEditorDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [defaultEditorAssigneeOptions, setDefaultEditorAssigneeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const parsedSheet = useMemo(() => matrixToSheetData(rawMatrix, hasHeader), [rawMatrix, hasHeader]);
 
   const headerImportableFields = useMemo(() => {
@@ -757,6 +820,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       .map((row) => row.targetFieldKey)
       .filter((key): key is string => Boolean(key));
   }, [mappingRows]);
+  const mappedHeaderFieldKeySet = useMemo(() => new Set(mappedHeaderFieldKeys), [mappedHeaderFieldKeys]);
 
   const mappedItemFieldKeys = useMemo(() => {
     return mappingRows
@@ -764,6 +828,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       .map((row) => row.targetFieldKey)
       .filter((key): key is string => Boolean(key));
   }, [mappingRows]);
+  const mappedItemFieldKeySet = useMemo(() => new Set(mappedItemFieldKeys), [mappedItemFieldKeys]);
 
   const mappedRequiredFieldKeys = useMemo(() => {
     const set = new Set(mappedHeaderFieldKeys);
@@ -790,8 +855,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setMappingRows([]);
     setDuplicateStrategy("skip");
     setDuplicateFields([]);
+    setDuplicateFieldSearch("");
     setSaveCustomMapping(false);
     setAutoSyncCustomerStats(moduleId === "invoices");
+    setDefaultEditorRelationOptions({});
+    setDefaultEditorDynamicOptions({});
+    setDefaultEditorAssigneeOptions([]);
   }, [moduleId, supportsGroupedInvoiceImport]);
 
   useEffect(() => {
@@ -934,6 +1003,428 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     },
     []
   );
+  const selectPopupContainer = useCallback(
+    (node?: HTMLElement | null) => node?.parentElement || document.body,
+    []
+  );
+  const wizardSelectProps = useMemo(
+    () => ({
+      getPopupContainer: selectPopupContainer,
+      popupMatchSelectWidth: false,
+      virtual: false,
+      listHeight: 280,
+      styles: { popup: { root: { zIndex: 1700, minWidth: 220 } } },
+    }),
+    [selectPopupContainer]
+  );
+  const headerFieldSelectOptions = useMemo(
+    () =>
+      headerImportableFields.map((field) => ({
+        label: field.labels.fa,
+        value: field.key,
+      })),
+    [headerImportableFields]
+  );
+  const itemFieldSelectOptions = useMemo(
+    () =>
+      itemImportableFields.map((field) => ({
+        label: field.labels.fa,
+        value: field.key,
+      })),
+    [itemImportableFields]
+  );
+  const duplicateFieldSelectOptions = useMemo(
+    () =>
+      headerImportableFields.map((field) => ({
+        label: field.labels.fa,
+        value: field.key,
+      })),
+    [headerImportableFields]
+  );
+  const filteredDuplicateFieldOptions = useMemo(() => {
+    const normalizedSearch = normalizeText(duplicateFieldSearch);
+    if (!normalizedSearch) return duplicateFieldSelectOptions;
+    return duplicateFieldSelectOptions.filter((option) =>
+      normalizeText(option.label).includes(normalizedSearch) || normalizeText(option.value).includes(normalizedSearch)
+    );
+  }, [duplicateFieldSearch, duplicateFieldSelectOptions]);
+  const getMappingTargetField = useCallback(
+    (row: MappingRow): ImportFieldDescriptor | null => {
+      const targetFieldKey = String(row.targetFieldKey || "").trim();
+      if (!targetFieldKey) return null;
+      return row.targetScope === "item"
+        ? itemFieldByKey.get(targetFieldKey) || null
+        : headerFieldByKey.get(targetFieldKey) || null;
+    },
+    [headerFieldByKey, itemFieldByKey]
+  );
+  const serializeEditorDefaultValue = useCallback((field: ImportFieldDescriptor, value: any): string => {
+    if (value === undefined || value === null) return "";
+    if (Array.isArray(value)) {
+      return value.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+    }
+    if (field.type === FieldType.CHECKBOX) {
+      return value ? "true" : "false";
+    }
+    return String(value).trim();
+  }, []);
+  const parseEditorDefaultValue = useCallback((field: ImportFieldDescriptor, value: string): any => {
+    const raw = String(value || "").trim();
+    if (!raw) return undefined;
+    if (field.type === FieldType.MULTI_SELECT || field.type === FieldType.CHECKLIST || field.type === FieldType.TAGS) {
+      return splitByDelimiters(raw);
+    }
+    if (field.type === FieldType.CHECKBOX) {
+      return parseBoolean(raw) ?? false;
+    }
+    if (
+      field.type === FieldType.NUMBER
+      || field.type === FieldType.PRICE
+      || field.type === FieldType.PERCENTAGE
+      || field.type === FieldType.PERCENTAGE_OR_AMOUNT
+      || field.type === FieldType.STOCK
+    ) {
+      return parseNumber(raw) ?? undefined;
+    }
+    return raw;
+  }, []);
+  const toEditorField = useCallback((field: ImportFieldDescriptor) => ({
+    key: field.key,
+    type: field.type === FieldType.USER ? FieldType.RELATION : field.type,
+    labels: field.labels,
+    options: field.options,
+    dynamicOptionsCategory: field.dynamicOptionsCategory,
+    relationConfig: field.type === FieldType.USER
+      ? { targetModule: "profiles", targetField: "full_name" }
+      : field.relationConfig,
+    validation: field.validation,
+    readonly: false,
+    nature: field.nature,
+  }), []);
+  useEffect(() => {
+    if (step !== 2) return;
+    const selectedFields = mappingRows
+      .map((row) => getMappingTargetField(row))
+      .filter((field): field is ImportFieldDescriptor => Boolean(field));
+    const neededDynamicCategories = Array.from(
+      new Set(
+        selectedFields
+          .map((field) => String(field.dynamicOptionsCategory || "").trim())
+          .filter(Boolean)
+      )
+    );
+    const neededRelationFields = selectedFields.filter((field) =>
+      field.key !== "assignee_id" && (field.type === FieldType.RELATION || field.type === FieldType.USER)
+    );
+    const needsAssigneeOptions = selectedFields.some((field) => field.key === "assignee_id");
+    let cancelled = false;
+
+    const loadEditorOptions = async () => {
+      const nextDynamicEntries = await Promise.all(
+        neededDynamicCategories
+          .filter((category) => !defaultEditorDynamicOptions[category])
+          .map(async (category) => [category, await fetchDynamicOptionsByCategory(supabase, category)] as const)
+      );
+      const nextRelationEntries = await Promise.all(
+        neededRelationFields
+          .filter((field) => !defaultEditorRelationOptions[`${field.scope}:${field.key}`])
+          .map(async (field) => [
+            `${field.scope}:${field.key}`,
+            await fetchRelationOptionsForField(supabase, toEditorField(field) as any, { limit: 300 }),
+          ] as const)
+      );
+
+      if (!cancelled && nextDynamicEntries.length > 0) {
+        setDefaultEditorDynamicOptions((prev) => ({ ...prev, ...Object.fromEntries(nextDynamicEntries) }));
+      }
+      if (!cancelled && nextRelationEntries.length > 0) {
+        setDefaultEditorRelationOptions((prev) => ({ ...prev, ...Object.fromEntries(nextRelationEntries) }));
+      }
+      if (!cancelled && needsAssigneeOptions && defaultEditorAssigneeOptions.length === 0) {
+        const directory = await fetchAssigneeDirectory(supabase);
+        setDefaultEditorAssigneeOptions([
+          ...directory.users.map((user) => ({
+            label: String(user.display_name || user.full_name || user.email || user.mobile_1 || user.id).trim(),
+            value: `user_${String(user.id)}`,
+          })),
+          ...(supportsGlobalRoleAssignee(moduleId)
+            ? directory.roles.map((role) => ({
+                label: String(role.title || role.id).trim(),
+                value: `role_${String(role.id)}`,
+              }))
+            : []),
+        ]);
+      }
+    };
+
+    void loadEditorOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    defaultEditorAssigneeOptions.length,
+    defaultEditorDynamicOptions,
+    defaultEditorRelationOptions,
+    getMappingTargetField,
+    mappingRows,
+    moduleId,
+    step,
+    toEditorField,
+  ]);
+  const renderDefaultValueEditor = useCallback((row: MappingRow) => {
+    const field = getMappingTargetField(row);
+    if (!field) {
+      return (
+        <Input
+          value={row.defaultValue}
+          onChange={(event) => updateMappingRow(row.sourceColumn, { defaultValue: event.target.value })}
+          placeholder="اختیاری"
+        />
+      );
+    }
+
+    const editorValue = parseEditorDefaultValue(field, row.defaultValue);
+    const setEditorValue = (nextValue: any) => {
+      updateMappingRow(row.sourceColumn, {
+        defaultValue: serializeEditorDefaultValue(field, nextValue),
+      });
+    };
+
+    if (field.key === "assignee_id") {
+      return (
+        <Select
+          {...wizardSelectProps}
+          value={editorValue}
+          allowClear
+          showSearch
+          className="w-full"
+          optionFilterProp="label"
+          options={defaultEditorAssigneeOptions}
+          placeholder="انتخاب مسئول پیش فرض"
+          onChange={(nextValue) => setEditorValue(nextValue)}
+        />
+      );
+    }
+
+    if ((field.type === FieldType.SELECT || field.type === FieldType.STATUS) && field.dynamicOptionsCategory) {
+      return (
+        <DynamicSelectField
+          value={editorValue}
+          onChange={setEditorValue}
+          options={defaultEditorDynamicOptions[String(field.dynamicOptionsCategory)] || []}
+          category={String(field.dynamicOptionsCategory)}
+          getPopupContainer={wizardSelectProps.getPopupContainer as any}
+          popupStyle={{ zIndex: 1700 }}
+        />
+      );
+    }
+
+    if ((field.type === FieldType.MULTI_SELECT || field.type === FieldType.CHECKLIST) && field.dynamicOptionsCategory) {
+      return (
+        <DynamicSelectField
+          value={Array.isArray(editorValue) ? editorValue : []}
+          onChange={setEditorValue}
+          options={defaultEditorDynamicOptions[String(field.dynamicOptionsCategory)] || []}
+          category={String(field.dynamicOptionsCategory)}
+          mode="multiple"
+          getPopupContainer={wizardSelectProps.getPopupContainer as any}
+          popupStyle={{ zIndex: 1700 }}
+        />
+      );
+    }
+
+    if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) {
+      return (
+        <Select
+          {...wizardSelectProps}
+          value={editorValue}
+          allowClear
+          showSearch
+          className="w-full"
+          optionFilterProp="label"
+          options={(field.options || []).map((option) => ({ label: option.label, value: option.value }))}
+          placeholder="انتخاب مقدار پیش فرض"
+          onChange={(nextValue) => setEditorValue(nextValue)}
+        />
+      );
+    }
+
+    if (field.type === FieldType.MULTI_SELECT || field.type === FieldType.CHECKLIST) {
+      return (
+        <Select
+          {...wizardSelectProps}
+          mode="multiple"
+          value={Array.isArray(editorValue) ? editorValue : []}
+          allowClear
+          showSearch
+          className="w-full"
+          optionFilterProp="label"
+          options={(field.options || []).map((option) => ({ label: option.label, value: option.value }))}
+          placeholder="انتخاب مقدار پیش فرض"
+          onChange={(nextValue) => setEditorValue(nextValue)}
+        />
+      );
+    }
+
+    if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
+      return (
+        <Select
+          {...wizardSelectProps}
+          value={editorValue}
+          allowClear
+          showSearch
+          className="w-full"
+          optionFilterProp="label"
+          options={defaultEditorRelationOptions[`${field.scope}:${field.key}`] || []}
+          placeholder="انتخاب مقدار پیش فرض"
+          onChange={(nextValue) => setEditorValue(nextValue)}
+        />
+      );
+    }
+
+    if (field.type === FieldType.CHECKBOX) {
+      return <Switch checked={!!editorValue} onChange={(checked) => setEditorValue(checked)} />;
+    }
+
+    if (
+      field.type === FieldType.NUMBER
+      || field.type === FieldType.PRICE
+      || field.type === FieldType.PERCENTAGE
+      || field.type === FieldType.PERCENTAGE_OR_AMOUNT
+      || field.type === FieldType.STOCK
+    ) {
+      return (
+        <InputNumber
+          value={editorValue}
+          onChange={(nextValue) => setEditorValue(nextValue)}
+          className="w-full"
+          controls={false}
+        />
+      );
+    }
+
+    if (field.type === FieldType.DATE) {
+      return <PersianDatePicker type="DATE" value={editorValue} onChange={setEditorValue} className="w-full" zIndex={1740} />;
+    }
+
+    if (field.type === FieldType.TIME) {
+      return <PersianDatePicker type="TIME" value={editorValue} onChange={setEditorValue} className="w-full" zIndex={1740} />;
+    }
+
+    if (field.type === FieldType.DATETIME) {
+      return <PersianDatePicker type="DATETIME" value={editorValue} onChange={setEditorValue} className="w-full" zIndex={1740} />;
+    }
+
+    return (
+      <Input
+        value={row.defaultValue}
+        onChange={(event) => updateMappingRow(row.sourceColumn, { defaultValue: event.target.value })}
+        placeholder="اختیاری"
+      />
+    );
+  }, [
+    defaultEditorAssigneeOptions,
+    defaultEditorDynamicOptions,
+    defaultEditorRelationOptions,
+    getMappingTargetField,
+    parseEditorDefaultValue,
+    serializeEditorDefaultValue,
+    updateMappingRow,
+    wizardSelectProps,
+  ]);
+  const mappingTargetFieldOptionsBySource = useMemo(() => {
+    const result: Record<string, Array<{ label: string; value: string; disabled?: boolean }>> = {};
+    mappingRows.forEach((row) => {
+      const currentValue = String(row.targetFieldKey || "").trim();
+      const baseOptions = row.targetScope === "item" ? itemFieldSelectOptions : headerFieldSelectOptions;
+      const usedFieldKeys = row.targetScope === "item" ? mappedItemFieldKeySet : mappedHeaderFieldKeySet;
+      result[row.sourceColumn] = baseOptions.map((option) => ({
+        ...option,
+        disabled: option.value !== currentValue && usedFieldKeys.has(option.value),
+      }));
+    });
+    return result;
+  }, [
+    headerFieldSelectOptions,
+    itemFieldSelectOptions,
+    mappedHeaderFieldKeySet,
+    mappedItemFieldKeySet,
+    mappingRows,
+  ]);
+  const mappingTableColumns = useMemo<ColumnsType<MappingRow>>(
+    () => [
+      {
+        title: "تیتر",
+        dataIndex: "sourceColumn",
+        key: "sourceColumn",
+        width: 280,
+        render: (value: string) => <span className="font-semibold">{value}</span>,
+      },
+      {
+        title: "ردیف اول",
+        dataIndex: "sampleValue",
+        key: "sampleValue",
+        width: 260,
+        render: (value: string) => <span className="text-gray-600">{value || "-"}</span>,
+      },
+      ...(importMode === "grouped_invoice"
+        ? [
+            {
+              title: "بخش",
+              dataIndex: "targetScope",
+              key: "targetScope",
+              width: 180,
+              render: (value: MappingTargetScope, row: MappingRow) => (
+                <Select
+                  {...wizardSelectProps}
+                  value={value}
+                  className="w-full"
+                  onChange={(nextScope) =>
+                    updateMappingRow(row.sourceColumn, {
+                      targetScope: nextScope,
+                      targetFieldKey: null,
+                    })
+                  }
+                  options={[
+                    { label: "سربرگ فاکتور", value: "header" },
+                    { label: "اقلام فاکتور", value: "item" },
+                  ]}
+                />
+              ),
+            },
+          ]
+        : []),
+      {
+        title: "فیلد های موجود",
+        dataIndex: "targetFieldKey",
+        key: "targetFieldKey",
+        width: 320,
+        render: (value: string | null, row: MappingRow) => (
+          <Select
+            {...wizardSelectProps}
+            value={value}
+            allowClear
+            showSearch
+            className="w-full"
+            optionFilterProp="label"
+            placeholder="انتخاب فیلد"
+            onChange={(nextValue) =>
+              updateMappingRow(row.sourceColumn, { targetFieldKey: nextValue || null })
+            }
+            options={mappingTargetFieldOptionsBySource[row.sourceColumn] || []}
+          />
+        ),
+      },
+      {
+        title: "مقدار پیش فرض",
+        dataIndex: "defaultValue",
+        key: "defaultValue",
+        width: 220,
+        render: (_value: string, row: MappingRow) => renderDefaultValueEditor(row),
+      },
+    ],
+    [importMode, mappingTargetFieldOptionsBySource, renderDefaultValueEditor, updateMappingRow]
+  );
 
   const ensureDynamicOptionValue = useCallback(
     async (
@@ -998,6 +1489,9 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     ): Promise<string | undefined> => {
       const value = stripLegacyReferencePrefix(rawValue);
       if (!value) return undefined;
+      if (field.key === "assignee_id" && /^(user|role)_[a-z0-9-]+$/i.test(value)) {
+        return value;
+      }
 
       const lookupKey = `${field.scope}:${field.key}`;
       const map = relationLookups[lookupKey] || new Map<string, string>();
@@ -1012,44 +1506,77 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       }
 
       const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig?.targetField);
-      const selectExpr = Array.from(new Set(["id", targetField])).join(", ");
+      const lookupFields = getRelationLookupFields(targetModule, targetField);
+      const selectVariants = getRelationSelectVariants(targetModule, targetField);
 
-      const existingResult = (await withTimeout(
-        supabase
-          .from(targetModule)
-          .select(selectExpr)
-          .eq(targetField, value)
-          .limit(1),
-        20000,
-        `جستجوی رابطه (${field.labels.fa})`
-      )) as unknown as QueryResult<Record<string, unknown>[]>;
-      if (existingResult.error) throw existingResult.error;
+      let existingRow: Record<string, unknown> | undefined;
+      for (const lookupField of lookupFields) {
+        for (const selectExpr of selectVariants) {
+          try {
+            const existingResult = (await withTimeout(
+              supabase
+                .from(targetModule)
+                .select(selectExpr)
+                .eq(lookupField, value)
+                .limit(1),
+              20000,
+              `جستجوی رابطه (${field.labels.fa})`
+            )) as unknown as QueryResult<Record<string, unknown>[]>;
+            if (existingResult.error) throw existingResult.error;
+            existingRow = existingResult.data?.[0];
+            if (existingRow?.id) break;
+          } catch (error) {
+            if (!isMissingColumnError(error)) throw error;
+          }
+        }
+        if (existingRow?.id) break;
+      }
 
-      const existingRow = existingResult.data?.[0];
       if (existingRow?.id) {
         const existingId = String(existingRow.id);
         map.set(encodeForLookup(value), existingId);
-        const relationLabel = String(existingRow[targetField] ?? "").trim();
-        if (relationLabel) map.set(encodeForLookup(relationLabel), existingId);
+        getRelationLookupCandidates(targetModule, existingRow, targetField).forEach((candidate) =>
+          map.set(encodeForLookup(candidate), existingId)
+        );
         return existingId;
       }
 
       const payload = buildRelationAutoCreatePayload(targetModule, value);
       if (!payload) return undefined;
 
-      const insertResult = (await withTimeout(
-        supabase.from(targetModule).insert(payload).select(selectExpr).single(),
-        20000,
-        `ایجاد رابطه (${field.labels.fa})`
-      )) as unknown as QueryResult<Record<string, unknown>>;
-      if (insertResult.error) throw insertResult.error;
+      let inserted: Record<string, unknown> | null = null;
+      let lastInsertError: unknown = null;
+      for (const selectExpr of selectVariants) {
+        try {
+          const insertResult = (await withTimeout(
+            supabase.from(targetModule).insert(payload).select(selectExpr).single(),
+            20000,
+            `ایجاد رابطه (${field.labels.fa})`
+          )) as unknown as QueryResult<Record<string, unknown>>;
+          if (insertResult.error) throw insertResult.error;
+          inserted = insertResult.data;
+          if (inserted?.id) break;
+        } catch (error) {
+          lastInsertError = error;
+          if (!isMissingColumnError(error)) break;
+        }
+      }
+      if (!inserted?.id) {
+        if (isIntegerOutOfRangeError(lastInsertError)) {
+          throw new Error(
+            `برای فیلد «${field.labels.fa}» مقدار «${value}» به عنوان رکورد مرتبط قابل ایجاد نیست. این مقدار شبیه کد/عدد خام است، نه عنوان رکورد رابطه.`
+          );
+        }
+        if (lastInsertError) throw lastInsertError;
+        return undefined;
+      }
 
-      const inserted = insertResult.data;
       const insertedId = String(inserted?.id || "").trim();
       if (!insertedId) return undefined;
       map.set(encodeForLookup(value), insertedId);
-      const relationLabel = String(inserted?.[targetField] ?? "").trim();
-      if (relationLabel) map.set(encodeForLookup(relationLabel), insertedId);
+      getRelationLookupCandidates(targetModule, inserted, targetField).forEach((candidate) =>
+        map.set(encodeForLookup(candidate), insertedId)
+      );
       return insertedId;
     },
     []
@@ -1094,6 +1621,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         case FieldType.NUMBER:
         case FieldType.PRICE:
         case FieldType.STOCK:
+        case FieldType.PERCENTAGE_OR_AMOUNT:
         case FieldType.PERCENTAGE: {
           const numberVal = parseNumber(value);
           return Promise.resolve(numberVal ?? undefined);
@@ -1197,11 +1725,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       const targetModule = field.relationConfig.targetModule;
       const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig.targetField);
-      const columns = getRelationLookupColumns(targetModule, targetField);
-      const selectVariants = [
-        columns.join(", "),
-        columns.filter((column) => column !== "system_code").join(", "),
-      ].filter(Boolean);
+      const selectVariants = getRelationSelectVariants(targetModule, targetField);
 
       let data: any[] | null = null;
       for (const selectExpr of selectVariants) {
@@ -1216,11 +1740,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             );
           data = (result.data || []) as any[];
           break;
-        } catch (error: any) {
-          const errorCode = String(error?.code || '').toUpperCase();
-          const errorText = String(error?.message || error?.details || '').toLowerCase();
-          const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-          if (!isMissingColumn) throw error;
+        } catch (error) {
+          if (!isMissingColumnError(error)) throw error;
         }
       }
 
@@ -1566,27 +2087,27 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
           if (!buildRowHasAnyValue(row)) continue;
 
-          const payloadRaw = await buildPayloadFromMappings(
-            row,
-            headerMappings,
-            headerFieldByKey,
-            headerImportableFields,
-            importContext
-          );
-          const payloadPrepared =
-            moduleId === "tasks"
-              ? attachTaskCompletionIfNeeded(payloadRaw as Record<string, unknown>)
-              : payloadRaw;
-          const payload = finalizeImportedPayload(payloadPrepared as Record<string, unknown>);
-
-          const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
-          if (missingInRow.length > 0) {
-            failed += 1;
-            errors.push(`ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
-            continue;
-          }
-
           try {
+            const payloadRaw = await buildPayloadFromMappings(
+              row,
+              headerMappings,
+              headerFieldByKey,
+              headerImportableFields,
+              importContext
+            );
+            const payloadPrepared =
+              moduleId === "tasks"
+                ? attachTaskCompletionIfNeeded(payloadRaw as Record<string, unknown>)
+                : payloadRaw;
+            const payload = finalizeImportedPayload(payloadPrepared as Record<string, unknown>);
+
+            const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
+            if (missingInRow.length > 0) {
+              failed += 1;
+              errors.push(`ردیف ${sourceLine}: مقدار فیلدهای اجباری کامل نیست.`);
+              continue;
+            }
+
             const existingRecord = await findExistingRecord(payload, `بررسی تکراری بودن ردیف ${sourceLine}`);
 
             if (existingRecord) {
@@ -1656,6 +2177,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       onImported?.();
       onClose();
+    } catch (error) {
+      message.error(toFaErrorMessage(error as any, "واردسازی انجام نشد"));
     } finally {
       setIsImporting(false);
       setImportProgress(null);
@@ -1777,10 +2300,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               <div className="text-xs text-gray-500 mb-0.5">
                 نحوه کدگذاری کاراکترها <span className="text-red-500">*</span>
               </div>
-              <Select
-                value={encoding}
-                onChange={(val) => setEncoding(val)}
-                className="w-full"
+            <Select
+              {...wizardSelectProps}
+              value={encoding}
+              onChange={(val) => setEncoding(val)}
+              className="w-full"
                 options={[
                   { label: "UTF-8", value: "utf-8" },
                   { label: "Windows-1256", value: "windows-1256" },
@@ -1792,10 +2316,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           {supportsGroupedInvoiceImport && (
             <div className="rounded-xl border border-gray-200 px-3 py-2 space-y-2">
               <div className="text-sm text-gray-500">حالت ورود اطلاعات</div>
-              <Select
-                value={importMode}
-                onChange={(value) => setImportMode(value)}
-                className="w-full"
+               <Select
+                {...wizardSelectProps}
+                 value={importMode}
+                 onChange={(value) => setImportMode(value)}
+                 className="w-full"
                 options={[
                   { label: "ردیف‌های مستقل", value: "simple" },
                   { label: "فاکتور گروه‌بندی‌شده", value: "grouped_invoice" },
@@ -1810,6 +2335,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
                 ستون تشخیص فاکتور <span className="text-red-500">*</span>
               </div>
               <Select
+                {...wizardSelectProps}
                 value={groupingColumn || undefined}
                 onChange={(value) => setGroupingColumn(value)}
                 className="w-full"
@@ -1847,6 +2373,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               نحوه رسیدگی به اطلاعات تکراری <span className="text-red-500">*</span>
             </div>
             <Select
+              {...wizardSelectProps}
               value={duplicateStrategy}
               onChange={(val) => setDuplicateStrategy(val)}
               options={DUPLICATE_OPTIONS.map((item) => ({ label: item.label, value: item.value }))}
@@ -1858,18 +2385,33 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             <div className="text-sm text-gray-500 mb-2">
               فیلدهای مطابق برای پیدا کردن رکوردهای تکراری <span className="text-red-500">*</span>
             </div>
-            <Select
-              mode="multiple"
-              value={duplicateFields}
-              onChange={(values) => setDuplicateFields(values)}
-              className="w-full"
-              optionFilterProp="label"
-              options={headerImportableFields.map((field) => ({
-                label: field.labels.fa,
-                value: field.key,
-              }))}
-              placeholder="انتخاب فیلدهای تطبیق"
-            />
+            <div className="space-y-2">
+              <Input
+                value={duplicateFieldSearch}
+                onChange={(event) => setDuplicateFieldSearch(event.target.value)}
+                placeholder="جستجوی فیلد..."
+                allowClear
+              />
+              <div className="max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                {filteredDuplicateFieldOptions.length > 0 ? (
+                  <Checkbox.Group
+                    value={duplicateFields}
+                    onChange={(values) => setDuplicateFields((values || []).map((value) => String(value)))}
+                    className="w-full"
+                  >
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {filteredDuplicateFieldOptions.map((option) => (
+                        <Checkbox key={option.value} value={option.value} className="!ml-0">
+                          {option.label}
+                        </Checkbox>
+                      ))}
+                    </div>
+                  </Checkbox.Group>
+                ) : (
+                  <div className="py-4 text-xs text-gray-400 text-center">فیلدی پیدا نشد.</div>
+                )}
+              </div>
+            </div>
           </div>
 
           {moduleId === "invoices" && (
@@ -1928,98 +2470,14 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           dataSource={mappingRows}
           size="middle"
           scroll={{ y: 300 }}
-          columns={[
-            {
-              title: "تیتر",
-              dataIndex: "sourceColumn",
-              key: "sourceColumn",
-              width: 280,
-              render: (value: string) => <span className="font-semibold">{value}</span>,
-            },
-            {
-              title: "ردیف اول",
-              dataIndex: "sampleValue",
-              key: "sampleValue",
-              width: 260,
-              render: (value: string) => <span className="text-gray-600">{value || "-"}</span>,
-            },
-            ...(importMode === "grouped_invoice"
-              ? [
-                  {
-                    title: "بخش",
-                    dataIndex: "targetScope",
-                    key: "targetScope",
-                    width: 180,
-                    render: (value: MappingTargetScope, row: MappingRow) => (
-                      <Select
-                        value={value}
-                        className="w-full"
-                        onChange={(nextScope) =>
-                          updateMappingRow(row.sourceColumn, {
-                            targetScope: nextScope,
-                            targetFieldKey: null,
-                          })
-                        }
-                        options={[
-                          { label: "سربرگ فاکتور", value: "header" },
-                          { label: "اقلام فاکتور", value: "item" },
-                        ]}
-                      />
-                    ),
-                  },
-                ]
-              : []),
-            {
-              title: "فیلد های موجود",
-              dataIndex: "targetFieldKey",
-              key: "targetFieldKey",
-              width: 320,
-              render: (value: string | null, row: MappingRow) => {
-                const options = (row.targetScope === "item" ? itemImportableFields : headerImportableFields).map((field) => ({
-                  label: field.labels.fa,
-                  value: field.key,
-                  disabled:
-                    Boolean(field.key !== value) &&
-                    (row.targetScope === "item" ? mappedItemFieldKeys : mappedHeaderFieldKeys).includes(field.key),
-                }));
-
-                return (
-                  <Select
-                    value={value}
-                    allowClear
-                    className="w-full"
-                    optionFilterProp="label"
-                    placeholder="انتخاب فیلد"
-                    onChange={(nextValue) =>
-                      updateMappingRow(row.sourceColumn, { targetFieldKey: nextValue || null })
-                    }
-                    options={options}
-                  />
-                );
-              },
-            },
-            {
-              title: "مقدار پیش فرض",
-              dataIndex: "defaultValue",
-              key: "defaultValue",
-              width: 220,
-              render: (value: string, row: MappingRow) => (
-                <Input
-                  value={value}
-                  onChange={(event) =>
-                    updateMappingRow(row.sourceColumn, { defaultValue: event.target.value })
-                  }
-                  placeholder="اختیاری"
-                />
-              ),
-            },
-          ]}
+          columns={mappingTableColumns}
         />
       </div>
     );
   }, [
     autoSyncCustomerStats,
     duplicateFields,
+    duplicateFieldSearch,
     duplicateStrategy,
     fileList,
     groupedData.missingGroupSourceLines.length,
@@ -2035,13 +2493,14 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     mappedHeaderFieldKeys,
     mappedItemFieldKeys,
     mappedRequiredFieldKeys,
+    mappingTableColumns,
     mappingRows,
     moduleId,
     requiredFields,
     saveCustomMapping,
     step,
     supportsGroupedInvoiceImport,
-    updateMappingRow,
+    filteredDuplicateFieldOptions,
     encoding,
   ]);
 

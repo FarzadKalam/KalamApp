@@ -48,6 +48,7 @@ import {
   SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
 } from './moduleSettingsTypes';
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
+import { MODULE_SETTINGS_UPDATED_EVENT } from '../../utils/moduleSettingsRuntime';
 
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -584,6 +585,9 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       setSettingsByModule(nextModules);
       setSettingsRowId(data?.id ? String(data.id) : settingsRowId);
       clearSystemCodeSettingsCache();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_UPDATED_EVENT));
+      }
       setIsDirty(false);
       message.success('تنظیمات ماژول ذخیره شد.');
     } catch (err: any) {

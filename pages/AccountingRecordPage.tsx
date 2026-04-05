@@ -42,6 +42,7 @@ import {
 } from '../utils/persianNumericInput';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
 type FieldOption = { value: string; label: string; color?: string };
@@ -691,8 +692,12 @@ const AccountingRecordPage: React.FC = () => {
     }
     try {
       setDeleting(true);
-      const { error } = await supabase.from(moduleConfig.table).delete().eq('id', id);
-      if (error) throw error;
+      if (isRecycleBinEnabledModule(moduleId)) {
+        await moveModuleRecordsToRecycleBin(moduleId, [String(id)]);
+      } else {
+        const { error } = await supabase.from(moduleConfig.table).delete().eq('id', id);
+        if (error) throw error;
+      }
       message.success('رکورد حذف شد');
       navigate(`/${moduleId}`);
     } catch (err: any) {

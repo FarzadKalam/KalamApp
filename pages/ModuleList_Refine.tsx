@@ -4,7 +4,7 @@ import { CrudFilter, CrudFilters, CrudSort, useDeleteMany } from "@refinedev/cor
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
-import { BlockType, FieldType, ModuleDefinition, SavedView, ViewMode } from "../types";
+import { FieldType, ModuleDefinition, SavedView, ViewMode } from "../types";
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
@@ -25,9 +25,6 @@ import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } f
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { fetchTaskSourceRecordOptions, getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
 import ExcelImportWizard from "../components/moduleList/ExcelImportWizard";
-import { supportsSystemCode } from "../utils/systemCode";
-import { buildCustomerRelationSearchText } from "../utils/customerRelation";
-import { getPreferredRelationTargetField } from "../utils/relationTargetField";
 import PrintSection from "../components/moduleShow/PrintSection";
 import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
 import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
@@ -37,10 +34,13 @@ import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { syncRecordTags } from "../utils/recordTags";
-import { writeModuleOptionSnapshot } from "../utils/moduleOptionSnapshot";
+import { mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from "../utils/moduleOptionSnapshot";
+import { buildModuleListOptionPlan, fetchModuleListRelationOptions } from "../utils/moduleListOptions";
+import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
 import { isWebFormTargetModule } from "../utils/webForms";
 import GoalsManager from "../components/goals/GoalsManager";
 import GoalProgressSlider from "../components/goals/GoalProgressSlider";
+import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
 
 const getDefaultGridPageSize = () => 16;
 const getGridLoadStep = () => 16;
@@ -69,15 +69,6 @@ interface PersistedModuleListState {
   columnFilters?: ColumnFiltersState;
   sorters?: CrudSort[];
 }
-
-interface ModuleListOptionsSnapshot {
-  dynamicOptions: Record<string, any[]>;
-  relationOptions: Record<string, any[]>;
-  allUsers: any[];
-  allRoles: any[];
-}
-
-const moduleListOptionsCache = new Map<string, ModuleListOptionsSnapshot>();
 
 const buildModuleListStateKey = (moduleId?: string | null, suffix?: string | null) => {
   const normalizedModuleId = String(moduleId || "").trim();
@@ -214,35 +205,10 @@ export const ModuleListRefine: React.FC<{
       content: string,
       duration?: number,
     ) => {
-      const baseStyle = {
-        marginTop: 88,
-        borderRadius: 14,
-        color: "#fff",
-        boxShadow: "0 16px 34px rgba(120, 74, 23, 0.24)",
-      } as React.CSSProperties;
-      const styleByType: Record<string, React.CSSProperties> = {
-        success: {
-          background: "linear-gradient(135deg, #7c4a17 0%, #a16207 100%)",
-          border: "1px solid rgba(251, 191, 36, 0.34)",
-        },
-        warning: {
-          background: "linear-gradient(135deg, #9a3412 0%, #c2410c 100%)",
-          border: "1px solid rgba(251, 191, 36, 0.32)",
-        },
-        loading: {
-          background: "linear-gradient(135deg, #7c4a17 0%, #92400e 100%)",
-          border: "1px solid rgba(251, 191, 36, 0.3)",
-        },
-        error: {
-          background: "linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%)",
-          border: "1px solid rgba(252, 165, 165, 0.3)",
-          boxShadow: "0 16px 34px rgba(127, 29, 29, 0.24)",
-        },
-      };
       const config = {
         content,
         duration: type === "loading" ? duration ?? 0 : duration,
-        style: { ...baseStyle, ...(styleByType[type] || styleByType.success) },
+        className: `kalam-list-message kalam-list-message--${type}`,
       };
       if (type === "loading") return msg.loading(config);
       if (type === "warning") return msg.warning(config);
@@ -256,6 +222,20 @@ export const ModuleListRefine: React.FC<{
   const persistedState = useMemo(
     () => readPersistedModuleListState(resolvedModuleId, storageKeySuffix),
     [resolvedModuleId, storageKeySuffix]
+  );
+  const cachedOptionSnapshot = useMemo(
+    () => readModuleOptionSnapshot(resolvedModuleId),
+    [resolvedModuleId]
+  );
+  const hasCachedModuleOptions = useMemo(
+    () =>
+      !!cachedOptionSnapshot && (
+        Object.keys(cachedOptionSnapshot.dynamicOptions || {}).length > 0 ||
+        Object.keys(cachedOptionSnapshot.relationOptions || {}).length > 0 ||
+        (cachedOptionSnapshot.allUsers?.length || 0) > 0 ||
+        (cachedOptionSnapshot.allRoles?.length || 0) > 0
+      ),
+    [cachedOptionSnapshot]
   );
   const effectiveInitialViewFilters = useMemo(
     () =>
@@ -357,7 +337,6 @@ export const ModuleListRefine: React.FC<{
       Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
         ? initialViewFiltersOverride
         : (restoredState?.viewFilters || []);
-    const cachedOptions = resolvedModuleId ? moduleListOptionsCache.get(resolvedModuleId) : null;
     setViewMode(restoredState?.viewMode || moduleConfig?.defaultViewMode || ViewMode.LIST);
     setCurrentView(
       Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
@@ -373,11 +352,11 @@ export const ModuleListRefine: React.FC<{
     setSearchTerm(restoredState?.searchTerm || "");
     setViewFiltersState(restoredViewFilters);
     setColumnFilters(restoredState?.columnFilters || {});
-    setDynamicOptions(cachedOptions?.dynamicOptions || {});
-    setRelationOptions(cachedOptions?.relationOptions || {});
-    setAllUsers(cachedOptions?.allUsers || []);
-    setAllRoles(cachedOptions?.allRoles || []);
-    setOptionsReady(!!cachedOptions);
+    setDynamicOptions(cachedOptionSnapshot?.dynamicOptions || {});
+    setRelationOptions(cachedOptionSnapshot?.relationOptions || {});
+    setAllUsers(cachedOptionSnapshot?.allUsers || []);
+    setAllRoles(cachedOptionSnapshot?.allRoles || []);
+    setOptionsReady(hasCachedModuleOptions);
     setTagsMap({});
     setTagsLoading(false);
     setEditRecordId(null);
@@ -400,7 +379,16 @@ export const ModuleListRefine: React.FC<{
     );
     setCurrent?.(1);
     setSorters(restoredSorters);
-  }, [initialViewFiltersOverride, moduleConfig, resolvedModuleId, setCurrent, setSorters, storageKeySuffix]);
+  }, [
+    cachedOptionSnapshot,
+    hasCachedModuleOptions,
+    initialViewFiltersOverride,
+    moduleConfig,
+    resolvedModuleId,
+    setCurrent,
+    setSorters,
+    storageKeySuffix,
+  ]);
 
   const fetchPermissions = useCallback(async () => {
     if (!resolvedModuleId) return;
@@ -696,199 +684,109 @@ export const ModuleListRefine: React.FC<{
 
   // ✅ اضافه شد: Fetch dynamic و relation options
   useEffect(() => {
-    if (!moduleConfig) return;
+    if (!moduleConfig || !resolvedModuleId) return;
 
     let isActive = true;
+    const optionPlan = buildModuleListOptionPlan(moduleConfig, visibleColumns);
+
+    const applySnapshotToState = (snapshot: ReturnType<typeof readModuleOptionSnapshot>) => {
+      if (!snapshot || !isActive) return;
+      setDynamicOptions(snapshot.dynamicOptions || {});
+      setRelationOptions(snapshot.relationOptions || {});
+      setAllUsers(snapshot.allUsers || []);
+      setAllRoles(snapshot.allRoles || []);
+    };
 
     const fetchOptions = async () => {
-      setOptionsReady(false);
+      if (!hasCachedModuleOptions) {
+        setOptionsReady(false);
+      }
+
       try {
         const directory = await fetchAssigneeDirectory(supabase);
-
         if (!isActive) return;
+
         setAllUsers(directory.users);
         setAllRoles(directory.roles);
 
-        const dynFields: any[] = [...moduleConfig.fields.filter((f) => (f as any).dynamicOptionsCategory)];
-        moduleConfig.blocks?.forEach((b) => {
-          if ((b.type === BlockType.TABLE || b.type === BlockType.GRID_TABLE) && b.tableColumns) {
-            b.tableColumns.forEach((c) => {
-              if (
-                (c.type === FieldType.SELECT || c.type === FieldType.MULTI_SELECT) &&
-                (c as any).dynamicOptionsCategory
-              ) {
-                dynFields.push(c);
-              }
-            });
-          }
-        });
-
-        const dynCategories: string[] = Array.from(
-          new Set(
-            dynFields
-              .map((f) => (f as any).dynamicOptionsCategory as string | undefined)
-              .filter(Boolean)
-          )
-        ) as string[];
-
-        const dynOpts: Record<string, any[]> = await fetchDynamicOptionsMap(supabase, dynCategories);
-        if (!isActive) return;
-        try {
-          const formulas = await fetchFormulaOptions(supabase);
-          if (formulas.length > 0) {
-            dynOpts['calculation_formulas'] = formulas;
-          }
-        } catch (err) {
-          console.warn('Could not load calculation formulas', err);
-        }
-        setDynamicOptions(dynOpts);
-
-        const relFields: any[] = [...moduleConfig.fields.filter((f) => f.type === FieldType.RELATION || f.type === FieldType.USER)];
-        moduleConfig.blocks?.forEach((b) => {
-          if (b.type === BlockType.TABLE && b.tableColumns) {
-            b.tableColumns.forEach((c) => {
-              if (c.type === FieldType.RELATION || c.type === FieldType.USER) relFields.push({ ...c, key: `${b.id}_${c.key}` });
-            });
-          }
-        });
-
-        const relOpts: Record<string, any[]> = {};
-
-        const profileOptions = (directory.users || []).map((p: any) => ({ label: p.display_name || p.full_name || p.id, value: p.id }));
-        const roleOptions = (directory.roles || []).map((role: any) => ({ label: role.title || role.id, value: role.id }));
-        const assigneeOptions = [
-          ...profileOptions,
-          ...roleOptions.filter((role) => !profileOptions.some((user) => String(user.value) === String(role.value))),
-        ];
-        relOpts["profiles"] = profileOptions;
-        relOpts["assignee_id"] = assigneeOptions;
-        relOpts["org_roles"] = roleOptions;
-        relOpts["roles"] = roleOptions;
-
-        const relResults = await Promise.all(
-          relFields.map(async (field) => {
-            if (field.type === FieldType.USER) {
-              return { key: field.key, options: profileOptions };
-            }
-            if (field.relationConfig) {
-              const { targetModule, targetField, filter } = field.relationConfig;
-              const resolvedTargetField = getPreferredRelationTargetField(targetModule, targetField);
-              const includeSystemCode = targetModule !== "cheques" && supportsSystemCode(targetModule);
-              const customerExtraFields =
-                targetModule === "customers"
-                  ? ["full_name", "first_name", "last_name", "business_name", "legal_name", "mobile_1", "phone"]
-                  : [];
-              const selectFields = Array.from(
-                new Set(
-                  targetModule === "profiles"
-                    ? ["id"].concat(resolvedTargetField ? [resolvedTargetField] : [])
-                    : ["id"].concat(includeSystemCode ? ["system_code"] : []).concat(resolvedTargetField ? [resolvedTargetField] : []).concat(customerExtraFields)
-                )
-              );
-              if (targetModule === "shelves" && !selectFields.includes("shelf_number")) {
-                selectFields.push("shelf_number");
-              }
-              const RELATION_BATCH_SIZE = 500;
-              const RELATION_MAX_PAGES = 40;
-              const runQuery = async (fields: string[]) => {
-                const rows: any[] = [];
-                for (let page = 0; page < RELATION_MAX_PAGES; page += 1) {
-                  const from = page * RELATION_BATCH_SIZE;
-                  const to = from + RELATION_BATCH_SIZE - 1;
-                  let query = supabase
-                    .from(targetModule)
-                    .select(fields.join(", "))
-                    .range(from, to);
-                  if (filter) Object.keys(filter).forEach((k) => (query = query.eq(k, filter[k])));
-                  const result = await query;
-                  if (result.error) return { data: null as any, error: result.error };
-                  const chunk = result.data || [];
-                  rows.push(...chunk);
-                  if (chunk.length < RELATION_BATCH_SIZE) break;
-                }
-                return { data: rows, error: null as any };
-              };
-
-              let { data: relData, error: relError } = await runQuery(selectFields);
-              const errorText = String((relError as any)?.message || (relError as any)?.details || '').toLowerCase();
-              const errorCode = String((relError as any)?.code || '').toUpperCase();
-              const hasColumnError = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-
-              if (relError && hasColumnError) {
-                const fallbackNoSystemCode = selectFields.filter((f) => f !== "system_code");
-                let fallback = await runQuery(fallbackNoSystemCode);
-
-                if (fallback.error && targetField) {
-                  const fallbackFieldErrorText = String((fallback.error as any)?.message || (fallback.error as any)?.details || '').toLowerCase();
-                  const missingTargetField =
-                    fallbackFieldErrorText.includes(String(targetField).toLowerCase()) ||
-                    String((fallback.error as any)?.code || '').toUpperCase() === '42703' ||
-                    String((fallback.error as any)?.code || '').toUpperCase() === 'PGRST204';
-
-                  if (missingTargetField) {
-                    const byName = await runQuery(["id", resolvedTargetField]);
-                    if (!byName.error) {
-                      fallback = byName;
-                    } else {
-                      fallback = await runQuery(["id"]);
-                    }
-                  }
-                }
-
-                relData = fallback.data;
-              }
-
-              const options = (relData || []).map((i: any) => {
-                const isCustomer = targetModule === "customers";
-                const labelValue = isCustomer
-                  ? String(i?.full_name || i?.[resolvedTargetField] || i?.business_name || i?.system_code || i?.id || 'بدون نام').trim()
-                  : ((resolvedTargetField ? (i as any)[resolvedTargetField] : null) || i.shelf_number || i.system_code || i.id);
-                const sys = !isCustomer && (i as any).system_code ? ` (${(i as any).system_code})` : "";
-                return {
-                  label: `${labelValue}${sys}`,
-                  value: i.id,
-                  searchText: isCustomer
-                    ? buildCustomerRelationSearchText(i, resolvedTargetField)
-                    : `${String(labelValue || '').toLowerCase()} ${String((i as any).system_code || '').toLowerCase()}`.trim(),
-                };
-              });
-              return { key: field.key, options };
-            }
-            return null;
-          })
+        const immediateDynamicOptions =
+          optionPlan.immediateDynamicCategories.length > 0
+            ? await fetchDynamicOptionsMap(supabase, optionPlan.immediateDynamicCategories)
+            : {};
+        const immediateRelationOptions = await fetchModuleListRelationOptions(
+          supabase,
+          optionPlan.immediateRelationFields,
+          directory
         );
 
-        if (!isActive) return;
-        relResults.forEach((res) => {
-          if (res) {
-            relOpts[res.key] = res.options;
-            if (res.key.includes("_")) relOpts[res.key.split("_").pop()!] = res.options;
-          }
+        const snapshot = writeModuleOptionSnapshot(resolvedModuleId, {
+          dynamicOptions: mergeOptionMaps(readModuleOptionSnapshot(resolvedModuleId)?.dynamicOptions, immediateDynamicOptions),
+          relationOptions: mergeOptionMaps(readModuleOptionSnapshot(resolvedModuleId)?.relationOptions, immediateRelationOptions),
+          allUsers: directory.users,
+          allRoles: directory.roles,
         });
-        setRelationOptions(relOpts);
-        if (resolvedModuleId) {
-          moduleListOptionsCache.set(resolvedModuleId, {
-            dynamicOptions: dynOpts,
-            relationOptions: relOpts,
-            allUsers: directory.users,
-            allRoles: directory.roles,
-          });
+
+        applySnapshotToState(snapshot);
+        if (isActive) {
+          setOptionsReady(true);
+        }
+
+        const latestSnapshot = readModuleOptionSnapshot(resolvedModuleId);
+        const shouldWarmDynamic =
+          optionPlan.allDynamicCategories.length > 0 &&
+          optionPlan.allDynamicCategories.some((category) => !(latestSnapshot?.dynamicOptions || {})[category]);
+        const shouldWarmRelations =
+          optionPlan.allRelationFields.length > 0 &&
+          optionPlan.allRelationFields.some((field) => !(latestSnapshot?.relationOptions || {})[field.key]);
+
+        if (shouldWarmDynamic || shouldWarmRelations) {
+          void (async () => {
+            try {
+              const [fullDynamicOptions, fullRelationOptions, formulas] = await Promise.all([
+                optionPlan.allDynamicCategories.length > 0
+                  ? fetchDynamicOptionsMap(supabase, optionPlan.allDynamicCategories)
+                  : Promise.resolve({} as Record<string, any[]>),
+                optionPlan.allRelationFields.length > 0
+                  ? fetchModuleListRelationOptions(supabase, optionPlan.allRelationFields, directory)
+                  : Promise.resolve({} as Record<string, any[]>),
+                fetchFormulaOptions(supabase).catch((error) => {
+                  console.warn('Could not load calculation formulas', error);
+                  return [] as any[];
+                }),
+              ]);
+
+              if (formulas.length > 0) {
+                fullDynamicOptions.calculation_formulas = formulas;
+              }
+
+              const fullSnapshot = writeModuleOptionSnapshot(resolvedModuleId, {
+                dynamicOptions: fullDynamicOptions,
+                relationOptions: fullRelationOptions,
+                allUsers: directory.users,
+                allRoles: directory.roles,
+              });
+              applySnapshotToState(fullSnapshot);
+            } catch (error) {
+              console.warn('Error warming full module list options', error);
+            }
+          })();
         }
       } catch (error) {
-        console.error("Error fetching options", error);
+        console.error('Error fetching options', error);
       } finally {
-        if (isActive) setOptionsReady(true);
+        if (isActive) {
+          setOptionsReady(true);
+        }
       }
     };
 
-    fetchOptions();
+    applySnapshotToState(readModuleOptionSnapshot(resolvedModuleId));
+    void fetchOptions();
 
     return () => {
       isActive = false;
     };
-  }, [moduleConfig]);
-
-  // ✅ Fetch tags for all records
+  }, [hasCachedModuleOptions, moduleConfig, resolvedModuleId, visibleColumns]);
   useEffect(() => {
     if (!tagsField || !resolvedModuleId || accessibleRecordIds.length === 0) {
       setTagsMap({});
@@ -1209,38 +1107,44 @@ export const ModuleListRefine: React.FC<{
       okType: 'danger',
       okText: 'بله، حذف کن',
       cancelText: 'خیر',
-      onOk: () => {
-        deleteMany(
-          {
-            resource: resolvedModuleId!,
-            ids: selectedRowKeys as string[],
-            successNotification: false,
-            errorNotification: false,
-          },
-          {
-            onSuccess: () => {
-              setSelectedRowKeys([]);
-              showListMessage('success', 'رکوردهای انتخاب‌شده حذف شدند.');
-              tableQueryResult.refetch();
-            },
-            onError: (error: any) => {
-              showListMessage('error', toFaErrorMessage(error, 'حذف رکوردها ناموفق بود.'));
-            },
+      onOk: async () => {
+        if (!resolvedModuleId) return;
+        try {
+          if (isRecycleBinEnabledModule(resolvedModuleId)) {
+            await moveModuleRecordsToRecycleBin(resolvedModuleId, selectedRowKeys as string[]);
+          } else {
+            await new Promise<void>((resolve, reject) => {
+              deleteMany(
+                {
+                  resource: resolvedModuleId,
+                  ids: selectedRowKeys as string[],
+                  successNotification: false,
+                  errorNotification: false,
+                },
+                {
+                  onSuccess: () => resolve(),
+                  onError: (error: any) => reject(error),
+                }
+              );
+            });
           }
-        );
+          setSelectedRowKeys([]);
+          showListMessage('success', 'رکوردهای انتخاب‌شده حذف شدند.');
+          tableQueryResult.refetch();
+        } catch (error: any) {
+          showListMessage('error', toFaErrorMessage(error, 'حذف رکوردها ناموفق بود.'));
+        }
       }
     });
   };
 
   const handleBulkEditOpen = () => {
-      if (selectedRowKeys.length === 0) return;
-      if (selectedRowKeys.length === 1) {
-        setEditRecordId(String(selectedRowKeys[0]));
-        setIsBulkEditMode(false);
-      } else {
-        setEditRecordId(null);
-        setIsBulkEditMode(true);
-      }
+      const nextState = resolveModuleListBulkEditOpenState(
+        selectedRowKeys.map((key) => String(key))
+      );
+      if (!nextState.shouldOpen) return;
+      setEditRecordId(nextState.editRecordId);
+      setIsBulkEditMode(nextState.isBulkEditMode);
       setIsBulkEditOpen(true);
   };
 
@@ -1652,8 +1556,8 @@ export const ModuleListRefine: React.FC<{
     <div className="module-list-page box-border p-3 md:p-6 max-w-[1800px] mx-auto pb-24 md:pb-6 h-full min-h-0 flex flex-col overflow-hidden">
         <div className="flex flex-col gap-2 mb-4 shrink-0">
         {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0 shrink-0">
             <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
                 <span className="w-2 h-8 bg-leather-500 rounded-full inline-block shrink-0"></span>
                 <span className="truncate">{moduleConfig.titles.fa}</span>
@@ -1664,6 +1568,17 @@ export const ModuleListRefine: React.FC<{
                 style={{ backgroundColor: '#f0f0f0', color: '#666', boxShadow: 'none' }}
             />
             </div>
+
+            {canShowGoalCards ? (
+              <div className="order-last basis-full pt-2 min-w-0 md:order-none md:-mt-1 md:basis-auto md:pt-0 md:flex md:flex-[0_1_666px] md:items-start md:justify-start md:self-start xl:flex-[0_1_742px]">
+                <div className="w-full">
+                  <GoalProgressSlider
+                    moduleId={resolvedModuleId}
+                    placement="module_list"
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {selectedRowKeys.length === 0 && (
               <div className="flex items-center gap-2 shrink-0">
@@ -1692,14 +1607,6 @@ export const ModuleListRefine: React.FC<{
               </div>
             )}
         </div>
-
-        {canShowGoalCards ? (
-          <GoalProgressSlider
-            moduleId={resolvedModuleId}
-            placement="module_list"
-            className="mt-1"
-          />
-        ) : null}
 
         <Toolbar
           viewMode={viewMode}
@@ -2010,3 +1917,4 @@ export const ModuleListRefine: React.FC<{
 };
 
 export default ModuleListRefine;
+

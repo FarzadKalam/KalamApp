@@ -83,12 +83,6 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
-const toComparableValue = (value: any) => {
-  if (value === null || value === undefined || value === "") return undefined;
-  if (typeof value === "string") return value;
-  return JSON.stringify(value);
-};
-
 const buildSuggestedFields = (targetModuleId?: string | null): BuilderFieldValue[] => {
   const normalizedTargetModuleId = String(targetModuleId || "").trim();
   if (!normalizedTargetModuleId) return [];

@@ -270,3 +270,13 @@ export const fetchFormulaOptions = async (
 
   return formulaOptionsCache.promise;
 };
+
+export const primeReferenceData = async (
+  supabaseClient: any,
+  options?: { force?: boolean }
+) => {
+  await Promise.all([
+    fetchAssigneeDirectory(supabaseClient, options),
+    fetchFormulaOptions(supabaseClient, options),
+  ]);
+};

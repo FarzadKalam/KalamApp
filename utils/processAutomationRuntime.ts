@@ -9,6 +9,13 @@ import {
   ProcessAutomationRule,
 } from './processAutomationTypes';
 import { WorkflowCondition } from './workflowTypes';
+import {
+  getProcessTaskCustomFieldValuesFromRecurrence,
+  getProcessTaskCustomFieldsFromRecurrence,
+  mergeProcessTaskCustomFieldValues,
+  TASK_AUTOMATION_FIELD_PREFIX,
+  withProcessTaskCustomFieldValues,
+} from './processTaskCustomFields';
 
 type AutomationActor = {
   id?: string | null;
@@ -32,7 +39,6 @@ type CommunicationTarget = {
   baleChatIds: string[];
 };
 
-const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
 const isTaskAutomationFieldKey = (fieldKey?: string | null) =>
   String(fieldKey || '').startsWith(TASK_AUTOMATION_FIELD_PREFIX);
 const getTaskAutomationBaseFieldKey = (fieldKey?: string | null) =>
@@ -66,6 +72,11 @@ const buildAutomationActionRecord = (
 ) => {
   const recurrence = parseRecurrenceInfo(task?.recurrence_info);
   const processLinks = parseProcessLinkMap(recurrence?.process_links);
+  const customFields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
+  const customFieldValues = mergeProcessTaskCustomFieldValues(
+    customFields,
+    getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
+  );
   const sourceLink = resolveTaskSourceLink(task);
   const merged: Record<string, any> = {
     ...(sourceRecord || {}),
@@ -80,6 +91,13 @@ const buildAutomationActionRecord = (
     process_group_id: task?.process_group_id ?? parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id ?? '',
     process_links: processLinks,
   };
+  customFields.forEach((field) => {
+    const key = String(field?.key || '').trim();
+    if (!key) return;
+    const value = customFieldValues[key];
+    merged[key] = value;
+    merged[`${TASK_AUTOMATION_FIELD_PREFIX}${key}`] = value;
+  });
   if (merged.status === undefined) {
     merged.status = task?.status ?? '';
   }
@@ -169,7 +187,7 @@ const getSameProcessTasks = async (task: Record<string, any>) => {
 
   const { data, error } = await query.order('sort_order', { ascending: true });
   if (error) throw error;
-  return Array.isArray(data) ? data : [];
+  return Array.isArray(data) ? data.map((row: any) => withProcessTaskCustomFieldValues(row)) : [];
 };
 
 const fetchSourceRecord = async (task: Record<string, any>) => {
@@ -449,13 +467,13 @@ export const runProcessAutomationsForTaskStatusChange = async ({
 
     const sourceContext = await getSourceRecordContext();
     const previousTaskRecord = previousNormalizedStatus
-      ? { ...task, status: previousStatus }
+      ? withProcessTaskCustomFieldValues({ ...task, status: previousStatus })
       : null;
 
     return evaluateProcessAutomationConditions({
       conditionsAll: rule?.conditions_all || [],
       conditionsAny: rule?.conditions_any || [],
-      taskCurrentRecord: task,
+      taskCurrentRecord: withProcessTaskCustomFieldValues(task),
       taskPreviousRecord: previousTaskRecord,
       sourceCurrentRecord: buildSourceRecordWithProcessLinks(task, sourceContext?.record || null),
       sourcePreviousRecord: null,
@@ -472,7 +490,7 @@ export const runProcessAutomationsForTaskStatusChange = async ({
         if (!await evaluateProcessAutomationConditions({
           conditionsAll: rule?.conditions_all || [],
           conditionsAny: rule?.conditions_any || [],
-          taskCurrentRecord: targetTask,
+          taskCurrentRecord: withProcessTaskCustomFieldValues(targetTask),
           taskPreviousRecord: null,
           sourceCurrentRecord: buildSourceRecordWithProcessLinks(targetTask, sourceContext?.record || null),
           sourcePreviousRecord: null,
@@ -492,6 +510,30 @@ export const runProcessAutomationsForTaskStatusChange = async ({
 
         for (const action of actions) {
           if (String(action?.type || '') === 'send_note') {
+            const actionRecipientFields = Array.isArray((action as any)?.config?.recipient_fields)
+              ? (action as any).config.recipient_fields
+              : [];
+            const directNoteTarget = actionRecipientFields.reduce((acc: MentionTarget, recipientField: any) => {
+              const rawRecipientField = String(recipientField || '').trim();
+              if (!rawRecipientField) return acc;
+              const resolvedValues = rawRecipientField.startsWith('user_') || rawRecipientField.startsWith('role_')
+                ? [rawRecipientField]
+                : (Array.isArray(actionRecord?.[rawRecipientField])
+                    ? actionRecord[rawRecipientField]
+                    : [actionRecord?.[rawRecipientField]]);
+              resolvedValues.forEach((resolvedValue: any) => {
+                const combo = String(resolvedValue || '').trim();
+                if (combo.startsWith('user_')) acc.userIds.push(combo.slice(5));
+                if (combo.startsWith('role_')) acc.roleIds.push(combo.slice(5));
+              });
+              return acc;
+            }, { userIds: [], roleIds: [] });
+            const noteTarget = (
+              directNoteTarget.userIds.length > 0
+              || directNoteTarget.roleIds.length > 0
+            )
+              ? mergeMentionTargets(directNoteTarget)
+              : target;
             await insertAutomationNote(
               targetTask,
               {
@@ -499,7 +541,7 @@ export const runProcessAutomationsForTaskStatusChange = async ({
                 actions: [action],
                 note_text: String(action?.config?.note_text || rule?.note_text || ''),
               },
-              target,
+              noteTarget,
               actionRecord,
               currentUser
             );

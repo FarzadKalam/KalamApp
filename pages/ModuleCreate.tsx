@@ -4,6 +4,7 @@ import { MODULES } from "../moduleRegistry";
 import SmartForm from "../components/SmartForm";
 import { Result, Spin } from "antd";
 import { supabase } from "../supabaseClient";
+import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from "../utils/processTaskCustomFields";
 import { applyInvoiceFinalizationInventory } from "../utils/invoiceInventoryWorkflow";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
@@ -30,6 +31,9 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
     wage: Number(stage?.wage || 0),
     metadata: {
       ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+      [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
+        stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
+      ),
       weight: Number(stage?.weight || stage?.metadata?.weight || 0),
       duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
       duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',

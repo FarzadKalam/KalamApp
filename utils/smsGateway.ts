@@ -21,12 +21,15 @@ export type SmsProviderResult = {
   recipient: string;
   raw?: string;
   result?: string;
+  method?: string;
 };
 
 export type SmsGatewaySendResult = {
   success?: boolean;
   sent?: number;
   provider_results?: SmsProviderResult[];
+  provider_method?: string;
+  provider_attempts?: Array<{ method: string; success: boolean; error?: string }>;
   build?: string;
 };
 
@@ -251,8 +254,19 @@ export const sendSmsViaGateway = async ({
 
   try {
     return await invokeSmsFunction(recipients, messageText, overrideSettings);
-  } catch (edgeError) {
+  } catch (edgeError: any) {
     if (!allowDirectFallback) throw edgeError;
+    const rawMessage = String(edgeError?.message || edgeError || '').toLowerCase();
+    const shouldFallbackDirect =
+      rawMessage.includes('failed to fetch') ||
+      rawMessage.includes('network') ||
+      rawMessage.includes('fetcherror') ||
+      rawMessage.includes('functionsfetcherror') ||
+      rawMessage.includes('gateway timeout') ||
+      rawMessage.includes('http 502') ||
+      rawMessage.includes('http 503') ||
+      rawMessage.includes('http 504');
+    if (!shouldFallbackDirect) throw edgeError;
   }
 
   const smsSettings = overrideSettings && Object.keys(overrideSettings).length > 0

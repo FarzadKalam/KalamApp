@@ -435,6 +435,14 @@ const ConnectionsTab: React.FC = () => {
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
+      const currentSmsValues = {
+        ...(form.getFieldValue('sms') || {}),
+        ...(values.sms || {}),
+      };
+      const currentPortalValues = {
+        ...(form.getFieldValue('portal') || {}),
+        ...(values.portal || {}),
+      };
       const ensuredTelegramSecret = String(values.telegram_bot?.webhook_secret || '').trim() || createWebhookSecret('telegram');
       const ensuredBaleSecret = String(values.bale_bot?.webhook_secret || '').trim() || createWebhookSecret('bale');
       const ensuredRubikaSecret = String(values.rubika_bot?.webhook_secret || '').trim() || createWebhookSecret('rubika');
@@ -451,7 +459,7 @@ const ConnectionsTab: React.FC = () => {
           id: rowIds.sms,
           connection_type: 'sms',
           provider: values.sms?.provider || 'meli_payamak',
-          settings: buildSmsOverrideSettings(values.sms || {}),
+          settings: buildSmsOverrideSettings(currentSmsValues),
           is_active: values.sms?.is_active !== false,
         },
         {
@@ -521,13 +529,13 @@ const ConnectionsTab: React.FC = () => {
           connection_type: 'portal',
           provider: values.portal?.provider || 'customer_portal',
           settings: {
-            portal_title: values.portal?.portal_title || '',
-            portal_slug: values.portal?.portal_slug || '',
-            login_mode: values.portal?.login_mode || 'otp',
-            base_url: values.portal?.base_url || '',
-            support_email: values.portal?.support_email || '',
-            allow_file_download: values.portal?.allow_file_download !== false,
-            allow_ticketing: values.portal?.allow_ticketing === true,
+            portal_title: currentPortalValues.portal_title || '',
+            portal_slug: currentPortalValues.portal_slug || '',
+            login_mode: currentPortalValues.login_mode || 'otp',
+            base_url: currentPortalValues.base_url || '',
+            support_email: currentPortalValues.support_email || '',
+            allow_file_download: currentPortalValues.allow_file_download !== false,
+            allow_ticketing: currentPortalValues.allow_ticketing === true,
           },
           is_active: values.portal?.is_active === true,
         },
@@ -616,10 +624,11 @@ const ConnectionsTab: React.FC = () => {
       });
       const providerResult = Array.isArray(result?.provider_results) ? result.provider_results[0] : null;
       const providerToken = String(providerResult?.result || '').trim();
+      const providerMethod = String(result?.provider_method || providerResult?.method || '').trim();
       message.info(
         providerToken
-          ? `Ø®Ø±ÙˆØ¬ÛŒ provider: ${providerToken}. Ø§ÛŒÙ† Ù¾Ø§Ø³Ø® ÙÙ‚Ø· Ø«Ø¨Øª Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø±Ø§ Ù†Ø´Ø§Ù† Ù…ÛŒâ€ŒØ¯Ù‡Ø¯ Ùˆ Ø¨Ù‡ Ù…Ø¹Ù†ÛŒ ØªØ§ÛŒÛŒØ¯ ØªØ­ÙˆÛŒÙ„ Ù†Ù‡Ø§ÛŒÛŒ Ø¨Ù‡ Ú¯ÙˆØ´ÛŒ Ù†ÛŒØ³Øª.`
-          : 'Ø¯Ø±Ø®ÙˆØ§Ø³Øª Ø§Ø±Ø³Ø§Ù„ Ø¯Ø± provider Ø«Ø¨Øª Ø´Ø¯ØŒ Ø§Ù…Ø§ ØªØ­ÙˆÛŒÙ„ Ù†Ù‡Ø§ÛŒÛŒ Ø¨Ù‡ Ú¯ÙˆØ´ÛŒ Ø¯Ø± Ø§ÛŒÙ† Ù…Ø³ÛŒØ± ØªØ§ÛŒÛŒØ¯ Ù†Ù…ÛŒâ€ŒØ´ÙˆØ¯.'
+          ? `${providerMethod ? `روش ارسال: ${providerMethod}. ` : ''}شناسه ثبت درخواست provider: ${providerToken}. این پاسخ فقط ثبت درخواست در سامانه پیامک را نشان می‌دهد و به معنی تایید تحویل نهایی به گوشی نیست.`
+          : 'درخواست ارسال در provider ثبت شد، اما شناسه‌ای برای نمایش برنگشت. تحویل نهایی به گوشی از این مسیر تایید نمی‌شود.'
       );
       message.success('پیامک تست ارسال شد (درخواست ثبت شد).');
     } catch (err: any) {
@@ -944,9 +953,6 @@ const ConnectionsTab: React.FC = () => {
                   <Form.Item label="فعال" name={['sms', 'is_active']} valuePropName="checked">
                     <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
                   </Form.Item>
-                  <Form.Item label="OTP ورود" name={['sms', 'otp_login_enabled']} valuePropName="checked">
-                    <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
-                  </Form.Item>
 
                   <Form.Item label="نام کاربری ملی پیامک" name={['sms', 'username']}>
                     <Input placeholder="معمولا شماره موبایل پنل" />
@@ -963,14 +969,6 @@ const ConnectionsTab: React.FC = () => {
                   </Form.Item>
                   <Form.Item label="کد الگو (اختیاری)" name={['sms', 'body_id']}>
                     <Input placeholder="برای Pattern/Base Number در صورت نیاز" />
-                  </Form.Item>
-                  <Form.Item label="ارسال OTP" name={['sms', 'otp_delivery_mode']}>
-                    <Select
-                      options={[
-                        { label: 'فقط پیامک', value: 'sms_only' },
-                        { label: 'پیامک + آینه بله (بعدا)', value: 'sms_and_bale' },
-                      ]}
-                    />
                   </Form.Item>
                 </div>
 
@@ -1295,14 +1293,6 @@ const ConnectionsTab: React.FC = () => {
 
                     <Form.Item label="Portal Slug" name={['portal', 'portal_slug']}>
                       <Input placeholder="example" />
-                    </Form.Item>
-                    <Form.Item label="حالت ورود" name={['portal', 'login_mode']}>
-                      <Select
-                        options={[
-                          { label: 'رمز یکبار مصرف', value: 'otp' },
-                          { label: 'رمز عبور', value: 'password' },
-                        ]}
-                      />
                     </Form.Item>
                     <Form.Item label="ایمیل پشتیبانی" name={['portal', 'support_email']}>
                       <Input />

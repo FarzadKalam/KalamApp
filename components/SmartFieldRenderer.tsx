@@ -52,7 +52,7 @@ import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
-import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { normalizeProcessTargetModuleIds } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions } from '../utils/taskMeta';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
@@ -432,7 +432,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const fieldOptions = (
     ((moduleId === 'process_templates' && (field?.key === 'module_id' || field?.key === 'module_ids'))
       || (moduleId === 'process_runs' && field?.key === 'module_id'))
-      ? getProjectModuleOptions()
+      ? getProcessTemplateModuleOptions()
       : moduleId === 'tasks' && field?.key === 'related_to_module'
         ? getTaskModuleOptions()
       : (options || field?.options || [])

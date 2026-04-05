@@ -13,7 +13,15 @@ export type FiscalYearSnapshot = {
   is_active?: boolean | null;
 };
 
-const toJalali = (value?: any) => dayjs(value || new Date()).calendar('jalali');
+export type GoalExplicitRangeInput = {
+  startDate?: string | null;
+  endDate?: string | null;
+};
+
+const toGoalDate = (value?: any) => {
+  const parsed = dayjs(value || new Date());
+  return parsed.isValid() ? parsed : dayjs();
+};
 
 const clampToFiscalYear = (
   start: dayjs.Dayjs,
@@ -24,12 +32,50 @@ const clampToFiscalYear = (
     return { start, end };
   }
 
-  const fiscalStart = toJalali(fiscalYear.start_date).startOf('day');
-  const fiscalEnd = toJalali(fiscalYear.end_date).endOf('day');
-  return {
+  const fiscalStart = toGoalDate(fiscalYear.start_date).startOf('day');
+  const fiscalEnd = toGoalDate(fiscalYear.end_date).endOf('day');
+  if (!fiscalStart.isValid() || !fiscalEnd.isValid() || !fiscalEnd.isAfter(fiscalStart)) {
+    return { start, end };
+  }
+
+  const clamped = {
     start: start.isBefore(fiscalStart) ? fiscalStart : start,
     end: end.isAfter(fiscalEnd) ? fiscalEnd : end,
   };
+
+  if (clamped.end.isBefore(clamped.start)) {
+    return { start, end };
+  }
+
+  if (
+    end.diff(start, 'day') >= 1 &&
+    clamped.end.diff(clamped.start, 'day') < 1
+  ) {
+    return { start, end };
+  }
+
+  return clamped;
+};
+
+const normalizeGoalRangeOrder = (start: dayjs.Dayjs, end: dayjs.Dayjs) => {
+  if (end.isBefore(start)) {
+    return {
+      start: end.startOf('day'),
+      end: start.endOf('day'),
+    };
+  }
+
+  return {
+    start: start.startOf('day'),
+    end: end.endOf('day'),
+  };
+};
+
+const parseExplicitGoalDate = (value?: string | null, edge: 'start' | 'end' = 'start') => {
+  if (!value) return null;
+  const parsed = toGoalDate(value);
+  if (!parsed.isValid()) return null;
+  return edge === 'end' ? parsed.endOf('day') : parsed.startOf('day');
 };
 
 const buildFiscalSegmentRange = (
@@ -37,10 +83,14 @@ const buildFiscalSegmentRange = (
   fiscalYear: FiscalYearSnapshot,
   segmentMonths: 3 | 6
 ) => {
-  const fiscalStart = toJalali(fiscalYear.start_date).startOf('day');
-  const fiscalEnd = toJalali(fiscalYear.end_date).endOf('day');
+  const fiscalStart = toGoalDate(fiscalYear.start_date).startOf('day');
+  const fiscalEnd = toGoalDate(fiscalYear.end_date).endOf('day');
+  const maxMonthDelta = Math.max(
+    0,
+    fiscalEnd.startOf('month').diff(fiscalStart.startOf('month'), 'month')
+  );
   const rawMonthDelta = now.startOf('month').diff(fiscalStart.startOf('month'), 'month');
-  const monthDelta = Math.max(0, rawMonthDelta);
+  const monthDelta = Math.min(Math.max(0, rawMonthDelta), maxMonthDelta);
   const segmentIndex = Math.floor(monthDelta / segmentMonths);
   const start = fiscalStart.add(segmentIndex * segmentMonths, 'month').startOf('day');
   const end = start.add(segmentMonths, 'month').subtract(1, 'day').endOf('day');
@@ -52,12 +102,12 @@ export const buildGoalCurrentRange = (
   fiscalYear?: FiscalYearSnapshot | null,
   referenceDate?: string | Date | null
 ) => {
-  const now = toJalali(referenceDate || new Date());
+  const now = toGoalDate(referenceDate || new Date());
 
   if (unit === 'year' && fiscalYear?.start_date && fiscalYear?.end_date) {
     return {
-      start: toJalali(fiscalYear.start_date).startOf('day'),
-      end: toJalali(fiscalYear.end_date).endOf('day'),
+      start: toGoalDate(fiscalYear.start_date).startOf('day'),
+      end: toGoalDate(fiscalYear.end_date).endOf('day'),
     };
   }
 
@@ -91,6 +141,42 @@ export const buildGoalCurrentRange = (
   }
 
   return clampToFiscalYear(start, end, fiscalYear);
+};
+
+export const buildGoalExplicitRange = (
+  rangeInput?: GoalExplicitRangeInput | null,
+  referenceDate?: string | Date | null
+) => {
+  const explicitStart = parseExplicitGoalDate(rangeInput?.startDate, 'start');
+  const explicitEnd = parseExplicitGoalDate(rangeInput?.endDate, 'end');
+
+  if (!explicitStart && !explicitEnd) {
+    return null;
+  }
+
+  const fallback = toGoalDate(referenceDate || new Date());
+  const start = explicitStart || fallback.startOf('day');
+  const end = explicitEnd || fallback.endOf('day');
+  return normalizeGoalRangeOrder(start, end);
+};
+
+export const clampGoalRangeToBounds = (
+  range: { start: dayjs.Dayjs; end: dayjs.Dayjs },
+  bounds?: { start: dayjs.Dayjs; end: dayjs.Dayjs } | null
+) => {
+  if (!bounds) return range;
+
+  const start = range.start.isBefore(bounds.start) ? bounds.start : range.start;
+  const end = range.end.isAfter(bounds.end) ? bounds.end : range.end;
+
+  if (end.isBefore(start)) {
+    return {
+      start: bounds.start,
+      end: bounds.end,
+    };
+  }
+
+  return normalizeGoalRangeOrder(start, end);
 };
 
 export const buildGoalRangeSnapshot = (start: dayjs.Dayjs, end: dayjs.Dayjs): GoalDateRange => ({

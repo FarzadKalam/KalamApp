@@ -348,6 +348,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
             {data.invoiceItems && Array.isArray(data.invoiceItems) && data.invoiceItems.length > 0 ? (
               data.invoiceItems.slice(0, isMobilePrint ? 4 : 6).map((item: any, idx: number) => {
                 const productLabel = getInvoiceItemProductLabel(item);
+                const deliveryTime = String(item?.delivery_time || '').trim();
                 return (
                   <tr key={idx} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ 
@@ -357,7 +358,12 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
                     wordBreak: 'break-word',
                     fontSize: isMobilePrint ? '6px' : '7px'
                   }}>
-                    {productLabel}
+                    <div>{productLabel}</div>
+                    {deliveryTime ? (
+                      <div style={{ marginTop: '2px', color: '#6b7280', fontSize: isMobilePrint ? '5.5px' : '6px', lineHeight: 1.6 }}>
+                        زمان تحویل: {deliveryTime}
+                      </div>
+                    ) : null}
                   </td>
                   <td style={{ 
                     padding: isMobilePrint ? '1px 2px' : '3px 4px', 

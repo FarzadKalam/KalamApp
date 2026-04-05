@@ -25,6 +25,15 @@ export const projectsModule: ModuleDefinition = {
   defaultViewMode: ViewMode.LIST,
   fields: [
     {
+      key: 'image_url',
+      labels: { fa: 'تصویر', en: 'Image' },
+      type: FieldType.IMAGE,
+      location: FieldLocation.HEADER,
+      order: 0,
+      isTableColumn: true,
+      nature: FieldNature.PREDEFINED,
+    },
+    {
       key: 'name',
       labels: { fa: 'عنوان پروژه', en: 'Project Name' },
       type: FieldType.TEXT,
@@ -52,6 +61,7 @@ export const projectsModule: ModuleDefinition = {
       location: FieldLocation.HEADER,
       order: 3,
       defaultValue: 'draft',
+      validation: { required: true },
       options: [
         { label: 'پیش‌نویس', value: 'draft', color: 'gray' },
         { label: 'برنامه‌ریزی', value: 'planning', color: 'blue' },
@@ -109,17 +119,6 @@ export const projectsModule: ModuleDefinition = {
       order: 1.2,
       relationConfig: { targetModule: 'purchase_invoices', targetField: 'name' },
       nature: FieldNature.STANDARD,
-    },
-    {
-      key: 'owner_id',
-      labels: { fa: 'مدیر پروژه', en: 'Owner' },
-      type: FieldType.RELATION,
-      location: FieldLocation.BLOCK,
-      blockId: 'base_info',
-      order: 2,
-      relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
-      nature: FieldNature.STANDARD,
-      isTableColumn: true,
     },
     {
       key: 'start_date',
@@ -207,7 +206,7 @@ export const projectsModule: ModuleDefinition = {
       type: FieldType.LOCATION,
       location: FieldLocation.BLOCK,
       blockId: 'base_info',
-      order: 3,
+      order: 2,
       nature: FieldNature.STANDARD,
     },
     {
@@ -216,7 +215,7 @@ export const projectsModule: ModuleDefinition = {
       type: FieldType.LONG_TEXT,
       location: FieldLocation.BLOCK,
       blockId: 'base_info',
-      order: 4,
+      order: 3,
       nature: FieldNature.STANDARD,
     },
   ],

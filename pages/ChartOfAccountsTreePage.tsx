@@ -18,6 +18,7 @@ import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 
 type AccountRow = {
   id: string;
@@ -226,8 +227,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
 
   const handleDeleteCashBox = useCallback(async (id: string) => {
     try {
-      const { error } = await supabase.from('cash_boxes').delete().eq('id', id);
-      if (error) throw error;
+      await moveModuleRecordsToRecycleBin('cash_boxes', [id]);
       message.success('صندوق با موفقیت حذف شد');
       load();
     } catch (err: any) {
@@ -237,8 +237,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
 
   const handleDeleteBankAccount = useCallback(async (id: string) => {
     try {
-      const { error } = await supabase.from('bank_accounts').delete().eq('id', id);
-      if (error) throw error;
+      await moveModuleRecordsToRecycleBin('bank_accounts', [id]);
       message.success('حساب بانکی با موفقیت حذف شد');
       load();
     } catch (err: any) {

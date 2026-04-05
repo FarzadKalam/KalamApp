@@ -51,13 +51,15 @@ import { getCachedAuthUser } from '../utils/sessionCache';
 import { supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { syncRecordTags } from '../utils/recordTags';
-import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
-import { doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
+import { createProcessLinkedFieldKey, doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
 import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
+import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -78,6 +80,16 @@ const toFaAccountingSyncError = (raw: unknown): string => {
   }
   return text;
 };
+
+const PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS = new Set([
+  'projects',
+  'tasks',
+  'process_templates',
+  'process_runs',
+  'customers',
+  'invoices',
+  'purchase_invoices',
+]);
 
 const buildAccountingEntryChoices = (entries: ResolvedJournalEntry[]): AccountingEntryChoice[] => {
   const grouped = new Map<string, AccountingEntryChoice>();
@@ -228,6 +240,18 @@ const ModuleShow: React.FC = () => {
   const [quickProjectForm] = Form.useForm();
   const quickProjectTemplateId = Form.useWatch('process_template_id', quickProjectForm);
   const quickProjectCustomerId = Form.useWatch('customer_id', quickProjectForm);
+  const quickProjectDisplayModuleIds = useMemo(
+    () => Array.from(new Set([
+      ...quickProjectTargetModuleIds,
+      ...(moduleId === 'invoices' ? ['invoices'] : []),
+      ...(moduleId === 'purchase_invoices' ? ['purchase_invoices'] : []),
+      ...(String(quickProjectCustomerId || '').trim() ? ['customers'] : []),
+    ])).filter((targetModuleId) =>
+      !!MODULES[targetModuleId]
+      && !['projects', 'tasks', 'process_templates', 'process_runs'].includes(targetModuleId)
+    ),
+    [moduleId, quickProjectCustomerId, quickProjectTargetModuleIds]
+  );
   const startDraftStorageKey = useMemo(() => (id ? `production-start-draft:${id}` : null), [id]);
   const [canIssueAccountingEntry, setCanIssueAccountingEntry] = useState(true);
     const fetchProductionQuantity = useCallback(async () => {
@@ -1477,6 +1501,54 @@ const ModuleShow: React.FC = () => {
         };
       });
 
+      if (moduleId === 'projects' && processDraftFieldKey) {
+        const draftStages = Array.isArray(normalizedRecordData?.[processDraftFieldKey])
+          ? normalizedRecordData[processDraftFieldKey]
+          : [];
+        const targetModuleIds = normalizeProcessTargetModuleIds(
+          draftStages.flatMap((stage: any) => (
+            Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []
+          )),
+          ''
+        );
+        const linkedRecordMap = draftStages.reduce<Record<string, string>>((acc, stage: any) => {
+          const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+            ? stage.process_link_map
+            : {};
+          Object.entries(rawMap).forEach(([targetModuleId, recordId]) => {
+            const normalizedTargetModuleId = String(targetModuleId || '').trim();
+            const normalizedRecordId = String(recordId || '').trim();
+            if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
+              acc[normalizedTargetModuleId] = normalizedRecordId;
+            }
+          });
+          return acc;
+        }, {});
+
+        targetModuleIds
+          .filter((targetModuleId) => !!MODULES[targetModuleId] && !PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId))
+          .forEach((targetModuleId) => {
+            const fieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
+            const exactId = linkedRecordMap[targetModuleId];
+            relationRequests.push((async () => {
+              const syntheticField = {
+                key: fieldKey,
+                type: FieldType.RELATION,
+                relationConfig: { targetModule: targetModuleId },
+              } as any;
+              const options = await fetchRelationOptionsForField(supabase, syntheticField, {
+                exactId: exactId || null,
+                limit: exactId ? 1 : 200,
+              });
+              return {
+                keys: [fieldKey],
+                options,
+                relationConfig: syntheticField.relationConfig,
+              };
+            })());
+          });
+      }
+
       (moduleConfig.blocks || []).forEach((block: any) => {
         const blockRows = Array.isArray(normalizedRecordData?.[block.id]) ? normalizedRecordData[block.id] : [];
         if (!block.tableColumns || blockRows.length === 0) return;
@@ -1605,7 +1677,7 @@ const ModuleShow: React.FC = () => {
       if (requestId && activeRecordRequestRef.current !== requestId) return;
       setOptionsReady(true);
     }
-  }, [moduleConfig]);
+  }, [moduleConfig, moduleId, processDraftFieldKey]);
 
   useEffect(() => {
     if (data) {
@@ -1924,7 +1996,24 @@ const ModuleShow: React.FC = () => {
   }, [id, moduleId, msg, modal, processDraftFieldKey]);
 
   const handleDelete = () => {
-    modal.confirm({ title: 'حذف رکورد', okType: 'danger', onOk: async () => { await supabase.from(moduleId).delete().eq('id', id); navigate(`/${moduleId}`); } });
+    modal.confirm({
+      title: 'حذف رکورد',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          if (isRecycleBinEnabledModule(moduleId)) {
+            await moveModuleRecordsToRecycleBin(moduleId, [String(id)]);
+          } else {
+            const { error } = await supabase.from(moduleConfig?.table || moduleId).delete().eq('id', id);
+            if (error) throw error;
+          }
+          msg.success('رکورد حذف شد');
+          navigate(`/${moduleId}`);
+        } catch (error: any) {
+          msg.error(toFaErrorMessage(error, 'خطا در حذف رکورد'));
+        }
+      },
+    });
   };
 
   const handleCopyRecord = useCallback(() => {
@@ -2105,8 +2194,13 @@ const ModuleShow: React.FC = () => {
         setQuickProjectLinkedRecords(inferredLinks);
 
         await Promise.all(
-          targetModuleIds
-            .filter((targetModuleId) => targetModuleId !== 'projects')
+          Array.from(new Set([
+            ...targetModuleIds,
+            ...(moduleId === 'invoices' ? ['invoices'] : []),
+            ...(moduleId === 'purchase_invoices' ? ['purchase_invoices'] : []),
+            ...(String(quickProjectCustomerId || '').trim() ? ['customers'] : []),
+          ]))
+            .filter((targetModuleId) => !['projects', 'tasks', 'process_templates', 'process_runs'].includes(targetModuleId))
             .map((targetModuleId) =>
               loadQuickProjectRelationOptions(targetModuleId, inferredLinks[targetModuleId] || null)
             )
@@ -2174,11 +2268,11 @@ const ModuleShow: React.FC = () => {
       const payload: Record<string, any> = {
         name: String(values?.name || '').trim(),
         status: 'draft',
-        customer_id: values?.customer_id || null,
+        customer_id: values?.customer_id || quickProjectLinkedRecords.customers || null,
         process_template_id: selectedTemplateId,
         execution_process_draft: executionDraft,
-        source_invoice_id: moduleId === 'invoices' ? id : null,
-        source_purchase_invoice_id: moduleId === 'purchase_invoices' ? id : null,
+        source_invoice_id: moduleId === 'invoices' ? id : (quickProjectLinkedRecords.invoices || null),
+        source_purchase_invoice_id: moduleId === 'purchase_invoices' ? id : (quickProjectLinkedRecords.purchase_invoices || null),
         created_by: userId,
       };
       if (!payload.name) {
@@ -2674,6 +2768,9 @@ const ModuleShow: React.FC = () => {
         automation_rules: Array.isArray(stage?.automation_rules)
           ? stage.automation_rules
           : (Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : []),
+        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
+          stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
+        ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -2905,7 +3002,7 @@ const ModuleShow: React.FC = () => {
           (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
           || (moduleId === 'process_runs' && field.key === 'module_id')
         )
-          ? getProjectModuleOptions()
+          ? getProcessTemplateModuleOptions()
           : (field.options || []);
       // اگر MULTI_SELECT است و آرایه است
       if (field.type === FieldType.MULTI_SELECT && Array.isArray(value)) {
@@ -3680,13 +3777,80 @@ const ModuleShow: React.FC = () => {
   const handleRecordPatch = useCallback((patch: Record<string, any>) => {
     setData((prev: any) => ({ ...(prev || {}), ...patch }));
   }, []);
+  const projectProcessLinkedFields = useMemo(() => {
+    if (moduleId !== 'projects' || !processDraftFieldKey || !data) return [] as Array<{
+      field: any;
+      value?: string;
+    }>;
+    const draftStages = Array.isArray(data?.[processDraftFieldKey]) ? data[processDraftFieldKey] : [];
+    const targetModuleIds = normalizeProcessTargetModuleIds(
+      draftStages.flatMap((stage: any) => (
+        Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []
+      )),
+      ''
+    );
+    const linkedRecordMap = draftStages.reduce<Record<string, string>>((acc, stage: any) => {
+      const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+        ? stage.process_link_map
+        : {};
+      Object.entries(rawMap).forEach(([targetModuleId, recordId]) => {
+        const normalizedTargetModuleId = String(targetModuleId || '').trim();
+        const normalizedRecordId = String(recordId || '').trim();
+        if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
+          acc[normalizedTargetModuleId] = normalizedRecordId;
+        }
+      });
+      return acc;
+    }, {});
+
+    return targetModuleIds
+      .filter((targetModuleId) => !!MODULES[targetModuleId] && !PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId))
+      .map((targetModuleId) => {
+        const fieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
+        return {
+          field: {
+            key: fieldKey,
+            labels: {
+              fa: `${MODULES[targetModuleId]?.titles?.faSingular || MODULES[targetModuleId]?.titles?.fa || targetModuleId} مرتبط`,
+              en: `Linked ${targetModuleId}`,
+            },
+            type: FieldType.RELATION,
+            relationConfig: { targetModule: targetModuleId },
+            nature: 'standard',
+          },
+          value: String(linkedRecordMap[targetModuleId] || '').trim() || undefined,
+        };
+      });
+  }, [data, moduleId, processDraftFieldKey]);
   const extraBlockContent = useMemo<Record<string, React.ReactNode>>(() => {
     const content: Record<string, React.ReactNode> = {};
     if (moduleId === 'customers' && id) {
       content.financial_stats = <CustomerFinancialOverviewPanel customerId={id} customerData={data} />;
     }
+    if (moduleId === 'projects' && projectProcessLinkedFields.length > 0) {
+      content.process = (
+        <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-4">
+          <div className="mb-3 text-sm font-semibold text-[rgba(var(--brand-800-rgb),1)]">رکوردهای مرتبط فرآیند</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {projectProcessLinkedFields.map(({ field, value }) => (
+              <div key={field.key}>
+                <SmartFieldRenderer
+                  field={field}
+                  value={value}
+                  onChange={() => {}}
+                  forceEditMode={false}
+                  options={relationOptions[field.key]}
+                  moduleId={moduleId}
+                  allValues={data}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
     return content;
-  }, [data, id, moduleId]);
+  }, [data, id, moduleId, projectProcessLinkedFields, relationOptions]);
 
   if (accessDenied) {
     return (
@@ -3718,7 +3882,7 @@ const ModuleShow: React.FC = () => {
       if (
         (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
         || (moduleId === 'process_runs' && field.key === 'module_id')
-      ) options = getProjectModuleOptions();
+      ) options = getProcessTemplateModuleOptions();
       else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
       else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
       else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
@@ -3768,7 +3932,7 @@ const ModuleShow: React.FC = () => {
     if (
       (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
       || (moduleId === 'process_runs' && field.key === 'module_id')
-    ) options = getProjectModuleOptions();
+    ) options = getProcessTemplateModuleOptions();
     else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
@@ -4141,16 +4305,14 @@ const ModuleShow: React.FC = () => {
             />
           </Form.Item>
 
-          {quickProjectTargetModuleIds.length > 0 ? (
+          {String(quickProjectTemplateId || '').trim() && quickProjectDisplayModuleIds.length > 0 ? (
             <div className="mb-4 rounded-xl border border-leather-200 bg-leather-50 px-3 py-3">
               <div className="text-sm font-semibold text-leather-800">رکوردهای مرتبط فرآیند</div>
               <div className="mt-1 text-xs text-leather-700">
                 رکوردهای شناخته‌شده به‌صورت خودکار پر شده‌اند. برای ماژول‌های دیگر در صورت نیاز رکورد انتخاب کنید.
               </div>
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                {quickProjectTargetModuleIds
-                  .filter((targetModuleId) => targetModuleId !== 'projects')
-                  .map((targetModuleId) => (
+                {quickProjectDisplayModuleIds.map((targetModuleId) => (
                     <div key={targetModuleId}>
                       <div className="mb-1 text-xs text-gray-500">{MODULES[targetModuleId]?.titles?.fa || targetModuleId}</div>
                       <Select

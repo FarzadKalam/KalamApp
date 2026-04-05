@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Refine, Authenticated } from "@refinedev/core";
 import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
@@ -10,10 +10,6 @@ import faIR from "antd/locale/fa_IR";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/Settings/SettingsPage";
 import { JalaliLocaleListener } from "antd-jalali";
-
-// ❌ تمام ایمپورت‌ها و تنظیمات dayjs را از اینجا حذف کردیم
-// چون الان در initDayjs.ts و index.tsx مدیریت می‌شوند.
-
 import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
 import Layout from "./components/Layout";
@@ -46,6 +42,7 @@ import ReportBuilderPage from "./pages/ReportBuilderPage";
 import ReportViewerPage from "./pages/ReportViewerPage";
 import WorkSchedulesPage from "./pages/WorkSchedulesPage";
 import HrQuickRequestPage from "./pages/HrQuickRequestPage";
+import RecycleBinPage from "./pages/RecycleBinPage";
 import {
   BRANDING_APPLIED_EVENT,
   BRANDING_UPDATED_EVENT,
@@ -63,8 +60,15 @@ import {
   readCachedBranding,
 } from "./utils/brandingRuntime";
 import { clearCurrentUserRoleContextCache } from "./utils/permissions";
-import { clearReferenceDataCache } from "./utils/referenceData";
+import { clearReferenceDataCache, primeReferenceData } from "./utils/referenceData";
 import { clearSessionBootstrapCache, primeSessionBootstrap } from "./utils/sessionCache";
+import {
+  applyModuleSettingsStoreToRegistry,
+  loadAndApplyModuleSettings,
+  MODULE_SETTINGS_UPDATED_EVENT,
+} from "./utils/moduleSettingsRuntime";
+
+// تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
@@ -91,13 +95,15 @@ const resolvePopupContainer = (triggerNode?: HTMLElement) => {
 function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
   const [branding, setBranding] = useState<BrandingConfig>(getInitialBranding);
+  const [moduleSettingsVersion, setModuleSettingsVersion] = useState(0);
+  const [moduleSettingsReady, setModuleSettingsReady] = useState(false);
   const authLifecycleRef = useRef<{ initialized: boolean; userId: string | null }>({
     initialized: false,
     userId: null,
   });
 
   useEffect(() => {
-    document.body.style.fontFamily = 'Vazirmatn, sans-serif';
+    document.body.style.fontFamily = "Vazirmatn, sans-serif";
   }, []);
 
   useEffect(() => {
@@ -121,7 +127,19 @@ function App() {
       persistRuntimeBranding(runtimeBranding);
       setBranding(runtimeBranding.branding);
     } catch (error) {
-      console.warn('Could not load branding settings', error);
+      console.warn("Could not load branding settings", error);
+    }
+  }, []);
+
+  const loadModuleSettings = useCallback(async () => {
+    try {
+      await loadAndApplyModuleSettings(supabase);
+    } catch (error) {
+      console.warn("Could not load module settings", error);
+      applyModuleSettingsStoreToRegistry(null);
+    } finally {
+      setModuleSettingsVersion((prev) => prev + 1);
+      setModuleSettingsReady(true);
     }
   }, []);
 
@@ -136,6 +154,48 @@ function App() {
       window.removeEventListener(BRANDING_UPDATED_EVENT, handleBrandingUpdated as EventListener);
     };
   }, [loadBranding]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const bootstrapModuleSettings = async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session?.user?.id) {
+          await loadModuleSettings();
+        } else {
+          applyModuleSettingsStoreToRegistry(null);
+          if (isMounted) {
+            setModuleSettingsVersion((prev) => prev + 1);
+            setModuleSettingsReady(true);
+          }
+        }
+      } catch {
+        applyModuleSettingsStoreToRegistry(null);
+        if (isMounted) {
+          setModuleSettingsVersion((prev) => prev + 1);
+          setModuleSettingsReady(true);
+        }
+      }
+    };
+
+    void bootstrapModuleSettings();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [loadModuleSettings]);
+
+  useEffect(() => {
+    const handleModuleSettingsUpdated = () => {
+      void loadModuleSettings();
+    };
+
+    window.addEventListener(MODULE_SETTINGS_UPDATED_EVENT, handleModuleSettingsUpdated as EventListener);
+    return () => {
+      window.removeEventListener(MODULE_SETTINGS_UPDATED_EVENT, handleModuleSettingsUpdated as EventListener);
+    };
+  }, [loadModuleSettings]);
 
   useEffect(() => {
     applyBrandingRuntime(branding);
@@ -157,9 +217,16 @@ function App() {
       if (eventName === "INITIAL_SESSION") {
         if (authLifecycleRef.current.initialized) return;
         authLifecycleRef.current.initialized = true;
-        if (!nextUserId) return;
+        if (!nextUserId) {
+          applyModuleSettingsStoreToRegistry(null);
+          setModuleSettingsVersion((prev) => prev + 1);
+          setModuleSettingsReady(true);
+          return;
+        }
         void primeSessionBootstrap(supabase);
+        void primeReferenceData(supabase);
         void loadBranding();
+        void loadModuleSettings();
         return;
       }
 
@@ -170,7 +237,9 @@ function App() {
         clearCurrentUserRoleContextCache();
         clearReferenceDataCache();
         void primeSessionBootstrap(supabase);
+        void primeReferenceData(supabase, { force: true });
         void loadBranding(true);
+        void loadModuleSettings();
         return;
       }
 
@@ -183,6 +252,9 @@ function App() {
         clearSessionBootstrapCache();
         clearCurrentUserRoleContextCache();
         clearReferenceDataCache();
+        applyModuleSettingsStoreToRegistry(null);
+        setModuleSettingsVersion((prev) => prev + 1);
+        setModuleSettingsReady(true);
         window.location.replace("/login");
       }
     });
@@ -190,18 +262,22 @@ function App() {
     return () => {
       subscription?.subscription?.unsubscribe();
     };
-  }, [loadBranding]);
+  }, [loadBranding, loadModuleSettings]);
 
-  const resources = Object.values(MODULES).map((mod) => ({
-    name: mod.id, 
-    list: `/${mod.id}`,
-    show: `/${mod.id}/:id`,
-    create: `/${mod.id}/create`,
-    edit: `/${mod.id}/:id`,
-    meta: {
-      label: mod.titles.fa,
-    },
-  }));
+  const resources = useMemo(
+    () =>
+      Object.values(MODULES).map((mod) => ({
+        name: mod.id,
+        list: `/${mod.id}`,
+        show: `/${mod.id}/:id`,
+        create: `/${mod.id}/create`,
+        edit: `/${mod.id}/:id`,
+        meta: {
+          label: mod.titles.fa,
+        },
+      })),
+    [moduleSettingsVersion]
+  );
 
   const getStandalonePageTitle = (pathname?: string) => {
     if (!pathname) return null;
@@ -217,6 +293,7 @@ function App() {
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
     if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
+    if (pathname.startsWith("/recycle-bin")) return "سطل بازیافت";
     if (pathname === "/reports") return "گزارشات";
     if (pathname === "/reports/create") return "گزارش جدید";
     if (/^\/reports\/[^/]+$/.test(pathname)) return "نمایش گزارش";
@@ -356,6 +433,7 @@ function App() {
             <Route path="/hr" element={<HRPage />} />
             <Route path="/hr/:employeeId" element={<HRPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
+            <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/web_forms" element={<WebFormsHubPage />} />
             <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
             <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
@@ -374,7 +452,7 @@ function App() {
             <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
             <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
             <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
-            
+
             <Route path="/:moduleId">
               <Route index element={<ModuleListRouteResolver />} />
               <Route path="create" element={<ModuleCreateRouteResolver />} />
@@ -386,25 +464,35 @@ function App() {
             <Route path="*" element={<ErrorComponent />} />
           </Route>
         </Routes>
-        
+
         <UnsavedChangesNotifier />
         <DocumentTitleHandler handler={titleHandler} />
       </Refine>
     );
   };
 
+  if (!moduleSettingsReady) {
+    return (
+      <ConfigProvider direction="rtl" locale={faIR}>
+        <div className="min-h-screen flex items-center justify-center text-sm text-gray-500">
+          در حال بارگذاری تنظیمات سازمان...
+        </div>
+      </ConfigProvider>
+    );
+  }
+
   return (
     <BrowserRouter>
-      <ConfigProvider 
-        direction="rtl" 
-        locale={faIR} 
+      <ConfigProvider
+        direction="rtl"
+        locale={faIR}
         getPopupContainer={resolvePopupContainer}
         theme={{
           algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: {
             colorPrimary: branding.palette.primary,
-            fontFamily: 'Vazirmatn, sans-serif',
-          }
+            fontFamily: "Vazirmatn, sans-serif",
+          },
         }}
       >
         <JalaliLocaleListener />

@@ -7,10 +7,12 @@ import {
   type PermissionMap,
 } from './permissions';
 import {
+  buildGoalExplicitRange,
   buildGoalCurrentRange,
   buildGoalRangeSnapshot,
   calculateRangeRatio,
   clampGoalSubperiodUnit,
+  clampGoalRangeToBounds,
   getAvailableGoalSubperiodUnits,
   type FiscalYearSnapshot,
 } from './goalPeriods';
@@ -24,6 +26,8 @@ import {
   type GoalTone,
 } from './goalTypes';
 import { evaluateWorkflowConditions } from './workflowRuntime';
+
+export const GOAL_ALL_USERS_VALUE = '__all_users__';
 
 const GOAL_NUMERIC_FIELD_TYPES = new Set<FieldType>([
   FieldType.NUMBER,
@@ -94,6 +98,15 @@ export const normalizeGoalRecord = (value: any): GoalRecord => ({
   config: value?.config && typeof value.config === 'object' ? value.config : {},
 });
 
+export const isGoalAssignedToAllUsers = (goal: GoalRecord) =>
+  String(goal?.config?.assignment_users_mode || '').trim() === 'all';
+
+export const getGoalUserSelectionValue = (goal?: GoalRecord | null) => {
+  if (!goal) return [];
+  if (isGoalAssignedToAllUsers(goal)) return [GOAL_ALL_USERS_VALUE];
+  return normalizeArray(goal.assignee_user_ids);
+};
+
 export const getGoalModuleOptions = (permissions?: PermissionMap | null) =>
   Object.values(MODULES)
     .filter((module) => permissions?.[module.id]?.view !== false)
@@ -138,6 +151,7 @@ export const isGoalVisibleToUser = (
   userId: string | null,
   roleId: string | null
 ) => {
+  if (isGoalAssignedToAllUsers(goal)) return true;
   const userIds = normalizeArray(goal.assignee_user_ids);
   const roleIds = normalizeArray(goal.assignee_role_ids);
   if (userIds.length === 0 && roleIds.length === 0) return true;
@@ -162,6 +176,9 @@ const resolveMetricLabel = (goal: GoalRecord) => {
   }
   return 'جمع';
 };
+
+const resolveGoalModuleLabel = (goal: GoalRecord) =>
+  MODULES[goal.module_id]?.titles?.fa || goal.module_id;
 
 const resolveGoalTargetValue = (goal: GoalRecord, levels: GoalLevelDefinition[]) => {
   const explicit = normalizeNumber(goal.target_value);
@@ -190,6 +207,31 @@ const resolveFilterFieldKey = (goal: GoalRecord) => {
   const preferred = String(goal.date_field_key || '').trim();
   if (preferred) return preferred;
   return 'created_at';
+};
+
+const getGoalExplicitRangeInput = (goal: GoalRecord) => ({
+  startDate: typeof goal?.config?.goal_start_date === 'string' ? goal.config.goal_start_date : null,
+  endDate: typeof goal?.config?.goal_end_date === 'string' ? goal.config.goal_end_date : null,
+});
+
+const resolveGoalPeriodBounds = (
+  goal: GoalRecord,
+  subperiodUnit: GoalPeriodUnit,
+  fiscalYear?: FiscalYearSnapshot | null
+) => {
+  const explicitBounds = buildGoalExplicitRange(getGoalExplicitRangeInput(goal));
+  if (explicitBounds) {
+    const rawSubBounds = buildGoalCurrentRange(subperiodUnit, fiscalYear);
+    return {
+      mainBounds: explicitBounds,
+      subBounds: clampGoalRangeToBounds(rawSubBounds, explicitBounds),
+    };
+  }
+
+  return {
+    mainBounds: buildGoalCurrentRange(goal.period_unit, fiscalYear),
+    subBounds: buildGoalCurrentRange(subperiodUnit, fiscalYear),
+  };
 };
 
 const queryRowsByDateRange = async (
@@ -259,6 +301,14 @@ const loadScopedRows = async (
     rows = await queryRowsByDateRange(module.table, '', range.startIso, range.endIso);
   }
 
+  if (rows.length === 0 && dateFieldKey) {
+    try {
+      rows = await queryRowsByDateRange(module.table, '', range.startIso, range.endIso);
+    } catch {
+      rows = [];
+    }
+  }
+
   const modulePerm = options.permissions?.[goal.module_id] || {};
   const filteredByDate = rows.filter((row) => {
     const dateValue = resolveGoalDateFilterValue(row, dateFieldKey);
@@ -279,15 +329,173 @@ const loadScopedRows = async (
 const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
   const filtered: any[] = [];
   for (const row of rows) {
-    const passed = await evaluateWorkflowConditions({
-      conditionsAll: goal.conditions_all,
-      conditionsAny: goal.conditions_any,
-      currentRecord: row,
-      moduleId: goal.module_id,
-    });
-    if (passed) filtered.push(row);
+    try {
+      const passed = await evaluateWorkflowConditions({
+        conditionsAll: goal.conditions_all,
+        conditionsAny: goal.conditions_any,
+        currentRecord: row,
+        moduleId: goal.module_id,
+      });
+      if (passed) filtered.push(row);
+    } catch {
+      continue;
+    }
   }
   return filtered;
+};
+
+const DEFAULT_SALES_INVOICE_GOAL_SEED_KEY = 'sales_invoices_monthly_paid_total_v1';
+
+export const ensureDefaultSalesInvoiceGoal = async (options?: { userId?: string | null }) => {
+  try {
+    const { data: existingRows, error: existingError } = await supabase
+      .from('goals')
+      .select('id, module_id, config')
+      .eq('module_id', 'invoices')
+      .limit(50);
+
+    if (existingError) throw existingError;
+
+    const hasSeed = (existingRows || []).some((row: any) => {
+      const config = row?.config && typeof row.config === 'object' ? row.config : {};
+      return String(config?.seed_key || '').trim() === DEFAULT_SALES_INVOICE_GOAL_SEED_KEY;
+    });
+
+    if (hasSeed) return;
+
+    const userId = options?.userId || (await supabase.auth.getUser()).data?.user?.id || null;
+    const payload = {
+      module_id: 'invoices',
+      name: 'فروش ماهانه تسویه‌شده',
+      description: 'جمع مبلغ فاکتورهای فروش با وضعیت تسویه‌شده یا تکمیل‌شده در بازه ماه جاری',
+      goal_scope: 'team',
+      period_unit: 'month',
+      subperiod_unit: 'week',
+      metric_type: 'sum',
+      metric_field_key: 'total_invoice_amount',
+      date_field_key: 'invoice_date',
+      target_value: null,
+      levels_enabled: true,
+      bronze_value: 500000000,
+      silver_value: 1000000000,
+      gold_value: 1500000000,
+      assignee_user_ids: [],
+      assignee_role_ids: [],
+      conditions_all: [],
+      conditions_any: [
+        {
+          id: 'seed_goal_condition_invoices_paid',
+          field: 'status',
+          operator: 'in',
+          value: ['settled', 'completed'],
+        },
+      ],
+      config: {
+        seed_key: DEFAULT_SALES_INVOICE_GOAL_SEED_KEY,
+        assignment_users_mode: 'all',
+        is_seeded_default: true,
+      },
+      is_active: true,
+      created_by: userId,
+      updated_by: userId,
+    };
+
+    const { error } = await supabase.from('goals').insert([payload]);
+    if (error) throw error;
+  } catch {
+    return;
+  }
+};
+
+export const dedupeGoalsForDisplay = (goals: GoalRecord[]) => {
+  const deduped = new Map<string, GoalRecord>();
+
+  goals.forEach((goal) => {
+    const seedKey = String(goal?.config?.seed_key || '').trim();
+    const dedupeKey = seedKey ? `seed:${goal.module_id}:${seedKey}` : `id:${goal.id}`;
+    if (!deduped.has(dedupeKey)) {
+      deduped.set(dedupeKey, goal);
+    }
+  });
+
+  return Array.from(deduped.values());
+};
+
+export const buildGoalFallbackProgressSnapshot = (
+  goalInput: GoalRecord,
+  options: {
+    fiscalYear?: FiscalYearSnapshot | null;
+    selectedSubperiodUnit?: GoalPeriodUnit | null;
+  }
+): GoalProgressSnapshot | null => {
+  const goal = normalizeGoalRecord(goalInput);
+  const module = MODULES[goal.module_id];
+  if (!module) return null;
+
+  const subperiodUnit = clampGoalSubperiodUnit(
+    goal.period_unit,
+    options.selectedSubperiodUnit || goal.subperiod_unit
+  );
+  const levels = buildGoalLevels(goal);
+  const targetValue = resolveGoalTargetValue(goal, levels);
+
+  try {
+    const { mainBounds, subBounds } = resolveGoalPeriodBounds(
+      goal,
+      subperiodUnit,
+      options.fiscalYear
+    );
+    const mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
+    const subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
+    const ratio = calculateRangeRatio(mainRange, subRange);
+    const subTargetValue = targetValue > 0 ? targetValue * ratio : 0;
+
+    return {
+      goal,
+      achievedValue: 0,
+      targetValue,
+      subAchievedValue: 0,
+      subTargetValue,
+      mainRange,
+      subRange,
+      tone: 'base',
+      activeLevelKey: null,
+      levels,
+      availableSubperiodUnits: getAvailableGoalSubperiodUnits(goal.period_unit),
+      selectedSubperiodUnit: subperiodUnit,
+      metricLabel: resolveMetricLabel(goal),
+      moduleLabel: resolveGoalModuleLabel(goal),
+    };
+  } catch {
+    const now = new Date();
+    const label = now.toLocaleDateString('fa-IR');
+    return {
+      goal,
+      achievedValue: 0,
+      targetValue,
+      subAchievedValue: 0,
+      subTargetValue: targetValue,
+      mainRange: {
+        startIso: now.toISOString(),
+        endIso: now.toISOString(),
+        startLabel: label,
+        endLabel: label,
+      },
+      subRange: {
+        startIso: now.toISOString(),
+        endIso: now.toISOString(),
+        startLabel: label,
+        endLabel: label,
+      },
+      tone: 'base',
+      activeLevelKey: null,
+      levels,
+      availableSubperiodUnits: getAvailableGoalSubperiodUnits(goal.period_unit),
+      selectedSubperiodUnit: subperiodUnit,
+      metricLabel: resolveMetricLabel(goal),
+      moduleLabel: resolveGoalModuleLabel(goal),
+    };
+  }
 };
 
 export const executeGoalProgress = async (
@@ -310,8 +518,11 @@ export const executeGoalProgress = async (
     options.selectedSubperiodUnit || goal.subperiod_unit
   );
 
-  const mainBounds = buildGoalCurrentRange(goal.period_unit, options.fiscalYear);
-  const subBounds = buildGoalCurrentRange(subperiodUnit, options.fiscalYear);
+  const { mainBounds, subBounds } = resolveGoalPeriodBounds(
+    goal,
+    subperiodUnit,
+    options.fiscalYear
+  );
   const mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
   const subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
 
@@ -358,6 +569,6 @@ export const executeGoalProgress = async (
     availableSubperiodUnits: getAvailableGoalSubperiodUnits(goal.period_unit),
     selectedSubperiodUnit: subperiodUnit,
     metricLabel: resolveMetricLabel(goal),
-    moduleLabel: module.titles.fa,
+    moduleLabel: resolveGoalModuleLabel(goal),
   };
 };

@@ -16,6 +16,7 @@ export interface SalesPackageItemSnapshot {
   product_id: string | null;
   product_name: string;
   product_type: string;
+  delivery_time?: string | null;
   quantity: number;
   main_unit: string;
   unit_price: number;
@@ -60,6 +61,7 @@ export const normalizeSalesPackageItems = (items: any): SalesPackageItemSnapshot
         product_id: productId,
         product_name: productName || productId || '-',
         product_type: productType,
+        delivery_time: String(item?.delivery_time || '').trim() || null,
         quantity,
         main_unit: mainUnit,
         unit_price: unitPrice,

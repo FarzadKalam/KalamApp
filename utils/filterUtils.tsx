@@ -25,6 +25,8 @@ export const WORKFLOW_OPERATORS = {
   is_today: 'امروز باشد',
   is_yesterday: 'دیروز باشد',
   is_tomorrow: 'فردا باشد',
+  is_friday: 'جمعه باشد',
+  is_official_holiday: 'تعطیل رسمی باشد',
   days_passed_gt: 'بیشتر از چند روز گذشته باشد',
   days_passed_lt: 'کمتر از چند روز گذشته باشد',
   days_remaining_gt: 'بیشتر از چند روز مانده باشد',
@@ -104,6 +106,8 @@ const baseDateOperators: WorkflowOperator[] = [
   'is_today',
   'is_yesterday',
   'is_tomorrow',
+  'is_friday',
+  'is_official_holiday',
   'days_passed_eq',
   'days_passed_gt',
   'days_passed_lt',
@@ -145,6 +149,8 @@ const baseDateTimeOperators: WorkflowOperator[] = [
   'is_today',
   'is_yesterday',
   'is_tomorrow',
+  'is_friday',
+  'is_official_holiday',
   'days_passed_eq',
   'days_passed_gt',
   'days_passed_lt',
@@ -214,6 +220,8 @@ export const workflowOperatorNeedsValue = (operator?: string) => {
     'is_today',
     'is_yesterday',
     'is_tomorrow',
+    'is_friday',
+    'is_official_holiday',
   ].includes(String(operator || ''));
 };
 

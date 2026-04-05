@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Table, Button, Space, App, Empty, Typography, Spin, Select, InputNumber, Popover, Input, Modal, Checkbox } from 'antd';
-import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
+import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField, RowCalculationType } from '../types';
 import { calculateRow } from '../utils/calculations';
@@ -144,6 +144,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [eligibleReceivedChequeOptions, setEligibleReceivedChequeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [rowReloadVersion, setRowReloadVersion] = useState<Record<string, number>>({});
   const [notePopoverRowKey, setNotePopoverRowKey] = useState<string | null>(null);
+  const [deliveryTimePopoverRowKey, setDeliveryTimePopoverRowKey] = useState<string | null>(null);
   const [shelfPopoverRowKey, setShelfPopoverRowKey] = useState<string | null>(null);
   const [dimensionsPopoverRowKey, setDimensionsPopoverRowKey] = useState<string | null>(null);
   const [calendarPopoverRowKey, setCalendarPopoverRowKey] = useState<string | null>(null);
@@ -323,7 +324,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (productIds.length > 0) {
       const { data: productRows, error: productError } = await supabase
         .from('products')
-        .select('id, name, product_type, main_unit, sell_price')
+        .select('id, name, product_type, main_unit, sell_price, delivery_time')
         .in('id', productIds);
       if (productError) throw productError;
       productMap = new Map((productRows || []).map((item: any) => [String(item.id), item]));
@@ -348,6 +349,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         product_id: item.product_id,
         product_name: String(item.product_name || productMeta?.name || item.product_id || '-'),
         product_type: String(item.product_type || productMeta?.product_type || 'goods'),
+        delivery_time: String(item.delivery_time || productMeta?.delivery_time || '').trim() || null,
         quantity,
         main_unit: mainUnit,
         unit_price: unitPrice,
@@ -765,7 +767,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         row.dimension_count_original_sub_unit = String(row?.sub_unit || row?.base_sub_unit || '').trim() || null;
       }
       row.sub_unit = 'عدد';
-      row.sub_quantity = roundToThree(toSafeNumber(row?.dimension_count));
+      row.sub_quantity = roundToThree(getDimensionCount(row));
       return;
     }
 
@@ -1055,6 +1057,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       currentRow.product_type = null;
       currentRow.price_list_id = null;
       currentRow.source_shelf_id = null;
+      currentRow.delivery_time = null;
       currentRow.selected_product_name = null;
       currentRow.product_name = null;
       currentRow.total_price = calculateRow(currentRow, block.rowCalculationType);
@@ -1110,6 +1113,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         currentRow.unit_price = currentRow.product_id ? currentRow.unit_price : 0;
         currentRow.main_unit = currentRow.product_id ? currentRow.main_unit : null;
         currentRow.sub_unit = currentRow.product_id ? currentRow.sub_unit : null;
+        currentRow.delivery_time = currentRow.product_id ? currentRow.delivery_time : null;
         currentRow.total_price = calculateRow(currentRow, block.rowCalculationType);
         applyPackageRowChanges(nextRows, index, currentRow);
         bumpRowReloadVersion(rowKey);
@@ -1137,6 +1141,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         currentRow.width = null;
         currentRow.start_date = null;
         currentRow.end_date = null;
+        currentRow.delivery_time = null;
         currentRow.description = buildSalesPackageDescription(packageSnapshot.items, packageQuantity) || currentRow.description || '';
         if (
           currentRow.source_shelf_id &&
@@ -1244,6 +1249,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           if ((isPriceListItems || isSalesPackageItems) && key === 'product_id') {
             currentRow.selected_product_name = record?.name || currentRow.selected_product_name || null;
             currentRow.product_name = record?.name || currentRow.product_name || null;
+            currentRow.delivery_time = String(record?.delivery_time || '').trim() || null;
             if (targetModule === 'billboards') {
               currentRow.product_type = 'service';
               currentRow.main_unit = 'روز';
@@ -1292,6 +1298,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.quantity = packageQuantity;
               currentRow.sub_quantity = packageQuantity;
               currentRow.unit_price = record.totalPrice;
+              currentRow.delivery_time = null;
               currentRow.length = null;
               currentRow.width = null;
               currentRow.start_date = null;
@@ -1318,6 +1325,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.sub_unit = 'عدد';
               currentRow.selected_product_name = record?.name || currentRow.selected_product_name || null;
               currentRow.product_name = record?.name || currentRow.product_name || null;
+              currentRow.delivery_time = String(record?.delivery_time || '').trim() || null;
               if (record?.daily_rent !== undefined && record?.daily_rent !== null && String(record.daily_rent).trim() !== '') {
                 currentRow.unit_price = record.daily_rent;
               }
@@ -1342,6 +1350,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.dimension_count_original_sub_unit = null;
               currentRow.selected_product_name = record?.name || currentRow.selected_product_name || null;
               currentRow.product_name = record?.name || currentRow.product_name || null;
+              currentRow.delivery_time = String(record?.delivery_time || '').trim() || null;
               const matchedPriceListId = String(currentRow?.price_list_id || '').trim();
               if (matchedPriceListId) {
                 const matchedItem = findPriceListItemByProduct(
@@ -2740,16 +2749,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
 
       const updatePayload: any = { [block.id]: dataToSave };
+      let currentInvoiceRow: Record<string, any> | null = null;
       if (
         (moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
         (block?.id === 'payments' || block?.id === 'invoiceItems')
       ) {
-        const { data: currentInvoiceRow, error: summarySourceError } = await supabase
+        const { data: fetchedInvoiceRow, error: summarySourceError } = await supabase
           .from(moduleId)
           .select('invoiceItems,payments')
           .eq('id', recordId)
           .maybeSingle();
         if (summarySourceError) throw summarySourceError;
+        currentInvoiceRow = fetchedInvoiceRow as Record<string, any> | null;
 
         const currentInvoiceItems = Array.isArray(currentInvoiceRow?.invoiceItems) ? currentInvoiceRow.invoiceItems : [];
         const currentPayments = Array.isArray(currentInvoiceRow?.payments) ? currentInvoiceRow.payments : [];
@@ -3232,6 +3243,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
     const noteRowKey = getRowKey(record);
     const noteOpen = notePopoverRowKey === noteRowKey;
+    const deliveryTimeOpen = deliveryTimePopoverRowKey === noteRowKey;
     const shelfOpen = shelfPopoverRowKey === noteRowKey;
     const dimensionsOpen = dimensionsPopoverRowKey === noteRowKey;
     const calendarOpen = calendarPopoverRowKey === noteRowKey;
@@ -3239,7 +3251,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const popoverOverlayStyle = { maxWidth: '92vw', zIndex: 1400 } as React.CSSProperties;
     const canEditNote = !isReadOnly && (isEditing || mode === 'local');
     const noteValue = String(record?.description || '');
+    const deliveryTimeValue = String(record?.delivery_time || '');
     const showInvoiceNote = (isAnyInvoiceItems || isSalesPackageItems || isPriceListItems) && col.key === 'product_id';
+    const showDeliveryTime = (isAnyInvoiceItems || isSalesPackageItems || isPriceListItems) && col.key === 'product_id';
     const sourceShelfColumn = visibleColumns.find((c: any) => c.key === 'source_shelf_id');
     const showInvoiceShelf = isAnyInvoiceItems && !!sourceShelfColumn && col.key === 'product_id';
     const shelfOptions = sourceShelfColumn ? getColumnOptions(sourceShelfColumn, noteRowKey, record) : [];
@@ -3341,6 +3355,54 @@ const EditableTable: React.FC<EditableTableProps> = ({
               className={noteValue.trim() ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
               icon={<FileTextOutlined />}
               title={noteValue.trim() ? 'توضیحات دارد' : 'توضیحات ندارد'}
+            />
+          </Popover>
+        )}
+        {showDeliveryTime && (
+          <Popover
+            trigger="click"
+            placement={popoverPlacement}
+            overlayStyle={popoverOverlayStyle}
+            getPopupContainer={() => document.body}
+            open={deliveryTimeOpen}
+            onOpenChange={(open) => setDeliveryTimePopoverRowKey(open ? noteRowKey : null)}
+            content={(
+              <div style={{ width: 'min(88vw, 320px)' }}>
+                <div className="text-xs text-gray-500 dark:text-gray-300 mb-2">زمان تحویل ردیف</div>
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  value={deliveryTimeValue}
+                  disabled={!canEditNote}
+                  onChange={(event) => updateRow(index, 'delivery_time', event.target.value)}
+                  placeholder="مثلا 7 الی 10 روز کاری"
+                />
+                <div className="mt-2 flex justify-end">
+                  <Space size={2}>
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-emerald-600"
+                      icon={<CheckOutlined />}
+                      onClick={() => setDeliveryTimePopoverRowKey(null)}
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      className="!h-6 !w-6 !min-w-6 !px-0 text-gray-500"
+                      icon={<CloseOutlined />}
+                      onClick={() => setDeliveryTimePopoverRowKey(null)}
+                    />
+                  </Space>
+                </div>
+              </div>
+            )}
+          >
+            <Button
+              size="small"
+              type="text"
+              className={deliveryTimeValue.trim() ? 'text-leather-600' : 'text-gray-400 dark:text-gray-300'}
+              icon={<ClockCircleOutlined />}
+              title={deliveryTimeValue.trim() ? 'زمان تحویل ثبت شده' : 'زمان تحویل ثبت نشده'}
             />
           </Popover>
         )}

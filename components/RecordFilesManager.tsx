@@ -22,6 +22,7 @@ import {
   setRecordFilesTableAvailability,
 } from '../utils/recordFilesAvailability';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { parseNoteContent } from '../utils/noteContent';
 
 export type RecordFileType = 'image' | 'video' | 'file';
 
@@ -91,6 +92,10 @@ const getDisplayFileName = (item: Pick<RecordFileItem, 'file_name' | 'file_url'>
   }
 };
 
+const NOTE_ATTACHMENT_ID_PREFIX = 'note-attachment:';
+const isSyntheticNoteAttachmentId = (value?: string | null) =>
+  String(value || '').startsWith(NOTE_ATTACHMENT_ID_PREFIX);
+
 const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   open,
   onClose,
@@ -146,6 +151,53 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       created_at: row.created_at ? String(row.created_at) : undefined,
     }));
   };
+  const loadNoteAttachmentItems = async (sortOffset = 0): Promise<RecordFileItem[]> => {
+    if (!recordId || !moduleId) return [];
+    try {
+      const { data, error } = await supabase
+        .from('notes')
+        .select('id, content, created_at')
+        .eq('module_id', moduleId)
+        .eq('record_id', recordId)
+        .order('created_at', { ascending: false })
+        .limit(300);
+      if (error) throw error;
+      const items: RecordFileItem[] = [];
+      (data || []).forEach((row: any, noteIndex: number) => {
+        const parsed = parseNoteContent(row?.content);
+        parsed.attachments.forEach((attachment, attachmentIndex) => {
+          items.push({
+            id: `${NOTE_ATTACHMENT_ID_PREFIX}${String(row?.id || '')}:${attachmentIndex}`,
+            module_id: moduleId,
+            record_id: recordId,
+            file_url: String(attachment.url || '').trim(),
+            file_type: normalizeType(null, attachment.mimeType || null, attachment.url),
+            file_name: attachment.name ? String(attachment.name) : null,
+            mime_type: attachment.mimeType ? String(attachment.mimeType) : null,
+            sort_order: sortOffset + noteIndex + attachmentIndex,
+            created_at: row?.created_at ? String(row.created_at) : undefined,
+          });
+        });
+      });
+      return items.filter((item) => item.file_url);
+    } catch (error) {
+      console.warn('Could not load note attachments for record files manager', error);
+      return [];
+    }
+  };
+  const mergeItemsWithNoteAttachments = async (baseItems: RecordFileItem[]) => {
+    const noteItems = await loadNoteAttachmentItems(baseItems.length + 1000);
+    if (noteItems.length === 0) return baseItems;
+    const seenUrls = new Set(baseItems.map((item) => String(item.file_url || '').trim()).filter(Boolean));
+    const merged = [...baseItems];
+    noteItems.forEach((item) => {
+      const url = String(item.file_url || '').trim();
+      if (!url || seenUrls.has(url)) return;
+      seenUrls.add(url);
+      merged.push(item);
+    });
+    return merged;
+  };
 
   const loadFiles = async (forceCheck = false) => {
     if (!recordId || !moduleId) return;
@@ -157,7 +209,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
       if (!tableExists) {
         setRecordFilesEnabled(false);
-        setItems(await loadLegacyProductImages());
+        const legacyItems = await loadLegacyProductImages();
+        setItems(await mergeItemsWithNoteAttachments(legacyItems));
         return;
       }
 
@@ -173,8 +226,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       recordFilesTableExistsCache = true;
       setRecordFilesTableAvailability(true);
       setRecordFilesEnabled(true);
-      setItems(
-        (data || []).map((row: any, idx: number) => ({
+      const baseItems = (data || []).map((row: any, idx: number) => ({
           id: String(row.id),
           module_id: String(row.module_id || moduleId),
           record_id: String(row.record_id || recordId),
@@ -184,14 +236,15 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           mime_type: row.mime_type ? String(row.mime_type) : null,
           sort_order: Number.isFinite(row.sort_order) ? row.sort_order : idx,
           created_at: row.created_at ? String(row.created_at) : undefined,
-        })),
-      );
+        }));
+      setItems(await mergeItemsWithNoteAttachments(baseItems));
     } catch (error: any) {
       if (isMissingRecordFilesError(error)) {
         recordFilesTableExistsCache = false;
         setRecordFilesTableAvailability(false);
         setRecordFilesEnabled(false);
-        setItems(await loadLegacyProductImages().catch(() => []));
+        const legacyItems = await loadLegacyProductImages().catch(() => []);
+        setItems(await mergeItemsWithNoteAttachments(legacyItems));
         msg.warning('جدول record_files هنوز روی دیتابیس ایجاد نشده است. لطفا migration را اجرا کنید.');
       } else {
         console.warn('Could not load record files', error);
@@ -381,6 +434,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       msg.warning('دسترسی حذف فایل ندارید');
       return;
     }
+    if (isSyntheticNoteAttachmentId(fileId)) {
+      msg.warning('برای حذف این فایل، پیوست را از خود یادداشت حذف کنید');
+      return;
+    }
     try {
       const target = items.find((it) => it.id === fileId);
       if (!recordFilesEnabled || recordFilesTableExistsCache === false) {
@@ -411,6 +468,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
     const current = typedItems[index];
     const target = typedItems[nextIndex];
+    if (isSyntheticNoteAttachmentId(current?.id) || isSyntheticNoteAttachmentId(target?.id)) {
+      msg.warning('ترتیب پیوست‌های یادداشت از این بخش قابل تغییر نیست');
+      return;
+    }
     const swappedA = { ...current, sort_order: target.sort_order };
     const swappedB = { ...target, sort_order: current.sort_order };
     const previous = items;
@@ -450,6 +511,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const renderMediaCard = (item: RecordFileItem, index: number, fileType: 'image' | 'video', total: number) => {
     const isMain = item.file_type === 'image' && mainImage === item.file_url;
     const isHighlighted = highlightFileId && highlightFileId === item.id;
+    const isNoteAttachment = isSyntheticNoteAttachmentId(item.id);
     const fileLabel = getDisplayFileName(item);
     return (
       <div key={item.id} className={`relative group border rounded-lg p-1 ${isHighlighted ? 'border-leather-500 ring-2 ring-leather-200' : 'border-gray-100'}`}>
@@ -467,20 +529,21 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         </div>
 
         <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition">
-          <Button size="small" icon={<ArrowUpOutlined />} onClick={() => moveWithinType(fileType, index, -1)} disabled={!canEdit || index === 0} />
-          <Button size="small" icon={<ArrowDownOutlined />} onClick={() => moveWithinType(fileType, index, 1)} disabled={!canEdit || index === total - 1} />
+          <Button size="small" icon={<ArrowUpOutlined />} onClick={() => moveWithinType(fileType, index, -1)} disabled={!canEdit || index === 0 || isNoteAttachment} />
+          <Button size="small" icon={<ArrowDownOutlined />} onClick={() => moveWithinType(fileType, index, 1)} disabled={!canEdit || index === total - 1 || isNoteAttachment} />
         </div>
 
         <div className="absolute bottom-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition">
           {item.file_type === 'image' && (
-            <Button size="small" icon={<StarOutlined />} onClick={() => onMainImageChange?.(item.file_url)} disabled={!canEdit}>تصویر اصلی</Button>
+            <Button size="small" icon={<StarOutlined />} onClick={() => onMainImageChange?.(item.file_url)} disabled={!canEdit || isNoteAttachment}>تصویر اصلی</Button>
           )}
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} disabled={!canDeleteFiles}>حذف</Button>
+          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} disabled={!canDeleteFiles || isNoteAttachment}>حذف</Button>
         </div>
 
         <div className="absolute top-1 left-1 flex items-center gap-1">
           {isMain && <Tag color="gold">اصلی</Tag>}
           {item.file_type === 'video' ? <Tag icon={<VideoCameraOutlined />}>فیلم</Tag> : <Tag icon={<PictureOutlined />}>عکس</Tag>}
+          {isNoteAttachment ? <Tag color="blue">یادداشت</Tag> : null}
         </div>
         <div className="px-1 pt-2">
           <div className="text-xs text-gray-600 truncate" title={fileLabel}>
@@ -524,18 +587,19 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           renderItem={(item) => {
             const fileLabel = getDisplayFileName(item);
             const isHighlighted = highlightFileId && highlightFileId === item.id;
+            const isNoteAttachment = isSyntheticNoteAttachmentId(item.id);
             return (
               <List.Item
                 className={`rounded-lg px-3 ${isHighlighted ? 'bg-leather-50 border border-leather-200' : ''}`}
                 actions={[
                   <Button key={`download-${item.id}`} size="small" icon={<DownloadOutlined />} onClick={() => downloadFile(item)}>دانلود</Button>,
-                  <Button key={`delete-${item.id}`} size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteFiles} onClick={() => handleDelete(item.id)}>حذف</Button>,
+                  <Button key={`delete-${item.id}`} size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteFiles || isNoteAttachment} onClick={() => handleDelete(item.id)}>حذف</Button>,
                 ]}
               >
                 <List.Item.Meta
                   avatar={<FileOutlined className="text-gray-500" />}
                   title={<span className="text-sm">{fileLabel}</span>}
-                  description={<span className="text-xs text-gray-500">{item.mime_type || 'فایل ضمیمه'}</span>}
+                  description={<span className="text-xs text-gray-500">{isNoteAttachment ? `پیوست یادداشت${item.mime_type ? ` • ${item.mime_type}` : ''}` : (item.mime_type || 'فایل ضمیمه')}</span>}
                 />
               </List.Item>
             );

@@ -210,6 +210,7 @@ const fieldsArray: any[] = [
     isTableColumn: true,
   },
   { key: 'required_quantity', labels: { fa: 'تعداد مورد نیاز', en: 'Required Quantity' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 5.6, nature: FieldNature.STANDARD, isTableColumn: true },
+  { key: 'delivery_time', labels: { fa: 'زمان تحویل', en: 'Delivery Time' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 5.7, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'vat_percentage', labels: { fa: 'ارزش افزوده', en: 'VAT (%)' }, type: FieldType.PERCENTAGE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 5.8, nature: FieldNature.STANDARD, defaultValue: 10 },
   { key: 'is_vat_exempt', labels: { fa: 'معاف', en: 'VAT Exempt' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 6, nature: FieldNature.STANDARD, defaultValue: true },
   { key: 'description', labels: { fa: 'توضیحات', en: 'Description' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 6.2, nature: FieldNature.STANDARD },

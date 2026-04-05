@@ -4,7 +4,9 @@ import { DeleteOutlined, PlusOutlined, ReloadOutlined, SettingOutlined } from '@
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import {
+  ensureDefaultSalesInvoiceGoal,
   getGoalModuleOptions,
+  isGoalAssignedToAllUsers,
   normalizeGoalRecord,
 } from '../../utils/goals';
 import {
@@ -47,6 +49,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
   const [editingRecord, setEditingRecord] = useState<GoalRecord | null>(null);
   const [permissions, setPermissions] = useState<PermissionMap | null>(null);
   const [access, setAccess] = useState<GoalAccessState>(defaultAccess);
+  const popupContainer = useCallback((node?: HTMLElement | null) => node?.parentElement || document.body, []);
 
   const moduleOptions = useMemo(() => getGoalModuleOptions(permissions), [permissions]);
 
@@ -64,6 +67,9 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
   const fetchRecords = useCallback(async () => {
     setLoading(true);
     try {
+      const context = await fetchCurrentUserRoleContext(supabase);
+      await ensureDefaultSalesInvoiceGoal({ userId: context.userId });
+
       let query = supabase.from('goals').select('*').order('updated_at', { ascending: false });
       if (moduleFilter !== 'all') {
         query = query.eq('module_id', moduleFilter);
@@ -139,11 +145,20 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
             <div>فیلد عددی: <span className="font-semibold text-gray-800 dark:text-gray-100">{record.metric_field_key}</span></div>
           ) : null}
           <div>فیلد تاریخ: <span className="font-semibold text-gray-800 dark:text-gray-100">{record.date_field_key || 'created_at'}</span></div>
+          {(record.config?.goal_start_date || record.config?.goal_end_date) ? (
+            <div>
+              بازه دستی:
+              <span className="font-semibold text-gray-800 dark:text-gray-100">
+                {' '}
+                {record.config?.goal_start_date || '...'} تا {record.config?.goal_end_date || '...'}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
           {record.description ? <div>{record.description}</div> : null}
-          <div>کاربران: <span className="font-semibold text-gray-800 dark:text-gray-100">{(record.assignee_user_ids || []).length || 'همه'}</span></div>
+          <div>کاربران: <span className="font-semibold text-gray-800 dark:text-gray-100">{isGoalAssignedToAllUsers(record) ? 'همه کاربران' : ((record.assignee_user_ids || []).length || 'همه')}</span></div>
           <div>نقش‌ها: <span className="font-semibold text-gray-800 dark:text-gray-100">{(record.assignee_role_ids || []).length || 'همه'}</span></div>
           <div>شرط‌های همه: <span className="font-semibold text-gray-800 dark:text-gray-100">{(record.conditions_all || []).length}</span></div>
           <div>شرط‌های یکی: <span className="font-semibold text-gray-800 dark:text-gray-100">{(record.conditions_any || []).length}</span></div>
@@ -168,6 +183,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
             className="min-w-[240px]"
             showSearch
             optionFilterProp="label"
+            getPopupContainer={popupContainer}
           />
           <Button icon={<ReloadOutlined />} onClick={() => void fetchRecords()} />
         </Space>
@@ -237,6 +253,8 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
                     okText="حذف"
                     cancelText="انصراف"
                     disabled={!access.canDeleteGoals}
+                    getPopupContainer={popupContainer}
+                    zIndex={1402}
                     onConfirm={() => void handleDelete(record.id)}
                   >
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!access.canDeleteGoals} />
@@ -273,6 +291,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
       onCancel={onClose}
       footer={null}
       width={1220}
+      zIndex={1400}
       destroyOnHidden={false}
       title={
         <span className="flex items-center gap-2">

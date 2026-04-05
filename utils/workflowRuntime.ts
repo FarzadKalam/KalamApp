@@ -2,6 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
 import { sendBotMessageViaGateway } from './botGateway';
+import { getHolidaySummaryForDate } from './holidayCalendar';
 import { normalizeNoteScope } from './noteScope';
 import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
@@ -262,11 +263,11 @@ const resolveConditionFieldValue = async (
   return record?.[fieldKey];
 };
 
-const evaluateResolvedCondition = (
+const evaluateResolvedCondition = async (
   condition: WorkflowCondition,
   currentValue: any,
   previousValue: any
-): boolean => {
+): Promise<boolean> => {
   const op = String(condition?.operator || 'eq');
   const expectedValue = condition?.value;
 
@@ -284,7 +285,7 @@ const evaluateResolvedCondition = (
       return String(cv ?? '') === String(ev ?? '');
     }
     case 'neq':
-      return !evaluateResolvedCondition({ ...condition, operator: 'eq' }, currentValue, previousValue);
+      return !(await evaluateResolvedCondition({ ...condition, operator: 'eq' }, currentValue, previousValue));
     case 'contains': {
       if (Array.isArray(currentValue)) {
         return normalizeListValues(currentValue).some((item) =>
@@ -294,7 +295,7 @@ const evaluateResolvedCondition = (
       return String(cv ?? '').toLowerCase().includes(String(ev ?? '').toLowerCase());
     }
     case 'not_contains':
-      return !evaluateResolvedCondition({ ...condition, operator: 'contains' }, currentValue, previousValue);
+      return !(await evaluateResolvedCondition({ ...condition, operator: 'contains' }, currentValue, previousValue));
     case 'starts_with':
       return String(cv ?? '').toLowerCase().startsWith(String(ev ?? '').toLowerCase());
     case 'ends_with':
@@ -357,6 +358,14 @@ const evaluateResolvedCondition = (
       const t = new Date();
       t.setDate(t.getDate() + 1);
       return isSameDate(d, t);
+    }
+    case 'is_friday': {
+      const summary = await getHolidaySummaryForDate(currentValue);
+      return !!summary?.isFriday;
+    }
+    case 'is_official_holiday': {
+      const summary = await getHolidaySummaryForDate(currentValue);
+      return !!summary?.isOfficialHoliday;
     }
     case 'days_passed_eq': {
       const diff = daysDiffFromNow(currentValue);

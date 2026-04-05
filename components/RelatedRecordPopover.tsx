@@ -343,7 +343,13 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   };
 
   const content = (
-    <div className="min-w-[300px] max-w-[420px]">
+    <div
+      className="max-w-full"
+      style={{
+        width: isMobileViewport ? 'calc(100vw - 1rem)' : 'min(92vw, 420px)',
+        maxWidth: 'calc(100vw - 1rem)',
+      }}
+    >
       <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] p-3">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
@@ -378,7 +384,10 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         {loading ? (
           <div className="py-8 flex items-center justify-center"><Spin size="small" /></div>
         ) : (
-          <div className="space-y-2 text-xs text-gray-700 dark:text-gray-200 max-h-[52vh] overflow-auto pr-1">
+          <div
+            className="space-y-2 text-xs text-gray-700 dark:text-gray-200 overflow-auto pr-1"
+            style={{ maxHeight: 'min(70vh, 32rem)' }}
+          >
             {fields.map((field) => (
               <div key={field.key} className="grid grid-cols-[110px_1fr] gap-2 items-start border-b border-gray-100 dark:border-gray-800 pb-1.5">
                 <span className="text-gray-500 dark:text-gray-400">{field.labels?.fa || field.key}</span>
@@ -425,7 +434,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       getPopupContainer={() => document.body}
       destroyOnHidden
       styles={{ body: { padding: 0 } }}
-      overlayStyle={{ zIndex: overlayZIndex, maxWidth: 'min(92vw, 460px)' }}
+      overlayStyle={{ zIndex: overlayZIndex, maxWidth: 'calc(100vw - 1rem)', maxHeight: 'calc(100vh - 1rem)' }}
     >
       {children || (
         <span className="text-leather-600 cursor-pointer hover:underline">

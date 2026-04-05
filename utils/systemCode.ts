@@ -210,7 +210,8 @@ export const buildClientFallbackSystemCode = async (
       .limit(5000);
 
     const suffixPattern = new RegExp(`^${escapeRegExp(prefix)}(\\d+)$`);
-    const matchingNumbers = (data || []).reduce<number[]>((acc, row: any) => {
+    const rows = ((data || []) as Array<{ system_code?: string | null }>);
+    const matchingNumbers = rows.reduce<number[]>((acc, row) => {
       const code = String(row?.system_code || '').trim().toUpperCase();
       const match = code.match(suffixPattern);
       if (!match) return acc;
@@ -222,7 +223,7 @@ export const buildClientFallbackSystemCode = async (
       return acc;
     }, []);
 
-    const maxExistingNumber = matchingNumbers.reduce((maxValue, currentValue) => (
+    const maxExistingNumber = matchingNumbers.reduce((maxValue: number, currentValue: number) => (
       Math.max(maxValue, currentValue)
     ), startNumber - 1);
 

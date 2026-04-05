@@ -130,10 +130,14 @@ export const clampReportRowLimit = (value: unknown) => {
 export const clampGroupingDefinitions = (value: unknown): ReportGroupingDefinition[] => {
   const list = Array.isArray(value) ? value : [];
   return list
-    .map((item) => ({
-      field: String((item as any)?.field || '').trim(),
-      direction: String((item as any)?.direction || '').trim().toLowerCase() === 'desc' ? 'desc' : 'asc',
-    }))
+    .map((item): ReportGroupingDefinition => {
+      const direction: ReportGroupDirection =
+        String((item as any)?.direction || '').trim().toLowerCase() === 'desc' ? 'desc' : 'asc';
+      return {
+        field: String((item as any)?.field || '').trim(),
+        direction,
+      };
+    })
     .filter((item) => !!item.field)
     .slice(0, 3);
 };

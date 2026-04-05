@@ -41,7 +41,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'send-sms-2026-03-23-09';
+const FUNCTION_BUILD = 'send-sms-2026-04-04-04';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -133,6 +133,41 @@ const MELIPAYAMAK_STATUS_MESSAGES: Record<string, string> = {
 };
 
 const getMelipayamakMessage = (code: string) => MELIPAYAMAK_STATUS_MESSAGES[String(code || '').trim()] || null;
+
+const MELIPAYAMAK_STATUS_MESSAGES_FA: Record<string, string> = {
+  '-111': 'IP درخواست‌کننده نامعتبر است.',
+  '-1011': 'باید به‌جای رمز عبور از API Key استفاده شود.',
+  '-1099': 'IP برای استفاده از API مجاز نشده است.',
+  '-108': 'IP به دلیل تلاش ناموفق برای استفاده از API مسدود شده است.',
+  '0': 'نام کاربری یا رمز عبور/API Key اشتباه است.',
+  '2': 'اعتبار کافی نیست.',
+  '3': 'محدودیت در ارسال روزانه وجود دارد.',
+  '4': 'محدودیت در حجم ارسال وجود دارد.',
+  '5': 'شماره فرستنده معتبر نیست.',
+  '6': 'سامانه در حال بروزرسانی است یا لینک ارسال در دسترس نیست.',
+  '7': 'متن پیامک شامل کلمه فیلتر شده است.',
+  '9': 'ارسال از خطوط عمومی از طریق وب‌سرویس ممکن نیست.',
+  '10': 'کاربر مورد نظر فعال نیست.',
+  '11': 'ارسال انجام نشد.',
+  '12': 'مدارک کاربر کامل نیست.',
+  '14': 'متن پیامک شامل لینک است.',
+  '15': 'قالب یا متن ارسالی معتبر نیست.',
+  '16': 'شماره گیرنده یافت نشد.',
+  '17': 'متن پیامک خالی است.',
+  '18': 'شماره موبایل معتبر نیست.',
+  '35': 'اطلاعات درخواست نامعتبر است.',
+};
+
+const getMelipayamakStatusMessageFa = (code: string) =>
+  MELIPAYAMAK_STATUS_MESSAGES_FA[String(code || '').trim()] || getMelipayamakMessage(code);
+
+const parseJsonSafe = (raw: string) => {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
 
 const createTimeoutSignal = (timeoutMs: number) => {
   const controller = new AbortController();
@@ -424,6 +459,104 @@ const sendSmsWithProvider = async (to: string[], text: string, settings: SmsSett
   };
 };
 
+const sendSmsWithProviderFallback = async (to: string[], text: string, settings: SmsSettings) => {
+  const recipients = Array.from(new Set((to || []).map((value) => normalizeRecipientPhone(String(value || '').trim())).filter(Boolean)));
+  const messageText = String(text || '').trim();
+  const username = String(settings.username || '').trim();
+  const password = String(settings.password || '').trim();
+  const apiKey = String(settings.api_key || '').trim();
+  const senderNumber = String(settings.sender_number || '').trim();
+  const isFlash = !!settings.is_flash;
+  const restUrl = normalizeSmsUrl('https://rest.payamak-panel.com/api/SendSMS/SendSMS', 'rest');
+
+  if (!senderNumber) {
+    throw new Error('تنظیمات ارسال پیامک ناقص است. شماره خط ارسال ثبت نشده است.');
+  }
+  if (!apiKey && (!username || !password)) {
+    throw new Error('نام کاربری/رمز عبور یا API Key برای سامانه پیامک کامل نیست.');
+  }
+  if (recipients.length === 0) {
+    throw new Error('گیرنده پیامک مشخص نشده است.');
+  }
+  if (!messageText) {
+    throw new Error('متن پیامک خالی است.');
+  }
+
+  const sendViaRest = async (timeoutMs = 8000) => {
+    const providerResults: Array<{ recipient: string; raw: string; result: string; method: string }> = [];
+
+    for (const recipient of recipients) {
+      const payload: Record<string, any> = {
+        username,
+        password: password || apiKey,
+        to: recipient,
+        from: senderNumber,
+        text: messageText,
+        isFlash,
+      };
+
+      const timeout = createTimeoutSignal(timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch(restUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: timeout.signal,
+        });
+      } finally {
+        timeout.cleanup();
+      }
+
+      const raw = await response.text();
+      if (!response.ok) {
+        throw new Error(raw || `HTTP ${response.status}`);
+      }
+
+      const parsed = parseJsonSafe(raw);
+      const retStatus = Number(parsed?.RetStatus ?? parsed?.retStatus ?? NaN);
+      const statusText = String(parsed?.StrRetStatus ?? parsed?.strRetStatus ?? parsed?.status ?? '').trim();
+      const result = String(
+        parsed?.Value ??
+        parsed?.value ??
+        parsed?.recId ??
+        parsed?.messageid ??
+        decodeSoapScalar(raw)
+      ).trim();
+
+      if (Number.isFinite(retStatus) && retStatus !== 1) {
+        const providerMessage = getMelipayamakStatusMessageFa(result);
+        throw new Error(`مسیر REST ناموفق بود. ${providerMessage || statusText || raw} کد/نتیجه: ${result || retStatus}`);
+      }
+
+      const providerMessage = getMelipayamakStatusMessageFa(result);
+      if (providerMessage && !Number.isFinite(retStatus)) {
+        throw new Error(`مسیر REST ناموفق بود. ${providerMessage} کد/نتیجه: ${result}`);
+      }
+
+      providerResults.push({ recipient, raw, result: result || statusText || 'accepted', method: 'rest_send_sms' });
+    }
+
+    return {
+      provider_method: 'rest_send_sms',
+      sent: recipients.length,
+      provider_results: providerResults,
+    };
+  };
+
+  try {
+    const result = await sendViaRest();
+    return {
+      ...result,
+      provider_attempts: [{ method: 'rest_send_sms', success: true }],
+    };
+  } catch (error: any) {
+    const message = String(error?.message || error);
+    console.warn('[send-sms] send provider=rest_send_sms:failed', message);
+    throw new Error(`ارسال پیامک از مسیر REST ملی پیامک ناموفق بود. ${message}`);
+  }
+};
+
 const getSmsCreditWithProvider = async (settings: SmsSettings) => {
   const username = String(settings.username || '').trim();
   const password = String(settings.password || settings.api_key || '').trim();
@@ -468,6 +601,7 @@ const getSmsCreditWithProvider = async (settings: SmsSettings) => {
     raw,
   };
 };
+
 
 const sendOtpViaSoap = async (phone: string, otp: string, settings: SmsSettings, timeoutMs = 4200) => {
   const soapUrl = String(Deno.env.get('MELIPAYAMAK_OTP_SOAP_URL') || settings?.otp_soap_url || DEFAULT_SMS_OTP_SOAP_URL).trim();
@@ -852,7 +986,7 @@ Deno.serve(async (req) => {
       return json(400, { success: false, message: 'to و text الزامی است.' });
     }
 
-    const sentResult = await sendSmsWithProvider(to, text, settings);
+    const sentResult = await sendSmsWithProviderFallback(to, text, settings);
 
     return json(200, { success: true, ...sentResult });
   } catch (error: any) {

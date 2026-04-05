@@ -108,6 +108,10 @@ const ReportViewerPage: React.FC = () => {
     () => config.group_bys.map((item) => fieldMap[item.field]).filter(Boolean),
     [config.group_bys, fieldMap]
   );
+  const groupingSummaryLabel = useMemo(
+    () => groupingFields.map((field) => field.labels?.fa || field.key).join(' / '),
+    [groupingFields]
+  );
   const metricFieldKeys = useMemo(
     () => (config.metric_type === 'sum' ? config.metric_fields.filter((key) => !!fieldMap[key]) : ['__count']),
     [config.metric_fields, config.metric_type, fieldMap]
@@ -509,6 +513,11 @@ const ReportViewerPage: React.FC = () => {
           </div>
           <div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5">
             <Statistic title="گروه‌ها" value={groupedRows.length} formatter={(value) => toPersianNumber(value)} />
+            {groupingSummaryLabel ? (
+              <div className="mt-2 text-xs text-gray-500">
+                گروه‌بندی بر اساس: {groupingSummaryLabel}
+              </div>
+            ) : null}
           </div>
           <div className="rounded-[1.5rem] border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-white/5">
             <Statistic
@@ -522,9 +531,9 @@ const ReportViewerPage: React.FC = () => {
         {chartAvailable && (
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
             <div className="flex flex-wrap items-center gap-2">
-              <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'bg-leather-600 hover:!bg-leather-500' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
-              <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'bg-leather-600 hover:!bg-leather-500' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
-              <Button icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} className={renderMode === 'pie' ? 'bg-leather-600 hover:!bg-leather-500' : ''} onClick={() => setRenderMode('pie')}>نمودار دایره‌ای</Button>
+              <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)] border-none' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
+              <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)] border-none' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
+              <Button icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} className={renderMode === 'pie' ? 'bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)] border-none' : ''} onClick={() => setRenderMode('pie')}>نمودار دایره‌ای</Button>
             </div>
             {metricOptions.length > 1 && (
               <Select
@@ -546,15 +555,27 @@ const ReportViewerPage: React.FC = () => {
         )}
 
         {(renderMode === 'table' || !chartAvailable) && (
-          <Table
-            loading={executing}
-            rowKey={config.group_bys.length > 0 ? 'key' : '__report_row_key'}
-            dataSource={config.group_bys.length > 0 ? groupedRows : rows}
-            columns={config.group_bys.length > 0 ? groupedColumns : rawColumns}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
-            scroll={{ x: true }}
-            locale={{ emptyText: 'برای این گزارش داده‌ای پیدا نشد' }}
-          />
+          config.group_bys.length > 0 ? (
+            <Table<GroupedRow>
+              loading={executing}
+              rowKey="key"
+              dataSource={groupedRows}
+              columns={groupedColumns}
+              pagination={{ pageSize: 20, showSizeChanger: true }}
+              scroll={{ x: true }}
+              locale={{ emptyText: 'برای این گزارش داده‌ای پیدا نشد' }}
+            />
+          ) : (
+            <Table<ReportRow>
+              loading={executing}
+              rowKey="__report_row_key"
+              dataSource={rows}
+              columns={rawColumns}
+              pagination={{ pageSize: 20, showSizeChanger: true }}
+              scroll={{ x: true }}
+              locale={{ emptyText: 'برای این گزارش داده‌ای پیدا نشد' }}
+            />
+          )
         )}
       </div>
     </div>

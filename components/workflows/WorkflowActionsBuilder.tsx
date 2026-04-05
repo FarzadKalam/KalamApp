@@ -45,7 +45,7 @@ type CreateRelatedFieldMapping = {
 const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
   switch (type) {
     case 'send_note':
-      return { note_text: '', variable_field: '', variable_target: 'note_text' };
+      return { recipient_fields: [], note_text: '', variable_field: '', variable_target: 'note_text' };
     case 'send_sms':
       return {
         recipient_fields: [],
@@ -596,6 +596,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (actionType === 'send_note') {
       return (
         <div className="space-y-2">
+          <div className="text-xs text-gray-500">گیرنده یادداشت</div>
+          <Select
+            {...commonSelectProps}
+            mode="multiple"
+            value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+            disabled={disabled}
+            options={recipientFieldOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+            placeholder="گیرنده(های) یادداشت"
+            className="w-full"
+            maxTagCount="responsive"
+          />
           <Input.TextArea
             rows={4}
             value={config.note_text}
@@ -757,32 +769,47 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
     if (actionType === 'update_record') {
       return (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <Select
-            {...commonSelectProps}
-            value={config.field}
-            disabled={disabled}
-            options={updatableFieldOptions}
-            onChange={(nextVal) => updateActionConfig(action.id, { field: nextVal, value: null })}
-            placeholder="فیلد مقصد"
-          />
-          <Select
-            {...commonSelectProps}
-            value={config.value_mode || 'static'}
-            disabled={disabled}
-            options={[
-              { label: 'مقدار ثابت', value: 'static' },
-              { label: 'از فیلد رکورد جاری', value: 'from_source' },
-              { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
-            ]}
-            onChange={(nextVal) => updateActionConfig(action.id, {
-              value_mode: nextVal,
-              value: null,
-              source_field: '',
-            })}
-            placeholder="نوع مقدار"
-          />
-          {renderUpdateValueInput(action)}
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
+          <div className="space-y-1 md:col-span-5">
+            <div className="text-xs text-gray-500">فیلد مقصد</div>
+            <Select
+              {...commonSelectProps}
+              value={config.field}
+              disabled={disabled}
+              options={updatableFieldOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { field: nextVal, value: null })}
+              placeholder="فیلد مقصد"
+            />
+          </div>
+          <div className="space-y-1 md:col-span-3">
+            <div className="text-xs text-gray-500">نوع مقدار</div>
+            <Select
+              {...commonSelectProps}
+              value={config.value_mode || 'static'}
+              disabled={disabled}
+              options={[
+                { label: 'مقدار ثابت', value: 'static' },
+                { label: 'از فیلد رکورد جاری', value: 'from_source' },
+                { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
+              ]}
+              onChange={(nextVal) => updateActionConfig(action.id, {
+                value_mode: nextVal,
+                value: null,
+                source_field: '',
+              })}
+              placeholder="نوع مقدار"
+            />
+          </div>
+          <div className="space-y-1 md:col-span-4">
+            <div className="text-xs text-gray-500">
+              {(config.value_mode || 'static') === 'from_related'
+                ? 'فیلد رکورد مرتبط'
+                : (config.value_mode || 'static') === 'from_source'
+                  ? 'فیلد رکورد جاری'
+                  : 'مقدار نهایی'}
+            </div>
+            {renderUpdateValueInput(action)}
+          </div>
         </div>
       );
     }
@@ -852,76 +879,85 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
       return (
         <div className="space-y-2">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <Select
-              {...commonSelectProps}
-              value={config.source_module_id || sourceModuleId}
-              disabled={disabled}
-              options={relationSourceModuleOptions && relationSourceModuleOptions.length > 0 ? relationSourceModuleOptions : [{ label: currentModuleId, value: currentModuleId }]}
-              onChange={(nextVal) => {
-                const nextSourceModuleId = String(nextVal || '');
-                const defaultRelationField =
-                  (MODULES[targetModuleId]?.fields || []).find(
-                    (field) =>
-                      field.type === FieldType.RELATION &&
-                      String((field.relationConfig as any)?.targetModule || '') === nextSourceModuleId
-                  )?.key || '';
-                updateActionConfig(action.id, {
-                  source_module_id: nextSourceModuleId,
-                  relation_field_key: defaultRelationField,
-                  field_mappings: ensureRequiredMappings(
-                    targetModuleId,
-                    defaultRelationField,
-                    getRelatedFieldMappings(action)
-                  ),
-                });
-              }}
-              placeholder="ماژول رکورد مرجع"
-            />
-            <Select
-              {...commonSelectProps}
-              value={config.target_module_id}
-              disabled={disabled}
-              options={relatedTargetModuleOptions}
-              onChange={(nextVal) => {
-                const nextTargetModuleId = String(nextVal || '');
-                const defaultRelationField =
-                  (MODULES[nextTargetModuleId]?.fields || []).find(
-                    (field) =>
-                      field.type === FieldType.RELATION &&
-                      String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
-                  )?.key || '';
-                updateActionConfig(action.id, {
-                  source_module_id: sourceModuleId,
-                  target_module_id: nextVal,
-                  relation_field_key: defaultRelationField,
-                  field_mappings: ensureRequiredMappings(
-                    nextTargetModuleId,
-                    defaultRelationField,
-                    []
-                  ),
-                });
-              }}
-              placeholder="ماژول رکورد جدید"
-            />
-            <Select
-              {...commonSelectProps}
-              value={config.relation_field_key}
-              disabled={disabled || !targetModuleId}
-              options={relationFields}
-              onChange={(nextVal) => {
-                const nextRelationFieldKey = String(nextVal || '');
-                updateActionConfig(action.id, {
-                  relation_field_key: nextVal,
-                  field_mappings: ensureRequiredMappings(
-                    targetModuleId,
-                    nextRelationFieldKey,
-                    getRelatedFieldMappings(action)
-                  ),
-                });
-              }}
-              placeholder="فیلد ارتباط با رکورد مرجع"
-            />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div className="space-y-1">
+              <div className="text-xs text-gray-500">ماژول رکورد مرجع</div>
+              <Select
+                {...commonSelectProps}
+                value={config.source_module_id || sourceModuleId}
+                disabled={disabled}
+                options={relationSourceModuleOptions && relationSourceModuleOptions.length > 0 ? relationSourceModuleOptions : [{ label: currentModuleId, value: currentModuleId }]}
+                onChange={(nextVal) => {
+                  const nextSourceModuleId = String(nextVal || '');
+                  const defaultRelationField =
+                    (MODULES[targetModuleId]?.fields || []).find(
+                      (field) =>
+                        field.type === FieldType.RELATION &&
+                        String((field.relationConfig as any)?.targetModule || '') === nextSourceModuleId
+                    )?.key || '';
+                  updateActionConfig(action.id, {
+                    source_module_id: nextSourceModuleId,
+                    relation_field_key: defaultRelationField,
+                    field_mappings: ensureRequiredMappings(
+                      targetModuleId,
+                      defaultRelationField,
+                      getRelatedFieldMappings(action)
+                    ),
+                  });
+                }}
+                placeholder="ماژول رکورد مرجع"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-gray-500">ماژول رکورد جدید</div>
+              <Select
+                {...commonSelectProps}
+                value={config.target_module_id}
+                disabled={disabled}
+                options={relatedTargetModuleOptions}
+                onChange={(nextVal) => {
+                  const nextTargetModuleId = String(nextVal || '');
+                  const defaultRelationField =
+                    (MODULES[nextTargetModuleId]?.fields || []).find(
+                      (field) =>
+                        field.type === FieldType.RELATION &&
+                        String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
+                    )?.key || '';
+                  updateActionConfig(action.id, {
+                    source_module_id: sourceModuleId,
+                    target_module_id: nextVal,
+                    relation_field_key: defaultRelationField,
+                    field_mappings: ensureRequiredMappings(
+                      nextTargetModuleId,
+                      defaultRelationField,
+                      []
+                    ),
+                  });
+                }}
+                placeholder="ماژول رکورد جدید"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-gray-500">فیلد ارتباط با رکورد مرجع</div>
+              <Select
+                {...commonSelectProps}
+                value={config.relation_field_key}
+                disabled={disabled || !targetModuleId}
+                options={relationFields}
+                onChange={(nextVal) => {
+                  const nextRelationFieldKey = String(nextVal || '');
+                  updateActionConfig(action.id, {
+                    relation_field_key: nextVal,
+                    field_mappings: ensureRequiredMappings(
+                      targetModuleId,
+                      nextRelationFieldKey,
+                      getRelatedFieldMappings(action)
+                    ),
+                  });
+                }}
+                placeholder="فیلد ارتباط با رکورد مرجع"
+              />
+            </div>
           </div>
 
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-2">
@@ -959,7 +995,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                     key={mapping.id}
                     className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start rounded-lg border border-gray-100 dark:border-gray-800 p-2"
                   >
-                    <div className="md:col-span-4">
+                    <div className="md:col-span-5">
+                      <div className="mb-1 text-xs text-gray-500">فیلد مقصد</div>
                       <Select
                         {...commonSelectProps}
                         value={mapping.field}
@@ -978,6 +1015,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                       />
                     </div>
                     <div className="md:col-span-3">
+                      <div className="mb-1 text-xs text-gray-500">نوع مقدار</div>
                       <Select
                         {...commonSelectProps}
                         value={mapping.mode}
@@ -999,7 +1037,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                         placeholder="نوع مقدار"
                       />
                     </div>
-                    <div className="md:col-span-4">
+                    <div className="md:col-span-3">
+                      <div className="mb-1 text-xs text-gray-500">
+                        {mapping.mode === 'from_related'
+                          ? 'فیلد رکورد مرتبط'
+                          : mapping.mode === 'from_source'
+                            ? 'فیلد رکورد جاری'
+                            : 'مقدار فیلد'}
+                      </div>
                       {mapping.mode === 'from_source' || mapping.mode === 'from_related' ? (
                         <Select
                           {...commonSelectProps}

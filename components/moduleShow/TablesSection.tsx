@@ -7,6 +7,7 @@ import { calculateSummary } from '../../utils/calculations';
 import { SummaryCalculationType, FieldType } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
+import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../../utils/processTaskCustomFields';
 
 // 👇 اینترفیس اصلاح شد: حذف linkedBomData و ...
 interface TablesSectionProps {
@@ -134,6 +135,9 @@ const TablesSection: React.FC<TablesSectionProps> = ({
       wage: Number(stage?.wage || 0),
       metadata: {
         ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
+          stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
+        ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',

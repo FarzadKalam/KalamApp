@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Tabs, Switch, Alert } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Tabs, Switch, Alert, Empty, Tag } from 'antd';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
@@ -22,6 +22,7 @@ import { FieldType, ModuleField } from '../types';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import {
   applyTaskSourceRecordFilter,
+  buildTaskSourcePatch,
   buildTaskSourceInitialValues,
   getMergedTaskTypeOptions,
   getTaskTypeProtectedValues,
@@ -31,7 +32,6 @@ import {
   createDefaultProcessAutomationRule,
   getProcessAutomationRuleSummary,
   normalizeProcessAutomationRules,
-  PROCESS_AUTOMATION_TARGET_OPTIONS,
   PROCESS_AUTOMATION_TRIGGER_OPTIONS,
   type ProcessAutomationRule,
 } from '../utils/processAutomationTypes';
@@ -50,6 +50,20 @@ import {
   normalizeProcessTargetModuleIds,
   syncProcessTemplateTargetModules,
 } from '../utils/processTargets';
+import {
+  buildProcessTaskCustomAutomationFields,
+  getProcessTaskCustomFieldValuesFromRecurrence,
+  getProcessTaskCustomFieldsFromRecurrence,
+  getProcessTaskCustomFieldsFromStage,
+  isReservedProcessTaskCustomFieldKey,
+  isSupportedProcessTaskCustomFieldType,
+  mergeProcessTaskCustomFieldValues,
+  normalizeProcessTaskCustomFieldKey,
+  normalizeProcessTaskCustomFields,
+  PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+  withProcessTaskCustomFieldValues,
+} from '../utils/processTaskCustomFields';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -123,6 +137,92 @@ const createProcessAutomationTaskVariableFields = (): ModuleField[] => ([
   { key: 'task_due_date', labels: { fa: 'موعد فعالیت', en: 'Task Due Date' }, type: FieldType.DATETIME, nature: 'standard' as any },
 ]);
 
+const processTaskCustomFieldTypeLabels: Partial<Record<FieldType, string>> = {
+  [FieldType.TEXT]: 'متن کوتاه',
+  [FieldType.LONG_TEXT]: 'متن بلند',
+  [FieldType.SUPER_LONG_TEXT]: 'متن خیلی بلند',
+  [FieldType.NUMBER]: 'عدد',
+  [FieldType.PRICE]: 'قیمت',
+  [FieldType.PERCENTAGE]: 'درصد',
+  [FieldType.CHECKBOX]: 'چک‌باکس',
+  [FieldType.STOCK]: 'موجودی',
+  [FieldType.SELECT]: 'انتخابی',
+  [FieldType.MULTI_SELECT]: 'چندانتخابی',
+  [FieldType.DATE]: 'تاریخ',
+  [FieldType.TIME]: 'زمان',
+  [FieldType.DATETIME]: 'تاریخ و زمان',
+  [FieldType.LINK]: 'لینک',
+  [FieldType.RELATION]: 'ارتباط با ماژول',
+  [FieldType.USER]: 'کاربر',
+  [FieldType.STATUS]: 'وضعیت',
+  [FieldType.PHONE]: 'تلفن',
+  [FieldType.TAGS]: 'برچسب',
+};
+
+const processTaskOptionEditableTypes = new Set<FieldType>([
+  FieldType.SELECT,
+  FieldType.MULTI_SELECT,
+  FieldType.STATUS,
+]);
+
+const supportedProcessTaskCustomFieldTypes: FieldType[] = [
+  FieldType.TEXT,
+  FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
+  FieldType.NUMBER,
+  FieldType.PRICE,
+  FieldType.PERCENTAGE,
+  FieldType.CHECKBOX,
+  FieldType.STOCK,
+  FieldType.SELECT,
+  FieldType.MULTI_SELECT,
+  FieldType.DATE,
+  FieldType.TIME,
+  FieldType.DATETIME,
+  FieldType.LINK,
+  FieldType.RELATION,
+  FieldType.USER,
+  FieldType.STATUS,
+  FieldType.PHONE,
+  FieldType.TAGS,
+];
+
+const processTaskDynamicOptionCapableTypes = new Set<FieldType>([
+  FieldType.SELECT,
+  FieldType.MULTI_SELECT,
+  FieldType.STATUS,
+]);
+
+const supportsProcessTaskDynamicCategory = (fieldType: FieldType) =>
+  processTaskDynamicOptionCapableTypes.has(fieldType);
+
+const serializeProcessTaskFieldOptions = (field: ModuleField): string =>
+  (field.options || [])
+    .map((option) =>
+      [String(option?.label || ''), String(option?.value || ''), String(option?.color || '')]
+        .filter((item) => item !== '')
+        .join('|')
+    )
+    .join('\n');
+
+const parseProcessTaskFieldOptions = (value: string): Array<{ label: string; value: string; color?: string }> =>
+  value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const [labelRaw, valueRaw, colorRaw] = line.split('|').map((item) => item.trim());
+      const label = labelRaw || valueRaw || `گزینه ${index + 1}`;
+      const optionValue = valueRaw || labelRaw || `option_${index + 1}`;
+      return {
+        label,
+        value: optionValue,
+        ...(colorRaw ? { color: colorRaw } : {}),
+      };
+    });
+
+const TASK_MODAL_CUSTOM_FIELD_DRAFT_ID = '__task_modal_custom_fields__';
+
 const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false }) => {
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -172,7 +272,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     templateName: string | null;
   } | null>(null);
   const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [draftModalTabKey, setDraftModalTabKey] = useState<'stage' | 'automation'>('stage');
+  const [draftModalTabKey, setDraftModalTabKey] = useState<'stage' | 'fields' | 'automation'>('stage');
+  const [draftCustomFields, setDraftCustomFields] = useState<ModuleField[]>([]);
+  const [isDraftCustomFieldModalOpen, setIsDraftCustomFieldModalOpen] = useState(false);
+  const [editingDraftCustomFieldKey, setEditingDraftCustomFieldKey] = useState<string | null>(null);
+  const [draftCustomFieldOptionsEditorKey, setDraftCustomFieldOptionsEditorKey] = useState<string | null>(null);
+  const [taskCustomFieldDrafts, setTaskCustomFieldDrafts] = useState<Record<string, Record<string, any>>>({});
+  const [taskCustomFieldDynamicOptions, setTaskCustomFieldDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [taskCustomFieldRelationOptions, setTaskCustomFieldRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [savingTaskCustomFields, setSavingTaskCustomFields] = useState<Record<string, boolean>>({});
+  const [draftCustomFieldForm] = Form.useForm();
+  const [draftCustomFieldOptionsForm] = Form.useForm<{ optionsText: string }>();
   const [automationDynamicOptions, setAutomationDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [automationRelationOptions, setAutomationRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
@@ -185,22 +295,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       optionFilterProp: 'label' as const,
       getPopupContainer: (node?: HTMLElement | null) => node?.parentElement || document.body,
       placement: 'bottomRight' as const,
+      popupMatchSelectWidth: false,
+      listHeight: 260,
+      virtual: false,
     }),
     []
-  );
-  const assigneeUserOptions = useMemo(
-    () => assignees.users.map((user: any) => ({
-      value: String(user.id),
-      label: user.display_name || user.full_name || user.email || user.mobile_1 || String(user.id),
-    })),
-    [assignees.users]
-  );
-  const assigneeRoleOptions = useMemo(
-    () => assignees.roles.map((role: any) => ({
-      value: String(role.id),
-      label: role.title || role.name || String(role.id),
-    })),
-    [assignees.roles]
   );
   const automationScopeModuleIds = useMemo(
     () => normalizeProcessTargetModuleIds(
@@ -212,29 +311,80 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     [automationContextModuleId, automationContextModuleIds, moduleId]
   );
   const automationScopeModuleId = automationScopeModuleIds[0] || '';
+  const draftCustomAutomationFields = useMemo(
+    () => buildProcessTaskCustomAutomationFields(draftCustomFields),
+    [draftCustomFields]
+  );
   const automationConditionFields = useMemo(
-    () => getProcessAutomationConditionFieldsForModules(automationScopeModuleIds),
-    [automationScopeModuleIds]
+    () => [
+      ...getProcessAutomationConditionFieldsForModules(automationScopeModuleIds),
+      ...draftCustomAutomationFields,
+    ],
+    [automationScopeModuleIds, draftCustomAutomationFields]
+  );
+  const automationConditionFieldsWithoutTaskType = useMemo(
+    () => automationConditionFields.filter((field) => String(field?.key || '').trim() !== '__task__task_type'),
+    [automationConditionFields]
   );
   const automationActionModuleFields = useMemo(
-    () =>
-      getProcessTargetModuleFields(
-        automationScopeModuleIds,
-        getVisibleWorkflowModuleFields,
-        getSyntheticWorkflowAssigneeField
-      ),
-    [automationScopeModuleIds]
+    () => Array.from(
+      new Map(
+        [
+          ...draftCustomAutomationFields,
+          ...getProcessTargetModuleFields(
+            automationScopeModuleIds,
+            getVisibleWorkflowModuleFields,
+            getSyntheticWorkflowAssigneeField
+          ),
+        ]
+          .filter((field) => !!String(field?.key || '').trim())
+          .map((field) => [String(field.key), field] as const)
+      ).values()
+    ),
+    [automationScopeModuleIds, draftCustomAutomationFields]
   );
   const automationActionVariableFields = useMemo(
-    () => [
-      ...createProcessAutomationTaskVariableFields(),
-      ...automationActionModuleFields,
-    ],
+    () => Array.from(
+      new Map(
+        [
+          ...createProcessAutomationTaskVariableFields(),
+          ...automationActionModuleFields,
+        ]
+          .filter((field) => !!String(field?.key || '').trim())
+          .map((field) => [String(field.key), field] as const)
+      ).values()
+    ),
     [automationActionModuleFields]
   );
   const workflowModuleOptions = useMemo(
     () => getProjectModuleOptions(),
     []
+  );
+  const processTaskCustomFieldTypeOptions = useMemo(
+    () =>
+      supportedProcessTaskCustomFieldTypes
+        .filter((type) => isSupportedProcessTaskCustomFieldType(type))
+        .map((type) => ({
+          label: processTaskCustomFieldTypeLabels[type] || type,
+          value: type,
+        })),
+    []
+  );
+  const draftCustomFieldType = Form.useWatch('type', draftCustomFieldForm) || FieldType.TEXT;
+  const draftCustomFieldRelationTargetModule = Form.useWatch('relationTargetModule', draftCustomFieldForm);
+  const draftStageTaskType = String(Form.useWatch('task_type', draftForm) || '').trim();
+  const draftStageTaskTypeLabel = useMemo(
+    () => taskTypeOptions.find((option) => String(option.value || '').trim() === draftStageTaskType)?.label || draftStageTaskType,
+    [draftStageTaskType, taskTypeOptions]
+  );
+  const taskModalCustomFields = useMemo(
+    () => getProcessTaskCustomFieldsFromStage(draftToCreate),
+    [draftToCreate]
+  );
+  const taskModalCustomFieldDraft = taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {};
+  const draftCustomFieldOptionEditor = useMemo(
+    () => draftCustomFields.find((field) => String(field?.key || '') === String(draftCustomFieldOptionsEditorKey || '')) || null,
+    [draftCustomFieldOptionsEditorKey, draftCustomFields]
   );
   const stageModalStyles = useMemo(
     () => ({
@@ -295,6 +445,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     () => `process_group_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
     []
   );
+  const normalizeStageName = useCallback(
+    (val: any) => String(val || '').trim().toLowerCase(),
+    []
+  );
   const getStageProcessGroupMeta = useCallback((stage: any) => {
     const fallbackGroupId = String(stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
     const groupId = String(stage?.process_group_id || fallbackGroupId).trim() || 'default_process_group';
@@ -319,12 +473,44 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const processMeta = recurrence?.process_group && typeof recurrence.process_group === 'object'
       ? recurrence.process_group
       : {};
-    const groupId = String(processMeta?.id || '').trim() || null;
-    const groupLabel = String(processMeta?.name || '').trim() || null;
-    const templateId = String(processMeta?.template_id || '').trim() || null;
+    const groupId = String(processMeta?.id || task?.process_group_id || '').trim() || null;
+    const groupLabel = String(processMeta?.name || task?.process_group_name || '').trim() || null;
+    const templateId = String(processMeta?.template_id || task?.source_template_id || '').trim() || null;
     const templateName = String(processMeta?.template_name || '').trim() || null;
     return { groupId, groupLabel, templateId, templateName };
   }, []);
+  const buildProcessStageTaskKey = useCallback((groupIdValue: any, nameValue: any, sortOrderValue: any) => {
+    const normalizedGroupId = String(groupIdValue || 'default_process_group').trim() || 'default_process_group';
+    const normalizedName = normalizeStageName(nameValue);
+    const numericSort = Number(sortOrderValue || 0);
+    const normalizedSort = Number.isFinite(numericSort) && numericSort > 0 ? numericSort : 0;
+    if (!normalizedName) return '';
+    return `${normalizedGroupId}::${normalizedName}::${normalizedSort}`;
+  }, [normalizeStageName]);
+  const removeSingleMatchingDraftStage = useCallback((stages: any[], targetStage: any) => {
+    if (!Array.isArray(stages)) return [];
+    if (!targetStage) return stages;
+    const targetMeta = getStageProcessGroupMeta(targetStage);
+    const targetId = String(targetStage?.id || '').trim();
+    const targetSort = Number(targetStage?.sort_order || 0);
+    const targetName = normalizeStageName(targetStage?.name || targetStage?.title);
+    let removed = false;
+
+    return stages.filter((stage: any) => {
+      if (removed) return true;
+      const stageMeta = getStageProcessGroupMeta(stage);
+      if (stageMeta.groupId !== targetMeta.groupId) return true;
+
+      const sameId = !!targetId && String(stage?.id || '').trim() === targetId;
+      const sameSort = targetSort > 0 && Number(stage?.sort_order || 0) === targetSort;
+      const sameName = !!targetName && normalizeStageName(stage?.name || stage?.title) === targetName;
+      const shouldRemove = sameId || (sameSort && sameName) || (!targetId && sameSort) || (!targetId && !targetSort && sameName);
+      if (!shouldRemove) return true;
+
+      removed = true;
+      return false;
+    });
+  }, [getStageProcessGroupMeta, normalizeStageName]);
 
   const loadAutomationOptions = useCallback(async () => {
     if (automationConditionFields.length === 0) {
@@ -402,6 +588,83 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setAutomationDynamicOptions(nextDynamicOptions);
     setAutomationRelationOptions(nextRelationOptions);
   }, [automationConditionFields, automationScopeModuleId, taskTypeOptions]);
+
+  const parseRecurrenceInfo = useCallback((value: any) => {
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const getTaskCustomFields = useCallback((task: any) => {
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    return getProcessTaskCustomFieldsFromRecurrence(recurrence);
+  }, [parseRecurrenceInfo]);
+
+  const getTaskCustomFieldValues = useCallback((task: any) => {
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    const fields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
+    return mergeProcessTaskCustomFieldValues(
+      fields,
+      getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
+    );
+  }, [parseRecurrenceInfo]);
+
+  const loadTaskCustomFieldOptions = useCallback(async (inputFields?: ModuleField[]) => {
+    const sourceFields = normalizeProcessTaskCustomFields(
+      inputFields && inputFields.length > 0
+        ? inputFields
+        : (Array.isArray(tasks)
+          ? tasks.flatMap((task: any) => getTaskCustomFields(task))
+          : [])
+    );
+
+    if (sourceFields.length === 0) {
+      setTaskCustomFieldDynamicOptions({});
+      setTaskCustomFieldRelationOptions({});
+      return;
+    }
+
+    const nextDynamicOptions: Record<string, Array<{ label: string; value: string }>> = {};
+    const nextRelationOptions: Record<string, Array<{ label: string; value: string }>> = {};
+
+    await Promise.all(sourceFields.map(async (field) => {
+      if (field.dynamicOptionsCategory && !nextDynamicOptions[field.dynamicOptionsCategory]) {
+        nextDynamicOptions[field.dynamicOptionsCategory] = field.dynamicOptionsCategory === 'task_type'
+          ? taskTypeOptions
+          : await fetchDynamicOptionsByCategory(supabase, field.dynamicOptionsCategory);
+      }
+
+      if (field.type === FieldType.USER) {
+        const directory = await fetchAssigneeDirectory(supabase);
+        nextRelationOptions[field.key] = directory.users.map((user) => ({
+          label: String(user.display_name || user.full_name || user.id).trim(),
+          value: String(user.id),
+        }));
+        return;
+      }
+
+      if (field.type === FieldType.RELATION && field.relationConfig?.targetModule) {
+        nextRelationOptions[field.key] = await fetchRelationOptionsForField(
+          supabase,
+          field as any,
+          { limit: 300 }
+        );
+      }
+    }));
+
+    setTaskCustomFieldDynamicOptions(nextDynamicOptions);
+    setTaskCustomFieldRelationOptions(nextRelationOptions);
+  }, [getTaskCustomFields, taskTypeOptions, tasks]);
+
+  useEffect(() => {
+    void loadTaskCustomFieldOptions();
+  }, [loadTaskCustomFieldOptions]);
 
   useEffect(() => {
     setDraftLocal((prev) => (prev === normalizedDraftStages ? prev : normalizedDraftStages));
@@ -511,17 +774,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
   }, [normalizeHandoverDeliveryRow, sumDeliveredRows, toNumber]);
 
-  const parseRecurrenceInfo = useCallback((value: any) => {
-    if (!value) return {};
-    if (typeof value === 'object') return value;
-    if (typeof value !== 'string') return {};
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  }, []);
   const parseAssigneeComboValue = useCallback((raw: any) => {
     const rawValue = String(raw || '').trim();
     if (!rawValue) {
@@ -878,7 +1130,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const { data, error } = await query.order('sort_order', { ascending: true });
 
       if (error) throw error;
-      const next = data || [];
+      const next = (data || []).map((row: any) => withProcessTaskCustomFieldValues(row));
       setTasks(next);
       return next;
     } catch (error: any) {
@@ -2133,6 +2385,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     } else {
       setActiveProcessGroupMeta(null);
     }
+    const stageCustomFields = getProcessTaskCustomFieldsFromStage(draftStage);
+    const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(stageCustomFields, {});
+    setTaskCustomFieldDrafts((prev) => {
+      const next = { ...prev };
+      if (stageCustomFields.length > 0) {
+        next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] = stageCustomFieldValues;
+      } else {
+        delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
+      }
+      return next;
+    });
+    void loadTaskCustomFieldOptions(stageCustomFields);
     const defaultRoleId = draftStage?.default_assignee_role_id ? String(draftStage.default_assignee_role_id) : null;
     const defaultUserId = draftStage?.default_assignee_id ? String(draftStage.default_assignee_id) : null;
     const assigneeCombo = defaultRoleId
@@ -2163,6 +2427,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const taskDescription = String(values?.description || '').trim() || null;
       const taskType = String(values?.task_type || '').trim() || null;
       const stageAutomationRules = normalizeProcessAutomationRules(draftToCreate?.automation_rules);
+      const stageCustomFields = getProcessTaskCustomFieldsFromStage(draftToCreate);
+      const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(
+        stageCustomFields,
+        taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {}
+      );
       const stageProcessLinkMap = draftToCreate?.process_link_map && typeof draftToCreate.process_link_map === 'object'
         ? draftToCreate.process_link_map
         : {};
@@ -2220,6 +2489,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         process_group_id: activeProcessGroupMeta?.id || null,
         ...buildTaskSourceInitialValues(isProductionOrder ? 'production_orders' : moduleId, recordId),
       };
+      const currentRecurrence = values?.recurrence_info && typeof values.recurrence_info === 'object'
+        ? values.recurrence_info
+        : {};
+
+      if (stageCustomFields.length > 0) {
+        payload.recurrence_info = {
+          ...currentRecurrence,
+          ...(taskType ? { task_type: taskType } : {}),
+          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+          [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
+        };
+      }
 
       if (isProductionOrder) {
         payload.produced_qty = 0;
@@ -2228,15 +2509,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         payload.produced_qty = 0;
         payload.production_line_id = null;
         payload.production_shelf_id = null;
-        const currentRecurrence = values?.recurrence_info && typeof values.recurrence_info === 'object'
-          ? values.recurrence_info
-          : {};
         payload.recurrence_info = {
-          ...currentRecurrence,
+          ...(payload.recurrence_info || currentRecurrence),
           ...(taskType ? { task_type: taskType } : {}),
           process_automation_rules: stageAutomationRules,
           process_target_module_ids: stageTargetModuleIds,
           process_links: stageProcessLinkMap,
+          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+          [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         };
         if (activeProcessGroupMeta?.id) {
           payload.recurrence_info = {
@@ -2253,15 +2533,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       await insertTasksWithFallback([payload]);
 
-      message.success('مرحله جدید اضافه شد');
-      if (draftToCreate?.id && isProcessRecordModule) {
-        const nextDrafts = (Array.isArray(draftLocal) ? draftLocal : []).filter(
-          (stage: any) => String(stage?.id || '') !== String(draftToCreate.id)
+      message.success(isProcessModule ? 'فعالیت جدید اضافه شد' : 'مرحله جدید اضافه شد');
+      if (draftToCreate && isProcessRecordModule) {
+        const nextDrafts = removeSingleMatchingDraftStage(
+          Array.isArray(draftLocal) ? draftLocal : [],
+          draftToCreate
         );
         await saveDraftStages(nextDrafts);
       }
       setIsTaskModalOpen(false);
       taskForm.resetFields();
+      setTaskCustomFieldDrafts((prev) => {
+        const next = { ...prev };
+        delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
+        return next;
+      });
       setActiveLineId(null);
       setActiveProcessGroupMeta(null);
       setDraftToCreate(null);
@@ -2269,7 +2555,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     } catch (error: any) {
       const debugText = String(error?.message || error?.details || error?.hint || '').trim();
       console.error('Task quick-create failed', error);
-      message.error(debugText ? `خطا در ثبت مرحله: ${debugText}` : toFaErrorMessage(error, 'خطا در ثبت اطلاعات'));
+      message.error(
+        debugText
+          ? `خطا در ثبت ${isProcessModule ? 'فعالیت' : 'مرحله'}: ${debugText}`
+          : toFaErrorMessage(error, 'خطا در ثبت اطلاعات')
+      );
     }
   };
 
@@ -2287,7 +2577,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
       setTasks((prev) => prev.map((item: any) => (
         String(item?.id) === String(taskId)
-          ? { ...item, ...updatedTask }
+          ? withProcessTaskCustomFieldValues({ ...item, ...updatedTask })
           : item
       )));
       message.success('وضعیت بروزرسانی شد');
@@ -2313,12 +2603,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
       setTasks((prev) => prev.map((row: any) => (
         String(row?.id) === String(task.id)
-          ? {
+          ? withProcessTaskCustomFieldValues({
               ...row,
               assignee_id: assigneeType === 'user' ? assigneeId : null,
               assignee_role_id: assigneeType === 'role' ? assigneeId : null,
               assignee_type: assigneeType,
-            }
+            })
           : row
       )));
       message.success('مسئول بروزرسانی شد');
@@ -2342,7 +2632,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
       setTasks((prev) => prev.map((row: any) => (
         String(row?.id) === taskId
-          ? { ...row, task_report: reportText || null, recurrence_info: nextRecurrence }
+          ? withProcessTaskCustomFieldValues({ ...row, task_report: reportText || null, recurrence_info: nextRecurrence })
           : row
       )));
       message.success('گزارش فعالیت ثبت شد');
@@ -2352,6 +2642,60 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setSavingReportIds((prev) => ({ ...prev, [taskId]: false }));
     }
   };
+
+  const updateTaskCustomFieldDraft = useCallback((taskId: string, fieldKey: string, value: any) => {
+    setTaskCustomFieldDrafts((prev) => ({
+      ...prev,
+      [taskId]: {
+        ...(prev[taskId] || {}),
+        [fieldKey]: value,
+      },
+    }));
+  }, []);
+
+  const handleSaveTaskCustomFields = useCallback(async (task: any) => {
+    if (!task?.id) return;
+    const taskId = String(task.id);
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    const fields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
+    if (fields.length === 0) return;
+
+    const currentValues = mergeProcessTaskCustomFieldValues(
+      fields,
+      getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
+    );
+    const nextValues = {
+      ...currentValues,
+      ...(taskCustomFieldDrafts[taskId] || {}),
+    };
+    const nextRecurrence = {
+      ...recurrence,
+      [PROCESS_TASK_CUSTOM_FIELDS_KEY]: fields,
+      [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues,
+    };
+
+    try {
+      setSavingTaskCustomFields((prev) => ({ ...prev, [taskId]: true }));
+      await updateTaskWithFallback(taskId, {
+        recurrence_info: nextRecurrence,
+      });
+      setTasks((prev) => prev.map((row: any) => (
+        String(row?.id) === taskId
+          ? withProcessTaskCustomFieldValues({ ...row, recurrence_info: nextRecurrence })
+          : row
+      )));
+      setTaskCustomFieldDrafts((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+      message.success('فیلدهای اختصاصی فعالیت ذخیره شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره فیلدهای اختصاصی ناموفق بود'));
+    } finally {
+      setSavingTaskCustomFields((prev) => ({ ...prev, [taskId]: false }));
+    }
+  }, [parseRecurrenceInfo, taskCustomFieldDrafts, updateTaskWithFallback]);
 
   const handleProducedQtyChange = async (taskId: string, value: number | null) => {
     try {
@@ -2363,13 +2707,65 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       if (error) throw error;
       setTasks((prev) => prev.map((item: any) => (
         String(item?.id) === String(taskId)
-          ? { ...item, produced_qty: nextProducedQty }
+          ? withProcessTaskCustomFieldValues({ ...item, produced_qty: nextProducedQty })
           : item
       )));
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در ثبت مقدار تولید شده'));
     }
   };
+  const handleUnlinkTaskFromProcess = useCallback(async (task: any) => {
+    if (!task?.id) return;
+    const taskId = String(task.id);
+    try {
+      const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+      const nextRecurrence = { ...recurrence };
+      delete nextRecurrence.process_group;
+      delete nextRecurrence.process_links;
+      const nextSourcePatch = buildTaskSourcePatch({
+        related_to_module: null,
+        source_module_id: null,
+        source_record_id: null,
+      });
+      await updateTaskWithFallback(taskId, {
+        ...nextSourcePatch,
+        source_template_id: null,
+        process_group_id: null,
+        recurrence_info: nextRecurrence,
+      });
+      setTasks((prev) => prev.map((row: any) => (
+        String(row?.id) === taskId
+          ? withProcessTaskCustomFieldValues({
+              ...row,
+              ...nextSourcePatch,
+              source_template_id: null,
+              process_group_id: null,
+              recurrence_info: nextRecurrence,
+            })
+          : row
+      )));
+      setOpenTaskPopoverId(null);
+      message.success('اتصال وظیفه از فرآیند و رکورد قطع شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'قطع اتصال وظیفه ناموفق بود'));
+    }
+  }, [parseRecurrenceInfo, updateTaskWithFallback]);
+  const handleDeleteTaskCompletely = useCallback(async (task: any) => {
+    if (!task?.id) return;
+    const taskId = String(task.id);
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('id', taskId);
+      if (error) throw error;
+      setTasks((prev) => prev.filter((row: any) => String(row?.id) !== taskId));
+      setOpenTaskPopoverId(null);
+      message.success('وظیفه حذف شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'حذف وظیفه ناموفق بود'));
+    }
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -2473,12 +2869,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return Boolean(assigneeUserId && String(assigneeUserId) === String(currentUser.id));
   }, [currentUser.id, currentUser.roleId]);
 
-  const getShelfLabel = useCallback((shelfId: string | null | undefined) => {
-    if (!shelfId) return 'تعیین نشده';
-    const option = productionShelfOptions.find((item) => String(item.value) === String(shelfId));
-    return option?.label || String(shelfId);
-  }, [productionShelfOptions]);
-
   const renderDate = (dateVal: any) => {
     if (!dateVal) return null;
     try {
@@ -2552,31 +2942,258 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }));
   }, [handoverForms]);
 
+  const getProcessTaskFieldOptions = useCallback((field: ModuleField) => {
+    if (field.dynamicOptionsCategory) {
+      return taskCustomFieldDynamicOptions[field.dynamicOptionsCategory] || [];
+    }
+    if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) {
+      return (field.options || []).map((option) => ({
+        label: String(option?.label ?? option?.value ?? '').trim(),
+        value: String(option?.value ?? ''),
+      }));
+    }
+    if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
+      return taskCustomFieldRelationOptions[field.key] || [];
+    }
+    return (field.options || []).map((option) => ({
+      label: String(option?.label ?? option?.value ?? '').trim(),
+      value: String(option?.value ?? ''),
+    }));
+  }, [taskCustomFieldDynamicOptions, taskCustomFieldRelationOptions]);
+
+  const renderTaskCustomFieldInput = useCallback((task: any, field: ModuleField, value: any) => {
+    const taskId = String(task?.id || '');
+    const disabled = !!savingTaskCustomFields[taskId];
+    const onValueChange = (nextValue: any) => updateTaskCustomFieldDraft(taskId, String(field.key), nextValue);
+    const options = getProcessTaskFieldOptions(field);
+
+    if (field.dynamicOptionsCategory) {
+      return (
+        <DynamicSelectField
+          value={value}
+          onChange={(nextValue) => onValueChange(nextValue)}
+          options={options}
+          category={field.dynamicOptionsCategory}
+          mode={
+            field.type === FieldType.MULTI_SELECT
+              ? 'multiple'
+              : field.type === FieldType.TAGS
+                ? 'tags'
+                : undefined
+          }
+          disabled={disabled}
+          className="w-full"
+          allowClear
+          showSearch
+          getPopupContainer={(node) => node?.parentElement || document.body}
+          popupStyle={{ zIndex: 12620 }}
+          onOptionsUpdate={() => { void loadTaskCustomFieldOptions([field]); }}
+          protectedValues={field.dynamicOptionsCategory === 'task_type' ? getTaskTypeProtectedValues() : undefined}
+        />
+      );
+    }
+
+    if (field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
+      return (
+        <Input.TextArea
+          value={value}
+          autoSize={{ minRows: 2, maxRows: 4 }}
+          disabled={disabled}
+          onChange={(event) => onValueChange(event.target.value)}
+        />
+      );
+    }
+
+    if (
+      field.type === FieldType.NUMBER
+      || field.type === FieldType.PRICE
+      || field.type === FieldType.PERCENTAGE
+      || field.type === FieldType.STOCK
+    ) {
+      return (
+        <InputNumber
+          className="w-full persian-number"
+          value={value}
+          disabled={disabled}
+          onChange={(nextValue) => onValueChange(nextValue)}
+        />
+      );
+    }
+
+    if (field.type === FieldType.CHECKBOX) {
+      return (
+        <Switch
+          checked={!!value}
+          disabled={disabled}
+          onChange={(checked) => onValueChange(checked)}
+        />
+      );
+    }
+
+    if (field.type === FieldType.DATE) {
+      return (
+        <PersianDatePicker
+          type="DATE"
+          value={value}
+          disabled={disabled}
+          onChange={(nextValue) => onValueChange(nextValue)}
+          className="w-full"
+          zIndex={12620}
+        />
+      );
+    }
+
+    if (field.type === FieldType.TIME) {
+      return (
+        <PersianDatePicker
+          type="TIME"
+          value={value}
+          disabled={disabled}
+          onChange={(nextValue) => onValueChange(nextValue)}
+          className="w-full"
+          zIndex={12620}
+        />
+      );
+    }
+
+    if (field.type === FieldType.DATETIME) {
+      return (
+        <PersianDatePicker
+          type="DATETIME"
+          value={value}
+          disabled={disabled}
+          onChange={(nextValue) => onValueChange(nextValue)}
+          className="w-full"
+          zIndex={12620}
+        />
+      );
+    }
+
+    if (field.type === FieldType.MULTI_SELECT) {
+      return (
+        <Select
+          mode="multiple"
+          value={Array.isArray(value) ? value : []}
+          disabled={disabled}
+          options={options}
+          className="w-full"
+          optionFilterProp="label"
+          showSearch
+          maxTagCount="responsive"
+          getPopupContainer={(node) => node?.parentElement || document.body}
+          onChange={(nextValue) => onValueChange(nextValue)}
+        />
+      );
+    }
+
+    if (field.type === FieldType.TAGS) {
+      return (
+        <Select
+          mode="tags"
+          value={Array.isArray(value) ? value : []}
+          disabled={disabled}
+          options={options}
+          className="w-full"
+          tokenSeparators={[',']}
+          maxTagCount="responsive"
+          getPopupContainer={(node) => node?.parentElement || document.body}
+          onChange={(nextValue) => onValueChange(nextValue)}
+        />
+      );
+    }
+
+    if (
+      field.type === FieldType.SELECT
+      || field.type === FieldType.STATUS
+      || field.type === FieldType.RELATION
+      || field.type === FieldType.USER
+    ) {
+      return (
+        <Select
+          allowClear
+          value={value ?? undefined}
+          disabled={disabled}
+          options={options}
+          className="w-full"
+          showSearch
+          optionFilterProp="label"
+          getPopupContainer={(node) => node?.parentElement || document.body}
+          onChange={(nextValue) => onValueChange(nextValue)}
+        />
+      );
+    }
+
+    return (
+      <Input
+        value={value ?? ''}
+        disabled={disabled}
+        className="w-full"
+        onChange={(event) => onValueChange(event.target.value)}
+      />
+    );
+  }, [getProcessTaskFieldOptions, loadTaskCustomFieldOptions, savingTaskCustomFields, updateTaskCustomFieldDraft]);
+
   const renderPopupContent = (task: any) => {
     const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
     const currentAssigneeCombo = task?.assignee_role_id
       ? `role:${String(task.assignee_role_id)}`
       : (task?.assignee_id ? `user:${String(task.assignee_id)}` : undefined);
     const fallback = getTaskOptionalFieldFallback(task);
+    const customFields = getTaskCustomFields(task);
+    const currentCustomFieldValues = getTaskCustomFieldValues(task);
+    const taskCustomFieldDraft = taskCustomFieldDrafts[String(task?.id || '')] || {};
     const taskTypeValue = String(task?.task_type || fallback.taskType || '').trim() || undefined;
     const reportDraft = taskReportDrafts[String(task.id)] ?? fallback.taskReport;
     const hasWage = task?.wage !== undefined && task?.wage !== null && Number(task.wage) !== 0;
     const hasWeight = task?.weight !== undefined && task?.weight !== null && Number(task.weight) !== 0;
+    const taskStatusValue = String(task?.status || '').trim();
+    const taskStatusLabel = taskStatusValue === 'done'
+      ? 'تکمیل شده'
+      : taskStatusValue === 'in_progress'
+        ? 'در حال انجام'
+        : taskStatusValue === 'review'
+          ? 'بازبینی'
+          : taskStatusValue === 'todo'
+            ? 'انجام نشده'
+            : taskStatusValue || null;
+    const taskStatusTagColor = taskStatusValue === 'done'
+      ? 'green'
+      : taskStatusValue === 'in_progress'
+        ? 'blue'
+        : taskStatusValue === 'review'
+          ? 'gold'
+          : 'default';
 
     return (
-      <div className="w-80 p-1 font-['Vazirmatn']">
-        <div className="flex justify-between items-start mb-3 border-b border-leather-100 pb-2">
-          <h4 className="font-bold text-leather-900 dark:text-gray-100 m-0 text-sm line-clamp-2">{task.title || task.name}</h4>
+      <div
+        className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
+        style={{
+          width: 'min(92vw, 26rem)',
+          maxWidth: 'calc(100vw - 1rem)',
+          maxHeight: 'min(78vh, 42rem)',
+          padding: '0.75rem',
+        }}
+      >
+        <div className="mb-3 flex items-start justify-between border-b border-[rgba(var(--brand-200-rgb),0.45)] pb-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+          <div className="space-y-2">
+            <h4 className="m-0 text-sm font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100 line-clamp-2">{task.title || task.name}</h4>
+            {(taskStatusLabel || taskTypeValue) ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {taskStatusLabel ? <Tag color={taskStatusTagColor}>{taskStatusLabel}</Tag> : null}
+                {taskTypeValue ? <Tag>{taskTypeValue}</Tag> : null}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <div className="space-y-3 mb-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-gray-500">مسئول:</span>
             <Select
               size="small"
               value={currentAssigneeCombo}
               onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
-              className="w-44"
+              className="w-full sm:w-44"
               disabled={readOnly}
               allowClear
               showSearch
@@ -2601,13 +3218,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </Select>
           </div>
 
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-gray-500">وضعیت:</span>
             <Select
               size="small"
               value={task.status}
               onChange={(val) => { void handleStatusChange(task.id, val); }}
-              className="w-44"
+              className="w-full sm:w-44"
               disabled={!canEditTaskStatus}
               getPopupContainer={(node) => node?.parentElement || document.body}
               styles={{ popup: { root: { zIndex: 10050 } } }}
@@ -2628,12 +3245,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
 
           {isProductionOrder && (
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-xs text-gray-500">مقدار تولید شده:</span>
               <InputNumber
                 size="small"
                 min={0}
-                className="w-44 persian-number"
+                className="w-full sm:w-44 persian-number"
                 value={toNumber(task?.produced_qty)}
                 disabled={readOnly || String(task?.status || '').toLowerCase() === 'todo' || String(task?.status || '').toLowerCase() === 'pending'}
                 onChange={(val) => {
@@ -2650,30 +3267,63 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </div>
           </div>
 
-          <div className="bg-leather-50/70 dark:bg-[#111827] p-2 rounded-lg border border-leather-100 dark:border-gray-700 space-y-2 text-xs text-gray-700 dark:text-gray-300">
+          {customFields.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-gray-500">فیلدهای اختصاصی این فعالیت:</span>
+                {savingTaskCustomFields[String(task.id)] && <span className="text-[11px] text-gray-500">در حال ذخیره...</span>}
+              </div>
+              <div className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-900/80 p-2">
+                {customFields.map((field) => (
+                  <div key={`${task.id}-${field.key}`} className="space-y-1">
+                    <div className="text-[11px] text-gray-500">{field.labels?.fa || field.key}</div>
+                    {renderTaskCustomFieldInput(
+                      task,
+                      field,
+                      Object.prototype.hasOwnProperty.call(taskCustomFieldDraft, String(field.key))
+                        ? taskCustomFieldDraft[String(field.key)]
+                        : currentCustomFieldValues[String(field.key)]
+                    )}
+                  </div>
+                ))}
+                <div className="flex justify-end pt-1">
+                  <Button
+                    size="small"
+                    icon={<SaveOutlined />}
+                    loading={!!savingTaskCustomFields[String(task.id)]}
+                    onClick={() => { void handleSaveTaskCustomFields(task); }}
+                  >
+                    ثبت فیلدها
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2 break-words rounded-lg border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.55)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[#111827] dark:text-gray-300">
             <div className="flex items-center gap-2">
-              <OrderedListOutlined className="text-leather-700" />
+              <OrderedListOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
               <span>ترتیب: {toPersianNumber(task.sort_order || '-')}</span>
             </div>
             <div className="flex items-center gap-2">
-              {task.assignee_type === 'role' ? <TeamOutlined className="text-leather-700" /> : <UserOutlined className="text-leather-700" />}
+              {task.assignee_type === 'role' ? <TeamOutlined className="text-[rgba(var(--brand-700-rgb),1)]" /> : <UserOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />}
               <span>مسئول: {getAssigneeLabel(task)}</span>
             </div>
             {hasWage && (
               <div className="flex items-center gap-2">
-                <span className="text-leather-700">💰</span>
+                <span className="text-[rgba(var(--brand-700-rgb),1)]">💰</span>
                 <span>دستمزد: {toPersianNumber(Number(task.wage || 0).toLocaleString('en-US'))} تومان</span>
               </div>
             )}
             {hasWeight && (
               <div className="flex items-center gap-2">
-                <span className="text-leather-700">وزن:</span>
+                <span className="text-[rgba(var(--brand-700-rgb),1)]">وزن:</span>
                 <span>{toPersianNumber(task.weight)}</span>
               </div>
             )}
             {task.due_date && (
               <div className="flex items-center gap-2">
-                <ClockCircleOutlined className="text-leather-700" />
+                <ClockCircleOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
                 <span>موعد: {renderDate(task.due_date)}</span>
               </div>
             )}
@@ -2707,12 +3357,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
         </div>
 
-        <div className="flex justify-between pt-2 border-t border-leather-100">
-          {supportsHandover ? (
-            <Button
-              size="small"
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+            {supportsHandover ? (
+              <Button
+                size="small"
               type="link"
-              className="text-xs text-leather-700 hover:text-leather-600 px-0"
+              className="px-0 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
               onClick={() => {
                 setOpenTaskPopoverId(null);
                 void openTaskHandoverModal(task);
@@ -2720,17 +3370,58 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             >
               فرم‌های تحویل کالا
             </Button>
-          ) : (
-            <span />
-          )}
-          <Link to={`/tasks/${task.id}`} target="_blank">
-            <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-leather-700 hover:text-leather-600">
-              جزئیات کامل
-            </Button>
-          </Link>
+            ) : (
+              <span />
+            )}
+            <div className="flex items-center justify-end gap-1">
+              <Tooltip title="قطع اتصال از این فرآیند و رکورد">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<LinkOutlined />}
+                  className="text-gray-500 hover:!text-amber-600"
+                  onClick={() => {
+                    Modal.confirm({
+                      title: 'قطع اتصال وظیفه',
+                      content: 'این وظیفه فقط از این فرآیند و رکورد جدا می‌شود و خود فعالیت باقی می‌ماند. ادامه می‌دهید؟',
+                      okText: 'قطع اتصال',
+                      cancelText: 'انصراف',
+                      onOk: async () => {
+                        await handleUnlinkTaskFromProcess(task);
+                      },
+                    });
+                  }}
+                />
+              </Tooltip>
+              <Tooltip title="حذف کامل وظیفه">
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => {
+                    Modal.confirm({
+                      title: 'حذف کامل وظیفه',
+                      content: 'این فعالیت به طور کامل حذف می‌شود. ادامه می‌دهید؟',
+                      okText: 'حذف',
+                      cancelText: 'انصراف',
+                      okButtonProps: { danger: true },
+                      onOk: async () => {
+                        await handleDeleteTaskCompletely(task);
+                      },
+                    });
+                  }}
+                />
+              </Tooltip>
+              <Link to={`/tasks/${task.id}`} target="_blank">
+                <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]">
+                  جزئیات کامل
+                </Button>
+              </Link>
+            </div>
+          </div>
         </div>
-      </div>
-    );
+      );
   };
 
   const draftList = Array.isArray(draftLocal) ? draftLocal : [];
@@ -2991,6 +3682,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           description: String(metadata?.description || '').trim() || null,
           task_type: String(metadata?.task_type || '').trim() || null,
           automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
+          process_task_custom_fields: normalizeProcessTaskCustomFields(metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -3136,6 +3828,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           description: String(metadata?.description || '').trim() || null,
           task_type: String(metadata?.task_type || '').trim() || null,
           automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
+          process_task_custom_fields: normalizeProcessTaskCustomFields(metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -3212,9 +3905,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, [buildProcessGroupId, draftLocal, getStageProcessGroupMeta, saveDraftStages]);
 
+  const getConnectedTaskCountForProcessGroup = useCallback((groupId: string) => {
+    const normalizedGroupId = String(groupId || '').trim();
+    if (!normalizedGroupId) return 0;
+    return tasks.filter((task: any) => String(getTaskProcessGroupMeta(task).groupId || '').trim() === normalizedGroupId).length;
+  }, [getTaskProcessGroupMeta, tasks]);
   const handleDeleteProcessGroup = useCallback(async (groupId: string) => {
     const normalizedGroupId = String(groupId || '').trim();
     if (!normalizedGroupId) return;
+    const connectedTaskCount = getConnectedTaskCountForProcessGroup(normalizedGroupId);
+    if (connectedTaskCount > 0) {
+      message.warning('فرآیندی که به فعالیت متصل است قابل حذف نیست');
+      return;
+    }
     try {
       setLoading(true);
       const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
@@ -3227,7 +3930,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     } finally {
       setLoading(false);
     }
-  }, [draftLocal, getStageProcessGroupMeta, saveDraftStages]);
+  }, [draftLocal, getConnectedTaskCountForProcessGroup, getStageProcessGroupMeta, saveDraftStages]);
 
   const parseStageAssignee = useCallback((stage: any) => {
     const defaultRoleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
@@ -3310,20 +4013,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const baseDate = await getProcessBaseDate();
       const dueByStageKey = new Map<string, string | null>();
       let previousDueAt: Date | null = null;
-      const buildStageTaskKey = (groupIdValue: any, nameValue: any, sortOrderValue: any) => {
-        const normalizedGroupId = String(groupIdValue || 'default_process_group').trim() || 'default_process_group';
-        const normalizedName = String(nameValue || '').trim().toLowerCase();
-        const normalizedSort = Number(sortOrderValue || 0);
-        return `${normalizedGroupId}::${normalizedName}::${normalizedSort}`;
-      };
       stageRows.forEach((stage: any) => {
-        const normalizedName = String(stage?.name || stage?.title || '').trim().toLowerCase();
+        const normalizedName = normalizeStageName(stage?.name || stage?.title);
         if (!normalizedName) return;
         const { groupId } = getStageProcessGroupMeta(stage);
         const dueAt = computeStageDueAt(stage, baseDate, previousDueAt);
         if (dueAt) previousDueAt = dueAt;
         dueByStageKey.set(
-          buildStageTaskKey(groupId, normalizedName, stage?.sort_order),
+          buildProcessStageTaskKey(groupId, normalizedName, stage?.sort_order),
           dueAt ? dueAt.toISOString() : null
         );
       });
@@ -3333,7 +4030,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           .filter((task: any) => processTaskModules.has(String(task?.related_to_module || '')))
           .map((task: any) => {
             const taskMeta = getTaskProcessGroupMeta(task);
-            return buildStageTaskKey(
+            return buildProcessStageTaskKey(
               taskMeta.groupId || 'default_process_group',
               task?.name || task?.title || '',
               task?.sort_order
@@ -3346,14 +4043,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .filter((stage: any) => {
           const stageName = String(stage?.name || stage?.title || '').trim();
           const stageMeta = getStageProcessGroupMeta(stage);
-          const stageKey = buildStageTaskKey(stageMeta.groupId, stageName, stage?.sort_order);
+          const stageKey = buildProcessStageTaskKey(stageMeta.groupId, stageName, stage?.sort_order);
           if (!stageName || existingByStageKey.has(stageKey)) return false;
           existingByStageKey.add(stageKey);
           return true;
         })
         .map((stage: any, index: number) => {
           const stageName = String(stage?.name || stage?.title || `مرحله ${index + 1}`).trim();
-          const normalized = stageName.toLowerCase();
+          const normalized = normalizeStageName(stageName);
           const stageMeta = getStageProcessGroupMeta(stage);
           const assignee = parseStageAssignee(stage);
           const recurrenceBase = stage?.recurrence_info && typeof stage.recurrence_info === 'object'
@@ -3362,6 +4059,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           const stageTaskType = String(stage?.task_type || '').trim() || null;
           const stageDescription = String(stage?.description || '').trim() || null;
           const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
+          const stageCustomFields = getProcessTaskCustomFieldsFromStage(stage);
+          const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(stageCustomFields, {});
           const taskRow: any = {
             name: stageName,
             status: 'todo',
@@ -3379,12 +4078,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             wage: Number(stage?.wage || 0),
             weight: Number(stage?.weight || 0),
             sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-            due_date: dueByStageKey.get(buildStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null,
+            due_date: dueByStageKey.get(buildProcessStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null,
             created_by: userId,
             recurrence_info: {
               ...recurrenceBase,
               ...(stageTaskType ? { task_type: stageTaskType } : {}),
               process_automation_rules: stageAutomationRules,
+              [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+              [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
               process_group: {
                 id: stageMeta.groupId,
                 name: stageMeta.groupLabel,
@@ -3410,6 +4111,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setLoading(false);
     }
   }, [
+    buildProcessStageTaskKey,
     computeStageDueAt,
     draftLocal,
     fetchTasks,
@@ -3419,6 +4121,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     insertTasksWithFallback,
     isProcessRecordModule,
     moduleId,
+    normalizeStageName,
     parseStageAssignee,
     processTaskModules,
     recordId,
@@ -3429,7 +4132,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const assigneeRaw = String(values?.default_assignee_combo || '');
     const assigneeType = assigneeRaw.startsWith('role:') ? 'role' : (assigneeRaw.startsWith('user:') ? 'user' : null);
     const assigneeId = assigneeType ? assigneeRaw.split(':')[1] : null;
-    const automationRules = normalizeProcessAutomationRules(draftAutomationRules);
+    const stageTaskType = String(values?.task_type || '').trim() || null;
+    const automationRules = normalizeProcessAutomationRules(draftAutomationRules.map((rule) => ({
+      ...rule,
+      conditions_all: [
+        ...(stageTaskType ? [{
+          id: '__locked_stage_task_type__',
+          field: '__task__task_type',
+          operator: 'eq',
+          value: stageTaskType,
+        }] : []),
+        ...((Array.isArray(rule?.conditions_all) ? rule.conditions_all : []).filter(
+          (condition) => String(condition?.field || '').trim() !== '__task__task_type'
+        )),
+      ],
+      conditions_any: (Array.isArray(rule?.conditions_any) ? rule.conditions_any : []).filter(
+        (condition) => String(condition?.field || '').trim() !== '__task__task_type'
+      ),
+    })));
     let next = [...draftLocal];
     if (editingDraft?.id) {
       next = next.map((stage: any) =>
@@ -3438,7 +4158,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               ...stage,
               name: values.name,
               description: String(values?.description || '').trim() || null,
-              task_type: String(values?.task_type || '').trim() || null,
+              task_type: stageTaskType,
               sort_order: values.sort_order || stage.sort_order,
               wage: Number(values?.wage || 0),
               weight: Number(values?.weight || 0),
@@ -3448,6 +4168,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               duration_unit: values?.duration_unit || 'day',
               duration_from: values?.duration_from || 'project_start',
               automation_rules: automationRules,
+              process_task_custom_fields: normalizeProcessTaskCustomFields(draftCustomFields),
             }
           : stage
       );
@@ -3456,7 +4177,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         id: Date.now(),
         name: values.name,
         description: String(values?.description || '').trim() || null,
-        task_type: String(values?.task_type || '').trim() || null,
+        task_type: stageTaskType,
         sort_order: values.sort_order || ((draftLocal.length + 1) * 10),
         wage: Number(values?.wage || 0),
         weight: Number(values?.weight || 0),
@@ -3466,6 +4187,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_unit: values?.duration_unit || 'day',
         duration_from: values?.duration_from || 'project_start',
         automation_rules: automationRules,
+        process_task_custom_fields: normalizeProcessTaskCustomFields(draftCustomFields),
       });
     }
     await saveDraftStages(next);
@@ -3474,7 +4196,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     draftForm.resetFields();
   };
 
-  const openDraftStageModal = useCallback((stage?: any | null, tab: 'stage' | 'automation' = 'stage') => {
+  const openDraftStageModal = useCallback((stage?: any | null, tab: 'stage' | 'fields' | 'automation' = 'stage') => {
     setEditingDraft(stage || null);
     setDraftModalTabKey(tab);
     setIsDraftModalOpen(true);
@@ -3506,6 +4228,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       id: String(rule?.actions?.[0]?.id || `proc_action_${ruleId}`),
                       type: 'send_note',
                       config: {
+                        ...((rule?.actions || []).find((action) => String(action?.type || '') === 'send_note')?.config || {}),
                         note_text: String(patch.note_text || ''),
                       },
                     },
@@ -3527,7 +4250,112 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setDraftAutomationRules((prev) => prev.filter((rule) => String(rule.id) !== String(ruleId)));
   }, []);
 
-  const handleRemoveDraftStage = async (id: any) => {
+  const openDraftCustomFieldModal = useCallback((field?: ModuleField | null) => {
+    const nextField = field || null;
+    setEditingDraftCustomFieldKey(nextField?.key ? String(nextField.key) : null);
+    draftCustomFieldForm.setFieldsValue({
+      key: nextField?.key || undefined,
+      labelFa: nextField?.labels?.fa || '',
+      type: nextField?.type || FieldType.TEXT,
+      relationTargetModule: nextField?.relationConfig?.targetModule || undefined,
+      relationTargetField: nextField?.relationConfig?.targetField || undefined,
+      dynamicCategory: nextField?.dynamicOptionsCategory || undefined,
+    });
+    setIsDraftCustomFieldModalOpen(true);
+  }, [draftCustomFieldForm]);
+
+  const closeDraftCustomFieldModal = useCallback(() => {
+    setIsDraftCustomFieldModalOpen(false);
+    setEditingDraftCustomFieldKey(null);
+    draftCustomFieldForm.resetFields();
+  }, [draftCustomFieldForm]);
+
+  const saveDraftCustomField = useCallback(async () => {
+    try {
+      const values = await draftCustomFieldForm.validateFields();
+      const normalizedKey = normalizeProcessTaskCustomFieldKey(values?.key);
+      if (!normalizedKey) {
+        message.error('کلید فیلد معتبر نیست.');
+        return;
+      }
+      if (isReservedProcessTaskCustomFieldKey(normalizedKey)) {
+        message.error('این کلید برای فیلدهای عمومی فعالیت رزرو شده است.');
+        return;
+      }
+      const duplicate = draftCustomFields.some((field) =>
+        String(field?.key || '') === normalizedKey && String(field?.key || '') !== String(editingDraftCustomFieldKey || '')
+      );
+      if (duplicate) {
+        message.error('کلید فیلد تکراری است.');
+        return;
+      }
+
+      const fieldType = values?.type || FieldType.TEXT;
+      if (!isSupportedProcessTaskCustomFieldType(fieldType)) {
+        message.error('این نوع فیلد برای فعالیت‌های اختصاصی پشتیبانی نمی‌شود.');
+        return;
+      }
+
+      const previousField = draftCustomFields.find((field) => String(field?.key || '') === String(editingDraftCustomFieldKey || '')) || null;
+      const normalizedField = normalizeProcessTaskCustomFields([{
+        key: normalizedKey,
+        type: fieldType,
+        labels: { fa: String(values?.labelFa || normalizedKey).trim() || normalizedKey, en: normalizedKey },
+        relationConfig: fieldType === FieldType.RELATION
+          ? {
+              targetModule: String(values?.relationTargetModule || '').trim(),
+              targetField: String(values?.relationTargetField || '').trim() || undefined,
+            }
+          : undefined,
+        dynamicOptionsCategory: supportsProcessTaskDynamicCategory(fieldType)
+          ? String(values?.dynamicCategory || '').trim() || undefined
+          : undefined,
+        options: processTaskOptionEditableTypes.has(fieldType) ? (previousField?.options || []) : undefined,
+      }])[0];
+
+      if (!normalizedField) {
+        message.error('تعریف فیلد نامعتبر است.');
+        return;
+      }
+
+      setDraftCustomFields((prev) => {
+        const next = prev.filter((field) => String(field?.key || '') !== String(editingDraftCustomFieldKey || ''));
+        return [...next, normalizedField].sort((a, b) => String(a.labels?.fa || a.key).localeCompare(String(b.labels?.fa || b.key), 'fa'));
+      });
+      closeDraftCustomFieldModal();
+    } catch {
+      // Ant validation handles this case.
+    }
+  }, [closeDraftCustomFieldModal, draftCustomFieldForm, draftCustomFields, editingDraftCustomFieldKey]);
+
+  const removeDraftCustomField = useCallback((fieldKey: string) => {
+    setDraftCustomFields((prev) => prev.filter((field) => String(field?.key || '') !== String(fieldKey || '')));
+  }, []);
+
+  const openDraftCustomFieldOptionsEditor = useCallback((field: ModuleField) => {
+    setDraftCustomFieldOptionsEditorKey(String(field?.key || ''));
+    draftCustomFieldOptionsForm.setFieldsValue({
+      optionsText: serializeProcessTaskFieldOptions(field),
+    });
+  }, [draftCustomFieldOptionsForm]);
+
+  const saveDraftCustomFieldOptions = useCallback(async () => {
+    try {
+      const values = await draftCustomFieldOptionsForm.validateFields();
+      const nextOptions = parseProcessTaskFieldOptions(String(values?.optionsText || ''));
+      setDraftCustomFields((prev) => prev.map((field) => (
+        String(field?.key || '') === String(draftCustomFieldOptionsEditorKey || '')
+          ? { ...field, options: nextOptions }
+          : field
+      )));
+      setDraftCustomFieldOptionsEditorKey(null);
+      draftCustomFieldOptionsForm.resetFields();
+    } catch {
+      // Ant validation handles this case.
+    }
+  }, [draftCustomFieldOptionsEditorKey, draftCustomFieldOptionsForm]);
+
+  const handleRemoveDraftStage = async (stageToRemove: any) => {
     Modal.confirm({
       title: 'حذف مرحله پیش‌نویس',
       content: 'آیا از حذف این مرحله پیش‌نویس مطمئن هستید؟',
@@ -3535,7 +4363,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       okType: 'danger',
       cancelText: 'انصراف',
       onOk: async () => {
-        const next = draftLocal.filter((s: any) => s.id !== id);
+        const next = removeSingleMatchingDraftStage(
+          Array.isArray(draftLocal) ? draftLocal : [],
+          stageToRemove
+        );
         await saveDraftStages(next);
       },
     });
@@ -3564,6 +4395,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           normalizeAutomationRuleForEditor(rule)
         )
       );
+      setDraftCustomFields(getProcessTaskCustomFieldsFromStage(editingDraft));
     } else {
       draftForm.setFieldsValue({
         description: '',
@@ -3576,6 +4408,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_from: 'project_start',
       });
       setDraftAutomationRules([]);
+      setDraftCustomFields([]);
     }
   }, [isDraftModalOpen, editingDraft, draftForm, draftLocal.length, normalizeAutomationRuleForEditor]);
 
@@ -3589,7 +4422,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setDraftAutomationRules((prev) => prev.map((rule) => normalizeAutomationRuleForEditor(rule)));
   }, [isDraftModalOpen, normalizeAutomationRuleForEditor, taskTypeOptions]);
 
-  const normalizeStageName = (val: any) => String(val || '').trim().toLowerCase();
   const draftSegments = draftList.map((stage: any) => ({
     ...stage,
     type: 'draft',
@@ -3705,18 +4537,69 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     const remainingTasks = sortedTasks.filter((task: any) => !usedTaskIds.has(String(task?.id || '')));
     if (remainingTasks.length > 0) {
-      if (!groups.length) {
-        groups.push({ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: remainingTasks });
-      } else {
-        groups[0] = { ...groups[0], tasks: [...groups[0].tasks, ...remainingTasks] };
+      const orphanGroups = new Map<string, any>();
+      const ungroupedTasks: any[] = [];
+      remainingTasks.forEach((task: any) => {
+        const taskMeta = getTaskProcessGroupMeta(task);
+        if (!taskMeta.groupId) {
+          ungroupedTasks.push(task);
+          return;
+        }
+        if (!orphanGroups.has(taskMeta.groupId)) {
+          orphanGroups.set(taskMeta.groupId, {
+            id: taskMeta.groupId,
+            label: taskMeta.groupLabel || taskMeta.templateName || '',
+            templateId: taskMeta.templateId || null,
+            templateName: taskMeta.templateName || null,
+            stages: [],
+            tasks: [],
+          });
+        }
+        orphanGroups.get(taskMeta.groupId).tasks.push(task);
+      });
+      if (orphanGroups.size > 0) {
+        groups.push(...Array.from(orphanGroups.values()));
+      }
+      if (ungroupedTasks.length > 0) {
+        if (!groups.length) {
+          groups.push({ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: ungroupedTasks });
+        } else {
+          groups[0] = { ...groups[0], tasks: [...groups[0].tasks, ...ungroupedTasks] };
+        }
       }
     }
 
-    return groups.map((group) => ({
+    return groups
+      .filter((group) => (Array.isArray(group?.stages) && group.stages.length > 0) || (Array.isArray(group?.tasks) && group.tasks.length > 0))
+      .map((group) => ({
       ...group,
       lineSegments: getLineSegments(group.tasks, group.stages),
     }));
   };
+  const canAutoAssignProcessGroup = useCallback((group: any) => {
+    const stages = Array.isArray(group?.stages) ? group.stages : [];
+    if (stages.length === 0) return false;
+    const existingKeys = new Set(
+      (Array.isArray(group?.tasks) ? group.tasks : [])
+        .map((task: any) => {
+          const taskMeta = getTaskProcessGroupMeta(task);
+          return buildProcessStageTaskKey(
+            taskMeta.groupId || group?.id || 'default_process_group',
+            task?.name || task?.title || '',
+            task?.sort_order
+          );
+        })
+        .filter(Boolean)
+    );
+
+    return stages.some((stage: any) => {
+      const stageName = String(stage?.name || stage?.title || '').trim();
+      if (!stageName) return false;
+      const stageMeta = getStageProcessGroupMeta(stage);
+      const stageKey = buildProcessStageTaskKey(stageMeta.groupId, stageName, stage?.sort_order);
+      return !!stageKey && !existingKeys.has(stageKey);
+    });
+  }, [buildProcessStageTaskKey, getStageProcessGroupMeta, getTaskProcessGroupMeta]);
 
   const handleCopyLine = async (line: any) => {
     if (!recordId || !line?.id || !isProductionOrder) return;
@@ -3850,8 +4733,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Popover
                   key={stage.id || index}
                   content={
-                    <div className="space-y-2 text-xs p-1">
-                      <div className="font-bold text-leather-900 dark:text-gray-100">{stage.label}</div>
+                    <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
+                      <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{stage.label}</div>
                       <div>ترتیب: {toPersianNumber(stage.sort_order || '-')}</div>
                       <div>دستمزد: {toPersianNumber(Number(stage.wage || 0).toLocaleString('en-US'))} تومان</div>
                       <div>وزن: {toPersianNumber(stage.weight || 0)}</div>
@@ -3866,13 +4749,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           {isProcessTemplateModule && (
                             <Button size="small" onClick={() => openDraftStageModal(stage, 'automation')}>اتوماسیون</Button>
                           )}
-                          <Button size="small" danger onClick={() => handleRemoveDraftStage(stage.id)}>حذف</Button>
+                          <Button size="small" danger onClick={() => handleRemoveDraftStage(stage)}>حذف</Button>
                         </div>
                       )}
                     </div>
                   }
                   trigger="click"
-                  overlayStyle={{ zIndex: 10000 }}
+                  overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
                 >
                   <div
                     className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''}`}
@@ -3953,7 +4836,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       }}
                       getPopupContainer={() => document.body}
                       placement="bottomRight"
-                      overlayStyle={{ zIndex: 12000, maxWidth: 'min(92vw, 360px)' }}
+                      overlayStyle={{ zIndex: 12000, width: 'min(92vw, 26rem)', maxWidth: 'calc(100vw - 1rem)' }}
                       title={null}
                     >
                       <div
@@ -3985,14 +4868,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Popover
                   key={`${barKey}-draft-${segment.id}-${index}`}
                   content={
-                    <div className="space-y-2 text-xs p-1">
-                      <div className="font-bold text-leather-900 dark:text-gray-100">{segment.label}</div>
+                    <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
+                      <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{segment.label}</div>
                       <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
                       <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
                       <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
                       <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
                       {String(segment?.task_type || '').trim() && <div>نوع فعالیت: {segment.task_type}</div>}
                       {String(segment?.description || '').trim() && <div>توضیحات: {segment.description}</div>}
+                      <div>فیلدهای اختصاصی: {toPersianNumber(getProcessTaskCustomFieldsFromStage(segment).length || 0)}</div>
                       <div>اتوماسیون‌ها: {toPersianNumber(normalizeProcessAutomationRules(segment?.automation_rules).length || 0)}</div>
                       <div>زمان انجام: {formatDraftDuration(segment)}</div>
                       {!readOnly && (
@@ -4001,7 +4885,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             <Button
                               size="small"
                               onClick={() => openTaskModal(line.id, segment)}
-                              className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                              className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                             >
                               ایجاد فعالیت
                             </Button>
@@ -4016,7 +4900,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             size="small"
                             danger
                             icon={<DeleteOutlined />}
-                            onClick={() => handleRemoveDraftStage(segment.id)}
+                              onClick={() => handleRemoveDraftStage(segment)}
                           >
                             حذف
                           </Button>
@@ -4025,7 +4909,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     </div>
                   }
                   trigger={compact ? 'hover' : 'click'}
-                  overlayStyle={{ zIndex: 10000 }}
+                  overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
                   title={null}
                 >
                   <div
@@ -4112,7 +4996,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         <Button
                           size={compact ? 'small' : 'middle'}
                           onClick={() => { void handleOpenAppendProcessModal(); }}
-                          className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                          className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                         >
                           افزودن فرآیند
                         </Button>
@@ -4127,36 +5011,53 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {normalizedProcessLineGroups.map((group: any, groupIndex: number) => (
+                    {normalizedProcessLineGroups.map((group: any, groupIndex: number) => {
+                      const showAutoAssignButton = canAutoAssignProcessGroup(group);
+                      return (
                       <div key={`${line.id}-${group.id}-${groupIndex}`} className="space-y-1">
                         {!readOnly && !!recordId && (
                           <div className="flex flex-wrap items-end gap-2">
                             <div className="min-w-[220px] flex-1 max-w-[360px]">
-                              <div className="text-[11px] text-gray-500 dark:text-gray-400 mb-1">
-                                الگوی فرآیند اجرا
+                              <div className="flex flex-col gap-1">
+                                <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
+                                <Select
+                                  {...modalSelectProps}
+                                  allowClear={false}
+                                  value={group?.templateId || undefined}
+                                  onChange={(val) => {
+                                    const normalizedValue = String(val || '').trim();
+                                    if (!normalizedValue) return;
+                                    void handleApplyTemplateToGroup(String(group?.id || ''), normalizedValue);
+                                  }}
+                                  options={processTemplateOptions}
+                                  loading={processTemplateOptionsLoading}
+                                  className="w-full"
+                                  placeholder="انتخاب الگوی فرآیند"
+                                />
+                                {!readOnly && !!recordId && groupIndex === normalizedProcessLineGroups.length - 1 ? (
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    className="w-fit px-0 text-[12px] text-[rgba(var(--brand-700-rgb),1)]"
+                                    onClick={() => {
+                                      setShowEmptyProcessDetails(true);
+                                      void handleOpenAppendProcessModal();
+                                    }}
+                                  >
+                                    افزودن الگوی فرآیند جدید
+                                  </Button>
+                                ) : null}
                               </div>
-                              <Select
-                                value={group?.templateId || undefined}
-                                onChange={(val) => {
-                                  if (!val) return;
-                                  void handleApplyTemplateToGroup(String(group?.id || ''), String(val));
-                                }}
-                                options={processTemplateOptions}
-                                showSearch
-                                optionFilterProp="label"
-                                loading={processTemplateOptionsLoading}
-                                className="w-full"
-                                placeholder="انتخاب الگوی فرآیند"
-                              />
                             </div>
-                            <Button
-                              size={compact ? 'small' : 'middle'}
-                              onClick={() => { void handleAutoAssignProcess(String(group?.id || '')); }}
-                              className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
-                              disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
-                            >
-                              ارجاع خودکار فرآیند
-                            </Button>
+                            {showAutoAssignButton ? (
+                              <Button
+                                size={compact ? 'small' : 'middle'}
+                                onClick={() => { void handleAutoAssignProcess(String(group?.id || '')); }}
+                                className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
+                              >
+                                ارجاع خودکار فرآیند
+                              </Button>
+                            ) : null}
                             <Tooltip title="کپی فرآیند">
                               <Button
                                 size={compact ? 'small' : 'middle'}
@@ -4165,12 +5066,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
                               />
                             </Tooltip>
-                            <Tooltip title="حذف فرآیند">
+                            <Tooltip title={Array.isArray(group?.tasks) && group.tasks.length > 0 ? 'فرآیند متصل به فعالیت قابل حذف نیست' : 'حذف فرآیند'}>
                               <Button
                                 danger
                                 size={compact ? 'small' : 'middle'}
                                 icon={<DeleteOutlined />}
                                 onClick={() => {
+                                  if (Array.isArray(group?.tasks) && group.tasks.length > 0) {
+                                    message.warning('ابتدا فعالیت‌های متصل به این فرآیند را جدا یا حذف کنید');
+                                    return;
+                                  }
                                   Modal.confirm({
                                     title: 'حذف فرآیند',
                                     content: 'این فرآیند از پیش‌نویس حذف شود؟',
@@ -4182,7 +5087,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     },
                                   });
                                 }}
-                                disabled={!Array.isArray(group?.stages) || group.stages.length === 0}
+                                disabled={!Array.isArray(group?.stages) || group.stages.length === 0 || (Array.isArray(group?.tasks) && group.tasks.length > 0)}
                               />
                             </Tooltip>
                           </div>
@@ -4204,13 +5109,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     templateName: group?.templateName || null,
                                   });
                                 }}
-                                className="flex-shrink-0 border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                                className="flex-shrink-0 border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                               />
                             </Tooltip>
                           )}
                         </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 )}
                 {!readOnly && !!recordId && (
@@ -4221,7 +5126,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         setShowEmptyProcessDetails(true);
                         void handleOpenAppendProcessModal();
                       }}
-                      className="border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                      className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                     >
                       افزودن فرآیند جدید
                     </Button>
@@ -4241,7 +5146,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         onClick={() => {
                           openTaskModal(line.id);
                         }}
-                        className="flex-shrink-0 border-leather-300 text-leather-700 hover:!border-leather-500 hover:!text-leather-600 hover:!bg-leather-50"
+                        className="flex-shrink-0 border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                       />
                     </Tooltip>
                   </div>
@@ -4321,18 +5226,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       <Modal
         title={<div className="flex items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند (فعالیت)' : 'افزودن مرحله تولید'}</div>}
         open={isTaskModalOpen}
-        onCancel={() => setIsTaskModalOpen(false)}
+        onCancel={() => {
+          setIsTaskModalOpen(false);
+          taskForm.resetFields();
+          setActiveLineId(null);
+          setActiveProcessGroupMeta(null);
+          setDraftToCreate(null);
+          setTaskCustomFieldDrafts((prev) => {
+            const next = { ...prev };
+            delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
+            return next;
+          });
+        }}
         footer={null}
         zIndex={10001}
-        width={480}
+        width={560}
         centered
         destroyOnHidden
         styles={stageModalStyles}
       >
-        <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-1">
+        <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-1 [&_.ant-form-item]:mb-3">
+          <div className="max-h-[68vh] overflow-y-auto pr-1">
           <div className="grid grid-cols-12 gap-3">
             <div className="col-span-9">
-              <Form.Item name="name" label="عنوان مرحله" rules={[{ required: true, message: 'الزامی' }]}> 
+              <Form.Item name="name" label={isProcessModule ? 'عنوان فعالیت' : 'عنوان مرحله'} rules={[{ required: true, message: 'الزامی' }]}> 
                 <Input placeholder="مثلا: برشکاری..." />
               </Form.Item>
             </div>
@@ -4389,10 +5306,35 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </div>
 
             <div className="col-span-12">
-              <Form.Item name="description" label="توضیحات">
+              <Form.Item name="description" label="شرح فعالیت">
                 <Input.TextArea placeholder="شرح مرحله/فعالیت" autoSize={{ minRows: 2, maxRows: 4 }} />
               </Form.Item>
             </div>
+
+            {taskModalCustomFields.length > 0 ? (
+              <div className="col-span-12 rounded-xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">فیلدهای اختصاصی فعالیت</div>
+                <div className="grid grid-cols-12 gap-2">
+                  {taskModalCustomFields.map((field) => (
+                    <div
+                      key={`task-modal-custom-${field.key}`}
+                      className={
+                        field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT
+                          ? 'col-span-12'
+                          : 'col-span-12 md:col-span-6'
+                      }
+                    >
+                      <div className="mb-1 text-xs text-gray-500">{field.labels?.fa || field.key}</div>
+                      {renderTaskCustomFieldInput(
+                        { id: TASK_MODAL_CUSTOM_FIELD_DRAFT_ID },
+                        field,
+                        taskModalCustomFieldDraft[String(field.key)]
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {isProcessModule && (
               <>
@@ -4440,11 +5382,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </Form.Item>
             </div>
           </div>
+          </div>
 
           <div className="flex justify-end gap-2 mt-4 border-t pt-4">
-            <Button onClick={() => setIsTaskModalOpen(false)} className="rounded-lg">انصراف</Button>
+            <Button onClick={() => {
+              setIsTaskModalOpen(false);
+              taskForm.resetFields();
+              setActiveLineId(null);
+              setActiveProcessGroupMeta(null);
+              setDraftToCreate(null);
+              setTaskCustomFieldDrafts((prev) => {
+                const next = { ...prev };
+                delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
+                return next;
+              });
+            }} className="rounded-lg">انصراف</Button>
             <Button type="primary" htmlType="submit" loading={loading} className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]">
-              ثبت مرحله
+              {isProcessModule ? 'ثبت فعالیت' : 'ثبت مرحله'}
             </Button>
           </div>
         </Form>
@@ -4457,6 +5411,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           setIsDraftModalOpen(false);
           setEditingDraft(null);
           setDraftAutomationRules([]);
+          setDraftCustomFields([]);
           draftForm.resetFields();
         }}
         footer={null}
@@ -4472,7 +5427,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
           <Tabs
             activeKey={draftModalTabKey}
-            onChange={(key) => setDraftModalTabKey((key as 'stage' | 'automation') || 'stage')}
+            onChange={(key) => setDraftModalTabKey((key as 'stage' | 'fields' | 'automation') || 'stage')}
             items={[
               {
                 key: 'stage',
@@ -4576,6 +5531,90 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 ),
               },
               {
+                key: 'fields',
+                label: `فیلدهای اختصاصی (${toPersianNumber(draftCustomFields.length)})`,
+                children: (
+                  <div className="space-y-4 pt-2">
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="فقط برای همین مرحله"
+                      description="فیلدهای این بخش عمومی نیستند؛ فقط روی taskهای ساخته‌شده از همین مرحله ذخیره و نمایش داده می‌شوند."
+                    />
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-xs text-gray-500">
+                        تعریف این فیلدها فقط روی همین activity در همین stage اثر می‌گذارد.
+                      </div>
+                      <Button
+                        type="dashed"
+                        icon={<PlusOutlined />}
+                        onClick={() => openDraftCustomFieldModal(null)}
+                      >
+                        افزودن فیلد
+                      </Button>
+                    </div>
+
+                    {draftCustomFields.length === 0 ? (
+                      <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description="هنوز فیلد اختصاصی برای این مرحله تعریف نشده است."
+                      />
+                    ) : (
+                      <div className="space-y-3">
+                        {draftCustomFields.map((field) => (
+                          <div
+                            key={field.key}
+                            className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/95 p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                                    {field.labels?.fa || field.key}
+                                  </div>
+                                  <Tag color="default">{processTaskCustomFieldTypeLabels[field.type] || field.type}</Tag>
+                                  <Tag>{field.key}</Tag>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                                  {field.dynamicOptionsCategory ? <span>دسته داینامیک: {field.dynamicOptionsCategory}</span> : null}
+                                  {field.relationConfig?.targetModule ? (
+                                    <span>ماژول مرتبط: {MODULES[String(field.relationConfig.targetModule)]?.titles?.fa || field.relationConfig.targetModule}</span>
+                                  ) : null}
+                                  {field.options?.length ? <span>{toPersianNumber(field.options.length)} گزینه ثابت</span> : null}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button size="small" icon={<EditOutlined />} onClick={() => openDraftCustomFieldModal(field)}>
+                                  ویرایش
+                                </Button>
+                                {processTaskOptionEditableTypes.has(field.type) && (
+                                  <Button
+                                    size="small"
+                                    icon={<SettingOutlined />}
+                                    onClick={() => openDraftCustomFieldOptionsEditor(field)}
+                                  >
+                                    گزینه‌ها
+                                  </Button>
+                                )}
+                                <Button
+                                  size="small"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  onClick={() => removeDraftCustomField(String(field.key))}
+                                >
+                                  حذف
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ),
+              },
+              {
                 key: 'automation',
                 label: `اتوماسیون (${toPersianNumber(draftAutomationRules.length)})`,
                 children: (
@@ -4591,8 +5630,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
                     {draftAutomationRules.map((rule, index) => {
                       const ruleActions = Array.isArray(rule.actions) ? rule.actions : [];
-                      const needsNoteReceiver = ruleActions.some((action) =>
-                        String(action?.type || '') === 'send_note'
+                      const editableAllConditions = (Array.isArray(rule.conditions_all) ? rule.conditions_all : []).filter(
+                        (condition) => String(condition?.field || '').trim() !== '__task__task_type'
+                      );
+                      const editableAnyConditions = (Array.isArray(rule.conditions_any) ? rule.conditions_any : []).filter(
+                        (condition) => String(condition?.field || '').trim() !== '__task__task_type'
                       );
                       return (
                       <div
@@ -4674,16 +5716,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
                           <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.42)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
                             <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">شرط‌ها</div>
-                            <div className="mb-3 rounded-xl border border-dashed border-[rgba(var(--brand-200-rgb),0.7)] bg-white/60 px-3 py-2 text-xs leading-6 text-gray-600 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-                              اگر در «یا یکی از شرط‌ها» مقداری ثبت شود، هم «همه شرط‌ها» و هم «یا یکی از شرط‌ها» با هم اعمال می‌شوند.
-                            </div>
                             <div className="space-y-4">
                               <div>
                                 <div className="mb-2 text-xs text-gray-500">همه شرط‌ها</div>
+                                {draftStageTaskType ? (
+                                  <div className="mb-3 rounded-xl border border-dashed border-[rgba(var(--brand-200-rgb),0.75)] bg-white/70 px-3 py-2 text-xs leading-6 text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
+                                    <span className="font-semibold text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">شرط پیش‌فرض:</span>
+                                    {' '}نوع فعالیت (فعالیت) برابر است با{' '}
+                                    <span className="font-semibold">{draftStageTaskTypeLabel}</span>
+                                  </div>
+                                ) : null}
                                 <WorkflowConditionsGroup
-                                  value={Array.isArray(rule.conditions_all) ? rule.conditions_all : []}
-                                  onChange={(next) => updateDraftAutomationRule(rule.id, { conditions_all: next as WorkflowCondition[] })}
-                                  fields={automationConditionFields}
+                                  value={editableAllConditions}
+                                  onChange={(next) => updateDraftAutomationRule(rule.id, {
+                                    conditions_all: (next as WorkflowCondition[]).filter(
+                                      (condition) => String(condition?.id || '') !== '__locked_stage_task_type__'
+                                    ),
+                                  })}
+                                  fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
                                   dynamicOptions={automationDynamicOptions}
                                   relationOptions={automationRelationOptions}
                                   dynamicFieldProps={{
@@ -4697,9 +5747,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               <div>
                                 <div className="mb-2 text-xs text-gray-500">یا یکی از شرط‌ها</div>
                                 <WorkflowConditionsGroup
-                                  value={Array.isArray(rule.conditions_any) ? rule.conditions_any : []}
-                                  onChange={(next) => updateDraftAutomationRule(rule.id, { conditions_any: next as WorkflowCondition[] })}
-                                  fields={automationConditionFields}
+                                  value={editableAnyConditions}
+                                  onChange={(next) => updateDraftAutomationRule(rule.id, {
+                                    conditions_any: (next as WorkflowCondition[]).filter(
+                                      (condition) => String(condition?.field || '').trim() !== '__task__task_type'
+                                    ),
+                                  })}
+                                  fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
                                   dynamicOptions={automationDynamicOptions}
                                   relationOptions={automationRelationOptions}
                                   dynamicFieldProps={{
@@ -4713,65 +5767,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             </div>
                           </div>
 
-                          <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.42)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
-                            <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">اقدام‌ها</div>
-                            <div className="grid grid-cols-12 gap-3">
-                              {needsNoteReceiver ? (
-                                <>
-                                  <div className="col-span-12 md:col-span-6">
-                                    <div className="mb-1 text-xs text-gray-500">گیرنده یادداشت</div>
-                                    <Select
-                                      {...modalSelectProps}
-                                      value={rule.target_type}
-                                      options={PROCESS_AUTOMATION_TARGET_OPTIONS}
-                                      onChange={(value) => updateDraftAutomationRule(rule.id, {
-                                        target_type: value,
-                                        ...(value !== 'task_type_assignee' ? { target_task_type: null } : {}),
-                                        ...(value !== 'specific_user' ? { target_user_id: null } : {}),
-                                        ...(value !== 'specific_role' ? { target_role_id: null } : {}),
-                                      } as Partial<ProcessAutomationRule>)}
-                                    />
-                                  </div>
-
-                                  {rule.target_type === 'task_type_assignee' ? (
-                                    <div className="col-span-12 md:col-span-6">
-                                      <div className="mb-1 text-xs text-gray-500">نوع فعالیت مقصد</div>
-                                      <Select
-                                        {...modalSelectProps}
-                                        value={rule.target_task_type || undefined}
-                                        options={taskTypeOptions}
-                                        onChange={(value) => updateDraftAutomationRule(rule.id, { target_task_type: String(value || '') })}
-                                      />
-                                    </div>
-                                  ) : null}
-
-                                  {rule.target_type === 'specific_user' ? (
-                                    <div className="col-span-12 md:col-span-6">
-                                      <div className="mb-1 text-xs text-gray-500">کاربر مقصد</div>
-                                      <Select
-                                        {...modalSelectProps}
-                                        value={rule.target_user_id || undefined}
-                                        options={assigneeUserOptions}
-                                        onChange={(value) => updateDraftAutomationRule(rule.id, { target_user_id: String(value || '') })}
-                                      />
-                                    </div>
-                                  ) : null}
-
-                                  {rule.target_type === 'specific_role' ? (
-                                    <div className="col-span-12 md:col-span-6">
-                                      <div className="mb-1 text-xs text-gray-500">تیم مقصد</div>
-                                      <Select
-                                        {...modalSelectProps}
-                                        value={rule.target_role_id || undefined}
-                                        options={assigneeRoleOptions}
-                                        onChange={(value) => updateDraftAutomationRule(rule.id, { target_role_id: String(value || '') })}
-                                      />
-                                    </div>
-                                  ) : null}
-                                </>
-                              ) : null}
-                              <div className="col-span-12">
-                                <WorkflowActionsBuilder
+                            <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.42)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                              <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">اقدام‌ها</div>
+                              <div className="grid grid-cols-12 gap-3">
+                                <div className="col-span-12">
+                                  <WorkflowActionsBuilder
                                   value={ruleActions}
                                   onChange={(next) => updateDraftAutomationRule(rule.id, {
                                     actions: next,
@@ -4822,12 +5822,92 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               setIsDraftModalOpen(false);
               setEditingDraft(null);
               setDraftAutomationRules([]);
+              setDraftCustomFields([]);
               draftForm.resetFields();
             }} className="rounded-lg">انصراف</Button>
-            <Button type="primary" htmlType="submit" className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]">
+            <Button type="primary" htmlType="submit" className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-700-rgb),1)] text-white hover:!bg-[rgba(var(--brand-600-rgb),1)] hover:!text-white focus:!text-white">
               {editingDraft ? 'بروزرسانی مرحله' : 'ثبت مرحله'}
             </Button>
           </div>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingDraftCustomFieldKey ? 'ویرایش فیلد اختصاصی فعالیت' : 'افزودن فیلد اختصاصی فعالیت'}
+        open={isDraftCustomFieldModalOpen}
+        onCancel={closeDraftCustomFieldModal}
+        onOk={() => { void saveDraftCustomField(); }}
+        okText={editingDraftCustomFieldKey ? 'بروزرسانی فیلد' : 'ایجاد فیلد'}
+        zIndex={10002}
+        destroyOnHidden
+      >
+        <Form
+          form={draftCustomFieldForm}
+          layout="vertical"
+          initialValues={{ type: FieldType.TEXT }}
+        >
+          <Form.Item label="کلید فیلد" name="key" rules={[{ required: true, message: 'کلید فیلد لازم است.' }]}>
+            <Input
+              placeholder="مثال: meeting_link"
+              disabled={!!editingDraftCustomFieldKey}
+            />
+          </Form.Item>
+          <Form.Item label="عنوان فارسی" name="labelFa" rules={[{ required: true, message: 'عنوان فارسی لازم است.' }]}>
+            <Input placeholder="مثال: لینک جلسه" />
+          </Form.Item>
+          <Form.Item label="نوع فیلد" name="type" rules={[{ required: true, message: 'نوع فیلد را انتخاب کنید.' }]}>
+            <Select {...modalSelectProps} allowClear={false} options={processTaskCustomFieldTypeOptions} />
+          </Form.Item>
+
+          {draftCustomFieldType === FieldType.RELATION && (
+            <>
+              <Form.Item
+                label="ماژول مرتبط"
+                name="relationTargetModule"
+                rules={[{ required: true, message: 'ماژول مرتبط را انتخاب کنید.' }]}
+              >
+                <Select {...modalSelectProps} options={workflowModuleOptions} />
+              </Form.Item>
+              <Form.Item label="فیلد نمایشی مقصد" name="relationTargetField">
+                <Select
+                  {...modalSelectProps}
+                  allowClear
+                  options={(MODULES[String(draftCustomFieldRelationTargetModule || '')]?.fields || []).map((field) => ({
+                    value: field.key,
+                    label: field.labels?.fa || field.key,
+                  }))}
+                />
+              </Form.Item>
+            </>
+          )}
+
+          {supportsProcessTaskDynamicCategory(draftCustomFieldType) && (
+            <Form.Item label="دسته‌بندی گزینه‌های داینامیک" name="dynamicCategory">
+              <Input placeholder="مثال: meeting_type" />
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+
+      <Modal
+        title="ویرایش گزینه‌های فیلد"
+        open={!!draftCustomFieldOptionEditor}
+        onCancel={() => {
+          setDraftCustomFieldOptionsEditorKey(null);
+          draftCustomFieldOptionsForm.resetFields();
+        }}
+        onOk={() => { void saveDraftCustomFieldOptions(); }}
+        okText="ثبت گزینه‌ها"
+        zIndex={10003}
+        destroyOnHidden
+      >
+        <div className="mb-3 text-xs text-gray-500">
+          هر خط به‌صورت <code>label|value|color</code> وارد شود. رنگ اختیاری است.
+        </div>
+        <Form form={draftCustomFieldOptionsForm} layout="vertical">
+          <Form.Item label="گزینه‌ها" name="optionsText">
+            <Input.TextArea autoSize={{ minRows: 8, maxRows: 14 }} placeholder={'در حال انجام|in_progress|blue'} />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -4848,7 +5928,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <Button
             key="add"
             type="primary"
-            className="bg-leather-600 hover:!bg-leather-500 border-none"
+            className="border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
             loading={loading}
             onClick={() => { void handleAppendProcessTemplate(); }}
             disabled={!appendProcessTemplateId}
@@ -4862,17 +5942,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <div className="text-xs text-gray-500">
             یک الگو انتخاب کنید تا یک نوار فرآیند جدید ساخته شود.
           </div>
-          <Select
-            value={appendProcessTemplateId || undefined}
-            onChange={(val) => setAppendProcessTemplateId(val)}
-            options={processTemplateOptions}
-            placeholder="انتخاب الگوی فرآیند"
-            showSearch
-            optionFilterProp="label"
-            loading={processTemplateOptionsLoading}
-            className="w-full"
-            allowClear
-          />
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
+            <Select
+              {...modalSelectProps}
+              value={String(appendProcessTemplateId || '').trim() || undefined}
+              onChange={(val) => setAppendProcessTemplateId(val ? String(val) : null)}
+              options={processTemplateOptions}
+              placeholder="انتخاب الگوی فرآیند"
+              loading={processTemplateOptionsLoading}
+              className="w-full"
+              allowClear
+            />
+          </div>
           {appendProcessTargetModuleIds.length > 0 ? (
             <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-3 space-y-3">
               <div className="text-sm font-semibold text-[rgba(var(--brand-800-rgb),1)]">رکوردهای مرتبط این فرآیند</div>

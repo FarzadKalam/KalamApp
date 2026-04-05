@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Checkbox, Form, Input, Select, Spin, Typography } from "antd";
+import { Alert, App, Button, Card, Checkbox, Form, Input, Select, Space, Spin, Typography } from "antd";
 import { LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../supabaseClient";
@@ -19,6 +19,21 @@ type PublicWebFormState = {
   config: ReturnType<typeof normalizeWebFormConfig>;
   fields: WebFormFieldRecord[];
   companySettings: Record<string, any>;
+};
+
+type PublicBrandingRpcRow = {
+  org_id?: string | null;
+  company_settings?: unknown;
+  branding_settings?: unknown;
+};
+
+type PublicWebFormRpcRow = {
+  org_id?: string | null;
+  form_id?: string | null;
+  web_form?: unknown;
+  fields?: unknown;
+  company_settings?: unknown;
+  branding_settings?: unknown;
 };
 
 const LEGACY_PREFIX_OPTIONS = [
@@ -248,7 +263,8 @@ const InquiryForm = () => {
           p_hostname: typeof window !== "undefined" ? window.location.hostname : null,
         })
         .maybeSingle();
-      return toRecord(data?.company_settings);
+      const response = (data || null) as PublicBrandingRpcRow | null;
+      return toRecord(response?.company_settings);
     };
 
     const loadDynamicForm = async () => {
@@ -264,11 +280,13 @@ const InquiryForm = () => {
 
         if (error) throw error;
 
-        if (data?.form_id) {
-          const webForm = toRecord(data.web_form);
+        const response = (data || null) as PublicWebFormRpcRow | null;
+
+        if (response?.form_id) {
+          const webForm = toRecord(response.web_form);
           const config = normalizeWebFormConfig(webForm.config);
-          const fields = Array.isArray(data.fields)
-            ? data.fields.map((item: unknown, index: number) => normalizeWebFormFieldRecord(item, index))
+          const fields = Array.isArray(response.fields)
+            ? response.fields.map((item: unknown, index: number) => normalizeWebFormFieldRecord(item, index))
             : [];
 
           if (!cancelled) {
@@ -280,7 +298,7 @@ const InquiryForm = () => {
               targetModuleId: String(webForm.target_module_id || ""),
               config,
               fields,
-              companySettings: toRecord(data.company_settings),
+              companySettings: toRecord(response.company_settings),
             });
           }
           return;

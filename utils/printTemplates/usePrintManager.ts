@@ -913,13 +913,14 @@ export const usePrintManager = ({
     const rows = items
       .map((item: any) => {
         const productName = getInvoiceItemTitle(item);
+        const deliveryTime = String(item?.delivery_time || '').trim();
         const quantity = toPersianNumber(String(item?.quantity || 0));
         const unitPrice = formatPersianPrice(Number(item?.unit_price || 0));
         const vat = item?.vat === null || item?.vat === undefined || item?.vat === '' ? '' : getDisplayValue(item.vat);
         const total = formatPersianPrice(Number(item?.quantity || 0) * Number(item?.unit_price || 0));
         return `
           <tr>
-            <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">${productName}</td>
+            <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;vertical-align:top;"><div style="font-weight:700;">${productName}</div>${deliveryTime ? `<div style="margin-top:2px;font-size:${getReducedPrintFontSize(11)};color:#64748b;line-height:1.7;${MULTILINE_PRINT_STYLE}">زمان تحویل: ${deliveryTime}</div>` : ''}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${quantity}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${unitPrice}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${vat || '-'}</td>
@@ -1050,6 +1051,8 @@ export const usePrintManager = ({
       const optionalParts: string[] = [];
       const descriptionValue = getDisplayValue(row?.description || row?.notes || '');
       if (descriptionValue && descriptionValue !== '-') optionalParts.push(descriptionValue);
+      const deliveryTimeValue = getDisplayValue(row?.delivery_time || '');
+      if (deliveryTimeValue && deliveryTimeValue !== '-') optionalParts.push(`زمان تحویل: ${deliveryTimeValue}`);
       if (row?.length || row?.width) {
         const countValue = Number(row?.dimension_count || 0) > 0
           ? formatCellValue(blockId, { key: 'dimension_count', title: 'تعداد', type: 'number' }, row)
@@ -1369,7 +1372,11 @@ export const usePrintManager = ({
       if (path === 'record.package_final_total') return formatPersianPrice(packageSummary.final);
       if (path === 'record.total_invoice_amount_words') {
         const rawWords = String(data?.total_invoice_amount_words || '').trim();
-        return rawWords ? localizePlainText(rawWords) : '';
+        if (rawWords) return localizePlainText(rawWords);
+        const totalAmount = Number(invoiceSummary.total || 0);
+        if (!Number.isFinite(totalAmount) || totalAmount <= 0) return '';
+        const words = toPersianWords(totalAmount);
+        return words ? `${words} ${resolvedCurrencyLabel}`.trim() : '';
       }
       if (path === 'responsible.name') {
         return localizePlainText(data?.assignee_name || data?.responsible_name || data?.created_by_name || '');

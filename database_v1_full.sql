@@ -909,6 +909,7 @@ alter table public.products
   add column if not exists vat_percentage numeric(8,4) not null default 10,
   add column if not exists is_vat_exempt boolean not null default true,
   add column if not exists description text,
+  add column if not exists delivery_time text,
   add column if not exists required_quantity numeric(18,3) not null default 0,
   add column if not exists commission_percentage numeric(8,4) not null default 0,
   add column if not exists production_cost numeric(18,2) not null default 0,
@@ -1578,6 +1579,7 @@ create table if not exists public.projects (
 
 alter table public.projects
   add column if not exists org_id uuid references public.organizations(id) on delete cascade default public.current_org_id(),
+  add column if not exists image_url text,
   add column if not exists name text not null default '',
   add column if not exists system_code text,
   add column if not exists status text not null default 'draft',
@@ -2444,6 +2446,58 @@ for all
 to authenticated
 using (org_id = public.current_org_id())
 with check (org_id = public.current_org_id());
+
+insert into public.goals (
+  org_id,
+  module_id,
+  name,
+  description,
+  goal_scope,
+  period_unit,
+  subperiod_unit,
+  metric_type,
+  metric_field_key,
+  date_field_key,
+  target_value,
+  levels_enabled,
+  bronze_value,
+  silver_value,
+  gold_value,
+  assignee_user_ids,
+  assignee_role_ids,
+  conditions_all,
+  conditions_any,
+  config,
+  is_active
+)
+select
+  public.current_org_id(),
+  'invoices',
+  'فروش ماهانه تسویه‌شده',
+  'جمع مبلغ فاکتورهای فروش با وضعیت تسویه‌شده یا تکمیل‌شده در بازه ماه جاری',
+  'team',
+  'month',
+  'week',
+  'sum',
+  'total_invoice_amount',
+  'invoice_date',
+  null,
+  true,
+  500000000,
+  1000000000,
+  1500000000,
+  '[]'::jsonb,
+  '[]'::jsonb,
+  '[]'::jsonb,
+  '[{"id":"seed_goal_condition_invoices_paid","field":"status","operator":"in","value":["settled","completed"]}]'::jsonb,
+  '{"seed_key":"sales_invoices_monthly_paid_total_v1","assignment_users_mode":"all","is_seeded_default":true}'::jsonb,
+  true
+where not exists (
+  select 1
+  from public.goals g
+  where g.module_id = 'invoices'
+    and coalesce(g.config->>'seed_key', '') = 'sales_invoices_monthly_paid_total_v1'
+);
 
 -- =====================================================
 -- Bootstrap seed data

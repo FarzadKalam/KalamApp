@@ -30,6 +30,11 @@ const PROCESS_DRAFT_FIELD_KEYS = [
   'marketing_process_draft',
   'production_stages_draft',
 ] as const;
+const PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS = new Set([
+  'process_templates',
+  'process_runs',
+  'tasks',
+]);
 
 export const getProjectModuleOptions = () =>
   Object.values(MODULES)
@@ -38,6 +43,11 @@ export const getProjectModuleOptions = () =>
       value: module.id,
     }))
     .sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+
+export const getProcessTemplateModuleOptions = () =>
+  getProjectModuleOptions().filter(
+    (option) => !PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS.has(String(option.value || '').trim())
+  );
 
 export const shouldIncludeWorkflowField = (field?: ModuleField | null) => {
   if (!field?.key) return false;

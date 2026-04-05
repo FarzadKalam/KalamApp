@@ -19,7 +19,7 @@ import PhoneActionsPopover from './PhoneActionsPopover';
 import PersianDatePicker from './PersianDatePicker';
 import { useCurrencyConfig } from '../utils/currency';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
-import { getProjectModuleOptions } from '../utils/workflowHelpers';
+import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -47,6 +47,25 @@ interface SmartTableRendererProps {
   onClearExternalFilters?: () => void;
   sorters?: Array<{ field: string; order: 'asc' | 'desc' }>;
 }
+
+export const buildSmartTablePagination = (pagination: any) =>
+  pagination === false
+    ? false
+    : {
+        ...(pagination || {}),
+        position: ['bottomCenter'],
+        size: 'small',
+        showSizeChanger: true,
+        pageSizeOptions: [10, 20, 50, 100],
+        showTotal: (total: number, range: [number, number]) =>
+          `${toPersianNumber(range[0])}-${toPersianNumber(range[1])} از ${toPersianNumber(total)}`,
+        itemRender: (page: number, type: string, originalElement: React.ReactNode) => {
+          if (type === 'page') {
+            return <span className="persian-number">{toPersianNumber(page)}</span>;
+          }
+          return originalElement;
+        },
+      };
 
 const getInitialScrollHeight = () => {
   if (typeof window === 'undefined') return 440;
@@ -561,7 +580,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       (moduleConfig?.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
       || (moduleConfig?.id === 'process_runs' && field.key === 'module_id')
     ) {
-      options = getProjectModuleOptions().map((o: any) => ({ text: o.label, value: o.value }));
+      options = getProcessTemplateModuleOptions().map((o: any) => ({ text: o.label, value: o.value }));
     } else if (field.options) {
       options = field.options.map((o: any) => ({ text: o.label, value: o.value }));
     } else if ((field as any).dynamicOptionsCategory) {
@@ -709,7 +728,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         const effectiveField = (
           ((moduleConfig?.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
             || (moduleConfig?.id === 'process_runs' && field.key === 'module_id'))
-            ? { ...field, options: getProjectModuleOptions() }
+            ? { ...field, options: getProcessTemplateModuleOptions() }
             : field
         );
         // Shared fallback for empty/invalid dates
@@ -1178,25 +1197,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     };
   }, [disableScroll, updateScrollHeight, filteredData.length, mergedFilterBubbles.length, columns.length, pagination]);
 
-  const tablePagination =
-    pagination === false
-      ? false
-      : {
-          ...(pagination || {}),
-          pageSize: 10,
-          position: ['bottomCenter'],
-          size: 'small',
-          showSizeChanger: true,
-          pageSizeOptions: [10, 20, 50, 100],
-          showTotal: (total: number, range: [number, number]) =>
-            `${toPersianNumber(range[0])}-${toPersianNumber(range[1])} از ${toPersianNumber(total)}`,
-          itemRender: (page: number, type: string, originalElement: React.ReactNode) => {
-            if (type === 'page') {
-              return <span className="persian-number">{toPersianNumber(page)}</span>;
-            }
-            return originalElement;
-          },
-        };
+  const tablePagination = buildSmartTablePagination(pagination);
 
   return (
     <div
@@ -1256,3 +1257,4 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 };
 
 export default SmartTableRenderer;
+

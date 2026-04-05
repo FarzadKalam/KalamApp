@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
@@ -23,6 +23,7 @@ import {
   ProjectOutlined,
   NodeIndexOutlined,
   SunOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -37,6 +38,7 @@ import {
   type PermissionMap,
 } from '../utils/permissions';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
+import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
 
 const { Header, Sider, Content } = AntLayout;
 
@@ -60,6 +62,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [searchResults, setSearchResults] = useState<Array<{ moduleId: string; moduleTitle: string; items: any[] }>>([]);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
+  const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   
@@ -137,6 +140,25 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
       return nextItem;
     });
+
+  const findMenuPath = useCallback((
+    items: NonNullable<MenuProps['items']>,
+    targetKey: string,
+    parents: string[] = []
+  ): string[] => {
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || !('key' in item)) continue;
+      const itemKey = String(item.key);
+      if (itemKey === targetKey) {
+        return [...parents, itemKey];
+      }
+      if ('children' in item && Array.isArray(item.children) && item.children.length > 0) {
+        const nested = findMenuPath(item.children, targetKey, [...parents, itemKey]);
+        if (nested.length > 0) return nested;
+      }
+    }
+    return [];
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -219,8 +241,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     });
   };
 
-  const menuItems = useMemo<MenuProps['items']>(() => {
-    const rawItems: NonNullable<MenuProps['items']> = [
+  const rawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
+    return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
       {
         key: 'resources',
@@ -292,29 +314,38 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         ]
       },
       {
-        key: 'tools',
+        key: '/reports',
+        icon: <BarChartOutlined />,
+        label: 'گزارشات',
+        disabled: !canViewReportsHub,
+      },
+      {
+        key: 'processes',
         icon: <NodeIndexOutlined />,
+        label: 'فرآیندها',
+        children: [
+          { key: '/process_templates', label: 'الگوهای فرآیند' },
+          { key: '/process_runs', label: 'اجرای فرآیندها' },
+        ],
+      },
+      {
+        key: 'tools',
+        icon: <AppstoreOutlined />,
         label: 'ابزارها',
         children: [
-          { key: '/reports', icon: <BarChartOutlined />, label: 'گزارشات', disabled: !canViewReportsHub },
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
-          {
-            key: 'tools_processes',
-            label: 'فرآیندها',
-            children: [
-              { key: '/process_templates', label: 'الگوهای فرآیند' },
-              { key: '/process_runs', label: 'اجرای فرآیندها' },
-            ],
-          },
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'گالری فایل‌ها' },
+          { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
         ]
       },
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, rolePermissions]);
 
-    return mapSidebarMenuItems(rawItems);
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, rolePermissions, isMobile, collapsed]);
+  const menuItems = useMemo<MenuProps['items']>(() => {
+    return mapSidebarMenuItems(rawMenuItems);
+  }, [rawMenuItems]);
 
   const searchableModules = useMemo(() => {
     return Object.entries(MODULES).map(([id, config]) => {
@@ -326,6 +357,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       return { id, title: config.titles?.fa || id, keys };
     });
   }, []);
+
+  useEffect(() => {
+    const matchedPath = findMenuPath(rawMenuItems, location.pathname);
+    const parentKeys = matchedPath.slice(0, -1);
+    setOpenMenuKeys((prev) => {
+      if (prev.length === parentKeys.length && prev.every((key, index) => key === parentKeys[index])) {
+        return prev;
+      }
+      return parentKeys;
+    });
+  }, [findMenuPath, location.pathname, rawMenuItems]);
 
   useEffect(() => {
     const term = globalSearch.trim();
@@ -524,6 +566,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             direction="rtl"
             inlineCollapsed={!isMobile && collapsed}
             selectedKeys={[location.pathname]}
+            openKeys={collapsed && !isMobile ? undefined : openMenuKeys}
+            onOpenChange={(keys) => setOpenMenuKeys(keys as string[])}
+            triggerSubMenuAction="click"
             items={menuItems}
             onClick={({ key }) => { 
                 if (typeof key === 'string' && key.startsWith('/')) {
