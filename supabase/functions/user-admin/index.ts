@@ -4,6 +4,7 @@ type UserAdminAction =
   | 'set_user_password'
   | 'create_user'
   | 'update_user'
+  | 'delete_user'
   | 'send_phone_otp'
   | 'verify_phone_otp'
   | 'repair_legacy_phone_login';
@@ -64,6 +65,13 @@ const toLocalIranMobile = (value?: string | null) => {
 
 const isPrivilegedRole = (role?: string | null) =>
   ['super_admin', 'admin', 'manager'].includes(String(role || '').trim().toLowerCase());
+
+const isPrivilegedRoleTitle = (title?: string | null) =>
+  ['super_admin', 'admin', 'manager', 'مدیر ارشد', 'مدیر سیستم', 'مدیر سازمان', 'مدیر']
+    .includes(String(title || '').trim());
+
+const canManageUsersByRoleContext = (softwareRole?: string | null, orgRoleTitle?: string | null) =>
+  isPrivilegedRole(softwareRole) || isPrivilegedRoleTitle(orgRoleTitle);
 
 const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, userToken: string) => {
   const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/auth/v1/user`, {
@@ -695,7 +703,9 @@ Deno.serve(async (request) => {
     }
 
     const callerRole = String(callerProfile?.role || '').trim().toLowerCase();
-    if (!isPrivilegedRole(callerRole)) {
+    const callerOrgRole = await fetchRole(supabaseUrl, serviceRoleKey, callerProfile?.role_id);
+    const callerOrgRoleTitle = String(callerOrgRole?.title || '').trim();
+    if (!canManageUsersByRoleContext(callerRole, callerOrgRoleTitle)) {
       return json(403, { success: false, message: 'دسترسی کافی برای مدیریت کاربران ندارید.' });
     }
 
@@ -905,6 +915,25 @@ Deno.serve(async (request) => {
       });
 
       return json(200, { success: true, profile });
+    }
+
+    if (action === 'delete_user') {
+      const targetUserId = String(body?.userId || '').trim();
+      if (!targetUserId) {
+        return json(400, { success: false, message: 'شناسه کاربر الزامی است.' });
+      }
+      if (targetUserId === String(callerProfile?.id || '')) {
+        return json(400, { success: false, message: 'نمی‌توانید حساب کاربری خودتان را حذف کنید.' });
+      }
+
+      const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+      if (!targetProfile?.id) {
+        return json(404, { success: false, message: 'پروفایل کاربر مقصد پیدا نشد.' });
+      }
+
+      assertOrgAccess(callerProfile, callerRole, targetProfile.org_id, targetProfile.role);
+      await deleteAuthUser(supabaseUrl, serviceRoleKey, targetUserId);
+      return json(200, { success: true });
     }
 
     if (action === 'send_phone_otp') {

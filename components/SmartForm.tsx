@@ -36,6 +36,7 @@ import { createProcessLinkedFieldKey, getRelationFieldLinksForModules, normalize
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
+import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -988,6 +989,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
           stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
         ),
+        [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
+          stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
+        ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -1590,6 +1594,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (module.id === 'tasks' && field.key === 'related_to_module') {
       return getTaskModuleOptions();
     }
+    if (module.id === 'tasks' && field.key === 'status') {
+      return getTaskStatusOptions(currentValues);
+    }
     if (field.type === FieldType.RELATION) {
       return relationOptions[relationKey || field.key];
     }
@@ -1999,6 +2006,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   const blockFields = module.fields
                     .filter(f => f.blockId === block.id)
                     .filter((f) => recordId || f.hideInCreateForm !== true)
+                    .filter((f) => !(!recordId && module.id === 'process_templates' && f.key === 'template_stages_preview'))
                     .filter((f) => {
                       if (f.key === processPreviewFieldKey) return true;
                       if (f.nature !== 'system') return true;
@@ -2013,6 +2021,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     .filter(f => f.key !== 'assignee_id' && f.key !== 'assignee_type')
                     .filter((f) => f.key !== 'auto_name_enabled')
                     .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+                  if (blockFields.length === 0) {
+                    return null;
+                  }
 
                   return (
                     <div key={block.id} className="mb-6 animate-slideUp">

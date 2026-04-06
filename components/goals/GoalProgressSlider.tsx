@@ -12,7 +12,7 @@ import {
   normalizeGoalRecord,
 } from '../../utils/goals';
 import { type FiscalYearSnapshot } from '../../utils/goalPeriods';
-import { fetchCurrentUserRoleContext } from '../../utils/permissions';
+import { fetchCurrentUserRecordAccessContext } from '../../utils/permissions';
 import {
   GOAL_PERIOD_UNIT_OPTIONS,
   type GoalPeriodUnit,
@@ -121,7 +121,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const loadCards = useCallback(async (nextSelections?: Record<string, GoalPeriodUnit>) => {
     setLoading(true);
     try {
-      const roleContext = await fetchCurrentUserRoleContext(supabase);
+      const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
 
       if (!canViewGoalPlacement(roleContext.permissions, placementField)) {
         setCards([]);
@@ -169,6 +169,9 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
           const snapshot = await executeGoalProgress(goal, {
             userId: roleContext.userId,
             roleId: roleContext.roleId,
+            orgId: roleContext.orgId,
+            allowedRoleIds: roleContext.allowedRoleIds,
+            allowedUserIds: roleContext.allowedUserIds,
             permissions: roleContext.permissions,
             fiscalYear: fiscalYearRef.current,
             selectedSubperiodUnit,

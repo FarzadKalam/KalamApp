@@ -5,6 +5,7 @@ const SOFTWARE_ROLE_OPTION_COLORS: Record<string, string> = {
   super_admin: 'gold',
   admin: 'blue',
   manager: 'purple',
+  editor: 'orange',
   viewer: 'default',
   user: 'green',
   employee: 'cyan',

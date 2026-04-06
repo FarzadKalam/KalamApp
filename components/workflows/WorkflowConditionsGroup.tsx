@@ -20,6 +20,7 @@ interface WorkflowConditionsGroupProps {
   dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
   relationOptions: Record<string, Array<{ label: string; value: string }>>;
   disabled?: boolean;
+  onBeforeAddCondition?: () => boolean | void;
   lockedConditionIds?: string[];
   requiredConditionIds?: string[];
   dynamicFieldProps?: Record<string, {
@@ -54,8 +55,6 @@ const getFieldOptions = (
 
 const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
 
-const selectPopupStyles = { popup: { root: { zIndex: 12600 } } } as const;
-
 const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   value,
   onChange,
@@ -63,6 +62,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   dynamicOptions,
   relationOptions,
   disabled = false,
+  onBeforeAddCondition,
   lockedConditionIds = [],
   requiredConditionIds = [],
   dynamicFieldProps = {},
@@ -101,6 +101,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   }, [editableFieldOptions, fields]);
 
   const addCondition = () => {
+    if (onBeforeAddCondition?.() === false) return;
     if (!firstField) return;
     const next = [
       ...safeValue,
@@ -140,7 +141,6 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 240,
     virtual: false,
-    styles: selectPopupStyles,
   };
 
   const renderValueInput = (condition: WorkflowCondition, isLocked = false) => {
@@ -188,7 +188,6 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           allowClear
           showSearch
           getPopupContainer={popupContainer as any}
-          popupStyle={{ zIndex: 12600 }}
           onOptionsUpdate={dynamicFieldProps[field.dynamicOptionsCategory]?.onOptionsUpdate}
           protectedValues={dynamicFieldProps[field.dynamicOptionsCategory]?.protectedValues}
         />
@@ -341,7 +340,6 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   popupMatchSelectWidth={false}
                   listHeight={240}
                   virtual={false}
-                  styles={selectPopupStyles}
                   value={condition.field}
                   onChange={(nextFieldKey) => {
                     const nextField = fields.find((f) => f.key === nextFieldKey);
@@ -365,7 +363,6 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   popupMatchSelectWidth={false}
                   listHeight={220}
                   virtual={false}
-                  styles={selectPopupStyles}
                   value={condition.operator}
                   onChange={(nextOperator) =>
                     updateCondition(condition.id, {
@@ -380,9 +377,14 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
               <div className="flex justify-end md:col-span-1">
                 <Button
                   type="text"
+                  htmlType="button"
                   danger
                   icon={<DeleteOutlined />}
-                  onClick={() => removeCondition(condition.id)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    removeCondition(condition.id);
+                  }}
                   disabled={disabled || isLocked}
                 />
               </div>
@@ -393,8 +395,13 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       <Space>
         <Button
           type="dashed"
+          htmlType="button"
           icon={<PlusOutlined />}
-          onClick={addCondition}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            addCondition();
+          }}
           disabled={disabled || !firstField}
         >
           افزودن شرط

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useMemo } from 'react';
 import { 
         Avatar, Button, Tag, Spin, Tabs, Descriptions, message, Drawer, Form, Input, Select, Switch, Upload, Alert, Table, Checkbox
 } from 'antd';
@@ -22,7 +23,7 @@ import { normalizeIranMobile } from '../utils/phoneNumber';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchCurrentUserRoleContext } from '../utils/permissions';
 import { fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
-import { SOFTWARE_ROLE_OPTIONS, getSoftwareRoleLabel } from '../utils/softwareRoles';
+import { SOFTWARE_ROLE_OPTIONS, canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../utils/softwareRoles';
 import PhoneActionsPopover from '../components/PhoneActionsPopover';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 
@@ -34,6 +35,8 @@ const ProfilePage: React.FC = () => {
     const [roles, setRoles] = useState<any[]>([]);
     const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
+    const [currentUserRoleTitle, setCurrentUserRoleTitle] = useState<string | null>(null);
     const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [drawerMode, setDrawerMode] = useState<'edit' | 'create'>('edit');
@@ -52,14 +55,29 @@ const ProfilePage: React.FC = () => {
   const [relatedEmployee, setRelatedEmployee] = useState<any | null>(null);
   useEffect(() => {
     fetchProfile();
-        fetchRoles();
         loadCurrentUserRole();
   }, [id]);
 
+    useEffect(() => {
+        fetchRoles();
+    }, [currentOrgId]);
+
     const fetchRoles = async () => {
-        const { data: rolesData, error } = await supabase.from('org_roles').select('id, title').order('created_at');
+        if (!currentOrgId) {
+            setRoles([]);
+            return;
+        }
+        const { data: rolesData, error } = await supabase
+            .from('org_roles')
+            .select('id, title')
+            .eq('org_id', currentOrgId)
+            .order('created_at');
         if (error) {
-            const fallback = await supabase.from('org_roles').select('*').order('created_at');
+            const fallback = await supabase
+                .from('org_roles')
+                .select('*')
+                .eq('org_id', currentOrgId)
+                .order('created_at');
             setRoles(fallback.data || []);
             return;
         }
@@ -72,7 +90,18 @@ const ProfilePage: React.FC = () => {
         setCurrentUserId(currentUserId);
         if (!currentUserId) return;
         setCurrentUserRole(snapshot.profile?.role || null);
+        setCurrentUserRoleId(snapshot.roleId || null);
         setCurrentOrgId(snapshot.orgId || null);
+        if (snapshot.roleId) {
+            const { data: roleRow } = await supabase
+                .from('org_roles')
+                .select('title')
+                .eq('id', snapshot.roleId)
+                .maybeSingle();
+            setCurrentUserRoleTitle(String(roleRow?.title || '').trim() || null);
+        } else {
+            setCurrentUserRoleTitle(null);
+        }
         const context = await fetchCurrentUserRoleContext(supabase);
         setProfileFieldPermissions(context.permissions?.profiles?.fields || {});
     };
@@ -260,11 +289,18 @@ const ProfilePage: React.FC = () => {
     setLoading(false);
   };
 
-    const canManageUsers = ['super_admin', 'admin', 'manager'].includes(String(currentUserRole || '').toLowerCase());
+    const fallbackCurrentRoleTitle = useMemo(() => {
+        const currentRole = roles.find((role) => String(role?.id || '') === String(currentUserRoleId || ''));
+        return String(currentRole?.title || '').trim();
+    }, [currentUserRoleId, roles]);
+
+    const effectiveCurrentRoleTitle = String(currentUserRoleTitle || fallbackCurrentRoleTitle || '').trim();
+    const canManageUsers = canManageUsersByRoleContext(currentUserRole, effectiveCurrentRoleTitle);
+    const canManageSuperAdmin = canManageSuperAdminByRoleContext(currentUserRole, effectiveCurrentRoleTitle);
 
     const canEditRecord = (currentRecord: any) => {
         if (!canManageUsers) return false;
-        if (currentRecord?.role === 'super_admin' && String(currentUserRole || '').toLowerCase() !== 'super_admin') {
+        if (currentRecord?.role === 'super_admin' && !canManageSuperAdmin) {
             return false;
         }
         return true;
@@ -840,7 +876,10 @@ const ProfilePage: React.FC = () => {
                     <Form.Item label="ایمیل" name="email" rules={[{ type: 'email', message: 'ایمیل معتبر نیست' }]}><Input /></Form.Item>
                     <Form.Item label="شماره موبایل" name="mobile" rules={[{ required: true }]}><Input /></Form.Item>
                     <Form.Item label="جایگاه سازمانی" name="role_id" rules={[{ required: true }]}>
-                        <Select placeholder="انتخاب کنید" options={roles.map(r => ({ label: getSoftwareRoleLabel(r.title || r.name), value: r.id }))} />
+                        <Select
+                            placeholder="انتخاب کنید"
+                            options={roles.map((r) => ({ label: String(r?.title || r?.name || 'بدون عنوان').trim(), value: r.id }))}
+                        />
                     </Form.Item>
                     <Form.Item label="نقش نرم‌افزاری" name="role" rules={[{ required: true }]}>
                         <Select

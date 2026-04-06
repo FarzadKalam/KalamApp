@@ -16,6 +16,7 @@ import {
   TASK_AUTOMATION_FIELD_PREFIX,
   withProcessTaskCustomFieldValues,
 } from './processTaskCustomFields';
+import { getTaskStatusLabel } from './processTaskStatusOptions';
 
 type AutomationActor = {
   id?: string | null;
@@ -58,13 +59,6 @@ const parseRecurrenceInfo = (value: any): Record<string, any> => {
   }
 };
 
-const getTaskStatusLabel = (status: unknown) => {
-  const normalized = normalizeTaskStatus(status);
-  const options = MODULES.tasks?.fields?.find((field: any) => field.key === 'status')?.options || [];
-  const matched = options.find((option: any) => normalizeTaskStatus(option?.value) === normalized);
-  return String(matched?.label || status || '').trim();
-};
-
 const buildAutomationActionRecord = (
   task: Record<string, any>,
   sourceRecord?: Record<string, any> | null,
@@ -83,8 +77,8 @@ const buildAutomationActionRecord = (
     task_name: task?.name ?? '',
     task_type: task?.task_type ?? parseRecurrenceInfo(task?.recurrence_info)?.task_type ?? '',
     task_status: task?.status ?? '',
-    status_label: getTaskStatusLabel(task?.status),
-    task_status_label: getTaskStatusLabel(task?.status),
+    status_label: getTaskStatusLabel(task?.status, task),
+    task_status_label: getTaskStatusLabel(task?.status, task),
     task_due_date: task?.due_date ?? '',
     source_module_id: sourceModuleId || sourceLink.moduleId || '',
     source_record_id: sourceLink.recordId ?? '',

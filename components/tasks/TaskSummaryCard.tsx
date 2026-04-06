@@ -6,6 +6,7 @@ import ProductionStagesField from '../ProductionStagesField';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
+import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 
 interface TaskSummaryCardProps {
   task: any;
@@ -50,6 +51,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   onProducedQtyChange,
 }) => {
   const sourceLink = resolveTaskSourceLink(task);
+  const resolvedStatusOptions = getTaskStatusOptions(task, statusOptions);
   const relatedModuleId = String(sourceLink.moduleId || '');
   const relatedRecordId = sourceLink.recordId;
 
@@ -95,7 +97,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
               onChange={(value) => {
                 void onStatusChange(String(task.id), String(value));
               }}
-              options={statusOptions.map((option) => ({ label: option.label, value: option.value }))}
+              options={resolvedStatusOptions.map((option) => ({ label: option.label, value: option.value }))}
               style={{ minWidth: 120 }}
             />
           ) : null}

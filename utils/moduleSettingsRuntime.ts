@@ -5,10 +5,24 @@ import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE, type ModuleSettingsConfig, type
 export const MODULE_SETTINGS_APPLIED_EVENT = 'kalam:module-settings-applied';
 export const MODULE_SETTINGS_UPDATED_EVENT = 'kalam:module-settings-updated';
 
+const MODULE_SETTINGS_TTL_MS = 5 * 60_000;
+
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const isModuleSettingsUnavailableError = (error: any) =>
   Number(error?.status) === 404
   || String(error?.code || '').toUpperCase() === 'PGRST205';
+
+const moduleSettingsCache: {
+  data: ModuleSettingsStore | null;
+  expiresAt: number;
+  unavailable: boolean;
+  promise: Promise<ModuleSettingsStore | null> | null;
+} = {
+  data: null,
+  expiresAt: 0,
+  unavailable: false,
+  promise: null,
+};
 
 const baseModuleRegistrySnapshot: Record<string, Pick<ModuleDefinition, 'fields' | 'blocks'>> = Object.fromEntries(
   Object.entries(MODULES).map(([moduleId, moduleDef]) => [
@@ -61,27 +75,63 @@ export const applyModuleSettingsStoreToRegistry = (
 };
 
 export const loadModuleSettingsStore = async (supabaseClient: any): Promise<ModuleSettingsStore | null> => {
-  const { data, error } = await supabaseClient
-    .from('system_settings')
-    .select('settings')
-    .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-    .eq('is_active', true)
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    if (isModuleSettingsUnavailableError(error)) {
-      return null;
-    }
-    throw error;
+  const now = Date.now();
+  if (moduleSettingsCache.expiresAt > now) {
+    if (moduleSettingsCache.unavailable) return null;
+    if (moduleSettingsCache.data) return moduleSettingsCache.data;
   }
 
-  const settings = data?.settings;
-  if (!settings || typeof settings !== 'object') return null;
-  const modules = (settings as any)?.modules;
-  if (!modules || typeof modules !== 'object') return null;
-  return { modules: modules as Record<string, ModuleSettingsConfig> };
+  if (moduleSettingsCache.promise) {
+    return moduleSettingsCache.promise;
+  }
+
+  moduleSettingsCache.promise = (async () => {
+    const { data, error } = await supabaseClient
+      .from('integration_settings')
+      .select('settings')
+      .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      if (isModuleSettingsUnavailableError(error)) {
+        moduleSettingsCache.data = null;
+        moduleSettingsCache.unavailable = true;
+        moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
+        return null;
+      }
+      throw error;
+    }
+
+    const settings = data?.settings;
+    if (!settings || typeof settings !== 'object') {
+      moduleSettingsCache.data = null;
+      moduleSettingsCache.unavailable = false;
+      moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
+      return null;
+    }
+    const modules = (settings as any)?.modules;
+    if (!modules || typeof modules !== 'object') {
+      moduleSettingsCache.data = null;
+      moduleSettingsCache.unavailable = false;
+      moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
+      return null;
+    }
+
+    const store = { modules: modules as Record<string, ModuleSettingsConfig> };
+    moduleSettingsCache.data = store;
+    moduleSettingsCache.unavailable = false;
+    moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
+    return store;
+  })();
+
+  try {
+    return await moduleSettingsCache.promise;
+  } finally {
+    moduleSettingsCache.promise = null;
+  }
 };
 
 export const loadAndApplyModuleSettings = async (supabaseClient: any) => {

@@ -597,16 +597,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (!profile.id) return [];
     const userId = profile.id;
     const roleId = profile.role_id;
-    const queryStatuses = statusOptions
-      .map((item: any) => String(item?.value || '').trim())
-      .filter((value: string) => value && value !== 'canceled');
-    const fallbackStatuses = ['todo', 'in_progress', 'review', 'done'];
-
     const buildTasksQuery = () =>
       supabase
         .from('tasks')
         .select('id, name, status, priority, produced_qty, created_at, start_date, due_date, assignee_id, assignee_role_id, assignee_type, production_line_id, related_to_module, related_product, related_customer, related_supplier, related_production_order, related_invoice, purchase_invoice_id, project_id, marketing_lead_id, source_module_id, source_record_id')
-        .in('status', queryStatuses.length ? queryStatuses : fallbackStatuses)
+        .neq('status', 'canceled')
         .order('created_at', { ascending: false })
         .limit(50);
 

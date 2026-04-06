@@ -125,6 +125,7 @@ export interface SelectOption {
   label: string;
   value: string | number;
   color?: string; 
+  insertAfter?: string;
 }
 
 export interface FieldValidation {

@@ -1,3 +1,5 @@
+import { fetchSessionBootstrap } from './sessionCache';
+
 type DynamicOptionRow = { label: string; value: string };
 type AssigneeDirectory = {
   users: Array<{
@@ -9,7 +11,13 @@ type AssigneeDirectory = {
     role_id?: string | null;
     display_name: string;
   }>;
-  roles: Array<{ id: string; title: string }>;
+  roles: Array<{
+    id: string;
+    title: string;
+    parent_id?: string | null;
+    sort_order?: number;
+    is_system?: boolean;
+  }>;
 };
 
 const REFERENCE_TTL_MS = 5 * 60_000;
@@ -18,10 +26,12 @@ const assigneeDirectoryCache: {
   data: AssigneeDirectory | null;
   expiresAt: number;
   promise: Promise<AssigneeDirectory> | null;
+  supportsRoleTreeSchema: boolean | null;
 } = {
   data: null,
   expiresAt: 0,
   promise: null,
+  supportsRoleTreeSchema: null,
 };
 
 const dynamicOptionsCache = new Map<string, { data: DynamicOptionRow[]; expiresAt: number }>();
@@ -64,12 +74,41 @@ const normalizeRoles = (rows: any[]) =>
   (rows || []).map((role: any) => ({
     id: String(role?.id || ''),
     title: String(role?.title || role?.name || role?.id || '').trim() || 'بدون عنوان',
+    parent_id: role?.parent_id ? String(role.parent_id) : null,
+    sort_order: Number.isFinite(Number(role?.sort_order)) ? Number(role.sort_order) : 0,
+    is_system: role?.is_system === true,
   }));
+
+const mergeRoleRows = (...sources: any[][]): any[] => {
+  const map = new Map<string, any>();
+  sources.forEach((rows) => {
+    (rows || []).forEach((row: any) => {
+      const id = String(row?.id || '').trim();
+      if (!id || map.has(id)) return;
+      map.set(id, row);
+    });
+  });
+  return Array.from(map.values());
+};
+
+const dedupeRolesForAssigneeSelection = (rows: any[]): any[] => {
+  const titleMap = new Map<string, any>();
+  return (rows || []).filter((row: any) => {
+    const id = String(row?.id || '').trim();
+    if (!id) return false;
+    const titleKey = String(row?.title || row?.name || id).trim().toLocaleLowerCase('fa');
+    const dedupeKey = titleKey || id;
+    if (titleMap.has(dedupeKey)) return false;
+    titleMap.set(dedupeKey, row);
+    return true;
+  });
+};
 
 export const clearReferenceDataCache = () => {
   assigneeDirectoryCache.data = null;
   assigneeDirectoryCache.expiresAt = 0;
   assigneeDirectoryCache.promise = null;
+  assigneeDirectoryCache.supportsRoleTreeSchema = null;
 
   dynamicOptionsCache.clear();
   dynamicOptionsPromiseCache.clear();
@@ -83,6 +122,11 @@ export const clearReferenceDataCache = () => {
 
 const buildRecordTagsCacheKey = (moduleId: string, recordIds: string[]) =>
   `${String(moduleId || '').trim()}::${recordIds.map((id) => String(id || '').trim()).filter(Boolean).sort().join(',')}`;
+
+const isRoleTreeColumnMissingError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('parent_id') || text.includes('sort_order');
+};
 
 export const fetchRecordTagsMap = async (
   supabaseClient: any,
@@ -153,20 +197,109 @@ export const fetchAssigneeDirectory = async (
   }
 
   assigneeDirectoryCache.promise = (async () => {
-    const [{ data: users }, rolesResult] = await Promise.all([
-      supabaseClient.from('profiles').select('id, full_name, email, mobile_1, avatar_url, role_id'),
-      supabaseClient.from('org_roles').select('id, title').limit(400),
+    const snapshot = await fetchSessionBootstrap(supabaseClient, options);
+    const orgId = String(snapshot.orgId || '').trim();
+
+    let usersQuery = supabaseClient.from('profiles').select('id, full_name, email, mobile_1, avatar_url, role_id');
+    const preferTreeSchema = assigneeDirectoryCache.supportsRoleTreeSchema !== false;
+
+    if (orgId) {
+      usersQuery = usersQuery.eq('org_id', orgId);
+    }
+
+    const buildRoleQuery = (mode: 'org' | 'extra', treeSchema: boolean) => {
+      let query = treeSchema
+        ? supabaseClient
+            .from('org_roles')
+            .select('id, org_id, title, parent_id, sort_order, is_system')
+            .limit(400)
+        : supabaseClient
+            .from('org_roles')
+            .select('id, org_id, title, is_system')
+            .limit(400);
+
+      if (orgId) {
+        if (mode === 'org') {
+          query = query.eq('org_id', orgId);
+        } else {
+          query = query.or('is_system.eq.true,org_id.is.null');
+        }
+      }
+
+      return query;
+    };
+
+    const extraRoleIdsQuery = orgId
+      ? supabaseClient
+          .from('phone_signup_invites')
+          .select('role_id')
+          .eq('org_id', orgId)
+          .not('role_id', 'is', null)
+      : Promise.resolve({ data: [] as any[], error: null });
+
+    const [{ data: users }, orgRolesResult, extraRolesResult, extraRoleIdsResult] = await Promise.all([
+      usersQuery,
+      buildRoleQuery('org', preferTreeSchema),
+      orgId ? buildRoleQuery('extra', preferTreeSchema) : Promise.resolve({ data: [] as any[], error: null }),
+      extraRoleIdsQuery,
     ]);
 
-    let roles = rolesResult?.data || [];
-    if ((!roles || roles.length === 0) && rolesResult?.error) {
-      const fallback = await supabaseClient.from('org_roles').select('*').limit(400);
-      roles = fallback?.data || [];
+    let roles = mergeRoleRows(orgRolesResult?.data || [], extraRolesResult?.data || []);
+    const roleTreeMissing =
+      preferTreeSchema
+      && (
+        (orgRolesResult?.error && isRoleTreeColumnMissingError(orgRolesResult.error))
+        || (extraRolesResult?.error && isRoleTreeColumnMissingError(extraRolesResult.error))
+      );
+
+    if (roleTreeMissing) {
+      assigneeDirectoryCache.supportsRoleTreeSchema = false;
+      const [fallbackOrgRoles, fallbackExtraRoles] = await Promise.all([
+        buildRoleQuery('org', false),
+        orgId ? buildRoleQuery('extra', false) : Promise.resolve({ data: [] as any[] }),
+      ]);
+      roles = mergeRoleRows(
+        (fallbackOrgRoles?.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 })),
+        (fallbackExtraRoles?.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 })),
+      );
+    } else if (!orgRolesResult?.error && !extraRolesResult?.error && preferTreeSchema) {
+      assigneeDirectoryCache.supportsRoleTreeSchema = true;
+    } else if (!preferTreeSchema) {
+      roles = (roles || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }));
+    } else if ((!roles || roles.length === 0) && (orgRolesResult?.error || extraRolesResult?.error)) {
+      const [fallbackOrgRoles, fallbackExtraRoles] = await Promise.all([
+        orgId
+          ? supabaseClient.from('org_roles').select('*').eq('org_id', orgId).limit(400)
+          : supabaseClient.from('org_roles').select('*').limit(400),
+        orgId
+          ? supabaseClient.from('org_roles').select('*').or('is_system.eq.true,org_id.is.null').limit(400)
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+      roles = mergeRoleRows(fallbackOrgRoles?.data || [], fallbackExtraRoles?.data || []);
+    }
+
+    const assignedRoleIds = Array.from(
+      new Set(
+        [
+          ...(users || []).map((row: any) => String(row?.role_id || '').trim()),
+          ...((extraRoleIdsResult as any)?.data || []).map((row: any) => String(row?.role_id || '').trim()),
+        ].filter(Boolean)
+      )
+    ).filter((id) => !(roles || []).some((role: any) => String(role?.id || '').trim() === id));
+
+    if (assignedRoleIds.length > 0) {
+      const missingRolesResult = assigneeDirectoryCache.supportsRoleTreeSchema === false
+        ? await supabaseClient.from('org_roles').select('id, org_id, title, is_system').in('id', assignedRoleIds)
+        : await supabaseClient.from('org_roles').select('id, org_id, title, parent_id, sort_order, is_system').in('id', assignedRoleIds);
+      const missingRoles = assigneeDirectoryCache.supportsRoleTreeSchema === false
+        ? (missingRolesResult?.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }))
+        : (missingRolesResult?.data || []);
+      roles = mergeRoleRows(roles || [], missingRoles);
     }
 
     const directory = {
       users: normalizeUsers(users || []),
-      roles: normalizeRoles(roles || []),
+      roles: normalizeRoles(dedupeRolesForAssigneeSelection(roles || [])),
     };
 
     assigneeDirectoryCache.data = directory;

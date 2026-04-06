@@ -37,7 +37,7 @@ import {
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
-import { canAccessAssignedRecord, fetchCurrentUserRoleContext } from '../utils/permissions';
+import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, type RecordScope } from '../utils/permissions';
 import { normalizeAutoNameEnabled } from '../utils/autoName';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { buildCopyPayload, detectCopyNameField } from '../utils/recordCopy';
@@ -60,6 +60,7 @@ import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
+import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
@@ -198,7 +199,7 @@ const ModuleShow: React.FC = () => {
   const recordFetchKeyRef = useRef<string>('');
   const skipNextOptionsFetchRef = useRef(false);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
-  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: 'all' | 'own' | 'team' }>({});
+  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [autoSyncedBomId, setAutoSyncedBomId] = useState<string | null>(null);
   const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
@@ -808,6 +809,9 @@ const ModuleShow: React.FC = () => {
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
+  const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
   const [accessDenied, setAccessDenied] = useState(false);
 
   const [allUsers, setAllUsers] = useState<any[]>([]);
@@ -1079,9 +1083,13 @@ const ModuleShow: React.FC = () => {
     }
     const recordScope = modulePermissions.record_scope ?? (modulePermissions.view === false ? 'own' : 'all');
     const hasModuleViewAccess = modulePermissions.view !== false || recordScope !== 'all';
-    const scopedAccess = canAccessAssignedRecord(data, currentUserId, currentUserRoleId, recordScope);
+    const scopedAccess = canAccessAssignedRecord(data, currentUserId, currentUserRoleId, recordScope, {
+      currentOrgId,
+      allowedRoleIds,
+      allowedUserIds,
+    });
     setAccessDenied(!hasModuleViewAccess || !scopedAccess);
-  }, [data, currentUserId, currentUserRoleId, modulePermissions.record_scope, modulePermissions.view]);
+  }, [allowedRoleIds, allowedUserIds, currentOrgId, currentUserId, currentUserRoleId, data, modulePermissions.record_scope, modulePermissions.view]);
 
   const loadProductionShelves = useCallback(async () => {
     const { data: shelves } = await supabase
@@ -1371,9 +1379,12 @@ const ModuleShow: React.FC = () => {
 
   const fetchFieldPermissions = useCallback(async () => {
     try {
-      const context = await fetchCurrentUserRoleContext(supabase);
+      const context = await fetchCurrentUserRecordAccessContext(supabase);
       setCurrentUserId(context.userId);
       setCurrentUserRoleId(context.roleId);
+      setCurrentOrgId(context.orgId);
+      setAllowedRoleIds(context.allowedRoleIds);
+      setAllowedUserIds(context.allowedUserIds);
 
       if (!context.roleId) {
         setFieldPermissions({});
@@ -1391,7 +1402,7 @@ const ModuleShow: React.FC = () => {
         view: modulePerms.view,
         edit: modulePerms.edit,
         delete: modulePerms.delete,
-        record_scope: modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all'),
+        record_scope: (modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all')) as RecordScope,
       });
       setCanIssueAccountingEntry(journalPerms.view !== false && journalPerms.edit !== false);
     } catch (err) {
@@ -2772,6 +2783,9 @@ const ModuleShow: React.FC = () => {
         [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
           stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
         ),
+        [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
+          stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
+        ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -2845,17 +2859,39 @@ const ModuleShow: React.FC = () => {
         values = syncProcessTemplateTargetModules(values);
       }
       const previous = data || {};
+      const authUser = await getCachedAuthUser(supabase);
+      const authUserId = authUser?.id || null;
+      const withUpdateAuditFields = (recordPayload: Record<string, any>) => {
+        if (!authUserId) return { ...recordPayload };
+        return {
+          ...recordPayload,
+          updated_by: recordPayload.updated_by ?? authUserId,
+        };
+      };
+      const isMissingAuditColumnError = (error: any) => {
+        const code = String(error?.code || '').toUpperCase();
+        const text = String(error?.message || error?.details || '').toLowerCase();
+        return (
+          code === '42703'
+          || code === 'PGRST204'
+          || text.includes('created_by')
+          || text.includes('updated_by')
+        );
+      };
+      const persistedValues = withUpdateAuditFields(values);
 
       const changedKeys = Object.keys(values).filter((k) => !areValuesEqual(values[k], previous[k]));
 
-      await supabase.from(moduleId).update(values).eq('id', id);
+      let updateResult = await supabase.from(moduleId).update(persistedValues).eq('id', id);
+      if (updateResult.error && isMissingAuditColumnError(updateResult.error)) {
+        updateResult = await supabase.from(moduleId).update(values).eq('id', id);
+      }
+      if (updateResult.error) throw updateResult.error;
       if (moduleId === 'process_templates') {
         await syncProcessTemplateStages(String(id), meta?.templateStagesPreview || []);
       }
 
       if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
-        const authUser = await getCachedAuthUser(supabase);
-        const userId = authUser?.id || null;
         await applyInvoiceFinalizationInventory({
           supabase: supabase as any,
           moduleId,
@@ -2863,7 +2899,7 @@ const ModuleShow: React.FC = () => {
           previousStatus: previous?.status || null,
           nextStatus: values?.status ?? previous?.status ?? null,
           invoiceItems: values?.invoiceItems ?? previous?.invoiceItems ?? [],
-          userId,
+          userId: authUserId,
         });
         const accountingSync = await syncInvoiceAccountingEntries({
           supabase: supabase as any,
@@ -2871,7 +2907,7 @@ const ModuleShow: React.FC = () => {
           recordId: id,
           recordData: {
             ...previous,
-            ...values,
+            ...persistedValues,
           },
           includePayments: true,
         });
@@ -2886,7 +2922,7 @@ const ModuleShow: React.FC = () => {
         event: 'upsert',
         currentRecord: {
           ...previous,
-          ...values,
+          ...persistedValues,
           id,
         } as Record<string, any>,
         previousRecord: previous as Record<string, any>,
@@ -3939,6 +3975,7 @@ const ModuleShow: React.FC = () => {
       || (moduleId === 'process_runs' && field.key === 'module_id')
     ) options = getProcessTemplateModuleOptions();
     else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
+    else if (moduleId === 'tasks' && field.key === 'status') options = getTaskStatusOptions(data);
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
 

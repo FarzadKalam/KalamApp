@@ -3,6 +3,7 @@ import { Button, Checkbox, Input, InputNumber, Select, Space, Tag } from 'antd';
 import { ArrowRightOutlined, ClockCircleOutlined, OrderedListOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { getBaseTaskStatusOptions, getTaskStatusColor, getTaskStatusLabel, getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 
 interface TaskQuickPopoverContentProps {
   task: any;
@@ -12,7 +13,7 @@ interface TaskQuickPopoverContentProps {
   assigneeUserOptions?: Array<{ value: string; label: string }>;
   assigneeRoleOptions?: Array<{ value: string; label: string }>;
   onAssigneeChange?: (value?: string) => void;
-  statusOptions?: Array<{ value: string; label: string }>;
+  statusOptions?: Array<{ value: string | number; label: string; color?: string }>;
   statusValue?: string;
   onStatusChange?: (value: string) => void;
   canEditTaskStatus?: boolean;
@@ -38,12 +39,7 @@ interface TaskQuickPopoverContentProps {
   onOpenHandover?: () => void;
 }
 
-const DEFAULT_STATUS_OPTIONS = [
-  { value: 'todo', label: 'انجام نشده' },
-  { value: 'in_progress', label: 'در حال انجام' },
-  { value: 'review', label: 'بازبینی' },
-  { value: 'done', label: 'تکمیل شده' },
-];
+const DEFAULT_STATUS_OPTIONS = getBaseTaskStatusOptions();
 
 const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
   task,
@@ -78,15 +74,10 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
   supportsHandover = false,
   onOpenHandover,
 }) => {
+  const resolvedStatusOptions = getTaskStatusOptions(task, statusOptions || DEFAULT_STATUS_OPTIONS);
   const normalizedStatusValue = String(statusValue || task?.status || '').trim();
-  const statusLabel = statusOptions.find((item) => String(item.value || '') === normalizedStatusValue)?.label || normalizedStatusValue;
-  const statusTagColor = normalizedStatusValue === 'done'
-    ? 'green'
-    : normalizedStatusValue === 'in_progress'
-      ? 'blue'
-      : normalizedStatusValue === 'review'
-        ? 'gold'
-        : 'default';
+  const statusLabel = getTaskStatusLabel(normalizedStatusValue, task, resolvedStatusOptions) || normalizedStatusValue;
+  const statusTagColor = getTaskStatusColor(normalizedStatusValue, task, resolvedStatusOptions);
 
   return (
     <div className="w-80 max-w-[80vw] p-1 font-['Vazirmatn']">
@@ -144,7 +135,7 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
             disabled={!canEditTaskStatus || !onStatusChange}
             getPopupContainer={() => document.body}
             styles={{ popup: { root: { zIndex: 12050 } } }}
-            options={statusOptions}
+            options={resolvedStatusOptions}
           />
         </div>
 

@@ -119,7 +119,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
-  const selectPopupStyles = { popup: { root: { zIndex: 12600 } } } as const;
 
   const commonSelectProps = {
     showSearch: true,
@@ -128,7 +127,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 260,
     virtual: false,
-    styles: selectPopupStyles,
   };
 
   const updatableFieldOptions = useMemo(

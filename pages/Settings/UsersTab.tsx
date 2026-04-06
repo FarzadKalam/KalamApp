@@ -7,6 +7,7 @@ import {
   Drawer,
   Form,
   Input,
+  Popconfirm,
   Select,
   Space,
   Switch,
@@ -14,13 +15,14 @@ import {
   Tag,
   Upload,
 } from 'antd';
-import { PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined } from '@ant-design/icons';
+import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
-import { clearSessionBootstrapCache } from '../../utils/sessionCache';
+import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
+import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
@@ -42,20 +44,28 @@ type UserRow = {
   _isPending?: boolean;
 };
 
-const SYSTEM_ROLE_FA_LABELS: Record<string, string> = {
-  super_admin: 'مدیر ارشد',
-  admin: 'مدیر سیستم',
-  manager: 'مدیر',
-  viewer: 'مشاهده‌گر',
-};
-
 const SYSTEM_ROLE_OPTIONS = [
   { label: 'مدیر ارشد', value: 'super_admin' },
   { label: 'مدیر سیستم', value: 'admin' },
   { label: 'مدیر', value: 'manager' },
+  { label: 'ویرایشگر', value: 'editor' },
   { label: 'مشاهده‌گر', value: 'viewer' },
 ];
 
+const normalizeRoleToken = (value?: string | null) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\\s_\\-\\u200c]+/g, ''); /*
+    .replace(/[\s_\-‌]+/g, '');
+
+  'مدیر',
+  'مدیراشد',
+  'مدیرسیستم',
+  'مدیرسازمان',
+]);
+
+*/
 const toInviteDisplayPhone = (value?: string | null) => {
   if (!value) return '';
   return formatIranMobileForInput(value);
@@ -72,6 +82,8 @@ const UsersTab: React.FC = () => {
   const [editingUser, setEditingUser] = useState<UserRow | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
+  const [currentUserRoleTitle, setCurrentUserRoleTitle] = useState<string | null>(null);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [seedInvite, setSeedInvite] = useState<UserRow | null>(null);
   const [phoneAuthState, setPhoneAuthState] = useState<any | null>(null);
@@ -82,8 +94,14 @@ const UsersTab: React.FC = () => {
 
   const mobileValue = Form.useWatch('mobile', form);
   const normalizedFormPhone = useMemo(() => normalizeIranMobile(mobileValue), [mobileValue]);
-
-  const canManageUsers = ['super_admin', 'admin', 'manager'].includes(String(currentUserRole || '').toLowerCase());
+  const fallbackCurrentRoleTitle = useMemo(() => {
+    const currentRole = roles.find((role) => String(role?.id || '') === String(currentUserRoleId || ''));
+    return String(currentRole?.title || '').trim();
+  }, [currentUserRoleId, roles]);
+  const effectiveCurrentRoleTitle = String(currentUserRoleTitle || fallbackCurrentRoleTitle || '').trim();
+  const canManageSuperAdmin = canManageSuperAdminByRoleContext(currentUserRole, effectiveCurrentRoleTitle)
+    || normalizeRoleToken(effectiveCurrentRoleTitle) === 'مدیراشد';
+  const canManageUsers = canManageUsersByRoleContext(currentUserRole, effectiveCurrentRoleTitle);
   const isEditingRealUser = editingUser?._rowType === 'profile';
   const drawerTitle = isEditingRealUser
     ? 'ویرایش کاربر'
@@ -92,9 +110,18 @@ const UsersTab: React.FC = () => {
       : 'ایجاد کاربر';
 
   useEffect(() => {
-    fetchData();
-    loadCurrentUser();
+    void loadCurrentUser();
   }, []);
+
+  useEffect(() => {
+    if (!currentOrgId) {
+      setRows([]);
+      setRoles([]);
+      setLoading(false);
+      return;
+    }
+    void fetchData();
+  }, [currentOrgId]);
 
   useEffect(() => {
     let active = true;
@@ -117,20 +144,43 @@ const UsersTab: React.FC = () => {
   }, [isDrawerOpen, normalizedFormPhone]);
 
   const loadCurrentUser = async () => {
-    const { data: authData } = await supabase.auth.getUser();
-    const userId = authData?.user?.id || null;
-    setCurrentUserId(userId);
-    if (!userId) return;
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role, role_id, org_id')
-      .eq('id', userId)
-      .single();
-    setCurrentUserRole(profile?.role || null);
-    setCurrentOrgId(profile?.org_id || null);
+    const snapshot = await fetchSessionBootstrap(supabase, { force: true });
+    const snapshotUserId = snapshot.user?.id || null;
+    let nextUserId = snapshotUserId;
+    let nextSoftwareRole = snapshot.profile?.role || null;
+    let nextRoleId = snapshot.roleId || null;
+    let nextOrgId = snapshot.orgId || null;
+    let nextRoleTitle: string | null = null;
+
+    if (nextUserId && (!nextSoftwareRole || !nextRoleId || !nextOrgId)) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, role_id, org_id')
+        .eq('id', nextUserId)
+        .maybeSingle();
+      nextSoftwareRole = profile?.role || nextSoftwareRole;
+      nextRoleId = profile?.role_id || nextRoleId;
+      nextOrgId = profile?.org_id || nextOrgId;
+    }
+
+    if (nextRoleId) {
+      const { data: roleRow } = await supabase
+        .from('org_roles')
+        .select('title')
+        .eq('id', nextRoleId)
+        .maybeSingle();
+      nextRoleTitle = String(roleRow?.title || '').trim() || null;
+    }
+
+    setCurrentUserId(nextUserId);
+    setCurrentUserRole(nextSoftwareRole);
+    setCurrentUserRoleId(nextRoleId);
+    setCurrentUserRoleTitle(nextRoleTitle);
+    setCurrentOrgId(nextOrgId);
   };
 
   const fetchData = async () => {
+    if (!currentOrgId) return;
     setLoading(true);
     try {
       const [{ data: usersData, error: usersError }, { data: rolesData, error: rolesError }, { data: invitesData, error: invitesError }] =
@@ -138,11 +188,13 @@ const UsersTab: React.FC = () => {
           supabase
             .from('profiles')
             .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, created_at, org_roles(title)')
+            .eq('org_id', currentOrgId)
             .order('created_at', { ascending: false }),
-          supabase.from('org_roles').select('*').order('created_at', { ascending: true }),
+          supabase.from('org_roles').select('*').eq('org_id', currentOrgId).order('created_at', { ascending: true }),
           supabase
             .from('phone_signup_invites')
             .select('id, org_id, role, role_id, full_name, email, phone_e164, is_active, created_at')
+            .eq('org_id', currentOrgId)
             .is('consumed_at', null)
             .order('created_at', { ascending: false }),
         ]);
@@ -182,15 +234,21 @@ const UsersTab: React.FC = () => {
   };
 
   const getRoleDisplayTitle = (role: any) => {
-    const raw = String(role?.title || role?.name || '').trim();
-    const normalized = raw.toLowerCase();
-    return SYSTEM_ROLE_FA_LABELS[normalized] || raw || 'بدون عنوان';
+    return String(role?.title || role?.name || '').trim() || 'بدون عنوان';
   };
 
   const canEditRecord = (record: UserRow) => {
     if (!canManageUsers) return false;
     if (record._rowType !== 'profile') return true;
-    if (record?.role === 'super_admin' && String(currentUserRole || '').toLowerCase() !== 'super_admin') {
+    if (record?.role === 'super_admin' && !canManageSuperAdmin) {
+      return false;
+    }
+    return true;
+  };
+
+  const canDeleteRecord = (record: UserRow) => {
+    if (!canEditRecord(record)) return false;
+    if (record._rowType === 'profile' && String(record.id || '') === String(currentUserId || '')) {
       return false;
     }
     return true;
@@ -235,6 +293,36 @@ const UsersTab: React.FC = () => {
     }
     message.success('وضعیت کاربر بروزرسانی شد');
     fetchData();
+  };
+
+  const handleDeleteRecord = async (record: UserRow) => {
+    if (!canDeleteRecord(record)) {
+      message.error('دسترسی کافی ندارید');
+      return;
+    }
+
+    try {
+      if (record._rowType === 'invite' && record._inviteId) {
+        const { error } = await supabase
+          .from('phone_signup_invites')
+          .delete()
+          .eq('id', record._inviteId)
+          .eq('org_id', currentOrgId);
+        if (error) throw error;
+        message.success('دعوت کاربر حذف شد');
+        await fetchData();
+        return;
+      }
+
+      await invokeUserAdmin({
+        action: 'delete_user',
+        userId: record.id,
+      });
+      message.success('کاربر حذف شد');
+      await fetchData();
+    } catch (error) {
+      message.error(toFaErrorMessage(error as any, 'حذف کاربر ناموفق بود'));
+    }
   };
 
   const handleAvatarUpload = async (file: File) => {
@@ -595,12 +683,28 @@ const UsersTab: React.FC = () => {
     {
       title: 'عملیات',
       key: 'actions',
-      width: 160,
+      width: 220,
       render: (_: any, record: UserRow) => (
         <Space>
           <Button size="small" onClick={() => handleEdit(record)} disabled={!canEditRecord(record)}>
             {record._rowType === 'invite' ? 'تکمیل ایجاد' : 'ویرایش'}
           </Button>
+          <Popconfirm
+            title={record._rowType === 'invite' ? 'حذف دعوت کاربر' : 'حذف کاربر'}
+            description={
+              record._rowType === 'invite'
+                ? 'این دعوت حذف شود؟'
+                : 'این کاربر از سیستم حذف شود؟'
+            }
+            okText="حذف"
+            cancelText="انصراف"
+            onConfirm={() => handleDeleteRecord(record)}
+            disabled={!canDeleteRecord(record)}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteRecord(record)}>
+              حذف
+            </Button>
+          </Popconfirm>
         </Space>
       ),
     },

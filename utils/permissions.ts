@@ -1,12 +1,15 @@
 ﻿import { BlockType, type ModuleDefinition } from '../types';
 import { getResolvedAssigneeId } from './assigneeValue';
+import { fetchAssigneeDirectory } from './referenceData';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCache';
+
+export type RecordScope = 'all' | 'own' | 'team' | 'subtree';
 
 export type ModulePermissionConfig = {
   view?: boolean;
   edit?: boolean;
   delete?: boolean;
-  record_scope?: 'all' | 'own' | 'team';
+  record_scope?: RecordScope;
   fields?: Record<string, any>;
 };
 
@@ -14,7 +17,13 @@ export type PermissionMap = Record<string, ModulePermissionConfig>;
 export type CurrentUserRoleContext = {
   userId: string | null;
   roleId: string | null;
+  orgId: string | null;
   permissions: PermissionMap | null;
+};
+
+export type CurrentUserRecordAccessContext = CurrentUserRoleContext & {
+  allowedRoleIds: string[];
+  allowedUserIds: string[];
 };
 
 export const SETTINGS_PERMISSION_KEY = '__settings_tabs';
@@ -306,24 +315,125 @@ export const resolvePreferredRoleModuleIds = (
   return next.slice(0, limit);
 };
 
+const normalizeIdSet = (values?: Iterable<string> | null) =>
+  new Set(Array.from(values || []).map((value) => String(value || '').trim()).filter(Boolean));
+
+const buildRoleChildrenMap = (roles: Array<{ id?: string | null; parent_id?: string | null }>) => {
+  const childrenMap = new Map<string, string[]>();
+  (roles || []).forEach((role) => {
+    const id = String(role?.id || '').trim();
+    const parentId = String(role?.parent_id || '').trim();
+    if (!id || !parentId) return;
+    const current = childrenMap.get(parentId) || [];
+    current.push(id);
+    childrenMap.set(parentId, current);
+  });
+  return childrenMap;
+};
+
+export const collectDescendantRoleIds = (
+  roles: Array<{ id?: string | null; parent_id?: string | null }>,
+  rootRoleId?: string | null
+) => {
+  const normalizedRootId = String(rootRoleId || '').trim();
+  if (!normalizedRootId) return new Set<string>();
+
+  const result = new Set<string>([normalizedRootId]);
+  const queue = [normalizedRootId];
+  const childrenMap = buildRoleChildrenMap(roles);
+
+  while (queue.length > 0) {
+    const currentId = String(queue.shift() || '').trim();
+    if (!currentId) continue;
+    (childrenMap.get(currentId) || []).forEach((childId) => {
+      const normalizedChildId = String(childId || '').trim();
+      if (!normalizedChildId || result.has(normalizedChildId)) return;
+      result.add(normalizedChildId);
+      queue.push(normalizedChildId);
+    });
+  }
+
+  return result;
+};
+
+export const resolveScopedRecordAccess = (
+  directory: { users?: Array<{ id?: string | null; role_id?: string | null }>; roles?: Array<{ id?: string | null; parent_id?: string | null }> } | null | undefined,
+  currentUserId: string | null,
+  currentUserRoleId: string | null
+) => {
+  const allowedRoleIds = collectDescendantRoleIds(directory?.roles || [], currentUserRoleId);
+  const allowedUserIds = new Set<string>();
+  const normalizedCurrentUserId = String(currentUserId || '').trim();
+
+  if (normalizedCurrentUserId) {
+    allowedUserIds.add(normalizedCurrentUserId);
+  }
+
+  (directory?.users || []).forEach((user) => {
+    const userId = String(user?.id || '').trim();
+    const roleId = String(user?.role_id || '').trim();
+    if (!userId) return;
+    if (roleId && allowedRoleIds.has(roleId)) {
+      allowedUserIds.add(userId);
+    }
+  });
+
+  return {
+    allowedRoleIds: Array.from(allowedRoleIds),
+    allowedUserIds: Array.from(allowedUserIds),
+  };
+};
+
 export const canAccessAssignedRecord = (
   record: any,
   currentUserId: string | null,
   currentUserRoleId: string | null,
-  recordScope: 'all' | 'own' | 'team' = 'all'
+  recordScope: RecordScope = 'all',
+  options?: {
+    currentOrgId?: string | null;
+    allowedRoleIds?: Iterable<string> | null;
+    allowedUserIds?: Iterable<string> | null;
+  }
 ) => {
-  if (recordScope === 'all') return true;
   if (!record) return false;
-  const resolvedAssigneeId = getResolvedAssigneeId(record);
+
+  const currentOrgId = String(options?.currentOrgId || '').trim();
+  const recordOrgId = String(record?.org_id || '').trim();
+  if (currentOrgId && recordOrgId && currentOrgId !== recordOrgId) {
+    return false;
+  }
+
+  if (recordScope === 'all') return true;
+
+  const resolvedAssigneeId = String(getResolvedAssigneeId(record) || '').trim();
+  if (!resolvedAssigneeId) return false;
+
   if (recordScope === 'team') {
     return !!currentUserRoleId && record?.assignee_type === 'role' && resolvedAssigneeId === currentUserRoleId;
   }
+
+  if (recordScope === 'subtree') {
+    const allowedRoleIds = normalizeIdSet(options?.allowedRoleIds);
+    const allowedUserIds = normalizeIdSet(options?.allowedUserIds);
+    if (currentUserRoleId) allowedRoleIds.add(String(currentUserRoleId));
+    if (currentUserId) allowedUserIds.add(String(currentUserId));
+
+    if (record?.assignee_type === 'role') {
+      return allowedRoleIds.has(resolvedAssigneeId);
+    }
+    if (record?.assignee_type === 'user') {
+      return allowedUserIds.has(resolvedAssigneeId);
+    }
+    return false;
+  }
+
   return !!currentUserId && record?.assignee_type === 'user' && resolvedAssigneeId === currentUserId;
 };
 
 const EMPTY_CURRENT_USER_ROLE_CONTEXT: CurrentUserRoleContext = {
   userId: null,
   roleId: null,
+  orgId: null,
   permissions: null,
 };
 
@@ -377,7 +487,7 @@ export const fetchCurrentUserRoleContext = async (
 
     const pending = (async (): Promise<CurrentUserRoleContext> => {
       if (!snapshot.roleId) {
-        const result = { userId: user.id, roleId: null, permissions: null };
+        const result = { userId: user.id, roleId: null, orgId: snapshot.orgId || null, permissions: null };
         currentUserRoleContextCache.set(cacheKey, result);
         return result;
       }
@@ -385,6 +495,7 @@ export const fetchCurrentUserRoleContext = async (
       const result = {
         userId: user.id,
         roleId: snapshot.roleId,
+        orgId: snapshot.orgId || null,
         permissions: (snapshot.permissions || null) as PermissionMap | null,
       };
       currentUserRoleContextCache.set(cacheKey, result);
@@ -462,6 +573,29 @@ export const fetchCurrentUserRolePermissions = async (supabaseClient: any): Prom
   } catch {
     return null;
   }
+};
+
+export const fetchCurrentUserRecordAccessContext = async (
+  supabaseClient: any,
+  options?: { force?: boolean }
+): Promise<CurrentUserRecordAccessContext> => {
+  const context = await fetchCurrentUserRoleContext(supabaseClient, options);
+  if (!context.userId) {
+    return {
+      ...context,
+      allowedRoleIds: [],
+      allowedUserIds: [],
+    };
+  }
+
+  const directory = await fetchAssigneeDirectory(supabaseClient, options);
+  const scoped = resolveScopedRecordAccess(directory, context.userId, context.roleId);
+
+  return {
+    ...context,
+    allowedRoleIds: scoped.allowedRoleIds,
+    allowedUserIds: scoped.allowedUserIds,
+  };
 };
 
 export const resolveReadyTextPermissions = (

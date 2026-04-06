@@ -271,6 +271,9 @@ const loadScopedRows = async (
   options: {
     userId: string | null;
     roleId: string | null;
+    orgId?: string | null;
+    allowedRoleIds?: string[];
+    allowedUserIds?: string[];
     permissions?: PermissionMap | null;
     cache: Map<string, any[]>;
   }
@@ -320,7 +323,11 @@ const loadScopedRows = async (
   });
 
   const scoped = filteredByDate.filter((row) =>
-    canAccessAssignedRecord(row, options.userId, options.roleId, modulePerm.record_scope || 'all')
+    canAccessAssignedRecord(row, options.userId, options.roleId, modulePerm.record_scope || 'all', {
+      currentOrgId: options.orgId,
+      allowedRoleIds: options.allowedRoleIds,
+      allowedUserIds: options.allowedUserIds,
+    })
   );
   options.cache.set(cacheKey, scoped);
   return scoped;
@@ -503,6 +510,9 @@ export const executeGoalProgress = async (
   options: {
     userId: string | null;
     roleId: string | null;
+    orgId?: string | null;
+    allowedRoleIds?: string[];
+    allowedUserIds?: string[];
     permissions?: PermissionMap | null;
     fiscalYear?: FiscalYearSnapshot | null;
     selectedSubperiodUnit?: GoalPeriodUnit | null;

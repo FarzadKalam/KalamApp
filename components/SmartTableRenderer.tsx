@@ -20,6 +20,7 @@ import PersianDatePicker from './PersianDatePicker';
 import { useCurrencyConfig } from '../utils/currency';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
+import { getTaskStatusOption } from '../utils/processTaskStatusOptions';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -775,7 +776,9 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             );
         }
         if (field.type === FieldType.STATUS) {
-            const opt = field.options?.find(o => o.value === value);
+            const opt = moduleConfig?.id === 'tasks' && String(field?.key || '') === 'status'
+              ? getTaskStatusOption(value, record, field.options || [])
+              : field.options?.find(o => o.value === value);
             const label = opt?.label || value;
             return <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>;
         }

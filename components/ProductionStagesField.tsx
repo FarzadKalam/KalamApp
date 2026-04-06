@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Tabs, Switch, Alert, Empty, Tag } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined } from '@ant-design/icons';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag } from 'antd';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
@@ -18,7 +18,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/inventoryTransactions';
 import { MODULES } from '../moduleRegistry';
-import { FieldType, ModuleField } from '../types';
+import { FieldType, ModuleField, SelectOption } from '../types';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import {
   applyTaskSourceRecordFilter,
@@ -64,6 +64,20 @@ import {
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
   withProcessTaskCustomFieldValues,
 } from '../utils/processTaskCustomFields';
+import {
+  getTaskStatusColor,
+  getTaskStatusLabel,
+  getTaskStatusOptions,
+  getTaskStatusSwatchColor,
+  normalizeProcessTaskStatusOptions,
+  getProcessTaskStatusOptionsFromStage,
+  getBaseTaskStatusOptions,
+  mergeTaskStatusOptions,
+  rebuildProcessTaskStatusOptionsByMergedOrder,
+  PROCESS_TASK_STATUS_COLOR_OPTIONS,
+  PROCESS_TASK_STATUS_OPTIONS_KEY,
+  PROCESS_TASK_STATUS_START_ANCHOR,
+} from '../utils/processTaskStatusOptions';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -126,6 +140,10 @@ type StageHandoverForm = {
   createdAt?: string | null;
   updatedAt?: string | null;
 };
+
+type DraftModalTabKey = 'stage' | 'fields' | 'automation';
+
+const DRAFT_MODAL_STEP_KEYS: DraftModalTabKey[] = ['stage', 'fields', 'automation'];
 
 const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
 const createProcessAutomationTaskVariableFields = (): ModuleField[] => ([
@@ -272,8 +290,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     templateName: string | null;
   } | null>(null);
   const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [draftModalTabKey, setDraftModalTabKey] = useState<'stage' | 'fields' | 'automation'>('stage');
+  const [draftModalTabKey, setDraftModalTabKey] = useState<DraftModalTabKey>('stage');
   const [draftCustomFields, setDraftCustomFields] = useState<ModuleField[]>([]);
+  const [draftStageStatusOptions, setDraftStageStatusOptions] = useState<SelectOption[]>([]);
+  const [draftStageTaskTypeValue, setDraftStageTaskTypeValue] = useState('');
   const [isDraftCustomFieldModalOpen, setIsDraftCustomFieldModalOpen] = useState(false);
   const [editingDraftCustomFieldKey, setEditingDraftCustomFieldKey] = useState<string | null>(null);
   const [draftCustomFieldOptionsEditorKey, setDraftCustomFieldOptionsEditorKey] = useState<string | null>(null);
@@ -288,6 +308,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
   const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
   const autoOpenedTaskIdRef = useRef<string | null>(null);
+  const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', draftForm);
   const modalSelectProps = useMemo(
     () => ({
       allowClear: true,
@@ -317,10 +338,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   );
   const automationConditionFields = useMemo(
     () => [
-      ...getProcessAutomationConditionFieldsForModules(automationScopeModuleIds),
+      ...getProcessAutomationConditionFieldsForModules(automationScopeModuleIds).map((field) => (
+        String(field?.key || '').trim() === '__task__status'
+          ? { ...field, options: getTaskStatusOptions({ recurrence_info: { [PROCESS_TASK_STATUS_OPTIONS_KEY]: draftStageStatusOptions } }, field.options || []) }
+          : field
+      )),
       ...draftCustomAutomationFields,
     ],
-    [automationScopeModuleIds, draftCustomAutomationFields]
+    [automationScopeModuleIds, draftCustomAutomationFields, draftStageStatusOptions]
   );
   const automationConditionFieldsWithoutTaskType = useMemo(
     () => automationConditionFields.filter((field) => String(field?.key || '').trim() !== '__task__task_type'),
@@ -372,10 +397,43 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   );
   const draftCustomFieldType = Form.useWatch('type', draftCustomFieldForm) || FieldType.TEXT;
   const draftCustomFieldRelationTargetModule = Form.useWatch('relationTargetModule', draftCustomFieldForm);
-  const draftStageTaskType = String(Form.useWatch('task_type', draftForm) || '').trim();
+  const draftStageTaskType = String(draftStageTaskTypeValue || '').trim();
+  const baseTaskStatusOptions = useMemo(() => getBaseTaskStatusOptions(), []);
+  const draftStageStatusValueSet = useMemo(
+    () => new Set(draftStageStatusOptions.map((option) => String(option?.value || '').trim()).filter(Boolean)),
+    [draftStageStatusOptions]
+  );
+  const mergedDraftStageStatusOptions = useMemo(
+    () => mergeTaskStatusOptions(baseTaskStatusOptions, draftStageStatusOptions),
+    [baseTaskStatusOptions, draftStageStatusOptions]
+  );
   const draftStageTaskTypeLabel = useMemo(
     () => taskTypeOptions.find((option) => String(option.value || '').trim() === draftStageTaskType)?.label || draftStageTaskType,
     [draftStageTaskType, taskTypeOptions]
+  );
+  const draftModalStepItems = useMemo(
+    () => [
+      {
+        key: 'stage' as DraftModalTabKey,
+        title: 'مرحله الگوی فرآیند',
+        description: 'مشخصات پایه و نوع فعالیت',
+      },
+      {
+        key: 'fields' as DraftModalTabKey,
+        title: `فیلدهای اختصاصی (${toPersianNumber(draftCustomFields.length)})`,
+        description: 'فیلدها و وضعیت‌های افزوده',
+      },
+      {
+        key: 'automation' as DraftModalTabKey,
+        title: `اتوماسیون (${toPersianNumber(draftAutomationRules.length)})`,
+        description: 'شرط‌ها و اقدام‌ها',
+      },
+    ],
+    [draftAutomationRules.length, draftCustomFields.length]
+  );
+  const draftModalStepIndex = useMemo(
+    () => Math.max(0, DRAFT_MODAL_STEP_KEYS.indexOf(draftModalTabKey)),
+    [draftModalTabKey]
   );
   const taskModalCustomFields = useMemo(
     () => getProcessTaskCustomFieldsFromStage(draftToCreate),
@@ -2428,6 +2486,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const taskType = String(values?.task_type || '').trim() || null;
       const stageAutomationRules = normalizeProcessAutomationRules(draftToCreate?.automation_rules);
       const stageCustomFields = getProcessTaskCustomFieldsFromStage(draftToCreate);
+      const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(draftToCreate);
       const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(
         stageCustomFields,
         taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {}
@@ -2498,6 +2557,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ...currentRecurrence,
           ...(taskType ? { task_type: taskType } : {}),
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+          [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         };
       }
@@ -2516,6 +2576,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_target_module_ids: stageTargetModuleIds,
           process_links: stageProcessLinkMap,
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+          [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         };
         if (activeProcessGroupMeta?.id) {
@@ -2767,22 +2828,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, []);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'done':
-      case 'completed':
-        return '#10b981';
-      case 'review':
-        return '#f97316';
-      case 'in_progress':
-        return '#3b82f6';
-      case 'todo':
-      case 'pending':
-        return '#ef4444';
-      default:
-        return '#9ca3af';
-    }
-  };
+  const getStatusColor = (status: string, task?: any) => getTaskStatusSwatchColor(status, task);
 
   const processLegendHelpContent = useMemo(() => (
     <div className="space-y-3 text-xs leading-6 text-gray-600 dark:text-gray-300">
@@ -2986,7 +3032,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           allowClear
           showSearch
           getPopupContainer={(node) => node?.parentElement || document.body}
-          popupStyle={{ zIndex: 12620 }}
           onOptionsUpdate={() => { void loadTaskCustomFieldOptions([field]); }}
           protectedValues={field.dynamicOptionsCategory === 'task_type' ? getTaskTypeProtectedValues() : undefined}
         />
@@ -3147,22 +3192,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const hasWage = task?.wage !== undefined && task?.wage !== null && Number(task.wage) !== 0;
     const hasWeight = task?.weight !== undefined && task?.weight !== null && Number(task.weight) !== 0;
     const taskStatusValue = String(task?.status || '').trim();
-    const taskStatusLabel = taskStatusValue === 'done'
-      ? 'تکمیل شده'
-      : taskStatusValue === 'in_progress'
-        ? 'در حال انجام'
-        : taskStatusValue === 'review'
-          ? 'بازبینی'
-          : taskStatusValue === 'todo'
-            ? 'انجام نشده'
-            : taskStatusValue || null;
-    const taskStatusTagColor = taskStatusValue === 'done'
-      ? 'green'
-      : taskStatusValue === 'in_progress'
-        ? 'blue'
-        : taskStatusValue === 'review'
-          ? 'gold'
-          : 'default';
+    const taskStatusOptions = getTaskStatusOptions(task);
+    const taskStatusLabel = getTaskStatusLabel(taskStatusValue, task, taskStatusOptions) || null;
+    const taskStatusTagColor = getTaskStatusColor(taskStatusValue, task, taskStatusOptions);
 
     return (
       <div
@@ -3199,7 +3231,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               showSearch
               optionFilterProp="label"
               getPopupContainer={(node) => node?.parentElement || document.body}
-              styles={{ popup: { root: { zIndex: 10050 } } }}
             >
               <Select.OptGroup label="کاربران">
                 {assignees.users.map((u) => (
@@ -3227,13 +3258,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               className="w-full sm:w-44"
               disabled={!canEditTaskStatus}
               getPopupContainer={(node) => node?.parentElement || document.body}
-              styles={{ popup: { root: { zIndex: 10050 } } }}
-              options={[
-                { value: 'todo', label: 'انجام نشده' },
-                { value: 'in_progress', label: 'در حال انجام' },
-                { value: 'review', label: 'بازبینی' },
-                { value: 'done', label: 'تکمیل شده' },
-              ]}
+              options={taskStatusOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
             />
           </div>
 
@@ -3683,6 +3711,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           task_type: String(metadata?.task_type || '').trim() || null,
           automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
           process_task_custom_fields: normalizeProcessTaskCustomFields(metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
+          process_task_status_options: normalizeProcessTaskStatusOptions(metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -3829,6 +3858,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           task_type: String(metadata?.task_type || '').trim() || null,
           automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
           process_task_custom_fields: normalizeProcessTaskCustomFields(metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
+          process_task_status_options: normalizeProcessTaskStatusOptions(metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
           sort_order: cursor,
           wage: Number(stage?.wage || 0),
           weight: Number(metadata?.weight || 0),
@@ -4060,6 +4090,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           const stageDescription = String(stage?.description || '').trim() || null;
           const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
           const stageCustomFields = getProcessTaskCustomFieldsFromStage(stage);
+          const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
           const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(stageCustomFields, {});
           const taskRow: any = {
             name: stageName,
@@ -4085,6 +4116,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               ...(stageTaskType ? { task_type: stageTaskType } : {}),
               process_automation_rules: stageAutomationRules,
               [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+              [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
               [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
               process_group: {
                 id: stageMeta.groupId,
@@ -4129,6 +4161,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   ]);
 
   const handleAddDraftStage = async (values: any) => {
+    if (draftModalStepIndex < DRAFT_MODAL_STEP_KEYS.length - 1) {
+      const nextStepKey = DRAFT_MODAL_STEP_KEYS[draftModalStepIndex + 1];
+      if (nextStepKey) {
+        setDraftModalTabKey(nextStepKey);
+      }
+      return;
+    }
     const assigneeRaw = String(values?.default_assignee_combo || '');
     const assigneeType = assigneeRaw.startsWith('role:') ? 'role' : (assigneeRaw.startsWith('user:') ? 'user' : null);
     const assigneeId = assigneeType ? assigneeRaw.split(':')[1] : null;
@@ -4169,6 +4208,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               duration_from: values?.duration_from || 'project_start',
               automation_rules: automationRules,
               process_task_custom_fields: normalizeProcessTaskCustomFields(draftCustomFields),
+              process_task_status_options: normalizeProcessTaskStatusOptions(draftStageStatusOptions),
             }
           : stage
       );
@@ -4188,19 +4228,99 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_from: values?.duration_from || 'project_start',
         automation_rules: automationRules,
         process_task_custom_fields: normalizeProcessTaskCustomFields(draftCustomFields),
+        process_task_status_options: normalizeProcessTaskStatusOptions(draftStageStatusOptions),
       });
     }
     await saveDraftStages(next);
     setIsDraftModalOpen(false);
     setEditingDraft(null);
+    setDraftModalTabKey('stage');
+    setDraftAutomationRules([]);
+    setDraftCustomFields([]);
+    setDraftStageStatusOptions([]);
+    setDraftStageTaskTypeValue('');
     draftForm.resetFields();
   };
 
-  const openDraftStageModal = useCallback((stage?: any | null, tab: 'stage' | 'fields' | 'automation' = 'stage') => {
+  const openDraftStageModal = useCallback((stage?: any | null, tab: DraftModalTabKey = 'stage') => {
     setEditingDraft(stage || null);
     setDraftModalTabKey(tab);
     setIsDraftModalOpen(true);
   }, []);
+
+  const closeDraftStageModal = useCallback(() => {
+    setIsDraftModalOpen(false);
+    setEditingDraft(null);
+    setDraftAutomationRules([]);
+    setDraftCustomFields([]);
+    setDraftStageStatusOptions([]);
+    setDraftStageTaskTypeValue('');
+    setDraftModalTabKey('stage');
+    draftForm.resetFields();
+  }, [draftForm]);
+
+  const guardDraftAutomationConditionAdd = useCallback(() => {
+    if (draftStageTaskType) return true;
+    message.warning('ابتدا در "بخش مرحله الگوی فرآیند" نوع فعالیت را انتخاب کنید.');
+    setDraftModalTabKey('stage');
+    return false;
+  }, [draftStageTaskType]);
+
+  const goToDraftModalStep = useCallback(async (targetKey: DraftModalTabKey) => {
+    if (targetKey === draftModalTabKey) return;
+    const currentIndex = DRAFT_MODAL_STEP_KEYS.indexOf(draftModalTabKey);
+    const targetIndex = DRAFT_MODAL_STEP_KEYS.indexOf(targetKey);
+    if (targetIndex > currentIndex) {
+      try {
+        const fieldsToValidate = ['name'];
+        if (isProcessModule) {
+          fieldsToValidate.push('task_type');
+        }
+        await draftForm.validateFields(fieldsToValidate);
+      } catch {
+        setDraftModalTabKey('stage');
+        return;
+      }
+    }
+    setDraftModalTabKey(targetKey);
+  }, [draftForm, draftModalTabKey, isProcessModule]);
+
+  const syncDraftStageStatusOptions = useCallback((nextOptions: SelectOption[]) => {
+    const normalized = normalizeProcessTaskStatusOptions(nextOptions);
+    setDraftStageStatusOptions(normalized);
+    draftForm.setFieldValue(
+      'stage_status_options_editor',
+      normalized.map((option) => ({
+        label: String(option?.label || ''),
+        value: String(option?.value || ''),
+        color: String(option?.color || '') || 'default',
+        insertAfter: String(option?.insertAfter || '').trim() || undefined,
+      }))
+    );
+  }, [draftForm]);
+
+  const moveDraftStageStatusOption = useCallback((optionValue: string, direction: 'up' | 'down') => {
+    const normalizedValue = String(optionValue || '').trim();
+    if (!normalizedValue) return;
+    const currentIndex = mergedDraftStageStatusOptions.findIndex(
+      (option) => String(option?.value || '').trim() === normalizedValue
+    );
+    if (currentIndex < 0) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= mergedDraftStageStatusOptions.length) return;
+
+    const reordered = [...mergedDraftStageStatusOptions];
+    const [moved] = reordered.splice(currentIndex, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    syncDraftStageStatusOptions(
+      rebuildProcessTaskStatusOptionsByMergedOrder(
+        reordered,
+        draftStageStatusOptions,
+        baseTaskStatusOptions
+      )
+    );
+  }, [baseTaskStatusOptions, draftStageStatusOptions, mergedDraftStageStatusOptions, syncDraftStageStatusOptions]);
 
   const normalizeAutomationRuleForEditor = useCallback((rule: ProcessAutomationRule): ProcessAutomationRule => ({
     ...rule,
@@ -4389,13 +4509,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: editingDraft.duration_value || 0,
         duration_unit: editingDraft.duration_unit || 'day',
         duration_from: editingDraft.duration_from || 'project_start',
+        stage_status_options_editor: getProcessTaskStatusOptionsFromStage(editingDraft).map((option) => ({
+          label: String(option?.label || ''),
+          value: String(option?.value || ''),
+          color: String(option?.color || '') || 'default',
+          insertAfter: String(option?.insertAfter || '').trim() || undefined,
+        })),
       });
+      setDraftStageTaskTypeValue(String(editingDraft?.task_type || '').trim());
       setDraftAutomationRules(
         normalizeProcessAutomationRules(editingDraft?.automation_rules).map((rule) =>
           normalizeAutomationRuleForEditor(rule)
         )
       );
       setDraftCustomFields(getProcessTaskCustomFieldsFromStage(editingDraft));
+      setDraftStageStatusOptions(getProcessTaskStatusOptionsFromStage(editingDraft));
     } else {
       draftForm.setFieldsValue({
         description: '',
@@ -4406,11 +4534,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: 0,
         duration_unit: 'day',
         duration_from: 'project_start',
+        stage_status_options_editor: [],
       });
       setDraftAutomationRules([]);
       setDraftCustomFields([]);
+      setDraftStageStatusOptions([]);
+      setDraftStageTaskTypeValue('');
     }
   }, [isDraftModalOpen, editingDraft, draftForm, draftLocal.length, normalizeAutomationRuleForEditor]);
+
+  useEffect(() => {
+    if (!isDraftModalOpen) return;
+    setDraftStageStatusOptions(normalizeProcessTaskStatusOptions(watchedDraftStageStatusOptions));
+  }, [isDraftModalOpen, watchedDraftStageStatusOptions]);
 
   useEffect(() => {
     if (!isDraftModalOpen || !isProcessModule) return;
@@ -4823,7 +4959,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 (() => {
                   const isAssignedToCurrent = isTaskAssignedToCurrentUser(segment);
                   const isHighlightedTask = isAssignedToCurrent;
-                  const segmentColor = getStatusColor(segment.status);
+                  const segmentColor = getStatusColor(segment.status, segment);
                   return (
                     <Popover
                       key={`${barKey}-task-${segment.id}`}
@@ -5407,13 +5543,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       <Modal
         title={<div className="flex items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div> {editingDraft ? 'ویرایش مرحله پیش‌نویس' : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس')}</div>}
         open={isDraftModalOpen}
-        onCancel={() => {
-          setIsDraftModalOpen(false);
-          setEditingDraft(null);
-          setDraftAutomationRules([]);
-          setDraftCustomFields([]);
-          draftForm.resetFields();
-        }}
+        onCancel={closeDraftStageModal}
         footer={null}
         zIndex={10001}
         width={1040}
@@ -5421,19 +5551,39 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         destroyOnHidden
         styles={stageModalStyles}
       >
-        <Form form={draftForm} onFinish={handleAddDraftStage} layout="vertical" className="pt-1">
+        <Form
+          form={draftForm}
+          onFinish={handleAddDraftStage}
+          onValuesChange={(changedValues) => {
+            if (Object.prototype.hasOwnProperty.call(changedValues || {}, 'task_type')) {
+              setDraftStageTaskTypeValue(String(changedValues?.task_type || '').trim());
+            }
+          }}
+          layout="vertical"
+          className="pt-1"
+        >
           <div className="mb-4 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.75)] px-4 py-3 text-xs leading-6 text-[rgba(var(--brand-800-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgba(var(--brand-700-rgb),0.16)] dark:text-[rgba(var(--brand-50-rgb),0.98)]">
             این مرحله فقط در پیش‌نمایش الگو ذخیره می‌شود. بعدا موقع ساخت یا کپی فرآیند، همین تنظیمات برای ایجاد فعالیت‌ها استفاده می‌شود.
           </div>
-          <Tabs
-            activeKey={draftModalTabKey}
-            onChange={(key) => setDraftModalTabKey((key as 'stage' | 'fields' | 'automation') || 'stage')}
-            items={[
-              {
-                key: 'stage',
-                label: 'مرحله الگوی فرآیند',
-                children: (
-                  <div className="grid grid-cols-12 gap-3 pt-2">
+          <div className="mb-5 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/80 px-4 py-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+            <Steps
+              current={draftModalStepIndex}
+              responsive={false}
+              size="small"
+              onChange={(index) => {
+                const targetKey = draftModalStepItems[index]?.key;
+                if (targetKey) {
+                  void goToDraftModalStep(targetKey);
+                }
+              }}
+              items={draftModalStepItems.map((step, index) => ({
+                title: step.title,
+                description: `مرحله ${toPersianNumber(index + 1)}: ${step.description}`,
+              }))}
+            />
+          </div>
+          {draftModalTabKey === 'stage' && (
+            <div className="grid grid-cols-12 gap-3 pt-2">
                     <div className="col-span-9">
                       <Form.Item name="name" label="عنوان مرحله" rules={[{ required: true, message: 'الزامی' }]}>
                         <Input placeholder="مثلا: برشکاری..." />
@@ -5458,7 +5608,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           </Form.Item>
                         </div>
                         <div className="col-span-12">
-                          <Form.Item name="task_type" label="نوع فعالیت">
+                          <Form.Item
+                            name="task_type"
+                            label="نوع فعالیت"
+                            rules={[{ required: true, message: 'نوع فعالیت را انتخاب کنید.' }]}
+                          >
                             <DynamicSelectField
                               options={taskTypeOptions}
                               category="task_type"
@@ -5528,26 +5682,139 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       </>
                     )}
                   </div>
-                ),
-              },
-              {
-                key: 'fields',
-                label: `فیلدهای اختصاصی (${toPersianNumber(draftCustomFields.length)})`,
-                children: (
-                  <div className="space-y-4 pt-2">
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="فقط برای همین مرحله"
-                      description="فیلدهای این بخش عمومی نیستند؛ فقط روی taskهای ساخته‌شده از همین مرحله ذخیره و نمایش داده می‌شوند."
-                    />
+          )}
+          {draftModalTabKey === 'fields' && (
+            <div className="space-y-4 pt-2">
+                    <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/95 p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]">
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">شخصی‌سازی وضعیت‌های فعالیت</div>
+                          <div className="space-y-2">
+                            {mergedDraftStageStatusOptions.length > 0 ? mergedDraftStageStatusOptions.map((option, index) => {
+                              const optionValue = String(option?.value || '').trim();
+                              const isCustom = draftStageStatusValueSet.has(optionValue);
+                              const isFirst = index === 0;
+                              const isLast = index === mergedDraftStageStatusOptions.length - 1;
+                              return (
+                                <div
+                                  key={`draft-stage-status-order-${optionValue}-${index}`}
+                                  className="flex items-center justify-between gap-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.34)] px-3 py-2 dark:border-[rgba(var(--brand-300-rgb),0.16)] dark:bg-white/5"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Tag color={String(option.color || 'default')}>{option.label}</Tag>
+                                    <Tag color={isCustom ? 'processing' : 'default'}>
+                                      {isCustom ? 'سفارشی' : 'سیستمی'}
+                                    </Tag>
+                                  </div>
+                                  {isCustom ? (
+                                    <Space size="small">
+                                      <Button
+                                        htmlType="button"
+                                        size="small"
+                                        icon={<UpOutlined />}
+                                        disabled={isFirst}
+                                        onClick={() => moveDraftStageStatusOption(optionValue, 'up')}
+                                      />
+                                      <Button
+                                        htmlType="button"
+                                        size="small"
+                                        icon={<DownOutlined />}
+                                        disabled={isLast}
+                                        onClick={() => moveDraftStageStatusOption(optionValue, 'down')}
+                                      />
+                                    </Space>
+                                  ) : (
+                                    <span className="text-xs text-gray-400">ثابت</span>
+                                  )}
+                                </div>
+                              );
+                            }) : (
+                              <span className="text-xs text-gray-400">هنوز وضعیتی برای نمایش وجود ندارد.</span>
+                            )}
+                          </div>
+                        </div>
 
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs text-gray-500">
-                        تعریف این فیلدها فقط روی همین activity در همین stage اثر می‌گذارد.
+                        <Form.List name="stage_status_options_editor">
+                          {(fields, { add, remove }) => (
+                            <div className="space-y-3">
+                              {fields.map((field) => {
+                                const { key, ...listField } = field;
+                                return (
+                                <div
+                                  key={key}
+                                  className="grid grid-cols-12 gap-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.36)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5"
+                                >
+                                  <div className="col-span-12 md:col-span-4">
+                                    <Form.Item
+                                      {...listField}
+                                      label="عنوان فارسی"
+                                      name={[field.name, 'label']}
+                                      rules={[{ required: true, message: 'عنوان فارسی را وارد کنید' }]}
+                                      className="mb-0"
+                                    >
+                                      <Input placeholder="مثلا: منتظر تایید مدیر" />
+                                    </Form.Item>
+                                  </div>
+                                  <div className="col-span-12 md:col-span-4">
+                                    <Form.Item
+                                      {...listField}
+                                      label="نام انگلیسی / کلید سیستمی"
+                                      name={[field.name, 'value']}
+                                      rules={[
+                                        { required: true, message: 'نام انگلیسی را وارد کنید' },
+                                        { pattern: /^[a-z0-9_]+$/, message: 'فقط حروف انگلیسی کوچک، عدد و _ مجاز است' },
+                                      ]}
+                                      className="mb-0"
+                                    >
+                                      <Input placeholder="manager_pending" dir="ltr" />
+                                    </Form.Item>
+                                  </div>
+                                  <div className="col-span-10 md:col-span-3">
+                                    <Form.Item
+                                      {...listField}
+                                      label="رنگ"
+                                      name={[field.name, 'color']}
+                                      initialValue="default"
+                                      rules={[{ required: true, message: 'رنگ را انتخاب کنید' }]}
+                                      className="mb-0"
+                                    >
+                                      <Select
+                                        {...modalSelectProps}
+                                        options={PROCESS_TASK_STATUS_COLOR_OPTIONS}
+                                        placeholder="رنگ"
+                                      />
+                                    </Form.Item>
+                                  </div>
+                                  <div className="col-span-2 md:col-span-1 flex items-end justify-end">
+                                    <Button htmlType="button" type="text" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                                  </div>
+                                  <Form.Item {...listField} name={[field.name, 'insertAfter']} hidden>
+                                    <Input />
+                                  </Form.Item>
+                                </div>
+                              )})}
+                              <Button
+                                type="dashed"
+                                htmlType="button"
+                                icon={<PlusOutlined />}
+                                onClick={() => add({
+                                  color: 'default',
+                                  insertAfter: String(mergedDraftStageStatusOptions[mergedDraftStageStatusOptions.length - 1]?.value || '').trim() || PROCESS_TASK_STATUS_START_ANCHOR,
+                                })}
+                                className="w-full"
+                              >
+                                افزودن وضعیت
+                              </Button>
+                            </div>
+                          )}
+                        </Form.List>
                       </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3">
                       <Button
                         type="dashed"
+                        htmlType="button"
                         icon={<PlusOutlined />}
                         onClick={() => openDraftCustomFieldModal(null)}
                       >
@@ -5585,12 +5852,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
-                                <Button size="small" icon={<EditOutlined />} onClick={() => openDraftCustomFieldModal(field)}>
+                                <Button size="small" htmlType="button" icon={<EditOutlined />} onClick={() => openDraftCustomFieldModal(field)}>
                                   ویرایش
                                 </Button>
                                 {processTaskOptionEditableTypes.has(field.type) && (
                                   <Button
                                     size="small"
+                                    htmlType="button"
                                     icon={<SettingOutlined />}
                                     onClick={() => openDraftCustomFieldOptionsEditor(field)}
                                   >
@@ -5599,6 +5867,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 )}
                                 <Button
                                   size="small"
+                                  htmlType="button"
                                   danger
                                   icon={<DeleteOutlined />}
                                   onClick={() => removeDraftCustomField(String(field.key))}
@@ -5612,19 +5881,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       </div>
                     )}
                   </div>
-                ),
-              },
-              {
-                key: 'automation',
-                label: `اتوماسیون (${toPersianNumber(draftAutomationRules.length)})`,
-                children: (
-                  <div className="space-y-4 pt-2">
+          )}
+          {draftModalTabKey === 'automation' && (
+            <div className="space-y-4 pt-2">
                     {!automationScopeModuleId && isProcessTemplateModule ? (
                       <Alert
                         type="warning"
                         showIcon
                         message="ابتدا ماژول هدف الگوی فرآیند را انتخاب کنید."
                         description="تا قبل از انتخاب ماژول هدف، فقط فیلدهای خود فعالیت در شرط‌ها در دسترس هستند. بعد از تعیین ماژول هدف، فیلدهای همان ماژول و ماژول‌های مرتبط هم اضافه می‌شوند."
+                      />
+                    ) : null}
+                    {!draftStageTaskType ? (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message='ابتدا در "بخش مرحله الگوی فرآیند" نوع فعالیت را انتخاب کنید.'
                       />
                     ) : null}
 
@@ -5655,6 +5927,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             />
                             <Button
                               type="text"
+                              htmlType="button"
                               danger
                               icon={<DeleteOutlined />}
                               onClick={() => removeDraftAutomationRule(rule.id)}
@@ -5742,6 +6015,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       protectedValues: getTaskTypeProtectedValues(),
                                     },
                                   }}
+                                  onBeforeAddCondition={guardDraftAutomationConditionAdd}
                                 />
                               </div>
                               <div>
@@ -5762,6 +6036,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       protectedValues: getTaskTypeProtectedValues(),
                                     },
                                   }}
+                                  onBeforeAddCondition={guardDraftAutomationConditionAdd}
                                 />
                               </div>
                             </div>
@@ -5805,6 +6080,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
                     <Button
                       type="dashed"
+                      htmlType="button"
                       icon={<PlusOutlined />}
                       className="rounded-xl border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                       onClick={addDraftAutomationRule}
@@ -5812,22 +6088,51 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       افزودن اتوماسیون
                     </Button>
                   </div>
-                ),
-              },
-            ]}
-          />
+          )}
 
-          <div className="flex justify-end gap-2 mt-4 border-t pt-4">
-            <Button onClick={() => {
-              setIsDraftModalOpen(false);
-              setEditingDraft(null);
-              setDraftAutomationRules([]);
-              setDraftCustomFields([]);
-              draftForm.resetFields();
-            }} className="rounded-lg">انصراف</Button>
-            <Button type="primary" htmlType="submit" className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-700-rgb),1)] text-white hover:!bg-[rgba(var(--brand-600-rgb),1)] hover:!text-white focus:!text-white">
-              {editingDraft ? 'بروزرسانی مرحله' : 'ثبت مرحله'}
-            </Button>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
+            <Button onClick={closeDraftStageModal} className="rounded-lg">انصراف</Button>
+            <div className="flex items-center gap-2">
+              {draftModalStepIndex > 0 ? (
+                <Button
+                  htmlType="button"
+                  icon={<ArrowRightOutlined />}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const previousStepKey = DRAFT_MODAL_STEP_KEYS[draftModalStepIndex - 1];
+                    if (previousStepKey) {
+                      void goToDraftModalStep(previousStepKey);
+                    }
+                  }}
+                  className="rounded-lg"
+                >
+                  مرحله قبل
+                </Button>
+              ) : null}
+              {draftModalStepIndex < DRAFT_MODAL_STEP_KEYS.length - 1 ? (
+                <Button
+                  type="primary"
+                  htmlType="button"
+                  icon={<ArrowLeftOutlined />}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const nextStepKey = DRAFT_MODAL_STEP_KEYS[draftModalStepIndex + 1];
+                    if (nextStepKey) {
+                      void goToDraftModalStep(nextStepKey);
+                    }
+                  }}
+                  className="rounded-lg border-none bg-leather-600 !text-white shadow-md hover:!border-none hover:!bg-leather-500 hover:!text-white focus:!border-none focus:!bg-leather-500 focus:!text-white active:!border-none active:!bg-leather-700 active:!text-white"
+                >
+                  مرحله بعد
+                </Button>
+              ) : (
+                <Button type="primary" htmlType="submit" className="rounded-lg border-none bg-leather-600 !text-white shadow-md hover:!border-none hover:!bg-leather-500 hover:!text-white focus:!border-none focus:!bg-leather-500 focus:!text-white active:!border-none active:!bg-leather-700 active:!text-white">
+                  {editingDraft ? 'بروزرسانی مرحله' : 'ثبت مرحله'}
+                </Button>
+              )}
+            </div>
           </div>
         </Form>
       </Modal>

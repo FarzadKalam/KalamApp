@@ -1,4 +1,5 @@
 import { FieldType, ModuleDefinition, ModuleField } from '../types';
+import { getTaskStatusOption } from './processTaskStatusOptions';
 
 const STATUS_HINT_KEYS = new Set([
   'status',
@@ -57,7 +58,9 @@ export const resolveCardStatusMeta = (
   const rawValue = statusField ? item?.[statusField.key] : undefined;
   if (!statusField || rawValue === undefined || rawValue === null || rawValue === '') return null;
 
-  const option = (statusField.options || []).find((entry: any) => String(entry?.value || '') === String(rawValue));
+  const option = moduleConfig?.id === 'tasks' && String(statusField?.key || '') === 'status'
+    ? getTaskStatusOption(rawValue, item, statusField.options || [])
+    : (statusField.options || []).find((entry: any) => String(entry?.value || '') === String(rawValue));
   return {
     field: statusField,
     value: rawValue,

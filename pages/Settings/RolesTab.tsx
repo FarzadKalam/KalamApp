@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Tree, Checkbox, Button, Input, Empty, Divider, Switch, Collapse, Radio, Select } from 'antd';
-import { PlusOutlined, DeleteOutlined, SaveOutlined, LockOutlined, TeamOutlined } from '@ant-design/icons';
+import { App, Tree, Checkbox, Button, Input, Empty, Divider, Switch, Collapse, Radio, Select, Tooltip } from 'antd';
+import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, DeleteOutlined, SaveOutlined, LockOutlined, TeamOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import {
@@ -23,21 +23,28 @@ import {
   MOBILE_FOOTER_DEFAULT_MODULES,
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
   type PermissionMap,
+  type RecordScope,
 } from '../../utils/permissions';
-import { getSoftwareRoleLabel } from '../../utils/softwareRoles';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 
 const { Panel } = Collapse;
 
+const isRoleTreeColumnMissingError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('parent_id') || text.includes('sort_order');
+};
+
 const RolesTab: React.FC = () => {
   const { message } = App.useApp();
   const [roles, setRoles] = useState<any[]>([]);
+  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<PermissionMap>({});
   const [newRoleName, setNewRoleName] = useState('');
   const [selectedRoleTitle, setSelectedRoleTitle] = useState('');
   const [loading, setLoading] = useState(false);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [supportsRoleTreeSchema, setSupportsRoleTreeSchema] = useState<boolean | null>(null);
 
   const defaultPermissions = useMemo(() => buildDefaultPermissions(MODULES), []);
   const mobileFooterModuleOptions = useMemo(
@@ -72,7 +79,21 @@ const RolesTab: React.FC = () => {
   }, [selectedRoleId, roles, defaultPermissions]);
 
   const getRoleDisplayTitle = (role: any) => {
-    return getSoftwareRoleLabel(role?.title || role?.name);
+    return String(role?.title || role?.name || '').trim() || 'بدون عنوان';
+  };
+
+  const sortRoles = (items: any[]) =>
+    [...items].sort(
+      (a: any, b: any) =>
+        Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
+        || new Date(String(a?.created_at || 0)).getTime() - new Date(String(b?.created_at || 0)).getTime()
+    );
+
+  const syncExpandedParents = (items: any[]) => {
+    const parentKeys = items
+      .map((role: any) => String(role?.parent_id || '').trim())
+      .filter(Boolean);
+    setExpandedKeys((prev) => Array.from(new Set([...(prev || []), ...parentKeys])));
   };
 
   const fetchRoles = async () => {
@@ -81,11 +102,35 @@ const RolesTab: React.FC = () => {
       return;
     }
 
-    const { data, error } = await supabase
-      .from('org_roles')
-      .select('id, org_id, title, permissions, created_at')
-      .eq('org_id', currentOrgId)
-      .order('created_at');
+    const runRolesQuery = async (preferTreeSchema: boolean) => {
+      if (preferTreeSchema) {
+        return supabase
+          .from('org_roles')
+          .select('id, org_id, title, permissions, created_at, parent_id, sort_order, is_system')
+          .eq('org_id', currentOrgId)
+          .order('created_at');
+      }
+      return supabase
+        .from('org_roles')
+        .select('id, org_id, title, permissions, created_at, is_system')
+        .eq('org_id', currentOrgId)
+        .order('created_at');
+    };
+
+    const preferTreeSchema = supportsRoleTreeSchema !== false;
+    const primary = await runRolesQuery(preferTreeSchema);
+    let data = primary.data;
+    let error = primary.error;
+    if (error && isRoleTreeColumnMissingError(error) && preferTreeSchema) {
+      setSupportsRoleTreeSchema(false);
+      const fallback = await runRolesQuery(false);
+      data = (fallback.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }));
+      error = fallback.error;
+    } else if (!error && preferTreeSchema) {
+      setSupportsRoleTreeSchema(true);
+    } else if (!error && !preferTreeSchema) {
+      data = (data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }));
+    }
     if (error) {
       console.error('RolesTab.fetchRoles error:', error);
       message.error('خطا در بارگذاری لیست نقش‌ها');
@@ -120,40 +165,75 @@ const RolesTab: React.FC = () => {
     ).filter((id) => !roleMap.has(id));
 
     if (assignedRoleIds.length > 0) {
-      const { data: assignedRoles } = await supabase
-        .from('org_roles')
-        .select('id, org_id, title, permissions, created_at')
-        .in('id', assignedRoleIds);
+      const primaryAssignedRoles = supportsRoleTreeSchema === false
+        ? await supabase
+            .from('org_roles')
+            .select('id, org_id, title, permissions, created_at, is_system')
+            .in('id', assignedRoleIds)
+        : await supabase
+            .from('org_roles')
+            .select('id, org_id, title, permissions, created_at, parent_id, sort_order, is_system')
+            .in('id', assignedRoleIds);
+      let assignedRoles = primaryAssignedRoles.data;
+      if (primaryAssignedRoles.error && isRoleTreeColumnMissingError(primaryAssignedRoles.error)) {
+        setSupportsRoleTreeSchema(false);
+        const fallbackAssignedRoles = await supabase
+          .from('org_roles')
+          .select('id, org_id, title, permissions, created_at, is_system')
+          .in('id', assignedRoleIds);
+        assignedRoles = (fallbackAssignedRoles.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }));
+      } else if (!primaryAssignedRoles.error && supportsRoleTreeSchema === false) {
+        assignedRoles = (assignedRoles || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }));
+      }
       (assignedRoles || []).forEach((role: any) => {
         const id = String(role?.id || '');
         if (id) roleMap.set(id, role);
       });
     }
 
-    const mergedRoles = Array.from(roleMap.values()).sort(
-      (a: any, b: any) =>
-        new Date(String(a?.created_at || 0)).getTime() - new Date(String(b?.created_at || 0)).getTime()
-    );
+    const mergedRoles = sortRoles(Array.from(roleMap.values()));
     setRoles(mergedRoles);
+    syncExpandedParents(mergedRoles);
   };
 
-  const handleAddRole = async () => {
+  const handleAddRole = async (parentRoleId?: string | null) => {
     if (!newRoleName.trim()) return;
     if (!currentOrgId) {
       message.error('سازمان جاری قابل تشخیص نیست');
       return;
     }
-    const { error } = await supabase
+    const normalizedParentId = String(parentRoleId || '').trim() || null;
+    const siblingSortOrders = roles
+      .filter((role) => String(role?.parent_id || '') === String(normalizedParentId || ''))
+      .map((role) => Number(role?.sort_order || 0));
+    const nextSortOrder = siblingSortOrders.length > 0 ? Math.max(...siblingSortOrders) + 1 : 0;
+
+    const primaryInsert = await supabase
       .from('org_roles')
       .insert([
         {
           title: newRoleName.trim(),
           permissions: defaultPermissions,
           org_id: currentOrgId,
+          parent_id: normalizedParentId,
+          sort_order: nextSortOrder,
         },
       ]);
+    let error = primaryInsert.error;
+    if (error && isRoleTreeColumnMissingError(error)) {
+      const fallbackInsert = await supabase
+        .from('org_roles')
+        .insert([
+          {
+            title: newRoleName.trim(),
+            permissions: defaultPermissions,
+            org_id: currentOrgId,
+          },
+        ]);
+      error = fallbackInsert.error;
+    }
     if (!error) {
-      message.success('جایگاه اضافه شد');
+      message.success(normalizedParentId ? 'زیرجایگاه اضافه شد' : 'جایگاه اضافه شد');
       setNewRoleName('');
       fetchRoles();
     }
@@ -213,7 +293,7 @@ const RolesTab: React.FC = () => {
       if (type === 'field' && fieldKey) {
         target.fields![fieldKey] = checked !== false;
       } else if (type === 'scope') {
-        target.record_scope = String(checked || 'all') as 'all' | 'own' | 'team';
+        target.record_scope = String(checked || 'all') as RecordScope;
       } else {
         (target as any)[type] = checked !== false;
         if (type === 'edit' && checked) target.view = true;
@@ -293,24 +373,175 @@ const RolesTab: React.FC = () => {
     ];
   };
 
-  const treeData = roles.map((role) => ({
-    title: (
-      <div className="flex justify-between items-center w-full pr-2 text-gray-700 dark:text-gray-300">
-        <span>{getRoleDisplayTitle(role)}</span>
-        <Button
-          type="text"
-          size="small"
-          danger
-          icon={<DeleteOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleDeleteRole(role.id);
-          }}
-        />
-      </div>
-    ),
-    key: role.id,
-  }));
+  const selectedRole = useMemo(
+    () => roles.find((role) => String(role?.id || '') === String(selectedRoleId || '')) || null,
+    [roles, selectedRoleId]
+  );
+
+  const getSortedSiblings = (parentId?: string | null, excludeRoleId?: string | null) =>
+    sortRoles(
+      roles
+        .filter((role) => String(role?.parent_id || '') === String(parentId || ''))
+        .filter((role) => !excludeRoleId || String(role?.id || '') !== String(excludeRoleId))
+    );
+
+  const updateRoleTreeLocally = (roleId: string, updates: { parent_id?: string | null; sort_order?: number }) => {
+    setRoles((prev) => {
+      const next = sortRoles(
+        prev.map((role) =>
+          String(role?.id || '') === String(roleId || '')
+            ? { ...role, ...updates }
+            : role
+        )
+      );
+      syncExpandedParents(next);
+      return next;
+    });
+  };
+
+  const handlePromoteRole = async (roleId: string) => {
+    if (supportsRoleTreeSchema === false) {
+      message.error('برای فعال شدن ساختار درختی نقش‌ها، migration مربوطه باید روی دیتابیس اجرا شود.');
+      return;
+    }
+    const role = roles.find((item) => String(item?.id || '') === String(roleId || ''));
+    if (!role?.parent_id) return;
+
+    const parentRole = roles.find((item) => String(item?.id || '') === String(role.parent_id || ''));
+    const nextParentId = parentRole?.parent_id || null;
+    const siblingSortOrders = getSortedSiblings(nextParentId, roleId).map((item) => Number(item?.sort_order || 0));
+    const nextSortOrder = siblingSortOrders.length > 0 ? Math.max(...siblingSortOrders) + 1 : 0;
+
+    const { error } = await supabase
+      .from('org_roles')
+      .update({ parent_id: nextParentId, sort_order: nextSortOrder })
+      .eq('id', roleId);
+
+    if (error) {
+      if (isRoleTreeColumnMissingError(error)) {
+        message.error('برای فعال شدن ساختار درختی نقش‌ها، migration مربوطه باید روی دیتابیس اجرا شود.');
+        return;
+      }
+      message.error(error.message || 'خطا در بروزرسانی سطح جایگاه');
+      return;
+    }
+
+    message.success('جایگاه به سطح بالاتر منتقل شد');
+    updateRoleTreeLocally(roleId, { parent_id: nextParentId, sort_order: nextSortOrder });
+  };
+
+  const handleDemoteRole = async (roleId: string) => {
+    if (supportsRoleTreeSchema === false) {
+      message.error('برای فعال شدن ساختار درختی نقش‌ها، migration مربوطه باید روی دیتابیس اجرا شود.');
+      return;
+    }
+    const role = roles.find((item) => String(item?.id || '') === String(roleId || ''));
+    if (!role) return;
+
+    const siblings = getSortedSiblings(role.parent_id || null);
+    const currentIndex = siblings.findIndex((item) => String(item?.id || '') === String(roleId || ''));
+    const previousSibling = currentIndex > 0 ? siblings[currentIndex - 1] : null;
+    if (!previousSibling?.id) return;
+
+    const childSortOrders = getSortedSiblings(previousSibling.id, roleId).map((item) => Number(item?.sort_order || 0));
+    const nextSortOrder = childSortOrders.length > 0 ? Math.max(...childSortOrders) + 1 : 0;
+
+    const { error } = await supabase
+      .from('org_roles')
+      .update({ parent_id: previousSibling.id, sort_order: nextSortOrder })
+      .eq('id', roleId);
+
+    if (error) {
+      if (isRoleTreeColumnMissingError(error)) {
+        message.error('برای فعال شدن ساختار درختی نقش‌ها، migration مربوطه باید روی دیتابیس اجرا شود.');
+        return;
+      }
+      message.error(error.message || 'خطا در بروزرسانی سطح جایگاه');
+      return;
+    }
+
+    message.success('جایگاه به زیرمجموعه ردیف قبلی منتقل شد');
+    updateRoleTreeLocally(roleId, { parent_id: previousSibling.id, sort_order: nextSortOrder });
+  };
+
+  const treeData = useMemo(() => {
+    const roleMap = new Map<string, any>();
+    const childrenMap = new Map<string | null, any[]>();
+
+    roles.forEach((role) => {
+      const roleId = String(role?.id || '').trim();
+      if (!roleId) return;
+      roleMap.set(roleId, role);
+    });
+
+    roles.forEach((role) => {
+      const parentId = role?.parent_id && roleMap.has(String(role.parent_id)) ? String(role.parent_id) : null;
+      const siblings = childrenMap.get(parentId) || [];
+      siblings.push(role);
+      childrenMap.set(parentId, siblings);
+    });
+
+    childrenMap.forEach((items) => {
+      items.sort(
+        (a, b) =>
+          Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
+          || new Date(String(a?.created_at || 0)).getTime() - new Date(String(b?.created_at || 0)).getTime()
+      );
+    });
+
+    const renderNode = (role: any): any => ({
+      title: (
+        <div className="flex justify-between items-center w-full pr-2 text-gray-700 dark:text-gray-300 gap-2 py-1">
+          <span className="truncate">{getRoleDisplayTitle(role)}</span>
+          <div className="flex items-center gap-1 shrink-0">
+            <Tooltip title="انتقال به سطح بالاتر">
+              <Button
+                type="text"
+                size="small"
+                icon={<ArrowUpOutlined />}
+                disabled={!role?.parent_id}
+                onMouseDown={stopTreeAction}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handlePromoteRole(String(role.id));
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="انتقال به زیرمجموعه ردیف قبلی">
+              <Button
+                type="text"
+                size="small"
+                icon={<ArrowDownOutlined />}
+                disabled={getSortedSiblings(role?.parent_id || null).findIndex((item) => String(item?.id || '') === String(role?.id || '')) <= 0}
+                onMouseDown={stopTreeAction}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDemoteRole(String(role.id));
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="حذف">
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onMouseDown={stopTreeAction}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteRole(role.id);
+                }}
+              />
+            </Tooltip>
+          </div>
+        </div>
+      ),
+      key: role.id,
+      children: (childrenMap.get(String(role.id)) || []).map(renderNode),
+    });
+
+    return (childrenMap.get(null) || []).map(renderNode);
+  }, [newRoleName, roles]);
 
   const getModulePerms = (moduleId: string) => {
     const merged = mergePermissionsWithDefaults(permissions, defaultPermissions);
@@ -344,29 +575,52 @@ const RolesTab: React.FC = () => {
     );
   };
 
+  function stopTreeAction(event: React.MouseEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget instanceof HTMLElement) {
+      event.currentTarget.blur();
+    }
+  }
+
   return (
     <div className="flex flex-col md:flex-row gap-6 h-[70vh]">
       <div className="w-full md:w-1/3 bg-gray-50 dark:bg-[#202020] border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex flex-col">
-        <div className="flex gap-2 mb-4">
+        <div className="mb-4">
           <Input
             placeholder="نام جایگاه جدید..."
             value={newRoleName}
             onChange={(e) => setNewRoleName(e.target.value)}
-            className="dark:bg-[#303030] dark:border-gray-700 dark:text-white"
+            className="mb-2 dark:bg-[#303030] dark:border-gray-700 dark:text-white"
           />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={handleAddRole}
+            onClick={() => handleAddRole(null)}
             className="bg-leather-600 border-none"
-          />
+            disabled={!newRoleName.trim()}
+          >
+            افزودن مدیر سطح
+          </Button>
+          <Button
+            icon={<PlusOutlined />}
+            onClick={() => handleAddRole(selectedRoleId)}
+            disabled={!newRoleName.trim() || !selectedRoleId}
+          >
+            افزودن بعنوان زیرمجموعه
+          </Button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {roles.length > 0 ? (
             <Tree
               className="bg-transparent dark:text-gray-300"
               treeData={treeData}
+              motion={null}
+              expandedKeys={expandedKeys}
               selectedKeys={selectedRoleId ? [selectedRoleId] : []}
+              onExpand={(keys) => setExpandedKeys(keys)}
               onSelect={(keys) => setSelectedRoleId(keys[0] as string)}
               blockNode
             />
@@ -384,7 +638,7 @@ const RolesTab: React.FC = () => {
                 <LockOutlined className="text-leather-600" />
                 دسترسی های جایگاه:
                 <span className="text-leather-600">
-                  {getRoleDisplayTitle(roles.find((r) => r.id === selectedRoleId))}
+                  {getRoleDisplayTitle(selectedRole)}
                 </span>
               </h3>
               <Button
@@ -408,6 +662,12 @@ const RolesTab: React.FC = () => {
               <Button onClick={handleUpdateRoleTitle} icon={<TeamOutlined />}>
                 ذخیره عنوان
               </Button>
+            </div>
+
+            <div className="mb-5 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                افزودن، حذف و جابه‌جایی ساختار جایگاه‌ها از روی خود ردیف‌های درخت انجام می‌شود.
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto pr-2">
@@ -488,6 +748,7 @@ const RolesTab: React.FC = () => {
                           <Radio value="all">مشاهده همه رکوردها</Radio>
                           <Radio value="own">فقط مشاهده رکوردهای به نام شخص</Radio>
                           <Radio value="team">فقط مشاهده رکوردهای به نام تیم (جایگاه)</Radio>
+                          <Radio value="subtree">مشاهده رکوردهای افراد زیرمجموعه</Radio>
                         </Radio.Group>
                         <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
                           دسترسی به فیلدها و جداول

@@ -8,6 +8,7 @@ import { SummaryCalculationType, FieldType } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../../utils/processTaskCustomFields';
+import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY } from '../../utils/processTaskStatusOptions';
 
 // 👇 اینترفیس اصلاح شد: حذف linkedBomData و ...
 interface TablesSectionProps {
@@ -137,6 +138,9 @@ const TablesSection: React.FC<TablesSectionProps> = ({
         ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
         [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
           stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
+        ),
+        [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
+          stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
         ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),

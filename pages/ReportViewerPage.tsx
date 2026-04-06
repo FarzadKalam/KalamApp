@@ -9,7 +9,7 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import {
   canAccessAssignedRecord,
-  fetchCurrentUserRoleContext,
+  fetchCurrentUserRecordAccessContext,
   resolveReportsAccessPermissions,
 } from '../utils/permissions';
 import {
@@ -149,7 +149,7 @@ const ReportViewerPage: React.FC = () => {
 
     setLoading(true);
     try {
-      const roleContext = await fetchCurrentUserRoleContext(supabase);
+      const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
       const access = resolveReportsAccessPermissions(roleContext.permissions);
       setCanEditReport(access.canUseBuilder);
       if (!access.canViewHub) {
@@ -204,7 +204,7 @@ const ReportViewerPage: React.FC = () => {
     if (!report || !moduleConfig) return;
     setExecuting(true);
     try {
-      const roleContext = await fetchCurrentUserRoleContext(supabase);
+      const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
       const modulePerm = roleContext.permissions?.[moduleId] || {};
       if (modulePerm.view === false) {
         setCanViewPage(false);
@@ -220,7 +220,11 @@ const ReportViewerPage: React.FC = () => {
       if (error) throw error;
 
       const scopedRows = (data || []).filter((row: any) =>
-        canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all')
+        canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
+          currentOrgId: roleContext.orgId,
+          allowedRoleIds: roleContext.allowedRoleIds,
+          allowedUserIds: roleContext.allowedUserIds,
+        })
       );
 
       const neededKeys = Array.from(new Set([

@@ -18,7 +18,7 @@ import ViewWrapper from "../components/moduleList/ViewWrapper";
 import GridView from "../components/moduleList/GridView";
 import MapView from "../components/moduleList/MapView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
-import { canAccessAssignedRecord, fetchCurrentUserRoleContext, GOALS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY } from "../utils/permissions";
+import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, GOALS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, type RecordScope } from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
@@ -276,9 +276,12 @@ export const ModuleListRefine: React.FC<{
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
-  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: 'all' | 'own' | 'team' }>({});
+  const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
+  const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
   const [isBulkProductsModalOpen, setIsBulkProductsModalOpen] = useState(false);
   const [isWorkflowsModalOpen, setIsWorkflowsModalOpen] = useState(false);
   const [isGoalsModalOpen, setIsGoalsModalOpen] = useState(false);
@@ -393,10 +396,13 @@ export const ModuleListRefine: React.FC<{
   const fetchPermissions = useCallback(async () => {
     if (!resolvedModuleId) return;
     try {
-      const context = await fetchCurrentUserRoleContext(supabase);
+      const context = await fetchCurrentUserRecordAccessContext(supabase);
       if (!context.userId) return;
       setCurrentUserId(context.userId);
       setCurrentUserRoleId(context.roleId);
+      setCurrentOrgId(context.orgId);
+      setAllowedRoleIds(context.allowedRoleIds);
+      setAllowedUserIds(context.allowedUserIds);
 
       if (!context.roleId) {
         setModulePermissions({});
@@ -494,9 +500,13 @@ export const ModuleListRefine: React.FC<{
   const accessibleData = useMemo(() => {
     if (!canViewModule) return [];
     return allData.filter((record: any) =>
-      canAccessAssignedRecord(record, currentUserId, currentUserRoleId, recordScope)
+      canAccessAssignedRecord(record, currentUserId, currentUserRoleId, recordScope, {
+        currentOrgId,
+        allowedRoleIds,
+        allowedUserIds,
+      })
     );
-  }, [allData, canViewModule, currentUserId, currentUserRoleId, recordScope]);
+  }, [allData, allowedRoleIds, allowedUserIds, canViewModule, currentOrgId, currentUserId, currentUserRoleId, recordScope]);
 
   const enrichedData = useMemo(() => {
     if (!tagsField) return accessibleData;

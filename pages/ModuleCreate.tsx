@@ -5,6 +5,7 @@ import SmartForm from "../components/SmartForm";
 import { Result, Spin } from "antd";
 import { supabase } from "../supabaseClient";
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from "../utils/processTaskCustomFields";
+import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY } from "../utils/processTaskStatusOptions";
 import { applyInvoiceFinalizationInventory } from "../utils/invoiceInventoryWorkflow";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
@@ -33,6 +34,9 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
       ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
       [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
         stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
+      ),
+      [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
+        stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
       ),
       weight: Number(stage?.weight || stage?.metadata?.weight || 0),
       duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
@@ -184,20 +188,51 @@ export const ModuleCreate = () => {
           onSave={async (values, meta) => {
             try {
               const selectedTags = Array.isArray(meta?.selectedTags) ? meta.selectedTags : [];
+              const authUser = await getCachedAuthUser(supabase);
+              const userId = authUser?.id || null;
+              const withCreateAuditFields = (recordPayload: Record<string, any>) => {
+                if (!userId) return { ...recordPayload };
+                return {
+                  ...recordPayload,
+                  created_by: recordPayload.created_by ?? userId,
+                  updated_by: recordPayload.updated_by ?? userId,
+                };
+              };
+              const isMissingAuditColumnError = (error: any) => {
+                const code = String(error?.code || "").toUpperCase();
+                const text = String(error?.message || error?.details || "").toLowerCase();
+                return (
+                  code === "42703"
+                  || code === "PGRST204"
+                  || text.includes("created_by")
+                  || text.includes("updated_by")
+                );
+              };
               if (moduleId === "process_templates") {
-                const { data: inserted, error } = await supabase
+                const templateStagesPreview = Array.isArray(meta?.templateStagesPreview) ? meta.templateStagesPreview : [];
+                let insertResult = await supabase
                   .from(moduleConfig.table)
-                  .insert(values)
+                  .insert(withCreateAuditFields(values))
                   .select("*")
                   .single();
-                if (error) throw error;
+                if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+                  insertResult = await supabase
+                    .from(moduleConfig.table)
+                    .insert(values)
+                    .select("*")
+                    .single();
+                }
+                if (insertResult.error) throw insertResult.error;
+                const inserted = insertResult.data;
                 if (!inserted?.id) throw new Error("ثبت الگوی فرآیند ناموفق بود");
 
                 if (moduleId && selectedTags.length > 0) {
                   await syncRecordTags(supabase, moduleId, String(inserted.id), selectedTags);
                 }
                 await runPostCreateCopy(String(inserted.id));
-                await syncProcessTemplateStages(String(inserted.id), meta?.templateStagesPreview || []);
+                if (templateStagesPreview.length > 0) {
+                  await syncProcessTemplateStages(String(inserted.id), templateStagesPreview);
+                }
                 if (moduleId) {
                   await runWorkflowsForEvent({
                     moduleId,
@@ -205,25 +240,31 @@ export const ModuleCreate = () => {
                     currentRecord: inserted as Record<string, any>,
                   });
                 }
-                navigate(`/${moduleId}`);
+                navigate(`/${moduleId}/${inserted.id}`);
                 return;
               }
 
               if (moduleId === "invoices" || moduleId === "purchase_invoices") {
-                const { data: inserted, error } = await supabase
+                let insertResult = await supabase
                   .from(moduleConfig.table)
-                  .insert(values)
+                  .insert(withCreateAuditFields(values))
                   .select("*")
                   .single();
-                if (error) throw error;
+                if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+                  insertResult = await supabase
+                    .from(moduleConfig.table)
+                    .insert(values)
+                    .select("*")
+                    .single();
+                }
+                if (insertResult.error) throw insertResult.error;
+                const inserted = insertResult.data;
                 if (!inserted?.id) throw new Error("ثبت فاکتور ناموفق بود");
 
                 if (moduleId && selectedTags.length > 0) {
                   await syncRecordTags(supabase, moduleId, String(inserted.id), selectedTags);
                 }
                 await runPostCreateCopy(String(inserted.id));
-                const authUser = await getCachedAuthUser(supabase);
-                const userId = authUser?.id || null;
                 await applyInvoiceFinalizationInventory({
                   supabase: supabase as any,
                   moduleId,
@@ -267,30 +308,9 @@ export const ModuleCreate = () => {
               if (moduleId && supportsSystemCode(moduleId) && !payload.system_code) {
                 payload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
               }
-              const authUser = await getCachedAuthUser(supabase);
-              const userId = authUser?.id || null;
-              const withAuditFields = (recordPayload: Record<string, any>) => {
-                if (!userId) return { ...recordPayload };
-                return {
-                  ...recordPayload,
-                  created_by: recordPayload.created_by ?? userId,
-                  updated_by: recordPayload.updated_by ?? userId,
-                };
-              };
-              const isMissingAuditColumnError = (error: any) => {
-                const code = String(error?.code || "").toUpperCase();
-                const text = String(error?.message || error?.details || "").toLowerCase();
-                return (
-                  code === "42703"
-                  || code === "PGRST204"
-                  || text.includes("created_by")
-                  || text.includes("updated_by")
-                );
-              };
-
               let insertResult = await supabase
                 .from(moduleConfig.table)
-                .insert(withAuditFields(payload))
+                .insert(withCreateAuditFields(payload))
                 .select("id")
                 .single();
 
@@ -313,7 +333,7 @@ export const ModuleCreate = () => {
 
                 insertResult = await supabase
                   .from(moduleConfig.table)
-                  .insert(withAuditFields(payloadWithSystemCode))
+                  .insert(withCreateAuditFields(payloadWithSystemCode))
                   .select("id")
                   .single();
 
