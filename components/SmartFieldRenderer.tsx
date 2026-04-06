@@ -38,6 +38,7 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
 import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL } from '../utils/mapConfig';
 import { createThemeMapPinElement } from '../utils/mapPin';
+import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
@@ -703,15 +704,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const applyQuickCreateAutoNaming = (rawValues: any) => {
     const nextValues = { ...(rawValues || {}) };
 
-    if (quickCreateTargetModuleId === 'products' && nextValues.auto_name_enabled === true) {
+    if (quickCreateTargetModuleId === 'products' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
       const nextName = buildQuickCreateAutoProductName(nextValues);
       if (nextName) nextValues.name = nextName;
     }
-    if (quickCreateTargetModuleId === 'production_orders' && nextValues.auto_name_enabled === true) {
+    if (quickCreateTargetModuleId === 'production_orders' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
       const nextName = buildQuickCreateAutoProductionOrderName(nextValues);
       if (nextName) nextValues.name = nextName;
     }
-    if (quickCreateTargetModuleId === 'customers' && nextValues.auto_name_enabled === true) {
+    if (quickCreateTargetModuleId === 'customers' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
       const nextFullName = buildQuickCreateAutoCustomerName(nextValues);
       if (nextFullName) nextValues.full_name = nextFullName;
     }
@@ -1277,7 +1278,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       if (f?.defaultValue !== undefined) defaults[f.key] = resolveConfiguredDefaultValue(f.defaultValue);
     });
     if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.defaultValue !== undefined) {
-      defaults[quickCreateAutoNameToggleField.key] = resolveConfiguredDefaultValue(quickCreateAutoNameToggleField.defaultValue);
+      defaults[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(
+        resolveConfiguredDefaultValue(quickCreateAutoNameToggleField.defaultValue),
+        false
+      );
     }
     const frameId = window.requestAnimationFrame(() => {
       quickCreateForm.setFieldsValue(defaults);
@@ -1426,7 +1430,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         payload.system_code = await buildClientFallbackSystemCode(supabase, quickCreateTargetModuleId);
       }
       if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.key) {
-        payload[quickCreateAutoNameToggleField.key] = values?.[quickCreateAutoNameToggleField.key] !== false;
+        payload[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(
+          values?.[quickCreateAutoNameToggleField.key],
+          normalizeAutoNameEnabled(quickCreateAutoNameToggleField.defaultValue, false)
+        );
       }
 
       if (!payload[quickCreateTargetField]) {

@@ -9,6 +9,7 @@ import { supabase } from '../../supabaseClient';
 import { convertArea, HARD_CODED_UNIT_OPTIONS, type UnitValue } from '../../utils/unitConversions';
 import { supportsSystemCode } from '../../utils/systemCode';
 import { getPreferredRelationTargetField } from '../../utils/relationTargetField';
+import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../../utils/autoName';
 
 interface BulkProductsCreateModalProps {
   open: boolean;
@@ -373,7 +374,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       ? draftRows.map((row: any) => ({
           ...row,
           key: String(row?.key || makeKey()),
-          auto_name_enabled: row?.auto_name_enabled !== false,
+          auto_name_enabled: normalizeAutoNameEnabled(row?.auto_name_enabled, true),
         }))
       : [createEmptyRow()];
     setProductType(String(draft?.productType || defaultType));
@@ -469,7 +470,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
     setRows((prev) => {
       let changed = false;
       const next = prev.map((row, index) => {
-        if (row.auto_name_enabled === false) return row;
+        if (!isAutoNameEnabled(row.auto_name_enabled)) return row;
         const computedName = buildName(row, index);
         if (String(row.name || '').trim() === computedName) return row;
         changed = true;
@@ -488,7 +489,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       for (const field of rowFields) {
         if (field.validation?.required && isEmpty(row[field.key])) return `ردیف ${i + 1}: فیلد «${field.labels?.fa || field.key}» الزامی است.`;
       }
-      if (row.auto_name_enabled === false && isEmpty(row.name)) return `ردیف ${i + 1}: نام محصول را وارد کنید.`;
+      if (!isAutoNameEnabled(row.auto_name_enabled) && isEmpty(row.name)) return `ردیف ${i + 1}: نام محصول را وارد کنید.`;
     }
     return null;
   }, [productCategory, productType, rawCategory, rowFields, rows]);
@@ -505,6 +506,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
 
       for (let i = 0; i < rows.length; i += 1) {
         const row = rows[i];
+        const autoNameEnabled = normalizeAutoNameEnabled(row.auto_name_enabled, true);
         const payload: Record<string, unknown> = { product_type: productType };
         payload.category = productType === 'goods' ? norm(rawCategory) : null;
         payload.product_category = productType === 'service' ? norm(productCategory) : null;
@@ -512,8 +514,8 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
         rowFields.forEach((f) => { const v = norm(row[f.key]); if (v !== undefined) payload[f.key] = v; });
         payload.manual_code = norm(row.manual_code);
         payload.image_url = norm(row.image_url);
-        payload.auto_name_enabled = row.auto_name_enabled !== false;
-        payload.name = row.auto_name_enabled === false ? norm(row.name) : buildName(row, i);
+        payload.auto_name_enabled = autoNameEnabled;
+        payload.name = autoNameEnabled ? buildName(row, i) : norm(row.name);
         if (userId) {
           payload.created_by = payload.created_by ?? userId;
           payload.updated_by = payload.updated_by ?? userId;

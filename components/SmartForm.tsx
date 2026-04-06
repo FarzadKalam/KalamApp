@@ -30,6 +30,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { syncRecordTags } from '../utils/recordTags';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
+import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
@@ -218,6 +219,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
           if (module.id === 'tasks') {
             finalValues = normalizeTaskSourceValues(finalValues);
+          }
+          if (Object.prototype.hasOwnProperty.call(finalValues, 'auto_name_enabled')) {
+            const autoNameField = module.fields.find((field) => field.key === 'auto_name_enabled');
+            finalValues.auto_name_enabled = normalizeAutoNameEnabled(
+              finalValues.auto_name_enabled,
+              normalizeAutoNameEnabled(autoNameField?.defaultValue, false)
+            );
           }
 
           setFormData(finalValues);
@@ -903,7 +911,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   useEffect(() => {
     if (module.id !== 'products') return;
     const currentValues = getLiveFormValues();
-    if (currentValues?.auto_name_enabled !== true) return;
+    if (!isAutoNameEnabled(currentValues?.auto_name_enabled)) return;
     const nextName = buildAutoProductName(currentValues);
     if (!nextName || nextName === currentValues?.name) return;
     form.setFieldValue('name', nextName);
@@ -913,7 +921,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   useEffect(() => {
     if (module.id !== 'production_orders') return;
     const currentValues = getLiveFormValues();
-    if (currentValues?.auto_name_enabled !== true) return;
+    if (!isAutoNameEnabled(currentValues?.auto_name_enabled)) return;
     const nextName = buildAutoProductionOrderName(currentValues);
     if (!nextName || nextName === currentValues?.name) return;
     form.setFieldValue('name', nextName);
@@ -923,7 +931,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   useEffect(() => {
     if (module.id !== 'customers') return;
     const currentValues = getLiveFormValues();
-    if (currentValues?.auto_name_enabled !== true) return;
+    if (!isAutoNameEnabled(currentValues?.auto_name_enabled)) return;
     const nextFullName = buildAutoCustomerName(currentValues);
     if (!nextFullName || nextFullName === currentValues?.full_name) return;
     form.setFieldValue('full_name', nextFullName);
@@ -1128,13 +1136,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
         delete values.__skipBomConfirm;
       }
 
-      if (module.id === 'products' && values.auto_name_enabled === true) {
+      if (module.id === 'products' && isAutoNameEnabled(values.auto_name_enabled)) {
         const nextName = buildAutoProductName(values);
         if (nextName) {
           values.name = nextName;
         }
       }
-      if (module.id === 'production_orders' && values.auto_name_enabled === true) {
+      if (module.id === 'production_orders' && isAutoNameEnabled(values.auto_name_enabled)) {
         const nextName = buildAutoProductionOrderName(values);
         if (nextName) {
           values.name = nextName;
@@ -1162,7 +1170,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         values = normalizeTaskSourceValues(values);
       }
       if (module.id === 'customers') {
-        if (values.auto_name_enabled === true) {
+        if (isAutoNameEnabled(values.auto_name_enabled)) {
           const nextFullName = buildAutoCustomerName(values);
           if (nextFullName) {
             values.full_name = nextFullName;
@@ -1659,7 +1667,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   const handleFormAction = (actionId: string) => {
     if (actionId === 'auto_name' && module.id === 'products') {
-      let enableAuto = !!form.getFieldValue('auto_name_enabled');
+      let enableAuto = normalizeAutoNameEnabled(form.getFieldValue('auto_name_enabled'), false);
       Modal.confirm({
         title: 'نامگذاری خودکار محصول',
         content: (
@@ -1695,7 +1703,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         cancelText: 'انصراف',
         onOk: () => {
           const currentValues = getLiveFormValues();
-          const enableAuto = currentValues?.auto_name_enabled === true;
+          const enableAuto = isAutoNameEnabled(currentValues?.auto_name_enabled);
           const nextFullName = buildAutoCustomerName({ ...currentValues, auto_name_enabled: enableAuto });
           if (!nextFullName) {
             messageApi.warning('اطلاعات کافی برای نامگذاری خودکار وجود ندارد.');
@@ -1709,7 +1717,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       return;
     }
     if (actionId === 'auto_name' && module.id === 'production_orders') {
-      let enableAuto = !!form.getFieldValue('auto_name_enabled');
+      let enableAuto = normalizeAutoNameEnabled(form.getFieldValue('auto_name_enabled'), false);
       Modal.confirm({
         title: 'نامگذاری خودکار سفارش تولید',
         content: (

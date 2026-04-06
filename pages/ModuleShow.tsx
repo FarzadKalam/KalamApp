@@ -38,6 +38,7 @@ import {
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
 import { canAccessAssignedRecord, fetchCurrentUserRoleContext } from '../utils/permissions';
+import { normalizeAutoNameEnabled } from '../utils/autoName';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { buildCopyPayload, detectCopyNameField } from '../utils/recordCopy';
 import { useCurrencyConfig } from '../utils/currency';
@@ -2398,7 +2399,7 @@ const ModuleShow: React.FC = () => {
     if (actionId === 'auto_name' && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers')) {
       if (!canEditModule) return;
       const supportsAutoToggle = moduleId === 'products' || moduleId === 'production_orders';
-      let enableAuto = !!data?.auto_name_enabled;
+      let enableAuto = normalizeAutoNameEnabled(data?.auto_name_enabled, false);
       modal.confirm({
         title: moduleId === 'products'
           ? 'نامگذاری خودکار محصول'
@@ -3600,12 +3601,16 @@ const ModuleShow: React.FC = () => {
   };
 
   const buildNewProductInitialValues = () => {
+    const autoNameDefault = normalizeAutoNameEnabled(
+      MODULES.products?.fields?.find((field) => field.key === 'auto_name_enabled')?.defaultValue,
+      true
+    );
     return {
       name: data?.name || '',
       product_type: outputProductType || 'goods',
       category: data?.product_category || null,
       product_category: null,
-      auto_name_enabled: true,
+      auto_name_enabled: autoNameDefault,
     } as any;
   };
 
