@@ -236,38 +236,46 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   margin-top: 88px;
 }
 
-.kalam-list-message .ant-message-notice-content {
+.kalam-list-message .ant-message-notice-content,
+.kalam-list-message.ant-message-notice-content {
   border-radius: 16px;
   border: 1px solid rgba(148, 96, 20, 0.18);
   box-shadow: 0 18px 38px rgba(120, 74, 23, 0.22);
-  color: #fff;
+  color: #fff !important;
   padding: 12px 16px;
-  background: linear-gradient(135deg, #7c4a17 0%, #a16207 100%);
+  background: linear-gradient(135deg, #7c4a17 0%, #a16207 100%) !important;
 }
 
 .kalam-list-message .ant-message-custom-content,
 .kalam-list-message .ant-message-custom-content > span:last-child,
-.kalam-list-message .anticon {
+.kalam-list-message .anticon,
+.kalam-list-message.ant-message-notice-content .ant-message-custom-content,
+.kalam-list-message.ant-message-notice-content .ant-message-custom-content > span:last-child,
+.kalam-list-message.ant-message-notice-content .anticon {
   color: inherit;
 }
 
-.kalam-list-message--success .ant-message-notice-content {
-  background: linear-gradient(135deg, #7c4a17 0%, #a16207 100%);
+.kalam-list-message--success .ant-message-notice-content,
+.kalam-list-message--success.ant-message-notice-content {
+  background: linear-gradient(135deg, #7c4a17 0%, #a16207 100%) !important;
   border-color: rgba(251, 191, 36, 0.28);
 }
 
-.kalam-list-message--warning .ant-message-notice-content {
-  background: linear-gradient(135deg, #9a3412 0%, #c2410c 100%);
+.kalam-list-message--warning .ant-message-notice-content,
+.kalam-list-message--warning.ant-message-notice-content {
+  background: linear-gradient(135deg, #9a3412 0%, #c2410c 100%) !important;
   border-color: rgba(251, 191, 36, 0.28);
 }
 
-.kalam-list-message--loading .ant-message-notice-content {
-  background: linear-gradient(135deg, #7c4a17 0%, #92400e 100%);
+.kalam-list-message--loading .ant-message-notice-content,
+.kalam-list-message--loading.ant-message-notice-content {
+  background: linear-gradient(135deg, #7c4a17 0%, #92400e 100%) !important;
   border-color: rgba(251, 191, 36, 0.24);
 }
 
-.kalam-list-message--error .ant-message-notice-content {
-  background: linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%);
+.kalam-list-message--error .ant-message-notice-content,
+.kalam-list-message--error.ant-message-notice-content {
+  background: linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%) !important;
   border-color: rgba(252, 165, 165, 0.26);
   box-shadow: 0 18px 38px rgba(127, 29, 29, 0.24);
 }

@@ -1,6 +1,18 @@
-import React from 'react';
-import { Button, Tooltip, Popover, QRCode } from 'antd';
-import { ArrowRightOutlined, PrinterOutlined, ShareAltOutlined, QrcodeOutlined, EditOutlined, DeleteOutlined, AppstoreOutlined, PlusOutlined, StarOutlined, ReloadOutlined, CopyOutlined } from '@ant-design/icons';
+import React, { useCallback } from 'react';
+import { App, Button, Popover, QRCode, Tooltip } from 'antd';
+import {
+  AppstoreOutlined,
+  ArrowRightOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  PrinterOutlined,
+  QrcodeOutlined,
+  ReloadOutlined,
+  ShareAltOutlined,
+  StarOutlined,
+} from '@ant-design/icons';
 
 interface HeaderActionsProps {
   moduleTitle: string;
@@ -17,10 +29,19 @@ interface HeaderActionsProps {
   refreshLoading?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
-  extraActions?: { id: string; label: string; variant?: 'primary' | 'default'; onClick: () => void; icon?: React.ReactNode; loading?: boolean; }[];
+  extraActions?: {
+    id: string;
+    label: string;
+    variant?: 'primary' | 'default';
+    onClick: () => void;
+    icon?: React.ReactNode;
+    loading?: boolean;
+  }[];
 }
 
 const HeaderActions: React.FC<HeaderActionsProps> = ({
+  moduleTitle,
+  recordName,
   shareUrl,
   onBack,
   onPrint,
@@ -33,19 +54,51 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   canDelete = true,
   extraActions = [],
 }) => {
+  const { message } = App.useApp();
+  const resolvedShareUrl = shareUrl || (typeof window !== 'undefined' ? window.location.href : '');
+
+  const handleShare = useCallback(async () => {
+    if (!resolvedShareUrl) {
+      message.error('لینک اشتراک گذاری در دسترس نیست.');
+      return;
+    }
+
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        await navigator.share({
+          title: recordName || moduleTitle,
+          url: resolvedShareUrl,
+        });
+        return;
+      }
+
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(resolvedShareUrl);
+        message.success('لینک اشتراک گذاری کپی شد.');
+        return;
+      }
+
+      message.error('امکان اشتراک گذاری در این مرورگر در دسترس نیست.');
+    } catch (error: any) {
+      if (error?.name === 'AbortError') return;
+      message.error('اشتراک گذاری این بخش ناموفق بود.');
+    }
+  }, [message, moduleTitle, recordName, resolvedShareUrl]);
+
   return (
     <div className="flex w-full justify-between items-center flex-wrap gap-2 mb-2 flex-row-reverse">
       <div className="flex gap-2 flex-wrap">
-        {extraActions.map(action => (
+        {extraActions.map((action) => (
           <Button
             key={action.id}
             icon={
-              action.icon ? action.icon :
-              action.id === 'auto_name'
-                ? <StarOutlined />
-                : action.variant === 'primary'
-                  ? <PlusOutlined />
-                  : <AppstoreOutlined />
+              action.icon
+                ? action.icon
+                : action.id === 'auto_name'
+                  ? <StarOutlined />
+                  : action.variant === 'primary'
+                    ? <PlusOutlined />
+                    : <AppstoreOutlined />
             }
             type={action.variant === 'primary' ? 'primary' : 'default'}
             onClick={action.onClick}
@@ -73,15 +126,16 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
           />
         </Tooltip>
         <Tooltip title="اشتراک گذاری">
-          <Button 
-            icon={<ShareAltOutlined />} 
+          <Button
+            icon={<ShareAltOutlined />}
+            onClick={() => void handleShare()}
             size="middle"
-            className="hover:text-leather-600 hover:border-leather-600" 
+            className="hover:text-leather-600 hover:border-leather-600"
           />
         </Tooltip>
-        <Popover content={<QRCode value={shareUrl} bordered={false} />} trigger="click">
-          <Button 
-            icon={<QrcodeOutlined />} 
+        <Popover content={<QRCode value={resolvedShareUrl} bordered={false} />} trigger="click">
+          <Button
+            icon={<QrcodeOutlined />}
             size="middle"
             className="hover:text-leather-600 hover:border-leather-600"
           />

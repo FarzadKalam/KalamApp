@@ -7,12 +7,16 @@ interface BulkActionsBarProps {
   selectedCount: number;
   onClear: () => void;
   onSelectAll?: () => void;
+  onSelectAllPages?: () => void;
+  selectAllLoading?: boolean;
+  selectAllPagesLoading?: boolean;
   onDelete?: () => void;
   onExport?: () => void;
   exportMenuItems?: MenuProps['items'];
   onEdit?: () => void;
   onCopy?: () => void;
   selectAllDisabled?: boolean;
+  selectAllPagesDisabled?: boolean;
   primaryActionLabel?: string;
   onPrimaryAction?: () => void;
   primaryActionDisabled?: boolean;
@@ -31,12 +35,16 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
   selectedCount,
   onClear,
   onSelectAll,
+  onSelectAllPages,
+  selectAllLoading = false,
+  selectAllPagesLoading = false,
   onDelete,
   onExport,
   exportMenuItems,
   onEdit,
   onCopy,
   selectAllDisabled = false,
+  selectAllPagesDisabled = false,
   primaryActionLabel,
   onPrimaryAction,
   primaryActionDisabled = false,
@@ -66,13 +74,32 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
           لغو انتخاب
         </Button>
         {onSelectAll && (
-          <Button onClick={onSelectAll} size="small" type="text" disabled={selectAllDisabled}>
+          <Button
+            onClick={onSelectAll}
+            size="small"
+            type="text"
+            disabled={selectAllDisabled}
+            loading={selectAllLoading}
+          >
             انتخاب همه
+          </Button>
+        )}
+        {onSelectAllPages && (
+          <Button
+            onClick={onSelectAllPages}
+            size="small"
+            type="text"
+            disabled={selectAllPagesDisabled}
+            loading={selectAllPagesLoading}
+          >
+            انتخاب همه صفحات
           </Button>
         )}
         {primaryActionButton &&
           (primaryActionTooltip ? (
-            <Tooltip title={primaryActionTooltip}>{primaryActionButton}</Tooltip>
+            <Tooltip title={primaryActionTooltip}>
+              <span className="inline-flex">{primaryActionButton}</span>
+            </Tooltip>
           ) : (
             primaryActionButton
           ))}
@@ -81,41 +108,53 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
       <div className="flex flex-wrap items-center justify-end gap-1 w-full sm:w-auto">
         {extraActions.map((action) => (
           <Tooltip key={action.key} title={action.tooltip}>
-            <Button
-              type="text"
-              icon={action.icon}
-              size="small"
-              onClick={action.onClick}
-              disabled={action.disabled}
-              danger={action.danger}
-              aria-label={action.tooltip}
-            />
+            <span className="inline-flex">
+              <Button
+                type="text"
+                icon={action.icon}
+                size="small"
+                onClick={action.onClick}
+                disabled={action.disabled}
+                danger={action.danger}
+                aria-label={action.tooltip}
+              />
+            </span>
           </Tooltip>
         ))}
         {onEdit && (
           <Tooltip title="ویرایش گروهی">
-            <Button type="text" icon={<EditOutlined />} size="small" onClick={onEdit} aria-label="ویرایش گروهی" />
+            <span className="inline-flex">
+              <Button type="text" icon={<EditOutlined />} size="small" onClick={onEdit} aria-label="ویرایش گروهی" />
+            </span>
           </Tooltip>
         )}
         {onCopy && (
           <Tooltip title="کپی">
-            <Button type="text" icon={<CopyOutlined />} size="small" onClick={onCopy} aria-label="کپی" />
+            <span className="inline-flex">
+              <Button type="text" icon={<CopyOutlined />} size="small" onClick={onCopy} aria-label="کپی" />
+            </span>
           </Tooltip>
         )}
         {Array.isArray(exportMenuItems) && exportMenuItems.length > 0 ? (
           <Tooltip title="خروجی">
-            <Dropdown trigger={['click']} menu={{ items: exportMenuItems }} placement="bottomLeft">
-              <Button type="text" icon={<ExportOutlined />} size="small" aria-label="خروجی" />
-            </Dropdown>
+            <span className="inline-flex">
+              <Dropdown trigger={['click']} menu={{ items: exportMenuItems }} placement="bottomLeft">
+                <Button type="text" icon={<ExportOutlined />} size="small" aria-label="خروجی" />
+              </Dropdown>
+            </span>
           </Tooltip>
         ) : onExport ? (
           <Tooltip title="خروجی">
-            <Button type="text" icon={<ExportOutlined />} size="small" onClick={onExport} aria-label="خروجی" />
+            <span className="inline-flex">
+              <Button type="text" icon={<ExportOutlined />} size="small" onClick={onExport} aria-label="خروجی" />
+            </span>
           </Tooltip>
         ) : null}
         {onDelete && (
           <Tooltip title="حذف">
-            <Button danger type="text" icon={<DeleteOutlined />} size="small" onClick={onDelete} aria-label="حذف" />
+            <span className="inline-flex">
+              <Button danger type="text" icon={<DeleteOutlined />} size="small" onClick={onDelete} aria-label="حذف" />
+            </span>
           </Tooltip>
         )}
       </div>

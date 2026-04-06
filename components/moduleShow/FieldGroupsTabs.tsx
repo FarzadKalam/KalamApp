@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Tabs } from 'antd';
 import EditableTable from '../EditableTable';
 import { FieldType } from '../../types';
@@ -80,6 +80,25 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
         return hasVisibleField || hasBlockTable;
       })
   ), [canViewField, checkVisibility, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys]);
+  const firstVisibleBlockId = String(visibleFieldGroups[0]?.id || '');
+  const [activeBlockId, setActiveBlockId] = useState<string>(firstVisibleBlockId);
+
+  useEffect(() => {
+    if (!firstVisibleBlockId) return;
+    const activeStillVisible = visibleFieldGroups.some((block: any) => String(block.id) === activeBlockId);
+    if (!activeBlockId || !activeStillVisible) {
+      setActiveBlockId(firstVisibleBlockId);
+    }
+  }, [activeBlockId, visibleFieldGroups]);
+
+  useEffect(() => {
+    if (!stockMovementQuickAddSignal || moduleId !== 'products') return;
+    const inventoryBlockVisible = visibleFieldGroups.some((block: any) => String(block.id) === 'product_inventory');
+    if (inventoryBlockVisible) {
+      setActiveBlockId('product_inventory');
+    }
+  }, [moduleId, stockMovementQuickAddSignal, visibleFieldGroups]);
+
   if (visibleFieldGroups.length === 0) return null;
 
   const renderBlockContent = (block: any) => (
@@ -202,6 +221,8 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   return (
     <div className="field-groups-tabs bg-white dark:bg-[#1a1a1a] p-1 md:p-1 sm:p-0 rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 mb-6">
       <Tabs
+        activeKey={activeBlockId}
+        onChange={setActiveBlockId}
         tabBarStyle={{ padding: '0 24px', marginBottom: 0 }}
         items={visibleFieldGroups.map(block => ({
           key: block.id,
