@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useTable } from "@refinedev/antd";
 import { CrudFilter, CrudFilters, CrudSort, useDeleteMany } from "@refinedev/core";
+import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase";
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
@@ -253,6 +254,7 @@ export const ModuleListRefine: React.FC<{
   const [viewMode, setViewMode] = useState<ViewMode>(persistedState?.viewMode || moduleConfig?.defaultViewMode || ViewMode.LIST);
   const [searchTerm, setSearchTerm] = useState(persistedState?.searchTerm || "");
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [selectAllPagesLoading, setSelectAllPagesLoading] = useState(false);
   const [selectedRowsMap, setSelectedRowsMap] = useState<Record<string, any>>({});
   const [listVisibleRowKeys, setListVisibleRowKeys] = useState<React.Key[] | null>(null);
   const [currentView, setCurrentView] = useState<SavedView | null>(
@@ -290,6 +292,7 @@ export const ModuleListRefine: React.FC<{
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
   const hasInitializedModuleStateRef = useRef(false);
+  const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, setCurrent } = useTable({
     resource: resolvedModuleId,
@@ -1029,7 +1032,7 @@ export const ModuleListRefine: React.FC<{
     return filters;
   }
 
-  function applyCombinedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, resetPage = true) {
+  function buildMergedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState): CrudFilters {
     const mergedFilters = [...nextViewFilters];
     mergedFilters.push(...buildColumnCrudFilters(nextColumnFilters));
     if (searchTargetField && nextSearchTerm.trim()) {
@@ -1039,6 +1042,11 @@ export const ModuleListRefine: React.FC<{
         value: nextSearchTerm.trim(),
       });
     }
+    return mergedFilters;
+  }
+
+  function applyCombinedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, resetPage = true) {
+    const mergedFilters = buildMergedFilters(nextViewFilters, nextSearchTerm, nextColumnFilters);
     setFilters(mergedFilters, "replace");
     if (resetPage) {
       setCurrent?.(1);
@@ -1098,6 +1106,106 @@ export const ModuleListRefine: React.FC<{
     if (!visibleSelectableRowKeys.length) return;
     setSelectedRowKeys((prev) => Array.from(new Set([...prev, ...visibleSelectableRowKeys])));
   }, [visibleSelectableRowKeys]);
+
+  const handleSelectAllAcrossPages = useCallback(async () => {
+    if (!resolvedModuleId || selectAllPagesLoading) return;
+
+    const mergedFilters = buildMergedFilters(viewFiltersState, searchTerm, columnFilters);
+    const pageSize = 1000;
+    const selectedRowsById = new Map<string, any>();
+    const closeLoadingMessage = showListMessage("loading", "در حال انتخاب همه رکوردهای صفحات...");
+    setSelectAllPagesLoading(true);
+
+    try {
+      let currentPage = 1;
+      let totalPages = 1;
+
+      while (currentPage <= totalPages) {
+        const response = await refineProvider.getList({
+          resource: resolvedModuleId,
+          pagination: { current: currentPage, pageSize },
+          sorters: sorters as CrudSort[],
+          filters: mergedFilters,
+          meta: {
+            select: "id,status,assignee_type,assignee_id,assignee_role_id",
+          },
+        });
+
+        const rows = Array.isArray(response?.data) ? response.data : [];
+        rows.forEach((row: any) => {
+          const rowId = String(row?.id || "").trim();
+          if (!rowId) return;
+          selectedRowsById.set(rowId, row);
+        });
+
+        if (currentPage === 1) {
+          const totalRows = Number(response?.total || 0);
+          if (totalRows > 0) {
+            totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+          } else if (rows.length < pageSize) {
+            break;
+          } else {
+            totalPages = Number.MAX_SAFE_INTEGER;
+          }
+        } else if (rows.length < pageSize && totalPages === Number.MAX_SAFE_INTEGER) {
+          break;
+        }
+
+        if (!rows.length) break;
+        currentPage += 1;
+      }
+
+      const allRows = Array.from(selectedRowsById.values());
+      const allowedRows = allRows.filter((row) =>
+        canAccessAssignedRecord(row, currentUserId, currentUserRoleId, recordScope)
+      );
+      const allowedKeys = allowedRows
+        .map((row) => String(row?.id || "").trim())
+        .filter(Boolean);
+
+      if (!allowedKeys.length) {
+        showListMessage("warning", "رکوردی برای انتخاب در همه صفحات پیدا نشد.");
+        return;
+      }
+
+      setSelectedRowKeys((prev) => Array.from(new Set([...prev, ...allowedKeys])));
+      setSelectedRowsMap((prev) => {
+        const nextMap = { ...prev };
+        allowedRows.forEach((row) => {
+          const rowId = String(row?.id || "").trim();
+          if (!rowId) return;
+          nextMap[rowId] = {
+            ...(nextMap[rowId] || {}),
+            ...row,
+          };
+        });
+        return nextMap;
+      });
+
+      showListMessage("success", `${allowedKeys.length} رکورد از همه صفحات انتخاب شد.`);
+    } catch (error: any) {
+      showListMessage("error", toFaErrorMessage(error, "انتخاب همه رکوردهای صفحات ناموفق بود."));
+    } finally {
+      if (typeof closeLoadingMessage === "function") {
+        closeLoadingMessage();
+      }
+      setSelectAllPagesLoading(false);
+    }
+  }, [
+    buildMergedFilters,
+    canAccessAssignedRecord,
+    columnFilters,
+    currentUserId,
+    currentUserRoleId,
+    recordScope,
+    refineProvider,
+    resolvedModuleId,
+    searchTerm,
+    selectAllPagesLoading,
+    showListMessage,
+    sorters,
+    viewFiltersState,
+  ]);
 
   const handleBulkDelete = () => {
     if (selectedRowKeys.length === 0) return;
@@ -1629,6 +1737,9 @@ export const ModuleListRefine: React.FC<{
           }}
           onSelectAll={visibleSelectableRowKeys.length > 0 ? handleSelectAllVisible : undefined}
           selectAllDisabled={allVisibleRowsSelected}
+          onSelectAllPages={visibleSelectableRowKeys.length > 0 ? handleSelectAllAcrossPages : undefined}
+          selectAllPagesLoading={selectAllPagesLoading}
+          selectAllPagesDisabled={selectAllPagesLoading}
           onEdit={selectedRowKeys.length && canEditModule ? handleBulkEditOpen : undefined}
           onCopy={selectedRowKeys.length && canEditModule ? handleCopyViaCreateForm : undefined}
           onDelete={selectedRowKeys.length && canDeleteModule ? handleBulkDelete : undefined}

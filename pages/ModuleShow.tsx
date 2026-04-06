@@ -2369,7 +2369,14 @@ const ModuleShow: React.FC = () => {
       return;
     }
     if (actionId === 'quick_stock_movement' && (moduleId === 'products' || moduleId === 'shelves')) {
-      if (!canEditModule) return;
+      if (!canEditModule) {
+        msg.error('دسترسی ویرایش برای افزودن حواله ندارید.');
+        return;
+      }
+      if (moduleId === 'products' && String(data?.product_type || 'goods') !== 'goods') {
+        msg.info('افزودن حواله فقط برای محصولات کالایی فعال است.');
+        return;
+      }
       setStockMovementQuickAddSignal((prev) => prev + 1);
       return;
     }
