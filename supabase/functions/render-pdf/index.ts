@@ -87,6 +87,18 @@ const normalizeFilename = (value: unknown) => {
 const encodeContentDispositionFilename = (filename: string) =>
   encodeURIComponent(filename).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 
+const getSafeGotenbergHeaderFilename = (filename: string) => {
+  const safeName = String(filename || 'print')
+    .replace(/\.pdf$/i, '')
+    .replace(/[^\x20-\x7E]+/g, '-')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+
+  return safeName || 'print';
+};
+
 const getPayload = async (request: Request) => {
   const contentType = String(request.headers.get('content-type') || '').toLowerCase();
 
@@ -146,7 +158,7 @@ Deno.serve(async (request) => {
     const response = await fetch(`${gotenbergUrl}/forms/chromium/convert/html`, {
       method: 'POST',
       headers: {
-        'Gotenberg-Output-Filename': filename.replace(/\.pdf$/i, ''),
+        'Gotenberg-Output-Filename': getSafeGotenbergHeaderFilename(filename),
         'Gotenberg-Trace': traceId,
       },
       body: form,
@@ -164,7 +176,7 @@ Deno.serve(async (request) => {
       headers: {
         ...corsHeaders,
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `inline; filename*=UTF-8''${encodeContentDispositionFilename(filename)}`,
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeContentDispositionFilename(filename)}`,
         'Cache-Control': 'no-store, max-age=0',
         'X-Kalam-Function-Build': FUNCTION_BUILD,
         'X-Kalam-Trace': traceId,
