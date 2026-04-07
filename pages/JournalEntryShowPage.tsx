@@ -19,6 +19,7 @@ import HeaderActions from '../components/moduleShow/HeaderActions';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../utils/permissions';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { buildPrintOutputName } from '../utils/printTemplates/outputName';
 import {
   formatNumericForInput,
   parseNumericInput,
@@ -218,6 +219,14 @@ const JournalEntryShowPage: React.FC = () => {
   const [isPrintOpen, setIsPrintOpen] = useState(false);
   const [printMode, setPrintMode] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const journalPrintOutputName = useMemo(
+    () =>
+      buildPrintOutputName({
+        record: entry,
+        fallbackLabel: 'سند حسابداری',
+      }),
+    [entry]
+  );
 
   const isDraft = entry?.status === 'draft';
   const canEditDraft = canEdit && isDraft;
@@ -1677,11 +1686,16 @@ const JournalEntryShowPage: React.FC = () => {
         isPrintModalOpen={isPrintOpen}
         onClose={() => setIsPrintOpen(false)}
         onPrint={() => {
+          const previousTitle = document.title;
           setIsPrintOpen(false);
           setPrintMode(true);
           setTimeout(() => {
+            document.title = journalPrintOutputName;
             window.print();
-            setTimeout(() => setPrintMode(false), 700);
+            setTimeout(() => {
+              document.title = previousTitle;
+              setPrintMode(false);
+            }, 700);
           }, 120);
         }}
         printTemplates={[{ id: 'journal_voucher', title: 'سند حسابداری', description: 'نسخه چاپی سند' }]}

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { supabase } from '../../supabaseClient';
 import { toPersianNumber, safeJalaliFormat } from '../persianNumberFormatter';
 import { readCurrencyConfig } from '../currency';
@@ -12,6 +13,9 @@ import {
   type StoredPrintTemplate,
 } from './store';
 import type { PrintTemplate } from './index';
+import { buildPrintOutputName } from './outputName';
+import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import { printInIframe } from './printInIframe';
 
 const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 
@@ -60,6 +64,8 @@ export const useListPrintManager = ({
   const [companyInfo, setCompanyInfo] = useState<any>(null);
   const templatesLoadedRef = useRef(false);
   const companyLoadedRef = useRef(false);
+  const renderPrintCardRef = useRef<() => React.ReactNode>(() => null);
+  const reservedPrintWindowRef = useRef<Window | null>(null);
   const currencyLabel = readCurrencyConfig().label || '';
 
   const loadTemplates = useCallback(async (mounted = true) => {
@@ -272,51 +278,52 @@ export const useListPrintManager = ({
     }
   }, [moduleId, selectedPrintFields, selectedStoredTemplate, selectedTemplateId, templatesByModuleStore, templatesStoreMeta.provider, templatesStoreMeta.rowId]);
 
+  const getPrintOutputName = useCallback(
+    () =>
+      buildPrintOutputName({
+        fallbackLabel: `لیست ${moduleConfig?.titles?.fa || moduleId}`,
+      }),
+    [moduleConfig, moduleId]
+  );
+
+  const preparePrint = useCallback(() => {
+    if (!shouldUseGeneratedPdfPrint()) return;
+    const printTitle = getPrintOutputName();
+    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
+  }, [getPrintOutputName]);
+
   const handlePrint = useCallback(() => {
     if (!selectedTemplateId) return;
-    if (typeof document !== 'undefined') {
-      document.body.classList.add('print-mode');
-    }
-    setPrintMode(true);
+    const printTitle = getPrintOutputName();
+    const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${
+      selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'
+    }`;
+    const staticPrintHtml = renderToStaticMarkup(React.createElement(React.Fragment, null, renderPrintCardRef.current()));
 
-    let tries = 0;
-    const triggerPrint = () => {
-      const printRoot = document.getElementById('print-root');
-      const hasContent = Boolean(printRoot && String(printRoot.innerHTML || '').trim().length > 0);
-      if (!hasContent && tries < 20) {
-        tries += 1;
-        window.setTimeout(triggerPrint, 70);
-        return;
-      }
-      if (!hasContent) {
-        setPrintMode(false);
-        if (typeof document !== 'undefined') {
-          document.body.classList.remove('print-mode');
-        }
-        return;
-      }
+    if (shouldUseGeneratedPdfPrint()) {
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
 
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          try {
-            window.focus();
-            window.print();
-          } catch (error) {
-            console.error('Print dialog failed to open', error);
-            setPrintMode(false);
-            if (typeof document !== 'undefined') {
-              document.body.classList.remove('print-mode');
-            }
-          }
-        });
+      void printAsPdf({
+        pageSize,
+        sourceHtml: staticPrintHtml,
+        title: printTitle,
+        filename: printTitle,
+        targetWindow,
+      }).catch((error) => {
+        console.error('Generated PDF print failed', error);
       });
-    };
+      return;
+    }
 
-    window.setTimeout(triggerPrint, 100);
-  }, [selectedTemplateId]);
+    void printInIframe({
+      pageSize,
+      sourceHtml: staticPrintHtml,
+      title: printTitle,
+    }).catch((error) => {
+      console.error('Print dialog failed to open', error);
+    });
+  }, [getPrintOutputName, selectedStoredTemplate, selectedTemplateId]);
 
   useEffect(() => {
     if (!printMode) return;
@@ -389,6 +396,7 @@ export const useListPrintManager = ({
       }),
     );
   }, [pagedRows, renderTemplateSection, rowsPerPage, selectedStoredTemplate]);
+  renderPrintCardRef.current = renderPrintCard;
 
   const refreshTemplates = useCallback(async () => {
     await loadTemplates(true);
@@ -415,6 +423,7 @@ export const useListPrintManager = ({
     handleSavePrintFields,
     savingPrintFields,
     handlePrint,
+    preparePrint,
     refreshTemplates,
     renderPrintCard,
     previewMeta,

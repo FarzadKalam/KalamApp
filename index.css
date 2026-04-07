@@ -193,6 +193,170 @@ body.ant-scrolling-effect {
   color: white !important;
 }
 
+.smarttable-shell .ant-table-wrapper,
+.smarttable-shell .ant-spin-nested-loading,
+.smarttable-shell .ant-spin-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.smarttable-shell .ant-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.smarttable-shell .ant-table-container,
+.smarttable-shell .ant-table-header,
+.smarttable-shell .ant-table-content,
+.smarttable-shell .ant-table-body {
+  min-height: 0;
+}
+
+.smarttable-shell .ant-table-header,
+.smarttable-shell .ant-table-content,
+.smarttable-shell .ant-table-body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+}
+
+.smarttable-shell .ant-table-body,
+.smarttable-shell .ant-table-content {
+  scroll-behavior: smooth;
+}
+
+.smarttable-shell .ant-table-pagination.ant-pagination {
+  flex: 0 0 auto;
+  margin: 8px 0 0 !important;
+  padding: 10px 12px 10px;
+  position: relative;
+  z-index: 2;
+  touch-action: manipulation;
+  row-gap: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(var(--brand-50-rgb), 0.36) 100%);
+}
+
+.smarttable-shell .ant-pagination,
+.smarttable-shell .ant-pagination *,
+.module-list-page .ant-pagination,
+.module-list-page .ant-pagination *,
+.module-list-header-count .ant-badge-count,
+.invoice-summary-card,
+.invoice-summary-card * {
+  font-family: 'Vazirmatn', system-ui, sans-serif !important;
+}
+
+.smarttable-shell .ant-pagination-options,
+.smarttable-shell .ant-pagination-options * {
+  font-feature-settings: "ss01";
+}
+
+.view-manager-modal-tabs > .ant-tabs-nav {
+  margin-bottom: 0 !important;
+}
+
+.view-manager-modal-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab {
+  border-color: rgba(var(--brand-200-rgb), 0.72) !important;
+  background: rgba(var(--brand-50-rgb), 0.72) !important;
+  color: rgba(var(--brand-700-rgb), 0.9) !important;
+  border-radius: 14px 14px 0 0 !important;
+}
+
+.view-manager-modal-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab-active {
+  background: rgb(var(--brand-600-rgb)) !important;
+  border-color: rgba(var(--brand-500-rgb), 0.92) !important;
+  box-shadow: 0 10px 24px rgba(var(--brand-500-rgb), 0.16);
+}
+
+.view-manager-modal-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #fff !important;
+}
+
+.dark .view-manager-modal-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab {
+  border-color: rgba(var(--brand-300-rgb), 0.22) !important;
+  background: rgba(var(--app-dark-surface-rgb), 0.86) !important;
+  color: rgba(var(--brand-200-rgb), 0.96) !important;
+}
+
+.dark .view-manager-modal-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab-active {
+  background: rgba(var(--brand-600-rgb), 0.92) !important;
+  border-color: rgba(var(--brand-300-rgb), 0.42) !important;
+  box-shadow: 0 12px 28px rgba(var(--brand-900-rgb), 0.32);
+}
+
+@keyframes bulk-actions-inline-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bulk-actions-inline-enter {
+  animation: bulk-actions-inline-enter 220ms ease-out both;
+}
+
+.module-list-page .ant-pagination-item a,
+.module-list-page .ant-pagination-total-text,
+.module-list-page .ant-pagination-options,
+.module-list-page .ant-pagination-options .ant-select-selector,
+.module-list-page .ant-pagination-options .ant-select-selection-item,
+.module-list-page .ant-pagination-options .ant-select-selection-placeholder {
+  font-family: 'Vazirmatn', system-ui, sans-serif !important;
+}
+
+.module-list-page .ant-table-selection-column {
+  width: 56px !important;
+  min-width: 56px !important;
+}
+
+.module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column {
+  padding: 4px 6px !important;
+}
+
+.module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th,
+.module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th + th {
+  padding-inline-start: 10px !important;
+}
+
+@media (max-width: 768px) {
+  .smarttable-shell .ant-table-pagination.ant-pagination {
+    padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
+    justify-content: center !important;
+  }
+
+  .smarttable-shell .ant-pagination-options {
+    margin-inline-start: 0 !important;
+  }
+
+  .module-list-page .ant-pagination-item,
+  .module-list-page .ant-pagination-prev,
+  .module-list-page .ant-pagination-next,
+  .module-list-page .ant-pagination-total-text,
+  .module-list-page .ant-pagination-options,
+  .module-list-page .ant-pagination-options .ant-select-selection-item,
+  .module-list-page .ant-pagination-options .ant-select-selection-placeholder {
+    font-family: 'Vazirmatn', system-ui, sans-serif !important;
+  }
+
+  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column {
+    padding: 6px 8px !important;
+  }
+
+  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th,
+  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th + th {
+    padding-inline-start: 12px !important;
+  }
+}
+
 /* =========================================
    4. استایل‌های تقویم و تایم‌پیکر (Date & Time Picker)
    ========================================= */
@@ -847,6 +1011,15 @@ body.ant-scrolling-effect {
 }
 
 @media (max-width: 480px) {
+  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column {
+    padding: 5px 6px !important;
+  }
+
+  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th,
+  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th + th {
+    padding-inline-start: 10px !important;
+  }
+
   .module-list-page .custom-erp-table .ant-table-cell {
     padding: 5px 6px !important;
     font-size: 10px !important;

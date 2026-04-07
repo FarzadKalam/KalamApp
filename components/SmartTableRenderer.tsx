@@ -47,6 +47,7 @@ interface SmartTableRendererProps {
   externalFilterBubbles?: Array<{ id: string; label: string; onRemove?: () => void }>;
   onClearExternalFilters?: () => void;
   sorters?: Array<{ field: string; order: 'asc' | 'desc' }>;
+  showFilterBar?: boolean;
 }
 
 export const buildSmartTablePagination = (pagination: any) =>
@@ -153,7 +154,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   onColumnFiltersChange,
   externalFilterBubbles = [],
   onClearExternalFilters,
-  sorters = []
+  sorters = [],
+  showFilterBar = true,
 }) => {
   const searchInput = useRef<InputRef>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -676,6 +678,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       width:
         field.key === 'id'
           ? 60
+          : field.type === FieldType.IMAGE
+            ? 80
           : isKeyLikeField
             ? (moduleConfig?.id === 'products' ? 380 : 340)
             : isTagField
@@ -1205,38 +1209,43 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   return (
     <div
       ref={rootRef}
-      className={["custom-erp-table", "smarttable-shell h-full min-h-0 flex flex-col overflow-hidden", containerClassName].filter(Boolean).join(' ')}
+      className={["custom-erp-table", "smarttable-shell relative h-full min-h-0 flex flex-col overflow-hidden", containerClassName].filter(Boolean).join(' ')}
     >
-      {mergedFilterBubbles.length > 0 && (
-        <div ref={filterBarRef} className="smarttable-filter-bubbles mb-2 flex flex-wrap items-center gap-2 px-1">
-          {mergedFilterBubbles.map((bubble) => (
-            <Tag
-              key={bubble.id}
-              closable={typeof bubble.onRemove === 'function'}
-              className="rounded-full px-2 py-0.5 text-[11px]"
-              onClose={(e) => {
-                e.preventDefault();
-                bubble.onRemove?.();
+      {showFilterBar ? (
+        <div ref={filterBarRef} className="smarttable-filter-bubbles mb-2 min-h-[42px] px-1">
+          {mergedFilterBubbles.length > 0 ? (
+          <div className="flex items-center gap-2 overflow-x-auto rounded-2xl border border-gray-200/80 bg-white/92 px-3 py-2 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#111827]/90">
+            {mergedFilterBubbles.map((bubble) => (
+              <Tag
+                key={bubble.id}
+                closable={typeof bubble.onRemove === 'function'}
+                className="!m-0 shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+                onClose={(e) => {
+                  e.preventDefault();
+                  bubble.onRemove?.();
+                }}
+              >
+                {bubble.label}
+              </Tag>
+            ))}
+            <Button
+              type="link"
+              size="small"
+              className="shrink-0"
+              onClick={() => {
+                updateColumnFilters({});
+                onClearExternalFilters?.();
               }}
             >
-              {bubble.label}
-            </Tag>
-          ))}
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              updateColumnFilters({});
-              onClearExternalFilters?.();
-            }}
-          >
-            حذف همه فیلترها
-          </Button>
+              حذف همه فیلترها
+            </Button>
+          </div>
+          ) : null}
         </div>
-      )}
-      <div className="smarttable-table-host flex-1 min-h-0 overflow-hidden" style={{ willChange: 'scroll-position' }}>
+      ) : null}
+      <div className="smarttable-table-host flex min-h-0 flex-1 flex-col">
       <Table 
-          className="smarttable-table h-full [transform:translateZ(0)]"
+          className="smarttable-table min-h-0"
           columns={columns} 
           dataSource={filteredData} 
           rowKey="id" 
@@ -1245,12 +1254,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           tableLayout={tableLayout}
           pagination={tablePagination} 
           onChange={handleTableChange}
-          scroll={disableScroll ? undefined : { x: scrollX ?? 'max-content', y: scrollHeight }}
+          scroll={disableScroll ? undefined : { x: scrollX ?? 'max-content', y: scrollHeight, scrollToFirstRowOnChange: false }}
           // 🔥 اتصال انتخاب گروهی
           rowSelection={rowSelection ? {
               type: 'checkbox',
               ...rowSelection,
-              columnWidth: 40,
+              columnWidth: 56,
         } : undefined}
         onRow={onRow}
       />

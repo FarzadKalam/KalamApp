@@ -27,6 +27,8 @@ interface WorkflowConditionsGroupProps {
     onOptionsUpdate?: () => void;
     protectedValues?: string[];
   }>;
+  getOperatorOptions?: (field?: ModuleField | null) => Array<{ label: string; value: string }>;
+  getDefaultOperator?: (field?: ModuleField | null) => string;
 }
 
 const getFieldOptions = (
@@ -66,6 +68,8 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   lockedConditionIds = [],
   requiredConditionIds = [],
   dynamicFieldProps = {},
+  getOperatorOptions,
+  getDefaultOperator,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
@@ -108,7 +112,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       {
         id: createWorkflowId(),
         field: firstField.key,
-        operator: getDefaultWorkflowOperator(firstField),
+        operator: getDefaultOperator?.(firstField) || getDefaultWorkflowOperator(firstField),
         value: undefined,
       },
     ];
@@ -151,7 +155,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
 
     if (!workflowOperatorNeedsValue(condition.operator)) {
       return (
-        <div className="rounded border border-dashed border-gray-200 px-2 py-1 text-xs text-gray-400">
+        <div className="rounded-lg border border-dashed border-[rgba(var(--brand-200-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.42)] px-2 py-1 text-xs text-[rgba(var(--brand-700-rgb),0.72)] dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),0.76)]">
           این عملگر نیاز به مقدار ندارد
         </div>
       );
@@ -327,7 +331,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           return (
             <div
               key={condition.id}
-              className="grid grid-cols-1 items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/70 p-3 md:grid-cols-12 dark:border-gray-700 dark:bg-white/5"
+              className="grid grid-cols-1 items-center gap-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.38)] p-3 md:grid-cols-12 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5"
             >
               <div className="md:col-span-4">
                 <div className="flex items-center gap-1">
@@ -345,7 +349,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                     const nextField = fields.find((f) => f.key === nextFieldKey);
                     updateCondition(condition.id, {
                       field: nextFieldKey,
-                      operator: getDefaultWorkflowOperator(nextField),
+                      operator: getDefaultOperator?.(nextField) || getDefaultWorkflowOperator(nextField),
                       value: undefined,
                     });
                   }}
@@ -358,7 +362,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
               <div className="md:col-span-3">
                 <Select
                   disabled={disabled || isLocked}
-                  options={getWorkflowOperatorOptions(field)}
+                  options={getOperatorOptions?.(field) || getWorkflowOperatorOptions(field)}
                   getPopupContainer={popupContainer}
                   popupMatchSelectWidth={false}
                   listHeight={220}
@@ -403,6 +407,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
             addCondition();
           }}
           disabled={disabled || !firstField}
+          className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.28)] dark:text-[rgba(var(--brand-200-rgb),1)] dark:hover:!bg-white/5"
         >
           افزودن شرط
         </Button>

@@ -478,7 +478,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       className={`
         bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] rounded-2xl border shadow-sm cursor-pointer transition-all flex flex-col group relative
         ${isSelected ? "border-leather-500 ring-1 ring-leather-500 bg-leather-50 dark:bg-leather-900/20" : "border-[rgba(var(--brand-200-rgb),0.75)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)]"}
-        ${minimal ? "p-3 mb-2" : "p-3 h-full"}
+        ${minimal ? "p-3" : "p-3 h-full"}
       `}
     >
       {!hideSelection && (

@@ -4627,6 +4627,7 @@ const ModuleShow: React.FC = () => {
       <PrintSection
         isPrintModalOpen={printManager.isPrintModalOpen}
         onClose={() => printManager.setIsPrintModalOpen(false)}
+        onPreparePrint={printManager.preparePrint}
         onPrint={printManager.handlePrint}
         printTemplates={printManager.printTemplates}
         selectedTemplateId={printManager.selectedTemplateId}

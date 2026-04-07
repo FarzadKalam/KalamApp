@@ -8,6 +8,7 @@ interface PrintSectionProps {
   isPrintModalOpen: boolean;
   onClose: () => void;
   onPrint: () => void;
+  onPreparePrint?: () => void;
   onRefreshPreview?: () => void | Promise<void>;
   printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
   selectedTemplateId: string;
@@ -46,6 +47,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   isPrintModalOpen,
   onClose,
   onPrint,
+  onPreparePrint,
   onRefreshPreview,
   printTemplates,
   selectedTemplateId,
@@ -65,6 +67,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
+  const pendingPrintRef = useRef(false);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
   const supportsZoom =
     typeof CSS !== 'undefined' &&
@@ -166,14 +169,43 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
   };
 
+  const handleCancel = () => {
+    pendingPrintRef.current = false;
+    onClose();
+  };
+
+  const handleRequestPrint = () => {
+    if (onPreparePrint || !isMobile) {
+      try {
+        onPreparePrint?.();
+      } catch (error) {
+        console.error('Prepare print failed', error);
+      }
+      pendingPrintRef.current = false;
+      onClose();
+      onPrint();
+      return;
+    }
+
+    pendingPrintRef.current = true;
+    onClose();
+  };
+
   return (
     <>
       <Modal
         title="انتخاب قالب چاپ"
         open={isPrintModalOpen}
-        onCancel={onClose}
-        onOk={onPrint}
-        okText={isMobile ? 'ذخیره PDF' : 'چاپ'}
+        onCancel={handleCancel}
+        onOk={handleRequestPrint}
+        afterOpenChange={(open) => {
+          if (open || !pendingPrintRef.current) return;
+          pendingPrintRef.current = false;
+          window.setTimeout(() => {
+            onPrint();
+          }, 0);
+        }}
+        okText={isMobile && onPreparePrint ? 'ذخیره PDF' : 'چاپ'}
         cancelText="انصراف"
         width={isMobile ? '100vw' : 1180}
         destroyOnHidden
@@ -529,7 +561,26 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 
       {typeof document !== 'undefined'
         ? createPortal(
-            <div id="print-root" aria-hidden={!printMode} style={{ display: printMode ? 'block' : 'none' }}>
+            <div
+              id="print-root"
+              aria-hidden={!printMode}
+              style={
+                printMode
+                  ? {
+                      display: 'block',
+                      position: 'fixed',
+                      top: 0,
+                      left: '-200vw',
+                      width: 'max-content',
+                      maxWidth: 'none',
+                      opacity: 0,
+                      pointerEvents: 'none',
+                      zIndex: -1,
+                      overflow: 'hidden',
+                    }
+                  : { display: 'none' }
+              }
+            >
               {printMode ? renderPrintCard() : null}
             </div>,
             document.body
@@ -537,6 +588,14 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         : null}
 
       <style>{`
+        .print-select-modal,
+        .print-select-modal *,
+        .print-select-modal .ant-modal,
+        .print-select-modal .ant-modal-mask,
+        .print-select-modal .ant-modal-wrap {
+          animation-duration: 0s !important;
+          transition-duration: 0s !important;
+        }
         .print-select-shell {
           display: grid;
           grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);

@@ -1,6 +1,6 @@
 import { supabase } from '../supabaseClient';
+import { runProcessAutomationsForTaskEvent } from './processAutomationRuntime';
 import { buildTaskStatusUpdatePayload } from './taskCompletion';
-import { runProcessAutomationsForTaskStatusChange } from './processAutomationRuntime';
 
 type TaskAutomationActor = {
   id?: string | null;
@@ -14,7 +14,7 @@ type UpdateTaskStatusWithAutomationArgs = {
   currentUser?: TaskAutomationActor | null;
 };
 
-const TASK_AUTOMATION_SELECT =
+export const TASK_AUTOMATION_SELECT =
   'id, name, status, due_date, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, source_template_id, source_module_id, source_record_id, process_group_id, recurrence_info, start_date, completed_at';
 
 export const updateTaskStatusWithAutomation = async ({
@@ -39,6 +39,10 @@ export const updateTaskStatusWithAutomation = async ({
     throw new Error('فعالیت موردنظر پیدا نشد.');
   }
 
+  if (String(currentTask?.status || '').trim() === String(nextStatus || '').trim()) {
+    return currentTask;
+  }
+
   const payload = buildTaskStatusUpdatePayload(nextStatus, {
     previousCompletedAt: currentTask?.completed_at ?? null,
     previousStatus: currentTask?.status ?? null,
@@ -56,9 +60,10 @@ export const updateTaskStatusWithAutomation = async ({
     ...payload,
   };
 
-  await runProcessAutomationsForTaskStatusChange({
+  await runProcessAutomationsForTaskEvent({
     task: updatedTask,
-    previousStatus: currentTask?.status ?? null,
+    event: 'update',
+    previousTask: currentTask,
     currentUser,
   });
 

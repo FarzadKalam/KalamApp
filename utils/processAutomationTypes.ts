@@ -1,10 +1,19 @@
-import { WorkflowAction, WorkflowCondition, createWorkflowId } from './workflowTypes';
+import {
+  WorkflowAction,
+  WorkflowCondition,
+  WorkflowExecutionMode,
+  WorkflowIntervalUnit,
+  WorkflowTriggerType,
+  createWorkflowId,
+} from './workflowTypes';
 
-export type ProcessAutomationTriggerType =
+export type LegacyProcessAutomationTriggerType =
   | 'process_started'
   | 'previous_stage_completed'
   | 'current_stage_in_progress'
   | 'current_stage_completed';
+
+export type ProcessAutomationTriggerType = WorkflowTriggerType | 'previous_stage_completed';
 
 export type ProcessAutomationTargetType =
   | 'current_task_assignee'
@@ -22,6 +31,11 @@ export type ProcessAutomationRule = {
   description?: string | null;
   is_active?: boolean | null;
   trigger_type: ProcessAutomationTriggerType;
+  execution_mode?: WorkflowExecutionMode | null;
+  interval_value?: number | null;
+  interval_unit?: WorkflowIntervalUnit | null;
+  interval_at?: string | null;
+  batch_size?: number | null;
   conditions_all?: WorkflowCondition[] | null;
   conditions_any?: WorkflowCondition[] | null;
   target_type: ProcessAutomationTargetType;
@@ -41,17 +55,107 @@ export const PROCESS_AUTOMATION_TARGET_OPTIONS: Array<{ label: string; value: Pr
   { label: 'تیم مشخص', value: 'specific_role' },
 ];
 
-export const PROCESS_AUTOMATION_TRIGGER_OPTIONS: Array<{ label: string; value: ProcessAutomationTriggerType }> = [
-  { label: 'وقتی فرآیند شروع شد', value: 'process_started' },
-  { label: 'وقتی این فعالیت در حال انجام شد', value: 'current_stage_in_progress' },
-  { label: 'وقتی این فعالیت تکمیل شد', value: 'current_stage_completed' },
-];
+export const PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION = {
+  label: 'وقتی فعالیت قبلی تکمیل شد',
+  value: 'previous_stage_completed' as const,
+};
 
 const PROCESS_AUTOMATION_TRIGGER_LABELS: Record<ProcessAutomationTriggerType, string> = {
-  process_started: 'وقتی فرآیند شروع شد',
+  on_create: 'وقتی رکورد جدید ایجاد شد',
+  on_upsert: 'وقتی رکورد ایجاد یا به روز شد',
+  interval: 'بر اساس بازه زمانی',
   previous_stage_completed: 'وقتی فعالیت قبلی تکمیل شد',
-  current_stage_in_progress: 'وقتی این فعالیت در حال انجام شد',
-  current_stage_completed: 'وقتی این فعالیت تکمیل شد',
+};
+
+const DEFAULT_NOTE_TEMPLATE = '{{task_name}} وارد وضعیت {{status_label}} شد.';
+const DEFAULT_STATUS_FIELD_KEY = '__task__status';
+
+const isWorkflowTriggerType = (value: string): value is WorkflowTriggerType =>
+  ['on_create', 'on_upsert', 'interval'].includes(value);
+
+const isProcessAutomationTriggerType = (value: string): value is ProcessAutomationTriggerType =>
+  isWorkflowTriggerType(value) || value === 'previous_stage_completed';
+
+const isWorkflowExecutionMode = (value: string): value is WorkflowExecutionMode =>
+  ['first_match', 'every_match'].includes(value);
+
+const isWorkflowIntervalUnit = (value: string): value is WorkflowIntervalUnit =>
+  ['hour', 'day', 'month'].includes(value);
+
+const createDefaultStatusCondition = (): WorkflowCondition => ({
+  id: createWorkflowId(),
+  field: DEFAULT_STATUS_FIELD_KEY,
+  operator: 'eq',
+  value: undefined,
+});
+
+const hasTaskStatusCondition = (conditions?: WorkflowCondition[] | null) =>
+  (Array.isArray(conditions) ? conditions : []).some(
+    (condition) => String(condition?.field || '').trim() === DEFAULT_STATUS_FIELD_KEY
+  );
+
+const prependLegacyStatusCondition = (
+  conditions: WorkflowCondition[] | null | undefined,
+  statusValue: string
+) => {
+  const normalized = Array.isArray(conditions) ? conditions : [];
+  if (hasTaskStatusCondition(normalized)) return normalized;
+  return [
+    {
+      id: `__legacy_status_${statusValue}__`,
+      field: DEFAULT_STATUS_FIELD_KEY,
+      operator: 'eq',
+      value: statusValue,
+    },
+    ...normalized,
+  ];
+};
+
+const normalizeLegacyTrigger = (
+  rawTriggerType: string,
+  currentConditionsAll: WorkflowCondition[] | null | undefined
+): {
+  triggerType: ProcessAutomationTriggerType;
+  executionMode: WorkflowExecutionMode;
+  conditionsAll: WorkflowCondition[];
+} => {
+  if (rawTriggerType === 'previous_stage_completed') {
+    return {
+      triggerType: 'previous_stage_completed',
+      executionMode: 'every_match',
+      conditionsAll: Array.isArray(currentConditionsAll) ? currentConditionsAll : [],
+    };
+  }
+
+  if (rawTriggerType === 'process_started') {
+    return {
+      triggerType: 'on_upsert',
+      executionMode: 'every_match',
+      conditionsAll: prependLegacyStatusCondition(currentConditionsAll, 'in_progress'),
+    };
+  }
+
+  if (rawTriggerType === 'current_stage_in_progress') {
+    return {
+      triggerType: 'on_upsert',
+      executionMode: 'every_match',
+      conditionsAll: prependLegacyStatusCondition(currentConditionsAll, 'in_progress'),
+    };
+  }
+
+  if (rawTriggerType === 'current_stage_completed') {
+    return {
+      triggerType: 'on_upsert',
+      executionMode: 'every_match',
+      conditionsAll: prependLegacyStatusCondition(currentConditionsAll, 'done'),
+    };
+  }
+
+  return {
+    triggerType: 'on_upsert',
+    executionMode: 'every_match',
+    conditionsAll: Array.isArray(currentConditionsAll) ? currentConditionsAll : [],
+  };
 };
 
 export const createProcessAutomationRuleId = () =>
@@ -62,21 +166,26 @@ export const createDefaultProcessAutomationRule = (): ProcessAutomationRule => (
   name: 'اتوماسیون جدید',
   description: '',
   is_active: true,
-  trigger_type: 'current_stage_completed',
-  conditions_all: [],
+  trigger_type: 'on_upsert',
+  execution_mode: 'every_match',
+  interval_value: null,
+  interval_unit: null,
+  interval_at: null,
+  batch_size: null,
+  conditions_all: [createDefaultStatusCondition()],
   conditions_any: [],
   target_type: 'current_task_assignee',
   target_task_type: null,
   target_user_id: null,
   target_role_id: null,
-  note_text: '{{task_name}} وارد وضعیت {{status_label}} شد.',
+  note_text: DEFAULT_NOTE_TEMPLATE,
   actions: [
     {
       id: createWorkflowId(),
       type: 'send_note',
       config: {
         recipient_fields: [],
-        note_text: '{{task_name}} وارد وضعیت {{status_label}} شد.',
+        note_text: DEFAULT_NOTE_TEMPLATE,
       },
     },
   ],
@@ -88,18 +197,38 @@ export const normalizeProcessAutomationRule = (value: any): ProcessAutomationRul
   const targetType = String(value?.target_type || '').trim() as ProcessAutomationTargetType;
   if (!targetType) return null;
 
+  const rawTriggerType = String(value?.trigger_type || '').trim();
+  const baseConditionsAll = Array.isArray(value?.conditions_all) ? value.conditions_all : [];
+  const baseConditionsAny = Array.isArray(value?.conditions_any) ? value.conditions_any : [];
+  const legacyNormalized = normalizeLegacyTrigger(rawTriggerType, baseConditionsAll);
+  const normalizedTriggerType = isProcessAutomationTriggerType(rawTriggerType)
+    ? rawTriggerType
+    : legacyNormalized.triggerType;
+  const normalizedExecutionMode = isWorkflowExecutionMode(String(value?.execution_mode || '').trim())
+    ? value.execution_mode
+    : legacyNormalized.executionMode;
+
   return {
     id: String(value?.id || createProcessAutomationRuleId()),
     name: String(value?.name || '').trim() || null,
     description: String(value?.description || '').trim() || null,
     is_active: value?.is_active !== false,
-    trigger_type: (
-      ['process_started', 'previous_stage_completed', 'current_stage_in_progress', 'current_stage_completed'].includes(String(value?.trigger_type || ''))
-        ? value.trigger_type
-        : 'current_stage_completed'
-    ) as ProcessAutomationTriggerType,
-    conditions_all: Array.isArray(value?.conditions_all) ? value.conditions_all : [],
-    conditions_any: Array.isArray(value?.conditions_any) ? value.conditions_any : [],
+    trigger_type: normalizedTriggerType,
+    execution_mode: normalizedExecutionMode,
+    interval_value: normalizedTriggerType === 'interval'
+      ? Math.max(1, Number.parseInt(String(value?.interval_value || '1'), 10) || 1)
+      : null,
+    interval_unit: normalizedTriggerType === 'interval' && isWorkflowIntervalUnit(String(value?.interval_unit || '').trim())
+      ? value.interval_unit
+      : (normalizedTriggerType === 'interval' ? 'day' : null),
+    interval_at: normalizedTriggerType === 'interval'
+      ? (String(value?.interval_at || '').trim() || null)
+      : null,
+    batch_size: normalizedTriggerType === 'interval'
+      ? Math.max(1, Number.parseInt(String(value?.batch_size || '0'), 10) || 0) || null
+      : null,
+    conditions_all: normalizedTriggerType === rawTriggerType ? baseConditionsAll : legacyNormalized.conditionsAll,
+    conditions_any: baseConditionsAny,
     target_type: targetType,
     target_task_type: String(value?.target_task_type || '').trim() || null,
     target_user_id: String(value?.target_user_id || '').trim() || null,
@@ -124,19 +253,19 @@ export const normalizeProcessAutomationRule = (value: any): ProcessAutomationRul
             : action
         ))
       : [
-      {
-        id: createWorkflowId(),
-        type: 'send_note',
-        config: {
-          recipient_fields: [],
-          note_text: String(
-            value?.note_text
-            || value?.actions?.[0]?.config?.note_text
-            || ''
-          ).trim() || '{{task_name}} وارد وضعیت {{status_label}} شد.',
-        },
-      },
-    ],
+          {
+            id: createWorkflowId(),
+            type: 'send_note',
+            config: {
+              recipient_fields: [],
+              note_text: String(
+                value?.note_text
+                || value?.actions?.[0]?.config?.note_text
+                || ''
+              ).trim() || DEFAULT_NOTE_TEMPLATE,
+            },
+          },
+        ],
   };
 };
 
@@ -146,14 +275,14 @@ export const normalizeProcessAutomationRules = (value: any): ProcessAutomationRu
     .filter((rule): rule is ProcessAutomationRule => Boolean(rule));
 
 export const getProcessAutomationRuleSummary = (rule: ProcessAutomationRule) => {
-  const triggerLabel = PROCESS_AUTOMATION_TRIGGER_LABELS[rule?.trigger_type || 'current_stage_completed'] || 'اجرای نامشخص';
+  const triggerLabel = PROCESS_AUTOMATION_TRIGGER_LABELS[rule?.trigger_type || 'on_upsert'] || 'اجرای نامشخص';
   const actionRecipientFields = (rule?.actions || []).flatMap((action: any) =>
     String(action?.type || '') === 'send_note' && Array.isArray(action?.config?.recipient_fields)
       ? action.config.recipient_fields
       : []
   );
   if (actionRecipientFields.length > 0) {
-    return `${triggerLabel}، گیرنده از داخل اقدام‌ها`;
+    return `${triggerLabel}، گیرنده از داخل اقدام ها`;
   }
   const targetLabel =
     PROCESS_AUTOMATION_TARGET_OPTIONS.find((item) => item.value === rule?.target_type)?.label

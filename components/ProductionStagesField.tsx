@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag } from 'antd';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio } from 'antd';
 import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { Link } from 'react-router-dom';
@@ -27,18 +27,26 @@ import {
   getMergedTaskTypeOptions,
   getTaskTypeProtectedValues,
 } from '../utils/taskMeta';
-import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
+import { TASK_AUTOMATION_SELECT, updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import {
   createDefaultProcessAutomationRule,
   getProcessAutomationRuleSummary,
   normalizeProcessAutomationRules,
-  PROCESS_AUTOMATION_TRIGGER_OPTIONS,
+  PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION,
   type ProcessAutomationRule,
 } from '../utils/processAutomationTypes';
+import { runProcessAutomationsForTaskEvent } from '../utils/processAutomationRuntime';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
-import { WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from '../utils/workflowTypes';
+import {
+  WORKFLOW_ASSIGNEE_FIELD_KEY,
+  intervalUnitOptions,
+  triggerTypeOptions,
+  type WorkflowCondition,
+  type WorkflowExecutionMode,
+  workflowExecutionModeOptions,
+} from '../utils/workflowTypes';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import WorkflowActionsBuilder from './workflows/WorkflowActionsBuilder';
 import HelpHint from './HelpHint';
@@ -962,8 +970,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       { constraint: 'tasks_production_shelf_id_fkey', column: 'production_shelf_id' },
     ];
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const { error } = await supabase.from('tasks').insert(payload);
-      if (!error) return;
+      const { data, error } = await supabase
+        .from('tasks')
+        .insert(payload)
+        .select(TASK_AUTOMATION_SELECT);
+      if (!error) {
+        const insertedRows = Array.isArray(data) ? data : [];
+        for (const insertedTask of insertedRows) {
+          await runProcessAutomationsForTaskEvent({
+            task: insertedTask,
+            event: 'create',
+            previousTask: null,
+            currentUser: null,
+          });
+        }
+        return insertedRows;
+      }
       const payloadColumns = Array.from(new Set(payload.flatMap((row) => Object.keys(row || {}))));
       const removable = optionalColumns.filter((columnName) =>
         payloadColumns.includes(columnName) && isMissingColumnError(error, columnName)
@@ -983,9 +1005,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       if (!merged.length) throw error;
       payload = removeColumnsFromRows(payload, merged);
     }
+    return [];
   }, [extractMissingColumnNames, isMissingColumnError, removeColumnsFromRows]);
-  const updateTaskWithFallback = useCallback(async (taskId: string, patch: Record<string, any>) => {
+  const updateTaskWithFallback = useCallback(async (
+    taskId: string,
+    patch: Record<string, any>,
+    options: {
+      runAutomation?: boolean;
+      previousTask?: Record<string, any> | null;
+    } = {}
+  ) => {
     let payload = { ...patch };
+    let previousTask = options.previousTask === undefined
+      ? (Array.isArray(tasks) ? tasks.find((item: any) => String(item?.id) === String(taskId)) || null : null)
+      : options.previousTask;
     const optionalColumns = [
       'assignee_id',
       'assignee_type',
@@ -1018,9 +1051,33 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'production_shelf_id',
       'recurrence_info',
     ];
+    if (options.runAutomation !== false && !previousTask) {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select(TASK_AUTOMATION_SELECT)
+        .eq('id', taskId)
+        .maybeSingle();
+      if (error) throw error;
+      previousTask = data || null;
+    }
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const { error } = await supabase.from('tasks').update(payload).eq('id', taskId);
-      if (!error) return;
+      const { data, error } = await supabase
+        .from('tasks')
+        .update(payload)
+        .eq('id', taskId)
+        .select(TASK_AUTOMATION_SELECT)
+        .maybeSingle();
+      if (!error) {
+        if (options.runAutomation !== false && data) {
+          await runProcessAutomationsForTaskEvent({
+            task: data,
+            event: 'update',
+            previousTask,
+            currentUser: null,
+          });
+        }
+        return data || null;
+      }
       const removable = optionalColumns.filter((columnName) =>
         Object.prototype.hasOwnProperty.call(payload, columnName) && isMissingColumnError(error, columnName)
       );
@@ -1037,7 +1094,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         delete payload[columnName];
       });
     }
-  }, [extractMissingColumnNames, isMissingColumnError]);
+    return null;
+  }, [extractMissingColumnNames, isMissingColumnError, tasks]);
 
   const getHandoverFromTask = useCallback((task: any) => {
     const recurrence = parseRecurrenceInfo(task?.recurrence_info);
@@ -4324,6 +4382,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const normalizeAutomationRuleForEditor = useCallback((rule: ProcessAutomationRule): ProcessAutomationRule => ({
     ...rule,
+    execution_mode: (rule?.execution_mode || 'every_match') as WorkflowExecutionMode,
+    interval_value: rule?.trigger_type === 'interval' ? (rule?.interval_value || 1) : null,
+    interval_unit: rule?.trigger_type === 'interval' ? (rule?.interval_unit || 'day') : null,
+    interval_at: rule?.trigger_type === 'interval' ? (rule?.interval_at || null) : null,
+    batch_size: rule?.trigger_type === 'interval' ? (rule?.batch_size || null) : null,
     conditions_all: Array.isArray(rule?.conditions_all) ? rule.conditions_all : [],
     conditions_any: Array.isArray(rule?.conditions_any) ? rule.conditions_any : [],
   }), []);
@@ -4363,6 +4426,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handleDraftAutomationTriggerChange = useCallback((rule: ProcessAutomationRule, triggerType: ProcessAutomationRule['trigger_type']) => {
     updateDraftAutomationRule(rule.id, {
       trigger_type: triggerType,
+      interval_value: triggerType === 'interval' ? (rule?.interval_value || 1) : null,
+      interval_unit: triggerType === 'interval' ? (rule?.interval_unit || 'day') : null,
+      interval_at: triggerType === 'interval' ? (rule?.interval_at || null) : null,
+      batch_size: triggerType === 'interval' ? (rule?.batch_size || null) : null,
     });
   }, [updateDraftAutomationRule]);
 
@@ -5960,30 +6027,92 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
                           <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.42)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
                             <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">شرایط اجرا</div>
-                            <div className="grid grid-cols-12 gap-3">
-                              <div className="col-span-12 md:col-span-6">
-                                <div className="mb-1 text-xs text-gray-500">زمان اجرا</div>
-                                <Select
-                                  {...modalSelectProps}
+                            <div className="space-y-4">
+                              <div>
+                                <div className="mb-2 text-xs text-gray-500">نوع اجرا</div>
+                                <Radio.Group
+                                  optionType="button"
+                                  buttonStyle="solid"
                                   value={rule.trigger_type}
-                                  options={PROCESS_AUTOMATION_TRIGGER_OPTIONS}
-                                  onChange={(value) => handleDraftAutomationTriggerChange(
+                                  options={
+                                    String(rule?.trigger_type || '').trim() === 'previous_stage_completed'
+                                      ? [...triggerTypeOptions, PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION]
+                                      : triggerTypeOptions
+                                  }
+                                  onChange={(event) => handleDraftAutomationTriggerChange(
                                     rule,
-                                    value as ProcessAutomationRule['trigger_type']
+                                    event.target.value as ProcessAutomationRule['trigger_type']
                                   )}
                                 />
                               </div>
-                              <div className="col-span-12">
-                                <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/70 px-3 py-2 text-xs leading-6 text-gray-600 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-                                  {rule.trigger_type === 'process_started'
-                                    ? 'وقتی اولین فعالیت همین فرآیند برای اولین بار وارد وضعیت "در حال انجام" شود.'
-                                    : rule.trigger_type === 'current_stage_in_progress'
-                                      ? 'وقتی همین فعالیت وارد وضعیت "در حال انجام" شود.'
-                                    : rule.trigger_type === 'previous_stage_completed'
-                                      ? 'وقتی فعالیت قبلی تکمیل شود و نوبت این فعالیت برسد.'
-                                      : 'وقتی همین فعالیت وارد وضعیت تکمیل‌شده شود.'}
-                                </div>
+                              <div>
+                                <div className="mb-2 text-xs text-gray-500">زمان اجرا</div>
+                                <Radio.Group
+                                  value={rule.execution_mode || 'every_match'}
+                                  options={workflowExecutionModeOptions}
+                                  onChange={(event) => updateDraftAutomationRule(rule.id, {
+                                    execution_mode: event.target.value as WorkflowExecutionMode,
+                                  })}
+                                />
                               </div>
+                              {rule.trigger_type === 'interval' ? (
+                                <div className="grid grid-cols-12 gap-3">
+                                  <div className="col-span-12">
+                                    <Alert
+                                      type="info"
+                                      showIcon
+                                      message="اجرای زمان بندی نیاز به Runner دارد (Cron Job یا Edge Function زمان بندی شده)."
+                                    />
+                                  </div>
+                                  <div className="col-span-12 md:col-span-3">
+                                    <div className="mb-1 text-xs text-gray-500">هر</div>
+                                    <InputNumber
+                                      min={1}
+                                      className="w-full persian-number"
+                                      value={rule.interval_value || undefined}
+                                      onChange={(value) => updateDraftAutomationRule(rule.id, {
+                                        interval_value: Number.isFinite(Number(value)) ? Math.max(1, Number(value)) : 1,
+                                      })}
+                                      placeholder="عدد"
+                                    />
+                                  </div>
+                                  <div className="col-span-12 md:col-span-3">
+                                    <div className="mb-1 text-xs text-gray-500">واحد زمان</div>
+                                    <Select
+                                      {...modalSelectProps}
+                                      value={rule.interval_unit || 'day'}
+                                      options={intervalUnitOptions}
+                                      onChange={(value) => updateDraftAutomationRule(rule.id, {
+                                        interval_unit: value,
+                                      })}
+                                    />
+                                  </div>
+                                  <div className="col-span-12 md:col-span-3">
+                                    <div className="mb-1 text-xs text-gray-500">در ساعت</div>
+                                    <PersianDatePicker
+                                      type="TIME"
+                                      value={rule.interval_at || null}
+                                      onChange={(value) => updateDraftAutomationRule(rule.id, {
+                                        interval_at: value || null,
+                                      })}
+                                    />
+                                  </div>
+                                  <div className="col-span-12 md:col-span-3">
+                                    <div className="mb-1 text-xs text-gray-500">تعداد بررسی</div>
+                                    <InputNumber
+                                      min={1}
+                                      className="w-full persian-number"
+                                      value={rule.batch_size || undefined}
+                                      onChange={(value) => updateDraftAutomationRule(rule.id, {
+                                        batch_size: value === null || value === undefined
+                                          ? null
+                                          : (Number.isFinite(Number(value)) ? Math.max(1, Number(value)) : null),
+                                      })}
+                                      placeholder="پیش فرض: همه"
+                                    />
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
 

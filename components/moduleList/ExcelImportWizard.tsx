@@ -24,10 +24,15 @@ import {
   InboxOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
+import DateObject from "react-date-object";
+import persian from "react-date-object/calendars/persian";
+import persian_fa from "react-date-object/locales/persian_fa";
+import gregorian from "react-date-object/calendars/gregorian";
+import gregorian_en from "react-date-object/locales/gregorian_en";
 import { FieldNature, FieldType, ModuleDefinition, ModuleField } from "../../types";
 import { supabase } from "../../supabaseClient";
 import { attachTaskCompletionIfNeeded } from "../../utils/taskCompletion";
-import { normalizePhoneForStorage } from "../../utils/phoneNumber";
+import { normalizeIranMobile, normalizePhoneDigits, normalizePhoneForStorage } from "../../utils/phoneNumber";
 import { toGregorianDateString } from "../../utils/persianNumberFormatter";
 import { syncCustomerLevelsByInvoiceCustomers } from "../../utils/customerLeveling";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
@@ -374,6 +379,78 @@ const buildNormalizedSlashDate = (value: string): string | null => {
   return hh && mm ? `${base} ${hh}:${mm}:${ss}` : base;
 };
 
+const tryConvertStructuredDateWithDateObject = (
+  value: string,
+  fieldType: FieldType.DATE | FieldType.DATETIME
+): string | null => {
+  const normalized = toEnglishDigits(String(value || "").trim())
+    .replace(/\./g, "/")
+    .replace(/T/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+
+  const match = normalized.match(
+    /^(\d{1,4})[\/-](\d{1,2})[\/-](\d{1,4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/
+  );
+  if (!match) return null;
+
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  const third = Number(match[3]);
+  const firstLen = String(match[1]).length;
+  const thirdLen = String(match[3]).length;
+  const hasTime = Boolean(match[4]);
+
+  let year = 0;
+  let month = 0;
+  let day = 0;
+
+  if (firstLen === 4) {
+    year = first;
+    month = second;
+    day = third;
+  } else if (thirdLen === 4) {
+    year = third;
+    if (first > 12 && second <= 12) {
+      day = first;
+      month = second;
+    } else {
+      month = first;
+      day = second;
+    }
+  } else {
+    return null;
+  }
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const hh = String(match[4] || "00").padStart(2, "0");
+  const mm = String(match[5] || "00").padStart(2, "0");
+  const ss = String(match[6] || "00").padStart(2, "0");
+  const dateText = `${String(year).padStart(4, "0")}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}`;
+  const dateTimeText = hasTime ? `${dateText} ${hh}:${mm}:${ss}` : dateText;
+  const format = hasTime ? "YYYY/MM/DD HH:mm:ss" : "YYYY/MM/DD";
+  const isJalaliYear = year >= 1300 && year <= 1599;
+
+  try {
+    const dateObject = new DateObject({
+      date: dateTimeText,
+      format,
+      calendar: isJalaliYear ? persian : gregorian,
+      locale: isJalaliYear ? persian_fa : gregorian_en,
+    });
+    if (!dateObject.isValid) return null;
+    const gregorianDate = isJalaliYear ? dateObject.convert(gregorian, gregorian_en) : dateObject;
+    if (fieldType === FieldType.DATE) {
+      return gregorianDate.format("YYYY-MM-DD");
+    }
+    return gregorianDate.toDate().toISOString();
+  } catch {
+    return null;
+  }
+};
+
 const normalizeImportedDateValue = (value: string, fieldType: FieldType.DATE | FieldType.DATETIME): string => {
   const raw = String(value || "").trim();
   if (!raw) return raw;
@@ -400,6 +477,8 @@ const normalizeImportedDateValue = (value: string, fieldType: FieldType.DATE | F
   for (const candidate of candidateValues) {
     const formatted = toGregorianDateString(candidate, targetFormat, formatOptions);
     if (formatted) return formatted;
+    const fallbackFormatted = tryConvertStructuredDateWithDateObject(candidate, fieldType);
+    if (fallbackFormatted) return fallbackFormatted;
   }
 
   return englishRaw || raw;
@@ -468,7 +547,83 @@ const guessGroupedInvoiceTarget = (
   return { scope: "header", key: null };
 };
 
-const encodeForLookup = (value: unknown): string => normalizeKey(stripLegacyReferencePrefix(value));
+const PHONE_FIELD_KEY_REGEX = /(^|_)(mobile|phone)(_|$)/i;
+
+const isPhoneFieldKey = (value: unknown): boolean => PHONE_FIELD_KEY_REGEX.test(String(value ?? "").trim());
+
+const isLikelyPhoneValue = (value: unknown): boolean => {
+  const raw = stripLegacyReferencePrefix(value);
+  if (!raw) return false;
+  const digits = normalizePhoneDigits(raw);
+  if (!digits) return false;
+  if (normalizeIranMobile(raw)) return true;
+  return raw.startsWith("+") || raw.startsWith("00") || (digits.length >= 10 && digits.length <= 15);
+};
+
+const buildPhoneLookupVariants = (value: unknown): string[] => {
+  const raw = stripLegacyReferencePrefix(value);
+  if (!isLikelyPhoneValue(raw)) return [];
+
+  const result = new Set<string>();
+  const push = (item: unknown) => {
+    const normalized = String(item ?? "").trim();
+    if (normalized) result.add(normalized);
+  };
+
+  const digits = normalizePhoneDigits(raw);
+  const normalizedStorage = normalizePhoneForStorage(raw);
+  const normalizedIran = normalizeIranMobile(raw);
+
+  push(raw);
+  push(digits);
+  push(normalizedStorage);
+  if (normalizedStorage.startsWith("+")) {
+    push(normalizedStorage.slice(1));
+  }
+  if (normalizedIran) {
+    const national = normalizedIran.replace(/^\+98/, "");
+    push(normalizedIran);
+    push(national);
+    push(`98${national}`);
+    push(`0${national}`);
+  }
+
+  return Array.from(result);
+};
+
+const buildLookupKeys = (value: unknown): string[] => {
+  const result = new Set<string>();
+  const push = (item: unknown) => {
+    const encoded = normalizeKey(item);
+    if (encoded) result.add(encoded);
+  };
+
+  push(stripLegacyReferencePrefix(value));
+  buildPhoneLookupVariants(value).forEach(push);
+  return Array.from(result);
+};
+
+const setLookupValue = (map: Map<string, string>, source: unknown, resolvedValue: string) => {
+  buildLookupKeys(source).forEach((key) => map.set(key, resolvedValue));
+};
+
+const getLookupValue = (map: Map<string, string>, source: unknown): string | undefined => {
+  for (const key of buildLookupKeys(source)) {
+    const matched = map.get(key);
+    if (matched) return matched;
+  }
+  return undefined;
+};
+
+const buildFieldMatchValues = (fieldKey: string, value: unknown, fieldType?: FieldType): string[] => {
+  const raw = stripLegacyReferencePrefix(value);
+  if (!raw) return [];
+  if (fieldType !== FieldType.PHONE && !isPhoneFieldKey(fieldKey)) {
+    return [raw];
+  }
+  const variants = buildPhoneLookupVariants(raw);
+  return variants.length > 0 ? variants : [raw];
+};
 
 const isProbablyDuplicateInsertError = (error: unknown): boolean => {
   const code = String((error as any)?.code || "").toUpperCase();
@@ -501,6 +656,9 @@ const getRelationLookupColumns = (targetModule: string, targetField: string): st
   if (targetModule === "products") {
     ["name", "manual_code", "crm_code", "accounting_code"].forEach((column) => columns.add(column));
   }
+  if (targetModule === "billboards") {
+    ["name", "manual_code"].forEach((column) => columns.add(column));
+  }
   return Array.from(columns);
 };
 
@@ -514,6 +672,16 @@ const getRelationLookupCandidates = (
   }
   if (targetModule === "products") {
     return getProductLookupCandidates(row, targetField);
+  }
+  if (targetModule === "billboards") {
+    return [
+      row[targetField],
+      row.name,
+      row.system_code,
+      row.manual_code,
+    ]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
   }
   return [row[targetField], row.system_code]
     .map((value) => String(value ?? "").trim())
@@ -1497,7 +1665,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       const map = relationLookups[lookupKey] || new Map<string, string>();
       relationLookups[lookupKey] = map;
 
-      const exact = map.get(encodeForLookup(value));
+      const exact = getLookupValue(map, value);
       if (exact) return exact;
 
       const targetModule = String(field.relationConfig?.targetModule || "").trim();
@@ -1513,12 +1681,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       for (const lookupField of lookupFields) {
         for (const selectExpr of selectVariants) {
           try {
+            const matchValues = buildFieldMatchValues(lookupField, value);
+            if (matchValues.length === 0) continue;
             const existingResult = (await withTimeout(
-              supabase
-                .from(targetModule)
-                .select(selectExpr)
-                .eq(lookupField, value)
-                .limit(1),
+              (matchValues.length > 1
+                ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(1)
+                : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(1)),
               20000,
               `جستجوی رابطه (${field.labels.fa})`
             )) as unknown as QueryResult<Record<string, unknown>[]>;
@@ -1534,9 +1702,9 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       if (existingRow?.id) {
         const existingId = String(existingRow.id);
-        map.set(encodeForLookup(value), existingId);
+        setLookupValue(map, value, existingId);
         getRelationLookupCandidates(targetModule, existingRow, targetField).forEach((candidate) =>
-          map.set(encodeForLookup(candidate), existingId)
+          setLookupValue(map, candidate, existingId)
         );
         return existingId;
       }
@@ -1573,9 +1741,9 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       const insertedId = String(inserted?.id || "").trim();
       if (!insertedId) return undefined;
-      map.set(encodeForLookup(value), insertedId);
+      setLookupValue(map, value, insertedId);
       getRelationLookupCandidates(targetModule, inserted, targetField).forEach((candidate) =>
-        map.set(encodeForLookup(candidate), insertedId)
+        setLookupValue(map, candidate, insertedId)
       );
       return insertedId;
     },
@@ -1681,9 +1849,9 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         );
         (users || []).forEach((item: { id: string; full_name: string | null; email?: string | null }) => {
           const encodedValue = `user_${item.id}`;
-          map.set(encodeForLookup(item.id), encodedValue);
-          if (item.full_name) map.set(encodeForLookup(item.full_name), encodedValue);
-          if (item.email) map.set(encodeForLookup(item.email), encodedValue);
+          setLookupValue(map, item.id, encodedValue);
+          if (item.full_name) setLookupValue(map, item.full_name, encodedValue);
+          if (item.email) setLookupValue(map, item.email, encodedValue);
         });
 
         if (supportsAssigneeTypeField(moduleId)) {
@@ -1694,8 +1862,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           );
           (roles || []).forEach((item: { id: string; title?: string | null }) => {
             const encodedValue = `role_${item.id}`;
-            map.set(encodeForLookup(item.id), encodedValue);
-            if (item.title) map.set(encodeForLookup(item.title), encodedValue);
+            setLookupValue(map, item.id, encodedValue);
+            if (item.title) setLookupValue(map, item.title, encodedValue);
           });
         }
 
@@ -1710,9 +1878,9 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           "دریافت کاربران برای تطبیق"
         );
         (data || []).forEach((item: { id: string; full_name: string | null; email?: string | null }) => {
-          map.set(encodeForLookup(item.id), item.id);
-          if (item.full_name) map.set(encodeForLookup(item.full_name), item.id);
-          if (item.email) map.set(encodeForLookup(item.email), item.id);
+          setLookupValue(map, item.id, item.id);
+          if (item.full_name) setLookupValue(map, item.full_name, item.id);
+          if (item.email) setLookupValue(map, item.email, item.id);
         });
         lookupMap[lookupKey] = map;
         continue;
@@ -1749,10 +1917,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       rows.forEach((item) => {
         const id = String(item.id ?? "");
         if (!id) return;
-        map.set(encodeForLookup(id), id);
+        setLookupValue(map, id, id);
 
         getRelationLookupCandidates(targetModule, item, targetField).forEach((candidate) =>
-          map.set(encodeForLookup(candidate), id)
+          setLookupValue(map, candidate, id)
         );
       });
 
@@ -1957,12 +2125,18 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       let query = supabase.from(moduleConfig.table).select("*").limit(1);
       Object.entries(duplicateFilter).forEach(([key, value]) => {
-        query = query.eq(key, value as never);
+        const field = headerFieldByKey.get(key);
+        const matchValues = buildFieldMatchValues(key, value, field?.type);
+        if (matchValues.length > 1) {
+          query = query.in(key, matchValues as never);
+          return;
+        }
+        query = query.eq(key, (matchValues[0] ?? value) as never);
       });
       const { data } = await withTimeout(Promise.resolve(query), 20000, label);
       return data && data[0] ? (data[0] as Record<string, unknown>) : null;
     },
-    [duplicateFields, moduleConfig.table]
+    [duplicateFields, headerFieldByKey, moduleConfig.table]
   );
 
   const handleImport = useCallback(async () => {

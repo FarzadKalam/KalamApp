@@ -73,7 +73,7 @@ const collectFullDynamicOptionFields = (moduleConfig: ModuleDefinition): ModuleF
     if ((block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE) && block.tableColumns) {
       block.tableColumns.forEach((column: any) => {
         if (
-          (column.type === FieldType.SELECT || column.type === FieldType.MULTI_SELECT) &&
+          (column.type === FieldType.SELECT || column.type === FieldType.MULTI_SELECT || column.type === FieldType.STATUS) &&
           column.dynamicOptionsCategory
         ) {
           fields.push(column);
@@ -87,13 +87,13 @@ const collectFullDynamicOptionFields = (moduleConfig: ModuleDefinition): ModuleF
 
 const collectFullRelationFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const fields: ModuleFieldLike[] = [
-    ...(moduleConfig.fields || []).filter((field) => field.type === FieldType.RELATION || field.type === FieldType.USER),
+    ...(moduleConfig.fields || []).filter((field) => field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS),
   ];
 
   (moduleConfig.blocks || []).forEach((block) => {
     if ((block.type === BlockType.TABLE || block.type === BlockType.GRID_TABLE) && block.tableColumns) {
       block.tableColumns.forEach((column) => {
-        if (column.type === FieldType.RELATION || column.type === FieldType.USER) {
+        if (column.type === FieldType.RELATION || column.type === FieldType.USER || column.type === FieldType.TAGS) {
           fields.push({ ...column, key: `${block.id}_${column.key}` });
         }
       });
@@ -138,11 +138,11 @@ export const buildModuleListOptionPlan = (
   const visibleFields = getModuleListVisibleFields(moduleConfig, visibleColumns);
   const immediateDynamicFields = visibleFields.filter(
     (field) =>
-      (field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT) &&
+      (field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT || field.type === FieldType.STATUS) &&
       field.dynamicOptionsCategory
   );
   const immediateRelationFields = visibleFields.filter(
-    (field) => field.type === FieldType.RELATION || field.type === FieldType.USER
+    (field) => field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS
   );
 
   const allDynamicFields = collectFullDynamicOptionFields(moduleConfig);

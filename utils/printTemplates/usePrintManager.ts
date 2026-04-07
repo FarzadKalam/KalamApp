@@ -25,6 +25,9 @@ import {
   savePrintTemplatesStore,
   type StoredPrintTemplate,
 } from './store';
+import { buildPrintOutputName } from './outputName';
+import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import { printInIframe } from './printInIframe';
 
 interface UsePrintManagerProps {
   moduleId: string;
@@ -324,6 +327,8 @@ export const usePrintManager = ({
   });
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const bodyMeasureRef = useRef<HTMLDivElement | null>(null);
+  const buildPrintCardRef = useRef<(pageCountOverride?: number | null) => React.ReactNode>(() => null);
+  const reservedPrintWindowRef = useRef<Window | null>(null);
   const templatesLoadedRef = useRef(false);
   const dependenciesLoadedKeyRef = useRef<string | null>(null);
   const [renderedPageCount, setRenderedPageCount] = useState(1);
@@ -523,8 +528,24 @@ export const usePrintManager = ({
     setIsPrintModalOpen(false);
   }, []);
 
+  const getPrintOutputName = useCallback(
+    () =>
+      buildPrintOutputName({
+        record: data,
+        fallbackLabel: getModuleTitle(moduleId, 'singular') || moduleConfig?.titles?.fa || 'چاپ',
+      }),
+    [data, moduleConfig, moduleId]
+  );
+
+  const preparePrint = useCallback(() => {
+    if (!shouldUseGeneratedPdfPrint()) return;
+    const printTitle = getPrintOutputName();
+    reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
+  }, [getPrintOutputName]);
+
   const handlePrint = useCallback(() => {
     if (!selectedTemplateId) return;
+    const printTitle = getPrintOutputName();
 
     let measuredPageCount = renderedPageCount;
     let previewPageCount = 0;
@@ -568,10 +589,6 @@ export const usePrintManager = ({
     if (measuredPageCount !== renderedPageCount) {
       setRenderedPageCount(measuredPageCount);
     }
-    const nextForcedPages = selectedTemplateId.startsWith('custom:')
-      ? Math.max(1, measuredPageCount)
-      : null;
-    setForcedPrintPageCount(nextForcedPages);
 
     const currentTpl = selectedTemplateId.startsWith('custom:')
       ? availableTemplates.find((tpl) => tpl.id === selectedTemplateId.replace('custom:', '')) || null
@@ -583,68 +600,46 @@ export const usePrintManager = ({
       : selectedTemplateId === 'product_label'
         ? 'A6 portrait'
         : 'A4 portrait';
+    const staticPrintHtml = renderToStaticMarkup(
+      React.createElement(
+        React.Fragment,
+        null,
+        buildPrintCardRef.current(selectedTemplateId.startsWith('custom:') ? Math.max(1, measuredPageCount) : null)
+      )
+    );
 
-    if (typeof document !== 'undefined') {
-      document.body.classList.add('print-mode');
-      const styleId = 'dynamic-print-page-style';
-      let styleEl = document.getElementById(styleId) as HTMLStyleElement | null;
-      if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = styleId;
-        document.head.appendChild(styleEl);
-      }
-      styleEl.media = 'print';
-      styleEl.textContent = `@page { size: ${pageSize}; margin: 0; }`;
-    }
-    setPrintMode(true);
-    const expectedCustomPages = selectedTemplateId.startsWith('custom:')
-      ? Math.max(1, measuredPageCount)
-      : 1;
+    if (shouldUseGeneratedPdfPrint()) {
+      const targetWindow = reservedPrintWindowRef.current;
+      reservedPrintWindowRef.current = null;
 
-    let tries = 0;
-    const triggerPrint = () => {
-      const printRoot = document.getElementById('print-root');
-      const hasContent = Boolean(printRoot && String(printRoot.innerHTML || '').trim().length > 0);
-      const renderedPages =
-        printRoot?.querySelectorAll?.('.print-template-page')?.length || 0;
-      const hasExpectedPages =
-        expectedCustomPages <= 1 ? hasContent : renderedPages >= expectedCustomPages;
-
-      if ((!hasContent || !hasExpectedPages) && tries < 20) {
-        tries += 1;
-        setTimeout(triggerPrint, 60);
-        return;
-      }
-      if (!hasContent || !hasExpectedPages) {
-        setPrintMode(false);
-        if (typeof document !== 'undefined') {
-          document.body.classList.remove('print-mode');
-        }
-        return;
-      }
-
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          try {
-            window.focus();
-            window.print();
-          } catch (error) {
-            console.error('Print dialog failed to open', error);
-            setPrintMode(false);
-            if (typeof document !== 'undefined') {
-              document.body.classList.remove('print-mode');
-            }
-          }
-        });
+      void printAsPdf({
+        pageSize,
+        sourceHtml: staticPrintHtml,
+        title: printTitle,
+        filename: printTitle,
+        targetWindow,
+      }).catch((error) => {
+        console.error('Generated PDF print failed', error);
       });
-    };
+      return;
+    }
 
-    setTimeout(triggerPrint, 80);
-  }, [availableTemplates, renderedPageCount, selectedStoredTemplate, selectedTemplateId]);
+    void printInIframe({
+      pageSize,
+      sourceHtml: staticPrintHtml,
+      title: printTitle,
+    }).catch((error) => {
+      console.error('Print dialog failed to open', error);
+    });
+  }, [
+    activeTemplate,
+    availableTemplates,
+    getPrintOutputName,
+    moduleConfig,
+    renderedPageCount,
+    selectedStoredTemplate,
+    selectedTemplateId,
+  ]);
 
   useEffect(() => {
     if (printMode) return;
@@ -1707,7 +1702,7 @@ export const usePrintManager = ({
     renderedCustomTemplate?.headerHtml,
   ]);
 
-  const renderPrintCard = useCallback(() => {
+  const buildPrintCard = useCallback((pageCountOverride?: number | null) => {
     const fieldsToDisplay = printableFieldsForTemplate.filter((field: any) => {
       const selected = selectedPrintFields[selectedTemplateId] || [];
       return selected.length === 0 || selected.includes(field.key);
@@ -1734,7 +1729,11 @@ export const usePrintManager = ({
       );
       const effectivePageCount = Math.max(
         1,
-        printMode && forcedPrintPageCount ? forcedPrintPageCount : renderedPageCount
+        typeof pageCountOverride === 'number'
+          ? pageCountOverride
+          : printMode && forcedPrintPageCount
+            ? forcedPrintPageCount
+            : renderedPageCount
       );
       const pageIndexes = Array.from({ length: effectivePageCount }, (_value, index) => index);
 
@@ -1936,6 +1935,9 @@ export const usePrintManager = ({
     formatPrintValue,
   ]);
 
+  const renderPrintCard = useCallback(() => buildPrintCard(), [buildPrintCard]);
+  buildPrintCardRef.current = buildPrintCard;
+
   useEffect(() => {
     if (!isPrintModalOpen && !printMode) return;
     const dependencyKey = `${moduleId}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}`;
@@ -1994,6 +1996,7 @@ export const usePrintManager = ({
     openPrintModal,
     closePrintModal,
     handlePrint,
+    preparePrint,
     handleTogglePrintField,
     handleSavePrintFields,
     refreshTemplates,

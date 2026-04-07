@@ -1,10 +1,9 @@
 ﻿import React from "react";
-import { Button, Input, Segmented, Tooltip } from "antd";
+import { Input, Segmented } from "antd";
 import {
   AppstoreOutlined,
   ColumnWidthOutlined,
   EnvironmentOutlined,
-  ReloadOutlined,
   TableOutlined,
 } from "@ant-design/icons";
 import { ViewMode } from "../../types";
@@ -27,7 +26,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   setViewMode,
   searchTerm,
   onSearchChange,
-  onRefresh,
+  onRefresh: _onRefresh,
   kanbanEnabled = false,
   mapEnabled = false,
   kanbanGroupBy,
@@ -35,7 +34,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onKanbanGroupChange,
 }) => {
   return (
-    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
+    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
       <div className="flex items-center gap-2 flex-1">
         <Input.Search
           placeholder="جستجو..."
@@ -44,9 +43,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
           className="max-w-md"
           allowClear
         />
-        <Tooltip title="تازه سازی">
-          <Button icon={<ReloadOutlined />} onClick={onRefresh} />
-        </Tooltip>
       </div>
 
       <div className="flex w-full md:w-auto flex-col md:flex-row md:items-center gap-2">

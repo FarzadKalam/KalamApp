@@ -23,9 +23,12 @@ type AutomationActor = {
   fullName?: string | null;
 };
 
+type ProcessAutomationEvent = 'create' | 'update';
+
 type ProcessAutomationRunArgs = {
   task: Record<string, any>;
-  previousStatus?: string | null;
+  event: ProcessAutomationEvent;
+  previousTask?: Record<string, any> | null;
   currentUser?: AutomationActor | null;
 };
 
@@ -47,6 +50,7 @@ const getTaskAutomationBaseFieldKey = (fieldKey?: string | null) =>
 
 const normalizeTaskStatus = (value: unknown) => String(value || '').trim().toLowerCase();
 const COMPLETED_TASK_STATUSES = new Set(['done', 'completed']);
+const PROCESS_AUTOMATION_LOG_RUN_TYPE = 'process_automation';
 
 const parseRecurrenceInfo = (value: any): Record<string, any> => {
   if (value && typeof value === 'object') return value;
@@ -410,18 +414,15 @@ const insertAutomationNote = async (
   if (error) throw error;
 };
 
-export const runProcessAutomationsForTaskStatusChange = async ({
+export const runProcessAutomationsForTaskEvent = async ({
   task,
-  previousStatus = null,
+  event,
+  previousTask = null,
   currentUser = null,
 }: ProcessAutomationRunArgs) => {
   const recurrence = parseRecurrenceInfo(task?.recurrence_info);
   const rules = normalizeProcessAutomationRules(recurrence?.process_automation_rules);
   if (rules.length === 0) return;
-
-  const nextStatus = normalizeTaskStatus(task?.status);
-  const previousNormalizedStatus = normalizeTaskStatus(previousStatus);
-  if (!nextStatus || nextStatus === previousNormalizedStatus) return;
 
   let siblingTasks: Record<string, any>[] | null = null;
   let sourceRecordContext: { moduleId: string; record: Record<string, any> | null } | null | undefined;
@@ -442,27 +443,19 @@ export const runProcessAutomationsForTaskStatusChange = async ({
     if (rule?.is_active === false) return false;
 
     const triggerType = String(rule?.trigger_type || '').trim();
-    let matchedTrigger = false;
+    if (triggerType === 'interval' || triggerType === 'previous_stage_completed') return false;
+    if (triggerType === 'on_create' && event !== 'create') return false;
+    if (triggerType === 'on_upsert' && !['create', 'update'].includes(event)) return false;
 
-    if (triggerType === 'current_stage_completed') {
-      matchedTrigger = isTaskCompleted(task?.status);
-    } else if (triggerType === 'current_stage_in_progress') {
-      matchedTrigger = nextStatus === 'in_progress';
-    } else if (triggerType === 'process_started') {
-      const siblings = await getSiblingTasks();
-      const currentSort = Number(task?.sort_order || 0);
-      const hasPreviousTask = siblings.some((row) => Number(row?.sort_order || 0) < currentSort);
-      matchedTrigger = !hasPreviousTask && nextStatus === 'in_progress';
-    } else {
-      matchedTrigger = false;
+    const executionMode = String(rule?.execution_mode || 'every_match').trim();
+    const taskId = String(task?.id || '').trim();
+    if (executionMode === 'first_match' && taskId) {
+      const alreadyExecuted = await hasProcessAutomationLogForTask(String(rule?.id || ''), taskId);
+      if (alreadyExecuted) return false;
     }
 
-    if (!matchedTrigger) return false;
-
     const sourceContext = await getSourceRecordContext();
-    const previousTaskRecord = previousNormalizedStatus
-      ? withProcessTaskCustomFieldValues({ ...task, status: previousStatus })
-      : null;
+    const previousTaskRecord = previousTask ? withProcessTaskCustomFieldValues(previousTask) : null;
 
     return evaluateProcessAutomationConditions({
       conditionsAll: rule?.conditions_all || [],
@@ -475,17 +468,29 @@ export const runProcessAutomationsForTaskStatusChange = async ({
     });
   };
 
-  const runRulesForTask = async (targetTask: Record<string, any>, candidateRules: ProcessAutomationRule[]) => {
+  const runRulesForTask = async (
+    targetTask: Record<string, any>,
+    candidateRules: ProcessAutomationRule[],
+    targetEvent: ProcessAutomationEvent | 'previous_stage_completed',
+    targetPreviousTask: Record<string, any> | null = null
+  ) => {
     if (candidateRules.length === 0) return;
 
     for (const rule of candidateRules) {
+      const targetTaskId = String(targetTask?.id || '').trim();
       try {
+        const executionMode = String(rule?.execution_mode || 'every_match').trim();
+        if (executionMode === 'first_match' && targetTaskId) {
+          const alreadyExecuted = await hasProcessAutomationLogForTask(String(rule?.id || ''), targetTaskId);
+          if (alreadyExecuted) continue;
+        }
+
         const sourceContext = await fetchSourceRecord(targetTask);
         if (!await evaluateProcessAutomationConditions({
           conditionsAll: rule?.conditions_all || [],
           conditionsAny: rule?.conditions_any || [],
           taskCurrentRecord: withProcessTaskCustomFieldValues(targetTask),
-          taskPreviousRecord: null,
+          taskPreviousRecord: targetPreviousTask ? withProcessTaskCustomFieldValues(targetPreviousTask) : null,
           sourceCurrentRecord: buildSourceRecordWithProcessLinks(targetTask, sourceContext?.record || null),
           sourcePreviousRecord: null,
           sourceModuleId: sourceContext?.moduleId || null,
@@ -575,8 +580,28 @@ export const runProcessAutomationsForTaskStatusChange = async ({
             actionRecord
           );
         }
+
+        await logProcessAutomationRun({
+          rule,
+          task: targetTask,
+          event: targetEvent,
+          status: 'success',
+          currentUser,
+        });
       } catch (error) {
         console.warn('Process automation rule failed', rule?.id, error);
+        try {
+          await logProcessAutomationRun({
+            rule,
+            task: targetTask,
+            event: targetEvent,
+            status: 'failed',
+            currentUser,
+            errorMessage: String((error as any)?.message || error || 'process automation failed'),
+          });
+        } catch (logError) {
+          console.warn('Process automation log failed', rule?.id, logError);
+        }
       }
     }
   };
@@ -587,9 +612,10 @@ export const runProcessAutomationsForTaskStatusChange = async ({
       currentTaskRules.push(rule);
     }
   }
-  await runRulesForTask(task, currentTaskRules);
+  await runRulesForTask(task, currentTaskRules, event, previousTask);
 
-  if (isTaskCompleted(task?.status)) {
+  const didBecomeCompleted = isTaskCompleted(task?.status) && !isTaskCompleted(previousTask?.status);
+  if (didBecomeCompleted) {
     const siblings = await getSiblingTasks();
     const currentSort = Number(task?.sort_order || 0);
     const nextTask = siblings
@@ -599,8 +625,72 @@ export const runProcessAutomationsForTaskStatusChange = async ({
       const nextTaskRules = normalizeProcessAutomationRules(parseRecurrenceInfo(nextTask?.recurrence_info)?.process_automation_rules)
         .filter((rule) => rule?.is_active !== false && rule?.trigger_type === 'previous_stage_completed');
       if (nextTaskRules.length > 0) {
-        await runRulesForTask(nextTask, nextTaskRules);
+        await runRulesForTask(nextTask, nextTaskRules, 'previous_stage_completed', null);
       }
     }
   }
+};
+
+const hasProcessAutomationLogForTask = async (ruleId: string, taskId: string) => {
+  const normalizedRuleId = String(ruleId || '').trim();
+  const normalizedTaskId = String(taskId || '').trim();
+  if (!normalizedRuleId || !normalizedTaskId) return false;
+
+  const { data, error } = await supabase
+    .from('workflow_logs')
+    .select('id')
+    .eq('run_type', PROCESS_AUTOMATION_LOG_RUN_TYPE)
+    .eq('status', 'success')
+    .eq('module_id', 'tasks')
+    .eq('record_id', normalizedTaskId)
+    .contains('details', { process_automation_rule_id: normalizedRuleId })
+    .limit(1);
+
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+};
+
+const logProcessAutomationRun = async ({
+  rule,
+  task,
+  event,
+  status,
+  currentUser = null,
+  errorMessage,
+}: {
+  rule: ProcessAutomationRule;
+  task: Record<string, any>;
+  event: ProcessAutomationEvent | 'previous_stage_completed';
+  status: 'success' | 'failed';
+  currentUser?: AutomationActor | null;
+  errorMessage?: string;
+}) => {
+  const taskId = String(task?.id || '').trim() || null;
+  await supabase.from('workflow_logs').insert({
+    run_type: PROCESS_AUTOMATION_LOG_RUN_TYPE,
+    status,
+    module_id: 'tasks',
+    record_id: taskId,
+    message: errorMessage || null,
+    details: {
+      process_automation_rule_id: String(rule?.id || '').trim() || null,
+      process_automation_trigger_type: String(rule?.trigger_type || '').trim() || null,
+      process_automation_event: event,
+      action_count: Array.isArray(rule?.actions) ? rule.actions.length : 0,
+      actor_id: String(currentUser?.id || '').trim() || null,
+    },
+  });
+};
+
+export const runProcessAutomationsForTaskStatusChange = async ({
+  task,
+  currentUser = null,
+  previousTask = null,
+}: Omit<ProcessAutomationRunArgs, 'event'>) => {
+  await runProcessAutomationsForTaskEvent({
+    task,
+    event: 'update',
+    previousTask,
+    currentUser,
+  });
 };

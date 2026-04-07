@@ -5,7 +5,7 @@ import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase"
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
-import { FieldType, ModuleDefinition, SavedView, ViewMode } from "../types";
+import { FieldType, ModuleDefinition, ModuleField, SavedView, ViewMode } from "../types";
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
@@ -36,17 +36,21 @@ import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { syncRecordTags } from "../utils/recordTags";
 import { mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from "../utils/moduleOptionSnapshot";
-import { buildModuleListOptionPlan, fetchModuleListRelationOptions } from "../utils/moduleListOptions";
+import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleListVisibleFields } from "../utils/moduleListOptions";
 import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
 import { isWebFormTargetModule } from "../utils/webForms";
 import GoalsManager from "../components/goals/GoalsManager";
 import GoalProgressSlider from "../components/goals/GoalProgressSlider";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
+import { toPersianNumber } from "../utils/persianNumberFormatter";
 
-const getDefaultGridPageSize = () => 16;
-const getGridLoadStep = () => 16;
+const getDefaultGridPageSize = () => 15;
+const getGridLoadStep = () => 15;
+const getDefaultKanbanPageSize = () => 15;
+const getKanbanLoadStep = () => 15;
 type ColumnFiltersState = Record<string, FilterValue | null>;
 type BulkBuildTarget = "product_bundles" | "price_lists" | null;
+type BulkBuildSourceModule = "products" | "billboards";
 
 const parseColumnRangeFilter = (raw: unknown): { from?: string | number; to?: string | number } => {
   if (raw === undefined || raw === null || raw === "") return {};
@@ -95,39 +99,94 @@ const getDefaultSorters = (moduleConfig?: ModuleDefinition | null): CrudSort[] =
   return [{ field: hasUpdatedAt ? "updated_at" : "created_at", order: "desc" }];
 };
 
+const normalizeCrudSorters = (sorters?: CrudSort[] | null): CrudSort[] =>
+  (Array.isArray(sorters) ? sorters : [])
+    .filter((item) => String(item?.field || "").trim() && (item?.order === "asc" || item?.order === "desc"))
+    .map((item) => ({
+      field: String(item.field),
+      order: item.order,
+    }));
+
+const ensureStableCrudSorters = (sorters?: CrudSort[] | null): CrudSort[] => {
+  const normalized = normalizeCrudSorters(sorters);
+  if (normalized.some((item) => String(item.field) === "id")) {
+    return normalized;
+  }
+  const fallbackOrder = normalized[0]?.order === "asc" ? "asc" : "desc";
+  return [...normalized, { field: "id", order: fallbackOrder }];
+};
+
+const stripStableIdSorter = (sorters?: CrudSort[] | null): CrudSort[] => {
+  const normalized = normalizeCrudSorters(sorters);
+  if (normalized.length > 1 && String(normalized[normalized.length - 1]?.field || "") === "id") {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+};
+
+const areCrudSortersEqual = (left?: CrudSort[] | null, right?: CrudSort[] | null) =>
+  JSON.stringify(normalizeCrudSorters(left)) === JSON.stringify(normalizeCrudSorters(right));
+
 const toHeaderOnlyModule = (module: ModuleDefinition, hiddenBlockId: string): ModuleDefinition => ({
   ...module,
   blocks: (module.blocks || []).filter((block) => block.id !== hiddenBlockId),
 });
 
-const buildPackageItemsFromProducts = (records: any[]) =>
+const getBulkBuildSourceModule = (moduleId?: string | null): BulkBuildSourceModule | null => {
+  if (moduleId === "products" || moduleId === "billboards") {
+    return moduleId;
+  }
+  return null;
+};
+
+const getCatalogRecordBuildMeta = (record: any, sourceModule: BulkBuildSourceModule) => {
+  const isBillboard = sourceModule === "billboards";
+  const unitPrice = (() => {
+    if (!isBillboard) {
+      return Number(record?.sell_price || 0) || 0;
+    }
+    const dailyRent = Number(record?.daily_rent || 0) || 0;
+    const monthlyRent = Number(record?.monthly_rent || 0) || 0;
+    const printCost = Number(record?.print_cost || 0) || 0;
+    return dailyRent || monthlyRent || printCost;
+  })();
+
+  return {
+    product_id: record?.id || null,
+    product_name: record?.name || record?.title || record?.id || "-",
+    product_type: isBillboard ? "service" : record?.product_type || "goods",
+    main_unit: isBillboard ? "روز" : record?.main_unit || "عدد",
+    unit_price: unitPrice,
+  };
+};
+
+const buildPackageItemsFromRecords = (records: any[], sourceModule: BulkBuildSourceModule) =>
   records
     .map((record: any) => {
+      const meta = getCatalogRecordBuildMeta(record, sourceModule);
       const quantity = 1;
-      const unitPrice = Number(record?.sell_price || 0) || 0;
       return {
-        product_id: record?.id || null,
-        product_name: record?.name || record?.title || record?.id || "-",
-        product_type: record?.product_type || "goods",
+        ...meta,
         quantity,
-        main_unit: record?.main_unit || "عدد",
-        unit_price: unitPrice,
         discount: 0,
         discount_type: "amount",
-        total_price: quantity * unitPrice,
+        total_price: quantity * meta.unit_price,
       };
     })
     .filter((item: any) => item.product_id);
 
-const buildPriceListItemsFromProducts = (records: any[]) => {
+const buildPriceListItemsFromRecords = (records: any[], sourceModule: BulkBuildSourceModule) => {
   const currencyLabel = readCurrencyConfig().label || "";
   return records
-    .map((record: any) => ({
-      product_id: record?.id || null,
-      price: Number(record?.sell_price || 0) || 0,
-      currency_label: currencyLabel,
-      unit_name: record?.main_unit || "",
-    }))
+    .map((record: any) => {
+      const meta = getCatalogRecordBuildMeta(record, sourceModule);
+      return {
+        product_id: meta.product_id,
+        price: meta.unit_price,
+        currency_label: currencyLabel,
+        unit_name: meta.main_unit || "",
+      };
+    })
     .filter((item: any) => item.product_id);
 };
 
@@ -185,7 +244,7 @@ const ModuleListContentSkeleton: React.FC<{ viewMode: ViewMode }> = ({ viewMode 
   }
 
   return (
-    <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 h-full overflow-hidden p-4">
+    <div className="bg-white dark:bg-[#1a1a1a] rounded-[1.5rem] shadow-sm border border-gray-200 dark:border-gray-800 h-full overflow-hidden p-4">
       <Skeleton active title={{ width: "20%" }} paragraph={{ rows: 10 }} />
     </div>
   );
@@ -275,6 +334,7 @@ export const ModuleListRefine: React.FC<{
   const [tagsMap, setTagsMap] = useState<Record<string, any[]>>({});  // ✅ Map of record id to tags
   const [tagsLoading, setTagsLoading] = useState(false);
   const [gridPageSize, setGridPageSize] = useState<number>(() => getDefaultGridPageSize()); // ✅ Grid pagination
+  const [kanbanVisibleCounts, setKanbanVisibleCounts] = useState<Record<string, number>>({});
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
@@ -295,11 +355,17 @@ export const ModuleListRefine: React.FC<{
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
   const hasInitializedModuleStateRef = useRef(false);
+  const searchSyncInitializedRef = useRef(false);
+  const autoSortSyncDoneRef = useRef(false);
+  const lastRequestedPageSizeRef = useRef<number | null>(null);
+  const utilitySlotRef = useRef<HTMLDivElement | null>(null);
+  const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
+  const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
   const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
 
-  const { tableProps, tableQueryResult, setFilters, sorters, setSorters, setCurrent } = useTable({
+  const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
     resource: resolvedModuleId,
-    sorters: { initial: defaultSorters },
+    sorters: { initial: ensureStableCrudSorters(defaultSorters) },
     pagination: { pageSize: 10 }, 
     queryOptions: {
       enabled: !!resolvedModuleId,
@@ -317,6 +383,14 @@ export const ModuleListRefine: React.FC<{
   const queryPending = loading || tableQueryResult.isFetching;
   const allData = tableQueryResult.data?.data || [];
   const hasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
+  const stableSorters = useMemo(
+    () => ensureStableCrudSorters((sorters as CrudSort[])?.length ? (sorters as CrudSort[]) : defaultSorters),
+    [defaultSorters, sorters]
+  );
+  const visibleSorters = useMemo(
+    () => stripStableIdSorter(stableSorters),
+    [stableSorters]
+  );
   const selectedRows = useMemo(
     () =>
       selectedRowKeys
@@ -330,6 +404,44 @@ export const ModuleListRefine: React.FC<{
     return selectedRows.every((row: any) => String(row?.status || '') === 'pending');
   }, [resolvedModuleId, selectedRows]);
   const showContentSkeleton = queryPending && !hasQueryResult;
+  const bulkBuildSourceModule = getBulkBuildSourceModule(resolvedModuleId);
+  const totalFilteredRecordCount = useMemo(
+    () => {
+      const paginationConfig = tableProps?.pagination as { total?: number } | undefined;
+      const paginationTotal = Number(paginationConfig?.total || 0);
+      return Number(paginationTotal || tableQueryResult.data?.total || 0);
+    },
+    [tableProps?.pagination, tableQueryResult.data?.total]
+  );
+
+  useEffect(() => {
+    autoSortSyncDoneRef.current = false;
+    lastRequestedPageSizeRef.current = null;
+  }, [resolvedModuleId, viewMode]);
+
+  useEffect(() => {
+    if (!resolvedModuleId) return;
+    const isListView = viewMode === ViewMode.LIST;
+    const fallbackPageSize = isListView ? 10 : getDefaultGridPageSize();
+    const desiredPageSize = isListView
+      ? 10
+      : Math.max(Number(tableQueryResult.data?.total || 0), fallbackPageSize);
+    const currentPageSize = Number(pageSize || 0);
+
+    if (!desiredPageSize || currentPageSize === desiredPageSize || lastRequestedPageSizeRef.current === desiredPageSize) return;
+    lastRequestedPageSizeRef.current = desiredPageSize;
+    if (current !== 1) {
+      setCurrent(1);
+    }
+    setPageSize(desiredPageSize);
+  }, [current, pageSize, resolvedModuleId, setCurrent, setPageSize, tableQueryResult.data?.total, viewMode]);
+
+  useEffect(() => {
+    if (autoSortSyncDoneRef.current) return;
+    autoSortSyncDoneRef.current = true;
+    if (areCrudSortersEqual(sorters as CrudSort[], stableSorters)) return;
+    setSorters(stableSorters);
+  }, [setSorters, sorters, stableSorters]);
 
   useEffect(() => {
     if (!hasInitializedModuleStateRef.current) {
@@ -354,6 +466,7 @@ export const ModuleListRefine: React.FC<{
     setListVisibleRowKeys(null);
     setVisibleColumns(restoredState?.visibleColumns || []);
     setGridPageSize(getDefaultGridPageSize());
+    setKanbanVisibleCounts({});
     setKanbanGroupBy("");
     setSearchTerm(restoredState?.searchTerm || "");
     setViewFiltersState(restoredViewFilters);
@@ -377,6 +490,8 @@ export const ModuleListRefine: React.FC<{
     setCanShowGoalCards(true);
     setListPrintRows([]);
     setBulkBuildTarget(null);
+    setHasListInitialPaintCompleted(false);
+    searchSyncInitializedRef.current = false;
     applyCombinedFilters(
       restoredViewFilters,
       restoredState?.searchTerm || "",
@@ -384,7 +499,7 @@ export const ModuleListRefine: React.FC<{
       false,
     );
     setCurrent?.(1);
-    setSorters(restoredSorters);
+    setSorters(ensureStableCrudSorters(restoredSorters));
   }, [
     cachedOptionSnapshot,
     hasCachedModuleOptions,
@@ -498,6 +613,15 @@ export const ModuleListRefine: React.FC<{
   const categoryField = resolvedModuleId === 'tasks'
     ? 'related_to_module'
     : moduleConfig?.fields.find(f => f.key === 'category' || f.key === 'product_category' || f.key === 'business_name')?.key;
+  const visibleListFieldKeys = useMemo(
+    () => getModuleListVisibleFields(moduleConfig, visibleColumns).map((field) => String(field?.key || "").trim()).filter(Boolean),
+    [moduleConfig, visibleColumns]
+  );
+  const shouldLoadTags = useMemo(() => {
+    if (!tagsField) return false;
+    if (viewMode !== ViewMode.LIST) return true;
+    return visibleListFieldKeys.includes(String(tagsField));
+  }, [tagsField, viewMode, visibleListFieldKeys]);
 
   // ✅ Merge tags into allData
   const accessibleData = useMemo(() => {
@@ -523,7 +647,7 @@ export const ModuleListRefine: React.FC<{
     () => accessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
     [accessibleData]
   );
-  const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (!optionsReady || tagsLoading);
+  const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (!optionsReady || (shouldLoadTags && tagsLoading));
   const effectiveRelationOptions = useMemo(() => {
     if (resolvedModuleId !== "tasks") return relationOptions;
     const merged: Record<string, any[]> = { ...relationOptions };
@@ -633,7 +757,10 @@ export const ModuleListRefine: React.FC<{
       isActive = false;
     };
   }, [enrichedData, resolvedModuleId]);
-  const showListSkeleton = false;
+  const showListSkeleton =
+    viewMode === ViewMode.LIST &&
+    !hasListInitialPaintCompleted &&
+    (queryPending || deferredListDataLoading);
   const gridLoadStep = getGridLoadStep();
 
   // ✅ Grid view - paginated data
@@ -653,11 +780,31 @@ export const ModuleListRefine: React.FC<{
     return toKeys(enrichedData);
   }, [enrichedData, gridData, listVisibleRowKeys, viewMode]);
 
-  const allVisibleRowsSelected = useMemo(() => {
-    if (visibleSelectableRowKeys.length === 0) return false;
-    const selectedSet = new Set(selectedRowKeys.map((key) => String(key)));
-    return visibleSelectableRowKeys.every((key) => selectedSet.has(String(key)));
-  }, [selectedRowKeys, visibleSelectableRowKeys]);
+  useEffect(() => {
+    if (viewMode !== ViewMode.LIST) return;
+    if (queryPending || deferredListDataLoading) return;
+    setHasListInitialPaintCompleted(true);
+  }, [deferredListDataLoading, queryPending, viewMode]);
+
+  useEffect(() => {
+    if (!canShowGoalCards || selectedRowKeys.length > 0) return;
+    const node = utilitySlotRef.current;
+    if (!node) return;
+
+    const measure = () => {
+      const nextHeight = Math.round(node.getBoundingClientRect().height);
+      if (nextHeight > 0) {
+        setUtilitySlotHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+      }
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [canShowGoalCards, selectedRowKeys.length]);
 
   const handleRowSelectionChange = useCallback((nextKeys: React.Key[], nextRows?: any[]) => {
     setSelectedRowKeys(nextKeys);
@@ -687,13 +834,13 @@ export const ModuleListRefine: React.FC<{
       visibleColumns,
       viewFilters: viewFiltersState,
       columnFilters,
-      sorters: sorters as CrudSort[],
+      sorters: visibleSorters,
     };
     window.localStorage.setItem(
       buildModuleListStateKey(resolvedModuleId, storageKeySuffix),
       JSON.stringify(stateToPersist)
     );
-  }, [columnFilters, currentView, resolvedModuleId, searchTerm, sorters, storageKeySuffix, viewFiltersState, viewMode, visibleColumns]);
+  }, [columnFilters, currentView, resolvedModuleId, searchTerm, storageKeySuffix, viewFiltersState, viewMode, visibleColumns, visibleSorters]);
 
   // ✅ اضافه شد: Fetch dynamic و relation options
   useEffect(() => {
@@ -716,16 +863,20 @@ export const ModuleListRefine: React.FC<{
       }
 
       try {
-        const directory = await fetchAssigneeDirectory(supabase);
+        const directoryPromise = fetchAssigneeDirectory(supabase);
+        const immediateDynamicPromise =
+          optionPlan.immediateDynamicCategories.length > 0
+            ? fetchDynamicOptionsMap(supabase, optionPlan.immediateDynamicCategories)
+            : Promise.resolve({} as Record<string, any[]>);
+        const [directory, immediateDynamicOptions] = await Promise.all([
+          directoryPromise,
+          immediateDynamicPromise,
+        ]);
         if (!isActive) return;
 
         setAllUsers(directory.users);
         setAllRoles(directory.roles);
 
-        const immediateDynamicOptions =
-          optionPlan.immediateDynamicCategories.length > 0
-            ? await fetchDynamicOptionsMap(supabase, optionPlan.immediateDynamicCategories)
-            : {};
         const immediateRelationOptions = await fetchModuleListRelationOptions(
           supabase,
           optionPlan.immediateRelationFields,
@@ -801,7 +952,7 @@ export const ModuleListRefine: React.FC<{
     };
   }, [hasCachedModuleOptions, moduleConfig, resolvedModuleId, visibleColumns]);
   useEffect(() => {
-    if (!tagsField || !resolvedModuleId || accessibleRecordIds.length === 0) {
+    if (!tagsField || !shouldLoadTags || !resolvedModuleId || accessibleRecordIds.length === 0) {
       setTagsMap({});
       setTagsLoading(false);
       return;
@@ -833,7 +984,7 @@ export const ModuleListRefine: React.FC<{
     return () => {
       isActive = false;
     };
-  }, [accessibleRecordIds, resolvedModuleId, tagsField]);
+  }, [accessibleRecordIds, resolvedModuleId, shouldLoadTags, tagsField]);
 
   const searchTargetField = useMemo(() => {
     if (!moduleConfig) return null;
@@ -911,14 +1062,91 @@ export const ModuleListRefine: React.FC<{
     return bubbles;
   }, [columnFilters, currentView?.config?.filters, dynamicOptions, moduleConfig, relationOptions, searchTerm, viewFiltersState]);
 
-  const clearExternalFilters = useCallback(() => {
+  const columnFilterBubbles = useMemo(() => {
+    if (!moduleConfig) return [];
+
+    return Object.entries(columnFilters || {})
+      .flatMap(([fieldKey, values]) => {
+        if (!Array.isArray(values) || values.length === 0) return [];
+
+        if (fieldKey === "assignee_id") {
+          return values
+            .map((raw) => String(raw ?? "").trim())
+            .filter(Boolean)
+            .map((rawValue) => {
+              const user = allUsers.find((item: any) => String(item?.id || "") === rawValue);
+              const role = allRoles.find((item: any) => String(item?.id || "") === rawValue);
+              const label = user?.display_name || user?.full_name || role?.title || rawValue;
+              return {
+                id: `column:${fieldKey}:${rawValue}`,
+                label: `مسئول: ${label}`,
+                onRemove: () => {
+                  const nextFilters = { ...columnFilters };
+                  const current = Array.isArray(nextFilters[fieldKey]) ? nextFilters[fieldKey] : [];
+                  const nextValues = current.filter((item) => String(item) !== rawValue);
+                  nextFilters[fieldKey] = nextValues.length > 0 ? nextValues : null;
+                  setColumnFilters(nextFilters);
+                  applyCombinedFilters(viewFiltersState, searchTerm, nextFilters);
+                },
+              };
+            });
+        }
+
+        const field = moduleConfig.fields.find((item) => item.key === fieldKey);
+        if (!field) return [];
+        const fieldLabel = field?.labels?.fa || fieldKey;
+
+        return values
+          .map((raw) => String(raw ?? "").trim())
+          .filter(Boolean)
+          .map((rawValue) => {
+            let valueLabel = rawValue;
+            if (
+              field.type === FieldType.PRICE ||
+              field.type === FieldType.DATE ||
+              field.type === FieldType.TIME ||
+              field.type === FieldType.DATETIME
+            ) {
+              const range = parseColumnRangeFilter(rawValue);
+              const from = range.from !== undefined && range.from !== "" ? String(range.from) : "...";
+              const to = range.to !== undefined && range.to !== "" ? String(range.to) : "...";
+              valueLabel = `${from} تا ${to}`;
+            } else {
+              valueLabel = String(
+                getSingleOptionLabel(field, rawValue, dynamicOptions, effectiveRelationOptions) || rawValue
+              );
+            }
+            return {
+              id: `column:${fieldKey}:${rawValue}`,
+              label: `${fieldLabel}: ${valueLabel}`,
+              onRemove: () => {
+                const nextFilters = { ...columnFilters };
+                const current = Array.isArray(nextFilters[fieldKey]) ? nextFilters[fieldKey] : [];
+                const nextValues = current.filter((item) => String(item) !== rawValue);
+                nextFilters[fieldKey] = nextValues.length > 0 ? nextValues : null;
+                setColumnFilters(nextFilters);
+                applyCombinedFilters(viewFiltersState, searchTerm, nextFilters);
+              },
+            };
+          });
+      });
+  }, [allRoles, allUsers, columnFilters, dynamicOptions, effectiveRelationOptions, moduleConfig, searchTerm, viewFiltersState]);
+
+  const allListFilterBubbles = useMemo(
+    () => [...activeFilterBubbles, ...columnFilterBubbles],
+    [activeFilterBubbles, columnFilterBubbles]
+  );
+  const hasListFilterBubbles = allListFilterBubbles.length > 0;
+
+  const clearAllListFilters = useCallback(() => {
     setSearchTerm("");
     setViewFiltersState([]);
+    setColumnFilters({});
     if ((currentView?.config?.filters || []).length > 0) {
       setCurrentView(null);
     }
-    applyCombinedFilters([], "", columnFilters);
-  }, [columnFilters, currentView?.config?.filters]);
+    applyCombinedFilters([], "", {});
+  }, [currentView?.config?.filters]);
 
   useEffect(() => {
     if (viewMode !== ViewMode.KANBAN) return;
@@ -927,6 +1155,10 @@ export const ModuleListRefine: React.FC<{
     const defaultField = availableGroupFields.find((f) => f.type === FieldType.STATUS) || availableGroupFields[0];
     setKanbanGroupBy(defaultField.key);
   }, [viewMode, kanbanGroupBy, availableGroupFields]);
+
+  useEffect(() => {
+    setKanbanVisibleCounts({});
+  }, [kanbanGroupBy, resolvedModuleId, viewMode]);
 
   useEffect(() => {
     if (viewMode !== ViewMode.MAP) return;
@@ -1055,6 +1287,104 @@ export const ModuleListRefine: React.FC<{
     return mergedFilters;
   }
 
+  function buildViewCrudFilters(nextViewFiltersConfig: any[]): CrudFilters {
+    if (!moduleConfig || !Array.isArray(nextViewFiltersConfig)) return [];
+
+    const buildDateBoundaryValue = (
+      field: ModuleField | undefined,
+      date: Date,
+      boundary: "start" | "end"
+    ) => {
+      const normalized = new Date(date);
+      if (boundary === "start") {
+        normalized.setHours(0, 0, 0, 0);
+      } else {
+        normalized.setHours(23, 59, 59, 999);
+      }
+
+      if (field?.type === FieldType.DATE) {
+        return normalized.toISOString().slice(0, 10);
+      }
+      return normalized.toISOString();
+    };
+
+    const filters: CrudFilters = [];
+
+    nextViewFiltersConfig.forEach((rawFilter: any) => {
+      const fieldKey = String(rawFilter?.field || "").trim();
+      const operator = String(rawFilter?.operator || "").trim();
+      const value = rawFilter?.value;
+      const field = moduleConfig.fields.find((item) => String(item?.key || "").trim() === fieldKey);
+      if (!fieldKey || !operator || !field) return;
+
+      switch (operator) {
+        case "eq":
+        case "contains":
+        case "gt":
+        case "gte":
+        case "lt":
+        case "lte":
+          filters.push({ field: fieldKey, operator, value } as any);
+          return;
+        case "neq":
+          filters.push({ field: fieldKey, operator: "ne", value } as any);
+          return;
+        case "not_contains":
+          filters.push({ field: fieldKey, operator: "ncontains", value } as any);
+          return;
+        case "starts_with":
+          filters.push({ field: fieldKey, operator: "startswith", value } as any);
+          return;
+        case "ends_with":
+          filters.push({ field: fieldKey, operator: "endswith", value } as any);
+          return;
+        case "in": {
+          const values = Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [];
+          if (values.length > 0) {
+            filters.push({ field: fieldKey, operator: "in", value: values } as any);
+          }
+          return;
+        }
+        case "not_in": {
+          const values = Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [];
+          if (values.length > 0) {
+            filters.push({ field: fieldKey, operator: "nin", value: values } as any);
+          }
+          return;
+        }
+        case "is_true":
+          filters.push({ field: fieldKey, operator: "eq", value: true } as any);
+          return;
+        case "is_false":
+          filters.push({ field: fieldKey, operator: "eq", value: false } as any);
+          return;
+        case "is_null":
+          filters.push({ field: fieldKey, operator: "null", value: null } as any);
+          return;
+        case "not_null":
+          filters.push({ field: fieldKey, operator: "nnull", value: null } as any);
+          return;
+        case "is_today":
+        case "is_yesterday":
+        case "is_tomorrow": {
+          const baseDate = new Date();
+          baseDate.setHours(0, 0, 0, 0);
+          if (operator === "is_yesterday") baseDate.setDate(baseDate.getDate() - 1);
+          if (operator === "is_tomorrow") baseDate.setDate(baseDate.getDate() + 1);
+          filters.push(
+            { field: fieldKey, operator: "gte", value: buildDateBoundaryValue(field, baseDate, "start") } as any,
+            { field: fieldKey, operator: "lte", value: buildDateBoundaryValue(field, baseDate, "end") } as any
+          );
+          return;
+        }
+        default:
+          return;
+      }
+    });
+
+    return filters;
+  }
+
   function applyCombinedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, resetPage = true) {
     const mergedFilters = buildMergedFilters(nextViewFilters, nextSearchTerm, nextColumnFilters);
     setFilters(mergedFilters, "replace");
@@ -1080,11 +1410,7 @@ export const ModuleListRefine: React.FC<{
     setCurrentView(view);
     const refineFilters: CrudFilters =
       config && config.filters && Array.isArray(config.filters) && config.filters.length > 0
-        ? config.filters.map((f: any) => ({
-            field: f.field,
-            operator: f.operator || 'eq',
-            value: f.value
-          }))
+        ? buildViewCrudFilters(config.filters)
         : [];
     setViewFiltersState(refineFilters);
     applyCombinedFilters(refineFilters, searchTerm, columnFilters);
@@ -1099,6 +1425,10 @@ export const ModuleListRefine: React.FC<{
 
   // ✅ FIX: سرچ فقط فیلتر سرچ را اضافه/حذف می‌کند و به فیلترهای View دست نمی‌زند
   useEffect(() => {
+    if (!searchSyncInitializedRef.current) {
+      searchSyncInitializedRef.current = true;
+      return;
+    }
     const handle = window.setTimeout(() => {
       applyCombinedFilters(viewFiltersState, searchTerm, columnFilters);
     }, 300);
@@ -1111,11 +1441,6 @@ export const ModuleListRefine: React.FC<{
     }
     tableProps.onChange?.(pagination, tableFilters, sorter, extra);
   }, [tableProps]);
-
-  const handleSelectAllVisible = useCallback(() => {
-    if (!visibleSelectableRowKeys.length) return;
-    setSelectedRowKeys((prev) => Array.from(new Set([...prev, ...visibleSelectableRowKeys])));
-  }, [visibleSelectableRowKeys]);
 
   const handleSelectAllAcrossPages = useCallback(async () => {
     if (!resolvedModuleId || selectAllPagesLoading) return;
@@ -1134,7 +1459,7 @@ export const ModuleListRefine: React.FC<{
         const response = await refineProvider.getList({
           resource: resolvedModuleId,
           pagination: { current: currentPage, pageSize },
-          sorters: sorters as CrudSort[],
+          sorters: stableSorters,
           filters: mergedFilters,
           meta: {
             select: "id,status,assignee_type,assignee_id,assignee_role_id",
@@ -1213,7 +1538,7 @@ export const ModuleListRefine: React.FC<{
     searchTerm,
     selectAllPagesLoading,
     showListMessage,
-    sorters,
+    stableSorters,
     viewFiltersState,
   ]);
 
@@ -1294,18 +1619,18 @@ export const ModuleListRefine: React.FC<{
   }, [bulkBuildTarget]);
 
   const handleBuildRecordFromSelection = useCallback(async (values: any) => {
-    if (!bulkBuildTarget) return;
-    const selectedProducts = await fetchSelectedRecords();
-    if (!selectedProducts.length) {
-      throw new Error("هیچ محصولی برای ساخت رکورد انتخاب نشده است.");
+    if (!bulkBuildTarget || !bulkBuildSourceModule) return;
+    const selectedRecords = await fetchSelectedRecords();
+    if (!selectedRecords.length) {
+      throw new Error("هیچ موردی برای ساخت رکورد انتخاب نشده است.");
     }
 
     const authUser = await getCachedAuthUser(supabase);
     const authUserId = authUser?.id || null;
     const payload =
       bulkBuildTarget === "product_bundles"
-        ? { ...values, products: buildPackageItemsFromProducts(selectedProducts) }
-        : { ...values, items: buildPriceListItemsFromProducts(selectedProducts) };
+        ? { ...values, products: buildPackageItemsFromRecords(selectedRecords, bulkBuildSourceModule) }
+        : { ...values, items: buildPriceListItemsFromRecords(selectedRecords, bulkBuildSourceModule) };
     const auditedPayload = authUserId
       ? { ...payload, created_by: payload.created_by ?? authUserId, updated_by: payload.updated_by ?? authUserId }
       : payload;
@@ -1324,7 +1649,7 @@ export const ModuleListRefine: React.FC<{
     setSelectedRowKeys([]);
     setSelectedRowsMap({});
     await tableQueryResult.refetch();
-  }, [bulkBuildTarget, fetchSelectedRecords, tableQueryResult]);
+  }, [bulkBuildSourceModule, bulkBuildTarget, fetchSelectedRecords, tableQueryResult]);
 
   const handleExportExcel = useCallback(async () => {
     if (!selectedRowKeys.length || !moduleConfig) return;
@@ -1671,29 +1996,102 @@ export const ModuleListRefine: React.FC<{
   }
 
   return (
-    <div className="module-list-page box-border p-3 md:p-6 max-w-[1800px] mx-auto pb-24 md:pb-6 h-full min-h-0 flex flex-col overflow-hidden">
-        <div className="flex flex-col gap-2 mb-4 shrink-0">
-        {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="module-list-page box-border p-3 md:p-6 max-w-[1800px] mx-auto pb-28 md:pb-8 h-full min-h-0 flex flex-col overflow-hidden">
+        <div className="flex flex-col gap-0 mb-1 md:mb-2 shrink-0">
+          {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
+        <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 shrink-0">
             <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
                 <span className="w-2 h-8 bg-leather-500 rounded-full inline-block shrink-0"></span>
                 <span className="truncate">{moduleConfig.titles.fa}</span>
             </h1>
             <Badge
-                count={tableQueryResult.data?.total || 0}
                 overflowCount={999}
-                style={{ backgroundColor: '#f0f0f0', color: '#666', boxShadow: 'none' }}
-            />
+                count={
+                  <span className="inline-flex min-w-[2rem] items-center justify-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600 shadow-none font-['Vazirmatn'] persian-number">
+                    {toPersianNumber(tableQueryResult.data?.total || 0)}
+                  </span>
+                }
+                style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
+                className="module-list-header-count"
+             />
             </div>
 
-            {canShowGoalCards ? (
-              <div className="order-last basis-full pt-2 min-w-0 md:order-none md:-mt-1 md:basis-auto md:pt-0 md:flex md:flex-[0_1_666px] md:items-start md:justify-start md:self-start xl:flex-[0_1_742px]">
-                <div className="w-full">
-                  <GoalProgressSlider
-                    moduleId={resolvedModuleId}
-                    placement="module_list"
-                  />
+            {(canShowGoalCards || selectedRowKeys.length > 0) ? (
+              <div className="order-last basis-full pt-1 min-w-0 md:order-none md:-mt-1 md:basis-auto md:pt-0 md:flex md:flex-[0_1_666px] md:items-start md:justify-start md:self-start xl:flex-[0_1_742px]">
+                <div
+                  ref={canShowGoalCards && selectedRowKeys.length === 0 ? utilitySlotRef : undefined}
+                  className="w-full min-h-[42px]"
+                  style={selectedRowKeys.length > 0 && utilitySlotHeight ? { minHeight: `${utilitySlotHeight}px` } : undefined}
+                >
+                  {selectedRowKeys.length > 0 ? (
+                    <BulkActionsBar
+                      placement="inline"
+                      selectedCount={selectedRowKeys.length}
+                      onClear={() => {
+                        setSelectedRowKeys([]);
+                        setSelectedRowsMap({});
+                      }}
+                      onSelectAllPages={visibleSelectableRowKeys.length > 0 ? handleSelectAllAcrossPages : undefined}
+                      selectAllPagesLabel={
+                        totalFilteredRecordCount > 0
+                          ? `انتخاب همه ${toPersianNumber(totalFilteredRecordCount)} رکورد`
+                          : "انتخاب همه رکوردها"
+                      }
+                      selectAllPagesLoading={selectAllPagesLoading}
+                      selectAllPagesDisabled={selectAllPagesLoading}
+                      onEdit={selectedRowKeys.length && canEditModule ? handleBulkEditOpen : undefined}
+                      onCopy={selectedRowKeys.length && canEditModule ? handleCopyViaCreateForm : undefined}
+                      onDelete={selectedRowKeys.length && canDeleteModule ? handleBulkDelete : undefined}
+                      onExport={selectedRowKeys.length ? handleExport : undefined}
+                      exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
+                      extraActions={
+                        bulkBuildSourceModule && selectedRowKeys.length > 0 && canEditModule
+                          ? [
+                              {
+                                key: "build_package",
+                                icon: <AppstoreAddOutlined />,
+                                tooltip: "ساخت پکیج",
+                                onClick: () => setBulkBuildTarget("product_bundles"),
+                              },
+                              {
+                                key: "build_price_list",
+                                icon: <TagsOutlined />,
+                                tooltip: "ساخت لیست قیمت",
+                                onClick: () => setBulkBuildTarget("price_lists"),
+                              },
+                            ]
+                          : []
+                      }
+                      primaryActionLabel={
+                        selectedRowKeys.length > 0 && resolvedModuleId === 'production_orders'
+                          ? 'ایجاد سفارش گروهی جدید'
+                          : undefined
+                      }
+                      onPrimaryAction={
+                        selectedRowKeys.length > 0 && resolvedModuleId === 'production_orders'
+                          ? handleCreateGroupOrderFromSelection
+                          : undefined
+                      }
+                      primaryActionDisabled={
+                        resolvedModuleId === 'production_orders' && selectedRowKeys.length > 0
+                          ? !allSelectedPendingInProductionOrders
+                          : false
+                      }
+                      primaryActionTooltip={
+                        resolvedModuleId === 'production_orders' &&
+                        selectedRowKeys.length > 0 &&
+                        !allSelectedPendingInProductionOrders
+                          ? 'فقط سفارش‌های تولید با وضعیت «در انتظار» قابل تبدیل به سفارش گروهی هستند.'
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <GoalProgressSlider
+                      moduleId={resolvedModuleId}
+                      placement="module_list"
+                    />
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1739,66 +2137,37 @@ export const ModuleListRefine: React.FC<{
           onKanbanGroupChange={setKanbanGroupBy}
         />
 
-        <BulkActionsBar
-          selectedCount={selectedRowKeys.length}
-          onClear={() => {
-            setSelectedRowKeys([]);
-            setSelectedRowsMap({});
-          }}
-          onSelectAll={visibleSelectableRowKeys.length > 0 ? handleSelectAllVisible : undefined}
-          selectAllDisabled={allVisibleRowsSelected}
-          onSelectAllPages={visibleSelectableRowKeys.length > 0 ? handleSelectAllAcrossPages : undefined}
-          selectAllPagesLoading={selectAllPagesLoading}
-          selectAllPagesDisabled={selectAllPagesLoading}
-          onEdit={selectedRowKeys.length && canEditModule ? handleBulkEditOpen : undefined}
-          onCopy={selectedRowKeys.length && canEditModule ? handleCopyViaCreateForm : undefined}
-          onDelete={selectedRowKeys.length && canDeleteModule ? handleBulkDelete : undefined}
-          onExport={selectedRowKeys.length ? handleExport : undefined}
-          exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
-          extraActions={
-            resolvedModuleId === "products" && selectedRowKeys.length > 0 && canEditModule
-              ? [
-                  {
-                    key: "build_package",
-                    icon: <AppstoreAddOutlined />,
-                    tooltip: "ساخت پکیج",
-                    onClick: () => setBulkBuildTarget("product_bundles"),
-                  },
-                  {
-                    key: "build_price_list",
-                    icon: <TagsOutlined />,
-                    tooltip: "ساخت لیست قیمت",
-                    onClick: () => setBulkBuildTarget("price_lists"),
-                  },
-                ]
-              : []
-          }
-          primaryActionLabel={
-            selectedRowKeys.length > 0 && resolvedModuleId === 'production_orders'
-              ? 'ایجاد سفارش گروهی جدید'
-              : undefined
-          }
-          onPrimaryAction={
-            selectedRowKeys.length > 0 && resolvedModuleId === 'production_orders'
-              ? handleCreateGroupOrderFromSelection
-              : undefined
-          }
-          primaryActionDisabled={
-            resolvedModuleId === 'production_orders' && selectedRowKeys.length > 0
-              ? !allSelectedPendingInProductionOrders
-              : false
-          }
-          primaryActionTooltip={
-            resolvedModuleId === 'production_orders' &&
-            selectedRowKeys.length > 0 &&
-            !allSelectedPendingInProductionOrders
-              ? 'فقط سفارش‌های تولید با وضعیت «در انتظار» قابل تبدیل به سفارش گروهی هستند.'
-              : undefined
-          }
-        />
+        {hasListFilterBubbles ? (
+        <div className="h-7 shrink-0">
+          <div className="flex h-full items-center gap-1 overflow-x-auto px-0.5 no-scrollbar">
+            {allListFilterBubbles.map((bubble) => (
+              <span
+                key={bubble.id}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-gray-200 bg-white/92 px-2 py-0.5 text-[10px] leading-4 text-gray-600 shadow-sm dark:border-white/10 dark:bg-[#111827]/90 dark:text-gray-200"
+              >
+                <span className="truncate">{bubble.label}</span>
+                {typeof bubble.onRemove === "function" ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-gray-400 transition hover:bg-gray-100 hover:text-red-500 dark:hover:bg-white/10"
+                    onClick={bubble.onRemove}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </span>
+            ))}
+             {allListFilterBubbles.length > 0 ? (
+              <Button type="link" size="small" className="!h-6 !px-1 shrink-0 text-[10px]" onClick={clearAllListFilters}>
+                حذف همه فیلترها
+              </Button>
+            ) : null}
+          </div>
+        </div>
+        ) : null}
         </div>
 
-         <div className="mb-3 shrink-0">
+         <div className="mb-2 md:mb-3 shrink-0">
            <ViewManager 
              moduleId={resolvedModuleId} 
              currentView={currentView} 
@@ -1808,17 +2177,17 @@ export const ModuleListRefine: React.FC<{
          </div>
 
          <ViewWrapper isFullscreen={false}>
-         <div className="flex-1 min-h-0 overflow-hidden relative rounded-[2rem]">
+         <div className="flex-1 min-h-0 overflow-hidden relative rounded-[1.5rem]">
             {showContentSkeleton || showListSkeleton ? (
-               <ModuleListContentSkeleton viewMode={viewMode} />
-           ) : accessibleData.length === 0 ? (
-             <div className="flex h-full items-center justify-center bg-white dark:bg-[#1a1a1a] rounded-[2rem] border border-dashed border-gray-300">
+                <ModuleListContentSkeleton viewMode={viewMode} />
+            ) : accessibleData.length === 0 ? (
+             <div className="flex h-full items-center justify-center bg-white dark:bg-[#1a1a1a] rounded-[1.5rem] border border-dashed border-gray-300">
                 <Empty description="هیچ داده‌ای یافت نشد" />
              </div>
            ) : (
-             <>
-               {viewMode === ViewMode.LIST && (
-                <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 h-full overflow-hidden">
+              <>
+                {viewMode === ViewMode.LIST && (
+                <div className="bg-white dark:bg-[#1a1a1a] rounded-[1.5rem] shadow-sm border border-gray-200 dark:border-gray-800 h-full overflow-hidden p-1">
                   <SmartTableRenderer 
                     moduleConfig={moduleConfig}
                      data={enrichedData} 
@@ -1830,23 +2199,34 @@ export const ModuleListRefine: React.FC<{
                      onChange={handleTableChange}
                      rowSelection={{ selectedRowKeys, onChange: handleRowSelectionChange, preserveSelectedRowKeys: true }}
                     onVisibleDataChange={handleVisibleDataChange}
-                    onRow={(record: any) => ({ 
-                      onClick: () => navigate(`/${resolvedModuleId}/${record.id}`), 
-                      style: { cursor: 'pointer' } 
+                    onRow={(record: any) => ({
+                      onClick: (event: React.MouseEvent<HTMLElement>) => {
+                        if (selectedRowKeys.length > 0) return;
+                        const target = event.target as HTMLElement | null;
+                        if (
+                          target?.closest(
+                            'a,button,input,label,select,textarea,[role="button"],.ant-btn,.ant-checkbox-wrapper,.ant-checkbox'
+                          )
+                        ) {
+                          return;
+                        }
+                        navigate(`/${resolvedModuleId}/${record.id}`);
+                      },
+                      style: { cursor: selectedRowKeys.length > 0 ? 'default' : 'pointer' },
                     })}
                     dynamicOptions={dynamicOptions}
-                    relationOptions={effectiveRelationOptions}
-                    allUsers={allUsers}
-                    allRoles={allRoles}
+                     relationOptions={effectiveRelationOptions}
+                     allUsers={allUsers}
+                     allRoles={allRoles}
                     canViewField={canViewField}
-                    columnFilters={columnFilters}
-                    onColumnFiltersChange={handleColumnFiltersChange}
-                    externalFilterBubbles={activeFilterBubbles}
-                    onClearExternalFilters={clearExternalFilters}
-                    sorters={sorters as CrudSort[]}
-                  />
-                </div>
-               )}
+                     columnFilters={columnFilters}
+                     onColumnFiltersChange={handleColumnFiltersChange}
+                     sorters={visibleSorters}
+                      showFilterBar={false}
+                      containerClassName="h-full rounded-[1.2rem] overflow-hidden"
+                      />
+                 </div>
+                )}
                   {viewMode === ViewMode.GRID && (
                 <div className="h-full overflow-y-auto p-1 custom-scrollbar flex flex-col">
                             <GridView
@@ -1866,21 +2246,21 @@ export const ModuleListRefine: React.FC<{
                               relationOptions={effectiveRelationOptions}
                             />
                             
-                   {/* Load More Button */}
-                   {gridPageSize < enrichedData.length && (
-                     <div className="flex justify-center items-center py-5 border-t border-gray-200 dark:border-gray-800">
-                     <Button 
-                       size="large"
-                       onClick={() => setGridPageSize((prev) => Math.min(prev + gridLoadStep, enrichedData.length))}
-                       className="h-12 px-6 sm:px-8 font-bold w-full sm:w-auto max-w-full"
-                     >
-                       مشاهده بیشتر ({gridPageSize} از {enrichedData.length})
-                     </Button>
-                     </div>
-                   )}
-               </div>
-               )}
-               {viewMode === ViewMode.MAP && moduleConfig && resolvedModuleId && (
+                    {/* Load More Button */}
+                    {gridPageSize < enrichedData.length && (
+                      <div className="mt-4 flex justify-center items-center py-5 border-t border-gray-200 dark:border-gray-800">
+                      <Button 
+                        size="large"
+                        onClick={() => setGridPageSize((prev) => Math.min(prev + gridLoadStep, enrichedData.length))}
+                        className="h-12 px-6 sm:px-8 font-bold w-full sm:w-auto max-w-full rounded-2xl border-[rgba(var(--brand-300-rgb),0.65)] bg-white/90 hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)]"
+                      >
+                        مشاهده بیشتر ({gridPageSize} از {enrichedData.length})
+                      </Button>
+                      </div>
+                    )}
+                </div>
+                )}
+                {viewMode === ViewMode.MAP && moduleConfig && resolvedModuleId && (
                 <div className="h-full">
                   <MapView
                     data={enrichedData}
@@ -1889,24 +2269,28 @@ export const ModuleListRefine: React.FC<{
                     navigate={navigate}
                   />
                 </div>
-               )}
-               {viewMode === ViewMode.KANBAN && (
-                <div className="flex gap-4 h-full overflow-x-auto pb-4 px-2">
+                )}
+                {viewMode === ViewMode.KANBAN && (
+                <div className="flex gap-5 md:gap-6 h-full overflow-x-auto pb-4 px-2">
                   {moduleConfig.fields.find(f => f.key === kanbanGroupBy)?.options?.map((col: any) => {
+                    const columnKey = String(col?.value ?? '');
                     const columnItems = enrichedData.filter((d: any) => d[kanbanGroupBy] === col.value);
+                    const visibleCount = kanbanVisibleCounts[columnKey] ?? getDefaultKanbanPageSize();
+                    const visibleItems = columnItems.slice(0, visibleCount);
+                    const canLoadMore = columnItems.length > visibleCount;
                     return (
-                      <div key={col.value} className="min-w-[280px] w-[280px] flex flex-col bg-gray-100/50 dark:bg-white/5 rounded-2xl p-2 border border-gray-200 dark:border-gray-800 h-full">
+                      <div key={col.value} className="min-w-[292px] w-[292px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border border-gray-200 dark:border-gray-800 shadow-sm h-full">
                         <div className="flex items-center justify-between p-2 mb-2">
                           <div className="flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: col.color || '#ccc' }}></span>
                             <span className="font-bold text-gray-700 dark:text-gray-300 text-sm">{col.label}</span>
                           </div>
-                          <span className="bg-white dark:bg-white/10 px-2 py-0.5 rounded-full text-xs text-gray-500">
+                          <span className="bg-white/80 dark:bg-white/10 px-2 py-0.5 rounded-full text-xs text-gray-500">
                             {columnItems.length}
                           </span>
                         </div>
-                        <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-0 custom-scrollbar pb-2">
-                          {columnItems.map((item: any) => (
+                        <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 custom-scrollbar pb-2">
+                          {visibleItems.map((item: any) => (
                             <RenderCardItem 
                               key={item.id} 
                               item={item} 
@@ -1927,11 +2311,28 @@ export const ModuleListRefine: React.FC<{
                             />
                           ))}
                         </div>
+                        {canLoadMore ? (
+                          <Button
+                            block
+                            className="mt-2 rounded-2xl border-[rgba(var(--brand-300-rgb),0.65)] bg-white/88 text-[11px] font-semibold text-[rgb(var(--brand-700-rgb))] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)] dark:text-[rgba(var(--brand-100-rgb),0.96)]"
+                            onClick={() => {
+                              setKanbanVisibleCounts((prev) => ({
+                                ...prev,
+                                [columnKey]: Math.min(
+                                  (prev[columnKey] ?? getDefaultKanbanPageSize()) + getKanbanLoadStep(),
+                                  columnItems.length
+                                ),
+                              }));
+                            }}
+                          >
+                            نمایش بیشتر ({visibleItems.length} از {columnItems.length})
+                          </Button>
+                        ) : null}
                         <Button 
                           type="dashed" 
                           block 
                           icon={<PlusOutlined />} 
-                          className="mt-2 text-xs text-gray-500 hover:text-leather-600 hover:border-leather-400"
+                          className="mt-2 text-xs rounded-2xl text-gray-500 hover:text-leather-600 hover:border-leather-400"
                           onClick={() => {
                             navigate(`/${resolvedModuleId}/create`, { 
                               state: { initialValues: { [kanbanGroupBy]: col.value } } 
@@ -2018,6 +2419,7 @@ export const ModuleListRefine: React.FC<{
       <PrintSection
         isPrintModalOpen={listPrintManager.isPrintModalOpen}
         onClose={() => listPrintManager.setIsPrintModalOpen(false)}
+        onPreparePrint={listPrintManager.preparePrint}
         onPrint={listPrintManager.handlePrint}
         printTemplates={listPrintManager.printTemplates}
         selectedTemplateId={listPrintManager.selectedTemplateId}

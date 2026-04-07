@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -21,16 +21,16 @@ import {
   EditOutlined,
   FilterOutlined,
   PlusOutlined,
-  ReloadOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import { SavedView, ViewConfig } from '../types';
-import { FieldType } from '../types';
+import { ModuleField, SavedView, ViewConfig } from '../types';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from '../utils/referenceData';
-import { getPreferredRelationTargetField } from '../utils/relationTargetField';
+import { getDefaultWorkflowOperator, getWorkflowOperatorOptions, workflowOperatorNeedsValue } from '../utils/filterUtils';
+import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
+import { getWorkflowConditionFields } from '../utils/workflowHelpers';
+import { createWorkflowId } from '../utils/workflowTypes';
 
 interface ViewManagerProps {
   moduleId: string;
@@ -42,7 +42,7 @@ interface ViewManagerProps {
 const savedViewsCache = new Map<string, SavedView[]>();
 const savedViewsPromiseCache = new Map<string, Promise<SavedView[]>>();
 
-const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onViewChange, onRefresh }) => {
+const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onViewChange, onRefresh: _onRefresh }) => {
   const { message } = App.useApp();
   const [views, setViews] = useState<SavedView[]>([]);
   const [loadingViews, setLoadingViews] = useState(false);
@@ -54,15 +54,72 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
 
   const moduleConfig = MODULES[moduleId];
+  const viewConditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
+  const supportedViewFilterOperators = useMemo(
+    () =>
+      new Set([
+        'eq',
+        'neq',
+        'contains',
+        'not_contains',
+        'starts_with',
+        'ends_with',
+        'gt',
+        'gte',
+        'lt',
+        'lte',
+        'in',
+        'not_in',
+        'is_true',
+        'is_false',
+        'is_null',
+        'not_null',
+        'is_today',
+        'is_yesterday',
+        'is_tomorrow',
+      ]),
+    []
+  );
+  const getViewFilterOperatorOptions = useCallback(
+    (field?: ModuleField | null) =>
+      getWorkflowOperatorOptions(field).filter((option) => supportedViewFilterOperators.has(String(option.value || ''))),
+    [supportedViewFilterOperators]
+  );
+  const getViewFilterDefaultOperator = useCallback(
+    (field?: ModuleField | null) => getViewFilterOperatorOptions(field)[0]?.value || getDefaultWorkflowOperator(field),
+    [getViewFilterOperatorOptions]
+  );
+  const normalizeViewFilters = useCallback(
+    (rawFilters: any[] | null | undefined) =>
+      (Array.isArray(rawFilters) ? rawFilters : [])
+        .map((rawFilter) => {
+          const fieldKey = String(rawFilter?.field || '').trim();
+          const field =
+            viewConditionFields.find((item) => String(item?.key || '').trim() === fieldKey) || null;
+          const operator = String(rawFilter?.operator || '').trim() || getViewFilterDefaultOperator(field);
+          if (!fieldKey || !operator) return null;
+          const nextFilter: any = {
+            id: String(rawFilter?.id || '').trim() || createWorkflowId(),
+            field: fieldKey,
+            operator,
+          };
+          if (Object.prototype.hasOwnProperty.call(rawFilter || {}, 'value')) {
+            nextFilter.value = rawFilter?.value;
+          }
+          return nextFilter;
+        })
+        .filter(Boolean) as any[],
+    [getViewFilterDefaultOperator, viewConditionFields]
+  );
   const defaultView = useMemo<SavedView>(
     () => ({
       id: 'default_all',
       module_id: moduleId,
-      name: 'همه رکوردها',
+      name: moduleConfig?.titles?.fa ? `همه ${moduleConfig.titles.fa}` : 'همه رکوردها',
       is_default: true,
       config: { columns: [], filters: [] },
     }),
-    [moduleId]
+    [moduleConfig?.titles?.fa, moduleId]
   );
 
   useEffect(() => {
@@ -120,60 +177,10 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
 
     const loadFilterOptions = async () => {
       try {
-        const directory = await fetchAssigneeDirectory(supabase);
+        const optionState = await loadWorkflowConditionEditorOptions(moduleId, viewConditionFields);
         if (!active) return;
-
-        const dynamicCategories = Array.from(
-          new Set(
-            moduleConfig.fields
-              .map((field: any) => field?.dynamicOptionsCategory)
-              .filter(Boolean)
-          )
-        ) as string[];
-        const dynOptions = await fetchDynamicOptionsMap(supabase, dynamicCategories);
-        if (!active) return;
-        setDynamicOptions(dynOptions);
-
-        const relationFields = moduleConfig.fields.filter(
-          (field) => field.type === FieldType.RELATION || field.type === FieldType.USER
-        );
-        const nextRelationOptions: Record<string, Array<{ label: string; value: string }>> = {
-          profiles: (directory.users || []).map((item: any) => ({
-            label: item.display_name || item.full_name || item.id,
-            value: String(item.id),
-          })),
-          org_roles: (directory.roles || []).map((item: any) => ({
-            label: item.title || item.id,
-            value: String(item.id),
-          })),
-        };
-
-        await Promise.all(
-          relationFields.map(async (field: any) => {
-            if (field.type === FieldType.USER) {
-              nextRelationOptions[field.key] = nextRelationOptions.profiles || [];
-              return;
-            }
-
-            const targetModule = String(field?.relationConfig?.targetModule || '').trim();
-            if (!targetModule) return;
-            const targetResource = MODULES[targetModule]?.table || targetModule;
-            const targetField = getPreferredRelationTargetField(targetModule, field?.relationConfig?.targetField);
-            const { data } = await supabase
-              .from(targetResource)
-              .select(`id, ${targetField}`)
-              .order(targetField, { ascending: true })
-              .limit(400);
-
-            nextRelationOptions[field.key] = (data || []).map((item: any) => ({
-              label: String(item?.[targetField] || item?.id || '').trim(),
-              value: String(item?.id || '').trim(),
-            })).filter((item: any) => item.value);
-          })
-        );
-
-        if (!active) return;
-        setRelationOptions(nextRelationOptions);
+        setDynamicOptions(optionState.dynamicOptions || {});
+        setRelationOptions(optionState.relationOptions || {});
       } catch (error) {
         if (!active) return;
         console.warn('Could not load view filter options', error);
@@ -186,7 +193,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
     return () => {
       active = false;
     };
-  }, [isModalOpen, moduleConfig]);
+  }, [isModalOpen, moduleId, moduleConfig, viewConditionFields]);
 
   const handleOpenNewView = () => {
     const allCols = moduleConfig.fields.map((f) => f.key);
@@ -204,7 +211,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
           ? rawConfig.columns
           : moduleConfig.fields.map((f) => f.key),
-      filters: Array.isArray(rawConfig.filters) ? rawConfig.filters : [],
+      filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
     };
     setConfig(safeConfig);
@@ -226,7 +233,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
     }
 
     const validFilters = (config.filters || []).filter(
-      (f) => f.field && f.operator && !(f.value === undefined || f.value === null)
+      (f) => f.field && f.operator && (
+        !workflowOperatorNeedsValue(f.operator) || !(f.value === undefined || f.value === null)
+      )
     );
 
     const cleanConfig: ViewConfig = { ...config, filters: validFilters };
@@ -318,33 +327,6 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
   return (
     <>
       <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm animate-fadeIn overflow-hidden">
-        <div className="flex items-center gap-1 px-2 shrink-0">
-          <Tooltip title="ایجاد نمای جدید">
-            <button
-              type="button"
-              onClick={handleOpenNewView}
-              className="relative inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-transparent hover:bg-gray-100 dark:hover:bg-white/10"
-            >
-              <PlusOutlined className="relative z-10 text-[11px] !text-gray-500" />
-              <span className="absolute inset-y-0 right-5 flex items-center leading-none text-gray-500">
-                {"\u0644\u06cc\u0633\u062a \u062c\u062f\u06cc\u062f"}
-              </span>
-              <span className="leading-none">Ù„ÛŒØ³Øª Ø¬Ø¯ÛŒØ¯</span>
-            </button>
-          </Tooltip>
-          <Tooltip title="بروزرسانی لیست">
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              onClick={onRefresh}
-              className="hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg text-gray-500"
-            />
-          </Tooltip>
-        </div>
-
-        <div className="w-[1px] h-5 bg-gray-200 dark:bg-gray-700 mx-1" />
-
         <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
           {loadingViews ? (
             <>
@@ -362,18 +344,18 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
               <div
                 key={view.id}
                 onClick={() => onViewChange(view, (view.config as any))}
-                className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
+                className={`group px-2.5 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-1.5 select-none border ${
                   currentView?.id === view.id
                     ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
                     : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
                 }`}
               >
-                {view.name}
+                <span className="leading-none">{view.name}</span>
                 {currentView?.id === view.id && (
-                  <div className="flex items-center gap-1 mr-1">
-                  <Tooltip title="ویرایش">
+                  <div className="mr-0 flex shrink-0 items-center gap-0.5">
+                  <Tooltip title="ویرایش" placement="top" mouseEnterDelay={0.45} destroyTooltipOnHide>
                     <span
-                      className="p-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 flex items-center"
+                      className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/10"
                       onClick={(e) => handleEditView(view, e)}
                     >
                       <EditOutlined className="text-[10px]" />
@@ -395,10 +377,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                       }}
                       onCancel={(e) => e?.stopPropagation()}
                     >
-                      <span
-                        className="p-1 rounded-full hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-500 flex items-center"
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10" onClick={(e) => e.stopPropagation()}>
                         <DeleteOutlined className="text-[10px]" />
                       </span>
                     </Popconfirm>
@@ -408,6 +387,21 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
               </div>
             ))
           )}
+        </div>
+
+        <div className="w-[1px] h-5 bg-gray-200 dark:bg-gray-700 mx-1 shrink-0" />
+
+        <div className="flex items-center gap-1 px-2 shrink-0">
+          <Tooltip title="ایجاد نمای جدید">
+            <button
+              type="button"
+              onClick={handleOpenNewView}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+            >
+              <PlusOutlined className="text-[11px]" />
+              <span className="leading-none">لیست جدید</span>
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -448,32 +442,35 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
               className="mb-2"
             />
           )}
-          <Input
-            placeholder="نام نما"
-            value={viewName}
-            onChange={(e) => setViewName(e.target.value)}
-            prefix={<span className="text-red-500 text-lg leading-none ml-1">*</span>}
-            size="large"
-          />
+          <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+            <Input
+              placeholder="نام نما"
+              value={viewName}
+              onChange={(e) => setViewName(e.target.value)}
+              prefix={<span className="text-red-500 text-lg leading-none ml-1">*</span>}
+              size="large"
+            />
+          </div>
           <Tabs
+            className="view-manager-modal-tabs"
             type="card"
             items={[
               {
                 key: 'columns',
                 label: (
-                  <span>
+                  <span className="inline-flex items-center gap-2">
                     <CheckSquareOutlined /> ستون‌ها
                   </span>
                 ),
                 children: (
-                  <div className="flex gap-4 h-[350px] border border-t-0 p-4 rounded-b-lg border-gray-200">
-                    <div className="flex-1 flex flex-col">
-                      <div className="text-xs text-gray-500 mb-2 font-bold bg-gray-50 p-2 rounded">موجود</div>
+                  <div className="flex h-[350px] gap-4 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                    <div className="flex flex-1 flex-col rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/80 p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
+                      <div className="mb-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.72)] p-2 text-xs font-bold text-[rgba(var(--brand-700-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)]">موجود</div>
                       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
                         {moduleConfig.fields.map((field) => (
                           <div
                             key={field.key}
-                            className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded cursor-pointer"
+                            className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition hover:bg-[rgba(var(--brand-50-rgb),0.78)] dark:hover:bg-white/5 cursor-pointer"
                             onClick={() => toggleColumn(field.key)}
                           >
                             <Checkbox checked={config.columns?.includes(field.key)} />
@@ -482,11 +479,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                         ))}
                       </div>
                     </div>
-                    <div className="w-[1px] bg-gray-200 my-2" />
-                    <div className="flex-1 flex flex-col">
-                      <div className="text-xs text-gray-500 mb-2 font-bold bg-gray-50 p-2 rounded flex justify-between">
+                    <div className="my-2 w-[1px] bg-[rgba(var(--brand-200-rgb),0.55)] dark:bg-[rgba(var(--brand-300-rgb),0.18)]" />
+                    <div className="flex flex-1 flex-col rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/80 p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
+                      <div className="mb-2 flex justify-between rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.72)] p-2 text-xs font-bold text-[rgba(var(--brand-700-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)]">
                         <span>انتخاب شده</span>
-                        <span className="badge border px-1 rounded">{config.columns?.length || 0}</span>
+                        <span className="rounded-md border border-[rgba(var(--brand-300-rgb),0.65)] bg-white/80 px-1.5 py-0.5 text-[rgba(var(--brand-700-rgb),1)] dark:bg-white/10 dark:text-[rgba(var(--brand-100-rgb),1)]">{config.columns?.length || 0}</span>
                       </div>
                       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
                         <List
@@ -498,9 +495,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                             if (!field) return null;
                             const index = config.columns.indexOf(colKey);
                             return (
-                              <List.Item className="bg-white mb-1.5 rounded-lg px-3 border border-gray-100 shadow-sm !py-2 flex justify-between group hover:border-leather-300">
+                              <List.Item className="!mb-1.5 !flex !justify-between !rounded-xl !border !border-[rgba(var(--brand-200-rgb),0.55)] !bg-[rgba(var(--brand-50-rgb),0.42)] !px-3 !py-2 shadow-sm transition hover:!border-[rgba(var(--brand-400-rgb),0.85)] dark:!border-[rgba(var(--brand-300-rgb),0.18)] dark:!bg-white/5">
                                 <span className="text-sm font-medium">{field.labels.fa}</span>
-                                <div className="flex gap-1 opacity-50 group-hover:opacity-100">
+                                <div className="flex gap-1">
                                   <Button
                                     size="small"
                                     type="text"
@@ -537,13 +534,18 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                   </div>
                 ),
                 children: (
-                  <div className="bg-white p-4 border border-t-0 rounded-b-lg min-h-[350px]">
+                  <div className="min-h-[350px] rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                    <div className="mb-3 text-sm font-medium text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">
+                      شرط‌های این نما
+                    </div>
                     <WorkflowConditionsGroup
                       value={(config.filters || []) as any}
                       onChange={(next) => handleFilterChange(next as any[])}
-                      fields={moduleConfig.fields}
+                      fields={viewConditionFields}
                       dynamicOptions={dynamicOptions}
                       relationOptions={relationOptions}
+                      getOperatorOptions={getViewFilterOperatorOptions}
+                      getDefaultOperator={getViewFilterDefaultOperator}
                     />
                   </div>
                 ),

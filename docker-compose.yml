@@ -349,12 +349,15 @@ services:
     depends_on:
       analytics:
         condition: service_healthy
+      gotenberg:
+        condition: service_started
     environment:
       JWT_SECRET: ${JWT_SECRET}
       SUPABASE_URL: http://kong:8000
       SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       SUPABASE_DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      GOTENBERG_URL: ${GOTENBERG_URL}
       MELIPAYAMAK_USERNAME: ${MELIPAYAMAK_USERNAME}
       MELIPAYAMAK_PASSWORD: ${MELIPAYAMAK_PASSWORD}
       MELIPAYAMAK_API_KEY: ${MELIPAYAMAK_API_KEY}
@@ -377,6 +380,24 @@ services:
         "--main-service",
         "/home/deno/functions/main"
       ]
+
+  gotenberg:
+    container_name: kalamapp-gotenberg
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/health"
+        ]
+      timeout: 5s
+      interval: 10s
+      retries: 6
 
   analytics:
     container_name: supabase-analytics
