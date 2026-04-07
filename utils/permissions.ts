@@ -49,6 +49,8 @@ export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'formulas', label: 'فرمول های محاسباتی' },
   { key: 'connections', label: 'اتصالات' },
   { key: 'customer_leveling', label: 'تنظیمات سطح بندی' },
+  { key: 'print_templates', label: 'قالب‌های پرینت' },
+  { key: 'ai_knowledge', label: 'دانش سازمان' },
   { key: 'workflows', label: 'گردش کارها' },
 ];
 

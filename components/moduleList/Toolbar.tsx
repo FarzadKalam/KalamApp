@@ -2,6 +2,7 @@
 import { Input, Segmented } from "antd";
 import {
   AppstoreOutlined,
+  CalendarOutlined,
   ColumnWidthOutlined,
   EnvironmentOutlined,
   TableOutlined,
@@ -15,10 +16,14 @@ interface ToolbarProps {
   onSearchChange: (value: string) => void;
   onRefresh: () => void;
   kanbanEnabled?: boolean;
+  calendarEnabled?: boolean;
   mapEnabled?: boolean;
   kanbanGroupBy: string | null;
   kanbanGroupOptions: { label: string; value: string }[];
   onKanbanGroupChange: (value: string) => void;
+  calendarDateField: string | null;
+  calendarDateFieldOptions: { label: string; value: string }[];
+  onCalendarDateFieldChange: (value: string) => void;
 }
 
 const Toolbar: React.FC<ToolbarProps> = ({
@@ -28,10 +33,14 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onSearchChange,
   onRefresh: _onRefresh,
   kanbanEnabled = false,
+  calendarEnabled = false,
   mapEnabled = false,
   kanbanGroupBy,
   kanbanGroupOptions,
   onKanbanGroupChange,
+  calendarDateField,
+  calendarDateFieldOptions,
+  onCalendarDateFieldChange,
 }) => {
   return (
     <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -52,6 +61,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
               { label: "جدول", value: ViewMode.LIST, icon: <TableOutlined /> },
               { label: "گرید", value: ViewMode.GRID, icon: <AppstoreOutlined /> },
               ...(mapEnabled ? [{ label: "نقشه", value: ViewMode.MAP, icon: <EnvironmentOutlined /> }] : []),
+              ...(calendarEnabled ? [{ label: "تقویم", value: ViewMode.CALENDAR, icon: <CalendarOutlined /> }] : []),
               ...(kanbanEnabled ? [{ label: "کانبان", value: ViewMode.KANBAN, icon: <ColumnWidthOutlined /> }] : []),
             ]}
             value={viewMode}
@@ -66,6 +76,17 @@ const Toolbar: React.FC<ToolbarProps> = ({
               options={kanbanGroupOptions}
               value={kanbanGroupBy || kanbanGroupOptions?.[0]?.value}
               onChange={(val) => onKanbanGroupChange(val as string)}
+            />
+          </div>
+        )}
+
+        {viewMode === ViewMode.CALENDAR && calendarEnabled && (
+          <div className="max-w-full overflow-x-auto no-scrollbar">
+            <Segmented
+              className="min-w-max"
+              options={calendarDateFieldOptions}
+              value={calendarDateField || calendarDateFieldOptions?.[0]?.value}
+              onChange={(val) => onCalendarDateFieldChange(val as string)}
             />
           </div>
         )}

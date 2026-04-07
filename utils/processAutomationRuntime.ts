@@ -51,6 +51,18 @@ const getTaskAutomationBaseFieldKey = (fieldKey?: string | null) =>
 const normalizeTaskStatus = (value: unknown) => String(value || '').trim().toLowerCase();
 const COMPLETED_TASK_STATUSES = new Set(['done', 'completed']);
 const PROCESS_AUTOMATION_LOG_RUN_TYPE = 'process_automation';
+const WORKFLOW_OPERATORS_WITHOUT_VALUE = new Set([
+  'is_true',
+  'is_false',
+  'is_null',
+  'not_null',
+  'changed',
+  'is_today',
+  'is_yesterday',
+  'is_tomorrow',
+  'is_friday',
+  'is_official_holiday',
+]);
 
 const parseRecurrenceInfo = (value: any): Record<string, any> => {
   if (value && typeof value === 'object') return value;
@@ -78,6 +90,7 @@ const buildAutomationActionRecord = (
   const sourceLink = resolveTaskSourceLink(task);
   const merged: Record<string, any> = {
     ...(sourceRecord || {}),
+    task_id: task?.id ?? '',
     task_name: task?.name ?? '',
     task_type: task?.task_type ?? parseRecurrenceInfo(task?.recurrence_info)?.task_type ?? '',
     task_status: task?.status ?? '',
@@ -102,7 +115,24 @@ const buildAutomationActionRecord = (
   if (merged.due_date === undefined) {
     merged.due_date = task?.due_date ?? '';
   }
+  if (merged.id === undefined || merged.id === null || String(merged.id).trim() === '') {
+    merged.id = task?.id ?? '';
+  }
   return merged;
+};
+
+const isBlankConditionValue = (value: unknown) =>
+  value === undefined
+  || value === null
+  || String(value).trim() === ''
+  || (Array.isArray(value) && value.length === 0);
+
+const isRunnableProcessAutomationCondition = (condition: WorkflowCondition) => {
+  const field = String(condition?.field || '').trim();
+  if (!field) return false;
+  const operator = String(condition?.operator || 'eq').trim();
+  if (WORKFLOW_OPERATORS_WITHOUT_VALUE.has(operator)) return true;
+  return !isBlankConditionValue(condition?.value);
 };
 
 const renderAutomationTemplateFromRecord = (template: string, record: Record<string, any>) =>
@@ -127,6 +157,19 @@ const mergeMentionTargets = (...targets: MentionTarget[]): MentionTarget => ({
   userIds: Array.from(new Set(targets.flatMap((item) => item.userIds).filter(Boolean))),
   roleIds: Array.from(new Set(targets.flatMap((item) => item.roleIds).filter(Boolean))),
 });
+
+const appendMentionTargetToken = (target: MentionTarget, value: any) => {
+  const combo = String(value || '').trim();
+  const match = combo.match(/^(user|role)[:_](.+)$/i);
+  if (!match) return;
+  const id = String(match[2] || '').trim();
+  if (!id) return;
+  if (String(match[1] || '').toLowerCase() === 'user') {
+    target.userIds.push(id);
+    return;
+  }
+  target.roleIds.push(id);
+};
 
 const resolveCommunicationTargets = async (target: MentionTarget): Promise<CommunicationTarget> => {
   const userIds = Array.from(new Set((target?.userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
@@ -288,8 +331,8 @@ const evaluateProcessAutomationConditions = async ({
   sourcePreviousRecord?: Record<string, any> | null | undefined;
   sourceModuleId?: string | null | undefined;
 }) => {
-  const all = Array.isArray(conditionsAll) ? conditionsAll : [];
-  const any = Array.isArray(conditionsAny) ? conditionsAny : [];
+  const all = (Array.isArray(conditionsAll) ? conditionsAll : []).filter(isRunnableProcessAutomationCondition);
+  const any = (Array.isArray(conditionsAny) ? conditionsAny : []).filter(isRunnableProcessAutomationCondition);
 
   const evaluateOne = async (condition: WorkflowCondition) => {
     const rawField = String(condition?.field || '').trim();
@@ -395,7 +438,6 @@ const insertAutomationNote = async (
   if (!scope.hasLinkedRecord) return;
 
   const mentionTarget = mergeMentionTargets(target);
-  if (mentionTarget.userIds.length === 0 && mentionTarget.roleIds.length === 0) return;
 
   const payload: Record<string, any> = {
     module_id: scope.module_id,
@@ -403,6 +445,12 @@ const insertAutomationNote = async (
     content: noteText,
     mention_user_ids: mentionTarget.userIds,
     mention_role_ids: mentionTarget.roleIds,
+    source_type: 'system',
+    metadata: {
+      source_type: 'system',
+      process_automation_rule_id: String(rule?.id || '').trim() || null,
+      workflow_action_type: 'send_note',
+    },
   };
 
   const currentUserId = String(currentUser?.id || '').trim();
@@ -515,15 +563,13 @@ export const runProcessAutomationsForTaskEvent = async ({
             const directNoteTarget = actionRecipientFields.reduce((acc: MentionTarget, recipientField: any) => {
               const rawRecipientField = String(recipientField || '').trim();
               if (!rawRecipientField) return acc;
-              const resolvedValues = rawRecipientField.startsWith('user_') || rawRecipientField.startsWith('role_')
+              const resolvedValues = /^(user|role)[:_]/i.test(rawRecipientField)
                 ? [rawRecipientField]
                 : (Array.isArray(actionRecord?.[rawRecipientField])
                     ? actionRecord[rawRecipientField]
                     : [actionRecord?.[rawRecipientField]]);
               resolvedValues.forEach((resolvedValue: any) => {
-                const combo = String(resolvedValue || '').trim();
-                if (combo.startsWith('user_')) acc.userIds.push(combo.slice(5));
-                if (combo.startsWith('role_')) acc.roleIds.push(combo.slice(5));
+                appendMentionTargetToken(acc, resolvedValue);
               });
               return acc;
             }, { userIds: [], roleIds: [] });
@@ -547,28 +593,37 @@ export const runProcessAutomationsForTaskEvent = async ({
             continue;
           }
 
-          if (!sourceContext?.moduleId || !sourceContext?.record) continue;
           const actionType = String(action?.type || '');
+          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_bale_bot'].includes(actionType);
+          if ((!sourceContext?.moduleId || !sourceContext?.record) && !canRunWithoutSourceRecord) continue;
+
+          const actionConfig = (action as any)?.config || {};
+          const actionRecipientFields = Array.isArray(actionConfig?.recipient_fields)
+            ? actionConfig.recipient_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
+            : [];
           const directConfigPatch: Record<string, any> = {};
 
-          if (actionType === 'send_sms' && communicationTargets.phones.length > 0) {
+          const hasManualNumbers = Array.isArray(actionConfig?.manual_numbers)
+            && actionConfig.manual_numbers.some((item: any) => String(item || '').trim());
+          if (actionType === 'send_sms' && communicationTargets.phones.length > 0 && actionRecipientFields.length === 0 && !hasManualNumbers) {
             directConfigPatch.manual_numbers = Array.from(new Set([
               ...communicationTargets.phones,
-              ...((Array.isArray((action as any)?.config?.manual_numbers) ? (action as any).config.manual_numbers : []) as string[]),
             ]));
           }
 
-          if (actionType === 'send_email' && communicationTargets.emails.length > 0) {
+          const hasManualEmails = Array.isArray(actionConfig?.manual_emails)
+            && actionConfig.manual_emails.some((item: any) => String(item || '').trim());
+          if (actionType === 'send_email' && communicationTargets.emails.length > 0 && actionRecipientFields.length === 0 && !hasManualEmails) {
             directConfigPatch.manual_emails = Array.from(new Set([
               ...communicationTargets.emails,
-              ...((Array.isArray((action as any)?.config?.manual_emails) ? (action as any).config.manual_emails : []) as string[]),
             ]));
           }
 
-          if (actionType === 'send_bale_bot' && communicationTargets.baleChatIds.length > 0) {
+          const hasManualChatIds = Array.isArray(actionConfig?.manual_chat_ids)
+            && actionConfig.manual_chat_ids.some((item: any) => String(item || '').trim());
+          if (actionType === 'send_bale_bot' && communicationTargets.baleChatIds.length > 0 && actionRecipientFields.length === 0 && !hasManualChatIds) {
             directConfigPatch.manual_chat_ids = Array.from(new Set([
               ...communicationTargets.baleChatIds,
-              ...((Array.isArray((action as any)?.config?.manual_chat_ids) ? (action as any).config.manual_chat_ids : []) as string[]),
             ]));
           }
 
@@ -576,7 +631,7 @@ export const runProcessAutomationsForTaskEvent = async ({
             Object.keys(directConfigPatch).length > 0
               ? { ...(action as any), config: { ...((action as any)?.config || {}), ...directConfigPatch } }
               : (action as any),
-            sourceContext.moduleId,
+            sourceContext?.moduleId || 'tasks',
             actionRecord
           );
         }

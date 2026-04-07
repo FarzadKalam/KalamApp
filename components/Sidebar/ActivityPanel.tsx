@@ -27,6 +27,7 @@ import {
   parseMaybeJsonValue,
   RelationValueMap,
 } from '../../utils/recordDisplayFormatter';
+import { NOTES_UPDATED_EVENT } from '../../utils/aiAssistantEvents';
 
 interface ActivityPanelProps {
   moduleId: string;
@@ -37,6 +38,11 @@ interface ActivityPanelProps {
   mentionRoles?: any[];
   moduleConfig?: any;
 }
+
+const isAiNote = (note: any) =>
+  String(note?.source_type || '').trim() === 'ai'
+  || String(note?.metadata?.source_type || '').trim() === 'ai'
+  || String(note?.author_name || '').trim() === 'دستیار هوشمند';
 
 const ActivityPanel: React.FC<ActivityPanelProps> = ({
   moduleId,
@@ -456,7 +462,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       if (view === 'notes') {
         const { data, error } = await supabase
           .from('notes')
-          .select('id, module_id, record_id, content, mention_user_ids, mention_role_ids, reply_to, author_id, author_name, is_edited, edited_at, created_at')
+          .select('id, module_id, record_id, content, mention_user_ids, mention_role_ids, reply_to, author_id, author_name, source_type, metadata, is_edited, edited_at, created_at')
           .eq('module_id', moduleId)
           .eq('record_id', recordId)
           .order('created_at', { ascending: false })
@@ -499,6 +505,23 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (view !== 'notes') return;
+    const handleNotesUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<{ moduleId?: string; recordId?: string }>).detail || {};
+      if (
+        detail.moduleId
+        && detail.recordId
+        && (String(detail.moduleId) !== String(moduleId) || String(detail.recordId) !== String(recordId))
+      ) {
+        return;
+      }
+      void fetchData();
+    };
+    window.addEventListener(NOTES_UPDATED_EVENT, handleNotesUpdated as EventListener);
+    return () => window.removeEventListener(NOTES_UPDATED_EVENT, handleNotesUpdated as EventListener);
+  }, [moduleId, recordId, view]);
 
   const parseMentionValues = (values: string[]) => {
     const mention_user_ids: string[] = [];
@@ -688,10 +711,11 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                 dataSource={items}
                 renderItem={(item: any) => {
                   const parsedContent = parseNoteContent(item.content);
-                  const authorName = item.author_name || authorNameMap[item.author_id] || 'کاربر سیستم';
+                  const isAi = isAiNote(item);
+                  const authorName = isAi ? 'دستیار هوشمند' : (item.author_name || authorNameMap[item.author_id] || 'کاربر سیستم');
                   const replyTarget = items.find((note) => note.id === item.reply_to);
                   const replyAuthorName = replyTarget
-                    ? (replyTarget.author_name || authorNameMap[replyTarget.author_id] || 'کاربر سیستم')
+                    ? (isAiNote(replyTarget) ? 'دستیار هوشمند' : (replyTarget.author_name || authorNameMap[replyTarget.author_id] || 'کاربر سیستم'))
                     : null;
                   const mentionUsers = (item.mention_user_ids || []).map((id: string) => mentionMap[id]?.label || id);
                   const mentionRoles = (item.mention_role_ids || []).map((id: string) => mentionMap[id]?.label || id);
@@ -705,6 +729,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         attachments={parsedContent.attachments}
                         mentionUsers={mentionUsers}
                         mentionRoles={mentionRoles}
+                        variant={isAi ? 'ai' : 'default'}
                         replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
                         replyAuthorName={replyAuthorName}
                         isEditing={editingId === item.id}
@@ -717,8 +742,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         }}
                         isEdited={Boolean(item.is_edited)}
                         onReply={() => setReplyToId(item.id)}
-                        onEdit={() => handleEdit(item)}
-                        onDelete={() => handleDelete(item.id)}
+                        onEdit={isAi ? undefined : () => handleEdit(item)}
+                        onDelete={isAi ? undefined : () => handleDelete(item.id)}
                       />
                     </div>
                   );

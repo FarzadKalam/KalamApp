@@ -71,6 +71,40 @@ const rewriteRetinaSpriteUrl = (rawUrl: string) => {
   }
 };
 
+const MAP_LOCAL_TEXT_FONT = 'Vazirmatn';
+
+const getLocalMapFontStack = (rawFonts: unknown): string[] => {
+  const fontText = Array.isArray(rawFonts) ? rawFonts.join(' ') : String(rawFonts || '');
+  if (/semi\s*bold|semibold/i.test(fontText)) return [`${MAP_LOCAL_TEXT_FONT} SemiBold`, MAP_LOCAL_TEXT_FONT];
+  if (/bold/i.test(fontText)) return [`${MAP_LOCAL_TEXT_FONT} Bold`, MAP_LOCAL_TEXT_FONT];
+  if (/medium/i.test(fontText)) return [`${MAP_LOCAL_TEXT_FONT} Medium`, MAP_LOCAL_TEXT_FONT];
+  if (/light/i.test(fontText)) return [`${MAP_LOCAL_TEXT_FONT} Light`, MAP_LOCAL_TEXT_FONT];
+  return [MAP_LOCAL_TEXT_FONT];
+};
+
+export const sanitizeMapStyle = (_previousStyle: unknown, nextStyle: any) => {
+  const sanitizedStyle = { ...(nextStyle || {}) };
+  delete sanitizedStyle.glyphs;
+  delete sanitizedStyle.sprite;
+
+  sanitizedStyle.layers = Array.isArray(nextStyle?.layers)
+    ? nextStyle.layers.map((layer: any) => {
+        if (layer?.type !== 'symbol') return layer;
+        const layout = layer.layout || {};
+        if (!layout['text-field'] && !layout['text-font']) return layer;
+        return {
+          ...layer,
+          layout: {
+            ...layout,
+            'text-font': getLocalMapFontStack(layout['text-font']),
+          },
+        };
+      })
+    : [];
+
+  return sanitizedStyle;
+};
+
 export const buildRasterStyle = () => {
   if (!MAP_TILE_URL) {
     return buildEmptyStyle();

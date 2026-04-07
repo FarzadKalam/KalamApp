@@ -851,6 +851,12 @@ export const executeWorkflowAction = async (
       module_id: scope.module_id,
       record_id: scope.record_id,
       content: noteText,
+      source_type: 'system',
+      metadata: {
+        source_type: 'system',
+        workflow_action_type: 'send_note',
+        workflow_action_id: (action as any)?.id || null,
+      },
     });
     return;
   }
@@ -889,6 +895,10 @@ export const executeWorkflowAction = async (
       });
     }
     return;
+  }
+
+  if (action.type === 'send_email') {
+    throw new Error('ارسال ایمیل هنوز پیاده‌سازی نشده است.');
   }
 
   if (action.type === 'update_record') {

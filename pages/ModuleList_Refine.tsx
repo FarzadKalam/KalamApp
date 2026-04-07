@@ -18,6 +18,7 @@ import BulkActionsBar from "../components/moduleList/BulkActionsBar";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
 import GridView from "../components/moduleList/GridView";
 import MapView from "../components/moduleList/MapView";
+import ModuleCalendarView from "../components/moduleList/CalendarView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
 import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, GOALS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, type RecordScope } from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
@@ -43,6 +44,7 @@ import GoalsManager from "../components/goals/GoalsManager";
 import GoalProgressSlider from "../components/goals/GoalProgressSlider";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
 import { toPersianNumber } from "../utils/persianNumberFormatter";
+import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
 
 const getDefaultGridPageSize = () => 15;
 const getGridLoadStep = () => 15;
@@ -325,6 +327,7 @@ export const ModuleListRefine: React.FC<{
   const [editRecordId, setEditRecordId] = useState<string | null>(null);
   const [isBulkEditMode, setIsBulkEditMode] = useState(false);
   const [kanbanGroupBy, setKanbanGroupBy] = useState<string>("");
+  const [calendarDateField, setCalendarDateField] = useState<string>("");
   const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(effectiveInitialViewFilters);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(persistedState?.columnFilters || {});
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);  // ✅ ستون‌های انتخاب‌شده
@@ -335,6 +338,8 @@ export const ModuleListRefine: React.FC<{
   const [tagsLoading, setTagsLoading] = useState(false);
   const [gridPageSize, setGridPageSize] = useState<number>(() => getDefaultGridPageSize()); // ✅ Grid pagination
   const [kanbanVisibleCounts, setKanbanVisibleCounts] = useState<Record<string, number>>({});
+  const [kanbanDraggingRecordId, setKanbanDraggingRecordId] = useState<string | null>(null);
+  const [kanbanDragOverColumn, setKanbanDragOverColumn] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
@@ -359,6 +364,7 @@ export const ModuleListRefine: React.FC<{
   const autoSortSyncDoneRef = useRef(false);
   const lastRequestedPageSizeRef = useRef<number | null>(null);
   const utilitySlotRef = useRef<HTMLDivElement | null>(null);
+  const kanbanDragRef = useRef<{ record: any; sourceColumnKey: string; fieldKey: string } | null>(null);
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
   const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
   const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
@@ -467,7 +473,10 @@ export const ModuleListRefine: React.FC<{
     setVisibleColumns(restoredState?.visibleColumns || []);
     setGridPageSize(getDefaultGridPageSize());
     setKanbanVisibleCounts({});
+    setKanbanDraggingRecordId(null);
+    setKanbanDragOverColumn(null);
     setKanbanGroupBy("");
+    setCalendarDateField("");
     setSearchTerm(restoredState?.searchTerm || "");
     setViewFiltersState(restoredViewFilters);
     setColumnFilters(restoredState?.columnFilters || {});
@@ -647,6 +656,22 @@ export const ModuleListRefine: React.FC<{
     () => accessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
     [accessibleData]
   );
+  useEffect(() => {
+    if (typeof window === "undefined" || !resolvedModuleId) return;
+    const visibleRecordIds = (listVisibleRowKeys || accessibleRecordIds)
+      .map((key) => String(key || "").trim())
+      .filter(Boolean);
+    window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, {
+      detail: {
+        mode: "list",
+        moduleId: resolvedModuleId,
+        recordId: null,
+        visibleRecordIds,
+        selectedRecordIds: selectedRowKeys.map((key) => String(key || "").trim()).filter(Boolean),
+        route: `${window.location.pathname}${window.location.search || ""}`,
+      },
+    }));
+  }, [accessibleRecordIds, listVisibleRowKeys, resolvedModuleId, selectedRowKeys]);
   const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (!optionsReady || (shouldLoadTags && tagsLoading));
   const effectiveRelationOptions = useMemo(() => {
     if (resolvedModuleId !== "tasks") return relationOptions;
@@ -1004,6 +1029,13 @@ export const ModuleListRefine: React.FC<{
     ) || [];
   }, [moduleConfig]);
 
+  const availableCalendarFields = useMemo(() => {
+    return moduleConfig?.fields.filter((field) =>
+      (field.type === FieldType.DATE || field.type === FieldType.DATETIME) &&
+      (canViewField ? canViewField(field.key) !== false : true)
+    ) || [];
+  }, [canViewField, moduleConfig]);
+
   const mapEnabled = useMemo(() => {
     if (!moduleConfig) return false;
     return moduleConfig.fields.some((field) => field.type === FieldType.LOCATION || field.key === "location");
@@ -1157,6 +1189,17 @@ export const ModuleListRefine: React.FC<{
   }, [viewMode, kanbanGroupBy, availableGroupFields]);
 
   useEffect(() => {
+    if (viewMode !== ViewMode.CALENDAR) return;
+    const selectedFieldStillAvailable = availableCalendarFields.some((field) => field.key === calendarDateField);
+    if (calendarDateField && selectedFieldStillAvailable) return;
+    if (availableCalendarFields.length === 0) return;
+    const defaultField =
+      availableCalendarFields.find((field) => field.key === "due_date" || field.key === "invoice_date") ||
+      availableCalendarFields[0];
+    setCalendarDateField(defaultField.key);
+  }, [viewMode, calendarDateField, availableCalendarFields]);
+
+  useEffect(() => {
     setKanbanVisibleCounts({});
   }, [kanbanGroupBy, resolvedModuleId, viewMode]);
 
@@ -1165,6 +1208,12 @@ export const ModuleListRefine: React.FC<{
     if (mapEnabled) return;
     setViewMode(moduleConfig?.defaultViewMode || ViewMode.LIST);
   }, [viewMode, mapEnabled, moduleConfig?.defaultViewMode]);
+
+  useEffect(() => {
+    if (viewMode !== ViewMode.CALENDAR) return;
+    if (availableCalendarFields.length > 0) return;
+    setViewMode(moduleConfig?.defaultViewMode || ViewMode.LIST);
+  }, [viewMode, availableCalendarFields.length, moduleConfig?.defaultViewMode]);
 
   const handleRefresh = useCallback(() => {
     void tableQueryResult.refetch();
@@ -1890,6 +1939,111 @@ export const ModuleListRefine: React.FC<{
       }
   };
 
+  const handleKanbanRecordMove = useCallback(async (record: any, targetColumnKey: string) => {
+    if (!moduleConfig?.table || !kanbanGroupBy) return;
+    const groupField = moduleConfig.fields.find((field) => field.key === kanbanGroupBy);
+    if (!groupField) return;
+
+    if (!canEditModule || groupField.readonly || (canViewField ? canViewField(kanbanGroupBy) === false : false)) {
+      showListMessage("warning", "شما دسترسی ویرایش این کارت را ندارید.");
+      return;
+    }
+
+    const targetOption = groupField.options?.find((option) => String(option?.value ?? "") === String(targetColumnKey));
+    const nextValue = targetOption?.value ?? targetColumnKey;
+    if (String(record?.[kanbanGroupBy] ?? "") === String(nextValue ?? "")) return;
+
+    const changes = { [kanbanGroupBy]: nextValue };
+    const normalizedChanges = resolvedModuleId === "tasks"
+      ? attachTaskCompletionIfNeeded(changes)
+      : changes;
+    const hide = showListMessage("loading", "در حال جابجایی کارت...", 0);
+
+    try {
+      const { error } = await supabase
+        .from(moduleConfig.table)
+        .update(normalizedChanges)
+        .eq("id", record.id);
+      if (error) throw error;
+
+      showListMessage("success", "کارت جابجا شد.");
+      void tableQueryResult.refetch();
+    } catch (error: any) {
+      showListMessage("error", toFaErrorMessage(error, "جابجایی کارت ناموفق بود."));
+    } finally {
+      hide?.();
+    }
+  }, [canEditModule, canViewField, kanbanGroupBy, moduleConfig, resolvedModuleId, showListMessage, tableQueryResult]);
+
+  const handleKanbanDragHandlePointerDown = useCallback((
+    record: any,
+    sourceColumnKey: string,
+    event: React.PointerEvent<HTMLButtonElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const groupField = moduleConfig?.fields.find((field) => field.key === kanbanGroupBy);
+    if (!moduleConfig?.table || !kanbanGroupBy || !groupField || !record?.id) return;
+
+    if (!canEditModule || groupField.readonly || (canViewField ? canViewField(kanbanGroupBy) === false : false)) {
+      showListMessage("warning", "شما دسترسی ویرایش این کارت را ندارید.");
+      return;
+    }
+
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    kanbanDragRef.current = {
+      record,
+      sourceColumnKey,
+      fieldKey: kanbanGroupBy,
+    };
+    setKanbanDraggingRecordId(String(record.id));
+    setKanbanDragOverColumn(sourceColumnKey);
+
+    const previousCursor = document.body.style.cursor;
+    document.body.style.cursor = "grabbing";
+
+    const getColumnKeyFromPoint = (pointerEvent: PointerEvent) => {
+      const element = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY) as HTMLElement | null;
+      return element?.closest<HTMLElement>("[data-kanban-column-key]")?.dataset.kanbanColumnKey || null;
+    };
+
+    let cleaned = false;
+    function cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+      document.body.style.cursor = previousCursor;
+      kanbanDragRef.current = null;
+      setKanbanDraggingRecordId(null);
+      setKanbanDragOverColumn(null);
+    }
+
+    function handlePointerMove(pointerEvent: PointerEvent) {
+      setKanbanDragOverColumn(getColumnKeyFromPoint(pointerEvent));
+    }
+
+    function handlePointerUp(pointerEvent: PointerEvent) {
+      const targetColumnKey = getColumnKeyFromPoint(pointerEvent);
+      const dragState = kanbanDragRef.current;
+      cleanup();
+
+      if (!dragState || dragState.fieldKey !== kanbanGroupBy || !targetColumnKey) return;
+      if (targetColumnKey === dragState.sourceColumnKey) return;
+      void handleKanbanRecordMove(dragState.record, targetColumnKey);
+    }
+
+    function handlePointerCancel() {
+      cleanup();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", handlePointerCancel, { once: true });
+  }, [canEditModule, canViewField, handleKanbanRecordMove, kanbanGroupBy, moduleConfig, showListMessage]);
+
   const handleExport = handleExportExcel;
 
   const exportMenuItems: MenuProps["items"] = useMemo(() => {
@@ -2131,10 +2285,14 @@ export const ModuleListRefine: React.FC<{
           onSearchChange={setSearchTerm}
           onRefresh={handleRefresh}
           kanbanEnabled={availableGroupFields.length > 0}
+          calendarEnabled={availableCalendarFields.length > 0}
           mapEnabled={mapEnabled}
           kanbanGroupBy={kanbanGroupBy}
           kanbanGroupOptions={availableGroupFields.map((f) => ({ label: f.labels.fa, value: f.key }))}
           onKanbanGroupChange={setKanbanGroupBy}
+          calendarDateField={calendarDateField}
+          calendarDateFieldOptions={availableCalendarFields.map((field) => ({ label: field.labels.fa, value: field.key }))}
+          onCalendarDateFieldChange={setCalendarDateField}
         />
 
         {hasListFilterBubbles ? (
@@ -2270,8 +2428,21 @@ export const ModuleListRefine: React.FC<{
                   />
                 </div>
                 )}
+                {viewMode === ViewMode.CALENDAR && moduleConfig && resolvedModuleId && (
+                <div className="h-full">
+                  <ModuleCalendarView
+                    data={enrichedData}
+                    moduleId={resolvedModuleId}
+                    moduleConfig={moduleConfig}
+                    dateFields={availableCalendarFields}
+                    dateFieldKey={calendarDateField || availableCalendarFields[0]?.key || ""}
+                    onDateFieldChange={setCalendarDateField}
+                    navigate={navigate}
+                  />
+                </div>
+                )}
                 {viewMode === ViewMode.KANBAN && (
-                <div className="flex gap-5 md:gap-6 h-full overflow-x-auto pb-4 px-2">
+                <div className="flex items-start gap-5 md:gap-6 h-full overflow-x-auto pb-4 px-2">
                   {moduleConfig.fields.find(f => f.key === kanbanGroupBy)?.options?.map((col: any) => {
                     const columnKey = String(col?.value ?? '');
                     const columnItems = enrichedData.filter((d: any) => d[kanbanGroupBy] === col.value);
@@ -2279,7 +2450,11 @@ export const ModuleListRefine: React.FC<{
                     const visibleItems = columnItems.slice(0, visibleCount);
                     const canLoadMore = columnItems.length > visibleCount;
                     return (
-                      <div key={col.value} className="min-w-[292px] w-[292px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border border-gray-200 dark:border-gray-800 shadow-sm h-full">
+                      <div
+                        key={columnKey}
+                        data-kanban-column-key={columnKey}
+                        className={`min-w-[292px] w-[292px] flex flex-col bg-gray-100/55 dark:bg-white/5 rounded-[1.6rem] p-3 border border-gray-200 dark:border-gray-800 shadow-sm h-full transition ${kanbanDragOverColumn === columnKey ? "ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}`}
+                      >
                         <div className="flex items-center justify-between p-2 mb-2">
                           <div className="flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: col.color || '#ccc' }}></span>
@@ -2289,7 +2464,7 @@ export const ModuleListRefine: React.FC<{
                             {columnItems.length}
                           </span>
                         </div>
-                        <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3 custom-scrollbar pb-2">
+                        <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-4 custom-scrollbar py-1 pb-3">
                           {visibleItems.map((item: any) => (
                             <RenderCardItem 
                               key={item.id} 
@@ -2308,6 +2483,12 @@ export const ModuleListRefine: React.FC<{
                               allUsers={allUsers}
                               allRoles={allRoles}
                               relationOptions={effectiveRelationOptions}
+                              showDragHandle={canEditModule && !!kanbanGroupBy}
+                              isDragActive={kanbanDraggingRecordId === String(item?.id || "")}
+                              dragHandleTitle="جابجایی کارت"
+                              onDragHandlePointerDown={(cardItem, event) =>
+                                handleKanbanDragHandlePointerDown(cardItem, columnKey, event)
+                              }
                             />
                           ))}
                         </div>

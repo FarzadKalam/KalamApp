@@ -13,6 +13,7 @@ import {
   Typography,
 } from 'antd';
 import {
+  CalendarOutlined,
   ClockCircleOutlined,
   CopyOutlined,
   EditOutlined,
@@ -27,8 +28,9 @@ import {
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import PersianDatePicker from '../components/PersianDatePicker';
-import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { parseDateValue, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { getHolidaySummaryForDate, type HolidayDaySummary } from '../utils/holidayCalendar';
 
 const { Title, Text } = Typography;
 
@@ -184,6 +186,28 @@ const avgDailyMinutes = (columns: ColumnState[]) => {
   return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : 480;
 };
 
+const dayKeyFromDate = (date: Date): DayKey => {
+  const keys: DayKey[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  return keys[date.getDay()];
+};
+
+const buildDateRange = (from?: string | null, to?: string | null) => {
+  const start = parseDateValue(from)?.toDate();
+  const end = parseDateValue(to)?.toDate();
+  if (!start || !end || start.getTime() > end.getTime()) return [];
+
+  start.setHours(12, 0, 0, 0);
+  end.setHours(12, 0, 0, 0);
+
+  const days: Date[] = [];
+  const cursor = new Date(start);
+  while (cursor.getTime() <= end.getTime() && days.length < 370) {
+    days.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+};
+
 const WorkSchedulesPage: React.FC = () => {
   const { message } = App.useApp();
   const navigate = useNavigate();
@@ -210,6 +234,8 @@ const WorkSchedulesPage: React.FC = () => {
   const [departmentFilter, setDepartmentFilter] = useState<string | undefined>();
   const [copyPopover, setCopyPopover] = useState<{ columnKey: string; dayKey: DayKey } | null>(null);
   const [copyTargets, setCopyTargets] = useState<DayKey[]>([]);
+  const [officialHolidaySummaries, setOfficialHolidaySummaries] = useState<HolidayDaySummary[]>([]);
+  const [officialHolidaysLoading, setOfficialHolidaysLoading] = useState(false);
 
   useEffect(() => {
     setRecordId(id || null);
@@ -310,6 +336,43 @@ const WorkSchedulesPage: React.FC = () => {
     () => visibleColumns.filter((column) => Boolean(column.employeeId)),
     [visibleColumns],
   );
+
+  useEffect(() => {
+    let isActive = true;
+    const dates = buildDateRange(effectiveFrom, effectiveTo);
+
+    if (!dates.length) {
+      setOfficialHolidaySummaries([]);
+      setOfficialHolidaysLoading(false);
+      return;
+    }
+
+    setOfficialHolidaysLoading(true);
+    void Promise.all(dates.map((date) => getHolidaySummaryForDate(date)))
+      .then((summaries) => {
+        if (!isActive) return;
+        setOfficialHolidaySummaries(
+          summaries.filter((summary): summary is HolidayDaySummary => !!summary?.isOfficialHoliday)
+        );
+      })
+      .finally(() => {
+        if (isActive) setOfficialHolidaysLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [effectiveFrom, effectiveTo]);
+
+  const officialHolidayCountsByDay = useMemo(() => {
+    return officialHolidaySummaries.reduce<Record<DayKey, number>>((acc, summary) => {
+      const date = parseDateValue(summary.dateKey)?.toDate();
+      if (!date) return acc;
+      const dayKey = dayKeyFromDate(date);
+      acc[dayKey] = (acc[dayKey] || 0) + 1;
+      return acc;
+    }, { sat: 0, sun: 0, mon: 0, tue: 0, wed: 0, thu: 0, fri: 0 });
+  }, [officialHolidaySummaries]);
 
   const getEmployeeOptions = useCallback(
     (currentEmployeeId: string | null) => {
@@ -545,11 +608,16 @@ const WorkSchedulesPage: React.FC = () => {
         </div>
 
         <div className="divide-y divide-gray-100 dark:divide-white/5">
-          {DAYS.map((day) => (
+          {DAYS.map((day) => {
+            const holidayCount = officialHolidayCountsByDay[day.key] || 0;
+            return (
             <div key={`${column.key}_${day.key}`} className="px-5 py-4">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div className="font-bold text-gray-800 dark:text-white">{day.label}</div>
-                {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
+                <div className="flex flex-wrap justify-end gap-1">
+                  {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
+                  {holidayCount > 0 && <Tag color="red">{toPersianNumber(holidayCount)} تعطیلی در بازه</Tag>}
+                </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {SHIFTS.map((shift) => {
@@ -575,7 +643,8 @@ const WorkSchedulesPage: React.FC = () => {
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="p-5 border-t border-gray-200 dark:border-gray-800">
@@ -670,6 +739,32 @@ const WorkSchedulesPage: React.FC = () => {
               </span>
             </div>
           </div>
+
+          {(officialHolidaysLoading || officialHolidaySummaries.length > 0) && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/70 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/20 dark:text-rose-200">
+              <div className="mb-2 flex items-center gap-2 font-bold">
+                <CalendarOutlined />
+                <span>تعطیلی‌های رسمی در بازه برنامه حضور</span>
+              </div>
+              {officialHolidaysLoading ? (
+                <div className="text-xs opacity-80">در حال بررسی تقویم رسمی...</div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {officialHolidaySummaries.slice(0, 10).map((summary) => (
+                    <Tag key={summary.dateKey} color="red" className="!m-0 max-w-full !rounded-lg !px-2 !py-1">
+                      <span className="font-bold">{summary.jalaliLabel}</span>
+                      {summary.occasions[0]?.title ? ` - ${summary.occasions[0].title}` : ''}
+                    </Tag>
+                  ))}
+                  {officialHolidaySummaries.length > 10 ? (
+                    <Tag color="red" className="!m-0 !rounded-lg !px-2 !py-1">
+                      +{toPersianNumber(officialHolidaySummaries.length - 10)} روز دیگر
+                    </Tag>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -762,8 +857,9 @@ const WorkSchedulesPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {DAYS.map((day) =>
-                  SHIFTS.map((shift, shiftIndex) => (
+                {DAYS.map((day) => {
+                  const holidayCount = officialHolidayCountsByDay[day.key] || 0;
+                  return SHIFTS.map((shift, shiftIndex) => (
                     <tr key={`${day.key}_${shift.key}`} className={day.accent}>
                       {shiftIndex === 0 && (
                         <td
@@ -774,6 +870,7 @@ const WorkSchedulesPage: React.FC = () => {
                           <div className="flex flex-col gap-1">
                             <span>{day.label}</span>
                             {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
+                            {holidayCount > 0 && <Tag color="red">{toPersianNumber(holidayCount)} تعطیلی در بازه</Tag>}
                           </div>
                         </td>
                       )}
@@ -874,8 +971,8 @@ const WorkSchedulesPage: React.FC = () => {
                         );
                       })}
                     </tr>
-                  )),
-                )}
+                  ));
+                })}
               </tbody>
             </table>
           </div>

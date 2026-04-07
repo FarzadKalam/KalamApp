@@ -4,7 +4,8 @@ import maplibregl from 'maplibre-gl';
 import { FieldType, ModuleDefinition } from '../../types';
 import { getRecordTitle } from '../../utils/recordTitle';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, isInsideIran, parseLocationValue } from '../../utils/location';
-import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL } from '../../utils/mapConfig';
+import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL, sanitizeMapStyle } from '../../utils/mapConfig';
+import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../../utils/maplibreRuntime';
 import { createThemeMapPinElement } from '../../utils/mapPin';
 import RelatedRecordPopover from '../RelatedRecordPopover';
 
@@ -134,9 +135,11 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
     const rasterFallbackStyle = buildRasterStyle();
     let fallbackApplied = false;
 
+    ensureMapLibreRTLTextPlugin();
+
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: buildMapStyle() as any,
+      style: (useRemoteStyle ? rasterFallbackStyle : buildMapStyle()) as any,
       transformRequest: buildMapTransformRequest() as any,
       center: [IRAN_CENTER[1], IRAN_CENTER[0]],
       zoom: 5,
@@ -151,6 +154,7 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
 
     mapRef.current = map;
     map.on('load', () => map.resize());
+    attachMissingMapImageFallback(map);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
     map.addControl(
       new maplibregl.GeolocateControl({
@@ -177,6 +181,10 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
       fallbackApplied = true;
       map.setStyle(rasterFallbackStyle as any, { diff: false } as any);
     });
+
+    if (useRemoteStyle) {
+      map.setStyle(MAP_STYLE_URL, { diff: false, transformStyle: sanitizeMapStyle } as any);
+    }
 
     return () => {
       markersRef.current.forEach((marker) => marker.remove());

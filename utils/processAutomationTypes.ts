@@ -61,8 +61,8 @@ export const PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION = {
 };
 
 const PROCESS_AUTOMATION_TRIGGER_LABELS: Record<ProcessAutomationTriggerType, string> = {
-  on_create: 'وقتی رکورد جدید ایجاد شد',
-  on_upsert: 'وقتی رکورد ایجاد یا به روز شد',
+  on_create: 'وقتی فعالیت جدید ایجاد شد',
+  on_upsert: 'وقتی فعالیت ایجاد یا به روز شد',
   interval: 'بر اساس بازه زمانی',
   previous_stage_completed: 'وقتی فعالیت قبلی تکمیل شد',
 };

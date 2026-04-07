@@ -22,6 +22,7 @@ import SharedNoteComposer from './notes/SharedNoteComposer';
 import RenderCardItem from './moduleList/RenderCardItem';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import ProductionStagesField from './ProductionStagesField';
+import { NOTES_UPDATED_EVENT } from '../utils/aiAssistantEvents';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -35,6 +36,8 @@ const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
 const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, 'primary' | 'id_only' | 'none'>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities';
+const SYSTEM_MESSAGES_USER_ID = '__system_messages__';
+const NOTE_SELECT_FIELDS = 'id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to, source_type, metadata, is_edited, edited_at';
 
 const loadSeenSet = (key: string) => {
   if (typeof window === 'undefined') return new Set<string>();
@@ -124,6 +127,11 @@ const getNoteMentionUserIds = (note: any) =>
   Array.isArray(note?.mention_user_ids)
     ? note.mention_user_ids.map((id: string) => String(id))
     : [];
+
+const isSystemNote = (note: any) =>
+  String(note?.source_type || '').trim() === 'system'
+  || String(note?.metadata?.source_type || '').trim() === 'system'
+  || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id);
 
 const isDirectConversationNote = (
   note: any,
@@ -487,14 +495,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const [{ data: mentionedUser, error: mentionedUserError }, { data: mentionedRole, error: mentionedRoleError }] = await Promise.all([
       supabase
         .from('notes')
-        .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
+        .select(NOTE_SELECT_FIELDS)
         .contains('mention_user_ids', [userId])
         .order('created_at', { ascending: false })
         .limit(40),
       roleId
         ? supabase
             .from('notes')
-            .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
+            .select(NOTE_SELECT_FIELDS)
             .contains('mention_role_ids', [roleId])
             .order('created_at', { ascending: false })
             .limit(40)
@@ -512,7 +520,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
     const { data: myNotes, error: myNotesError } = await supabase
       .from('notes')
-      .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
+      .select(NOTE_SELECT_FIELDS)
       .eq('author_id', userId)
       .order('created_at', { ascending: false })
       .limit(40);
@@ -530,7 +538,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (myNoteIds.length) {
       const { data, error } = await supabase
         .from('notes')
-        .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
+        .select(NOTE_SELECT_FIELDS)
         .in('reply_to', myNoteIds)
         .order('created_at', { ascending: false })
         .limit(40);
@@ -545,7 +553,21 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       replyNotes = data || [];
     }
 
-    const assignedPairs = await getAssignedRecordPairs();
+    const withTimeout = async <T,>(promise: Promise<T>, fallback: T, timeoutMs = 1200) => {
+      let timeoutId: number | undefined;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<T>((resolve) => {
+            timeoutId = window.setTimeout(() => resolve(fallback), timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId) window.clearTimeout(timeoutId);
+      }
+    };
+
+    const assignedPairs = await withTimeout(getAssignedRecordPairs(), [] as { module_id: string; record_id: string }[]);
     const grouped: Record<string, string[]> = {};
     assignedPairs.forEach((item) => {
       if (!item.module_id || !item.record_id) return;
@@ -553,11 +575,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       if (!grouped[item.module_id].includes(item.record_id)) grouped[item.module_id].push(item.record_id);
     });
     const assignedNotes: any[] = [];
-    await Promise.all(
+    await withTimeout(Promise.all(
       Object.entries(grouped).map(async ([moduleId, ids]) => {
         const { data, error } = await supabase
           .from('notes')
-          .select('id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to')
+          .select(NOTE_SELECT_FIELDS)
           .eq('module_id', moduleId)
           .in('record_id', ids)
           .order('created_at', { ascending: false })
@@ -572,9 +594,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         }
         if (data?.length) assignedNotes.push(...data);
       })
-    );
+    ), [] as any[]);
 
-    const merged = [...(mentionedUser || []), ...(mentionedRole || []), ...replyNotes, ...(myNotes || []), ...assignedNotes];
+    const merged = [...(mentionedUser || []), ...(mentionedRole || []), ...replyNotes, ...(myNotes || []), ...assignedNotes]
+      .filter((note: any) => String(note?.source_type || '').trim() !== 'ai' && String(note?.metadata?.source_type || '').trim() !== 'ai');
     const uniq = new Map<string, any>();
     merged.forEach((note) => {
       uniq.set(note.id, note);
@@ -793,6 +816,17 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (showSkeleton) setLoadingResponsibilities(false);
   };
 
+  useEffect(() => {
+    const handleNotesUpdated = () => {
+      notesPollingPausedRef.current = false;
+      notesPollingPauseLoggedRef.current = false;
+      lastLoadedAtRef.current.notes = 0;
+      void refreshSection('notes', { force: true });
+    };
+    window.addEventListener(NOTES_UPDATED_EVENT, handleNotesUpdated);
+    return () => window.removeEventListener(NOTES_UPDATED_EVENT, handleNotesUpdated);
+  }, [profile.id]);
+
   const refreshAll = async (notify = false, options?: { force?: boolean }) => {
     if (!profile.id) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -1008,6 +1042,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   );
   const filteredNotes = useMemo(() => {
     if (!selectedNoteUserId) return notes;
+    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
+      return notes.filter((note: any) => isSystemNote(note));
+    }
     const targetUserId = String(selectedNoteUserId);
     const currentUserId = String(profile.id || '');
     return notes.filter((note: any) =>
@@ -1043,6 +1080,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         return String(a.display_name || '').localeCompare(String(b.display_name || ''), 'fa');
       })
   ), [directoryUsers, noteLookup, notes, profile.id, seenNoteIds]);
+  const systemNoteStats = useMemo(() => {
+    const systemNotes = notes.filter((note: any) => isSystemNote(note));
+    const latestMessageAt = systemNotes.reduce<number>((latest, note: any) => {
+      const createdAt = new Date(note?.created_at || '').getTime();
+      return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
+    }, 0);
+    const unreadCount = systemNotes.filter((note: any) => !seenNoteIds.has(String(note?.id || ''))).length;
+    return { noteCount: systemNotes.length, latestMessageAt, unreadCount };
+  }, [notes, seenNoteIds]);
   const visibleNoteUsers = useMemo(() => {
     const search = String(noteUserSearch || '').trim().toLowerCase();
     if (!search) return noteUsersWithActivity;
@@ -1052,6 +1098,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   }, [noteUserSearch, noteUsersWithActivity]);
   const selectedNoteUser = useMemo(() => {
     if (!selectedNoteUserId) return null;
+    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
+      return {
+        id: SYSTEM_MESSAGES_USER_ID,
+        display_name: 'پیام‌های سیستم',
+        avatar_url: null,
+        role_id: null,
+      };
+    }
     return directoryUserMap[String(selectedNoteUserId)] || null;
   }, [directoryUserMap, selectedNoteUserId]);
   const orderedFilteredNotes = useMemo(
@@ -1078,9 +1132,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     });
   }, [authorNameMap, directoryUserMap, normalizedNoteMessageSearch, orderedFilteredNotes]);
   const activeConversationRoleLabel = useMemo(() => {
+    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return 'یادداشت‌های ثبت‌شده توسط گردش کارها و اتوماسیون‌ها';
     if (!selectedNoteUser?.role_id) return 'بدون نقش';
     return roleLookup[String(selectedNoteUser.role_id)] || 'بدون نقش';
-  }, [roleLookup, selectedNoteUser]);
+  }, [roleLookup, selectedNoteUser, selectedNoteUserId]);
   const forwardTargetOptions = useMemo(
     () => directoryUsers
       .filter((user) => String(user.id) !== String(profile.id || ''))
@@ -1275,7 +1330,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       if (normalizedValue.startsWith('role:')) mentionRoleIds.add(normalizedValue.replace('role:', ''));
     });
 
-    if (selectedNoteUserId) {
+    if (selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID) {
       mentionUserIds.add(String(selectedNoteUserId));
     }
 
@@ -1296,35 +1351,39 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const submitNote = async () => {
     if (!noteText.trim() && noteAttachments.length === 0) return;
 
-    const scope = normalizeNoteScope(noteModuleId, noteRecordId);
-    const { mentionUserIds, mentionRoleIds } = parseMentionSelections(mentionValues);
-    const attachments = noteAttachments.length > 0
-      ? await uploadNoteAttachments(scope.hasLinkedRecord ? scope.module_id : null, scope.hasLinkedRecord ? scope.record_id : null, noteAttachments)
-      : [];
+    try {
+      const scope = normalizeNoteScope(noteModuleId, noteRecordId);
+      const { mentionUserIds, mentionRoleIds } = parseMentionSelections(mentionValues);
+      const attachments = noteAttachments.length > 0
+        ? await uploadNoteAttachments(scope.hasLinkedRecord ? scope.module_id : null, scope.hasLinkedRecord ? scope.record_id : null, noteAttachments)
+        : [];
 
-    const payload = {
-      module_id: scope.module_id,
-      record_id: scope.record_id,
-      content: serializeNoteContent(noteText, attachments),
-      reply_to: noteReplyTo || null,
-      mention_user_ids: mentionUserIds,
-      mention_role_ids: mentionRoleIds,
-      author_id: profile.id,
-      author_name: directoryUserMap[String(profile.id || '')]?.display_name || null,
-    };
+      const payload = {
+        module_id: scope.module_id,
+        record_id: scope.record_id,
+        content: serializeNoteContent(noteText, attachments),
+        reply_to: noteReplyTo || null,
+        mention_user_ids: mentionUserIds,
+        mention_role_ids: mentionRoleIds,
+        author_id: profile.id,
+        author_name: directoryUserMap[String(profile.id || '')]?.display_name || null,
+      };
 
-    const { error } = await supabase.from('notes').insert([payload]);
-    if (error) throw error;
+      const { error } = await supabase.from('notes').insert([payload]);
+      if (error) throw error;
 
-    noteShouldStickToBottomRef.current = true;
-    noteForceScrollToBottomRef.current = true;
-    resetNoteComposer();
-    await refreshSection('notes', { force: true });
+      noteShouldStickToBottomRef.current = true;
+      noteForceScrollToBottomRef.current = true;
+      resetNoteComposer();
+      await refreshSection('notes', { force: true });
+    } catch (error: any) {
+      message.error(String(error?.message || 'ثبت یادداشت ناموفق بود.'));
+    }
   };
 
   const openForwardModal = (note: any) => {
     setForwardingNote(note);
-    setForwardTargetUserIds(selectedNoteUserId ? [String(selectedNoteUserId)] : []);
+    setForwardTargetUserIds(selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID ? [String(selectedNoteUserId)] : []);
   };
 
   const submitForward = async () => {
@@ -1415,6 +1474,35 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium">همه گفتگوها</span>
                   <span className="text-[11px] text-gray-400">{toPersianNumber(String(notes.length || 0))}</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileNoteSearchOpen(false);
+                  setSelectedNoteUserId((prev) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID));
+                }}
+                className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
+                  selectedNoteUserId === SYSTEM_MESSAGES_USER_ID
+                    ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
+                    : 'hover:bg-white/80 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Avatar size={36} className="!bg-[rgba(var(--brand-100-rgb),0.95)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-white/10 dark:!text-[rgb(var(--brand-300-rgb))]">
+                    <BellOutlined />
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">پیام‌های سیستم</div>
+                    <div className="text-[11px] text-gray-400">
+                      {systemNoteStats.noteCount > 0 ? `${toPersianNumber(String(systemNoteStats.noteCount))} پیام` : 'بدون پیام'}
+                    </div>
+                  </div>
+                  {systemNoteStats.unreadCount > 0 ? (
+                    <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
+                      {toPersianNumber(String(systemNoteStats.unreadCount))}
+                    </span>
+                  ) : null}
                 </div>
               </button>
               {visibleNoteUsers.map((user) => (
@@ -1512,9 +1600,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               data.map((note: any) => {
                 const recordKey = `${note.module_id}:${note.record_id}`;
                 const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id });
-                const isMine = note.author_id && profile.id && note.author_id === profile.id;
+                const isSystem = isSystemNote(note);
+                const isMine = !isSystem && note.author_id && profile.id && note.author_id === profile.id;
                 const author = directoryUserMap[String(note.author_id || '')];
-                const authorName = isMine ? 'شما' : (note.author_name || author?.display_name || authorNameMap[note.author_id] || 'کاربر سیستم');
+                const authorName = isSystem ? 'پیام‌های سیستم' : (isMine ? 'شما' : (note.author_name || author?.display_name || authorNameMap[note.author_id] || 'کاربر سیستم'));
                 const replyTarget = note.reply_to ? noteMap.get(note.reply_to) : null;
                 const replyAuthorName = replyTarget
                   ? (
@@ -1546,6 +1635,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                       replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
                       replyAuthorName={replyAuthorName}
                       isMine={Boolean(isMine)}
+                      variant="default"
                       isEdited={Boolean(note.is_edited)}
                       isEditing={editingNoteId === note.id}
                       editingValue={editingNoteValue}
@@ -1644,7 +1734,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             value={noteText}
             onChange={setNoteText}
             onSubmit={submitNote}
-            placeholder={selectedNoteUser ? `پیام به ${selectedNoteUser.display_name}...` : 'یادداشت جدید...'}
+            placeholder={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'این گفتگو فقط پیام‌های سیستم را نمایش می‌دهد.' : (selectedNoteUser ? `پیام به ${selectedNoteUser.display_name}...` : 'یادداشت جدید...')}
             mentionOptions={mentionOptions}
             mentionValues={mentionValues}
             onMentionChange={(values) => setMentionValues(values || [])}
@@ -1665,7 +1755,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             }}
             replyActive={Boolean(noteReplyTo)}
             onClearReply={() => setNoteReplyTo(null)}
-            submitDisabled={!noteText.trim() && noteAttachments.length === 0}
+            submitDisabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0)}
           />
         </div>
         {withMobileUserRail ? (
@@ -1712,6 +1802,29 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                   همه
                 </div>
                 <span className="text-[10px] text-gray-500 dark:text-gray-400">{toPersianNumber(String(notes.length || 0))}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedNoteUserId((prev) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID))}
+                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1.5 py-2 transition-colors hover:bg-white/80 dark:hover:bg-white/5"
+                title="پیام‌های سیستم"
+              >
+                <div className="relative">
+                  <Badge count={systemNoteStats.unreadCount > 0 ? toPersianNumber(String(systemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
+                    <Avatar
+                      size={44}
+                      className={`!bg-[rgba(var(--brand-100-rgb),0.95)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-white/10 dark:!text-[rgb(var(--brand-300-rgb))] ${
+                        selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 ring-offset-white dark:ring-offset-[rgba(var(--app-dark-surface-rgb),1)]' : ''
+                      }`}
+                    >
+                      <BellOutlined />
+                    </Avatar>
+                  </Badge>
+                </div>
+                <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
+                  سیستم
+                </span>
               </button>
 
               {visibleNoteUsers.map((user) => (
@@ -1766,8 +1879,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             data.map((note: any) => {
               const recordKey = `${note.module_id}:${note.record_id}`;
               const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id });
-              const isMine = note.author_id && profile.id && note.author_id === profile.id;
-              const authorName = isMine ? 'شما' : (note.author_name || authorNameMap[note.author_id] || 'کاربر سیستم');
+              const isSystem = isSystemNote(note);
+              const isMine = !isSystem && note.author_id && profile.id && note.author_id === profile.id;
+              const authorName = isSystem ? 'پیام‌های سیستم' : (isMine ? 'شما' : (note.author_name || authorNameMap[note.author_id] || 'کاربر سیستم'));
               const replyTarget = note.reply_to ? noteMap.get(note.reply_to) : null;
               const parsedContent = parseNoteContent(note.content);
               return (
@@ -1921,11 +2035,12 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           </div>
           <div className="flex flex-col gap-2">
             <Input.TextArea
-              placeholder="یادداشت جدید..."
+              placeholder={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'این گفتگو فقط پیام‌های سیستم را نمایش می‌دهد.' : 'یادداشت جدید...'}
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
               autoSize={{ minRows: 2, maxRows: 4 }}
               className="rounded-lg border-gray-300"
+              disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
             />
             <Select
               mode="multiple"
@@ -1937,6 +2052,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               options={mentionOptions}
               optionFilterProp="label"
               className="w-full"
+              disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
               getPopupContainer={(node) => node.parentElement || document.body}
               styles={{ popup: { root: { zIndex: 1100, minWidth: 240 } } }}
             />
@@ -1950,6 +2066,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             <div className="flex justify-end">
               <Button
                 type="primary"
+                disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0)}
                 onClick={async () => {
                   await submitNote();
                 }}

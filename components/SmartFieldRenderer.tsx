@@ -36,7 +36,8 @@ import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
-import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL } from '../utils/mapConfig';
+import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL, sanitizeMapStyle } from '../utils/mapConfig';
+import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../utils/maplibreRuntime';
 import { createThemeMapPinElement } from '../utils/mapPin';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
@@ -168,9 +169,11 @@ const LocationPickerMap: React.FC<{
     const rasterFallbackStyle = buildRasterStyle();
     let fallbackApplied = false;
 
+    ensureMapLibreRTLTextPlugin();
+
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: buildMapStyle() as any,
+      style: (useRemoteStyle ? rasterFallbackStyle : buildMapStyle()) as any,
       transformRequest: buildMapTransformRequest() as any,
       center,
       zoom: value ? 12 : 5,
@@ -189,6 +192,7 @@ const LocationPickerMap: React.FC<{
       window.requestAnimationFrame(() => map.resize());
       window.setTimeout(() => map.resize(), 220);
     });
+    attachMissingMapImageFallback(map);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
     map.addControl(
       new maplibregl.GeolocateControl({
@@ -215,6 +219,9 @@ const LocationPickerMap: React.FC<{
       fallbackApplied = true;
       map.setStyle(rasterFallbackStyle as any, { diff: false } as any);
     });
+    if (useRemoteStyle) {
+      map.setStyle(MAP_STYLE_URL, { diff: false, transformStyle: sanitizeMapStyle } as any);
+    }
     map.on('click', (event) => {
       onChange({ lat: event.lngLat.lat, lng: event.lngLat.lng });
     });

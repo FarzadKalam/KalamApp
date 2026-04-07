@@ -10,6 +10,7 @@ import {
   PaperClipOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
+import AiSparkleIcon from '../ai/AiSparkleIcon';
 
 interface SharedNoteCardProps {
   authorName: string;
@@ -34,6 +35,7 @@ interface SharedNoteCardProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onForward?: () => void;
+  variant?: 'default' | 'ai';
 }
 
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
@@ -59,20 +61,23 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onEdit,
   onDelete,
   onForward,
+  variant = 'default',
 }) => (
   <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
       <Avatar
         size={30}
         src={avatarUrl || undefined}
-        className="mt-0.5 shrink-0"
+        className={`mt-0.5 shrink-0 ${variant === 'ai' ? '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]' : ''}`}
       >
-        {!avatarUrl && (avatarFallback || authorName || '?').slice(0, 1)}
+        {!avatarUrl && (variant === 'ai' ? <AiSparkleIcon className="h-4 w-4" /> : (avatarFallback || authorName || '?').slice(0, 1))}
       </Avatar>
       <div
         dir="rtl"
         className={`min-w-0 max-w-[calc(100%-2.3rem)] text-right rounded-2xl px-2.5 py-2 border shadow-sm ${
-          isMine
+          variant === 'ai'
+            ? 'bg-[#fdf2f8] dark:bg-[#3b1022] border-[#f0abfc] dark:border-[#be185d]/45 rounded-tl-sm'
+            : isMine
             ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-tr-sm'
             : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-tl-sm'
         }`}

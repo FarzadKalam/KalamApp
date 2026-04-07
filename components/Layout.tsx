@@ -28,8 +28,9 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import QrScanPopover from './QrScanPopover';
 import NotificationsPopover from './NotificationsPopover';
+import AssistantDrawer from './ai/AssistantDrawer';
+import AiSparkleIcon from './ai/AiSparkleIcon';
 import { getRecordTitle } from '../utils/recordTitle';
 import {
   ACCOUNTING_PERMISSION_KEY,
@@ -63,6 +64,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   
@@ -656,17 +658,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
-            <QrScanPopover
-              label=""
-              buttonProps={{ type: 'text', shape: 'circle' }}
-              buttonClassName="text-gray-500 dark:text-gray-400 hover:text-leather-500"
-              onScan={({ moduleId, recordId }) => {
-                if (moduleId && recordId) {
-                  navigate(`/${moduleId}/${recordId}`);
-                  return;
-                }
-                messageApi.warning('کد معتبر نیست');
-              }}
+            <Button
+              type="text"
+              shape="circle"
+              icon={<AiSparkleIcon className="h-[18px] w-[18px]" />}
+              onClick={() => setAssistantOpen(true)}
+              className="text-[#be185d] dark:text-[#f9a8d4] hover:!text-[#a21caf] hover:!bg-[#fdf2f8] dark:hover:!bg-[#3b1022]"
+              title="دستیار هوشمند"
             />
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
             <NotificationsPopover isMobile={isMobile} />
@@ -735,6 +733,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
              })}
           </div>
         )}
+        <AssistantDrawer
+          open={assistantOpen}
+          onClose={() => setAssistantOpen(false)}
+          isMobile={isMobile}
+        />
       </AntLayout>
     </AntLayout>
   );

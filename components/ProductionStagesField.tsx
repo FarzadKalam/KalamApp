@@ -102,7 +102,7 @@ interface ProductionStagesFieldProps {
   onQuantityChange?: (qty: number) => void;
   orderStatus?: string | null;
   draftStages?: any[];
-  onDraftStagesChange?: (stages: any[]) => void;
+  onDraftStagesChange?: (stages: any[]) => void | Promise<void>;
   showWageSummary?: boolean;
 }
 
@@ -265,8 +265,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [draftToCreate, setDraftToCreate] = useState<any | null>(null);
   const [editingDraft, setEditingDraft] = useState<any | null>(null);
   const [draftAutomationRules, setDraftAutomationRules] = useState<ProcessAutomationRule[]>([]);
+  const [isSavingDraftStage, setIsSavingDraftStage] = useState(false);
   const [isReadyToLoad, setIsReadyToLoad] = useState(!lazyLoad);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const draftLocalRef = useRef<any[]>(Array.isArray(draftStages) ? draftStages : []);
+  const draftEditorStageIdRef = useRef<any>(null);
+  const draftStageSavePromiseRef = useRef<Promise<any> | null>(null);
   const isBom = moduleId === 'production_boms';
   const isProcessTemplateModule = moduleId === 'process_templates';
   const isDraftOnlyModule = isBom || isProcessTemplateModule;
@@ -316,7 +320,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
   const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
   const autoOpenedTaskIdRef = useRef<string | null>(null);
-  const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', draftForm);
+  const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
   const modalSelectProps = useMemo(
     () => ({
       allowClear: true,
@@ -327,6 +331,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       popupMatchSelectWidth: false,
       listHeight: 260,
       virtual: false,
+    }),
+    []
+  );
+  const processAutomationTriggerTypeOptions = useMemo(
+    () => triggerTypeOptions.map((option) => {
+      if (option.value === 'on_create') {
+        return { ...option, label: 'وقتی فعالیت جدید ایجاد شد' };
+      }
+      if (option.value === 'on_upsert') {
+        return { ...option, label: 'وقتی فعالیت ایجاد یا به روز شد' };
+      }
+      return option;
     }),
     []
   );
@@ -477,9 +493,89 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     onQuantityChangeRef.current = onQuantityChange;
   }, [onQuantityChange]);
 
+  const normalizeDraftStageForEditor = useCallback((stage: any, index = 0) => {
+    const metadata = stage?.metadata && typeof stage.metadata === 'object' && !Array.isArray(stage.metadata)
+      ? stage.metadata
+      : {};
+    const firstText = (...values: any[]) =>
+      values.map((value) => String(value ?? '').trim()).find(Boolean) || '';
+    const stageName = firstText(
+      stage?.name,
+      stage?.stage_name,
+      stage?.title,
+      metadata?.name,
+      metadata?.stage_name
+    ) || `مرحله ${index + 1}`;
+    const description = firstText(stage?.description, metadata?.description) || null;
+    const taskType = firstText(stage?.task_type, metadata?.task_type) || null;
+    const automationRules = normalizeProcessAutomationRules(
+      Array.isArray(stage?.automation_rules)
+        ? stage.automation_rules
+        : metadata?.automation_rules
+    );
+    const processTaskCustomFields = normalizeProcessTaskCustomFields(
+      Array.isArray(stage?.process_task_custom_fields)
+        ? stage.process_task_custom_fields
+        : (Array.isArray(stage?.custom_task_fields)
+          ? stage.custom_task_fields
+          : metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY])
+    );
+    const processTaskStatusOptions = normalizeProcessTaskStatusOptions(
+      Array.isArray(stage?.process_task_status_options)
+        ? stage.process_task_status_options
+        : metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
+    );
+    const readNumber = (value: any, fallback = 0) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const sortOrder = readNumber(stage?.sort_order, (index + 1) * 10) || ((index + 1) * 10);
+    const weight = readNumber(stage?.weight ?? metadata?.weight, 0);
+    const durationValue = readNumber(stage?.duration_value ?? metadata?.duration_value, 0);
+    const durationUnit = String(stage?.duration_unit ?? metadata?.duration_unit ?? 'day') === 'hour' ? 'hour' : 'day';
+    const durationFrom = String(stage?.duration_from ?? metadata?.duration_from ?? 'project_start') === 'previous_stage_end'
+      ? 'previous_stage_end'
+      : 'project_start';
+    const id = stage?.id || stage?.template_stage_id || stage?.process_run_stage_id || `draft_${index + 1}_${sortOrder}`;
+
+    return {
+      ...(stage || {}),
+      id,
+      name: stageName,
+      title: stage?.title || stageName,
+      stage_name: stage?.stage_name || stageName,
+      description,
+      task_type: taskType,
+      automation_rules: automationRules,
+      process_task_custom_fields: processTaskCustomFields,
+      process_task_status_options: processTaskStatusOptions,
+      sort_order: sortOrder,
+      wage: readNumber(stage?.wage, 0),
+      weight,
+      default_assignee_id: stage?.default_assignee_id ?? stage?.assignee_id ?? metadata?.default_assignee_id ?? null,
+      default_assignee_role_id: stage?.default_assignee_role_id ?? stage?.assignee_role_id ?? metadata?.default_assignee_role_id ?? null,
+      duration_value: durationValue,
+      duration_unit: durationUnit,
+      duration_from: durationFrom,
+      metadata: {
+        ...metadata,
+        description,
+        task_type: taskType,
+        automation_rules: automationRules,
+        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: processTaskCustomFields,
+        [PROCESS_TASK_STATUS_OPTIONS_KEY]: processTaskStatusOptions,
+        weight,
+        duration_value: durationValue,
+        duration_unit: durationUnit,
+        duration_from: durationFrom,
+      },
+    };
+  }, []);
   const normalizedDraftStages = useMemo(
-    () => (Array.isArray(draftStages) ? draftStages : []),
-    [draftStages]
+    () => (Array.isArray(draftStages) ? draftStages : []).map((stage: any, index: number) =>
+      normalizeDraftStageForEditor(stage, index)
+    ),
+    [draftStages, normalizeDraftStageForEditor]
   );
   const isProcessRecordModule = (
     moduleId === 'projects'
@@ -733,6 +829,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [loadTaskCustomFieldOptions]);
 
   useEffect(() => {
+    draftLocalRef.current = normalizedDraftStages;
     setDraftLocal((prev) => (prev === normalizedDraftStages ? prev : normalizedDraftStages));
   }, [normalizedDraftStages]);
 
@@ -3522,13 +3619,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return lines.filter((line: any) => String(line?.id || '') === String(onlyLineId));
   }, [lines, onlyLineId]);
 
-  const saveDraftStages = async (nextStages: any[]) => {
+  const saveDraftStages = useCallback(async (nextStages: any[]) => {
+    draftLocalRef.current = nextStages;
     setDraftLocal(nextStages);
-    if (onDraftStagesChange) onDraftStagesChange(nextStages);
+    if (onDraftStagesChange) await onDraftStagesChange(nextStages);
     if (moduleId === 'production_boms' && recordId) {
       await supabase.from('production_boms').update({ production_stages_draft: nextStages }).eq('id', recordId);
     }
-  };
+  }, [moduleId, onDraftStagesChange, recordId]);
 
   const loadProcessTemplateOptions = useCallback(async () => {
     if (!moduleId || !isProcessRecordModule) {
@@ -4218,18 +4316,45 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     tasks,
   ]);
 
-  const handleAddDraftStage = async (values: any) => {
-    if (draftModalStepIndex < DRAFT_MODAL_STEP_KEYS.length - 1) {
-      const nextStepKey = DRAFT_MODAL_STEP_KEYS[draftModalStepIndex + 1];
-      if (nextStepKey) {
-        setDraftModalTabKey(nextStepKey);
-      }
-      return;
-    }
+  const getDraftStageEditorStatusOptions = useCallback(() =>
+    normalizeProcessTaskStatusOptions(
+      draftForm.getFieldValue('stage_status_options_editor') ?? draftStageStatusOptions
+    ), [draftForm, draftStageStatusOptions]);
+
+  const buildDraftStageFromEditorValues = useCallback((values: any, existingStage?: any | null) => {
+    const existingMetadata = existingStage?.metadata && typeof existingStage.metadata === 'object' && !Array.isArray(existingStage.metadata)
+      ? existingStage.metadata
+      : {};
+    const firstText = (...inputValues: any[]) =>
+      inputValues.map((value) => String(value ?? '').trim()).find(Boolean) || '';
     const assigneeRaw = String(values?.default_assignee_combo || '');
     const assigneeType = assigneeRaw.startsWith('role:') ? 'role' : (assigneeRaw.startsWith('user:') ? 'user' : null);
     const assigneeId = assigneeType ? assigneeRaw.split(':')[1] : null;
-    const stageTaskType = String(values?.task_type || '').trim() || null;
+    const hasDescriptionValue = Object.prototype.hasOwnProperty.call(values || {}, 'description');
+    const hasTaskTypeValue = Object.prototype.hasOwnProperty.call(values || {}, 'task_type');
+    const currentDraftCount = Array.isArray(draftLocalRef.current) ? draftLocalRef.current.length : draftLocal.length;
+    const stageName = firstText(
+      values?.name,
+      existingStage?.name,
+      existingStage?.stage_name,
+      existingStage?.title
+    ) || `مرحله ${currentDraftCount + 1}`;
+    const stageDescription = String(
+      hasDescriptionValue
+        ? values?.description
+        : (existingStage?.description ?? existingMetadata?.description ?? '')
+    ).trim() || null;
+    const stageTaskType = String(
+      hasTaskTypeValue
+        ? values?.task_type
+        : (existingStage?.task_type ?? existingMetadata?.task_type ?? '')
+    ).trim() || null;
+    const stageStatusOptions = getDraftStageEditorStatusOptions();
+    const processTaskCustomFields = normalizeProcessTaskCustomFields(draftCustomFields);
+    const weight = Number(values?.weight || 0);
+    const durationValue = Number(values?.duration_value || 0);
+    const durationUnit = values?.duration_unit || 'day';
+    const durationFrom = values?.duration_from || 'project_start';
     const automationRules = normalizeProcessAutomationRules(draftAutomationRules.map((rule) => ({
       ...rule,
       conditions_all: [
@@ -4247,51 +4372,154 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         (condition) => String(condition?.field || '').trim() !== '__task__task_type'
       ),
     })));
-    let next = [...draftLocal];
-    if (editingDraft?.id) {
-      next = next.map((stage: any) =>
-        stage.id === editingDraft.id
-          ? {
-              ...stage,
-              name: values.name,
-              description: String(values?.description || '').trim() || null,
-              task_type: stageTaskType,
-              sort_order: values.sort_order || stage.sort_order,
-              wage: Number(values?.wage || 0),
-              weight: Number(values?.weight || 0),
-              default_assignee_id: assigneeType === 'user' ? assigneeId : null,
-              default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
-              duration_value: Number(values?.duration_value || 0),
-              duration_unit: values?.duration_unit || 'day',
-              duration_from: values?.duration_from || 'project_start',
-              automation_rules: automationRules,
-              process_task_custom_fields: normalizeProcessTaskCustomFields(draftCustomFields),
-              process_task_status_options: normalizeProcessTaskStatusOptions(draftStageStatusOptions),
-            }
-          : stage
-      );
-    } else {
-      next.push({
-        id: Date.now(),
-        name: values.name,
-        description: String(values?.description || '').trim() || null,
+    return {
+      ...(existingStage || {}),
+      id: existingStage?.id || Date.now(),
+      name: stageName,
+      title: existingStage?.title || stageName,
+      stage_name: existingStage?.stage_name || stageName,
+      description: stageDescription,
+      task_type: stageTaskType,
+      sort_order: values.sort_order || existingStage?.sort_order || ((currentDraftCount + 1) * 10),
+      wage: Number(values?.wage || 0),
+      weight,
+      default_assignee_id: assigneeType === 'user' ? assigneeId : null,
+      default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+      duration_value: durationValue,
+      duration_unit: durationUnit,
+      duration_from: durationFrom,
+      automation_rules: automationRules,
+      process_task_custom_fields: processTaskCustomFields,
+      process_task_status_options: stageStatusOptions,
+      metadata: {
+        ...existingMetadata,
+        description: stageDescription,
         task_type: stageTaskType,
-        sort_order: values.sort_order || ((draftLocal.length + 1) * 10),
-        wage: Number(values?.wage || 0),
-        weight: Number(values?.weight || 0),
-        default_assignee_id: assigneeType === 'user' ? assigneeId : null,
-        default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
-        duration_value: Number(values?.duration_value || 0),
-        duration_unit: values?.duration_unit || 'day',
-        duration_from: values?.duration_from || 'project_start',
         automation_rules: automationRules,
-        process_task_custom_fields: normalizeProcessTaskCustomFields(draftCustomFields),
-        process_task_status_options: normalizeProcessTaskStatusOptions(draftStageStatusOptions),
-      });
+        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: processTaskCustomFields,
+        [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageStatusOptions,
+        weight,
+        duration_value: durationValue,
+        duration_unit: durationUnit,
+        duration_from: durationFrom,
+      },
+    };
+  }, [draftAutomationRules, draftCustomFields, draftLocal.length, getDraftStageEditorStatusOptions]);
+
+  const saveDraftStageFromEditor = useCallback(async (rawValues?: any) => {
+    if (draftStageSavePromiseRef.current) {
+      return draftStageSavePromiseRef.current;
     }
-    await saveDraftStages(next);
+
+    const savePromise = (async () => {
+      setIsSavingDraftStage(true);
+      const values = {
+        ...draftForm.getFieldsValue(true),
+        ...(rawValues || {}),
+      };
+      const currentStages = Array.isArray(draftLocalRef.current) ? [...draftLocalRef.current] : [];
+      const editorStageId = draftEditorStageIdRef.current ?? editingDraft?.id ?? null;
+      const editorStageNames = new Set(
+        [
+          normalizeStageName(values?.name),
+          normalizeStageName(editingDraft?.name || editingDraft?.stage_name || editingDraft?.title),
+        ].filter(Boolean)
+      );
+      const editorSortOrders = new Set(
+        [Number(values?.sort_order || 0), Number(editingDraft?.sort_order || 0)]
+          .filter((value) => Number.isFinite(value) && value > 0)
+      );
+      const existingIndex = currentStages.findIndex((stage: any) => {
+        const stageIds = [
+          stage?.id,
+          stage?.template_stage_id,
+          stage?.process_run_stage_id,
+        ].map((value) => String(value || '')).filter(Boolean);
+        if (editorStageId && stageIds.includes(String(editorStageId))) return true;
+
+        const stageSortOrder = Number(stage?.sort_order || 0);
+        const stageName = normalizeStageName(stage?.name || stage?.stage_name || stage?.title);
+        return stageSortOrder > 0
+          && editorSortOrders.has(stageSortOrder)
+          && editorStageNames.has(stageName);
+      });
+      const existingStage = existingIndex >= 0
+        ? currentStages[existingIndex]
+        : (editingDraft || null);
+      const currentStage = existingStage ? normalizeDraftStageForEditor(existingStage, 0) : null;
+      const nextStage = buildDraftStageFromEditorValues(values, currentStage);
+      draftEditorStageIdRef.current = nextStage.id;
+
+      let next = currentStages;
+      const nextStageId = String(nextStage?.id || '');
+      const currentEditorStageId = String(draftEditorStageIdRef.current || '');
+      const targetIndex = next.findIndex((stage: any) => {
+        const stageId = String(stage?.id || '');
+        return !!stageId && (stageId === nextStageId || stageId === currentEditorStageId);
+      });
+      if (targetIndex >= 0) {
+        next = next.map((stage: any, index: number) => (index === targetIndex ? nextStage : stage));
+      } else {
+        next = [...next, nextStage];
+      }
+
+      await saveDraftStages(next);
+      const savedStages = Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [];
+      const savedStageName = normalizeStageName(nextStage?.name || nextStage?.stage_name || nextStage?.title);
+      const savedStageSortOrder = Number(nextStage?.sort_order || 0);
+      const persistedStage = savedStages.find((stage: any) => {
+        const stageIds = [
+          stage?.id,
+          stage?.template_stage_id,
+          stage?.process_run_stage_id,
+        ].map((value) => String(value || '')).filter(Boolean);
+        if (nextStage?.id && stageIds.includes(String(nextStage.id))) return true;
+        return savedStageSortOrder > 0
+          && Number(stage?.sort_order || 0) === savedStageSortOrder
+          && normalizeStageName(stage?.name || stage?.stage_name || stage?.title) === savedStageName;
+      });
+      const editorStage = persistedStage ? normalizeDraftStageForEditor(persistedStage, 0) : nextStage;
+      draftEditorStageIdRef.current = editorStage.id;
+      setEditingDraft(editorStage);
+      setDraftStageStatusOptions(normalizeProcessTaskStatusOptions(editorStage.process_task_status_options));
+      return editorStage;
+    })();
+
+    draftStageSavePromiseRef.current = savePromise;
+    try {
+      return await savePromise;
+    } finally {
+      draftStageSavePromiseRef.current = null;
+      setIsSavingDraftStage(false);
+    }
+  }, [buildDraftStageFromEditorValues, draftForm, editingDraft, normalizeDraftStageForEditor, normalizeStageName, saveDraftStages]);
+
+  const validateDraftModalStep = useCallback(async (stepKey: DraftModalTabKey) => {
+    if (stepKey === 'stage') {
+      const fieldsToValidate = ['name'];
+      if (isProcessModule) fieldsToValidate.push('task_type');
+      await draftForm.validateFields(fieldsToValidate);
+      return;
+    }
+    if (stepKey === 'fields') {
+      await draftForm.validateFields(['stage_status_options_editor']);
+    }
+  }, [draftForm, isProcessModule]);
+
+  const handleAddDraftStage = async (values: any) => {
+    await validateDraftModalStep('stage');
+    await validateDraftModalStep('fields');
+    await saveDraftStageFromEditor(values);
+    if (draftModalStepIndex < DRAFT_MODAL_STEP_KEYS.length - 1) {
+      const nextStepKey = DRAFT_MODAL_STEP_KEYS[draftModalStepIndex + 1];
+      if (nextStepKey) {
+        setDraftModalTabKey(nextStepKey);
+      }
+      return;
+    }
     setIsDraftModalOpen(false);
     setEditingDraft(null);
+    draftEditorStageIdRef.current = null;
     setDraftModalTabKey('stage');
     setDraftAutomationRules([]);
     setDraftCustomFields([]);
@@ -4301,14 +4529,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   };
 
   const openDraftStageModal = useCallback((stage?: any | null, tab: DraftModalTabKey = 'stage') => {
-    setEditingDraft(stage || null);
+    const nextEditingDraft = stage ? normalizeDraftStageForEditor(stage, 0) : null;
+    draftEditorStageIdRef.current = nextEditingDraft?.id ?? null;
+    setEditingDraft(nextEditingDraft);
     setDraftModalTabKey(tab);
     setIsDraftModalOpen(true);
-  }, []);
+  }, [normalizeDraftStageForEditor]);
 
   const closeDraftStageModal = useCallback(() => {
     setIsDraftModalOpen(false);
     setEditingDraft(null);
+    draftEditorStageIdRef.current = null;
     setDraftAutomationRules([]);
     setDraftCustomFields([]);
     setDraftStageStatusOptions([]);
@@ -4328,20 +4559,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (targetKey === draftModalTabKey) return;
     const currentIndex = DRAFT_MODAL_STEP_KEYS.indexOf(draftModalTabKey);
     const targetIndex = DRAFT_MODAL_STEP_KEYS.indexOf(targetKey);
-    if (targetIndex > currentIndex) {
-      try {
-        const fieldsToValidate = ['name'];
-        if (isProcessModule) {
-          fieldsToValidate.push('task_type');
-        }
-        await draftForm.validateFields(fieldsToValidate);
-      } catch {
-        setDraftModalTabKey('stage');
-        return;
-      }
+    if (targetIndex < 0 || currentIndex < 0) return;
+    try {
+      await validateDraftModalStep(draftModalTabKey);
+      await saveDraftStageFromEditor();
+    } catch {
+      return;
     }
     setDraftModalTabKey(targetKey);
-  }, [draftForm, draftModalTabKey, isProcessModule]);
+  }, [draftModalTabKey, saveDraftStageFromEditor, validateDraftModalStep]);
 
   const syncDraftStageStatusOptions = useCallback((nextOptions: SelectOption[]) => {
     const normalized = normalizeProcessTaskStatusOptions(nextOptions);
@@ -4562,35 +4788,36 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   useEffect(() => {
     if (!isDraftModalOpen) return;
     if (editingDraft) {
-      const assigneeCombo = editingDraft?.default_assignee_role_id
-        ? `role:${String(editingDraft.default_assignee_role_id)}`
-        : (editingDraft?.default_assignee_id ? `user:${String(editingDraft.default_assignee_id)}` : undefined);
+      const draftForEditor = normalizeDraftStageForEditor(editingDraft, 0);
+      const assigneeCombo = draftForEditor?.default_assignee_role_id
+        ? `role:${String(draftForEditor.default_assignee_role_id)}`
+        : (draftForEditor?.default_assignee_id ? `user:${String(draftForEditor.default_assignee_id)}` : undefined);
       draftForm.setFieldsValue({
-        name: editingDraft.name,
-        description: editingDraft.description || '',
-        task_type: editingDraft.task_type || undefined,
-        sort_order: editingDraft.sort_order,
-        wage: editingDraft.wage || 0,
-        weight: editingDraft.weight || 0,
+        name: draftForEditor.name,
+        description: draftForEditor.description || '',
+        task_type: draftForEditor.task_type || undefined,
+        sort_order: draftForEditor.sort_order,
+        wage: draftForEditor.wage || 0,
+        weight: draftForEditor.weight || 0,
         default_assignee_combo: assigneeCombo,
-        duration_value: editingDraft.duration_value || 0,
-        duration_unit: editingDraft.duration_unit || 'day',
-        duration_from: editingDraft.duration_from || 'project_start',
-        stage_status_options_editor: getProcessTaskStatusOptionsFromStage(editingDraft).map((option) => ({
+        duration_value: draftForEditor.duration_value || 0,
+        duration_unit: draftForEditor.duration_unit || 'day',
+        duration_from: draftForEditor.duration_from || 'project_start',
+        stage_status_options_editor: getProcessTaskStatusOptionsFromStage(draftForEditor).map((option) => ({
           label: String(option?.label || ''),
           value: String(option?.value || ''),
           color: String(option?.color || '') || 'default',
           insertAfter: String(option?.insertAfter || '').trim() || undefined,
         })),
       });
-      setDraftStageTaskTypeValue(String(editingDraft?.task_type || '').trim());
+      setDraftStageTaskTypeValue(String(draftForEditor?.task_type || '').trim());
       setDraftAutomationRules(
-        normalizeProcessAutomationRules(editingDraft?.automation_rules).map((rule) =>
+        normalizeProcessAutomationRules(draftForEditor?.automation_rules).map((rule) =>
           normalizeAutomationRuleForEditor(rule)
         )
       );
-      setDraftCustomFields(getProcessTaskCustomFieldsFromStage(editingDraft));
-      setDraftStageStatusOptions(getProcessTaskStatusOptionsFromStage(editingDraft));
+      setDraftCustomFields(getProcessTaskCustomFieldsFromStage(draftForEditor));
+      setDraftStageStatusOptions(getProcessTaskStatusOptionsFromStage(draftForEditor));
     } else {
       draftForm.setFieldsValue({
         description: '',
@@ -4608,10 +4835,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setDraftStageStatusOptions([]);
       setDraftStageTaskTypeValue('');
     }
-  }, [isDraftModalOpen, editingDraft, draftForm, draftLocal.length, normalizeAutomationRuleForEditor]);
+  }, [isDraftModalOpen, editingDraft, draftForm, draftLocal.length, normalizeAutomationRuleForEditor, normalizeDraftStageForEditor]);
 
   useEffect(() => {
     if (!isDraftModalOpen) return;
+    if (watchedDraftStageStatusOptions === undefined) return;
     setDraftStageStatusOptions(normalizeProcessTaskStatusOptions(watchedDraftStageStatusOptions));
   }, [isDraftModalOpen, watchedDraftStageStatusOptions]);
 
@@ -4877,56 +5105,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     <div ref={containerRef} className="w-full flex flex-col gap-4 select-none" dir="rtl">
       {isDraftOnlyModule && (
         <div className="space-y-2">
-          {isProcessTemplateModule && (
-            <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.55)] p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.58)]">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">اتوماسیون مراحل الگو</div>
-                  <div className="text-xs leading-6 text-gray-500 dark:text-gray-400">
-                    قانون‌های هر مرحله از همین الگو ذخیره می‌شوند و بعدا چه در کپی از الگو و چه در اجرای خودکار فرآیند، همراه همان مرحله به فعالیت‌های ساخته‌شده منتقل می‌شوند.
-                  </div>
-                </div>
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-100">
-                  مجموع قوانین: {toPersianNumber(
-                    draftSegments.reduce((sum: number, stage: any) => sum + normalizeProcessAutomationRules(stage?.automation_rules).length, 0)
-                  )}
-                </div>
-              </div>
-              <div className="mt-4 flex flex-col gap-2">
-                {draftSegments.length > 0 ? draftSegments.map((stage: any) => {
-                  const automationCount = normalizeProcessAutomationRules(stage?.automation_rules).length;
-                  return (
-                    <div
-                      key={`template-auto-${stage.id}`}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/70 bg-white/80 px-3 py-2 dark:border-white/10 dark:bg-white/5"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">{stage.label}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                          {automationCount > 0
-                            ? `${toPersianNumber(automationCount)} قانون ثبت شده`
-                            : 'هنوز اتوماسیونی برای این مرحله ثبت نشده است'}
-                        </div>
-                      </div>
-                      {!readOnly ? (
-                        <Button
-                          size="small"
-                          className="rounded-xl"
-                          onClick={() => openDraftStageModal(stage, 'automation')}
-                        >
-                          {automationCount > 0 ? 'مدیریت اتوماسیون' : 'افزودن اتوماسیون'}
-                        </Button>
-                      ) : null}
-                    </div>
-                  );
-                }) : (
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                    بعد از افزودن مرحله، تنظیم اتوماسیون هر مرحله از همین بخش در دسترس خواهد بود.
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
           <div className="text-xs text-gray-500 dark:text-gray-400">
             {isProcessTemplateModule ? 'مراحل پیش‌نویس فرآیند' : 'مراحل پیش‌نویس (BOM)'}
           </div>
@@ -4957,12 +5135,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       )}
                     </div>
                   }
-                  trigger="click"
+                  trigger={readOnly ? 'click' : 'hover'}
                   overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
                 >
                   <div
                     className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''}`}
                     style={{ flex: 1, border: '1px dashed #d1d5db', backgroundColor: 'transparent' }}
+                    onClick={() => {
+                      if (!readOnly) openDraftStageModal(stage, 'stage');
+                    }}
                   >
                     <span className={`text-gray-600 font-medium truncate w-full text-center ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
                       {stage.label}
@@ -5625,6 +5806,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             if (Object.prototype.hasOwnProperty.call(changedValues || {}, 'task_type')) {
               setDraftStageTaskTypeValue(String(changedValues?.task_type || '').trim());
             }
+            if (Object.prototype.hasOwnProperty.call(changedValues || {}, 'stage_status_options_editor')) {
+              setDraftStageStatusOptions(normalizeProcessTaskStatusOptions(
+                draftForm.getFieldValue('stage_status_options_editor')
+              ));
+            }
           }}
           layout="vertical"
           className="pt-1"
@@ -5638,6 +5824,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               responsive={false}
               size="small"
               onChange={(index) => {
+                if (isSavingDraftStage) return;
                 const targetKey = draftModalStepItems[index]?.key;
                 if (targetKey) {
                   void goToDraftModalStep(targetKey);
@@ -6036,8 +6223,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   value={rule.trigger_type}
                                   options={
                                     String(rule?.trigger_type || '').trim() === 'previous_stage_completed'
-                                      ? [...triggerTypeOptions, PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION]
-                                      : triggerTypeOptions
+                                      ? [...processAutomationTriggerTypeOptions, PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION]
+                                      : processAutomationTriggerTypeOptions
                                   }
                                   onChange={(event) => handleDraftAutomationTriggerChange(
                                     rule,
@@ -6226,6 +6413,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <Button
                   htmlType="button"
                   icon={<ArrowRightOutlined />}
+                  disabled={isSavingDraftStage}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -6244,6 +6432,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   type="primary"
                   htmlType="button"
                   icon={<ArrowLeftOutlined />}
+                  loading={isSavingDraftStage}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -6257,7 +6446,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   مرحله بعد
                 </Button>
               ) : (
-                <Button type="primary" htmlType="submit" className="rounded-lg border-none bg-leather-600 !text-white shadow-md hover:!border-none hover:!bg-leather-500 hover:!text-white focus:!border-none focus:!bg-leather-500 focus:!text-white active:!border-none active:!bg-leather-700 active:!text-white">
+                <Button type="primary" htmlType="submit" loading={isSavingDraftStage} className="rounded-lg border-none bg-leather-600 !text-white shadow-md hover:!border-none hover:!bg-leather-500 hover:!text-white focus:!border-none focus:!bg-leather-500 focus:!text-white active:!border-none active:!bg-leather-700 active:!text-white">
                   {editingDraft ? 'بروزرسانی مرحله' : 'ثبت مرحله'}
                 </Button>
               )}

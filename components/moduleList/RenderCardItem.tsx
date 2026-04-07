@@ -1,6 +1,6 @@
 import React from "react";
 import { Avatar, Checkbox, Popover, Tag } from "antd";
-import { AppstoreOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, DragOutlined } from "@ant-design/icons";
 import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
 import { getRecordTitle } from "../../utils/recordTitle";
@@ -29,6 +29,10 @@ export interface RenderCardItemProps {
   hideSelection?: boolean;
   canViewField?: (fieldKey: string) => boolean;
   relationOptions?: Record<string, any[]>;
+  showDragHandle?: boolean;
+  isDragActive?: boolean;
+  dragHandleTitle?: string;
+  onDragHandlePointerDown?: (item: any, event: React.PointerEvent<HTMLButtonElement>) => void;
 }
 
 const RenderCardItem: React.FC<RenderCardItemProps> = ({
@@ -48,6 +52,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   hideSelection = false,
   canViewField,
   relationOptions = {},
+  showDragHandle = false,
+  isDragActive = false,
+  dragHandleTitle = "جابجایی کارت",
+  onDragHandlePointerDown,
 }) => {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const [standaloneTaskPopoverOpen, setStandaloneTaskPopoverOpen] = React.useState(false);
@@ -224,6 +232,22 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       : [...selectedRowKeys, item.id];
     setSelectedRowKeys(newSelected);
   };
+  const renderDragHandle = () => {
+    if (!showDragHandle || !onDragHandlePointerDown) return null;
+    return (
+      <button
+        type="button"
+        title={dragHandleTitle}
+        aria-label={dragHandleTitle}
+        className="absolute bottom-2 left-2 z-20 flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white/95 text-gray-500 shadow-sm transition hover:border-[rgba(var(--brand-500-rgb),0.8)] hover:text-[rgb(var(--brand-700-rgb))] active:cursor-grabbing dark:border-white/10 dark:bg-[#242424] dark:text-gray-300"
+        style={{ touchAction: 'none', userSelect: 'none' }}
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => onDragHandlePointerDown(item, event)}
+      >
+        <DragOutlined />
+      </button>
+    );
+  };
   const handleCardClick = () => {
     if (isTasks && (isProductionTask || isExecutionProcessTask) && cardRef.current) {
       const segment = cardRef.current.querySelector<HTMLElement>(`[data-task-segment-id="${String(item.id)}"]`);
@@ -317,23 +341,31 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       if ((field?.type === FieldType.RELATION || field?.type === FieldType.USER) && relationOptions?.[field.key]?.length) {
         const matched = relationOptions[field.key].find((opt: any) => String(opt?.value) === String(value));
         if (matched?.label) {
-          return <span className="break-words text-gray-700 dark:text-gray-200">{matched.label}</span>;
+          return <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{matched.label}</span>;
         }
       }
 
-      return <span className="break-words text-gray-700 dark:text-gray-200">{formatRecordDisplayValue(value, field)}</span>;
+      if (field?.type === FieldType.PHONE) {
+        return <span className="min-w-0 break-all text-left text-gray-700 dark:text-gray-200 dir-ltr">{formatRecordDisplayValue(value, field)}</span>;
+      }
+
+      return <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{formatRecordDisplayValue(value, field)}</span>;
     };
 
     return (
       <div
         onClick={handleCardClick}
         className={`
-          group relative flex h-full cursor-pointer flex-col rounded-2xl border bg-gradient-to-b from-white to-gray-50 shadow-sm transition-all
+          group relative flex cursor-pointer flex-col rounded-2xl border bg-gradient-to-b from-white to-gray-50 shadow-sm transition-all
           dark:from-[#1d1d1d] dark:to-[#171717]
           ${isSelected ? "border-leather-500 ring-1 ring-leather-500 bg-leather-50 dark:bg-leather-900/20" : "border-[rgba(var(--brand-200-rgb),0.75)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)]"}
+          ${minimal ? "" : "h-full"}
           ${minimal ? "p-3" : "p-3"}
+          ${showDragHandle ? "pb-9" : ""}
+          ${isDragActive ? "opacity-70 ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}
         `}
       >
+        {renderDragHandle()}
         {!hideSelection && (
           <div className="absolute top-3 right-3 z-10" onClick={(e) => e.stopPropagation()}>
             <Checkbox checked={isSelected} onChange={toggleSelect} />
@@ -391,7 +423,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                   return (
                     <div
                       key={field.key}
-                      className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 last:border-b-0 last:pb-0 dark:border-gray-800"
+                      className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 items-start border-b border-gray-100 pb-1.5 last:border-b-0 last:pb-0 dark:border-gray-800"
                     >
                       <span className="text-gray-500 dark:text-gray-400">{field.labels?.fa || field.title || field.key}</span>
                       {renderFieldValue(field, value)}
@@ -479,8 +511,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] rounded-2xl border shadow-sm cursor-pointer transition-all flex flex-col group relative
         ${isSelected ? "border-leather-500 ring-1 ring-leather-500 bg-leather-50 dark:bg-leather-900/20" : "border-[rgba(var(--brand-200-rgb),0.75)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)]"}
         ${minimal ? "p-3" : "p-3 h-full"}
+        ${showDragHandle ? "pb-9" : ""}
+        ${isDragActive ? "opacity-70 ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}
       `}
     >
+      {renderDragHandle()}
       {!hideSelection && (
         <div className="absolute top-3 right-3 z-10" onClick={(e) => e.stopPropagation()}>
           <Checkbox checked={isSelected} onChange={toggleSelect} />

@@ -31,6 +31,7 @@ interface WorkflowActionsBuilderProps {
   relationOptions: Record<string, Array<{ label: string; value: string }>>;
   relationSourceModuleOptions?: WorkflowModuleOption[];
   additionalRecipientFieldOptions?: Array<{ label: string; value: string }>;
+  actionOptions?: Array<{ label: string; value: WorkflowActionType }>;
   disabled?: boolean;
 }
 
@@ -115,6 +116,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   relationOptions,
   relationSourceModuleOptions,
   additionalRecipientFieldOptions,
+  actionOptions,
   disabled = false,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
@@ -204,9 +206,24 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   const processTemplateOptions = relationOptions.process_template_id || [];
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
+  const effectiveActionTypeOptions = useMemo(() => {
+    const baseOptions = actionOptions && actionOptions.length > 0
+      ? actionOptions
+      : actionTypeOptions.filter((option) => option.value !== 'send_email');
+    const optionsByValue = new Map(baseOptions.map((option) => [String(option.value), option] as const));
+    safeValue.forEach((action) => {
+      const actionType = String(action?.type || '') as WorkflowActionType;
+      if (!actionType || optionsByValue.has(actionType)) return;
+      const legacyOption = actionTypeOptions.find((option) => option.value === actionType);
+      if (legacyOption) {
+        optionsByValue.set(actionType, { ...legacyOption, label: `${legacyOption.label} (غیرفعال)` });
+      }
+    });
+    return Array.from(optionsByValue.values());
+  }, [actionOptions, safeValue]);
 
   const addAction = () => {
-    const type = actionTypeOptions[0]?.value || 'send_note';
+    const type = effectiveActionTypeOptions[0]?.value || 'send_note';
     const next = [
       ...safeValue,
       {
@@ -1111,7 +1128,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   {...commonSelectProps}
                   value={action.type}
                   disabled={disabled}
-                  options={actionTypeOptions}
+                  options={effectiveActionTypeOptions}
                   onChange={(nextType: WorkflowActionType) =>
                     updateAction(action.id, {
                       type: nextType,
