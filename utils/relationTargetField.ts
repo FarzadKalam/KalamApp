@@ -5,6 +5,7 @@ const DEFAULT_RELATION_TARGET_FIELDS: Record<string, string> = {
   org_roles: 'title',
   employees: 'full_name',
   work_schedules: 'title',
+  journal_entries: 'entry_no',
 };
 
 export const getPreferredRelationTargetField = (
@@ -33,6 +34,9 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
   }
   if (moduleName === 'work_schedules') {
     return ['title', 'name'];
+  }
+  if (moduleName === 'journal_entries') {
+    return ['entry_no', 'source_record_title', 'description'];
   }
   return ['name', 'title', 'business_name', 'shelf_number'];
 };

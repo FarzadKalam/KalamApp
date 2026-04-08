@@ -5,6 +5,10 @@ export const journalEntriesConfig: ModuleDefinition = {
   titles: { fa: 'اسناد حسابداری', en: 'Journal Entries' },
   nature: ModuleNature.FINANCE,
   table: 'journal_entries',
+  relationDisplay: {
+    labelTemplate: '{{entry_no}} - {{entry_date}} - {{source_record_title}} - {{description}}',
+    searchFields: ['entry_no', 'entry_date', 'source_record_title', 'description', 'id'],
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [
