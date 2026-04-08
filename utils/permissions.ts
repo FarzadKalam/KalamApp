@@ -153,6 +153,10 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
     ensureField(fieldMap, '__action_quick_stock_movement', 'عملیات: افزودن حواله');
   }
 
+  if (module.id === 'invoices') {
+    ensureField(fieldMap, '__action_send_taxpayer_system', 'عملیات: ارسال به سامانه مودیان');
+  }
+
   if (!fieldMap.has('assignee_id')) {
     ensureField(fieldMap, 'assignee_id', 'مسئول');
   }

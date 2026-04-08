@@ -12,7 +12,7 @@ import {
   Space,
   Switch,
 } from 'antd';
-import { CopyOutlined, ReloadOutlined, SaveOutlined, SendOutlined } from '@ant-design/icons';
+import { CopyOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { getSmsBalanceViaGateway, sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -20,6 +20,7 @@ import type { BotChannel } from '../../utils/botGateway';
 import { formatIranMobileForInput } from '../../utils/phoneNumber';
 import PhoneActionsPopover from '../../components/PhoneActionsPopover';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
+import { TAXPAYER_DEFAULT_BASE_URL } from '../../utils/taxpayerSystem';
 
 type ConnectionType =
   | 'sms'
@@ -122,6 +123,16 @@ type FormValues = {
     has_api_key?: boolean;
     is_active?: boolean;
   };
+  taxpayer_system: {
+    fiscal_id?: string;
+    base_url?: string;
+    private_key?: string;
+    certificate_pem?: string;
+    legacy_last_serial?: string | number;
+    has_private_key?: boolean;
+    has_certificate?: boolean;
+    is_active?: boolean;
+  };
 };
 
 const CONNECTION_TYPES: ConnectionType[] = [
@@ -133,6 +144,27 @@ const CONNECTION_TYPES: ConnectionType[] = [
   'rubika_bot',
   'portal',
 ];
+
+const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
+  sms: 'پیامک ملی پیامک otp احراز پیام',
+  email: 'ایمیل smtp mail',
+  site: 'سایت api webhook',
+  ai_provider: 'هوش مصنوعی ai openai avalai مدل',
+  taxpayer_system: 'سامانه مودیان شناسه حافظه مالیاتی کلید خصوصی گواهی امضا سریال صورتحساب cer crt',
+  telegram_bot: 'بات تلگرام telegram chat id',
+  bale_bot: 'بات بله bale chat id',
+  rubika_bot: 'بات روبیکا rubika chat id',
+  portal: 'پورتال مشتریان portal',
+};
+
+const normalizeConnectionSearchText = (value: string) =>
+  String(value || '')
+    .replace(/[\u200c\u200f]/g, ' ')
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
 const DEFAULT_VALUES: FormValues = {
   sms: {
@@ -207,6 +239,16 @@ const DEFAULT_VALUES: FormValues = {
     has_api_key: false,
     is_active: true,
   },
+  taxpayer_system: {
+    fiscal_id: '',
+    base_url: TAXPAYER_DEFAULT_BASE_URL,
+    private_key: '',
+    certificate_pem: '',
+    legacy_last_serial: '',
+    has_private_key: false,
+    has_certificate: false,
+    is_active: false,
+  },
 };
 
 const isMissingTableError = (err: any) => {
@@ -242,6 +284,7 @@ const ConnectionsTab: React.FC = () => {
   const [smsTesting, setSmsTesting] = useState(false);
   const [smsBalanceLoading, setSmsBalanceLoading] = useState(false);
   const [smsBalance, setSmsBalance] = useState<string | null>(null);
+  const [taxpayerTesting, setTaxpayerTesting] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiModelsLoading, setAiModelsLoading] = useState(false);
   const [aiCreditLoading, setAiCreditLoading] = useState(false);
@@ -249,6 +292,8 @@ const ConnectionsTab: React.FC = () => {
   const [aiCreditInfo, setAiCreditInfo] = useState<Record<string, any> | null>(null);
   const [tableMissing, setTableMissing] = useState(false);
   const [rowIds, setRowIds] = useState<Partial<Record<ConnectionType, string>>>({});
+  const [connectionSearch, setConnectionSearch] = useState('');
+  const [activePanelKeys, setActivePanelKeys] = useState<string[]>([]);
 
   const [testMobile, setTestMobile] = useState('');
   const [testText, setTestText] = useState('این یک پیامک تست از سامانه ERP است.');
@@ -354,6 +399,37 @@ const ConnectionsTab: React.FC = () => {
     is_flash: false,
   });
 
+  const getTaxpayerSystemValues = (): FormValues['taxpayer_system'] =>
+    form.getFieldValue('taxpayer_system') || DEFAULT_VALUES.taxpayer_system;
+
+  const buildTaxpayerSystemRequestSettings = () => {
+    const values = getTaxpayerSystemValues();
+    return {
+      fiscal_id: String(values.fiscal_id || '').trim().toUpperCase(),
+      base_url: TAXPAYER_DEFAULT_BASE_URL,
+      private_key: String(values.private_key || '').trim(),
+      certificate_pem: String(values.certificate_pem || '').trim(),
+      legacy_last_serial: String(values.legacy_last_serial || '').trim(),
+      is_active: values.is_active === true,
+    };
+  };
+
+  const hasTaxpayerSystemInput = (values: FormValues['taxpayer_system'] | undefined) => {
+    const merged = {
+      ...DEFAULT_VALUES.taxpayer_system,
+      ...(values || {}),
+    };
+    return (
+      merged.is_active === true ||
+      merged.has_private_key === true ||
+      merged.has_certificate === true ||
+      Boolean(String(merged.fiscal_id || '').trim()) ||
+      Boolean(String(merged.private_key || '').trim()) ||
+      Boolean(String(merged.certificate_pem || '').trim()) ||
+      Boolean(String(merged.legacy_last_serial || '').trim())
+    );
+  };
+
   const getBotConnectionId = (channel: BotChannel) => {
     const connectionType = `${channel}_bot` as ConnectionType;
     return rowIds[connectionType];
@@ -452,6 +528,7 @@ const ConnectionsTab: React.FC = () => {
           is_active: byType.portal?.is_active ?? DEFAULT_VALUES.portal.is_active,
         },
         ai_provider: DEFAULT_VALUES.ai_provider,
+        taxpayer_system: DEFAULT_VALUES.taxpayer_system,
       };
 
       try {
@@ -484,6 +561,29 @@ const ConnectionsTab: React.FC = () => {
         console.warn('Could not load AI provider settings', aiError);
       }
 
+      try {
+        const { data: taxpayerData, error: taxpayerError } = await supabase.functions.invoke('taxpayer_system', {
+          body: { action: 'get_settings' },
+        });
+        if (taxpayerError) throw taxpayerError;
+        if (taxpayerData?.success && taxpayerData?.settings) {
+          const taxpayerSettings = taxpayerData.settings;
+          nextValues.taxpayer_system = {
+            ...DEFAULT_VALUES.taxpayer_system,
+            fiscal_id: String(taxpayerSettings.fiscal_id || ''),
+            base_url: TAXPAYER_DEFAULT_BASE_URL,
+            private_key: '',
+            certificate_pem: '',
+            legacy_last_serial: taxpayerSettings.legacy_last_serial ? String(taxpayerSettings.legacy_last_serial) : '',
+            has_private_key: taxpayerSettings.has_private_key === true,
+            has_certificate: taxpayerSettings.has_certificate === true,
+            is_active: taxpayerSettings.is_active === true,
+          };
+        }
+      } catch (taxpayerError) {
+        console.warn('Could not load taxpayer system settings', taxpayerError);
+      }
+
       form.setFieldsValue(nextValues);
       setSmsBalance(null);
       setAiCreditInfo(null);
@@ -510,6 +610,10 @@ const ConnectionsTab: React.FC = () => {
       const currentAiProviderValues = {
         ...(form.getFieldValue('ai_provider') || {}),
         ...(values.ai_provider || {}),
+      };
+      const currentTaxpayerSystemValues = {
+        ...(form.getFieldValue('taxpayer_system') || {}),
+        ...(values.taxpayer_system || {}),
       };
       const ensuredTelegramSecret = String(values.telegram_bot?.webhook_secret || '').trim() || createWebhookSecret('telegram');
       const ensuredBaleSecret = String(values.bale_bot?.webhook_secret || '').trim() || createWebhookSecret('bale');
@@ -660,6 +764,29 @@ const ConnectionsTab: React.FC = () => {
           },
         });
       }
+      if (hasTaxpayerSystemInput(currentTaxpayerSystemValues)) {
+        const { data: taxpayerSaveData, error: taxpayerSaveError } = await supabase.functions.invoke('taxpayer_system', {
+          body: {
+            action: 'save_settings',
+            settings: buildTaxpayerSystemRequestSettings(),
+          },
+        });
+        if (taxpayerSaveError) throw taxpayerSaveError;
+        if (!taxpayerSaveData?.success) {
+          throw new Error(String(taxpayerSaveData?.message || 'ذخیره تنظیمات سامانه مودیان ناموفق بود.'));
+        }
+        if (taxpayerSaveData?.settings) {
+          form.setFieldsValue({
+            taxpayer_system: {
+              ...currentTaxpayerSystemValues,
+              ...taxpayerSaveData.settings,
+              private_key: '',
+              has_private_key: taxpayerSaveData.settings.has_private_key === true,
+              has_certificate: taxpayerSaveData.settings.has_certificate === true,
+            },
+          });
+        }
+      }
       setTableMissing(false);
       message.success('تنظیمات اتصالات ذخیره شد.');
     } catch (err: any) {
@@ -745,6 +872,59 @@ const ConnectionsTab: React.FC = () => {
       message.error(toFaErrorMessage(err, 'خطا در تست اتصال AI'));
     } finally {
       setAiTesting(false);
+    }
+  };
+
+  const handleTestTaxpayerSystem = async () => {
+    setTaxpayerTesting(true);
+    try {
+      const settings = buildTaxpayerSystemRequestSettings();
+      const currentValues = getTaxpayerSystemValues();
+      if (!settings.fiscal_id) {
+        throw new Error('شناسه یکتای حافظه مالیاتی را وارد کنید.');
+      }
+      if (!settings.private_key && !currentValues.has_private_key) {
+        throw new Error('کلید خصوصی امضا را وارد و ذخیره کنید.');
+      }
+      if (!settings.certificate_pem && !currentValues.has_certificate) {
+        throw new Error('گواهی امضا را وارد و ذخیره کنید.');
+      }
+
+      const { data: saveData, error: saveError } = await supabase.functions.invoke('taxpayer_system', {
+        body: {
+          action: 'save_settings',
+          settings,
+        },
+      });
+      if (saveError) throw saveError;
+      if (!saveData?.success) {
+        throw new Error(String(saveData?.message || 'ذخیره تنظیمات سامانه مودیان ناموفق بود.'));
+      }
+      if (saveData?.settings) {
+        form.setFieldsValue({
+          taxpayer_system: {
+            ...currentValues,
+            ...saveData.settings,
+            private_key: '',
+            certificate_pem: '',
+            has_private_key: saveData.settings.has_private_key === true,
+            has_certificate: saveData.settings.has_certificate === true,
+          },
+        });
+      }
+
+      const { data, error } = await supabase.functions.invoke('taxpayer_system', {
+        body: { action: 'test_connection' },
+      });
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(String(data?.message || 'تست اتصال سامانه مودیان ناموفق بود.'));
+      }
+      message.success(String(data?.message || 'اتصال سامانه مودیان برقرار است.'));
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در تست اتصال سامانه مودیان'));
+    } finally {
+      setTaxpayerTesting(false);
     }
   };
 
@@ -1146,6 +1326,15 @@ const ConnectionsTab: React.FC = () => {
     );
   };
 
+  const normalizedConnectionSearch = normalizeConnectionSearchText(connectionSearch);
+  const shouldShowConnectionPanel = (key: string) => {
+    if (!normalizedConnectionSearch) return true;
+    const searchText = normalizeConnectionSearchText(CONNECTION_PANEL_SEARCH_TEXT[key] || key);
+    return searchText.includes(normalizedConnectionSearch);
+  };
+  const hasVisibleConnectionPanel = Object.keys(CONNECTION_PANEL_SEARCH_TEXT).some((key) => shouldShowConnectionPanel(key));
+  const visibleActivePanelKeys = activePanelKeys.filter((key) => shouldShowConnectionPanel(key));
+
   return (
     <div className="max-w-6xl mx-auto py-4">
       {tableMissing ? (
@@ -1159,10 +1348,23 @@ const ConnectionsTab: React.FC = () => {
       ) : null}
 
       <Form form={form} layout="vertical" initialValues={DEFAULT_VALUES} disabled={loading}>
+        <div className="mb-4">
+          <Input
+            allowClear
+            size="large"
+            prefix={<SearchOutlined className="text-gray-400" />}
+            placeholder="جستجو در اتصالات..."
+            value={connectionSearch}
+            onChange={(e) => setConnectionSearch(e.target.value)}
+          />
+        </div>
         <Collapse
-          defaultActiveKey={[...CONNECTION_TYPES, 'ai_provider']}
+          activeKey={visibleActivePanelKeys}
           className="rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden"
           expandIconPosition="end"
+          onChange={(keys) =>
+            setActivePanelKeys(Array.isArray(keys) ? keys.map((key) => String(key)) : keys ? [String(keys)] : [])
+          }
           items={[
             {
               key: 'sms',
@@ -1400,6 +1602,86 @@ const ConnectionsTab: React.FC = () => {
               ),
             },
             {
+              key: 'taxpayer_system',
+              label: (
+                <span className="inline-flex items-center gap-2">
+                  <SafetyCertificateOutlined />
+                  اتصال سامانه مودیان
+                </span>
+              ),
+              children: (
+                <>
+                  <Alert
+                    type="info"
+                    showIcon
+                    className="mb-3"
+                    message="تنظیمات ارسال مستقیم صورتحساب"
+                    description="اطلاعات این بخش برای هر سازمان به صورت جداگانه ذخیره می‌شود. برای شروع ارسال، شناسه یکتای حافظه مالیاتی، کلید خصوصی امضا و گواهی امضای همان مودی را وارد کنید. شماره اقتصادی فروشنده از تب اطلاعات شرکت خوانده می‌شود و در این فرم نیازی به ورود مجدد آن نیست."
+                  />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <Form.Item label="فعال" name={['taxpayer_system', 'is_active']} valuePropName="checked">
+                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+                    </Form.Item>
+                    <Form.Item
+                      label="شناسه یکتای حافظه مالیاتی"
+                      name={['taxpayer_system', 'fiscal_id']}
+                      extra="این شناسه ۶ کاراکتری است و باید دقیقاً مطابق اطلاعات کارپوشه مودی وارد شود."
+                    >
+                      <Input placeholder="مثال: A38MRA" maxLength={6} />
+                    </Form.Item>
+                    <Form.Item
+                      label="آخرین سریال ثبت شده در نرم افزار قبلی"
+                      name={['taxpayer_system', 'legacy_last_serial']}
+                      extra="اگر قبلاً با نرم افزار دیگری ارسال داشته‌اید، آخرین سریال همان نرم افزار را وارد کنید تا شماره مالیاتی از عدد بعدی ادامه پیدا کند. می‌توانید عدد ده‌دهی، بخش هگز سریال، یا کل شناسه مالیاتی را وارد کنید. در نمونه ABCDEF04D2F000000009D7 بخش سریال صورتحساب 000000009D است."
+                    >
+                      <Input placeholder="مثال: 157 یا 000000009D یا ABCDEF04D2F000000009D7" />
+                    </Form.Item>
+                    <Form.Item noStyle shouldUpdate={(prev, next) => prev.taxpayer_system?.has_private_key !== next.taxpayer_system?.has_private_key || prev.taxpayer_system?.has_certificate !== next.taxpayer_system?.has_certificate}>
+                      {({ getFieldValue }) => {
+                        const hasPrivateKey = getFieldValue(['taxpayer_system', 'has_private_key']);
+                        const hasCertificate = getFieldValue(['taxpayer_system', 'has_certificate']);
+                        return (
+                          <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="flex items-center rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700">
+                              {hasPrivateKey ? 'کلید خصوصی امضا برای این سازمان قبلاً ذخیره شده است.' : 'هنوز کلید خصوصی امضا برای این سازمان ذخیره نشده است.'}
+                            </div>
+                            <div className="flex items-center rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700">
+                              {hasCertificate ? 'گواهی امضا برای این سازمان قبلاً ذخیره شده است.' : 'هنوز گواهی امضا برای این سازمان ذخیره نشده است.'}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    </Form.Item>
+                    <Form.Item
+                      label="کلید خصوصی امضا"
+                      name={['taxpayer_system', 'private_key']}
+                      className="md:col-span-3"
+                      extra="اگر قبلاً کلید خصوصی ذخیره شده است، این فیلد را خالی بگذارید. در بسیاری از موارد خروجی GICA بدون BEGIN/END نمایش داده می‌شود؛ همان مقدار raw/base64 هم قابل ثبت است. فقط برای جایگزینی کلید، مقدار جدید را وارد کنید."
+                    >
+                      <Input.TextArea rows={5} placeholder="کلید خصوصی امضا" autoComplete="new-password" />
+                    </Form.Item>
+                    <Form.Item
+                      label="گواهی امضا"
+                      name={['taxpayer_system', 'certificate_pem']}
+                      className="md:col-span-3"
+                      extra="گواهی امضای مرتبط با همین کلید خصوصی را وارد کنید. اگر فایل گواهی با پسوند cer یا crt دارید، محتوای آن را عیناً در این فیلد قرار دهید. اگر قبلاً گواهی ذخیره شده است، این فیلد را خالی بگذارید."
+                    >
+                      <Input.TextArea rows={4} placeholder="-----BEGIN CERTIFICATE-----" />
+                    </Form.Item>
+                  </div>
+                  <Space wrap>
+                    <Button
+                      icon={<SendOutlined />}
+                      loading={taxpayerTesting}
+                      onClick={handleTestTaxpayerSystem}
+                    >
+                      ذخیره و تست اتصال
+                    </Button>
+                  </Space>
+                </>
+              ),
+            },
+            {
               key: 'telegram_bot',
               label: 'اتصال بات تلگرام',
               children: (
@@ -1625,8 +1907,16 @@ const ConnectionsTab: React.FC = () => {
                 </>
               ),
             },
-          ]}
+          ].filter((item) => shouldShowConnectionPanel(String(item.key)))}
         />
+        {normalizedConnectionSearch && !hasVisibleConnectionPanel ? (
+          <Alert
+            type="info"
+            showIcon
+            className="mt-4"
+            message="موردی با این جستجو پیدا نشد."
+          />
+        ) : null}
 
         <div className="flex justify-end mt-4 sticky bottom-0 bg-white dark:bg-[#1a1a1a] py-3 border-t border-gray-100 dark:border-gray-800 z-10">
           <Button

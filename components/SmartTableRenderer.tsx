@@ -160,6 +160,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const searchInput = useRef<InputRef>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const filterBarRef = useRef<HTMLDivElement>(null);
+  const lastVisibleRowSignatureRef = useRef('');
   const [scrollHeight, setScrollHeight] = useState<number>(() => getInitialScrollHeight());
   const [internalColumnFilters, setInternalColumnFilters] = useState<Record<string, FilterValue | null>>({});
   const assigneeLabel = getAssigneeLabel(moduleConfig?.id);
@@ -700,7 +701,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       filteredValue: activeColumnFilters[field.key] ?? null,
       sorter: canSortField,
       sortOrder,
-      sortDirections: ['ascend', 'descend'],
+      sortDirections: ['ascend', 'descend', null],
       showSorterTooltip: false,
       sortIcon: () =>
         canSortField ? (
@@ -989,7 +990,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     filteredValue: activeColumnFilters.assignee_id ?? null,
     sorter: true,
     sortOrder: assigneeSortOrder,
-    sortDirections: ['ascend', 'descend'],
+    sortDirections: ['ascend', 'descend', null],
     showSorterTooltip: false,
     sortIcon: () => (
       <span className="inline-flex flex-col leading-none text-[9px] mr-1 text-gray-300">
@@ -1166,7 +1167,14 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   }, [disableScroll, pagination]);
 
   useEffect(() => {
-    onVisibleDataChange?.(filteredData);
+    if (!onVisibleDataChange) return;
+    const nextSignature = filteredData
+      .map((row: any) => String(row?.id || '').trim())
+      .filter(Boolean)
+      .join('|');
+    if (lastVisibleRowSignatureRef.current === nextSignature) return;
+    lastVisibleRowSignatureRef.current = nextSignature;
+    onVisibleDataChange(filteredData);
   }, [filteredData, onVisibleDataChange]);
 
   useEffect(() => {

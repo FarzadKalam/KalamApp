@@ -353,7 +353,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                 <span className="leading-none">{view.name}</span>
                 {currentView?.id === view.id && (
                   <div className="mr-0 flex shrink-0 items-center gap-0.5">
-                  <Tooltip title="ویرایش" placement="top" mouseEnterDelay={0.45} destroyTooltipOnHide>
+                  <Tooltip title="ویرایش" placement="top" mouseEnterDelay={0.45} destroyOnHidden>
                     <span
                       className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/10"
                       onClick={(e) => handleEditView(view, e)}

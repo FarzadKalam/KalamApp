@@ -1,7 +1,7 @@
 {
   "name": "kalamapp",
   "private": true,
-  "version": "1.9.9.8",
+  "version": "1.9.9.9",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,10 @@
     "test": "vitest run",
     "preview": "vite preview",
     "deploy:prod": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1",
-    "deploy:prod:skip-build": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1 -SkipBuild"
+    "deploy:prod:skip-build": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1 -SkipBuild",
+    "deploy:function": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1",
+    "deploy:function:all": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -All",
+    "deploy:function:list": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1 -List"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
@@ -69,3 +72,4 @@
     "vitest": "^4.1.2"
   }
 }
+

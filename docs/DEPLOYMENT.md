@@ -44,6 +44,53 @@ What it does:
 
 For a one-click flow in VS Code, run the `Deploy KalamApp` task.
 
+## Supabase Edge Functions Deploy
+
+For self-hosted Supabase Edge Functions, use the separate deploy script:
+
+```powershell
+npm run deploy:function -- -Function taxpayer_system
+```
+
+Useful variants:
+
+```powershell
+npm run deploy:function:list
+npm run deploy:function -- -Function send-sms,bot-webhook
+npm run deploy:function:all
+```
+
+Required settings in `.env.deploy`:
+
+- `DEPLOY_HOST`
+- `DEPLOY_PORT`
+- `DEPLOY_USER`
+- `DEPLOY_FUNCTIONS_PATH`
+
+Optional settings:
+
+- `DEPLOY_FUNCTIONS_COMPOSE_DIR`
+- `DEPLOY_FUNCTIONS_COMPOSE_FILE`
+- `DEPLOY_FUNCTIONS_SERVICE`
+- `DEPLOY_FUNCTIONS_FILES_WITH_SUDO`
+- `DEPLOY_FUNCTIONS_RESTART_WITH_SUDO`
+- `DEPLOY_FUNCTIONS_ARCHIVE_NAME`
+
+The script copies only the selected function folder(s) into the remote `volumes/functions` path and then recreates the `functions` service unless `-SkipRestart` is used.
+
+If the `deploy` user cannot write into the remote `volumes/functions` directory, set:
+
+```env
+DEPLOY_FUNCTIONS_FILES_WITH_SUDO=true
+```
+
+If the compose `.env` file or the `docker compose` command is also restricted, set:
+
+```env
+DEPLOY_FUNCTIONS_RESTART_WITH_SUDO=true
+```
+
+When either sudo flag is enabled, the deploy script allocates a TTY so you can enter the sudo password interactively. If you prefer not to use sudo, change ownership of the target directory and compose files so the deploy user can read and write them directly.
 ## Legacy GitHub Actions Flow
 
 The sections below are only for the old GitHub Actions based workflow.
@@ -179,3 +226,4 @@ ls -1 /var/www/kalamapp/releases
 sudo ln -sfn /var/www/kalamapp/releases/<OLD_TIMESTAMP> /var/www/kalamapp/current
 sudo systemctl reload nginx
 ```
+

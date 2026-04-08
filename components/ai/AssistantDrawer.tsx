@@ -345,7 +345,7 @@ const AssistantDrawer: React.FC<AssistantDrawerProps> = ({ open, onClose, isMobi
       width={isMobile ? '100%' : 460}
       placement="left"
       classNames={{ body: '!p-0' }}
-      destroyOnClose={false}
+      destroyOnHidden={false}
       getContainer={typeof document === 'undefined' ? undefined : () => document.body}
     >
       <div className="flex h-full min-h-0 flex-col bg-gray-50 dark:bg-[rgba(var(--app-dark-surface-rgb),0.96)]">

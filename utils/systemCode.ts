@@ -218,7 +218,6 @@ export const buildClientFallbackSystemCode = async (
       const code = String(row?.system_code || '').trim().toUpperCase();
       const match = code.match(suffixPattern);
       if (!match) return acc;
-      const numericText = String(match[1] || '').trim();
       const numeric = Number(match[1]);
       if (!Number.isFinite(numeric) || numeric > MAX_SYSTEM_CODE_SEQUENCE_NUMBER) return acc;
       acc.push(numeric);

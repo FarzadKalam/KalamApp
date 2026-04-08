@@ -62,6 +62,7 @@ import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFi
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
+import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -231,6 +232,7 @@ const ModuleShow: React.FC = () => {
   const [accountingEntryChoices, setAccountingEntryChoices] = useState<AccountingEntryChoice[]>([]);
   const assigneeLabel = getAssigneeLabel(moduleId);
   const [stockMovementQuickAddSignal, setStockMovementQuickAddSignal] = useState(0);
+  const [isTaxpayerModalOpen, setIsTaxpayerModalOpen] = useState(false);
   const [isQuickProjectModalOpen, setIsQuickProjectModalOpen] = useState(false);
   const [quickProjectLoading, setQuickProjectLoading] = useState(false);
   const [quickProjectCustomerOptions, setQuickProjectCustomerOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -2409,6 +2411,10 @@ const ModuleShow: React.FC = () => {
       void handleOpenQuickProjectModal();
       return;
     }
+    if (actionId === 'send_taxpayer_system' && moduleId === 'invoices') {
+      setIsTaxpayerModalOpen(true);
+      return;
+    }
     if (actionId === 'create_customer_from_lead' && moduleId === 'marketing_leads') {
       if (!canEditModule) return;
       setIsCreateCustomerFromLeadOpen(true);
@@ -4133,6 +4139,14 @@ const ModuleShow: React.FC = () => {
       onClick: handleIssueAccountingEntry,
     });
   }
+  if (moduleId === 'invoices' && canUseAction('send_taxpayer_system')) {
+    headerActions.push({
+      id: 'send_taxpayer_system',
+      label: 'ارسال به سامانه مودیان',
+      variant: 'default',
+      onClick: () => handleHeaderAction('send_taxpayer_system'),
+    });
+  }
   if (moduleId === 'production_orders') {
     if (data?.status === 'in_progress') {
       if (canUseAction('stop_production')) {
@@ -4306,6 +4320,16 @@ const ModuleShow: React.FC = () => {
           initialValues={buildCustomerInitialValuesFromLead()}
           onCancel={() => setIsCreateCustomerFromLeadOpen(false)}
           onSave={handleCreateCustomerFromLeadSave}
+        />
+      )}
+
+      {moduleId === 'invoices' && id && (
+        <TaxpayerInvoiceModal
+          open={isTaxpayerModalOpen}
+          invoiceId={id}
+          invoiceRecord={data}
+          onClose={() => setIsTaxpayerModalOpen(false)}
+          onRefresh={() => fetchRecord(true)}
         />
       )}
 

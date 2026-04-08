@@ -112,6 +112,7 @@ const BLOCKS = {
         width: 140,
         options: [
           { label: 'نقد', value: 'cash' },
+          { label: 'کارت‌خوان', value: 'pos' },
           { label: 'کارت به کارت', value: 'card' },
           { label: 'انتقال حساب', value: 'transfer' },
           { label: 'چک', value: 'cheque' },

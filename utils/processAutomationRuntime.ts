@@ -43,6 +43,8 @@ type CommunicationTarget = {
   baleChatIds: string[];
 };
 
+type CommunicationChannel = 'sms' | 'email' | 'bale';
+
 const isTaskAutomationFieldKey = (fieldKey?: string | null) =>
   String(fieldKey || '').startsWith(TASK_AUTOMATION_FIELD_PREFIX);
 const getTaskAutomationBaseFieldKey = (fieldKey?: string | null) =>
@@ -171,15 +173,50 @@ const appendMentionTargetToken = (target: MentionTarget, value: any) => {
   target.roleIds.push(id);
 };
 
-const resolveCommunicationTargets = async (target: MentionTarget): Promise<CommunicationTarget> => {
+const getRequestedCommunicationChannels = (actions: any[]): Set<CommunicationChannel> => {
+  const channels = new Set<CommunicationChannel>();
+  actions.forEach((action) => {
+    const actionType = String(action?.type || '').trim();
+    if (actionType === 'send_sms') {
+      channels.add('sms');
+      return;
+    }
+    if (actionType === 'send_email') {
+      channels.add('email');
+      return;
+    }
+    if (actionType === 'send_bale_bot') {
+      channels.add('bale');
+    }
+  });
+  return channels;
+};
+
+const getProfileCommunicationSelect = (channels: Set<CommunicationChannel>) => {
+  const columns = ['id'];
+  if (channels.has('sms')) columns.push('mobile_1');
+  if (channels.has('email')) columns.push('email');
+  if (channels.has('bale')) columns.push('bale_chat_id');
+  return columns.join(', ');
+};
+
+const resolveCommunicationTargets = async (
+  target: MentionTarget,
+  channels: Set<CommunicationChannel>
+): Promise<CommunicationTarget> => {
+  if (channels.size === 0) {
+    return { phones: [], emails: [], baleChatIds: [] };
+  }
+
   const userIds = Array.from(new Set((target?.userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
   const roleIds = Array.from(new Set((target?.roleIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  const profileSelect = getProfileCommunicationSelect(channels);
 
   let directUsers: any[] = [];
   if (userIds.length > 0) {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, mobile_1, email, bale_chat_id')
+      .select(profileSelect)
       .in('id', userIds);
     if (error) throw error;
     directUsers = Array.isArray(data) ? data : [];
@@ -189,7 +226,7 @@ const resolveCommunicationTargets = async (target: MentionTarget): Promise<Commu
   if (roleIds.length > 0) {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, role_id, mobile_1, email, bale_chat_id')
+      .select(profileSelect)
       .in('role_id', roleIds);
     if (error) throw error;
     roleUsers = Array.isArray(data) ? data : [];
@@ -553,7 +590,10 @@ export const runProcessAutomationsForTaskEvent = async ({
           sourceContext?.moduleId || null,
           (await getSiblingTasks()) || [],
         );
-        const communicationTargets = await resolveCommunicationTargets(target);
+        const communicationTargets = await resolveCommunicationTargets(
+          target,
+          getRequestedCommunicationChannels(actions)
+        );
 
         for (const action of actions) {
           if (String(action?.type || '') === 'send_note') {

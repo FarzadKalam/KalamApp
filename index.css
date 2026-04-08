@@ -220,12 +220,11 @@ body.ant-scrolling-effect {
 .smarttable-shell .ant-table-body {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  scrollbar-gutter: stable;
 }
 
 .smarttable-shell .ant-table-body,
 .smarttable-shell .ant-table-content {
-  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {
@@ -322,11 +321,6 @@ body.ant-scrolling-effect {
   padding: 4px 6px !important;
 }
 
-.module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th,
-.module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th + th {
-  padding-inline-start: 10px !important;
-}
-
 @media (max-width: 768px) {
   .smarttable-shell .ant-table-pagination.ant-pagination {
     padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
@@ -351,10 +345,6 @@ body.ant-scrolling-effect {
     padding: 6px 8px !important;
   }
 
-  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th,
-  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th + th {
-    padding-inline-start: 12px !important;
-  }
 }
 
 /* =========================================
@@ -1056,11 +1046,6 @@ body.ant-scrolling-effect {
 @media (max-width: 480px) {
   .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column {
     padding: 5px 6px !important;
-  }
-
-  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th,
-  .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column + th + th {
-    padding-inline-start: 10px !important;
   }
 
   .module-list-page .custom-erp-table .ant-table-cell {

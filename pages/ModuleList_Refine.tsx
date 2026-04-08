@@ -54,6 +54,7 @@ const getKanbanLoadStep = () => 15;
 type ColumnFiltersState = Record<string, FilterValue | null>;
 type BulkBuildTarget = "product_bundles" | "price_lists" | null;
 type BulkBuildSourceModule = "products" | "billboards";
+const EMPTY_ROWS: any[] = [];
 
 const parseColumnRangeFilter = (raw: unknown): { from?: string | number; to?: string | number } => {
   if (raw === undefined || raw === null || raw === "") return {};
@@ -389,7 +390,7 @@ export const ModuleListRefine: React.FC<{
 
   const loading = tableQueryResult.isLoading;
   const queryPending = loading || tableQueryResult.isFetching;
-  const allData = tableQueryResult.data?.data || [];
+  const allData = tableQueryResult.data?.data || EMPTY_ROWS;
   const hasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
   const stableSorters = useMemo(
     () => ensureStableCrudSorters((sorters as CrudSort[])?.length ? (sorters as CrudSort[]) : defaultSorters),
@@ -682,6 +683,10 @@ export const ModuleListRefine: React.FC<{
     () => accessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
     [accessibleData]
   );
+  const accessibleRecordIdsSignature = useMemo(
+    () => accessibleRecordIds.join("|"),
+    [accessibleRecordIds]
+  );
   useEffect(() => {
     if (typeof window === "undefined" || !resolvedModuleId) return;
     const visibleRecordIds = (listVisibleRowKeys || accessibleRecordIds)
@@ -717,28 +722,34 @@ export const ModuleListRefine: React.FC<{
 
   useEffect(() => {
     if (!selectedRowKeys.length) {
-      setSelectedRowsMap({});
+      setSelectedRowsMap((prev) => (Object.keys(prev).length > 0 ? {} : prev));
       return;
     }
     setSelectedRowsMap((prev) => {
       const nextMap = { ...prev };
+      let changed = false;
       enrichedData.forEach((row: any) => {
         if (selectedRowKeys.some((key) => String(key) === String(row?.id))) {
-          nextMap[String(row.id)] = row;
+          const rowKey = String(row.id);
+          if (nextMap[rowKey] !== row) {
+            nextMap[rowKey] = row;
+            changed = true;
+          }
         }
       });
       Object.keys(nextMap).forEach((key) => {
         if (!selectedRowKeys.some((selectedKey) => String(selectedKey) === key)) {
           delete nextMap[key];
+          changed = true;
         }
       });
-      return nextMap;
+      return changed ? nextMap : prev;
     });
   }, [enrichedData, selectedRowKeys]);
 
   useEffect(() => {
     if (resolvedModuleId !== "tasks" || !enrichedData.length) {
-      setTaskRelationOptionsByField({});
+      setTaskRelationOptionsByField((prev) => (Object.keys(prev).length > 0 ? {} : prev));
       return;
     }
 
@@ -761,7 +772,9 @@ export const ModuleListRefine: React.FC<{
       });
 
       if (!requests.size) {
-        if (isActive) setTaskRelationOptionsByField({});
+        if (isActive) {
+          setTaskRelationOptionsByField((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+        }
         return;
       }
 
@@ -1004,8 +1017,8 @@ export const ModuleListRefine: React.FC<{
   }, [hasCachedModuleOptions, moduleConfig, resolvedModuleId, visibleColumns]);
   useEffect(() => {
     if (!tagsField || !shouldLoadTags || !resolvedModuleId || accessibleRecordIds.length === 0) {
-      setTagsMap({});
-      setTagsLoading(false);
+      setTagsMap((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+      setTagsLoading((prev) => (prev ? false : prev));
       return;
     }
 
@@ -1022,7 +1035,7 @@ export const ModuleListRefine: React.FC<{
       } catch (err) {
         if (!isActive) return;
         console.error('Error fetching tags:', err);
-        setTagsMap({});
+        setTagsMap((prev) => (Object.keys(prev).length > 0 ? {} : prev));
       } finally {
         if (isActive) {
           setTagsLoading(false);
@@ -1035,7 +1048,7 @@ export const ModuleListRefine: React.FC<{
     return () => {
       isActive = false;
     };
-  }, [accessibleRecordIds, resolvedModuleId, shouldLoadTags, tagsField]);
+  }, [accessibleRecordIdsSignature, resolvedModuleId, shouldLoadTags, tagsField]);
 
   const searchTargetField = useMemo(() => {
     if (!moduleConfig) return null;
@@ -1539,8 +1552,18 @@ export const ModuleListRefine: React.FC<{
     if (extra?.action === "filter") {
       return;
     }
+
+    if (extra?.action === "sort") {
+      const sorterList = Array.isArray(sorter) ? sorter : [sorter];
+      const hasActiveSorter = sorterList.some((item: any) => item?.order === "ascend" || item?.order === "descend");
+      if (!hasActiveSorter) {
+        setSorters(ensureStableCrudSorters(defaultSorters));
+        return;
+      }
+    }
+
     tableProps.onChange?.(pagination, tableFilters, sorter, extra);
-  }, [tableProps]);
+  }, [defaultSorters, setSorters, tableProps]);
 
   const handleSelectAllAcrossPages = useCallback(async () => {
     if (!resolvedModuleId || selectAllPagesLoading) return;

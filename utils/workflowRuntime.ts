@@ -652,6 +652,12 @@ const sendSms = async (to: string[], text: string) => {
 
 type CommunicationChannel = 'sms' | 'email' | 'bale';
 
+const getProfileCommunicationSelect = (channel: CommunicationChannel) => {
+  if (channel === 'sms') return 'id, mobile_1';
+  if (channel === 'email') return 'id, email';
+  return 'id, bale_chat_id';
+};
+
 const parseCommunicationRecipientToken = (value: any) => {
   const raw = String(value || '').trim();
   const match = raw.match(/^(user|role)[:_](.+)$/i);
@@ -705,10 +711,11 @@ const resolveCommunicationValuesFromFields = async ({
   }
 
   const profileRows: Array<Record<string, any>> = [];
+  const profileSelect = getProfileCommunicationSelect(channel);
   if (userIds.size > 0) {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, role_id, mobile_1, email, bale_chat_id')
+      .select(profileSelect)
       .in('id', Array.from(userIds));
     if (error) throw error;
     profileRows.push(...((data || []) as Array<Record<string, any>>));
@@ -716,7 +723,7 @@ const resolveCommunicationValuesFromFields = async ({
   if (roleIds.size > 0) {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, role_id, mobile_1, email, bale_chat_id')
+      .select(profileSelect)
       .in('role_id', Array.from(roleIds));
     if (error) throw error;
     profileRows.push(...((data || []) as Array<Record<string, any>>));

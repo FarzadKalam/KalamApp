@@ -211,7 +211,11 @@ const CompanyTab: React.FC = () => {
         <Form.Item label={<span className="dark:text-gray-300">شماره ثبت</span>} name="registration_number">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
-        <Form.Item label={<span className="dark:text-gray-300">کد اقتصادی</span>} name="economic_code">
+        <Form.Item
+          label={<span className="dark:text-gray-300">کد اقتصادی</span>}
+          name="economic_code"
+          extra="برای ارسال فاکتور به سامانه مودیان از همین مقدار استفاده می‌شود."
+        >
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">کد پستی</span>} name="postal_code">

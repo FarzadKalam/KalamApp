@@ -11,6 +11,12 @@ import {
 } from '../types';
 import { HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
 import { getTodayLocalDateValue } from '../utils/defaultValues';
+import {
+  TAXPAYER_INVOICE_PATTERN_OPTIONS,
+  TAXPAYER_INVOICE_SUBJECT_OPTIONS,
+  TAXPAYER_INVOICE_TYPE_OPTIONS,
+  TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
+} from '../utils/taxpayerSystem';
 
 const BLOCKS = {
   baseInfo: {
@@ -126,6 +132,7 @@ const BLOCKS = {
         width: 140,
         options: [
           { label: 'نقد', value: 'cash' },
+          { label: 'کارت‌خوان', value: 'pos' },
           { label: 'کارت به کارت', value: 'card' },
           { label: 'انتقال حساب', value: 'transfer' },
           { label: 'چک', value: 'cheque' },
@@ -215,6 +222,14 @@ const BLOCKS = {
         remaining: 'remaining_balance',
       },
     },
+  },
+
+  taxpayerSystem: {
+    id: 'taxpayerSystem',
+    titles: { fa: 'سامانه مودیان', en: 'Taxpayer System' },
+    icon: 'SafetyCertificateOutlined',
+    order: 4.5,
+    type: BlockType.FIELD_GROUP,
   },
 
   process: {
@@ -378,6 +393,51 @@ export const invoicesConfig: ModuleDefinition = {
       order: 2,
       nature: FieldNature.STANDARD,
     },
+    {
+      key: 'taxpayer_invoice_type',
+      labels: { fa: 'نوع صورتحساب مودیان', en: 'Taxpayer Invoice Type' },
+      type: FieldType.SELECT,
+      location: FieldLocation.BLOCK,
+      blockId: 'taxpayerSystem',
+      order: 1,
+      options: TAXPAYER_INVOICE_TYPE_OPTIONS,
+      defaultValue: '1',
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'taxpayer_invoice_pattern',
+      labels: { fa: 'الگوی صورتحساب مودیان', en: 'Taxpayer Invoice Pattern' },
+      type: FieldType.SELECT,
+      location: FieldLocation.BLOCK,
+      blockId: 'taxpayerSystem',
+      order: 2,
+      options: TAXPAYER_INVOICE_PATTERN_OPTIONS,
+      defaultValue: '1',
+      readonly: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'taxpayer_invoice_subject',
+      labels: { fa: 'موضوع صورتحساب مودیان', en: 'Taxpayer Invoice Subject' },
+      type: FieldType.SELECT,
+      location: FieldLocation.BLOCK,
+      blockId: 'taxpayerSystem',
+      order: 3,
+      options: TAXPAYER_INVOICE_SUBJECT_OPTIONS,
+      defaultValue: '1',
+      readonly: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'taxpayer_settlement_method',
+      labels: { fa: 'روش تسویه مودیان', en: 'Taxpayer Settlement Method' },
+      type: FieldType.SELECT,
+      location: FieldLocation.BLOCK,
+      blockId: 'taxpayerSystem',
+      order: 4,
+      options: TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
+      nature: FieldNature.STANDARD,
+    },
     { key: 'total_invoice_amount', labels: { fa: 'مبلغ کل فاکتور', en: 'Total Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'total_received_amount', labels: { fa: 'مبلغ دریافت شده', en: 'Received Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'remaining_balance', labels: { fa: 'مانده حساب', en: 'Remaining Balance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
@@ -389,6 +449,7 @@ export const invoicesConfig: ModuleDefinition = {
     BLOCKS.invoiceItems,
     BLOCKS.payments,
     BLOCKS.process,
+    BLOCKS.taxpayerSystem,
     BLOCKS.summary,
   ],
   relatedTabs: [

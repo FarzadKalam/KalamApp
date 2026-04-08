@@ -153,7 +153,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         let nextRecord = data || null;
         const tagsField = fields.find((field: any) => field.type === FieldType.TAGS);
         if (nextRecord && tagsField) {
-          const tagsMap = await fetchRecordTagsMap(supabase, moduleId, [recordId]).catch(() => ({}));
+          const tagsMap = (await fetchRecordTagsMap(supabase, moduleId, [recordId]).catch(() => ({}))) as Record<string, any[]>;
           nextRecord = {
             ...nextRecord,
             [tagsField.key]: tagsMap[String(recordId)] || [],

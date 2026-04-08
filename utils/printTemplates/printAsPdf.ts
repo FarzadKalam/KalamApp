@@ -290,7 +290,7 @@ export const printAsPdf = async (options: PrintAsPdfOptions) => {
     const filename = normalizePdfFilename(options.filename, options.title);
 
     if (targetWindow) {
-      const pdfUrl = targetWindow.URL.createObjectURL(pdfBlob);
+      const pdfUrl = URL.createObjectURL(pdfBlob);
       writeSuccessState({
         targetWindow,
         title: options.title,
