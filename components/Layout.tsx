@@ -316,10 +316,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         ]
       },
       {
-        key: '/reports',
+        key: 'reports',
         icon: <BarChartOutlined />,
         label: 'گزارشات',
-        disabled: !canViewReportsHub,
+        children: [
+          { key: '/reports', label: 'گزارش‌ساز', disabled: !canViewReportsHub },
+          { key: '/automation_execution_reports', label: 'گزارشات فرآیند و اتوماسیون', disabled: !canViewModule('automation_execution_reports') },
+          { key: '/sms_delivery_reports', label: 'گزارشات ارسال پیامک', disabled: !canViewModule('sms_delivery_reports') },
+        ],
       },
       {
         key: 'processes',

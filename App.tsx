@@ -356,6 +356,9 @@ function App() {
 
   const ModuleCreateRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId && MODULES[routeModuleId]?.disableCreate) {
+      return <ModuleListRefine key={`module-list:${routeModuleId}`} />;
+    }
     if (routeModuleId === "work_schedules") {
       return <WorkSchedulesPage />;
     }
@@ -373,6 +376,9 @@ function App() {
 
   const ModuleShowRouteResolver: React.FC = () => {
     const { moduleId: routeModuleId } = useParams();
+    if (routeModuleId && MODULES[routeModuleId]?.disableDetailView) {
+      return <ModuleListRefine key={`module-list:${routeModuleId}`} />;
+    }
     if (routeModuleId === "work_schedules") {
       return <WorkSchedulesPage />;
     }

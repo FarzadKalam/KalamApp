@@ -35,6 +35,8 @@ import { overtimeRequestsModule } from './modules/overtimeRequestsConfig';
 import { missionRequestsModule } from './modules/missionRequestsConfig';
 import { priceListsConfig } from './modules/priceListsConfig';
 import { webFormsConfig } from './modules/webFormsConfig';
+import { automationExecutionReportsConfig } from './modules/automationExecutionReportsConfig';
+import { smsDeliveryReportsConfig } from './modules/smsDeliveryReportsConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -74,4 +76,6 @@ export const MODULES: Record<string, ModuleDefinition> = {
   mission_requests: missionRequestsModule,
   price_lists: priceListsConfig,
   web_forms: webFormsConfig,
+  automation_execution_reports: automationExecutionReportsConfig,
+  sms_delivery_reports: smsDeliveryReportsConfig,
 };

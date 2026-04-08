@@ -66,6 +66,11 @@ const isMissingAuditColumnError = (error: any) => {
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || '').trim() === '57014'
   || String(error?.message || '').toLowerCase().includes('statement timeout');
+const isDuplicateSystemCodeError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return code === '23505' && text.includes('system_code');
+};
 type AssigneeOptionsState = { users: any[]; roles: any[] };
 let assigneesCache: AssigneeOptionsState | null = null;
 let assigneesPromise: Promise<AssigneeOptionsState> | null = null;
@@ -1327,8 +1332,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (
             insertResult.error
             && supportsSystemCode(module.id)
-            && !payload.system_code
-            && isStatementTimeoutError(insertResult.error)
+            && (isStatementTimeoutError(insertResult.error) || isDuplicateSystemCodeError(insertResult.error))
           ) {
             const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, module.id, module.table);
             const payloadWithSystemCode = { ...payload, system_code: fallbackSystemCode };

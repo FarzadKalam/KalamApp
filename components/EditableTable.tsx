@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Table, Button, Space, App, Empty, Typography, Spin, Select, InputNumber, Popover, Input, Modal, Checkbox } from 'antd';
-import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField, RowCalculationType } from '../types';
 import { calculateRow } from '../utils/calculations';
@@ -141,6 +141,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [shelfOptionsByRow, setShelfOptionsByRow] = useState<Record<string, { loading: boolean; options: { label: string; value: string }[] }>>({});
   const [localDynamicOptions, setLocalDynamicOptions] = useState<Record<string, any[]>>({});
   const [invoicePriceLists, setInvoicePriceLists] = useState<Array<{ id: string; name: string; items: any[] }>>([]);
+  const [priceRefreshLoading, setPriceRefreshLoading] = useState(false);
   const [eligibleReceivedChequeOptions, setEligibleReceivedChequeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [rowReloadVersion, setRowReloadVersion] = useState<Record<string, number>>({});
   const [notePopoverRowKey, setNotePopoverRowKey] = useState<string | null>(null);
@@ -2845,6 +2846,221 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }));
   };
 
+  const pickFirstNumber = (...values: any[]) => {
+    for (const value of values) {
+      if (value === undefined || value === null || String(value).trim() === '') continue;
+      return toSafeNumber(value);
+    }
+    return 0;
+  };
+
+  const resolveRelatedPriceRecord = async (row: any) => {
+    const productId = String(row?.product_id || '').trim();
+    if (!productId) return null;
+
+    const options = isAnyInvoiceItems
+      ? getInvoiceProductRelationOptions(row)
+      : getCatalogProductRelationOptions(row);
+    const selectedOption = options.find((option: any) => String(option?.value || '').trim() === productId);
+    const hintedModule = String(selectedOption?.module || '').trim();
+
+    if (hintedModule === 'product_bundles') {
+      const packageSnapshot = await loadPackageSnapshot(productId);
+      return packageSnapshot ? { targetModule: 'product_bundles', record: packageSnapshot } : null;
+    }
+
+    if (hintedModule === 'billboards') {
+      const { data: billboardRecord, error } = await supabase
+        .from('billboards')
+        .select('*')
+        .eq('id', productId)
+        .maybeSingle();
+      if (error) throw error;
+      return billboardRecord ? { targetModule: 'billboards', record: billboardRecord } : null;
+    }
+
+    const { data: productRecord, error: productError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', productId)
+      .maybeSingle();
+    if (productError) throw productError;
+    if (productRecord) return { targetModule: 'products', record: productRecord };
+
+    const { data: billboardRecord, error: billboardError } = await supabase
+      .from('billboards')
+      .select('*')
+      .eq('id', productId)
+      .maybeSingle();
+    if (billboardError) throw billboardError;
+    if (billboardRecord) return { targetModule: 'billboards', record: billboardRecord };
+
+    return null;
+  };
+
+  const refreshRowPriceFromSource = async (row: any) => {
+    const nextRow = { ...(row || {}) };
+
+    if (isAnyInvoiceItems && isPackageInvoiceRow(nextRow)) {
+      const packageId = String(nextRow.package_id || nextRow.product_id || '').trim();
+      if (!packageId) return nextRow;
+      const packageSnapshot = await loadPackageSnapshot(packageId);
+      if (!packageSnapshot) return nextRow;
+      const packageQuantity = Math.max(1, toSafeNumber(nextRow?.quantity) || 1);
+      nextRow.product_id = packageSnapshot.id;
+      nextRow.package_id = packageSnapshot.id;
+      nextRow.package_name = packageSnapshot.name;
+      nextRow.package_items = packageSnapshot.items;
+      nextRow.item_kind = 'package';
+      nextRow.product_type = 'package';
+      nextRow.base_sub_unit = 'عدد';
+      nextRow.dimension_count_original_sub_unit = null;
+      nextRow.selected_product_name = packageSnapshot.name;
+      nextRow.product_name = packageSnapshot.name;
+      nextRow.price_list_id = null;
+      nextRow.main_unit = 'عدد';
+      nextRow.sub_unit = 'عدد';
+      nextRow.quantity = packageQuantity;
+      nextRow.sub_quantity = packageQuantity;
+      nextRow.unit_price = packageSnapshot.totalPrice;
+      nextRow.delivery_time = null;
+      nextRow.length = null;
+      nextRow.width = null;
+      nextRow.start_date = null;
+      nextRow.end_date = null;
+      nextRow.description = buildSalesPackageDescription(packageSnapshot.items, packageQuantity) || nextRow.description || '';
+      nextRow.total_price = calculateRow(nextRow, block.rowCalculationType);
+      return nextRow;
+    }
+
+    const relationResult = await resolveRelatedPriceRecord(nextRow);
+    if (!relationResult?.record) return nextRow;
+
+    const { targetModule, record } = relationResult;
+    const isBillboardSource = targetModule === 'billboards';
+    const sourceName = record?.name || record?.title || nextRow.product_name || nextRow.selected_product_name || null;
+    const sourceMainUnit = isBillboardSource ? 'روز' : (String(record?.main_unit || 'عدد').trim() || 'عدد');
+    const sourceProductType = isBillboardSource ? 'service' : (record?.product_type || nextRow.product_type || 'goods');
+    const sourceSellPrice = isBillboardSource
+      ? pickFirstNumber(record?.daily_rent, record?.monthly_rent, record?.print_cost, record?.sell_price)
+      : pickFirstNumber(record?.sell_price);
+    const sourceBuyPrice = isBillboardSource
+      ? sourceSellPrice
+      : pickFirstNumber(record?.buy_price, record?.sell_price);
+
+    nextRow.selected_product_name = sourceName;
+    nextRow.product_name = sourceName;
+    nextRow.product_type = sourceProductType;
+    nextRow.main_unit = sourceMainUnit;
+    nextRow.delivery_time = String(record?.delivery_time || '').trim() || null;
+
+    if (isPriceListItems) {
+      nextRow.price = sourceSellPrice;
+      nextRow.currency_label = currencyLabel;
+      nextRow.unit_name = sourceMainUnit;
+      return nextRow;
+    }
+
+    if (isSalesPackageItems) {
+      nextRow.unit_price = sourceSellPrice;
+      nextRow.total_price = calculateRow(nextRow, block.rowCalculationType);
+      return nextRow;
+    }
+
+    if (isAnyInvoiceItems) {
+      nextRow.item_kind = 'product';
+      nextRow.package_id = null;
+      nextRow.package_name = null;
+      nextRow.package_items = [];
+      if (String(nextRow.description || '').trim().startsWith('شامل:')) {
+        nextRow.description = '';
+      }
+
+      if (isBillboardSource) {
+        nextRow.price_list_id = null;
+        nextRow.sub_unit = 'عدد';
+        nextRow.unit_price = sourceSellPrice;
+        if (record?.width !== undefined && record?.width !== null && String(record.width).trim() !== '') {
+          nextRow.length = record.width;
+        }
+        if (record?.height !== undefined && record?.height !== null && String(record.height).trim() !== '') {
+          nextRow.width = record.height;
+        }
+      } else {
+        nextRow.sub_unit = record?.sub_unit || nextRow.sub_unit || null;
+        nextRow.base_sub_unit = nextRow.sub_unit || null;
+        const matchedPriceListId = isInvoiceItems ? String(nextRow?.price_list_id || '').trim() : '';
+        if (matchedPriceListId) {
+          const matchedItem = findPriceListItemByProduct(
+            invoicePriceLists.find((item) => item.id === matchedPriceListId)?.items,
+            String(nextRow.product_id || ''),
+          );
+          if (matchedItem) {
+            nextRow.unit_price = toSafeNumber(matchedItem?.price);
+          } else {
+            nextRow.price_list_id = null;
+            nextRow.unit_price = isPurchaseInvoiceItems ? sourceBuyPrice : sourceSellPrice;
+          }
+        } else {
+          nextRow.unit_price = isPurchaseInvoiceItems ? sourceBuyPrice : sourceSellPrice;
+        }
+      }
+
+      if (isServiceProduct(nextRow.product_type) && !isBillboardSource) {
+        nextRow.length = null;
+        nextRow.width = null;
+        nextRow.source_shelf_id = null;
+      }
+      if (isBillboardSource) {
+        nextRow.base_sub_unit = null;
+        nextRow.dimension_count_original_sub_unit = null;
+      }
+      applyInvoiceAutoQuantity(nextRow);
+      syncInvoiceSubQuantity(nextRow);
+      nextRow.total_price = calculateRow(nextRow, block.rowCalculationType);
+    }
+
+    return nextRow;
+  };
+
+  const handleRefreshRelatedPrices = async () => {
+    if (priceRefreshLoading) return;
+    if (!isEditing && mode !== 'local') {
+      msg.warning('برای بروزرسانی قیمت، ابتدا جدول را در حالت ویرایش قرار دهید.');
+      return;
+    }
+
+    const source = isEditing ? tempData : data;
+    if (!Array.isArray(source) || source.length === 0) {
+      msg.warning('ردیفی برای بروزرسانی قیمت وجود ندارد.');
+      return;
+    }
+
+    setPriceRefreshLoading(true);
+    try {
+      const nextRows: any[] = [];
+      let changedCount = 0;
+      for (const row of source) {
+        const before = JSON.stringify(row || {});
+        const refreshed = await refreshRowPriceFromSource(row);
+        const after = JSON.stringify(refreshed || {});
+        if (before !== after) changedCount += 1;
+        nextRows.push(refreshed);
+      }
+      applyRowUpdate(nextRows);
+      nextRows.forEach((row, index) => {
+        const rowKey = String(row?.key || row?.id || index);
+        if (rowKey) bumpRowReloadVersion(rowKey);
+      });
+      msg.success(changedCount > 0 ? `${toPersianNumber(changedCount)} ردیف بروزرسانی شد.` : 'قیمت‌ها با منبع مرتبط یکسان بودند.');
+    } catch (error: any) {
+      console.error(error);
+      msg.error(toFaErrorMessage(error, 'بروزرسانی قیمت‌ها ناموفق بود.'));
+    } finally {
+      setPriceRefreshLoading(false);
+    }
+  };
+
   const ensureRowExpanded = (rowKey: string) => {
     setExpandedRowKeys((prev) => {
       const keyStr = String(rowKey);
@@ -3655,6 +3871,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
     !isReadOnly &&
     (isEditing || mode === 'local');
   const canCopyRows = !isReadOnly && (isEditing || mode === 'local');
+  const canRefreshRelatedPrices =
+    (isAnyInvoiceItems || isPriceListItems || isSalesPackageItems) &&
+    !isReadOnly;
   const resolveColumnTitle = (col: any) => {
     if (isAnyInvoicePayments && col?.key === 'amount') {
       return `${col.title} (${currencyLabel})`;
@@ -3902,6 +4121,17 @@ const EditableTable: React.FC<EditableTableProps> = ({
           </h3>
         </div>
         <Space>
+          {canRefreshRelatedPrices && (
+            <Button
+              size="small"
+              type="text"
+              icon={<ReloadOutlined />}
+              loading={priceRefreshLoading}
+              disabled={!isEditing && mode !== 'local'}
+              title={!isEditing && mode !== 'local' ? 'ابتدا جدول را در حالت ویرایش قرار دهید' : 'بروزرسانی قیمت از رکورد مرتبط'}
+              onClick={() => { void handleRefreshRelatedPrices(); }}
+            />
+          )}
           {mode === 'db' && !isEditing && !isReadOnly && <Button size="small" icon={<EditOutlined />} onClick={startEdit}>ویرایش لیست</Button>}
         </Space>
       </div>

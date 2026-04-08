@@ -26,6 +26,8 @@ const SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE = 'module_settings';
 
 const DEFAULT_SYSTEM_CODE_START_NUMBER = 100;
 const DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER = 234;
+const MAX_SYSTEM_CODE_SEQUENCE_NUMBER = 2147483647;
+const MAX_SYSTEM_CODE_NUMBER_WIDTH = 20;
 
 type ResolvedSystemCodeConfig = {
   prefix: string;
@@ -54,6 +56,7 @@ const getDefaultSystemCodeNumberWidth = (moduleName?: string | null) => {
 const normalizeSystemCodeStartNumber = (value: unknown) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return DEFAULT_SYSTEM_CODE_START_NUMBER;
+  if (numeric > MAX_SYSTEM_CODE_SEQUENCE_NUMBER) return DEFAULT_SYSTEM_CODE_START_NUMBER;
   return Math.max(Math.trunc(numeric), 0);
 };
 
@@ -62,7 +65,7 @@ const normalizeSystemCodeNumberWidth = (value: unknown) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
   const normalized = Math.max(Math.trunc(numeric), 0);
-  return normalized > 0 ? normalized : null;
+  return normalized > 0 && normalized <= MAX_SYSTEM_CODE_NUMBER_WIDTH ? normalized : null;
 };
 
 const normalizeSystemCodePrefix = (value: unknown, fallback: string) => {
@@ -216,9 +219,8 @@ export const buildClientFallbackSystemCode = async (
       const match = code.match(suffixPattern);
       if (!match) return acc;
       const numericText = String(match[1] || '').trim();
-      if (numberWidth && numericText.length > numberWidth) return acc;
       const numeric = Number(match[1]);
-      if (!Number.isFinite(numeric)) return acc;
+      if (!Number.isFinite(numeric) || numeric > MAX_SYSTEM_CODE_SEQUENCE_NUMBER) return acc;
       acc.push(numeric);
       return acc;
     }, []);

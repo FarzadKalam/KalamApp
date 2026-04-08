@@ -280,6 +280,11 @@ export interface ModuleDefinition {
   titles: { fa: string; en?: string; faSingular?: string };
   nature?: ModuleNature;
   table: string;
+  systemManaged?: boolean;
+  disableCreate?: boolean;
+  disableDetailView?: boolean;
+  hideFullRecordAction?: boolean;
+  listPreviewMode?: 'modal';
   dashboard?: {
     quickCreateLabel?: string;
     recentListFields?: string[];

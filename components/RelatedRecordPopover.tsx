@@ -11,6 +11,7 @@ import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberForma
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
 import { supportsSystemCode } from '../utils/systemCode';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
+import { fetchRecordTagsMap } from '../utils/referenceData';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -22,6 +23,7 @@ interface RelatedRecordPopoverProps {
   onOpenChange?: (open: boolean) => void;
   overlayZIndex?: number;
   onNavigate?: (path: string) => void;
+  hideFullRecordAction?: boolean;
 }
 
 const isEmptyValue = (value: any) => (
@@ -75,6 +77,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   onOpenChange,
   overlayZIndex = 5000,
   onNavigate,
+  hideFullRecordAction = false,
 }) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -147,7 +150,17 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           .single();
         if (error) throw error;
         if (cancelled) return;
-        setRecord(data || null);
+        let nextRecord = data || null;
+        const tagsField = fields.find((field: any) => field.type === FieldType.TAGS);
+        if (nextRecord && tagsField) {
+          const tagsMap = await fetchRecordTagsMap(supabase, moduleId, [recordId]).catch(() => ({}));
+          nextRecord = {
+            ...nextRecord,
+            [tagsField.key]: tagsMap[String(recordId)] || [],
+          };
+        }
+        if (cancelled) return;
+        setRecord(nextRecord);
 
         const categorySet = new Set<string>();
         fields.forEach((field: any) => {
@@ -397,11 +410,13 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           </div>
         )}
 
-        <div className="pt-2 mt-2 flex justify-end border-t border-gray-100 dark:border-gray-800">
-          <Button size="small" type="link" onClick={openFullRecord}>
-            {'\u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0645\u0644'}
-          </Button>
-        </div>
+        {!hideFullRecordAction ? (
+          <div className="pt-2 mt-2 flex justify-end border-t border-gray-100 dark:border-gray-800">
+            <Button size="small" type="link" onClick={openFullRecord}>
+              {'\u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0645\u0644'}
+            </Button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

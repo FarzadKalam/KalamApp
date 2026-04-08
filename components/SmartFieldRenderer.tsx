@@ -66,6 +66,12 @@ const normalizeDigitsToEnglish = (raw: any): string => {
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
 };
 
+const isDuplicateSystemCodeError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return code === '23505' && text.includes('system_code');
+};
+
 const normalizeNumericString = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
   const englishDigits = normalizeDigitsToEnglish(raw)
@@ -1433,9 +1439,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         const nextValue = values?.[key];
         payload[key] = nextValue === '' ? null : nextValue;
       });
-      if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
-        payload.system_code = await buildClientFallbackSystemCode(supabase, quickCreateTargetModuleId);
-      }
       if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.key) {
         payload[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(
           values?.[quickCreateAutoNameToggleField.key],
@@ -1447,18 +1450,36 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         throw new Error(`فیلد "${quickCreateTargetField}" الزامی است.`);
       }
 
+      const targetTable = quickCreateTargetModule?.table || quickCreateTargetModuleId;
       const selectFields = Array.from(new Set(['id', quickCreateTargetField])).join(', ');
-      const { data: inserted, error } = await supabase
-        .from(quickCreateTargetModuleId)
+      let insertResult = await supabase
+        .from(targetTable)
         .insert([payload])
         .select(selectFields)
         .single();
-      if (error) throw error;
+      if (
+        insertResult.error
+        && supportsSystemCode(quickCreateTargetModuleId)
+        && !payload.system_code
+        && isDuplicateSystemCodeError(insertResult.error)
+      ) {
+        payload.system_code = await buildClientFallbackSystemCode(
+          supabase,
+          quickCreateTargetModuleId,
+          targetTable
+        );
+        insertResult = await supabase
+          .from(targetTable)
+          .insert([payload])
+          .select(selectFields)
+          .single();
+      }
+      if (insertResult.error) throw insertResult.error;
 
       msg.success('رکورد جدید ایجاد شد');
       closeQuickCreate();
       if (onOptionsUpdate) onOptionsUpdate();
-      const insertedRow: any = inserted as any;
+      const insertedRow: any = insertResult.data as any;
       if (insertedRow?.id) onChange(insertedRow.id);
     } catch (err: any) {
       if (Array.isArray(err?.errorFields)) return;
@@ -2508,9 +2529,48 @@ interface QuickCreateProps {
   relationOptions: Record<string, any[]>;
   dynamicOptions: Record<string, any[]>;
   onCancel: () => void;
-  onOk: () => void;
+  onOk: () => void | Promise<void>;
   overlayZIndexBase?: number;
 }
+
+const QuickCreateAutoNameSwitch: React.FC<{
+  open: boolean;
+  field: ModuleField;
+  form: any;
+  fallback: boolean;
+  disabled?: boolean;
+  onImmediateChange: (value: boolean) => void;
+}> = React.memo(({ open, field, form, fallback, disabled = false, onImmediateChange }) => {
+  const fieldKey = String(field?.key || '');
+  const readValue = useCallback(() => {
+    if (!fieldKey) return fallback;
+    return normalizeAutoNameEnabled(form?.getFieldValue?.(fieldKey), fallback);
+  }, [fallback, fieldKey, form]);
+  const [checked, setChecked] = useState(() => readValue());
+
+  useEffect(() => {
+    if (!open) return;
+    setChecked(readValue());
+    if (typeof window === 'undefined') return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      setChecked(readValue());
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [open, readValue]);
+
+  return (
+    <Switch
+      checked={checked}
+      onChange={(nextValue) => {
+        const normalized = normalizeAutoNameEnabled(nextValue, fallback);
+        setChecked(normalized);
+        onImmediateChange(normalized);
+      }}
+      disabled={disabled}
+    />
+  );
+});
 
 export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   open,
@@ -2527,6 +2587,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
 }) => {
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [assigneesLoading, setAssigneesLoading] = useState(false);
+  const pendingAutoNameToggleValueRef = useRef<boolean | null>(null);
+  const pendingAutoNameToggleFrameRef = useRef<number | null>(null);
   const supportsAssignee = supportsGlobalAssignee(String(moduleId || ''));
   const supportsAssigneeType = supportsGlobalAssigneeType(String(moduleId || ''));
   const supportsRoleAssignee = supportsGlobalRoleAssignee(String(moduleId || ''));
@@ -2537,9 +2599,54 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     [quickCreateModuleConfig]
   );
   const showAutoNameToggle = !!autoNameToggleField && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers');
+  const autoNameToggleKey = autoNameToggleField?.key || '';
+  const autoNameToggleDefault = normalizeAutoNameEnabled(autoNameToggleField?.defaultValue, false);
   const watchedAssigneeCombo = Form.useWatch('assignee_combo', form);
   const watchedQuickCreateValues = Form.useWatch([], form) || {};
   const childOverlayZIndexBase = overlayZIndexBase + 20;
+  const clearPendingAutoNameToggleWrite = useCallback(() => {
+    if (pendingAutoNameToggleFrameRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(pendingAutoNameToggleFrameRef.current);
+    }
+    pendingAutoNameToggleFrameRef.current = null;
+    pendingAutoNameToggleValueRef.current = null;
+  }, []);
+  const flushPendingAutoNameToggleWrite = useCallback(() => {
+    if (!showAutoNameToggle || !autoNameToggleKey) return;
+    if (pendingAutoNameToggleFrameRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(pendingAutoNameToggleFrameRef.current);
+    }
+    pendingAutoNameToggleFrameRef.current = null;
+    if (pendingAutoNameToggleValueRef.current === null) return;
+    form?.setFieldValue?.(autoNameToggleKey, pendingAutoNameToggleValueRef.current);
+    pendingAutoNameToggleValueRef.current = null;
+  }, [autoNameToggleKey, form, showAutoNameToggle]);
+  const setDeferredAutoNameToggleFormValue = useCallback((nextValue: boolean) => {
+    if (!autoNameToggleKey) return;
+    pendingAutoNameToggleValueRef.current = nextValue;
+    if (pendingAutoNameToggleFrameRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(pendingAutoNameToggleFrameRef.current);
+    }
+    if (typeof window === 'undefined') {
+      form?.setFieldValue?.(autoNameToggleKey, nextValue);
+      pendingAutoNameToggleValueRef.current = null;
+      pendingAutoNameToggleFrameRef.current = null;
+      return;
+    }
+    pendingAutoNameToggleFrameRef.current = window.requestAnimationFrame(() => {
+      form?.setFieldValue?.(autoNameToggleKey, nextValue);
+      pendingAutoNameToggleValueRef.current = null;
+      pendingAutoNameToggleFrameRef.current = null;
+    });
+  }, [autoNameToggleKey, form]);
+  const handleQuickCreateCancel = useCallback(() => {
+    clearPendingAutoNameToggleWrite();
+    onCancel();
+  }, [clearPendingAutoNameToggleWrite, onCancel]);
+  const handleQuickCreateOk = useCallback(() => {
+    flushPendingAutoNameToggleWrite();
+    return onOk();
+  }, [flushPendingAutoNameToggleWrite, onOk]);
   const parseAssigneeCombo = (value?: string | null) => {
     if (!value) return { assignee_type: null, assignee_id: null };
     const [type, id] = String(value).split('_');
@@ -2611,6 +2718,10 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       .filter((field) => String(field?.key || '') !== 'auto_name_enabled'),
     [fields, supportsAssignee],
   );
+
+  useEffect(() => () => {
+    clearPendingAutoNameToggleWrite();
+  }, [clearPendingAutoNameToggleWrite]);
 
   useEffect(() => {
     if (!open || !supportsAssignee) return;
@@ -2720,8 +2831,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     <Modal
       title={`افزودن سریع: ${label}`}
       open={open}
-      onCancel={onCancel}
-      onOk={onOk}
+      onCancel={handleQuickCreateCancel}
+      onOk={handleQuickCreateOk}
       okText="افزودن"
       cancelText="انصراف"
       confirmLoading={loading}
@@ -2732,7 +2843,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       <Form
         form={form}
         layout="vertical"
-        onFinish={onOk}
+        onFinish={handleQuickCreateOk}
         className="max-h-[60vh] overflow-y-auto pr-1"
       >
         {showAutoNameToggle && (
@@ -2741,18 +2852,13 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
               <div className="h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
                 <span className="text-xs text-gray-400 shrink-0">{autoNameToggleField.labels?.fa || 'نامگذاری خودکار'}:</span>
                 <div className="flex-1 min-w-0">
-                  <SmartFieldRenderer
+                  <QuickCreateAutoNameSwitch
+                    open={open}
                     field={autoNameToggleField}
-                    value={form.getFieldValue(autoNameToggleField.key)}
-                    onChange={(value) => form.setFieldValue(autoNameToggleField.key, value)}
-                    compactMode
-                    forceEditMode={(autoNameToggleField as any)?.readonly !== true}
-                    options={autoNameToggleField.options}
-                    onOptionsUpdate={() => undefined}
-                    moduleId={moduleId}
-                    allValues={watchedQuickCreateValues}
-                    disableRequired
-                    overlayZIndexBase={childOverlayZIndexBase}
+                    form={form}
+                    fallback={autoNameToggleDefault}
+                    onImmediateChange={setDeferredAutoNameToggleFormValue}
+                    disabled={(autoNameToggleField as any)?.readonly === true}
                   />
                 </div>
               </div>

@@ -174,7 +174,9 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
         font-family: 'Vazirmatn', system-ui, sans-serif !important;
       }
 
+      #print-root,
       #print-root * {
+        font-family: 'Vazirmatn', system-ui, sans-serif !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
       }
@@ -189,6 +191,12 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
   </head>
   <body class="print-mode">
     <div id="print-root">${sourceHtml}</div>
+    <script>
+      window.__KALAMAPP_PRINT_READY = false;
+      Promise.resolve(document.fonts && document.fonts.ready)
+        .catch(function () { return null; })
+        .then(function () { window.__KALAMAPP_PRINT_READY = true; });
+    </script>
   </body>
 </html>`;
 };

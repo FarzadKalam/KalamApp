@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'render-pdf-2026-04-07-01';
+const FUNCTION_BUILD = 'render-pdf-2026-04-08-01';
 const DEFAULT_GOTENBERG_URL = 'http://gotenberg:3000';
 const GOTENBERG_TIMEOUT_MS = 120000;
 
@@ -150,7 +150,8 @@ Deno.serve(async (request) => {
   form.append('files', new File([documentHtml], 'index.html', { type: 'text/html; charset=utf-8' }));
   form.append('preferCssPageSize', 'true');
   form.append('printBackground', 'true');
-  form.append('waitDelay', '500ms');
+  form.append('waitDelay', '1000ms');
+  form.append('waitForExpression', 'window.__KALAMAPP_PRINT_READY === true');
 
   const { signal, cleanup } = createTimeoutSignal(GOTENBERG_TIMEOUT_MS);
 

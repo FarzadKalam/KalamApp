@@ -320,7 +320,51 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
   const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
   const autoOpenedTaskIdRef = useRef<string | null>(null);
+  const taskQuickModalHistoryRef = useRef<string | null>(null);
   const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
+  const activeTaskQuickModalTask = useMemo(
+    () => (
+      openTaskPopoverId
+        ? tasks.find((task: any) => String(task?.id || '') === String(openTaskPopoverId)) || null
+        : null
+    ),
+    [openTaskPopoverId, tasks]
+  );
+  const closeTaskQuickModal = useCallback((syncHistory = true) => {
+    if (syncHistory && typeof window !== 'undefined') {
+      const marker = taskQuickModalHistoryRef.current;
+      if (marker && window.history.state?.kalamappTaskQuickModal === marker) {
+        setOpenTaskPopoverId(null);
+        taskQuickModalHistoryRef.current = null;
+        window.history.back();
+        return;
+      }
+    }
+    taskQuickModalHistoryRef.current = null;
+    setOpenTaskPopoverId(null);
+  }, []);
+  useEffect(() => {
+    if (!openTaskPopoverId || typeof window === 'undefined') return;
+
+    const marker = `task-quick-modal:${openTaskPopoverId}:${Date.now()}`;
+    taskQuickModalHistoryRef.current = marker;
+    window.history.pushState(
+      { ...(window.history.state || {}), kalamappTaskQuickModal: marker },
+      '',
+      window.location.href
+    );
+
+    const handlePopState = () => {
+      if (taskQuickModalHistoryRef.current !== marker) return;
+      taskQuickModalHistoryRef.current = null;
+      closeTaskQuickModal(false);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [closeTaskQuickModal, openTaskPopoverId]);
   const modalSelectProps = useMemo(
     () => ({
       allowClear: true,
@@ -1705,7 +1749,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const openTaskHandoverModal = useCallback(async (task: any, providedTasks?: any[]) => {
     if (!supportsHandover || !task?.id || !recordId || isBom) return;
     try {
-      setOpenTaskPopoverId(null);
+      closeTaskQuickModal(false);
       setHandoverLoading(true);
       if (!productionShelfOptions.length) await fetchProductionShelves();
       if (!assignees.users.length && !assignees.roles.length) await fetchAssignees();
@@ -1921,6 +1965,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     getHandoverFromTask,
     buildGroupsFromPreviousStage,
     buildGroupsFromOrder,
+    closeTaskQuickModal,
     mergeSavedGroups,
     recalcHandoverGroup,
     resolveCategoryLabel,
@@ -2960,12 +3005,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             })
           : row
       )));
-      setOpenTaskPopoverId(null);
+      closeTaskQuickModal(false);
       message.success('اتصال وظیفه از فرآیند و رکورد قطع شد');
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'قطع اتصال وظیفه ناموفق بود'));
     }
-  }, [parseRecurrenceInfo, updateTaskWithFallback]);
+  }, [closeTaskQuickModal, parseRecurrenceInfo, updateTaskWithFallback]);
   const handleDeleteTaskCompletely = useCallback(async (task: any) => {
     if (!task?.id) return;
     const taskId = String(task.id);
@@ -2976,12 +3021,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .eq('id', taskId);
       if (error) throw error;
       setTasks((prev) => prev.filter((row: any) => String(row?.id) !== taskId));
-      setOpenTaskPopoverId(null);
+      closeTaskQuickModal(false);
       message.success('وظیفه حذف شد');
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'حذف وظیفه ناموفق بود'));
     }
-  }, []);
+  }, [closeTaskQuickModal]);
 
   const getStatusColor = (status: string, task?: any) => getTaskStatusSwatchColor(status, task);
 
@@ -3355,7 +3400,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       <div
         className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
         style={{
-          width: 'min(92vw, 26rem)',
+          width: '100%',
           maxWidth: 'calc(100vw - 1rem)',
           maxHeight: 'min(78vh, 42rem)',
           padding: '0.75rem',
@@ -3547,7 +3592,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               type="link"
               className="px-0 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
               onClick={() => {
-                setOpenTaskPopoverId(null);
+                closeTaskQuickModal(false);
                 void openTaskHandoverModal(task);
               }}
             >
@@ -4506,6 +4551,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, [draftForm, isProcessModule]);
 
+  const resetDraftStageEditorState = useCallback(() => {
+    setEditingDraft(null);
+    draftEditorStageIdRef.current = null;
+    setDraftModalTabKey('stage');
+    setDraftAutomationRules([]);
+    setDraftCustomFields([]);
+    setDraftStageStatusOptions([]);
+    setDraftStageTaskTypeValue('');
+    draftForm.resetFields();
+  }, [draftForm]);
+
+  const closeDraftStageModal = useCallback(() => {
+    setIsDraftModalOpen(false);
+    resetDraftStageEditorState();
+  }, [resetDraftStageEditorState]);
+
   const handleAddDraftStage = async (values: any) => {
     await validateDraftModalStep('stage');
     await validateDraftModalStep('fields');
@@ -4517,16 +4578,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
       return;
     }
-    setIsDraftModalOpen(false);
-    setEditingDraft(null);
-    draftEditorStageIdRef.current = null;
-    setDraftModalTabKey('stage');
-    setDraftAutomationRules([]);
-    setDraftCustomFields([]);
-    setDraftStageStatusOptions([]);
-    setDraftStageTaskTypeValue('');
-    draftForm.resetFields();
+    closeDraftStageModal();
   };
+
+  const handleSaveDraftStageAndClose = useCallback(async () => {
+    try {
+      await validateDraftModalStep('stage');
+      await validateDraftModalStep('fields');
+      await saveDraftStageFromEditor();
+      closeDraftStageModal();
+    } catch {
+      // Ant Form already marks invalid fields.
+    }
+  }, [closeDraftStageModal, saveDraftStageFromEditor, validateDraftModalStep]);
 
   const openDraftStageModal = useCallback((stage?: any | null, tab: DraftModalTabKey = 'stage') => {
     const nextEditingDraft = stage ? normalizeDraftStageForEditor(stage, 0) : null;
@@ -4535,18 +4599,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setDraftModalTabKey(tab);
     setIsDraftModalOpen(true);
   }, [normalizeDraftStageForEditor]);
-
-  const closeDraftStageModal = useCallback(() => {
-    setIsDraftModalOpen(false);
-    setEditingDraft(null);
-    draftEditorStageIdRef.current = null;
-    setDraftAutomationRules([]);
-    setDraftCustomFields([]);
-    setDraftStageStatusOptions([]);
-    setDraftStageTaskTypeValue('');
-    setDraftModalTabKey('stage');
-    draftForm.resetFields();
-  }, [draftForm]);
 
   const guardDraftAutomationConditionAdd = useCallback(() => {
     if (draftStageTaskType) return true;
@@ -5209,43 +5261,34 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   const isHighlightedTask = isAssignedToCurrent;
                   const segmentColor = getStatusColor(segment.status, segment);
                   return (
-                    <Popover
+                    <div
                       key={`${barKey}-task-${segment.id}`}
-                      content={renderPopupContent(segment)}
-                      trigger={(compact && !(readOnly && allowReportEditInReadOnly)) ? 'hover' : 'click'}
-                      open={((compact && !(readOnly && allowReportEditInReadOnly)) ? undefined : (openTaskPopoverId === String(segment.id)))}
-                      onOpenChange={(open) => {
-                        if (compact && !(readOnly && allowReportEditInReadOnly)) return;
-                        setOpenTaskPopoverId(open ? String(segment.id) : null);
+                      data-task-segment-id={String(segment.id)}
+                      className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === displaySegments.length - 1 && hiddenCount === 0 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
+                      style={{
+                        flex: 1,
+                        backgroundColor: segmentColor,
+                        boxShadow: isHighlightedTask
+                          ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
+                          : undefined,
                       }}
-                      getPopupContainer={() => document.body}
-                      placement="bottomRight"
-                      overlayStyle={{ zIndex: 12000, width: 'min(92vw, 26rem)', maxWidth: 'calc(100vw - 1rem)' }}
-                      title={null}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setOpenTaskPopoverId(String(segment.id));
+                      }}
                     >
-                      <div
-                        data-task-segment-id={String(segment.id)}
-                        className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === displaySegments.length - 1 && hiddenCount === 0 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
-                        style={{
-                          flex: 1,
-                          backgroundColor: segmentColor,
-                          boxShadow: isHighlightedTask
-                            ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
-                            : undefined,
-                        }}
-                        >
-                        <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
-                          <span className={`text-white font-medium truncate w-full text-center drop-shadow-md ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                            {shouldCompactSegments ? getCompactLabel(segment.title || segment.name) : (segment.title || segment.name)}
+                      <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
+                        <span className={`text-white font-medium truncate w-full text-center drop-shadow-md ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
+                          {shouldCompactSegments ? getCompactLabel(segment.title || segment.name) : (segment.title || segment.name)}
+                        </span>
+                        {!compact && segment.sort_order && (
+                          <span className="text-[8px] text-white/90 absolute bottom-0.5 right-1 bg-black/10 px-1 rounded-sm">
+                            {toPersianNumber(segment.sort_order)}
                           </span>
-                          {!compact && segment.sort_order && (
-                            <span className="text-[8px] text-white/90 absolute bottom-0.5 right-1 bg-black/10 px-1 rounded-sm">
-                              {toPersianNumber(segment.sort_order)}
-                            </span>
-                          )}
-                        </div>
+                        )}
                       </div>
-                    </Popover>
+                    </div>
                   );
                 })()
               ) : (
@@ -5575,6 +5618,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           جمع دستمزد تولید: {toPersianNumber(totalWage.toLocaleString('en-US'))} تومان
         </div>
       )}
+
+      <Modal
+        rootClassName="task-quick-modal-root"
+        className="task-quick-modal"
+        open={!!activeTaskQuickModalTask}
+        onCancel={() => closeTaskQuickModal()}
+        footer={null}
+        title={null}
+        centered
+        destroyOnHidden
+        width={560}
+        zIndex={12000}
+        styles={{ body: { padding: 0 } }}
+      >
+        {activeTaskQuickModalTask ? renderPopupContent(activeTaskQuickModalTask) : null}
+      </Modal>
 
       <Modal
         title="افزودن خط تولید"
@@ -6409,6 +6468,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
             <Button onClick={closeDraftStageModal} className="rounded-lg">انصراف</Button>
             <div className="flex items-center gap-2">
+              <Button
+                htmlType="button"
+                icon={<SaveOutlined />}
+                loading={isSavingDraftStage}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void handleSaveDraftStageAndClose();
+                }}
+                className="rounded-lg"
+              >
+                ذخیره
+              </Button>
               {draftModalStepIndex > 0 ? (
                 <Button
                   htmlType="button"

@@ -5,7 +5,7 @@ import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase"
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
-import { FieldType, ModuleDefinition, ModuleField, SavedView, ViewMode } from "../types";
+import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMode } from "../types";
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
@@ -45,6 +45,7 @@ import GoalProgressSlider from "../components/goals/GoalProgressSlider";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
 import { toPersianNumber } from "../utils/persianNumberFormatter";
 import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
+import RelatedRecordPopover from "../components/RelatedRecordPopover";
 
 const getDefaultGridPageSize = () => 15;
 const getGridLoadStep = () => 15;
@@ -358,6 +359,7 @@ export const ModuleListRefine: React.FC<{
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
   const [listPrintRows, setListPrintRows] = useState<any[]>([]);
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
+  const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
   const hasInitializedModuleStateRef = useRef(false);
   const searchSyncInitializedRef = useRef(false);
@@ -499,6 +501,7 @@ export const ModuleListRefine: React.FC<{
     setCanShowGoalCards(true);
     setListPrintRows([]);
     setBulkBuildTarget(null);
+    setPreviewRecordId(null);
     setHasListInitialPaintCompleted(false);
     searchSyncInitializedRef.current = false;
     applyCombinedFilters(
@@ -614,10 +617,33 @@ export const ModuleListRefine: React.FC<{
   const canEditModule = modulePermissions.edit !== false;
   const canDeleteModule = modulePermissions.delete !== false;
   const canOpenModuleSettings = modulePermissions.view !== false && fieldPermissions.__module_settings !== false;
+  const isSystemManagedModule = moduleConfig?.systemManaged === true;
+  const createDisabled = moduleConfig?.disableCreate === true;
+  const detailDisabled = moduleConfig?.disableDetailView === true;
+  const useQuickPreviewModal = moduleConfig?.listPreviewMode === "modal" || detailDisabled;
+  const canCreateModule = canEditModule && !createDisabled;
 
   // ✅ Define field keys FIRST (before any useMemo/useEffect that uses them)
   const imageField = moduleConfig?.fields.find(f => f.type === FieldType.IMAGE)?.key;
   const tagsField = moduleConfig?.fields.find(f => f.type === FieldType.TAGS)?.key;
+  const tagOnlyBulkEditModule = useMemo<ModuleDefinition | null>(() => {
+    if (!moduleConfig) return null;
+    if (!isSystemManagedModule || !tagsField) return moduleConfig;
+    const tagField = moduleConfig.fields.find((field) => field.type === FieldType.TAGS);
+    if (!tagField) return moduleConfig;
+    return {
+      ...moduleConfig,
+      fields: [tagField],
+      blocks: [
+        {
+          id: "system_tags",
+          titles: { fa: "برچسب‌ها", en: "Tags" },
+          type: BlockType.FIELD_GROUP,
+          order: 1,
+        },
+      ],
+    };
+  }, [isSystemManagedModule, moduleConfig, tagsField]);
   const statusField = moduleConfig?.fields.find(f => f.type === FieldType.STATUS)?.key;
   const categoryField = resolvedModuleId === 'tasks'
     ? 'related_to_module'
@@ -1219,6 +1245,31 @@ export const ModuleListRefine: React.FC<{
     void tableQueryResult.refetch();
   }, [tableQueryResult]);
 
+  const openRecordFromList = useCallback((record: any) => {
+    const recordId = String(record?.id || "").trim();
+    if (!resolvedModuleId || !recordId) return;
+    if (useQuickPreviewModal) {
+      setPreviewRecordId(recordId);
+      return;
+    }
+    navigate(`/${resolvedModuleId}/${recordId}`);
+  }, [navigate, resolvedModuleId, useQuickPreviewModal]);
+
+  const moduleListNavigate = useCallback((path: string) => {
+    const normalizedPath = String(path || "").trim();
+    if (useQuickPreviewModal && resolvedModuleId) {
+      const moduleRecordPrefix = `/${resolvedModuleId}/`;
+      if (normalizedPath.startsWith(moduleRecordPrefix)) {
+        const recordId = normalizedPath.slice(moduleRecordPrefix.length).split("/")[0];
+        if (recordId && recordId !== "create") {
+          setPreviewRecordId(recordId);
+          return;
+        }
+      }
+    }
+    navigate(normalizedPath);
+  }, [navigate, resolvedModuleId, useQuickPreviewModal]);
+
   function buildColumnCrudFilters(nextColumnFilters: ColumnFiltersState): CrudFilters {
     if (!moduleConfig) return [];
 
@@ -1593,6 +1644,10 @@ export const ModuleListRefine: React.FC<{
 
   const handleBulkDelete = () => {
     if (selectedRowKeys.length === 0) return;
+    if (isSystemManagedModule) {
+      showListMessage("warning", "رکوردهای سیستمی قابل حذف نیستند.");
+      return;
+    }
     modal.confirm({
       title: `حذف ${selectedRowKeys.length} رکورد`,
       content: 'آیا مطمئن هستید؟',
@@ -1631,6 +1686,16 @@ export const ModuleListRefine: React.FC<{
   };
 
   const handleBulkEditOpen = () => {
+      if (isSystemManagedModule) {
+        if (!tagsField) {
+          showListMessage("warning", "برای این گزارش فیلد برچسب فعال نیست.");
+          return;
+        }
+        setEditRecordId(null);
+        setIsBulkEditMode(true);
+        setIsBulkEditOpen(true);
+        return;
+      }
       const nextState = resolveModuleListBulkEditOpenState(
         selectedRowKeys.map((key) => String(key))
       );
@@ -1820,6 +1885,10 @@ export const ModuleListRefine: React.FC<{
 
   const handleCopyViaCreateForm = () => {
     if (!selectedRowKeys.length || !resolvedModuleId || !moduleConfig) return;
+    if (isSystemManagedModule) {
+      showListMessage("warning", "رکوردهای سیستمی قابل کپی نیستند.");
+      return;
+    }
     if (selectedRowKeys.length > 1) {
       showListMessage("warning", "برای کپی از طریق فرم، فقط یک رکورد را انتخاب کنید.");
       return;
@@ -1903,18 +1972,23 @@ export const ModuleListRefine: React.FC<{
         ? meta.selectedTags.filter(Boolean)
         : [];
       const hasTagChanges = selectedTags.length > 0;
+      if (isSystemManagedModule && Object.keys(changes).length > 0 && !hasTagChanges) {
+        showListMessage('warning', 'برای گزارش‌های سیستمی فقط برچسب‌ها قابل ویرایش هستند.');
+        return;
+      }
       if (Object.keys(changes).length === 0 && !hasTagChanges) return;
       if (!moduleConfig?.table) return;
       const normalizedChanges = Object.keys(changes).length > 0 && resolvedModuleId === 'tasks'
         ? attachTaskCompletionIfNeeded(changes)
         : changes;
+      const shouldUpdateRecordPayload = Object.keys(normalizedChanges).length > 0 && !isSystemManagedModule;
       const selectedIds = selectedRowKeys.map((id) => String(id)).filter(Boolean);
       if (!selectedIds.length) return;
 
       const hide = showListMessage('loading', 'در حال بروزرسانی موارد انتخاب‌شده...', 0);
       try {
         for (const id of selectedIds) {
-          if (Object.keys(normalizedChanges).length > 0) {
+          if (shouldUpdateRecordPayload) {
             const { error } = await supabase
               .from(moduleConfig.table)
               .update(normalizedChanges)
@@ -2071,16 +2145,16 @@ export const ModuleListRefine: React.FC<{
   const moduleActionItems: MenuProps["items"] = useMemo(() => {
     const items: MenuProps["items"] = [];
 
-    if (canOpenGoals) {
+    if (!isSystemManagedModule && canOpenGoals) {
       items.push({ key: "goals", label: "هدف‌گذاری" });
     }
-    if (canOpenWorkflows) {
+    if (!isSystemManagedModule && canOpenWorkflows) {
       items.push({ key: "workflows", label: "گردش کارها" });
     }
-    if (canEditModule) {
+    if (!isSystemManagedModule && canEditModule) {
       items.push({ key: "excel_import", icon: <FileExcelOutlined />, label: "وارد کردن از اکسل" });
     }
-    if (canEditModule && resolvedModuleId === "products") {
+    if (!isSystemManagedModule && canEditModule && resolvedModuleId === "products") {
       items.push({ key: "bulk_create", icon: <PlusOutlined />, label: "افزودن گروهی" });
     }
     if (resolvedModuleId === "production_orders") {
@@ -2103,7 +2177,7 @@ export const ModuleListRefine: React.FC<{
     }
 
     return items;
-  }, [canEditModule, canOpenGoals, canOpenModuleSettings, canOpenWorkflows, resolvedModuleId, moduleConfig?.titles.fa]);
+  }, [canEditModule, canOpenGoals, canOpenModuleSettings, canOpenWorkflows, isSystemManagedModule, resolvedModuleId, moduleConfig?.titles.fa]);
   const hasModuleActionItems = Array.isArray(moduleActionItems) && moduleActionItems.length > 0;
 
   const handleModuleActionClick: MenuProps["onClick"] = ({ key }) => {
@@ -2171,7 +2245,7 @@ export const ModuleListRefine: React.FC<{
              />
             </div>
 
-            {(canShowGoalCards || selectedRowKeys.length > 0) ? (
+            {((canShowGoalCards && !isSystemManagedModule) || selectedRowKeys.length > 0) ? (
               <div className="order-last basis-full pt-1 min-w-0 md:order-none md:-mt-1 md:basis-auto md:pt-0 md:flex md:flex-[0_1_666px] md:items-start md:justify-start md:self-start xl:flex-[0_1_742px]">
                 <div
                   ref={canShowGoalCards && selectedRowKeys.length === 0 ? utilitySlotRef : undefined}
@@ -2194,13 +2268,13 @@ export const ModuleListRefine: React.FC<{
                       }
                       selectAllPagesLoading={selectAllPagesLoading}
                       selectAllPagesDisabled={selectAllPagesLoading}
-                      onEdit={selectedRowKeys.length && canEditModule ? handleBulkEditOpen : undefined}
-                      onCopy={selectedRowKeys.length && canEditModule ? handleCopyViaCreateForm : undefined}
-                      onDelete={selectedRowKeys.length && canDeleteModule ? handleBulkDelete : undefined}
+                      onEdit={selectedRowKeys.length && canEditModule && (!isSystemManagedModule || !!tagsField) ? handleBulkEditOpen : undefined}
+                      onCopy={selectedRowKeys.length && canEditModule && !isSystemManagedModule ? handleCopyViaCreateForm : undefined}
+                      onDelete={selectedRowKeys.length && canDeleteModule && !isSystemManagedModule ? handleBulkDelete : undefined}
                       onExport={selectedRowKeys.length ? handleExport : undefined}
                       exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
                       extraActions={
-                        bulkBuildSourceModule && selectedRowKeys.length > 0 && canEditModule
+                        bulkBuildSourceModule && selectedRowKeys.length > 0 && canEditModule && !isSystemManagedModule
                           ? [
                               {
                                 key: "build_package",
@@ -2241,10 +2315,12 @@ export const ModuleListRefine: React.FC<{
                       }
                     />
                   ) : (
-                    <GoalProgressSlider
-                      moduleId={resolvedModuleId}
-                      placement="module_list"
-                    />
+                    !isSystemManagedModule ? (
+                      <GoalProgressSlider
+                        moduleId={resolvedModuleId}
+                        placement="module_list"
+                      />
+                    ) : null
                   )}
                 </div>
               </div>
@@ -2252,7 +2328,7 @@ export const ModuleListRefine: React.FC<{
 
             {selectedRowKeys.length === 0 && (
               <div className="flex items-center gap-2 shrink-0">
-                {canEditModule && (
+                {canCreateModule && (
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
@@ -2368,7 +2444,7 @@ export const ModuleListRefine: React.FC<{
                         ) {
                           return;
                         }
-                        navigate(`/${resolvedModuleId}/${record.id}`);
+                        openRecordFromList(record);
                       },
                       style: { cursor: selectedRowKeys.length > 0 ? 'default' : 'pointer' },
                     })}
@@ -2397,7 +2473,7 @@ export const ModuleListRefine: React.FC<{
                               categoryField={categoryField}
                               selectedRowKeys={selectedRowKeys}
                               setSelectedRowKeys={setSelectedRowKeys}
-                              navigate={navigate}
+                              navigate={moduleListNavigate}
                               canViewField={canViewField}
                               allUsers={allUsers}
                               allRoles={allRoles}
@@ -2424,7 +2500,7 @@ export const ModuleListRefine: React.FC<{
                     data={enrichedData}
                     moduleId={resolvedModuleId}
                     moduleConfig={moduleConfig}
-                    navigate={navigate}
+                    navigate={moduleListNavigate}
                   />
                 </div>
                 )}
@@ -2437,7 +2513,7 @@ export const ModuleListRefine: React.FC<{
                     dateFields={availableCalendarFields}
                     dateFieldKey={calendarDateField || availableCalendarFields[0]?.key || ""}
                     onDateFieldChange={setCalendarDateField}
-                    navigate={navigate}
+                    navigate={moduleListNavigate}
                   />
                 </div>
                 )}
@@ -2477,7 +2553,7 @@ export const ModuleListRefine: React.FC<{
                               categoryField={categoryField}
                               selectedRowKeys={selectedRowKeys}
                               setSelectedRowKeys={setSelectedRowKeys}
-                              navigate={navigate}
+                              navigate={moduleListNavigate}
                               minimal={true}
                               canViewField={canViewField}
                               allUsers={allUsers}
@@ -2509,19 +2585,21 @@ export const ModuleListRefine: React.FC<{
                             نمایش بیشتر ({visibleItems.length} از {columnItems.length})
                           </Button>
                         ) : null}
-                        <Button 
-                          type="dashed" 
-                          block 
-                          icon={<PlusOutlined />} 
-                          className="mt-2 text-xs rounded-2xl text-gray-500 hover:text-leather-600 hover:border-leather-400"
-                          onClick={() => {
-                            navigate(`/${resolvedModuleId}/create`, { 
-                              state: { initialValues: { [kanbanGroupBy]: col.value } } 
-                            });
-                          }}
-                        >
-                          افزودن به {col.label}
-                        </Button>
+                        {canCreateModule ? (
+                          <Button
+                            type="dashed"
+                            block
+                            icon={<PlusOutlined />}
+                            className="mt-2 text-xs rounded-2xl text-gray-500 hover:text-leather-600 hover:border-leather-400"
+                            onClick={() => {
+                              navigate(`/${resolvedModuleId}/create`, {
+                                state: { initialValues: { [kanbanGroupBy]: col.value } }
+                              });
+                            }}
+                          >
+                            افزودن به {col.label}
+                          </Button>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -2533,9 +2611,9 @@ export const ModuleListRefine: React.FC<{
          </ViewWrapper>
        {isBulkEditOpen && (
            <SmartForm 
-               module={moduleConfig}
+               module={isSystemManagedModule && isBulkEditMode ? (tagOnlyBulkEditModule || moduleConfig) : moduleConfig}
                visible={isBulkEditOpen}
-               recordId={editRecordId || undefined}
+               recordId={isSystemManagedModule ? undefined : (editRecordId || undefined)}
                onCancel={() => {
                  setIsBulkEditOpen(false);
                  setEditRecordId(null);
@@ -2616,6 +2694,23 @@ export const ModuleListRefine: React.FC<{
         allowFieldSelectionTab={listPrintManager.allowFieldSelectionTab}
         previewMeta={listPrintManager.previewMeta}
       />
+      {previewRecordId && useQuickPreviewModal ? (
+        <RelatedRecordPopover
+          mode="modal"
+          moduleId={resolvedModuleId}
+          recordId={previewRecordId}
+          open={!!previewRecordId}
+          overlayZIndex={6200}
+          hideFullRecordAction={moduleConfig?.hideFullRecordAction ?? detailDisabled}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setPreviewRecordId(null);
+          }}
+          onNavigate={(path) => {
+            setPreviewRecordId(null);
+            navigate(path);
+          }}
+        />
+      ) : null}
     </div>
   );
 };
