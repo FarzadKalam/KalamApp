@@ -126,10 +126,8 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
 
   const mergedDropdownStyle: React.CSSProperties = {
     minWidth: isMobileViewport ? 180 : 280,
-    maxWidth: isMobileViewport ? 'min(88vw, 360px)' : 520,
-    width: isMobileViewport ? 'min(88vw, 360px)' : undefined,
-    maxHeight: isMobileViewport ? 'min(42vh, 280px)' : 420,
-    overflowY: 'auto',
+    maxWidth: isMobileViewport ? 'calc(100vw - 24px)' : 520,
+    width: isMobileViewport ? 'min(92vw, 420px)' : undefined,
     overscrollBehavior: 'contain',
     ...dropdownStyle,
     ...popupStyle,
@@ -137,12 +135,9 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
 
   const resolvedPopupContainer = useMemo(
     () => (trigger: HTMLElement) => {
-      if (isMobileViewport) {
-        return trigger?.parentElement || trigger;
-      }
-      return getPopupContainer(trigger);
+      return getPopupContainer(trigger) || document.body;
     },
-    [getPopupContainer, isMobileViewport]
+    [getPopupContainer]
   );
 
   React.useEffect(() => {
@@ -552,9 +547,9 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         optionFilterProp="label"
         getPopupContainer={resolvedPopupContainer}
         options={normalizedOptions}
-        placement="bottomRight"
-        popupMatchSelectWidth={isMobileViewport}
-        listHeight={isMobileViewport ? 208 : 320}
+        placement={isMobileViewport ? 'bottomLeft' : 'bottomRight'}
+        popupMatchSelectWidth
+        listHeight={isMobileViewport ? 192 : 320}
         notFoundContent={loading ? 'در حال بارگزاری...' : 'موردی وجود ندارد'}
         styles={{ popup: { root: mergedDropdownStyle } }}
         optionRender={(option) => (
@@ -591,7 +586,16 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
           <>
             {menu}
             <Divider style={{ margin: '8px 0' }} />
-            <div style={{ padding: isMobileViewport ? '8px' : '8px 10px 10px' }}>
+            <div
+              onMouseDown={(e) => e.preventDefault()}
+              style={{
+                padding: isMobileViewport ? '8px' : '8px 10px 10px',
+                position: 'sticky',
+                bottom: 0,
+                background: 'inherit',
+                zIndex: 1,
+              }}
+            >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Input
                   placeholder="افزودن گزینه جدید..."

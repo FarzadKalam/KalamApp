@@ -28,6 +28,8 @@ type GoalProgressSliderProps = {
 };
 
 const GOAL_PROGRESS_CACHE_TTL_MS = 60_000;
+const GOAL_PROGRESS_CACHE_STORAGE_KEY = 'goal-progress-cards-cache-v1';
+const GOAL_PROGRESS_COMPUTE_CONCURRENCY = 3;
 
 let goalProgressFiscalYearCache: {
   data: FiscalYearSnapshot | null;
@@ -41,6 +43,63 @@ let goalProgressFiscalYearCache: {
 
 const goalProgressCardsCache = new Map<string, { data: GoalProgressSnapshot[]; expiresAt: number }>();
 const goalProgressCardsPromiseCache = new Map<string, Promise<GoalProgressSnapshot[]>>();
+
+const readGoalProgressStorage = () => {
+  try {
+    const raw = window.sessionStorage.getItem(GOAL_PROGRESS_CACHE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed as Record<string, { data: GoalProgressSnapshot[]; expiresAt: number }>;
+  } catch {
+    return {};
+  }
+};
+
+const readGoalProgressCardsFromStorage = (cacheKey: string) => {
+  try {
+    const store = readGoalProgressStorage();
+    const entry = store[cacheKey];
+    if (!entry || !Array.isArray(entry.data) || typeof entry.expiresAt !== 'number') return null;
+    return entry;
+  } catch {
+    return null;
+  }
+};
+
+const writeGoalProgressCardsToStorage = (cacheKey: string, entry: { data: GoalProgressSnapshot[]; expiresAt: number }) => {
+  try {
+    const store = readGoalProgressStorage();
+    store[cacheKey] = entry;
+    window.sessionStorage.setItem(GOAL_PROGRESS_CACHE_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // noop
+  }
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> => {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= items.length) break;
+        results[index] = await worker(items[index], index);
+      }
+    })
+  );
+
+  return results;
+};
 
 const canAccessGoalModule = (permissions: any, targetModuleId?: string | null) => {
   if (!targetModuleId) return true;
@@ -203,6 +262,15 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         return;
       }
 
+      const storageCached = readGoalProgressCardsFromStorage(cacheKey);
+      if (storageCached && storageCached.expiresAt > Date.now()) {
+        goalProgressCardsCache.set(cacheKey, storageCached);
+        setCards(storageCached.data);
+        setActiveIndex((current) => (storageCached.data.length === 0 ? 0 : Math.min(current, storageCached.data.length - 1)));
+        setLoading(false);
+        return;
+      }
+
       const pendingCards = goalProgressCardsPromiseCache.get(cacheKey);
       if (pendingCards) {
         const sharedCards = await pendingCards;
@@ -235,39 +303,44 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
             .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId))
         );
 
-        const prepared: GoalProgressSnapshot[] = [];
-        for (const goal of visibleGoals) {
-          const selectedSubperiodUnit =
-            nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit;
-          try {
-            const snapshot = await executeGoalProgress(goal, {
-              userId: roleContext.userId,
-              roleId: roleContext.roleId,
-              orgId: roleContext.orgId,
-              allowedRoleIds: roleContext.allowedRoleIds,
-              allowedUserIds: roleContext.allowedUserIds,
-              permissions: roleContext.permissions,
-              fiscalYear: fiscalYearRef.current,
-              selectedSubperiodUnit,
-              cache: rowCacheRef.current,
-            });
-            if (snapshot) prepared.push(snapshot);
-          } catch {
-            const fallbackSnapshot = buildGoalFallbackProgressSnapshot(goal, {
-              fiscalYear: fiscalYearRef.current,
-              selectedSubperiodUnit,
-            });
-            if (fallbackSnapshot) prepared.push(fallbackSnapshot);
+        const prepared = await mapWithConcurrency(
+          visibleGoals,
+          GOAL_PROGRESS_COMPUTE_CONCURRENCY,
+          async (goal) => {
+            const selectedSubperiodUnit =
+              nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit;
+            try {
+              return await executeGoalProgress(goal, {
+                userId: roleContext.userId,
+                roleId: roleContext.roleId,
+                orgId: roleContext.orgId,
+                allowedRoleIds: roleContext.allowedRoleIds,
+                allowedUserIds: roleContext.allowedUserIds,
+                permissions: roleContext.permissions,
+                fiscalYear: fiscalYearRef.current,
+                selectedSubperiodUnit,
+                cache: rowCacheRef.current,
+              });
+            } catch {
+              return buildGoalFallbackProgressSnapshot(goal, {
+                fiscalYear: fiscalYearRef.current,
+                selectedSubperiodUnit,
+              });
+            }
           }
-        }
+        );
 
-        return prepared;
+        return prepared.filter(Boolean) as GoalProgressSnapshot[];
       })();
 
       goalProgressCardsPromiseCache.set(cacheKey, cardsPromise);
       try {
         const prepared = await cardsPromise;
         goalProgressCardsCache.set(cacheKey, {
+          data: prepared,
+          expiresAt: Date.now() + GOAL_PROGRESS_CACHE_TTL_MS,
+        });
+        writeGoalProgressCardsToStorage(cacheKey, {
           data: prepared,
           expiresAt: Date.now() + GOAL_PROGRESS_CACHE_TTL_MS,
         });

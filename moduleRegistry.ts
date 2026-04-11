@@ -37,6 +37,7 @@ import { priceListsConfig } from './modules/priceListsConfig';
 import { webFormsConfig } from './modules/webFormsConfig';
 import { automationExecutionReportsConfig } from './modules/automationExecutionReportsConfig';
 import { smsDeliveryReportsConfig } from './modules/smsDeliveryReportsConfig';
+import { counterpartyBotGroupsConfig } from './modules/counterpartyBotGroupsConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -78,4 +79,5 @@ export const MODULES: Record<string, ModuleDefinition> = {
   web_forms: webFormsConfig,
   automation_execution_reports: automationExecutionReportsConfig,
   sms_delivery_reports: smsDeliveryReportsConfig,
+  counterparty_bot_groups: counterpartyBotGroupsConfig,
 };

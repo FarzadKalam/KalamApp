@@ -9,6 +9,7 @@ type BotAdminBody = {
   cursor?: string | number | null;
   chatId?: string;
   text?: string;
+  skipLog?: boolean;
 };
 
 type InboundContact = {
@@ -25,7 +26,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_ADMIN_BUILD = 'bot-admin-2026-03-24-04';
+const BOT_ADMIN_BUILD = 'bot-admin-2026-04-11-16';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -62,6 +63,69 @@ const normalizeBaseUrl = (value: string, channel: BotChannel) => {
   if (!raw) return '';
   if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
   return `https://${raw.replace(/\/+$/, '')}`;
+};
+
+const pickWebhookPublicBase = (
+  requestUrl: string,
+  fallbackBase: string,
+  headers?: Headers,
+  settings?: Record<string, any>
+) => {
+  const forceHttpsIfPublic = (urlLike: string) => {
+    const trimmed = String(urlLike || '').trim();
+    if (!trimmed) return trimmed;
+    try {
+      const parsed = new URL(trimmed);
+      const host = String(parsed.hostname || '').toLowerCase();
+      const isLocal =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host.endsWith('.local') ||
+        host.endsWith('.internal');
+      if (!isLocal && parsed.protocol === 'http:') {
+        parsed.protocol = 'https:';
+        return parsed.toString().replace(/\/+$/, '');
+      }
+      return trimmed.replace(/\/+$/, '');
+    } catch {
+      return trimmed.replace(/\/+$/, '');
+    }
+  };
+
+  const explicitBase = pick(
+    settings?.webhook_base_url,
+    settings?.webhook_public_base_url,
+    Deno.env.get('BOT_WEBHOOK_PUBLIC_BASE_URL'),
+    Deno.env.get('PUBLIC_API_BASE_URL')
+  );
+  if (explicitBase) {
+    return forceHttpsIfPublic(normalizeBaseUrl(explicitBase, 'rubika'));
+  }
+
+  const forwardedProto = pick(headers?.get('x-forwarded-proto'), headers?.get('x-forwarded-protocol'));
+  const forwardedHostRaw = pick(headers?.get('x-forwarded-host'));
+  const forwardedHost = String(forwardedHostRaw || '').split(',')[0]?.trim();
+  if (forwardedProto && forwardedHost) {
+    return forceHttpsIfPublic(`${forwardedProto}://${forwardedHost}`);
+  }
+
+  const hostRaw = pick(headers?.get('host'));
+  const host = String(hostRaw || '').split(',')[0]?.trim();
+  if (host) {
+    const proto = forwardedProto || 'https';
+    return forceHttpsIfPublic(`${proto}://${host}`);
+  }
+
+  const fallback = normalizeBaseUrl(fallbackBase, 'rubika');
+  try {
+    const requestOrigin = new URL(String(requestUrl || '')).origin.replace(/\/+$/, '');
+    if (/^https?:\/\//i.test(requestOrigin) && !requestOrigin.includes('functions:9000')) {
+      return forceHttpsIfPublic(requestOrigin);
+    }
+  } catch {
+    // ignore invalid request url
+  }
+  return forceHttpsIfPublic(fallback);
 };
 
 const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: string) => {
@@ -356,6 +420,59 @@ const disableTelegramLikeWebhook = async (
   return payload;
 };
 
+const configureRubikaReceiveEndpoint = async (
+  supabaseUrl: string,
+  requestUrl: string,
+  requestHeaders: Headers,
+  settings: Record<string, any>
+) => {
+  const token = pick(settings?.bot_token);
+  if (!token) throw new Error('توکن بات تنظیم نشده است.');
+  const secret = pick(settings?.webhook_secret);
+  if (!secret) throw new Error('Webhook Secret برای بات روبیکا تنظیم نشده است.');
+
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url, 'rubika');
+  const webhookBase = pickWebhookPublicBase(requestUrl, supabaseUrl, requestHeaders, settings);
+  const normalizedSecret = encodeURIComponent(secret);
+  const webhookCandidates = [
+    `${webhookBase}/functions/v1/bot-webhook/rubika/${normalizedSecret}`,
+    `${webhookBase}/functions/v1/bot-webhook/rubika/${normalizedSecret}/`,
+    `${webhookBase}/functions/v1/bot-webhook?channel=rubika&secret=${normalizedSecret}`,
+  ];
+  const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/updateBotEndpoints`;
+  const failures: string[] = [];
+
+  for (const webhookUrl of webhookCandidates) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: webhookUrl,
+        type: 'ReceiveUpdate',
+      }),
+    });
+    const payload = await parseResponse(response);
+    const rootStatus = String(payload?.status || '').trim().toUpperCase();
+    const nestedStatus = String(payload?.data?.status || '').trim().toUpperCase();
+    const messageStatus = String(payload?.message || payload?.description || '').trim().toUpperCase();
+    const rubikaOk = (!rootStatus || rootStatus === 'OK') && (!nestedStatus || nestedStatus === 'OK');
+    const hasExplicitOk = messageStatus === 'OK';
+    if (rubikaOk && (response.ok || hasExplicitOk)) {
+      return {
+        webhook_url: webhookUrl,
+        http_status: response.status,
+        response: payload,
+      };
+    }
+    const detail = typeof payload === 'string'
+      ? payload
+      : String(payload?.message || payload?.description || payload?.status || payload?.data?.status || `HTTP ${response.status}`);
+    failures.push(`url=${webhookUrl} => ${detail}`);
+  }
+
+  throw new Error(`Rubika updateBotEndpoints failed | ${failures.join(' || ')}`);
+};
+
 const callTelegramLikeGetUpdates = async (
   channel: 'telegram' | 'bale',
   settings: Record<string, any>,
@@ -404,34 +521,75 @@ const callRubikaGetUpdates = async (
   if (!token) throw new Error('توکن بات تنظیم نشده است.');
   const baseUrl = normalizeBaseUrl(settings?.api_base_url, 'rubika');
   const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/getUpdates`;
-  const body: Record<string, any> = {
-    limit: 10,
-  };
   const offsetId = pick(cursor);
+  const requestBodies: Array<Record<string, any>> = [];
   if (offsetId) {
-    body.offset_id = offsetId;
+    requestBodies.push({ limit: 10, offset_id: offsetId });
+    requestBodies.push({ limit: 10, start_id: offsetId });
+    requestBodies.push({ offset_id: offsetId });
+    requestBodies.push({ start_id: offsetId });
+  }
+  requestBodies.push({ limit: 10, state: 'all' });
+  requestBodies.push({ limit: 10 });
+  requestBodies.push({});
+
+  let bestPayload: any = null;
+  let bestUpdates: any[] = [];
+  let bestNextCursor: string | number | null = offsetId || null;
+  let lastError: any = null;
+
+  for (const body of requestBodies) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        lastError = typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`);
+        continue;
+      }
+      ensureRubikaSuccess(payload);
+      const updates =
+        (Array.isArray(payload?.updates) ? payload.updates : null) ||
+        (Array.isArray(payload?.data?.updates) ? payload.data.updates : null) ||
+        (Array.isArray(payload?.result?.updates) ? payload.result.updates : null) ||
+        (Array.isArray(payload?.data) ? payload.data : null) ||
+        (Array.isArray(payload?.result) ? payload.result : null) ||
+        [];
+      const nextCursor = pick(payload?.next_offset_id, payload?.data?.next_offset_id, payload?.result?.next_offset_id, offsetId);
+
+      if (!bestPayload) {
+        bestPayload = payload;
+        bestUpdates = updates;
+        bestNextCursor = nextCursor || null;
+      }
+      if (Array.isArray(updates) && updates.length > bestUpdates.length) {
+        bestPayload = payload;
+        bestUpdates = updates;
+        bestNextCursor = nextCursor || null;
+      }
+      if (Array.isArray(updates) && updates.length > 0) {
+        return {
+          updates,
+          nextCursor: nextCursor || null,
+          raw: payload,
+        };
+      }
+    } catch (error: any) {
+      lastError = String(error?.message || error || '');
+    }
   }
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const payload = await parseResponse(response);
-  if (!response.ok) {
-    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`));
+  if (lastError && !bestPayload) {
+    throw new Error(String(lastError || 'خطا در دریافت آپدیت روبیکا'));
   }
-  ensureRubikaSuccess(payload);
-  const updates =
-    (Array.isArray(payload?.updates) ? payload.updates : null) ||
-    (Array.isArray(payload?.data?.updates) ? payload.data.updates : null) ||
-    (Array.isArray(payload?.result?.updates) ? payload.result.updates : null) ||
-    [];
-  const nextCursor = pick(payload?.next_offset_id, payload?.data?.next_offset_id, payload?.result?.next_offset_id, cursor);
+
   return {
-    updates,
-    nextCursor: nextCursor || null,
-    raw: payload,
+    updates: Array.isArray(bestUpdates) ? bestUpdates : [],
+    nextCursor: bestNextCursor || null,
+    raw: bestPayload || {},
   };
 };
 
@@ -502,6 +660,13 @@ const pollChannelUpdates = async (
     ? await callRubikaGetUpdates(settings, cursor)
     : await callTelegramLikeGetUpdates(channel as 'telegram' | 'bale', settings, cursor);
 
+  const raw = (result as any)?.raw || {};
+  const debug = {
+    status: String(raw?.status || '').trim() || null,
+    message: String(raw?.message || raw?.description || '').trim() || null,
+    has_updates_array: Array.isArray(raw?.updates) || Array.isArray(raw?.data?.updates) || Array.isArray(raw?.result?.updates),
+  };
+
   const found = pickLatestContact(result.updates);
   if (!found) {
     return {
@@ -509,6 +674,7 @@ const pollChannelUpdates = async (
       cursor: result.nextCursor,
       contact: null,
       provider_result_count: Array.isArray(result.updates) ? result.updates.length : 0,
+      provider_debug: debug,
     };
   }
 
@@ -518,6 +684,7 @@ const pollChannelUpdates = async (
     cursor: result.nextCursor,
     contact: saved,
     provider_result_count: Array.isArray(result.updates) ? result.updates.length : 0,
+    provider_debug: debug,
   };
 };
 
@@ -532,41 +699,52 @@ const sendProviderMessage = async (
   const baseUrl = String(settings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
   const sendMessagePath = String(settings?.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
 
-  const response = await fetch(buildSendMessageUrl(baseUrl, token, sendMessagePath), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(
-      channel === 'rubika'
-        ? {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= (channel === 'rubika' ? 3 : 1); attempt += 1) {
+    const response = await fetch(buildSendMessageUrl(baseUrl, token, sendMessagePath), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(
+        channel === 'rubika'
+          ? {
             chat_id: chatId,
             text,
           }
-        : {
+          : {
             chat_id: chatId,
             text,
             parse_mode: 'HTML',
           }
-    ),
-  });
+      ),
+    });
 
-  const payload = await parseResponse(response);
-  if (!response.ok) {
-    throw new Error(
-      typeof payload === 'string'
+    const payload = await parseResponse(response);
+    if (!response.ok) {
+      const detail = typeof payload === 'string'
         ? payload
-        : String(payload?.description || payload?.message || payload?.data?.status || `HTTP ${response.status}`)
-    );
+        : String(payload?.description || payload?.message || payload?.data?.status || `HTTP ${response.status}`);
+      const normalized = String(detail || '').toLowerCase();
+      const looksTransientNginx = normalized.includes('<!doctype html>') || normalized.includes('nginx');
+      lastError = new Error(detail);
+      if (channel === 'rubika' && looksTransientNginx && attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        continue;
+      }
+      throw lastError;
+    }
+
+    if (channel === 'rubika') {
+      ensureRubikaSuccess(payload);
+    } else {
+      ensureTelegramLikeSuccess(payload);
+    }
+
+    return payload;
   }
 
-  if (channel === 'rubika') {
-    ensureRubikaSuccess(payload);
-  } else {
-    ensureTelegramLikeSuccess(payload);
-  }
-
-  return payload;
+  throw lastError || new Error('Bot send failed');
 };
 
 const sendTestMessage = async (
@@ -575,20 +753,24 @@ const sendTestMessage = async (
   integration: Record<string, any>,
   channel: BotChannel,
   chatId: string,
-  text: string
+  text: string,
+  options?: { skipLog?: boolean }
 ) => {
-  const logRow = await createOutboundLog(supabaseUrl, serviceRoleKey, {
-    channel_type: channel,
-    provider: String(integration?.provider || `${channel}_bot`),
-    recipient: chatId,
-    title: 'Test Bot Message',
-    message_text: text,
-    metadata: {
-      channel,
-      source: 'settings_test_send',
-    },
-    status: 'pending',
-  });
+  const shouldLog = options?.skipLog !== true;
+  const logRow = shouldLog
+    ? await createOutboundLog(supabaseUrl, serviceRoleKey, {
+      channel_type: channel,
+      provider: String(integration?.provider || `${channel}_bot`),
+      recipient: chatId,
+      title: 'Test Bot Message',
+      message_text: text,
+      metadata: {
+        channel,
+        source: 'settings_test_send',
+      },
+      status: 'pending',
+    })
+    : null;
 
   try {
     const payload = await sendProviderMessage(channel, integration?.settings || {}, chatId, text);
@@ -597,11 +779,17 @@ const sendTestMessage = async (
         status: 'sent',
         sent_at: new Date().toISOString(),
         provider_message_id: String(payload?.result?.message_id || payload?.message_id || payload?.data?.message_id || ''),
-        metadata: {
-          channel,
-          source: 'settings_test_send',
-          response: payload,
-        },
+        metadata: shouldLog
+          ? {
+            channel,
+            source: 'settings_test_send',
+            response: payload,
+          }
+          : {
+            channel,
+            source: 'function_proxy',
+            response: payload,
+          },
       });
     }
     return payload;
@@ -664,8 +852,19 @@ Deno.serve(async (req) => {
       let providerResult: any = null;
       if (channel === 'telegram' || channel === 'bale') {
         providerResult = await disableTelegramLikeWebhook(channel, integration.settings || {});
+      } else if (channel === 'rubika') {
+        try {
+          providerResult = await configureRubikaReceiveEndpoint(supabaseUrl, req.url, req.headers, integration.settings || {});
+        } catch (error: any) {
+          providerResult = {
+            webhook_configured: false,
+            warning: String(error?.message || error || 'Rubika endpoint configure failed'),
+          };
+        }
       }
-      const baseline = await primeChannelCursor(integration, channel, cursor);
+      const baseline = channel === 'rubika'
+        ? { cursor: null, provider_result_count: 0 }
+        : await primeChannelCursor(integration, channel, cursor);
       return json(200, {
         success: true,
         channel,
@@ -685,7 +884,9 @@ Deno.serve(async (req) => {
       if (!text) {
         return json(400, { success: false, message: 'text الزامی است.' });
       }
-      const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text);
+      const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text, {
+        skipLog: body?.skipLog === true,
+      });
       return json(200, {
         success: true,
         channel,

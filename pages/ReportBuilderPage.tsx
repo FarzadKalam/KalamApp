@@ -477,7 +477,10 @@ const ReportBuilderPage: React.FC = () => {
                 <div className="font-black text-gray-800 dark:text-gray-100">انتخاب ستون‌ها</div>
                 <div className="text-sm text-gray-500">فیلد مسئول/بازاریاب و فیلدهای ماژول فرعی نیز در این لیست حاضر هستند</div>
               </div>
-              <Button onClick={() => setColumns(suggestedColumns)}>پیشنهاد سریع</Button>
+              <div className="flex items-center gap-2">
+                <Button onClick={() => setColumns(reportableFields.map((field) => field.key))}>انتخاب همه</Button>
+                <Button onClick={() => setColumns(suggestedColumns)}>پیشنهاد سریع</Button>
+              </div>
             </div>
             <Select
               mode="multiple"

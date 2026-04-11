@@ -26,6 +26,13 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   org_roles: ['title', 'name'],
   work_schedules: ['title', 'name'],
   journal_entries: ['entry_no', 'source_record_title', 'description'],
+  products: ['name', 'system_code', 'status'],
+  production_orders: ['name', 'system_code', 'status'],
+  shelves: ['name', 'system_code', 'shelf_number'],
+  invoices: ['name', 'system_code', 'status'],
+  projects: ['name', 'system_code', 'status'],
+  purchase_invoices: ['name', 'system_code', 'status'],
+  marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'status'],
 };
 
 export const getRelationLabelFallbackFields = (targetModule?: string | null): string[] => {
@@ -86,12 +93,13 @@ export const getRelationOptionSelectVariants = (
     return Array.from(new Set(variants.filter(Boolean)));
   }
 
+  // Keep generic fallback conservative to avoid repeated 400 requests on modules
+  // that do not have legacy label fields such as `title` or `business_name`.
   const genericPrioritizedFields = [
     targetField,
     ...(includeSystemCode ? ['system_code'] : []),
-    ...fallbackFields,
   ];
-  const genericCompactFields = [targetField, ...fallbackFields];
+  const genericCompactFields = [targetField];
   return Array.from(
     new Set([buildVariant(genericPrioritizedFields), buildVariant(genericCompactFields), 'id'].filter(Boolean))
   );

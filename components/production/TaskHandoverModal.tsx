@@ -290,13 +290,21 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
 
   return (
     <Modal
+      rootClassName="task-handover-modal-root"
+      className="task-handover-modal"
       title="فرم تحویل کالا"
       width="min(980px, calc(100vw - 24px))"
       open={open}
       onCancel={onCancel}
       confirmLoading={loading}
       destroyOnHidden
-      styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}
+      styles={{
+        body: {
+          maxHeight: isMobile ? 'calc(100dvh - 210px)' : '72vh',
+          overflowY: 'auto',
+          paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom, 0px))' : undefined,
+        },
+      }}
       footer={(
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1">
@@ -752,7 +760,39 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
         </div>
       </div>
       <style>{`
+        .task-handover-modal .ant-modal-content {
+          overflow: hidden;
+        }
+
         @media (max-width: 768px) {
+          .task-handover-modal-root .ant-modal-wrap {
+            overflow: hidden;
+          }
+
+          .task-handover-modal {
+            top: 0 !important;
+            max-width: 100vw !important;
+            margin: 0 !important;
+            padding-bottom: 0 !important;
+          }
+
+          .task-handover-modal .ant-modal-content {
+            min-height: 100dvh;
+            max-height: 100dvh;
+            border-radius: 0 !important;
+            display: flex;
+            flex-direction: column;
+          }
+
+          .task-handover-modal .ant-modal-body {
+            flex: 1;
+            min-height: 0;
+          }
+
+          .task-handover-modal .ant-modal-footer {
+            padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+          }
+
           .task-handover-delivery-table .ant-table-cell {
             padding: 10px 8px !important;
           }

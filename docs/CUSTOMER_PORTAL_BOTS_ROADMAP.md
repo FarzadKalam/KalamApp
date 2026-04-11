@@ -1,6 +1,6 @@
 # Customer Portal + Bots Roadmap
 
-Last updated: 2026-03-21
+Last updated: 2026-04-11
 
 ## Goal
 
@@ -19,6 +19,8 @@ Build a customer-facing portal and organization-specific notification channels i
 - Current `notes` are an internal collaboration tool and should not become the main customer ticket engine.
 - `record_files` should be reused later for portal/ticket attachments.
 - Subdomain-based portal must be supported later, but initial implementation can be path-based.
+- Bot conversation ownership must be modeled as `group` per counterparty, not only raw `chat_id`.
+- Counterparty bot mapping must be reusable for both `customers` and `suppliers`.
 
 ## Delivery Phases
 
@@ -126,3 +128,16 @@ Suggested bot settings payload later:
 3. Add reusable outbound channel service beside SMS.
 4. Add customer-side portal fields to customer UI.
 5. Build read-only portal shell.
+
+## April 2026 Update - Bot Groups
+
+- New data model direction:
+  - `counterparty_bot_groups` (one row per counterparty + channel).
+  - `counterparty_bot_messages` (inbound/outbound message timeline).
+- Naming in UI and product copy should use:
+  - "گروه‌های بات" (not "چت‌آیدی").
+- Channel handling remains pluggable:
+  - `channel_type` supports `rubika`, `telegram`, `bale`.
+  - Phase-1 execution focuses on Rubika while keeping adapters channel-aware.
+- Counterparty coverage:
+  - Works for both `customers` and `suppliers` through shared module and schema.

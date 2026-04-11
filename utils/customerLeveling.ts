@@ -54,6 +54,7 @@ const CUSTOMER_STAT_FIELDS = [
   'last_purchase_date',
   'rank',
 ] as const;
+const CUSTOMER_INTERESTS_CATEGORY = 'customer_interests';
 
 const missingCustomerColumnsCache = new Set<string>();
 let knownCustomerColumns: Set<string> | null = null;
@@ -388,6 +389,80 @@ const stripMissingColumns = (payload: Record<string, any>) => {
   return next;
 };
 
+const normalizeListValues = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean)));
+  }
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  return Array.from(
+    new Set(
+      raw
+        .replace(/\|\s*##\s*\|/g, ',')
+        .replace(/\s+-\s+/g, ',')
+        .split(/[,،;|\n\r]+/g)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+};
+
+const normalizeInterest = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+
+const buildEligibleStatusSet = (config: CustomerLevelingConfig) =>
+  new Set(
+    (Array.isArray(config?.eligible_statuses) ? config.eligible_statuses : [])
+      .map((status) => normalizeInvoiceStatus(status))
+      .filter(Boolean)
+  );
+
+const collectProductIdsFromInvoiceRows = (invoiceRows: any[], eligibleStatusSet: Set<string>): string[] => {
+  const ids = new Set<string>();
+  (Array.isArray(invoiceRows) ? invoiceRows : []).forEach((row: any) => {
+    if (!eligibleStatusSet.has(normalizeInvoiceStatus(row?.status))) return;
+    const invoiceItems = Array.isArray(row?.invoiceItems) ? row.invoiceItems : [];
+    invoiceItems.forEach((item: any) => {
+      const productId = String(item?.product_id || '').trim();
+      if (productId) ids.add(productId);
+    });
+  });
+  return Array.from(ids);
+};
+
+const ensureCustomerInterestOptions = async (supabase: SupabaseClient, values: string[]) => {
+  const deduped = Array.from(new Set((values || []).map((item) => String(item || '').trim()).filter(Boolean)));
+  if (deduped.length === 0) return;
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from('dynamic_options')
+    .select('label, value')
+    .eq('category', CUSTOMER_INTERESTS_CATEGORY)
+    .limit(5000);
+  if (existingError) throw existingError;
+
+  const existingSet = new Set<string>();
+  (existingRows || []).forEach((row: any) => {
+    const value = String(row?.value || '').trim();
+    const label = String(row?.label || '').trim();
+    if (value) existingSet.add(normalizeInterest(value));
+    if (label) existingSet.add(normalizeInterest(label));
+  });
+
+  const missing = deduped.filter((item) => !existingSet.has(normalizeInterest(item)));
+  if (missing.length === 0) return;
+
+  const payload = missing.map((item) => ({
+    category: CUSTOMER_INTERESTS_CATEGORY,
+    label: item,
+    value: item,
+    is_active: true,
+  }));
+  const { error: insertError } = await supabase.from('dynamic_options').insert(payload);
+  if (insertError && String(insertError?.code || '').toUpperCase() !== '23505') {
+    throw insertError;
+  }
+};
+
 export const syncCustomerLevelsByInvoiceCustomers = async ({
   supabase,
   customerIds,
@@ -399,19 +474,26 @@ export const syncCustomerLevelsByInvoiceCustomers = async ({
   if (!ids.length) return;
 
   const config = await loadCompanyLevelingConfig(supabase);
+  const eligibleStatusSet = buildEligibleStatusSet(config);
   await ensureKnownCustomerColumns(supabase, ids[0]);
+  const hasCustomerInterestsColumn = knownCustomerColumns?.has('customer_interests') === true
+    && !missingCustomerColumnsCache.has('customer_interests');
+  const customerSelect = hasCustomerInterestsColumn ? 'id, created_at, customer_interests' : 'id, created_at';
   const { data: customers, error: customersError } = await supabase
     .from('customers')
-    .select('id, created_at')
+    .select(customerSelect)
     .in('id', ids);
   if (customersError) throw customersError;
   const customerCreatedAtById = new Map<string, string | null>(
     (customers || []).map((row: any) => [String(row.id), row?.created_at ? String(row.created_at) : null])
   );
+  const customerInterestsById = new Map<string, string[]>(
+    (customers || []).map((row: any) => [String(row.id), normalizeListValues(row?.customer_interests)])
+  );
 
   const { data: invoices, error: invoicesError } = await supabase
     .from('invoices')
-    .select('customer_id, status, total_invoice_amount, invoice_date, created_at, payments')
+    .select('customer_id, status, total_invoice_amount, invoice_date, created_at, payments, invoiceItems')
     .in('customer_id', ids);
 
   if (invoicesError) throw invoicesError;
@@ -424,6 +506,50 @@ export const syncCustomerLevelsByInvoiceCustomers = async ({
     if (!id || !byCustomer.has(id)) return;
     byCustomer.get(id)!.push(row);
   });
+
+  const productIds = collectProductIdsFromInvoiceRows(invoices || [], eligibleStatusSet);
+  const productInterestsById = new Map<string, string[]>();
+  if (productIds.length > 0) {
+    const { data: products, error: productsError } = await supabase
+      .from('products')
+      .select('id, category, product_category')
+      .in('id', productIds);
+    if (productsError) throw productsError;
+    (products || []).forEach((row: any) => {
+      const productId = String(row?.id || '').trim();
+      if (!productId) return;
+      const interests = [String(row?.category || '').trim(), String(row?.product_category || '').trim()].filter(Boolean);
+      if (interests.length === 0) return;
+      productInterestsById.set(productId, Array.from(new Set(interests)));
+    });
+  }
+
+  const invoiceDerivedInterestsByCustomer = new Map<string, string[]>();
+  ids.forEach((id) => {
+    const collected: string[] = [];
+    (byCustomer.get(id) || []).forEach((invoiceRow: any) => {
+      if (!eligibleStatusSet.has(normalizeInvoiceStatus(invoiceRow?.status))) return;
+      const invoiceItems = Array.isArray(invoiceRow?.invoiceItems) ? invoiceRow.invoiceItems : [];
+      invoiceItems.forEach((item: any) => {
+        const productId = String(item?.product_id || '').trim();
+        if (!productId) return;
+        const productInterests = productInterestsById.get(productId) || [];
+        if (productInterests.length > 0) {
+          collected.push(...productInterests);
+        }
+      });
+    });
+    invoiceDerivedInterestsByCustomer.set(id, Array.from(new Set(collected)));
+  });
+
+  if (hasCustomerInterestsColumn) {
+    const allNewInterestValues = Array.from(
+      new Set(Array.from(invoiceDerivedInterestsByCustomer.values()).flatMap((items) => items))
+    );
+    if (allNewInterestValues.length > 0) {
+      await ensureCustomerInterestOptions(supabase, allNewInterestValues);
+    }
+  }
 
   for (const customerId of ids) {
     const stats = calculateCustomerStatsFromInvoices(
@@ -448,6 +574,21 @@ export const syncCustomerLevelsByInvoiceCustomers = async ({
       last_purchase_date: stats.lastPurchaseDate,
       rank,
     };
+    if (hasCustomerInterestsColumn) {
+      const existingInterests = customerInterestsById.get(customerId) || [];
+      const invoiceInterests = invoiceDerivedInterestsByCustomer.get(customerId) || [];
+      const mergedInterests = Array.from(
+        new Map(
+          [...existingInterests, ...invoiceInterests]
+            .map((item) => String(item || '').trim())
+            .filter(Boolean)
+            .map((item) => [normalizeInterest(item), item] as const)
+        ).values()
+      );
+      if (mergedInterests.length > 0 || existingInterests.length > 0) {
+        fullPayload.customer_interests = mergedInterests;
+      }
+    }
 
     let payload = stripMissingColumns(fullPayload);
     // اگر بعضی ستون‌ها هنوز در دیتابیس ساخته نشده‌اند، با حذف همان ستون ادامه بده.

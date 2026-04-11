@@ -64,8 +64,10 @@ import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
+import CounterpartyBotStatusModal from '../components/bot/CounterpartyBotStatusModal';
 import { serializeNoteContent } from '../utils/noteContent';
 import { normalizeNoteScope } from '../utils/noteScope';
+import { getActiveChannelSettings } from '../utils/channelSettings';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -96,6 +98,31 @@ const PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS = new Set([
   'invoices',
   'purchase_invoices',
 ]);
+
+const CUSTOMER_BOT_CHANNEL_LABELS: Record<string, string> = {
+  rubika: 'روبیکا',
+  telegram: 'تلگرام',
+  bale: 'بله',
+  none: 'بدون پلتفرم',
+};
+
+const buildEnglishActivationBase = (value: any) => {
+  const ascii = String(value || '')
+    .normalize('NFKD')
+    .replace(/[^\x00-\x7F]/g, ' ')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toUpperCase();
+  if (!ascii) return '';
+  const words = ascii.split(/\s+/).filter(Boolean).slice(0, 3);
+  return words.join('-').slice(0, 20);
+};
+
+const createBotActivationCode = (englishName?: string) => {
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const base = buildEnglishActivationBase(englishName);
+  return base ? `KALAM-${base}-${random}` : `KALAM-${random}`;
+};
 
 const buildAccountingEntryChoices = (entries: ResolvedJournalEntry[]): AccountingEntryChoice[] => {
   const grouped = new Map<string, AccountingEntryChoice>();
@@ -173,6 +200,12 @@ type AccountingEntryChoice = {
 const moduleShowSnapshotCache = new Map<string, ModuleShowSnapshot>();
 let moduleShowBaseInfoCache: { users: any[]; roles: any[] } | null = null;
 let moduleShowBaseInfoPromise: Promise<{ users: any[]; roles: any[] }> | null = null;
+
+type BotStatusModalContext = {
+  moduleId: 'customers' | 'suppliers';
+  targetType: 'customers' | 'suppliers';
+  counterpartyId: string;
+};
 
 const ModuleShow: React.FC = () => {
   const { moduleId = 'products', id } = useParams();
@@ -263,6 +296,23 @@ const ModuleShow: React.FC = () => {
   );
   const startDraftStorageKey = useMemo(() => (id ? `production-start-draft:${id}` : null), [id]);
   const [canIssueAccountingEntry, setCanIssueAccountingEntry] = useState(true);
+  const [botStatusModalOpen, setBotStatusModalOpen] = useState(false);
+  const [botStatusModalLoading, setBotStatusModalLoading] = useState(false);
+  const [botStatusModalSaving, setBotStatusModalSaving] = useState(false);
+  const [botStatusModalContext, setBotStatusModalContext] = useState<BotStatusModalContext | null>(null);
+  const [botStatusChannel, setBotStatusChannel] = useState<'rubika' | 'telegram' | 'bale'>('rubika');
+  const [botStatusJoinLink, setBotStatusJoinLink] = useState('');
+  const [botStatusGroupTitle, setBotStatusGroupTitle] = useState('');
+  const [botStatusCurrentStatus, setBotStatusCurrentStatus] = useState('pending_join_link');
+  const [botStatusActivationCode, setBotStatusActivationCode] = useState('');
+  const [botStatusWaitingForFirstMessage, setBotStatusWaitingForFirstMessage] = useState(true);
+  const [botStatusCountdown, setBotStatusCountdown] = useState(0);
+  const [botStatusWatching, setBotStatusWatching] = useState(false);
+  const [botStatusLastInboundAt, setBotStatusLastInboundAt] = useState('');
+  const [botStatusLastInboundText, setBotStatusLastInboundText] = useState('');
+  const [botStatusAllowedUserIds, setBotStatusAllowedUserIds] = useState<string[]>([]);
+  const [botStatusAllowedRoleIds, setBotStatusAllowedRoleIds] = useState<string[]>([]);
+  const botStatusWatchTimerRef = useRef<number | null>(null);
     const fetchProductionQuantity = useCallback(async () => {
       if (moduleId !== 'production_orders' || !id) return null;
       const { data: lines } = await supabase
@@ -2186,6 +2236,421 @@ const ModuleShow: React.FC = () => {
     throw new Error('ایجاد پروژه ناموفق بود');
   };
 
+  const updateCustomerBotLegacyFieldsWithFallback = async (
+    customerId: string,
+    payload: Record<string, any>
+  ) => {
+    let currentPayload: Record<string, any> = { ...payload };
+    const optionalColumns = ['preferred_notification_channel'];
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (Object.keys(currentPayload).length === 0) return;
+      const { error } = await supabase
+        .from('customers')
+        .update(currentPayload)
+        .eq('id', customerId);
+      if (!error) return;
+
+      const removable = optionalColumns.filter((columnName) =>
+        Object.prototype.hasOwnProperty.call(currentPayload, columnName) && isMissingColumnError(error, columnName)
+      );
+      if (!removable.length) throw error;
+      removable.forEach((columnName) => {
+        delete currentPayload[columnName];
+      });
+    }
+  };
+
+  const clearBotStatusWatchTimer = () => {
+    if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(botStatusWatchTimerRef.current);
+      botStatusWatchTimerRef.current = null;
+    }
+  };
+
+  const loadBotStatusRow = useCallback(async (
+    context: BotStatusModalContext,
+    preferredChannel?: string,
+  ) => {
+    const nextPreferred = String(preferredChannel || botStatusChannel || 'rubika').trim();
+    let selectedChannel = ['rubika', 'telegram', 'bale'].includes(nextPreferred) ? nextPreferred : 'rubika';
+    let groupJoinLink = '';
+    let groupTitle = '';
+    let currentStatus = 'pending_join_link';
+    let activationCode = createBotActivationCode(
+      String(
+        data?.company_name_en
+        || data?.business_name_en
+        || data?.english_name
+        || data?.name_en
+        || data?.legal_name_en
+        || data?.full_name_en
+        || ''
+      ).trim()
+    );
+    let waitingForFirstMessage = true;
+    let lastInboundAt = '';
+    let lastInboundText = '';
+    let allowedUserIds: string[] = [];
+    let allowedRoleIds: string[] = [];
+
+    let query = supabase
+      .from('counterparty_bot_groups')
+      .select('id, channel_type, status, group_join_link, group_title, metadata, last_inbound_at')
+      .limit(50);
+    query = context.targetType === 'customers'
+      ? query.eq('customer_id', context.counterpartyId)
+      : query.eq('supplier_id', context.counterpartyId);
+    const { data: rows, error } = await query;
+    if (error) throw error;
+    const rowMap = new Map(
+      (rows || []).map((row: any) => [String(row?.channel_type || '').trim(), row] as const)
+    );
+    const preferredRow = rowMap.get(selectedChannel) || (rows || [])[0] || null;
+    if (preferredRow) {
+      selectedChannel = String(preferredRow.channel_type || selectedChannel).trim() || selectedChannel;
+      groupJoinLink = String(preferredRow.group_join_link || '').trim();
+      groupTitle = String(preferredRow.group_title || '').trim();
+      currentStatus = String(preferredRow.status || '').trim() || 'pending_join_link';
+      const metadata = (preferredRow?.metadata && typeof preferredRow.metadata === 'object')
+        ? preferredRow.metadata
+        : {};
+      const existingCode = String(metadata?.activation_code || '').trim().toUpperCase();
+      if (existingCode) activationCode = existingCode;
+      if (typeof metadata?.capture_mode === 'boolean') {
+        waitingForFirstMessage = Boolean(metadata.capture_mode);
+      }
+      allowedUserIds = Array.isArray(metadata?.allowed_user_ids)
+        ? metadata.allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      allowedRoleIds = Array.isArray(metadata?.allowed_role_ids)
+        ? metadata.allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      lastInboundAt = String(preferredRow?.last_inbound_at || '').trim();
+    }
+
+    const preferredGroupId = String(preferredRow?.id || '').trim();
+    if (preferredGroupId) {
+      const { data: inboundRows } = await supabase
+        .from('counterparty_bot_messages')
+        .select('created_at, content_text')
+        .eq('bot_group_id', preferredGroupId)
+        .eq('direction', 'inbound')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (Array.isArray(inboundRows) && inboundRows[0]) {
+        lastInboundAt = String(inboundRows[0]?.created_at || lastInboundAt || '').trim();
+        lastInboundText = String(inboundRows[0]?.content_text || '').trim();
+      }
+    }
+
+    setBotStatusChannel(selectedChannel as 'rubika' | 'telegram' | 'bale');
+    setBotStatusJoinLink(groupJoinLink);
+    setBotStatusGroupTitle(groupTitle);
+    setBotStatusCurrentStatus(currentStatus);
+    setBotStatusActivationCode(activationCode);
+    setBotStatusWaitingForFirstMessage(waitingForFirstMessage);
+    setBotStatusLastInboundAt(lastInboundAt);
+    setBotStatusLastInboundText(lastInboundText);
+    setBotStatusAllowedUserIds(allowedUserIds);
+    setBotStatusAllowedRoleIds(allowedRoleIds);
+  }, [botStatusChannel, data?.business_name_en, data?.company_name_en, data?.english_name, data?.full_name_en, data?.legal_name_en, data?.name_en]);
+
+  const saveBotStatusSettings = useCallback(async (options?: { forceCapture?: boolean; captureSeconds?: number }) => {
+    const context = botStatusModalContext;
+    if (!context) return;
+    const nextChannel = ['rubika', 'telegram', 'bale'].includes(botStatusChannel)
+      ? botStatusChannel
+      : 'rubika';
+    let existingQuery = supabase
+      .from('counterparty_bot_groups')
+      .select('id, status, bot_chat_id, group_join_link, metadata')
+      .eq('channel_type', nextChannel)
+      .limit(1);
+    existingQuery = context.targetType === 'customers'
+      ? existingQuery.eq('customer_id', context.counterpartyId)
+      : existingQuery.eq('supplier_id', context.counterpartyId);
+    const { data: existingRows, error: existingError } = await existingQuery;
+    if (existingError) throw existingError;
+
+    const forceCapture = options?.forceCapture === true;
+    const existingRow = Array.isArray(existingRows) ? existingRows[0] : null;
+    const existingStatus = String(existingRow?.status || '').trim();
+    const existingChatId = String(existingRow?.bot_chat_id || '').trim();
+    const existingJoinLink = String(existingRow?.group_join_link || '').trim();
+    const hasJoinLink = Boolean(String(botStatusJoinLink || '').trim());
+    const nextStatus = forceCapture
+      ? (hasJoinLink ? 'pending_join' : 'pending_join_link')
+      : (
+        (existingStatus === 'active' && existingChatId)
+          ? 'active'
+          : ((hasJoinLink && existingChatId && existingJoinLink && existingJoinLink === String(botStatusJoinLink || '').trim())
+            ? 'active'
+            : (hasJoinLink ? 'pending_join' : 'pending_join_link'))
+      );
+    const existingRowMetadata = (Array.isArray(existingRows) && existingRows[0]?.metadata && typeof existingRows[0].metadata === 'object')
+      ? existingRows[0].metadata
+      : {};
+    const captureSeconds = Number(options?.captureSeconds || 30);
+    const captureEnabled = forceCapture;
+    const nowIso = new Date().toISOString();
+    const captureExpiresAt = captureEnabled
+      ? new Date(Date.now() + Math.max(10, captureSeconds) * 1000).toISOString()
+      : null;
+
+    const payload: Record<string, any> = {
+      target_type: context.targetType,
+      channel_type: nextChannel,
+      status: nextStatus,
+      group_join_link: botStatusJoinLink || null,
+      metadata: {
+        ...existingRowMetadata,
+        activation_code: String(botStatusActivationCode || '').trim().toUpperCase(),
+        activation_required: true,
+        capture_mode: captureEnabled,
+        capture_started_at: captureEnabled ? nowIso : null,
+        capture_expires_at: captureExpiresAt,
+        allowed_user_ids: botStatusAllowedUserIds,
+        allowed_role_ids: botStatusAllowedRoleIds,
+        activation_confirmation_sent: forceCapture ? false : Boolean(existingRowMetadata?.activation_confirmation_sent),
+        activation_updated_at: nowIso,
+      },
+      updated_by: null,
+    };
+    if (context.targetType === 'customers') {
+      payload.customer_id = context.counterpartyId;
+      payload.supplier_id = null;
+    } else {
+      payload.supplier_id = context.counterpartyId;
+      payload.customer_id = null;
+    }
+
+    if (Array.isArray(existingRows) && existingRows[0]?.id) {
+      const { error } = await supabase
+        .from('counterparty_bot_groups')
+        .update(payload)
+        .eq('id', String(existingRows[0].id));
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from('counterparty_bot_groups')
+        .insert([payload]);
+      if (error) throw error;
+    }
+
+    if (context.moduleId === 'customers') {
+      const legacyPatch = { preferred_notification_channel: nextChannel };
+      await updateCustomerBotLegacyFieldsWithFallback(context.counterpartyId, legacyPatch);
+      setData((prev: any) => ({ ...prev, preferred_notification_channel: legacyPatch.preferred_notification_channel }));
+    }
+  }, [botStatusActivationCode, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusJoinLink, botStatusModalContext, botStatusWaitingForFirstMessage]);
+
+  const handleCloseBotStatusModal = useCallback(() => {
+    clearBotStatusWatchTimer();
+    setBotStatusWatching(false);
+    setBotStatusCountdown(0);
+    setBotStatusModalOpen(false);
+  }, []);
+
+  const handleSaveBotStatusModal = useCallback(async () => {
+    if (!botStatusModalContext) return;
+    try {
+      setBotStatusModalSaving(true);
+      await saveBotStatusSettings();
+      await loadBotStatusRow(botStatusModalContext, botStatusChannel);
+      msg.success('وضعیت گروه بات ذخیره شد.');
+    } catch (error: any) {
+      msg.error(toFaErrorMessage(error, 'ذخیره وضعیت گروه بات ناموفق بود.'));
+    } finally {
+      setBotStatusModalSaving(false);
+    }
+  }, [botStatusActivationCode, botStatusChannel, botStatusModalContext, loadBotStatusRow, msg, saveBotStatusSettings]);
+
+  const handleStartBotBindWatch = useCallback(async () => {
+    if (!botStatusModalContext) return;
+    try {
+      setBotStatusModalSaving(true);
+      await saveBotStatusSettings({ forceCapture: true, captureSeconds: 30 });
+      let captureConnectionId = '';
+      let captureCursor: string | number | null = null;
+      try {
+        const integration = await getActiveChannelSettings(botStatusChannel);
+        captureConnectionId = String(integration?.id || '').trim();
+        if (!captureConnectionId) {
+          msg.warning(`اتصال فعال برای بات ${CUSTOMER_BOT_CHANNEL_LABELS[botStatusChannel] || botStatusChannel} پیدا نشد.`);
+        } else {
+          const { data: captureData, error: captureError } = await supabase.functions.invoke('bot-admin', {
+            body: {
+              action: 'start_capture',
+              channel: botStatusChannel,
+              connectionId: captureConnectionId,
+            },
+          });
+          if (captureError) throw captureError;
+          if (!captureData?.success) {
+            throw new Error(String(captureData?.message || 'شروع capture ناموفق بود.'));
+          }
+          if (botStatusChannel !== 'rubika' && Object.prototype.hasOwnProperty.call(captureData, 'cursor')) {
+            captureCursor = captureData?.cursor ?? null;
+          }
+        }
+      } catch (captureErr: any) {
+        msg.warning(toFaErrorMessage(captureErr, 'شروع capture بات با خطا مواجه شد.'));
+      }
+      await loadBotStatusRow(botStatusModalContext, botStatusChannel);
+      clearBotStatusWatchTimer();
+      setBotStatusWatching(true);
+      setBotStatusCountdown(30);
+
+      let remaining = 30;
+      botStatusWatchTimerRef.current = window.setInterval(async () => {
+        remaining -= 1;
+        setBotStatusCountdown(Math.max(remaining, 0));
+        if (remaining % 2 === 0) {
+          try {
+            if (captureConnectionId) {
+              const { data: pollData } = await supabase.functions.invoke('bot-admin', {
+                body: {
+                  action: 'poll_updates',
+                  channel: botStatusChannel,
+                  connectionId: captureConnectionId,
+                  cursor: captureCursor,
+                },
+              });
+              if (pollData?.success && Object.prototype.hasOwnProperty.call(pollData, 'cursor')) {
+                captureCursor = pollData?.cursor ?? captureCursor;
+              }
+              const polledContact = pollData?.found ? (pollData?.contact || null) : null;
+              const polledChatId = String(polledContact?.chat_id || polledContact?.chatId || '').trim();
+              if (polledContact && polledChatId) {
+                const polledText = String(polledContact?.last_message_text || polledContact?.text || '').trim();
+                const polledPayload = (polledContact?.last_payload && typeof polledContact.last_payload === 'object')
+                  ? polledContact.last_payload
+                  : {};
+                const chatTitle = String(
+                  polledPayload?.update?.chat_title
+                  || polledPayload?.update?.group_title
+                  || polledPayload?.update?.new_message?.chat_title
+                  || polledPayload?.update?.new_message?.group_title
+                  || polledPayload?.update?.new_message?.chat?.title
+                  || polledPayload?.chat_title
+                  || polledPayload?.group_title
+                  || ''
+                ).trim();
+                const chatType = String(
+                  polledPayload?.update?.chat_type
+                  || polledPayload?.update?.new_message?.chat?.type
+                  || polledPayload?.chat_type
+                  || ''
+                ).trim().toLowerCase();
+                const isGroupByType = ['group', 'supergroup', 'channel'].includes(chatType);
+                const chatIdLower = polledChatId.toLowerCase();
+                const isGroupByPrefix = chatIdLower.startsWith('g0') || chatIdLower.startsWith('c0') || chatIdLower.startsWith('ch');
+                const isGroup = isGroupByType || isGroupByPrefix || Boolean(chatTitle);
+                const activationCode = String(botStatusActivationCode || '').trim().toUpperCase();
+                const hasActivationCode = !activationCode || String(polledText || '').toUpperCase().includes(activationCode);
+
+                if (isGroup && hasActivationCode) {
+                  let groupQuery = supabase
+                    .from('counterparty_bot_groups')
+                    .select('id, metadata, group_title')
+                    .eq('channel_type', botStatusChannel)
+                    .limit(1);
+                  groupQuery = botStatusModalContext.targetType === 'customers'
+                    ? groupQuery.eq('customer_id', botStatusModalContext.counterpartyId)
+                    : groupQuery.eq('supplier_id', botStatusModalContext.counterpartyId);
+                  const { data: bindRows } = await groupQuery;
+                  const bindRow = Array.isArray(bindRows) ? bindRows[0] : null;
+                  const bindRowId = String(bindRow?.id || '').trim();
+                  if (bindRowId) {
+                    const existingMetadata = (bindRow?.metadata && typeof bindRow.metadata === 'object')
+                      ? bindRow.metadata
+                      : {};
+                    await supabase
+                      .from('counterparty_bot_groups')
+                      .update({
+                        status: 'active',
+                        bot_chat_id: polledChatId,
+                        group_title: chatTitle || String(bindRow?.group_title || '').trim() || null,
+                        last_inbound_at: new Date().toISOString(),
+                        metadata: {
+                          ...existingMetadata,
+                          capture_mode: false,
+                          capture_expires_at: null,
+                          activation_last_match_at: new Date().toISOString(),
+                        },
+                      })
+                      .eq('id', bindRowId);
+                    await loadBotStatusRow(botStatusModalContext, botStatusChannel);
+                  }
+                }
+              }
+            }
+            await loadBotStatusRow(botStatusModalContext, botStatusChannel);
+            let query = supabase
+              .from('counterparty_bot_groups')
+              .select('status, bot_chat_id')
+              .eq('channel_type', botStatusChannel)
+              .limit(1);
+            query = botStatusModalContext.targetType === 'customers'
+              ? query.eq('customer_id', botStatusModalContext.counterpartyId)
+              : query.eq('supplier_id', botStatusModalContext.counterpartyId);
+            const { data: liveRows } = await query;
+            const row = Array.isArray(liveRows) ? liveRows[0] : null;
+            if (String(row?.status || '').trim() === 'active' && String(row?.bot_chat_id || '').trim()) {
+              clearBotStatusWatchTimer();
+              setBotStatusWatching(false);
+              setBotStatusCountdown(0);
+              msg.success('اتصال گروه بات با موفقیت انجام شد.');
+            }
+          } catch {
+            // ignore temporary poll failures
+          }
+        }
+        if (remaining <= 0) {
+          clearBotStatusWatchTimer();
+          setBotStatusWatching(false);
+          setBotStatusCountdown(0);
+          msg.info('زمان انتظار bind تمام شد. در صورت نیاز دوباره شروع کنید.');
+        }
+      }, 1000);
+    } catch (error: any) {
+      msg.error(toFaErrorMessage(error, 'شروع حالت انتظار bind ناموفق بود.'));
+      setBotStatusWatching(false);
+      setBotStatusCountdown(0);
+    } finally {
+      setBotStatusModalSaving(false);
+    }
+  }, [botStatusChannel, botStatusModalContext, loadBotStatusRow, msg, saveBotStatusSettings]);
+
+  const handleChangeBotStatusChannel = useCallback(async (value: 'rubika' | 'telegram' | 'bale') => {
+    const nextChannel = String(value || 'rubika') as 'rubika' | 'telegram' | 'bale';
+    setBotStatusChannel(nextChannel);
+    if (!botStatusModalContext) return;
+    try {
+      setBotStatusModalLoading(true);
+      await loadBotStatusRow(botStatusModalContext, nextChannel);
+    } catch (error: any) {
+      msg.error(toFaErrorMessage(error, 'خواندن تنظیمات کانال ناموفق بود.'));
+    } finally {
+      setBotStatusModalLoading(false);
+    }
+  }, [botStatusModalContext, loadBotStatusRow, msg]);
+
+  const handleCopyBotActivationCode = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(String(botStatusActivationCode || '').trim());
+      msg.success('کد فعال‌سازی کپی شد.');
+    } catch {
+      msg.error('کپی کد فعال‌سازی ناموفق بود.');
+    }
+  }, [botStatusActivationCode, msg]);
+
+  useEffect(() => {
+    return () => {
+      clearBotStatusWatchTimer();
+    };
+  }, []);
+
   const loadQuickProjectModalOptions = useCallback(async () => {
     try {
       const [{ data: customers }, { data: templates, error: templatesError }] = await Promise.all([
@@ -2458,7 +2923,7 @@ const ModuleShow: React.FC = () => {
     }
   };
 
-    const handleHeaderAction = (actionId: string) => {
+    const handleHeaderAction = async (actionId: string) => {
 
       if (actionId === 'create_journal_entry') {
 
@@ -2513,6 +2978,40 @@ const ModuleShow: React.FC = () => {
     if (actionId === 'create_customer_from_lead' && moduleId === 'marketing_leads') {
       if (!canEditModule) return;
       setIsCreateCustomerFromLeadOpen(true);
+      return;
+    }
+    if (actionId === 'counterparty_bot_group_status' && (moduleId === 'customers' || moduleId === 'suppliers')) {
+      if (!canEditModule) {
+        msg.error('دسترسی ویرایش برای تنظیم گروه بات ندارید.');
+        return;
+      }
+      const counterpartyId = String(id || '').trim();
+      if (!counterpartyId) {
+        msg.error('شناسه رکورد معتبر نیست.');
+        return;
+      }
+
+      const context: BotStatusModalContext = {
+        moduleId: moduleId === 'customers' ? 'customers' : 'suppliers',
+        targetType: moduleId === 'customers' ? 'customers' : 'suppliers',
+        counterpartyId,
+      };
+      const preferredChannel = context.moduleId === 'customers'
+        ? String(data?.preferred_notification_channel || 'rubika').trim()
+        : 'rubika';
+      setBotStatusModalContext(context);
+      setBotStatusModalLoading(true);
+      setBotStatusModalOpen(true);
+      clearBotStatusWatchTimer();
+      setBotStatusWatching(false);
+      setBotStatusCountdown(0);
+      try {
+        await loadBotStatusRow(context, preferredChannel);
+      } catch (error: any) {
+        msg.error(toFaErrorMessage(error, 'خواندن تنظیم گروه بات ناموفق بود.'));
+      } finally {
+        setBotStatusModalLoading(false);
+      }
       return;
     }
     if (actionId === 'auto_name' && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers')) {
@@ -4408,6 +4907,20 @@ const ModuleShow: React.FC = () => {
       onClick: () => handleHeaderAction('create_customer_from_lead')
     });
   }
+  if ((moduleId === 'customers' || moduleId === 'suppliers') && canEditModule) {
+    const platformKey = moduleId === 'customers'
+      ? String(data?.preferred_notification_channel || 'none').trim()
+      : 'none';
+    const platformLabel = CUSTOMER_BOT_CHANNEL_LABELS[platformKey] || CUSTOMER_BOT_CHANNEL_LABELS.none;
+    headerActions.push({
+      id: 'counterparty_bot_group_status',
+      label: moduleId === 'customers'
+        ? `وضعیت گروه ${platformLabel}`
+        : 'وضعیت گروه بات',
+      variant: 'default',
+      onClick: () => handleHeaderAction('counterparty_bot_group_status')
+    });
+  }
   if (moduleId === 'products' && canUseAction('quick_stock_movement')) {
     headerActions.push({
       id: 'quick_stock_movement',
@@ -4909,6 +5422,39 @@ const ModuleShow: React.FC = () => {
           )}
         </>
       )}
+
+      <CounterpartyBotStatusModal
+        open={botStatusModalOpen}
+        loading={botStatusModalLoading}
+        saving={botStatusModalSaving}
+        watching={botStatusWatching}
+        countdown={botStatusCountdown}
+        channel={botStatusChannel}
+        joinLink={botStatusJoinLink}
+        groupTitle={botStatusGroupTitle}
+        currentStatus={botStatusCurrentStatus}
+        activationCode={botStatusActivationCode}
+        lastInboundAt={botStatusLastInboundAt}
+        lastInboundText={botStatusLastInboundText}
+        allowedUserIds={botStatusAllowedUserIds}
+        allowedRoleIds={botStatusAllowedRoleIds}
+        userOptions={allUsers.map((user: any) => ({
+          label: String(user?.full_name || user?.email || user?.mobile_1 || user?.id || '-').trim(),
+          value: String(user?.id || '').trim(),
+        })).filter((item) => item.value)}
+        roleOptions={allRoles.map((role: any) => ({
+          label: String(role?.title || role?.name || role?.id || '-').trim(),
+          value: String(role?.id || '').trim(),
+        })).filter((item) => item.value)}
+        onClose={handleCloseBotStatusModal}
+        onSave={() => void handleSaveBotStatusModal()}
+        onStartBindWatch={() => void handleStartBotBindWatch()}
+        onCopyActivationCode={() => void handleCopyBotActivationCode()}
+        onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
+        onChangeJoinLink={setBotStatusJoinLink}
+        onChangeAllowedUserIds={setBotStatusAllowedUserIds}
+        onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
+      />
 
       <Modal
         open={accountingEntryPickerOpen}

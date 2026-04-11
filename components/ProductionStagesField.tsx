@@ -379,6 +379,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [showCompletedProcessGroups, setShowCompletedProcessGroups] = useState(false);
   const [processOriginTitleMap, setProcessOriginTitleMap] = useState<Record<string, string>>({});
   const [draftTemplatePickerSearch, setDraftTemplatePickerSearch] = useState('');
+  const [draftTemplatePickerOpenKey, setDraftTemplatePickerOpenKey] = useState<string | null>(null);
   const [activeProcessGroupMeta, setActiveProcessGroupMeta] = useState<{
     id: string;
     label: string | null;
@@ -1042,6 +1043,41 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       focusDraftTemplateTarget(targetKey, nextCaret);
     }
   }, [draftForm, focusDraftTemplateTarget]);
+
+  const copyDraftTemplateTokenToClipboard = useCallback(async (token: string) => {
+    const text = String(token || '').trim();
+    if (!text) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch {
+      // fallback handled below
+    }
+    try {
+      if (typeof document === 'undefined') return;
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      textarea.style.pointerEvents = 'none';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+    } catch {
+      // no-op: token insertion is still applied even if clipboard is blocked
+    }
+  }, []);
+
+  const handleDraftTemplateTokenPick = useCallback((targetKey: string, token: string) => {
+    insertDraftTemplateToken(targetKey, token);
+    setDraftTemplatePickerOpenKey(null);
+    setDraftTemplatePickerSearch('');
+    void copyDraftTemplateTokenToClipboard(token);
+  }, [copyDraftTemplateTokenToClipboard, insertDraftTemplateToken]);
 
   const buildTaskTemplateContextRecord = useCallback(async ({
     taskName,
@@ -3825,6 +3861,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     <Popover
       trigger="click"
       placement="bottomRight"
+      open={draftTemplatePickerOpenKey === targetKey}
+      onOpenChange={(open) => {
+        setDraftTemplatePickerOpenKey(open ? targetKey : null);
+        if (!open) setDraftTemplatePickerSearch('');
+      }}
       content={(
         <div
           className="w-[min(88vw,24rem)] space-y-2 select-text"
@@ -3837,7 +3878,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             size="small"
             placeholder="جستجو در متغیرها"
           />
-          <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+          <div
+            className="space-y-1 pr-1"
+            style={{ maxHeight: '18rem', overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}
+            onWheelCapture={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+          >
           {filteredStageTemplateVariableOptions.length === 0 ? (
             <div className="px-2 py-3 text-xs text-gray-500">متغیری در دسترس نیست.</div>
           ) : filteredStageTemplateVariableOptions.map((item) => (
@@ -3845,7 +3891,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               key={`${targetKey}-${item.key}`}
               type="button"
               className="w-full rounded-lg border border-transparent px-2 py-2 text-right transition-colors hover:border-[rgba(var(--brand-200-rgb),0.75)] hover:bg-[rgba(var(--brand-50-rgb),0.55)] select-text"
-              onClick={() => insertDraftTemplateToken(targetKey, item.token)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleDraftTemplateTokenPick(targetKey, item.token)}
             >
               <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.label}</div>
               <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400" dir="ltr">{item.token}</div>
@@ -3860,9 +3907,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         size="small"
         icon={<CopyOutlined />}
         className="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
+        onMouseDown={(event) => event.preventDefault()}
       />
     </Popover>
-  ), [draftTemplatePickerSearch, filteredStageTemplateVariableOptions, insertDraftTemplateToken]);
+  ), [draftTemplatePickerOpenKey, draftTemplatePickerSearch, filteredStageTemplateVariableOptions, handleDraftTemplateTokenPick]);
 
   const renderPopupContent = (task: any) => {
     const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);

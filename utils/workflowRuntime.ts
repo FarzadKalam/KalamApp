@@ -119,11 +119,63 @@ const isSameDate = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
+const TEHRAN_TIME_ZONE = 'Asia/Tehran';
+
+const DATE_TIME_LIKE_REGEX =
+  /^\d{4}-\d{2}-\d{2}[tT ]\d{2}:\d{2}(:\d{2}(?:\.\d{1,6})?)?(?:[zZ]|[+-]\d{2}:?\d{2})?$/;
+
+const toTehranDateTime = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+
+  let date: Date | null = null;
+  if (value instanceof Date) {
+    date = Number.isNaN(value.getTime()) ? null : value;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || !DATE_TIME_LIKE_REGEX.test(trimmed)) return null;
+    const parsed = new Date(trimmed);
+    date = Number.isNaN(parsed.getTime()) ? null : parsed;
+  } else {
+    return null;
+  }
+  if (!date) return null;
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TEHRAN_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = byType.year || '';
+  const month = byType.month || '';
+  const day = byType.day || '';
+  const hour = byType.hour || '';
+  const minute = byType.minute || '';
+  if (!year || !month || !day || !hour || !minute) return null;
+  return `${year}/${month}/${day} ${hour}:${minute}`;
+};
+
+export const formatWorkflowTemplateValue = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => formatWorkflowTemplateValue(item))
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (typeof value === 'object') return JSON.stringify(value);
+  return toTehranDateTime(value) || String(value);
+};
+
 const renderTemplate = (template: string, record: Record<string, any>) => {
   return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
     const fieldKey = String(key || '').trim();
     const val = record?.[fieldKey];
-    return val === null || val === undefined ? '' : String(val);
+    return formatWorkflowTemplateValue(val);
   });
 };
 
@@ -132,7 +184,7 @@ const renderTemplateWithBoldMarkers = (template: string, record: Record<string, 
     const fieldKey = String(key || '').trim();
     const val = record?.[fieldKey];
     if (val === null || val === undefined) return '';
-    const resolved = String(val).trim();
+    const resolved = formatWorkflowTemplateValue(val).trim();
     return resolved ? `**${resolved}**` : '';
   });
 };

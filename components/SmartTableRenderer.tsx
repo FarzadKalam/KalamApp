@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip } from 'antd';
-import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, CloseOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
@@ -648,14 +648,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             </button>
           </Popover>
         ) : null}
-        <button
-          type="button"
-          className="inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/10 dark:hover:text-gray-200"
-          onClick={() => setIsTagFilterPopoverOpen(false)}
-          aria-label="close-tag-filter"
-        >
-          <CloseOutlined className="text-[10px]" />
-        </button>
       </div>
     );
   };

@@ -37,6 +37,8 @@ import { readRuntimeBranding } from '../utils/brandingRuntime';
 import PhoneDisplay from '../components/PhoneDisplay';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import OccasionsWidget from '../components/dashboard/OccasionsWidget';
+import TaskCalendarWidget from '../components/dashboard/TaskCalendarWidget';
+import ReportsSliderWidget from '../components/dashboard/ReportsSliderWidget';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -786,6 +788,21 @@ const Dashboard: React.FC = () => {
               </Card>
             </Col>
           ))}
+        </Row>
+      )}
+
+      {(canShowWidget('activity_calendar') || canShowWidget('reports_slider')) && (
+        <Row gutter={[16, 16]} className="mb-6">
+          {canShowWidget('activity_calendar') && (
+            <Col xs={24} lg={canShowWidget('reports_slider') ? 12 : 24}>
+              <TaskCalendarWidget />
+            </Col>
+          )}
+          {canShowWidget('reports_slider') && (
+            <Col xs={24} lg={canShowWidget('activity_calendar') ? 12 : 24}>
+              <ReportsSliderWidget />
+            </Col>
+          )}
         </Row>
       )}
 

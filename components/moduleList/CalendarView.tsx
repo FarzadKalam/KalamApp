@@ -261,13 +261,17 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     <button
       key={event.key}
       type="button"
-      className="w-full min-w-0 rounded-lg border border-gray-200 bg-white/90 px-2 py-1 text-right text-[11px] leading-5 shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] hover:bg-[rgba(var(--brand-50-rgb),0.9)] dark:border-white/10 dark:bg-[#1d1d1d] dark:hover:bg-white/10"
+      className="w-full min-w-0 rounded-lg border border-gray-200 bg-white/90 px-2 py-1 text-right text-[10px] leading-4 shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] hover:bg-[rgba(var(--brand-50-rgb),0.9)] dark:border-white/10 dark:bg-[#1d1d1d] dark:hover:bg-white/10 sm:text-[11px]"
       style={{ borderRight: `3px solid ${selectedFieldColor}` }}
       onClick={() => navigate(`/${moduleId}/${event.item.id}`)}
       title={event.title}
     >
-      <span className="block min-w-0 truncate font-bold text-gray-700 dark:text-gray-100">
-        {event.timeLabel ? `${event.timeLabel} ` : ""}
+      {event.timeLabel ? (
+        <span className="block min-w-0 truncate text-[9px] font-semibold leading-4 text-gray-500 dark:text-gray-400 sm:text-[10px]">
+          {event.timeLabel}
+        </span>
+      ) : null}
+      <span className="mt-0.5 block min-w-0 line-clamp-2 break-words text-[9px] font-bold leading-4 text-gray-700 dark:text-gray-100 sm:text-[10px]">
         {event.title}
       </span>
       {!compact && event.statusLabel ? (

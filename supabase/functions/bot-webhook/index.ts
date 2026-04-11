@@ -2,13 +2,33 @@
 
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
+type IntegrationSettings = {
+  bot_token?: string;
+  api_base_url?: string;
+  send_message_path?: string;
+  bot_name?: string;
+  bot_username?: string;
+};
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-telegram-bot-api-secret-token',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-03-24-03';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-04-11-02';
+
+const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
+  telegram: 'https://api.telegram.org',
+  bale: 'https://tapi.bale.ai',
+  rubika: 'https://botapi.rubika.ir',
+};
+
+const DEFAULT_SEND_PATH: Record<BotChannel, string> = {
+  telegram: '/bot{token}/sendMessage',
+  bale: '/bot{token}/sendMessage',
+  rubika: '/v3/{token}/sendMessage',
+};
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: BOT_WEBHOOK_BUILD, ...payload }), {
@@ -45,6 +65,21 @@ const pick = (...values: any[]) => {
   return '';
 };
 
+const normalizeBaseUrl = (value: any) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
+  return `https://${raw.replace(/\/+$/, '')}`;
+};
+
+const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: string) => {
+  const normalizedBase = normalizeBaseUrl(baseUrl);
+  const normalizedPath = String(pathTemplate || '')
+    .replace('{token}', encodeURIComponent(token))
+    .replace(/^\/*/, '/');
+  return `${normalizedBase}${normalizedPath}`;
+};
+
 const getDisplayName = (obj: Record<string, any> | null | undefined) => {
   if (!obj || typeof obj !== 'object') return '';
   const first = String(obj.first_name || obj.firstName || '').trim();
@@ -52,6 +87,29 @@ const getDisplayName = (obj: Record<string, any> | null | undefined) => {
   const direct = pick(obj.name, obj.title, obj.display_name, obj.displayName, obj.full_name, obj.fullName);
   const combined = [first, last].filter(Boolean).join(' ').trim();
   return pick(direct, combined);
+};
+
+const extractChatTitle = (payload: Record<string, any>, message: Record<string, any> | null) => {
+  const rubikaUpdate = payload?.update || null;
+  const rubikaNewMessage = rubikaUpdate?.new_message || null;
+  const rubikaInlineMessage = payload?.inline_message || null;
+  return pick(
+    message?.chat?.title,
+    message?.chat?.name,
+    message?.chat_title,
+    message?.group_title,
+    rubikaUpdate?.chat_title,
+    rubikaUpdate?.group_title,
+    rubikaNewMessage?.chat?.title,
+    rubikaNewMessage?.chat_title,
+    rubikaNewMessage?.group_title,
+    rubikaInlineMessage?.chat?.title,
+    rubikaInlineMessage?.chat_title,
+    rubikaInlineMessage?.group_title,
+    payload?.chat?.title,
+    payload?.chat_title,
+    payload?.group_title
+  );
 };
 
 const getPathChannelAndSecret = (pathname: string) => {
@@ -104,11 +162,19 @@ const extractContact = (payload: Record<string, any>) => {
   const chatId = pick(
     message?.chat?.id,
     message?.chat_id,
+    message?.object_guid,
+    message?.objectGuid,
     callbackQuery?.message?.chat?.id,
     callbackQuery?.message?.chat_id,
+    callbackQuery?.message?.object_guid,
     rubikaUpdate?.chat_id,
+    rubikaUpdate?.object_guid,
     rubikaInlineMessage?.chat_id,
+    rubikaInlineMessage?.object_guid,
+    rubikaNewMessage?.chat_id,
+    rubikaNewMessage?.object_guid,
     payload?.chat_id,
+    payload?.object_guid,
     payload?.chatId,
     payload?.conversation_id,
     payload?.conversationId,
@@ -162,12 +228,120 @@ const extractContact = (payload: Record<string, any>) => {
     payload?.caption
   );
 
+  const senderId = pick(
+    from?.id,
+    from?.user_id,
+    from?.userId,
+    from?.object_guid,
+    from?.objectGuid,
+    payload?.sender_id,
+    payload?.user_id,
+    payload?.userId
+  );
+  const chatTitle = extractChatTitle(payload, message);
+  const chatType = pick(
+    message?.chat?.type,
+    message?.chat_type,
+    payload?.chat?.type,
+    payload?.chat_type,
+    payload?.type,
+    payload?.event?.chat?.type
+  ).toLowerCase();
+  const normalizedChatType = String(chatType || '').trim().toLowerCase();
+  const isGroupByType = ['group', 'supergroup', 'channel'].includes(normalizedChatType);
+  const chatIdLower = String(chatId || '').trim().toLowerCase();
+  const isGroupByChatIdPrefix = chatIdLower.startsWith('g0') || chatIdLower.startsWith('c0') || chatIdLower.startsWith('ch');
+  const isGroupByTitle = Boolean(String(chatTitle || '').trim());
+  const isGroup = isGroupByType || isGroupByChatIdPrefix || isGroupByTitle;
+
   return {
     chatId,
+    senderId,
     username,
     phoneNumber,
     displayName,
+    chatTitle,
+    chatType: normalizedChatType || null,
+    isGroup,
     text,
+  };
+};
+
+const extractMediaInfo = (payload: Record<string, any>) => {
+  const rubikaUpdate = payload?.update || null;
+  const rubikaNewMessage = rubikaUpdate?.new_message || null;
+  const rubikaInlineMessage = payload?.inline_message || null;
+  const message =
+    payload?.message ||
+    payload?.body?.message ||
+    payload?.data?.message ||
+    payload?.event?.message ||
+    payload?.update?.message ||
+    rubikaNewMessage ||
+    rubikaInlineMessage ||
+    null;
+
+  const directUrl = pick(
+    message?.file_url,
+    message?.fileUrl,
+    message?.media_url,
+    message?.mediaUrl,
+    message?.photo?.url,
+    message?.document?.url,
+    message?.video?.url,
+    message?.audio?.url,
+    rubikaNewMessage?.file?.url,
+    rubikaNewMessage?.file_url,
+    rubikaInlineMessage?.file?.url,
+    payload?.file_url,
+    payload?.fileUrl,
+    payload?.media_url,
+    payload?.mediaUrl
+  );
+  const fileId = pick(
+    message?.file_id,
+    message?.fileId,
+    message?.photo?.file_id,
+    message?.document?.file_id,
+    message?.video?.file_id,
+    message?.audio?.file_id,
+    rubikaNewMessage?.file_id,
+    payload?.file_id,
+    payload?.fileId
+  );
+  const fileName = pick(
+    message?.file_name,
+    message?.fileName,
+    message?.document?.file_name,
+    message?.document?.fileName,
+    message?.video?.file_name,
+    rubikaNewMessage?.file_name,
+    payload?.file_name,
+    payload?.fileName
+  );
+  const mimeType = pick(
+    message?.mime_type,
+    message?.mimeType,
+    message?.document?.mime_type,
+    message?.document?.mimeType,
+    message?.video?.mime_type,
+    payload?.mime_type,
+    payload?.mimeType
+  );
+  const hasPhoto = Boolean(message?.photo || payload?.photo);
+  const hasDocument = Boolean(message?.document || payload?.document || fileName || directUrl || fileId);
+  const hasVideo = Boolean(message?.video || payload?.video);
+  const hasAudio = Boolean(message?.audio || payload?.audio);
+  const messageType =
+    hasPhoto ? 'image'
+      : (hasDocument || hasVideo || hasAudio) ? 'file'
+        : 'text';
+  return {
+    messageType,
+    fileUrl: directUrl || null,
+    fileName: fileName || null,
+    mimeType: mimeType || null,
+    fileId: fileId || null,
   };
 };
 
@@ -219,6 +393,244 @@ const upsertInboundContact = async (
   if (!response.ok) throw new Error(raw || '??? ?? ????? ????? ???');
   const parsed = raw ? JSON.parse(raw) : [];
   return Array.isArray(parsed) ? parsed[0] : parsed;
+};
+
+const normalizeLinkToken = (value: any) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const noQuery = text.split('?')[0].split('#')[0];
+  const parts = noQuery.split('/').filter(Boolean);
+  return String(parts[parts.length - 1] || '').trim().toLowerCase();
+};
+
+const normalizePlainToken = (value: any) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9\u0600-\u06ff _-]/g, '');
+
+const extractUrlTokens = (value: any) => {
+  const text = String(value || '');
+  if (!text.trim()) return [] as string[];
+  const matches = text.match(/https?:\/\/[^\s]+/gi) || [];
+  return Array.from(new Set(matches.map((item) => normalizeLinkToken(item)).filter(Boolean)));
+};
+
+const loadOrgCounterpartyBotGroups = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  orgId: string,
+  channel: BotChannel
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_groups`);
+  url.searchParams.set('org_id', `eq.${orgId}`);
+  url.searchParams.set('channel_type', `eq.${channel}`);
+  url.searchParams.set('select', 'id,customer_id,supplier_id,status,group_join_link,group_title,bot_chat_id,metadata');
+  url.searchParams.set('limit', '200');
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not load counterparty bot groups');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed : [];
+};
+
+const patchCounterpartyBotGroup = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  id: string,
+  patch: Record<string, any>
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_groups`);
+  url.searchParams.set('id', `eq.${id}`);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(patch),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not patch counterparty bot group');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] : parsed;
+};
+
+const loadCounterpartyLabel = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  row: Record<string, any> | null | undefined
+) => {
+  const targetType = String(row?.customer_id ? 'customers' : row?.supplier_id ? 'suppliers' : '').trim();
+  const targetId = String(row?.customer_id || row?.supplier_id || '').trim();
+  if (!targetType || !targetId) return '';
+
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${targetType}`);
+  url.searchParams.set('id', `eq.${targetId}`);
+  if (targetType === 'customers') {
+    url.searchParams.set('select', 'full_name,business_name,legal_name,system_code');
+  } else {
+    url.searchParams.set('select', 'business_name,full_name,system_code');
+  }
+  url.searchParams.set('limit', '1');
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) return '';
+  const rows = raw ? JSON.parse(raw) : [];
+  const item = Array.isArray(rows) ? rows[0] : null;
+  if (!item) return '';
+
+  return pick(item?.full_name, item?.business_name, item?.legal_name, item?.system_code);
+};
+
+const sendBotConnectionConfirmation = async ({
+  channel,
+  settings,
+  chatId,
+  counterpartyLabel,
+}: {
+  channel: BotChannel;
+  settings: IntegrationSettings;
+  chatId: string;
+  counterpartyLabel: string;
+}) => {
+  const token = String(settings?.bot_token || '').trim();
+  if (!token) return;
+  const baseUrl = String(settings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
+  const sendPath = String(settings?.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
+  const text = `اتصال این گروه به "${counterpartyLabel || 'طرف‌حساب'}" با موفقیت انجام شد`;
+
+  const response = await fetch(buildSendMessageUrl(baseUrl, token, sendPath), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      ...(channel === 'rubika' ? {} : { parse_mode: 'HTML' }),
+    }),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(raw || 'Could not send connection confirmation message');
+  }
+};
+
+const insertCounterpartyBotMessage = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: Record<string, any>
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not insert counterparty bot message');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] : parsed;
+};
+
+const syncCounterpartyBotGroupByInbound = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  orgId,
+  channel,
+  contact,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  orgId: string;
+  channel: BotChannel;
+  contact: Record<string, any>;
+}) => {
+  try {
+    if (contact?.isGroup !== true) return null;
+    const rows = await loadOrgCounterpartyBotGroups(supabaseUrl, serviceRoleKey, orgId, channel);
+    const chatId = String(contact?.chatId || '').trim();
+    const usernameToken = normalizeLinkToken(contact?.username);
+    const displayToken = normalizeLinkToken(contact?.displayName);
+    const chatTitleToken = normalizePlainToken(contact?.chatTitle);
+    const textTokens = extractUrlTokens(contact?.text);
+    const inboundLinkTokens = new Set([usernameToken, displayToken, ...textTokens].filter(Boolean));
+    const incomingTextUpper = String(contact?.text || '').trim().toUpperCase();
+    const nowMs = Date.now();
+    const isCaptureActive = (row: any) => {
+      if (row?.metadata?.capture_mode !== true) return false;
+      const status = String(row?.status || '').trim();
+      if (status !== 'pending_join' && status !== 'pending_join_link') return false;
+      const exp = String(row?.metadata?.capture_expires_at || '').trim();
+      if (!exp) return true;
+      const expMs = new Date(exp).getTime();
+      if (!Number.isFinite(expMs)) return true;
+      return expMs >= nowMs;
+    };
+
+    const matchedByChatId = rows.find((row: any) => String(row?.bot_chat_id || '').trim() === chatId);
+    const captureActiveRows = rows.filter((row: any) => !String(row?.bot_chat_id || '').trim() && isCaptureActive(row));
+    const matchedByCaptureSingle = captureActiveRows.length === 1 ? captureActiveRows[0] : null;
+    const matchedByLinkTokenRows = rows.filter((row: any) => {
+      if (String(row?.bot_chat_id || '').trim()) return false;
+      const linkToken = normalizeLinkToken(row?.group_join_link);
+      if (!linkToken) return false;
+      return inboundLinkTokens.has(linkToken);
+    });
+    const matchedByActivationRows = rows.filter((row: any) => {
+      if (String(row?.bot_chat_id || '').trim()) return false;
+      if (row?.metadata?.capture_mode !== true) return false;
+      const code = String(row?.metadata?.activation_code || '').trim().toUpperCase();
+      if (!code || !incomingTextUpper) return false;
+      return incomingTextUpper.includes(code);
+    });
+    const matchedByTitleRows = rows.filter((row: any) => {
+      if (String(row?.bot_chat_id || '').trim()) return false;
+      const rowTitle = normalizePlainToken(row?.group_title);
+      if (!rowTitle || !chatTitleToken) return false;
+      return rowTitle === chatTitleToken;
+    });
+
+    const matchedByLinkToken = matchedByLinkTokenRows.length === 1 ? matchedByLinkTokenRows[0] : null;
+    const matchedByActivation = matchedByActivationRows.length === 1 ? matchedByActivationRows[0] : null;
+    const matchedByTitle = matchedByTitleRows.length === 1 ? matchedByTitleRows[0] : null;
+
+    const matched = matchedByChatId || matchedByActivation || matchedByLinkToken || matchedByTitle || matchedByCaptureSingle || null;
+    if (!matched) return null;
+    if (!chatId) return null;
+
+    const nextPatch: Record<string, any> = {
+      bot_chat_id: chatId || null,
+      status: 'active',
+      last_inbound_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      metadata: {
+        ...(matched?.metadata && typeof matched.metadata === 'object' ? matched.metadata : {}),
+        capture_mode: false,
+        activation_required: false,
+        activation_matched_at: new Date().toISOString(),
+      },
+    };
+    const resolvedTitle = String(contact?.chatTitle || contact?.displayName || '').trim();
+    if (resolvedTitle) {
+      nextPatch.group_title = resolvedTitle;
+    }
+
+    return patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, String(matched.id), nextPatch);
+  } catch (error) {
+    console.warn('[bot-webhook] counterparty group sync skipped', error);
+    return null;
+  }
 };
 
 Deno.serve(async (req) => {
@@ -281,12 +693,81 @@ Deno.serve(async (req) => {
     if (contact.text) rowPayload.last_message_text = contact.text;
 
     const saved = await upsertInboundContact(supabaseUrl, serviceRoleKey, rowPayload);
+    const matchedGroup = await syncCounterpartyBotGroupByInbound({
+      supabaseUrl,
+      serviceRoleKey,
+      orgId: String(integration?.org_id || ''),
+      channel,
+      contact,
+    });
+
+    const shouldSendConnectionAck = Boolean(
+      matchedGroup?.id
+      && String(matchedGroup?.status || '').trim() === 'active'
+      && (
+        matchedGroup?.metadata?.activation_confirmation_sent !== true
+        || String(matchedGroup?.metadata?.activation_confirmation_chat_id || '').trim() !== String(contact?.chatId || '').trim()
+      )
+    );
+    if (shouldSendConnectionAck) {
+      try {
+        const label = await loadCounterpartyLabel(supabaseUrl, serviceRoleKey, matchedGroup);
+        await sendBotConnectionConfirmation({
+          channel,
+          settings: (integration?.settings || {}) as IntegrationSettings,
+          chatId: String(contact?.chatId || '').trim(),
+          counterpartyLabel: label || (
+            matchedGroup?.customer_id ? 'مشتری' : matchedGroup?.supplier_id ? 'تامین کننده' : 'طرف‌حساب'
+          ),
+        });
+        await patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, String(matchedGroup.id), {
+          metadata: {
+            ...(matchedGroup?.metadata && typeof matchedGroup.metadata === 'object' ? matchedGroup.metadata : {}),
+            activation_confirmation_sent: true,
+            activation_confirmation_sent_at: new Date().toISOString(),
+            activation_confirmation_chat_id: String(contact?.chatId || '').trim() || null,
+          },
+        });
+      } catch (error) {
+        console.warn('[bot-webhook] could not send connection confirmation', error);
+      }
+    }
+
+    try {
+      const mediaInfo = extractMediaInfo(payload);
+      await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
+        org_id: integration.org_id || null,
+        bot_group_id: matchedGroup?.id || null,
+        customer_id: matchedGroup?.customer_id || null,
+        supplier_id: matchedGroup?.supplier_id || null,
+        channel_type: channel,
+        direction: 'inbound',
+        message_type: mediaInfo.messageType,
+        chat_id: String(contact.chatId || '').trim() || null,
+        content_text: String(contact.text || '').trim() || null,
+        file_url: mediaInfo.fileUrl,
+        file_name: mediaInfo.fileName,
+        mime_type: mediaInfo.mimeType,
+        payload: {
+          ...(payload && typeof payload === 'object' ? payload : {}),
+          sender_id: String(contact.senderId || '').trim() || null,
+          sender_display_name: String(contact.displayName || '').trim() || null,
+          username: String(contact.username || '').trim() || null,
+          media_file_id: mediaInfo.fileId,
+        },
+      });
+    } catch (error) {
+      console.warn('[bot-webhook] could not write counterparty bot message', error);
+    }
 
     return json(200, {
       success: true,
       channel,
       chat_id: contact.chatId,
+      is_group: contact?.isGroup === true,
+      chat_title: String(contact?.chatTitle || '').trim() || null,
       contact: saved,
+      matched_group_id: matchedGroup?.id || null,
     });
   } catch (error: any) {
     console.error('[bot-webhook] error', String(error?.message || error));

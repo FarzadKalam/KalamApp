@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs } from 'antd';
-import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
+import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -11,7 +11,6 @@ import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
 import QrScanPopover from './QrScanPopover';
 import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
-import { parseNoteTemplateTextSegments } from '../utils/noteTemplateText';
 import { uploadNoteAttachments } from '../utils/noteAttachments';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { FieldType } from '../types';
@@ -28,6 +27,7 @@ import { getRecordTitle } from '../utils/recordTitle';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
+import { getActiveChannelSettings } from '../utils/channelSettings';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -41,10 +41,11 @@ const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
 const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
 const DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY = 'notif_dismissed_ui_v1';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, 'primary' | 'id_only' | 'none'>();
-type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities';
+type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages';
 type CreatedSortDirection = 'desc' | 'asc';
 const SYSTEM_MESSAGES_USER_ID = '__system_messages__';
 const CHAT_GROUP_PREFIX = 'group:';
+const BOT_GROUP_FORWARD_PREFIX = 'botgroup:';
 const NOTE_SELECT_FIELDS = 'id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to, source_type, metadata, is_edited, edited_at';
 type ChatGroupRow = {
   id: string;
@@ -55,6 +56,52 @@ type ChatGroupRow = {
   created_by: string | null;
   created_at: string | null;
   updated_at: string | null;
+};
+
+type CounterpartyBotGroupRow = {
+  id: string;
+  target_type: 'customers' | 'suppliers' | string;
+  customer_id: string | null;
+  supplier_id: string | null;
+  channel_type: 'rubika' | 'telegram' | 'bale' | string;
+  status: string;
+  group_title: string | null;
+  group_join_link: string | null;
+  bot_chat_id: string | null;
+  updated_at: string | null;
+  last_inbound_at: string | null;
+  last_outbound_at: string | null;
+  metadata?: Record<string, any> | null;
+  counterparty_label?: string | null;
+};
+
+type CounterpartyBotMessageRow = {
+  id: string;
+  bot_group_id: string | null;
+  direction: 'inbound' | 'outbound' | string;
+  message_type: 'text' | 'image' | 'file' | 'invoice' | 'other' | string;
+  chat_id?: string | null;
+  provider_message_id?: string | null;
+  content_text: string | null;
+  file_url: string | null;
+  file_name: string | null;
+  mime_type?: string | null;
+  payload?: Record<string, any> | null;
+  created_at: string | null;
+};
+
+const BOT_STATUS_LABELS_FA: Record<string, string> = {
+  pending_join_link: 'در انتظار ثبت لینک',
+  pending_join: 'انتظار برای پیام در گروه',
+  active: 'فعال',
+  disabled: 'غیرفعال',
+  error: 'خطا',
+};
+
+const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
+  rubika: 'روبیکا',
+  telegram: 'تلگرام',
+  bale: 'بله',
 };
 
 type ConversationListItem = {
@@ -73,7 +120,7 @@ type ConversationListItem = {
 
 type UiNotificationItem = {
   id: string;
-  kind: 'note' | 'task' | 'responsibility';
+  kind: 'note' | 'task' | 'responsibility' | 'bot';
   title: string;
   body: string;
   createdAt: string | null;
@@ -81,6 +128,8 @@ type UiNotificationItem = {
   note?: any;
   task?: any;
   responsibility?: any;
+  botMessage?: CounterpartyBotMessageRow | null;
+  botGroupId?: string | null;
 };
 
 const loadSeenSet = (key: string) => {
@@ -232,21 +281,34 @@ const isDirectConversationNote = (
   );
 };
 
-const renderTemplateAwareText = (value: string, enableBold: boolean) => {
-  if (!enableBold) return value;
-  const segments = parseNoteTemplateTextSegments(value);
-  if (segments.length === 0) return value;
-  return segments.map((segment, index) => (
-    segment.bold ? (
-      <strong key={`${index}-${segment.text}`} className="font-bold">
-        {segment.text}
-      </strong>
-    ) : (
-      <React.Fragment key={`${index}-${segment.text}`}>
-        {segment.text}
-      </React.Fragment>
-    )
-  ));
+const renderLinkifiedText = (value: string, keyPrefix = 'link') => {
+  const source = String(value || '');
+  if (!source.trim()) return source;
+  const regex = /(https?:\/\/[^\s]+)/gi;
+  const matches = Array.from(source.matchAll(regex));
+  if (!matches.length) return source;
+  const nodes: React.ReactNode[] = [];
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    const matched = String(match[0] || '');
+    const start = typeof match.index === 'number' ? match.index : -1;
+    if (!matched || start < 0) return;
+    if (start > cursor) nodes.push(source.slice(cursor, start));
+    nodes.push(
+      <a
+        key={`${keyPrefix}-${index}-${start}`}
+        href={matched}
+        target="_blank"
+        rel="noreferrer"
+        className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
+      >
+        {matched}
+      </a>
+    );
+    cursor = start + matched.length;
+  });
+  if (cursor < source.length) nodes.push(source.slice(cursor));
+  return nodes.length ? nodes : source;
 };
 
 const buildDirectoryMaps = async () => {
@@ -279,6 +341,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [notes, setNotes] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [responsibilities, setResponsibilities] = useState<any[]>([]);
+  const [botGroups, setBotGroups] = useState<CounterpartyBotGroupRow[]>([]);
+  const [botMessages, setBotMessages] = useState<CounterpartyBotMessageRow[]>([]);
+  const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(null);
+  const [botMessageText, setBotMessageText] = useState('');
+  const [botSending, setBotSending] = useState(false);
+  const [botGroupSearch, setBotGroupSearch] = useState('');
+  const [botMessageSearch, setBotMessageSearch] = useState('');
+  const [botReplyToId, setBotReplyToId] = useState<string | null>(null);
+  const [botAttachments, setBotAttachments] = useState<File[]>([]);
+  const [editingBotMessageId, setEditingBotMessageId] = useState<string | null>(null);
+  const [editingBotMessageValue, setEditingBotMessageValue] = useState('');
+  const [botMentionPickerOpen, setBotMentionPickerOpen] = useState(false);
   const [showMore, setShowMore] = useState({ notes: false, tasks: false, responsibilities: false });
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
@@ -316,8 +390,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [forwardingNote, setForwardingNote] = useState<any | null>(null);
   const [forwardTargetUserIds, setForwardTargetUserIds] = useState<string[]>([]);
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
-  const [desktopActiveKey, setDesktopActiveKey] = useState<'notes' | 'tasks' | 'responsibilities'>('tasks');
-  const [mobileActiveKey, setMobileActiveKey] = useState<'notes' | 'tasks' | 'responsibilities'>('tasks');
+  const [desktopActiveKey, setDesktopActiveKey] = useState<'notes' | 'tasks' | 'responsibilities' | 'bot_messages'>('tasks');
+  const [mobileActiveKey, setMobileActiveKey] = useState<'notes' | 'tasks' | 'responsibilities' | 'bot_messages'>('tasks');
   const [responsibilityViewKey, setResponsibilityViewKey] = useState('all');
   const [responsibilitySortDirection, setResponsibilitySortDirection] = useState<CreatedSortDirection>('desc');
   const [previewRecord, setPreviewRecord] = useState<{ moduleId: string; recordId: string; label?: string } | null>(null);
@@ -333,10 +407,12 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [loadingResponsibilities, setLoadingResponsibilities] = useState(false);
+  const [loadingBotMessages, setLoadingBotMessages] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const prevNotesRef = useRef<Set<string>>(new Set());
   const prevTasksRef = useRef<Set<string>>(new Set());
   const prevResponsibilitiesRef = useRef<Set<string>>(new Set());
+  const prevBotMessageIdsRef = useRef<Set<string>>(new Set());
   const notificationsReadyRef = useRef(false);
   const notesPollingPausedRef = useRef(false);
   const notesPollingPauseLoggedRef = useRef(false);
@@ -348,11 +424,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     notes: 0,
     tasks: 0,
     responsibilities: 0,
+    bot_messages: 0,
   });
   const liveRefreshTimerRef = useRef<number | null>(null);
   const realtimeDisabledRef = useRef(false);
   const refreshAllRef = useRef<((notify?: boolean, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const notificationSoundWindowRef = useRef<{ startedAt: number; plays: number }>({ startedAt: 0, plays: 0 });
+  const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const botShouldStickToBottomRef = useRef(true);
+  const botForceScrollToBottomRef = useRef(false);
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -1024,6 +1104,21 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       return;
     }
 
+    if (section === 'bot_messages') {
+      const showSkeleton = botGroups.length === 0 && botMessages.length === 0;
+      if (showSkeleton) setLoadingBotMessages(true);
+      const groups = await safeSectionFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]);
+      const resolvedGroupId = String(selectedBotGroupId || groups[0]?.id || '').trim();
+      if (resolvedGroupId) {
+        await safeSectionFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+      } else {
+        setBotMessages([]);
+      }
+      lastLoadedAtRef.current.bot_messages = Date.now();
+      if (showSkeleton) setLoadingBotMessages(false);
+      return;
+    }
+
     const showSkeleton = responsibilities.length === 0;
     if (showSkeleton) setLoadingResponsibilities(true);
     const responsibilitiesData = await safeSectionFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]);
@@ -1057,11 +1152,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const showNotesSkeleton = notes.length === 0;
     const showTasksSkeleton = tasks.length === 0;
     const showResponsibilitiesSkeleton = responsibilities.length === 0;
+    const showBotSkeleton = botGroups.length === 0 && botMessages.length === 0;
 
     if (showNotesSkeleton) setLoadingNotes(true);
     if (showTasksSkeleton) setLoadingTasks(true);
     if (showResponsibilitiesSkeleton) setLoadingResponsibilities(true);
-    const safeFetch = async <T,>(loader: () => Promise<T>, type: 'notes' | 'tasks' | 'responsibilities', fallback: T) => {
+    if (showBotSkeleton) setLoadingBotMessages(true);
+    const safeFetch = async <T,>(loader: () => Promise<T>, type: NotificationSectionKey, fallback: T) => {
       try {
         return await loader();
       } catch (error) {
@@ -1077,10 +1174,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         return fallback;
       }
     };
-    const [notesData, tasksData, responsibilitiesData] = await Promise.all([
+    const [notesData, tasksData, responsibilitiesData, botGroupsData] = await Promise.all([
       safeFetch(() => fetchNotes(), 'notes', [] as any[]),
       safeFetch(() => fetchTasks(), 'tasks', [] as any[]),
       safeFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]),
+      safeFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]),
     ]);
     setNotes(notesData);
     setTasks(tasksData);
@@ -1090,7 +1188,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       notes: loadedAt,
       tasks: loadedAt,
       responsibilities: loadedAt,
+      bot_messages: loadedAt,
     };
+    const resolvedGroupId = String(selectedBotGroupId || botGroupsData[0]?.id || '').trim();
+    if (resolvedGroupId) {
+      await safeFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+    } else {
+      setBotMessages([]);
+    }
     const completedTaskIds = tasksData
       .filter((task: any) => {
         const normalizedStatus = String(task?.status || '').toLowerCase();
@@ -1105,11 +1210,169 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (showNotesSkeleton) setLoadingNotes(false);
     if (showTasksSkeleton) setLoadingTasks(false);
     if (showResponsibilitiesSkeleton) setLoadingResponsibilities(false);
+    if (showBotSkeleton) setLoadingBotMessages(false);
 
     if (notify && !notificationsReadyRef.current) {
       notificationsReadyRef.current = true;
     }
   };
+
+  const fetchBotGroups = async () => {
+    const { data, error } = await supabase
+      .from('counterparty_bot_groups')
+      .select('id,target_type,customer_id,supplier_id,channel_type,status,group_title,group_join_link,bot_chat_id,updated_at,last_inbound_at,last_outbound_at,metadata')
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .limit(200);
+    if (error) throw error;
+    const baseRows = (data || []) as CounterpartyBotGroupRow[];
+    const userId = String(profile.id || '').trim();
+    const roleId = String(profile.role_id || '').trim();
+    const rows = baseRows.filter((row) => {
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      const allowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
+        ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const allowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids)
+        ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      if (!allowedUserIds.length && !allowedRoleIds.length) return true;
+      if (userId && allowedUserIds.includes(userId)) return true;
+      if (roleId && allowedRoleIds.includes(roleId)) return true;
+      return false;
+    });
+
+    const customerIds = Array.from(new Set(rows.map((row) => String(row.customer_id || '').trim()).filter(Boolean)));
+    const supplierIds = Array.from(new Set(rows.map((row) => String(row.supplier_id || '').trim()).filter(Boolean)));
+
+    const counterpartyLabelMap: Record<string, string> = {};
+    if (customerIds.length > 0) {
+      const { data: customers } = await supabase
+        .from('customers')
+        .select('id,full_name,business_name,legal_name,system_code')
+        .in('id', customerIds);
+      (customers || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        counterpartyLabelMap[`customers:${id}`] = String(
+          item?.full_name || item?.business_name || item?.legal_name || item?.system_code || id
+        ).trim();
+      });
+    }
+    if (supplierIds.length > 0) {
+      const { data: suppliers } = await supabase
+        .from('suppliers')
+        .select('id,business_name,full_name,system_code')
+        .in('id', supplierIds);
+      (suppliers || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        counterpartyLabelMap[`suppliers:${id}`] = String(
+          item?.business_name || item?.full_name || item?.system_code || id
+        ).trim();
+      });
+    }
+
+    const enrichedRows = rows.map((row) => {
+      const customerId = String(row.customer_id || '').trim();
+      const supplierId = String(row.supplier_id || '').trim();
+      const key = customerId ? `customers:${customerId}` : supplierId ? `suppliers:${supplierId}` : '';
+      return {
+        ...row,
+        counterparty_label: key ? (counterpartyLabelMap[key] || null) : null,
+      };
+    });
+    setBotGroups(enrichedRows);
+    setSelectedBotGroupId((prev) => {
+      if (prev && enrichedRows.some((row) => String(row.id) === String(prev))) return prev;
+      const withChat = enrichedRows.find((row) => String(row.bot_chat_id || '').trim());
+      return withChat ? String(withChat.id) : (enrichedRows[0]?.id ? String(enrichedRows[0].id) : null);
+    });
+    return enrichedRows;
+  };
+
+  const fetchBotMessages = async (groupId?: string | null) => {
+    const targetGroupId = String(groupId || selectedBotGroupId || '').trim();
+    if (!targetGroupId) {
+      setBotMessages([]);
+      return [] as CounterpartyBotMessageRow[];
+    }
+    const { data, error } = await supabase
+      .from('counterparty_bot_messages')
+      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_at')
+      .eq('bot_group_id', targetGroupId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    const rows = ((data || []) as CounterpartyBotMessageRow[]).reverse();
+    setBotMessages(rows);
+    return rows;
+  };
+
+  const sendTextToBotGroup = useCallback(async (
+    group: CounterpartyBotGroupRow,
+    text: string,
+    options?: { payload?: Record<string, any>; messageType?: string }
+  ) => {
+    const channel = String(group?.channel_type || '').trim();
+    if (!['rubika', 'telegram', 'bale'].includes(channel)) {
+      throw new Error('کانال بات معتبر نیست.');
+    }
+    const chatId = String(group?.bot_chat_id || '').trim();
+    if (!chatId) {
+      throw new Error('برای این گروه chat id بات ثبت نشده است.');
+    }
+    const activeConnection = await getActiveChannelSettings(channel as any);
+    const connectionId = String(activeConnection?.id || '').trim();
+    if (!connectionId) {
+      throw new Error(`تنظیمات فعال بات ${BOT_CHANNEL_LABELS_FA[channel] || channel} پیدا نشد.`);
+    }
+    const { data: proxyData, error: proxyError } = await supabase.functions.invoke('bot-admin', {
+      body: {
+        action: 'send_test_message',
+        channel,
+        connectionId,
+        chatId,
+        text,
+        skipLog: false,
+      },
+    });
+    if (proxyError) throw proxyError;
+    if (!proxyData?.success) {
+      throw new Error(String(proxyData?.message || 'ارسال پیام بات ناموفق بود.'));
+    }
+    const providerResponse = proxyData?.provider_result || {};
+    const messageType = String(options?.messageType || 'text').trim() || 'text';
+
+    const { error: insertError } = await supabase
+      .from('counterparty_bot_messages')
+      .insert([{
+        bot_group_id: group.id,
+        customer_id: group.customer_id,
+        supplier_id: group.supplier_id,
+        channel_type: group.channel_type,
+        direction: 'outbound',
+        message_type: messageType,
+        chat_id: chatId,
+        provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || '') || null,
+        content_text: text,
+        payload: {
+          ...(options?.payload || {}),
+          provider_response: providerResponse || {},
+        },
+      }]);
+    if (insertError) throw insertError;
+
+    const { error: patchError } = await supabase
+      .from('counterparty_bot_groups')
+      .update({
+        status: 'active',
+        last_outbound_at: new Date().toISOString(),
+      })
+      .eq('id', group.id);
+    if (patchError) throw patchError;
+
+    return providerResponse;
+  }, []);
 
   const handleManualRefresh = async () => {
     setRefreshing(true);
@@ -1133,6 +1396,32 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       void refreshSection(activeDrawerSection);
     }
   }, [activeDrawerSection, open, profile.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeDrawerSection !== 'bot_messages') return;
+    if (!selectedBotGroupId) {
+      setBotMessages([]);
+      return;
+    }
+    botShouldStickToBottomRef.current = true;
+    botForceScrollToBottomRef.current = true;
+    void fetchBotMessages(selectedBotGroupId);
+  }, [activeDrawerSection, open, selectedBotGroupId]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeDrawerSection !== 'bot_messages') return;
+    botShouldStickToBottomRef.current = true;
+    botForceScrollToBottomRef.current = true;
+    const timer = window.setInterval(() => {
+      void fetchBotGroups();
+      if (selectedBotGroupId) {
+        void fetchBotMessages(selectedBotGroupId);
+      }
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [activeDrawerSection, open, selectedBotGroupId]);
 
   useEffect(() => {
     if (!profile.id) return;
@@ -1220,6 +1509,12 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tasks' }, (payload: any) => {
         if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_groups' }, () => {
+        scheduleLiveRefresh();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_messages' }, () => {
+        scheduleLiveRefresh();
       });
 
     RESPONSIBILITY_REALTIME_TABLES.forEach((table) => {
@@ -1251,7 +1546,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const notesCount = notes.filter((n: any) => !seenNoteIds.has(String(n.id))).length;
   const tasksCount = tasks.filter((t: any) => !seenTaskIds.has(String(t.id))).length;
   const responsibilitiesCount = responsibilities.filter((r: any) => !seenResponsibilityIds.has(String(r.id))).length;
-  const totalCount = notesCount + tasksCount + responsibilitiesCount;
+  const botMessagesCount = botMessages.length;
+  const totalCount = notesCount + tasksCount + responsibilitiesCount + botMessagesCount;
   const filteredTasks = useMemo(() => {
     const parseTime = (value: any) => {
       if (!value) return null;
@@ -1537,6 +1833,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   }, [resolveGroupMemberUserIds, roleLookup, selectedChatGroup, selectedNoteUser, selectedNoteUserId]);
   const forwardTargetOptions = useMemo(
     () => [
+      ...botGroups.map((group) => ({
+        label: `گروه بات: ${String(group.group_title || '').trim() || String(group.group_join_link || '').trim() || group.id}`,
+        value: `${BOT_GROUP_FORWARD_PREFIX}${group.id}`,
+        searchText: `گروه بات ${String(group.group_title || '').trim() || ''} ${String(group.group_join_link || '').trim() || ''}`.toLowerCase(),
+      })),
       ...chatGroups.map((group) => ({
         label: `گروه: ${group.name}`,
         value: `${CHAT_GROUP_PREFIX}${group.id}`,
@@ -1553,8 +1854,51 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           };
         }),
     ],
-    [chatGroups, directoryUsers, profile.id, roleLookup]
+    [botGroups, chatGroups, directoryUsers, profile.id, roleLookup]
   );
+
+  const isBotGroupForwardSelection = (value: string) => String(value || '').startsWith(BOT_GROUP_FORWARD_PREFIX);
+  const getBotGroupForwardSelectionId = (value: string) => {
+    if (!isBotGroupForwardSelection(value)) return null;
+    return String(value).slice(BOT_GROUP_FORWARD_PREFIX.length) || null;
+  };
+
+  const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow): Array<{ name: string; url: string }> => {
+    const list: Array<{ name: string; url: string }> = [];
+    const fileUrl = String(row?.file_url || '').trim();
+    const fileName = String(row?.file_name || '').trim();
+    if (fileUrl) {
+      list.push({
+        name: fileName || 'فایل',
+        url: fileUrl,
+      });
+    }
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const payloadMediaUrl = String((payload as any)?.media_url || (payload as any)?.file_url || '').trim();
+    if (payloadMediaUrl && !list.some((entry) => entry.url === payloadMediaUrl)) {
+      list.push({
+        name: String((payload as any)?.file_name || row?.file_name || 'فایل').trim(),
+        url: payloadMediaUrl,
+      });
+    }
+    const payloadAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];
+    payloadAttachments.forEach((item: any) => {
+      const url = String(item?.url || '').trim();
+      if (!url) return;
+      const name = String(item?.name || item?.file_name || 'فایل').trim();
+      if (!list.some((entry) => entry.url === url)) {
+        list.push({ name, url });
+      }
+    });
+    return list;
+  }, []);
+
+  const buildForwardBodyText = useCallback((text: string, attachments: Array<{ name: string; url: string }>) => {
+    const baseText = String(text || '').trim();
+    if (!attachments.length) return baseText;
+    const attachmentLines = attachments.map((item) => `${item.name}: ${item.url}`);
+    return [baseText, ...attachmentLines].filter(Boolean).join('\n');
+  }, []);
   const responsibilityViews = useMemo(() => {
     const seen = new Set<string>();
     const items = [{ key: 'all', label: 'همه رکوردها' }];
@@ -1652,10 +1996,32 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
     });
   }
+  function scrollBotMessagesToBottom(behavior: ScrollBehavior = 'auto') {
+    const node = botMessagesScrollContainerRef.current;
+    if (!node) return;
+    if (behavior === 'auto') {
+      node.scrollTop = node.scrollHeight;
+      return;
+    }
+    if (typeof window === 'undefined') {
+      node.scrollTop = node.scrollHeight;
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      const currentNode = botMessagesScrollContainerRef.current;
+      if (!currentNode) return;
+      currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
+    });
+  }
   const handleNotesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const node = event.currentTarget;
     const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
     noteShouldStickToBottomRef.current = distanceToBottom <= 80;
+  }, []);
+  const handleBotMessagesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const node = event.currentTarget;
+    const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    botShouldStickToBottomRef.current = distanceToBottom <= 80;
   }, []);
 
   const handleClose = useCallback(() => {
@@ -1763,7 +2129,23 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (!open || activeDrawerSection !== 'notes') return;
     noteShouldStickToBottomRef.current = true;
     noteForceScrollToBottomRef.current = true;
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => scrollNotesToBottom('auto'));
+    } else {
+      scrollNotesToBottom('auto');
+    }
   }, [activeDrawerSection, open]);
+
+  useEffect(() => {
+    if (!open || activeDrawerSection !== 'bot_messages') return;
+    botShouldStickToBottomRef.current = true;
+    botForceScrollToBottomRef.current = true;
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => scrollBotMessagesToBottom('auto'));
+    } else {
+      scrollBotMessagesToBottom('auto');
+    }
+  }, [activeDrawerSection, open, selectedBotGroupId]);
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
@@ -1772,6 +2154,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     scrollNotesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     noteForceScrollToBottomRef.current = false;
   }, [activeDrawerSection, displayedChatNotes, open]);
+
+  useLayoutEffect(() => {
+    if (!open || activeDrawerSection !== 'bot_messages') return;
+    const shouldForceScroll = botForceScrollToBottomRef.current;
+    if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
+    scrollBotMessagesToBottom(shouldForceScroll ? 'auto' : 'smooth');
+    botForceScrollToBottomRef.current = false;
+  }, [activeDrawerSection, botMessages, open, selectedBotGroupId]);
 
   const playNotificationChime = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -1954,8 +2344,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     }
   };
 
-  const openForwardModal = (note: any) => {
-    setForwardingNote(note);
+  const openForwardModal = (note: any, sourceType: 'note' | 'bot' = 'note') => {
+    setForwardingNote({
+      ...note,
+      __forward_source_type: sourceType,
+    });
     setForwardTargetUserIds(
       selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
         ? [String(selectedNoteUserId)]
@@ -1979,9 +2372,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       return;
     }
 
-    const scope = normalizeNoteScope(forwardingNote.module_id, forwardingNote.record_id);
-    const parsedContent = parseNoteContent(forwardingNote.content);
+    const sourceType = String((forwardingNote as any)?.__forward_source_type || 'note').trim() === 'bot' ? 'bot' : 'note';
+    const scope = sourceType === 'note'
+      ? normalizeNoteScope(forwardingNote.module_id, forwardingNote.record_id)
+      : normalizeNoteScope(null, null);
+    const parsedContent = sourceType === 'note'
+      ? parseNoteContent(forwardingNote.content)
+      : { text: String(forwardingNote?.content_text || '').trim(), attachments: getBotMessageAttachments(forwardingNote as CounterpartyBotMessageRow) };
+
+    const forwardText = buildForwardBodyText(parsedContent.text || '', parsedContent.attachments || []);
     const payloads = targetIds.flatMap((targetId) => {
+      if (isBotGroupForwardSelection(targetId)) {
+        return [];
+      }
       if (isChatGroupSelection(targetId)) {
         const group = chatGroupMap[String(getChatGroupSelectionId(targetId) || '')] || null;
         if (!group) return [];
@@ -1989,7 +2392,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         return [{
           module_id: scope.module_id,
           record_id: scope.record_id,
-          content: serializeNoteContent(parsedContent.text, parsedContent.attachments),
+          content: serializeNoteContent(forwardText, []),
           reply_to: null,
           mention_user_ids: groupPayload.mentionUserIds,
           mention_role_ids: groupPayload.mentionRoleIds,
@@ -2003,7 +2406,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       return [{
         module_id: scope.module_id,
         record_id: scope.record_id,
-        content: serializeNoteContent(parsedContent.text, parsedContent.attachments),
+        content: serializeNoteContent(forwardText, []),
         reply_to: null,
         mention_user_ids: [targetId],
         mention_role_ids: [],
@@ -2013,20 +2416,41 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       }];
     });
 
-    if (payloads.length === 0) {
+    const botTargets = targetIds
+      .filter((value) => isBotGroupForwardSelection(value))
+      .map((value) => String(getBotGroupForwardSelectionId(value) || '').trim())
+      .filter(Boolean);
+
+    if (payloads.length === 0 && botTargets.length === 0) {
       message.warning('حداقل یک گیرنده معتبر انتخاب کنید.');
       return;
     }
 
     setForwardSubmitting(true);
     try {
-      await insertNotesWithFallback(payloads);
+      if (payloads.length > 0) {
+        await insertNotesWithFallback(payloads);
+      }
+      for (const botGroupId of botTargets) {
+        const targetGroup = botGroups.find((row) => String(row.id) === botGroupId);
+        if (!targetGroup) continue;
+        await sendTextToBotGroup(targetGroup, forwardText, {
+          payload: {
+            forwarded_from: {
+              source_type: sourceType,
+              source_id: String(forwardingNote?.id || '').trim() || null,
+            },
+          },
+          messageType: 'text',
+        });
+      }
       noteShouldStickToBottomRef.current = true;
       noteForceScrollToBottomRef.current = true;
       setForwardingNote(null);
       setForwardTargetUserIds([]);
       message.success('پیام فوروارد شد.');
       await refreshSection('notes', { force: true });
+      await refreshSection('bot_messages', { force: true });
     } catch (error: any) {
       message.error(String(error?.message || 'فوروارد پیام ناموفق بود.'));
     } finally {
@@ -2149,12 +2573,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const currentNoteIds = new Set(notes.map((note: any) => String(note?.id || '')).filter(Boolean));
     const currentTaskIds = new Set(tasks.map((task: any) => String(task?.id || '')).filter(Boolean));
     const currentResponsibilityIds = new Set(responsibilities.map((item: any) => String(item?.id || '')).filter(Boolean));
+    const currentBotMessageIds = new Set(
+      botMessages
+        .filter((row) => String(row?.direction || '') === 'inbound')
+        .map((row) => String(row?.id || '').trim())
+        .filter(Boolean)
+    );
 
     if (!notificationsReadyRef.current) {
       prevNotesRef.current = currentNoteIds;
       prevTasksRef.current = currentTaskIds;
       prevResponsibilitiesRef.current = currentResponsibilityIds;
-      if (currentNoteIds.size > 0 || currentTaskIds.size > 0 || currentResponsibilityIds.size > 0) {
+      prevBotMessageIdsRef.current = currentBotMessageIds;
+      if (currentNoteIds.size > 0 || currentTaskIds.size > 0 || currentResponsibilityIds.size > 0 || currentBotMessageIds.size > 0) {
         notificationsReadyRef.current = true;
       }
       return;
@@ -2226,6 +2657,33 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
           createdAt: item.created_at || null,
           responsibility: item,
         })),
+      ...botMessages
+        .filter((row) => {
+          const id = String(row?.id || '').trim();
+          if (!id) return false;
+          if (String(row?.direction || '') !== 'inbound') return false;
+          return !prevBotMessageIdsRef.current.has(id) && !dismissedUiNotificationIds.has(`bot:${id}`);
+        })
+        .map((row) => {
+          const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+          const sender = String((payload as any)?.sender_display_name || '').trim()
+            || String((payload as any)?.sender_id || '').trim()
+            || String((payload as any)?.username || '').trim()
+            || 'کاربر گروه';
+          const group = botGroups.find((item) => String(item.id) === String(row.bot_group_id || ''));
+          const title = String(group?.group_title || '').trim() || String(group?.counterparty_label || '').trim() || 'پیام جدید بات';
+          const body = String(row?.content_text || '').trim() || (row?.file_name ? `فایل: ${row.file_name}` : 'پیام جدید');
+          return {
+            id: `bot:${String(row.id)}`,
+            kind: 'bot' as const,
+            title: `${title} - ${sender}`,
+            body,
+            createdAt: row.created_at || null,
+            hasAttachments: Boolean(row?.file_url || row?.file_name),
+            botMessage: row,
+            botGroupId: row.bot_group_id || null,
+          };
+        }),
     ]
       .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
@@ -2244,7 +2702,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     prevNotesRef.current = currentNoteIds;
     prevTasksRef.current = currentTaskIds;
     prevResponsibilitiesRef.current = currentResponsibilityIds;
+    prevBotMessageIdsRef.current = currentBotMessageIds;
   }, [
+    botGroups,
+    botMessages,
     chatGroupMap,
     directoryUserMap,
     dismissedUiNotificationIds,
@@ -2268,6 +2729,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       if (kind === 'note') return !seenNoteIds.has(entityId);
       if (kind === 'task') return !seenTaskIds.has(entityId);
       if (kind === 'responsibility') return !seenResponsibilityIds.has(entityId);
+      if (kind === 'bot') return true;
       return false;
     }));
   }, [dismissedUiNotificationIds, seenNoteIds, seenResponsibilityIds, seenTaskIds]);
@@ -2316,6 +2778,17 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       if (moduleId && recordId) {
         openPreviewRecord(moduleId, recordId, recordTitleMap[`${moduleId}:${recordId}`] || formatRecordLabel(item.responsibility, moduleId));
       }
+      return;
+    }
+
+    if (item.kind === 'bot') {
+      const groupId = String(item?.botGroupId || item?.botMessage?.bot_group_id || '').trim();
+      if (groupId) {
+        setSelectedBotGroupId(groupId);
+      }
+      setDesktopActiveKey('bot_messages');
+      setMobileActiveKey('bot_messages');
+      setOpen(true);
     }
   }, [openPreviewRecord, recordTitleMap, resolveDirectConversationTargetUserId]);
 
@@ -2354,7 +2827,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       : `${toPersianNumber(String(notes.length || 0))} پیام`;
 
     return (
-      <div dir="ltr" className="flex flex-1 min-h-0 bg-[rgba(var(--brand-50-rgb),0.92)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+      <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
         {withUserSidebar ? (
           <div dir="rtl" className="w-[208px] border-r border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.14)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
             <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.22)]">
@@ -2897,11 +3370,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                     </div>
                     {replyTarget && (
                       <div className="text-[11px] text-gray-600 dark:text-gray-300 bg-[rgba(var(--brand-50-rgb),0.96)] dark:bg-[rgba(var(--brand-700-rgb),0.38)] rounded-lg p-2 mb-2">
-                        پاسخ به: {renderTemplateAwareText(parseNoteContent(replyTarget.content).text || '', isSystem)}
+                        پاسخ به: {renderLinkifiedText(String(parseNoteContent(replyTarget.content).text || ''), `note-reply-${note.id}`)}
                       </div>
                     )}
                     <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">
-                      {renderTemplateAwareText(parsedContent.text, isSystem)}
+                      {renderLinkifiedText(String(parsedContent.text || ''), `note-body-${note.id}`)}
                     </div>
                     {parsedContent.attachments.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-2">
@@ -3073,6 +3546,277 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               </Button>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderBotMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
+    const selectedGroup = botGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null;
+    const statusLabel = BOT_STATUS_LABELS_FA[String(selectedGroup?.status || '')] || String(selectedGroup?.status || 'نامشخص');
+    const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
+    const groupTitle = String(selectedGroup?.group_title || '').trim() || String(selectedGroup?.group_join_link || '').trim() || 'گروه بدون عنوان';
+    const canSend = Boolean(String(selectedGroup?.bot_chat_id || '').trim());
+    const botMessageMap = new Map(botMessages.map((row) => [String(row.id), row]));
+    const normalizedGroupSearch = String(botGroupSearch || '').trim().toLowerCase();
+    const normalizedMessageSearch = String(botMessageSearch || '').trim().toLowerCase();
+    const filteredBotGroups = botGroups.filter((row) => {
+      if (!normalizedGroupSearch) return true;
+      const title = String(row.group_title || '').trim().toLowerCase();
+      const link = String(row.group_join_link || '').trim().toLowerCase();
+      const channel = String(row.channel_type || '').trim().toLowerCase();
+      return `${title} ${link} ${channel}`.includes(normalizedGroupSearch);
+    });
+    const filteredBotMessages = botMessages.filter((row) => {
+      if (!normalizedMessageSearch) return true;
+      const text = String(row.content_text || '').trim().toLowerCase();
+      const fileName = String(row.file_name || '').trim().toLowerCase();
+      return `${text} ${fileName}`.includes(normalizedMessageSearch);
+    });
+
+    const sendBotMessage = async () => {
+      const text = String(botMessageText || '').trim();
+      if (!selectedGroup) {
+        message.warning('ابتدا یک گروه بات انتخاب کنید.');
+        return;
+      }
+      const chatId = String(selectedGroup.bot_chat_id || '').trim();
+      if (!chatId) {
+        message.warning('این گروه هنوز chat id بات ندارد. یک پیام در گروه ارسال کنید تا فعال شود.');
+        return;
+      }
+      setBotSending(true);
+      try {
+        const recordModuleId = selectedGroup.target_type === 'customers' ? 'customers' : 'suppliers';
+        const recordId = selectedGroup.target_type === 'customers'
+          ? String(selectedGroup.customer_id || '').trim()
+          : String(selectedGroup.supplier_id || '').trim();
+        const attachments = botAttachments.length > 0
+          ? await uploadNoteAttachments(recordModuleId, recordId || null, botAttachments)
+          : [];
+        const attachmentText = attachments
+          .map((item) => `${String(item?.name || 'فایل').trim()}: ${String(item?.url || '').trim()}`)
+          .filter(Boolean)
+          .join('\n');
+        const finalText = [text, attachmentText].filter(Boolean).join('\n');
+        if (!String(finalText || '').trim()) {
+          message.warning('متن پیام خالی است.');
+          return;
+        }
+        await sendTextToBotGroup(selectedGroup, finalText, {
+          payload: {
+            attachments,
+            reply_to_message_id: botReplyToId || null,
+          },
+          messageType: attachments.length > 0 ? 'file' : 'text',
+        });
+        setBotMessageText('');
+        setBotReplyToId(null);
+        setBotAttachments([]);
+        setBotMentionPickerOpen(false);
+        await fetchBotGroups();
+        await fetchBotMessages(selectedGroup.id);
+        message.success('پیام بات ارسال شد.');
+      } catch (error: any) {
+        console.warn('Could not send bot group message', error);
+        message.error(String(error?.message || 'ارسال پیام بات ناموفق بود.'));
+      } finally {
+        setBotSending(false);
+      }
+    };
+
+    return (
+      <div className={`h-full min-h-0 ${layout === 'desktop' ? 'grid grid-cols-[260px_minmax(0,1fr)] gap-3' : 'flex flex-col gap-3'} overflow-hidden`}>
+        <div className="min-h-0 overflow-y-auto rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(255,255,255,0.98)] p-2.5 dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div className="mb-2 px-1 text-xs font-bold text-gray-600 dark:text-gray-300">گروه‌های بات</div>
+          <Input
+            size="small"
+            allowClear
+            value={botGroupSearch}
+            onChange={(event) => setBotGroupSearch(event.target.value)}
+            placeholder="جستجو در گروه‌ها..."
+            className="mb-2"
+            prefix={<SearchOutlined className="text-gray-400" />}
+          />
+          <div className="space-y-1.5">
+            {filteredBotGroups.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گروه باتی ثبت نشده است." />
+            ) : filteredBotGroups.map((row) => {
+              const rowStatus = BOT_STATUS_LABELS_FA[String(row.status || '')] || String(row.status || '');
+              const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '')] || String(row.channel_type || '');
+              const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه بدون عنوان';
+              const active = String(selectedBotGroupId || '') === String(row.id);
+              return (
+                <button
+                  type="button"
+                  key={row.id}
+                  className={`w-full rounded-xl border px-2 py-2 text-right transition-colors ${active ? 'border-[rgb(var(--brand-500-rgb))] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.2)]' : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5'}`}
+                  onClick={() => setSelectedBotGroupId(String(row.id))}
+                >
+                  <div className="truncate text-xs font-bold text-gray-800 dark:text-gray-100">{rowTitle}</div>
+                  <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">{rowChannel} | {rowStatus}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="min-h-0 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(255,255,255,0.98)] dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgb(var(--app-dark-surface-rgb))] flex flex-col overflow-hidden">
+          <div className="border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.96)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+            <div className="text-sm font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+              <RobotOutlined />
+              <span className="truncate">{groupTitle}</span>
+            </div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              وضعیت: {statusLabel} | پلتفرم: {channelLabel}
+            </div>
+            {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id) ? (
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                طرف مرتبط:{' '}
+                <Link
+                  to={`/${selectedGroup.customer_id ? 'customers' : 'suppliers'}/${selectedGroup.customer_id || selectedGroup.supplier_id}`}
+                  className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
+                  onClick={handleClose}
+                >
+                  {String(selectedGroup.counterparty_label || '').trim() || 'مشاهده رکورد'}
+                </Link>
+              </div>
+            ) : null}
+            <Input
+              size="small"
+              allowClear
+              value={botMessageSearch}
+              onChange={(event) => setBotMessageSearch(event.target.value)}
+              placeholder="جستجو در پیام‌های گروه..."
+              className="mt-2"
+              prefix={<SearchOutlined className="text-gray-400" />}
+            />
+            {!canSend ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+                برای فعال شدن بات، بعد از عضویت بات در گروه، یک پیام داخل همان گروه ارسال کنید.
+              </div>
+            ) : null}
+          </div>
+          <div
+            ref={botMessagesScrollContainerRef}
+            onScroll={handleBotMessagesScroll}
+            className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-2"
+          >
+            {loadingBotMessages ? (
+              <div className="space-y-2">
+                <Skeleton active paragraph={{ rows: 2 }} />
+                <Skeleton active paragraph={{ rows: 2 }} />
+              </div>
+            ) : !selectedGroup ? (
+              <Empty description="یک گروه بات را انتخاب کنید." />
+            ) : filteredBotMessages.length === 0 ? (
+              <Empty description="پیامی برای این گروه ثبت نشده است." />
+            ) : (
+              filteredBotMessages.map((row) => {
+                const outgoing = String(row.direction || '') === 'outbound';
+                const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+                const parsedAttachments = getBotMessageAttachments(row);
+                const replyToId = String(payload?.reply_to_message_id || '').trim();
+                const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
+                const replyAuthorName = replyTarget
+                  ? (String(replyTarget.direction || '') === 'outbound'
+                    ? 'شما'
+                    : (String((replyTarget.payload as any)?.sender_display_name || '').trim()
+                      || String((replyTarget.payload as any)?.sender_id || '').trim()
+                      || String((replyTarget.payload as any)?.username || '').trim()
+                      || 'کاربر گروه'))
+                  : null;
+                const body = String(row.content_text || '').trim() || (row.file_name ? `فایل: ${row.file_name}` : 'پیام بدون متن');
+                const isEditing = editingBotMessageId === row.id;
+                const inboundAuthor = String((payload as any)?.sender_display_name || '').trim()
+                  || String((payload as any)?.sender_id || '').trim()
+                  || String((payload as any)?.username || '').trim()
+                  || 'کاربر گروه';
+                return (
+                  <div key={row.id} className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
+                    <SharedNoteCard
+                      authorName={outgoing ? 'شما' : inboundAuthor}
+                      createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
+                      text={body}
+                      attachments={parsedAttachments.map((item) => ({ name: item.name, url: item.url } as any))}
+                      avatarUrl={null}
+                      avatarFallback={outgoing ? 'ش' : 'ب'}
+                      mentionUsers={[]}
+                      mentionRoles={[]}
+                      replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
+                      replyAuthorName={replyAuthorName}
+                      isMine={outgoing}
+                      isEdited={Boolean(payload?.is_edited)}
+                      isEditing={isEditing}
+                      editingValue={editingBotMessageValue}
+                      onEditingChange={setEditingBotMessageValue}
+                      onSaveEdit={outgoing ? async () => {
+                        const nextText = String(editingBotMessageValue || '').trim();
+                        if (!nextText) return;
+                        const nextPayload = {
+                          ...(payload || {}),
+                          is_edited: true,
+                          edited_at: new Date().toISOString(),
+                        };
+                        const { error } = await supabase
+                          .from('counterparty_bot_messages')
+                          .update({
+                            content_text: nextText,
+                            payload: nextPayload,
+                          })
+                          .eq('id', row.id);
+                        if (error) throw error;
+                        setEditingBotMessageId(null);
+                        setEditingBotMessageValue('');
+                        await fetchBotMessages(selectedGroup?.id || null);
+                      } : undefined}
+                      onCancelEdit={() => {
+                        setEditingBotMessageId(null);
+                        setEditingBotMessageValue('');
+                      }}
+                      onReply={() => setBotReplyToId(row.id)}
+                      onForward={() => openForwardModal(row, 'bot')}
+                      onEdit={outgoing ? () => {
+                        setEditingBotMessageId(row.id);
+                        setEditingBotMessageValue(String(row.content_text || '').trim());
+                      } : undefined}
+                      onDelete={outgoing ? async () => {
+                        const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', row.id);
+                        if (error) throw error;
+                        await fetchBotMessages(selectedGroup?.id || null);
+                      } : undefined}
+                    />
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <SharedNoteComposer
+            value={botMessageText}
+            onChange={setBotMessageText}
+            onSubmit={() => void sendBotMessage()}
+            placeholder={canSend ? 'پیام به گروه بات...' : 'این گروه هنوز فعال نشده است.'}
+            mentionOptions={[]}
+            mentionValues={[]}
+            onMentionChange={() => undefined}
+            mentionPickerOpen={botMentionPickerOpen}
+            onToggleMentionPicker={() => setBotMentionPickerOpen((prev) => !prev)}
+            attachments={botAttachments}
+            onFilesSelected={(files) => {
+              setBotAttachments((prev) => {
+                const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
+                files.forEach((file) => {
+                  map.set(`${file.name}-${file.size}-${file.lastModified}`, file);
+                });
+                return Array.from(map.values());
+              });
+            }}
+            onRemoveAttachment={(fileName) => {
+              setBotAttachments((prev) => prev.filter((file) => file.name !== fileName));
+            }}
+            replyActive={Boolean(botReplyToId)}
+            onClearReply={() => setBotReplyToId(null)}
+            submitDisabled={!selectedGroup || !canSend || botSending || (!String(botMessageText || '').trim() && botAttachments.length === 0)}
+          />
         </div>
       </div>
     );
@@ -3634,7 +4378,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     <div className="h-full min-h-0 flex flex-col bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
       <Tabs
         activeKey={mobileActiveKey}
-        onChange={(key) => setMobileActiveKey(key as 'notes' | 'tasks' | 'responsibilities')}
+        onChange={(key) => setMobileActiveKey(key as 'notes' | 'tasks' | 'responsibilities' | 'bot_messages')}
         className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
         items={[
           {
@@ -3652,6 +4396,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
             children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderResponsibilities()}</div>,
           },
+          {
+            key: 'bot_messages',
+            label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+            children: <div className="h-full min-h-0 flex flex-col overflow-hidden p-2">{renderBotMessagesPanel('mobile')}</div>,
+          },
         ]}
       />
     </div>
@@ -3659,10 +4408,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 
   const contentDesktopModern = (
     <div className="w-[780px] max-w-[88vw] h-[90vh] p-3">
-      <div className="h-full rounded-xl border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] overflow-hidden">
+      <div className="h-full rounded-xl border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] overflow-hidden">
         <Tabs
           activeKey={desktopActiveKey}
-          onChange={(key) => setDesktopActiveKey(key as 'notes' | 'tasks' | 'responsibilities')}
+          onChange={(key) => setDesktopActiveKey(key as 'notes' | 'tasks' | 'responsibilities' | 'bot_messages')}
           className="h-full [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
           items={[
             {
@@ -3680,6 +4429,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
               children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderResponsibilitiesPanel('grid')}</div>,
             },
+            {
+              key: 'bot_messages',
+              label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+              children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-2 pb-2">{renderBotMessagesPanel('desktop')}</div>,
+            },
           ]}
         />
       </div>
@@ -3687,10 +4441,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   );
 
   const contentMobileModern = (
-    <div className="h-full min-h-0 flex flex-col bg-[rgb(var(--brand-50-rgb))] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+    <div className="h-full min-h-0 flex flex-col bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
       <Tabs
         activeKey={mobileActiveKey}
-        onChange={(key) => setMobileActiveKey(key as 'notes' | 'tasks' | 'responsibilities')}
+        onChange={(key) => setMobileActiveKey(key as 'notes' | 'tasks' | 'responsibilities' | 'bot_messages')}
         className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
         items={[
           {
@@ -3707,6 +4461,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             key: 'responsibilities',
             label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
             children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderResponsibilitiesPanel('grid')}</div>,
+          },
+          {
+            key: 'bot_messages',
+            label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+            children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderBotMessagesPanel('mobile')}</div>,
           },
         ]}
       />
@@ -3861,7 +4620,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       >
         <div className="space-y-3">
           <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] px-3 py-2 text-sm text-gray-700">
-            {forwardingNote ? (parseNoteContent(forwardingNote.content).text || 'بدون متن') : ''}
+            {forwardingNote
+              ? (
+                String((forwardingNote as any)?.__forward_source_type || 'note').trim() === 'bot'
+                  ? (String(forwardingNote?.content_text || '').trim() || 'بدون متن')
+                  : (parseNoteContent(forwardingNote.content).text || 'بدون متن')
+              )
+              : ''}
           </div>
           <Select
             mode="multiple"
@@ -3885,3 +4650,4 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
 };
 
 export default NotificationsPopover;
+

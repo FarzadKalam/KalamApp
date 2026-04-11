@@ -56,6 +56,8 @@ export const SETTINGS_TAB_PERMISSIONS = [
 
 export const DASHBOARD_WIDGET_PERMISSIONS = [
   { key: 'quick_add', label: 'افزودن سریع' },
+  { key: 'activity_calendar', label: 'تقویم فعالیت‌ها' },
+  { key: 'reports_slider', label: 'گزارش‌های اسلایدی' },
   { key: 'summary_cards', label: 'کارت‌های آماری' },
   { key: 'recent_lists', label: 'جدول‌های آخرین رکوردها' },
 ];

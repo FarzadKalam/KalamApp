@@ -22,6 +22,7 @@ import {
   DeleteOutlined,
   FileOutlined,
   InboxOutlined,
+  PlusOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import DateObject from "react-date-object";
@@ -44,6 +45,7 @@ import DynamicSelectField from "../DynamicSelectField";
 import PersianDatePicker from "../PersianDatePicker";
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from "../../utils/referenceData";
 import { fetchRelationOptionsForField } from "../../utils/relationOptions";
+import { MODULES } from "../../moduleRegistry";
 
 type DuplicateStrategy = "skip" | "overwrite" | "merge";
 type EncodingType = "utf-8" | "windows-1256";
@@ -56,6 +58,19 @@ type MappingRow = {
   targetScope: MappingTargetScope;
   targetFieldKey: string | null;
   defaultValue: string;
+};
+
+type RelatedModuleLinkConfig = {
+  id: string;
+  sourceColumn: string;
+  targetModuleId: string;
+  relationFieldKey: string | null;
+  matchFieldKey: string;
+};
+
+type ParsedRelatedTargetKey = {
+  linkId: string;
+  fieldKey: string;
 };
 
 type ParsedSheet = {
@@ -162,7 +177,42 @@ const DYNAMIC_OPTION_IMPORT_TYPES = new Set<FieldType>([
   FieldType.MULTI_SELECT,
   FieldType.CHECKLIST,
 ]);
+const RELATED_LINK_MATCHABLE_TYPES = new Set<FieldType>([
+  FieldType.TEXT,
+  FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
+  FieldType.NUMBER,
+  FieldType.PHONE,
+  FieldType.SELECT,
+  FieldType.STATUS,
+  FieldType.DATE,
+  FieldType.TIME,
+  FieldType.DATETIME,
+  FieldType.LINK,
+]);
+const RELATED_MODULE_IMPORTABLE_TYPES = new Set<FieldType>([
+  FieldType.TEXT,
+  FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
+  FieldType.NUMBER,
+  FieldType.PRICE,
+  FieldType.PERCENTAGE,
+  FieldType.CHECKBOX,
+  FieldType.STOCK,
+  FieldType.SELECT,
+  FieldType.MULTI_SELECT,
+  FieldType.CHECKLIST,
+  FieldType.DATE,
+  FieldType.TIME,
+  FieldType.DATETIME,
+  FieldType.LINK,
+  FieldType.STATUS,
+  FieldType.PHONE,
+  FieldType.TAGS,
+  FieldType.PERCENTAGE_OR_AMOUNT,
+]);
 const RELATION_AUTOCREATE_TARGET_MODULES = new Set(["customers", "suppliers", "employees"]);
+const RELATED_TARGET_PREFIX = "related::";
 
 const LEGACY_PREFIX_REGEX = /^(contacts|accounts|products)\s*::::\s*/i;
 
@@ -216,6 +266,21 @@ const buildAutoCustomerName = (values: Record<string, unknown>) => {
 const stripLegacyReferencePrefix = (value: unknown): string =>
   String(value ?? "").trim().replace(LEGACY_PREFIX_REGEX, "").trim();
 
+const buildRelatedTargetKey = (linkId: string, fieldKey: string): string =>
+  `${RELATED_TARGET_PREFIX}${String(linkId || "").trim()}::${String(fieldKey || "").trim()}`;
+
+const parseRelatedTargetKey = (value: unknown): ParsedRelatedTargetKey | null => {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith(RELATED_TARGET_PREFIX)) return null;
+  const payload = raw.slice(RELATED_TARGET_PREFIX.length);
+  const [linkId, fieldKey] = payload.split("::");
+  if (!linkId || !fieldKey) return null;
+  return { linkId, fieldKey };
+};
+
+const createRelatedLinkId = (): string =>
+  `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
 const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope; key: string }> = {
   [normalizeKey("شماره ی فاکتور")]: { scope: "header", key: "legacy_invoice_number" },
   [normalizeKey("شماره فاکتور")]: { scope: "header", key: "legacy_invoice_number" },
@@ -250,6 +315,13 @@ const splitByDelimiters = (value: string): string[] =>
     .split(/[,،;|\n\r]+/g)
     .map((item) => item.trim())
     .filter(Boolean);
+
+const splitDynamicOptionValues = (value: string): string[] => {
+  const normalized = String(value || "")
+    .replace(/\|\s*##\s*\|/g, "\n")
+    .replace(/\s+-\s+/g, "\n");
+  return Array.from(new Set(splitByDelimiters(normalized)));
+};
 
 const parseCsvLine = (line: string): string[] => {
   const result: string[] = [];
@@ -898,10 +970,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const [mappingRows, setMappingRows] = useState<MappingRow[]>([]);
   const [duplicateStrategy, setDuplicateStrategy] = useState<DuplicateStrategy>("skip");
   const [duplicateFields, setDuplicateFields] = useState<string[]>([]);
+  const [relatedModuleLinks, setRelatedModuleLinks] = useState<RelatedModuleLinkConfig[]>([]);
   const [saveCustomMapping, setSaveCustomMapping] = useState<boolean>(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [autoSyncCustomerStats, setAutoSyncCustomerStats] = useState<boolean>(moduleId === "invoices");
-  const [duplicateFieldSearch, setDuplicateFieldSearch] = useState<string>("");
   const [defaultEditorRelationOptions, setDefaultEditorRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [defaultEditorDynamicOptions, setDefaultEditorDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [defaultEditorAssigneeOptions, setDefaultEditorAssigneeOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -985,18 +1057,22 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const mappedHeaderFieldKeys = useMemo(() => {
     return mappingRows
       .filter((row) => row.targetScope === "header")
-      .map((row) => row.targetFieldKey)
+      .map((row) => {
+        const targetFieldKey = String(row.targetFieldKey || "").trim();
+        return parseRelatedTargetKey(targetFieldKey) ? null : targetFieldKey;
+      })
       .filter((key): key is string => Boolean(key));
   }, [mappingRows]);
-  const mappedHeaderFieldKeySet = useMemo(() => new Set(mappedHeaderFieldKeys), [mappedHeaderFieldKeys]);
 
   const mappedItemFieldKeys = useMemo(() => {
     return mappingRows
       .filter((row) => row.targetScope === "item")
-      .map((row) => row.targetFieldKey)
+      .map((row) => {
+        const targetFieldKey = String(row.targetFieldKey || "").trim();
+        return parseRelatedTargetKey(targetFieldKey) ? null : targetFieldKey;
+      })
       .filter((key): key is string => Boolean(key));
   }, [mappingRows]);
-  const mappedItemFieldKeySet = useMemo(() => new Set(mappedItemFieldKeys), [mappedItemFieldKeys]);
 
   const mappedRequiredFieldKeys = useMemo(() => {
     const set = new Set(mappedHeaderFieldKeys);
@@ -1023,7 +1099,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setMappingRows([]);
     setDuplicateStrategy("skip");
     setDuplicateFields([]);
-    setDuplicateFieldSearch("");
+    setRelatedModuleLinks([]);
     setSaveCustomMapping(false);
     setAutoSyncCustomerStats(moduleId === "invoices");
     setDefaultEditorRelationOptions({});
@@ -1209,22 +1285,156 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       })),
     [headerImportableFields]
   );
-  const filteredDuplicateFieldOptions = useMemo(() => {
-    const normalizedSearch = normalizeText(duplicateFieldSearch);
-    if (!normalizedSearch) return duplicateFieldSelectOptions;
-    return duplicateFieldSelectOptions.filter((option) =>
-      normalizeText(option.label).includes(normalizedSearch) || normalizeText(option.value).includes(normalizedSearch)
+  const linkableRelationFieldOptions = useMemo(() => {
+    return headerImportableFields
+      .filter((field) => field.type === FieldType.RELATION && !!field.relationConfig?.targetModule)
+      .map((field) => ({
+        key: field.key,
+        label: field.labels.fa,
+        targetModuleId: String(field.relationConfig?.targetModule || "").trim(),
+      }));
+  }, [headerImportableFields]);
+  const relatedModuleOptions = useMemo(
+    () =>
+      Object.entries(MODULES)
+        .filter(([, config]) => Array.isArray(config?.fields) && config.fields.length > 0)
+        .map(([id, config]) => ({
+          value: id,
+          label: config.titles?.fa || config.titles?.faSingular || id,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, "fa")),
+    []
+  );
+  const getRelatedMatchFieldOptions = useCallback((moduleIdValue: string) => {
+    const targetModule = MODULES[String(moduleIdValue || "").trim()];
+    if (!targetModule) return [] as Array<{ value: string; label: string }>;
+    const fields = (targetModule.fields || []).filter((field) => {
+      if (!RELATED_LINK_MATCHABLE_TYPES.has(field.type)) return false;
+      if (field.nature === FieldNature.SYSTEM) return false;
+      return true;
+    });
+    const ordered = [...fields].sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+    return ordered.map((field) => ({
+      value: field.key,
+      label: field.labels?.fa || field.key,
+    }));
+  }, []);
+  const relatedImportableFieldsByLinkId = useMemo(() => {
+    const result: Record<string, Map<string, ImportFieldDescriptor>> = {};
+    relatedModuleLinks.forEach((link) => {
+      const moduleConfig = MODULES[String(link.targetModuleId || "").trim()];
+      if (!moduleConfig) return;
+      const fields = (moduleConfig.fields || [])
+        .filter((field) => {
+          if (!RELATED_MODULE_IMPORTABLE_TYPES.has(field.type)) return false;
+          if (field.nature === FieldNature.SYSTEM) return false;
+          if (field.readonly) return false;
+          return true;
+        })
+        .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+        .map((field) => toImportField(field, "header"));
+      result[link.id] = new Map(fields.map((field) => [field.key, field] as const));
+    });
+    return result;
+  }, [relatedModuleLinks]);
+  const relatedFieldSelectOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [];
+    relatedModuleLinks.forEach((link) => {
+      const moduleConfig = MODULES[String(link.targetModuleId || "").trim()];
+      if (!moduleConfig) return;
+      const moduleLabel = moduleConfig.titles?.fa || moduleConfig.titles?.faSingular || link.targetModuleId;
+      const fieldMap = relatedImportableFieldsByLinkId[link.id];
+      if (!fieldMap) return;
+      fieldMap.forEach((field) => {
+        options.push({
+          value: buildRelatedTargetKey(link.id, field.key),
+          label: `${field.labels.fa} (${moduleLabel})`,
+        });
+      });
+    });
+    return options;
+  }, [relatedImportableFieldsByLinkId, relatedModuleLinks]);
+  const addRelatedModuleLink = useCallback(() => {
+    const firstColumn = parsedSheet.headers[0] || "";
+    const firstLinkable = linkableRelationFieldOptions[0];
+    const targetModuleId = firstLinkable?.targetModuleId || relatedModuleOptions[0]?.value || "";
+    const matchOptions = getRelatedMatchFieldOptions(targetModuleId);
+    const next: RelatedModuleLinkConfig = {
+      id: createRelatedLinkId(),
+      sourceColumn: firstColumn,
+      targetModuleId,
+      relationFieldKey: firstLinkable?.key || null,
+      matchFieldKey: matchOptions[0]?.value || "id",
+    };
+    setRelatedModuleLinks((prev) => [...prev, next]);
+  }, [getRelatedMatchFieldOptions, linkableRelationFieldOptions, parsedSheet.headers, relatedModuleOptions]);
+  const updateRelatedModuleLink = useCallback((id: string, patch: Partial<RelatedModuleLinkConfig>) => {
+    setRelatedModuleLinks((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const merged = { ...item, ...patch };
+        const nextModuleId = String(merged.targetModuleId || "").trim();
+        const nextMatchOptions = getRelatedMatchFieldOptions(nextModuleId);
+        const safeMatchField =
+          nextMatchOptions.some((option) => option.value === merged.matchFieldKey)
+            ? merged.matchFieldKey
+            : nextMatchOptions[0]?.value || "id";
+        const relationCandidates = linkableRelationFieldOptions.filter((option) => option.targetModuleId === nextModuleId);
+        const safeRelationField =
+          relationCandidates.some((option) => option.key === merged.relationFieldKey)
+            ? merged.relationFieldKey
+            : relationCandidates[0]?.key || null;
+        const safeSourceColumn = parsedSheet.headers.includes(merged.sourceColumn)
+          ? merged.sourceColumn
+          : parsedSheet.headers[0] || "";
+        return {
+          ...merged,
+          sourceColumn: safeSourceColumn,
+          relationFieldKey: safeRelationField,
+          matchFieldKey: safeMatchField,
+        };
+      })
     );
-  }, [duplicateFieldSearch, duplicateFieldSelectOptions]);
+  }, [getRelatedMatchFieldOptions, linkableRelationFieldOptions, parsedSheet.headers]);
+  const removeRelatedModuleLink = useCallback((id: string) => {
+    setRelatedModuleLinks((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+  useEffect(() => {
+    if (parsedSheet.headers.length === 0) {
+      setRelatedModuleLinks([]);
+      return;
+    }
+    setRelatedModuleLinks((prev) =>
+      prev.map((item) => {
+        const nextModuleId = String(item.targetModuleId || "").trim();
+        const matchOptions = getRelatedMatchFieldOptions(nextModuleId);
+        const relationCandidates = linkableRelationFieldOptions.filter((option) => option.targetModuleId === nextModuleId);
+        return {
+          ...item,
+          sourceColumn: parsedSheet.headers.includes(item.sourceColumn) ? item.sourceColumn : parsedSheet.headers[0],
+          relationFieldKey: relationCandidates.some((option) => option.key === item.relationFieldKey)
+            ? item.relationFieldKey
+            : relationCandidates[0]?.key || null,
+          matchFieldKey: matchOptions.some((option) => option.value === item.matchFieldKey)
+            ? item.matchFieldKey
+            : matchOptions[0]?.value || "id",
+        };
+      })
+    );
+  }, [getRelatedMatchFieldOptions, linkableRelationFieldOptions, parsedSheet.headers]);
   const getMappingTargetField = useCallback(
     (row: MappingRow): ImportFieldDescriptor | null => {
       const targetFieldKey = String(row.targetFieldKey || "").trim();
       if (!targetFieldKey) return null;
+      const relatedTarget = parseRelatedTargetKey(targetFieldKey);
+      if (relatedTarget) {
+        return relatedImportableFieldsByLinkId[relatedTarget.linkId]?.get(relatedTarget.fieldKey) || null;
+      }
       return row.targetScope === "item"
         ? itemFieldByKey.get(targetFieldKey) || null
         : headerFieldByKey.get(targetFieldKey) || null;
     },
-    [headerFieldByKey, itemFieldByKey]
+    [headerFieldByKey, itemFieldByKey, relatedImportableFieldsByLinkId]
   );
   const serializeEditorDefaultValue = useCallback((field: ImportFieldDescriptor, value: any): string => {
     if (value === undefined || value === null) return "";
@@ -1502,10 +1712,25 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   ]);
   const mappingTargetFieldOptionsBySource = useMemo(() => {
     const result: Record<string, Array<{ label: string; value: string; disabled?: boolean }>> = {};
+    const usedHeaderTargets = new Set(
+      mappingRows
+        .filter((item) => item.targetScope === "header")
+        .map((item) => String(item.targetFieldKey || "").trim())
+        .filter(Boolean)
+    );
+    const usedItemTargets = new Set(
+      mappingRows
+        .filter((item) => item.targetScope === "item")
+        .map((item) => String(item.targetFieldKey || "").trim())
+        .filter(Boolean)
+    );
     mappingRows.forEach((row) => {
       const currentValue = String(row.targetFieldKey || "").trim();
-      const baseOptions = row.targetScope === "item" ? itemFieldSelectOptions : headerFieldSelectOptions;
-      const usedFieldKeys = row.targetScope === "item" ? mappedItemFieldKeySet : mappedHeaderFieldKeySet;
+      const baseOptions =
+        row.targetScope === "item"
+          ? itemFieldSelectOptions
+          : [...headerFieldSelectOptions, ...relatedFieldSelectOptions];
+      const usedFieldKeys = row.targetScope === "item" ? usedItemTargets : usedHeaderTargets;
       result[row.sourceColumn] = baseOptions.map((option) => ({
         ...option,
         disabled: option.value !== currentValue && usedFieldKeys.has(option.value),
@@ -1515,9 +1740,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   }, [
     headerFieldSelectOptions,
     itemFieldSelectOptions,
-    mappedHeaderFieldKeySet,
-    mappedItemFieldKeySet,
     mappingRows,
+    relatedFieldSelectOptions,
   ]);
   const mappingTableColumns = useMemo<ColumnsType<MappingRow>>(
     () => [
@@ -1777,7 +2001,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       if (field.dynamicOptionsCategory && DYNAMIC_OPTION_IMPORT_TYPES.has(field.type)) {
         if (field.type === FieldType.MULTI_SELECT || field.type === FieldType.CHECKLIST) {
           return Promise.all(
-            splitByDelimiters(value).map((item) =>
+            splitDynamicOptionValues(value).map((item) =>
               ensureDynamicOptionValue(field.dynamicOptionsCategory!, item, importContext.dynamicOptionLookups)
             )
           ).then((items) => items.filter((item): item is string => Boolean(item)));
@@ -1823,6 +2047,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
     mappingRows.forEach((mapping) => {
       if (!mapping.targetFieldKey) return;
+      if (parseRelatedTargetKey(mapping.targetFieldKey)) return;
       const field =
         mapping.targetScope === "item"
           ? itemFieldByKey.get(mapping.targetFieldKey)
@@ -1935,6 +2160,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
     mappingRows.forEach((mapping) => {
       if (!mapping.targetFieldKey) return;
+      if (parseRelatedTargetKey(mapping.targetFieldKey)) return;
       const field =
         mapping.targetScope === "item"
           ? itemFieldByKey.get(mapping.targetFieldKey)
@@ -1995,6 +2221,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       for (const mapping of mappings) {
         if (!mapping.targetFieldKey) continue;
+        if (parseRelatedTargetKey(mapping.targetFieldKey)) continue;
         const field = fieldByKey.get(mapping.targetFieldKey);
         if (!field) continue;
 
@@ -2020,6 +2247,144 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       return payload;
     },
     [convertValueByType]
+  );
+  const buildRelatedPayloadFromMappings = useCallback(
+    async (
+      row: Record<string, string>,
+      link: RelatedModuleLinkConfig,
+      importContext: ImportRuntimeContext
+    ): Promise<Record<string, unknown>> => {
+      const payload: Record<string, unknown> = {};
+      const fieldMap = relatedImportableFieldsByLinkId[link.id];
+      if (!fieldMap) return payload;
+
+      for (const mapping of mappingRows) {
+        if (!mapping.targetFieldKey) continue;
+        const relatedTarget = parseRelatedTargetKey(mapping.targetFieldKey);
+        if (!relatedTarget || relatedTarget.linkId !== link.id) continue;
+        const field = fieldMap.get(relatedTarget.fieldKey);
+        if (!field) continue;
+
+        const rawValue = row[mapping.sourceColumn] ?? "";
+        const converted = await convertValueByType(field, rawValue, importContext);
+        if (!isValueEmpty(converted)) {
+          payload[field.key] = converted;
+          continue;
+        }
+
+        if (mapping.defaultValue.trim() !== "") {
+          const defaultConverted = await convertValueByType(field, mapping.defaultValue, importContext);
+          if (!isValueEmpty(defaultConverted)) payload[field.key] = defaultConverted;
+        }
+      }
+      return payload;
+    },
+    [convertValueByType, mappingRows, relatedImportableFieldsByLinkId]
+  );
+  const resolveRelatedRecordId = useCallback(
+    async (
+      row: Record<string, string>,
+      link: RelatedModuleLinkConfig,
+      importContext: ImportRuntimeContext
+    ): Promise<string | undefined> => {
+      const targetModuleId = String(link.targetModuleId || "").trim();
+      const matchFieldKey = String(link.matchFieldKey || "").trim();
+      const sourceColumn = String(link.sourceColumn || "").trim();
+      if (!targetModuleId || !matchFieldKey || !sourceColumn) return undefined;
+
+      const sourceValueRaw = row[sourceColumn] ?? "";
+      const sourceValue = stripLegacyReferencePrefix(sourceValueRaw);
+      if (!sourceValue) return undefined;
+
+      const lookupKey = `related:${link.id}`;
+      const map = importContext.relationLookups[lookupKey] || new Map<string, string>();
+      importContext.relationLookups[lookupKey] = map;
+      const cached = getLookupValue(map, sourceValue);
+      if (cached) return cached;
+
+      const selectVariants = getRelationSelectVariants(targetModuleId, matchFieldKey);
+      const lookupFields = Array.from(
+        new Set([matchFieldKey, ...getRelationLabelFallbackFields(targetModuleId)].filter(Boolean))
+      );
+
+      const relatedPayload = await buildRelatedPayloadFromMappings(row, link, importContext);
+      let existingRow: Record<string, unknown> | undefined;
+      for (const lookupField of lookupFields) {
+        for (const selectExpr of selectVariants) {
+          try {
+            const matchValues = buildFieldMatchValues(lookupField, sourceValue);
+            if (matchValues.length === 0) continue;
+            const existingResult = (await withTimeout(
+              (matchValues.length > 1
+                ? supabase.from(targetModuleId).select(selectExpr).in(lookupField, matchValues).limit(1)
+                : supabase.from(targetModuleId).select(selectExpr).eq(lookupField, matchValues[0]).limit(1)),
+              20000,
+              `جستجوی رکورد مرتبط (${targetModuleId})`
+            )) as unknown as QueryResult<Record<string, unknown>[]>;
+            if (existingResult.error) throw existingResult.error;
+            existingRow = existingResult.data?.[0];
+            if (existingRow?.id) break;
+          } catch (error) {
+            if (!isMissingColumnError(error)) throw error;
+          }
+        }
+        if (existingRow?.id) break;
+      }
+
+      if (existingRow?.id) {
+        const existingId = String(existingRow.id);
+        const mergePayload = Object.entries(relatedPayload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+          if (!isValueEmpty(value)) acc[key] = value;
+          return acc;
+        }, {});
+        if (Object.keys(mergePayload).length > 0) {
+          const { error: updateError } = await withTimeout(
+            supabase.from(targetModuleId).update(mergePayload).eq("id", existingId),
+            20000,
+            `بروزرسانی رکورد مرتبط (${targetModuleId})`
+          );
+          if (updateError) throw updateError;
+        }
+        setLookupValue(map, sourceValue, existingId);
+        return existingId;
+      }
+
+      const createPayload = {
+        ...(buildRelationAutoCreatePayload(targetModuleId, sourceValue) || {}),
+        ...relatedPayload,
+      };
+      if (isValueEmpty(createPayload[matchFieldKey])) {
+        createPayload[matchFieldKey] = sourceValue;
+      }
+
+      const { data: inserted, error: insertError } = await withTimeout(
+        supabase.from(targetModuleId).insert(createPayload).select("id").single(),
+        20000,
+        `ایجاد رکورد مرتبط (${targetModuleId})`
+      );
+      if (insertError) throw insertError;
+      const insertedId = String(inserted?.id || "").trim();
+      if (!insertedId) return undefined;
+      setLookupValue(map, sourceValue, insertedId);
+      return insertedId;
+    },
+    [buildRelatedPayloadFromMappings]
+  );
+  const resolveRelatedLinksForRow = useCallback(
+    async (
+      row: Record<string, string>,
+      importContext: ImportRuntimeContext
+    ): Promise<Record<string, string>> => {
+      const resolved: Record<string, string> = {};
+      for (const link of relatedModuleLinks) {
+        const relationFieldKey = String(link.relationFieldKey || "").trim();
+        if (!relationFieldKey) continue;
+        const relatedId = await resolveRelatedRecordId(row, link, importContext);
+        if (relatedId) resolved[relationFieldKey] = relatedId;
+      }
+      return resolved;
+    },
+    [relatedModuleLinks, resolveRelatedRecordId]
   );
 
   const finalizeImportedPayload = useCallback(
@@ -2088,6 +2453,26 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       message.error("برای بازنویسی یا ادغام، حداقل یک فیلد تطبیق انتخاب کنید.");
       return false;
     }
+    for (const link of relatedModuleLinks) {
+      const sourceColumn = String(link.sourceColumn || "").trim();
+      const targetModuleId = String(link.targetModuleId || "").trim();
+      const matchFieldKey = String(link.matchFieldKey || "").trim();
+      const relationFieldKey = String(link.relationFieldKey || "").trim();
+      if (!sourceColumn || !targetModuleId || !matchFieldKey || !relationFieldKey) {
+        message.error("پیکربندی فیلد مرتبط کامل نیست. لطفا ستون اکسل، ماژول، فیلد ارتباط و فیلد تطبیق را تکمیل کنید.");
+        return false;
+      }
+      const relationField = headerFieldByKey.get(relationFieldKey);
+      if (!relationField || relationField.type !== FieldType.RELATION) {
+        message.error("فیلد ارتباط انتخاب‌شده معتبر نیست.");
+        return false;
+      }
+      const relationTargetModule = String(relationField.relationConfig?.targetModule || "").trim();
+      if (!relationTargetModule || relationTargetModule !== targetModuleId) {
+        message.error("ماژول انتخاب‌شده با فیلد ارتباط در ماژول اصلی هم‌خوانی ندارد.");
+        return false;
+      }
+    }
     if (missingRequiredFields.length > 0) {
       message.error(
         `این فیلدهای اجباری هنوز تطبیق داده نشده‌اند: ${missingRequiredFields
@@ -2105,10 +2490,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     groupingColumn,
     importMode,
     mappedItemFieldKeys.length,
+    headerFieldByKey,
     message,
     missingRequiredFields,
     parsedSheet.rows.length,
     selectedFile,
+    relatedModuleLinks,
   ]);
 
   const findExistingRecord = useCallback(
@@ -2176,7 +2563,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               headerImportableFields,
               importContext
             );
-            const headerPayload = finalizeInvoiceHeaderPayload(headerPayloadRaw);
+            const linkedRelations = await resolveRelatedLinksForRow(record.firstRow, importContext);
+            const headerPayload = finalizeInvoiceHeaderPayload({
+              ...headerPayloadRaw,
+              ...linkedRelations,
+            });
             const itemPayloads: Record<string, unknown>[] = [];
             for (const row of record.rows) {
               const itemPayload = finalizeInvoiceItemPayload(
@@ -2269,10 +2660,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               headerImportableFields,
               importContext
             );
+            const linkedRelations = await resolveRelatedLinksForRow(row, importContext);
+            const payloadRawWithLinks = { ...payloadRaw, ...linkedRelations };
             const payloadPrepared =
               moduleId === "tasks"
-                ? attachTaskCompletionIfNeeded(payloadRaw as Record<string, unknown>)
-                : payloadRaw;
+                ? attachTaskCompletionIfNeeded(payloadRawWithLinks as Record<string, unknown>)
+                : payloadRawWithLinks;
             const payload = finalizeImportedPayload(payloadPrepared as Record<string, unknown>);
 
             const missingInRow = requiredFields.filter((field) => isValueEmpty(payload[field.key]));
@@ -2380,6 +2773,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     onImported,
     parsedSheet.rows,
     requiredFields,
+    resolveRelatedLinksForRow,
     setImportProgress,
     validateBeforeImport,
   ]);
@@ -2559,33 +2953,101 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             <div className="text-sm text-gray-500 mb-2">
               فیلدهای مطابق برای پیدا کردن رکوردهای تکراری <span className="text-red-500">*</span>
             </div>
-            <div className="space-y-2">
-              <Input
-                value={duplicateFieldSearch}
-                onChange={(event) => setDuplicateFieldSearch(event.target.value)}
-                placeholder="جستجوی فیلد..."
-                allowClear
-              />
-              <div className="max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                {filteredDuplicateFieldOptions.length > 0 ? (
-                  <Checkbox.Group
-                    value={duplicateFields}
-                    onChange={(values) => setDuplicateFields((values || []).map((value) => String(value)))}
-                    className="w-full"
-                  >
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {filteredDuplicateFieldOptions.map((option) => (
-                        <Checkbox key={option.value} value={option.value} className="!ml-0">
-                          {option.label}
-                        </Checkbox>
-                      ))}
-                    </div>
-                  </Checkbox.Group>
-                ) : (
-                  <div className="py-4 text-xs text-gray-400 text-center">فیلدی پیدا نشد.</div>
-                )}
-              </div>
+            <Select
+              {...wizardSelectProps}
+              mode="multiple"
+              showSearch
+              allowClear
+              optionFilterProp="label"
+              value={duplicateFields}
+              onChange={(values) => setDuplicateFields((values || []).map((value) => String(value)))}
+              options={duplicateFieldSelectOptions}
+              placeholder="یک یا چند فیلد را انتخاب کنید"
+              className="w-full"
+            />
+          </div>
+
+          <div className="rounded-xl border border-gray-200 px-3 py-2 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm text-gray-500">فیلدهای مرتبط</div>
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                onClick={addRelatedModuleLink}
+                disabled={parsedSheet.headers.length === 0}
+              >
+                افزودن فیلد مرتبط
+              </Button>
             </div>
+            {relatedModuleLinks.length === 0 ? (
+              <div className="text-xs text-gray-400">در صورت نیاز می‌توانید یک یا چند اتصال به ماژول‌های دیگر تعریف کنید.</div>
+            ) : (
+              <div className="space-y-2">
+                {relatedModuleLinks.map((link) => {
+                  const matchFieldOptions = getRelatedMatchFieldOptions(link.targetModuleId);
+                  const relationFieldOptions = linkableRelationFieldOptions
+                    .filter((option) => option.targetModuleId === link.targetModuleId)
+                    .map((option) => ({ value: option.key, label: option.label }));
+                  return (
+                    <div key={link.id} className="rounded-lg border border-gray-200 bg-gray-50 p-2 space-y-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">ستون فایل اکسل</div>
+                          <Select
+                            {...wizardSelectProps}
+                            value={link.sourceColumn || undefined}
+                            onChange={(value) => updateRelatedModuleLink(link.id, { sourceColumn: value })}
+                            options={parsedSheet.headers.map((header) => ({ value: header, label: header }))}
+                            className="w-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">ماژول مرجع</div>
+                          <Select
+                            {...wizardSelectProps}
+                            value={link.targetModuleId || undefined}
+                            onChange={(value) => updateRelatedModuleLink(link.id, { targetModuleId: value })}
+                            options={relatedModuleOptions}
+                            showSearch
+                            optionFilterProp="label"
+                            className="w-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">فیلد ارتباط در ماژول اصلی</div>
+                          <Select
+                            {...wizardSelectProps}
+                            value={link.relationFieldKey || undefined}
+                            onChange={(value) => updateRelatedModuleLink(link.id, { relationFieldKey: value || null })}
+                            options={relationFieldOptions}
+                            allowClear
+                            placeholder="انتخاب فیلد رابطه"
+                            className="w-full"
+                          />
+                        </div>
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">فیلد تطبیق در ماژول مرجع</div>
+                          <Select
+                            {...wizardSelectProps}
+                            value={link.matchFieldKey || undefined}
+                            onChange={(value) => updateRelatedModuleLink(link.id, { matchFieldKey: value })}
+                            options={matchFieldOptions}
+                            showSearch
+                            optionFilterProp="label"
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <Button danger type="text" icon={<DeleteOutlined />} onClick={() => removeRelatedModuleLink(link.id)}>
+                          حذف
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {moduleId === "invoices" && (
@@ -2649,33 +3111,37 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       </div>
     );
   }, [
+    addRelatedModuleLink,
     autoSyncCustomerStats,
     duplicateFields,
-    duplicateFieldSearch,
+    duplicateFieldSelectOptions,
     duplicateStrategy,
+    encoding,
     fileList,
     groupedData.missingGroupSourceLines.length,
     groupedData.records.length,
     groupingColumn,
+    getRelatedMatchFieldOptions,
     handleRemoveFile,
     handleSelectFile,
-    headerImportableFields,
     hasHeader,
     importMode,
-    itemImportableFields,
     isParsing,
-    mappedHeaderFieldKeys,
-    mappedItemFieldKeys,
+    linkableRelationFieldOptions,
     mappedRequiredFieldKeys,
     mappingTableColumns,
     mappingRows,
     moduleId,
+    parsedSheet.headers,
     requiredFields,
+    relatedModuleLinks,
+    relatedModuleOptions,
+    removeRelatedModuleLink,
     saveCustomMapping,
     step,
     supportsGroupedInvoiceImport,
-    filteredDuplicateFieldOptions,
-    encoding,
+    updateRelatedModuleLink,
+    wizardSelectProps,
   ]);
 
   const connectorClass = (leftStepIndex: number, rightStepIndex: number): string => {

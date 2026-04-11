@@ -354,35 +354,6 @@ const ReportViewerPage: React.FC = () => {
     [relationOptions, visibleFields]
   );
 
-  const groupedColumns = useMemo<ColumnsType<GroupedRow>>(() => {
-    const groupingColumns = config.group_bys.map((grouping) => ({
-      title: fieldMap[grouping.field]?.labels?.fa || grouping.field,
-      key: grouping.field,
-      render: (_value: unknown, row: GroupedRow) => row.group_labels[grouping.field] || '-',
-    }));
-
-    const metricColumns = metricOptions.map((metric) => ({
-      title: metric.label,
-      key: metric.value,
-      render: (_value: unknown, row: GroupedRow) =>
-        metric.value === '__count'
-          ? toPersianNumber(row.row_count)
-          : formatMetricValue(row.metrics[metric.value] || 0, String(fieldMap[metric.value]?.type || '').toLowerCase()),
-    }));
-
-    return [
-      ...groupingColumns,
-      ...metricColumns,
-      ...(includeRowCountColumn
-        ? [{
-            title: 'تعداد رکورد',
-            key: '__row_count',
-            render: (_value: unknown, row: GroupedRow) => toPersianNumber(row.row_count),
-          }]
-        : []),
-    ];
-  }, [config.group_bys, fieldMap, includeRowCountColumn, metricOptions]);
-
   const chartItems = useMemo(() => {
     if (!chartAvailable) return [];
     return groupedRows.map((row) => {
@@ -559,27 +530,15 @@ const ReportViewerPage: React.FC = () => {
         )}
 
         {(renderMode === 'table' || !chartAvailable) && (
-          config.group_bys.length > 0 ? (
-            <Table<GroupedRow>
-              loading={executing}
-              rowKey="key"
-              dataSource={groupedRows}
-              columns={groupedColumns}
-              pagination={{ pageSize: 20, showSizeChanger: true }}
-              scroll={{ x: true }}
-              locale={{ emptyText: 'برای این گزارش داده‌ای پیدا نشد' }}
-            />
-          ) : (
-            <Table<ReportRow>
-              loading={executing}
-              rowKey="__report_row_key"
-              dataSource={rows}
-              columns={rawColumns}
-              pagination={{ pageSize: 20, showSizeChanger: true }}
-              scroll={{ x: true }}
-              locale={{ emptyText: 'برای این گزارش داده‌ای پیدا نشد' }}
-            />
-          )
+          <Table<ReportRow>
+            loading={executing}
+            rowKey="__report_row_key"
+            dataSource={rows}
+            columns={rawColumns}
+            pagination={{ pageSize: 20, showSizeChanger: true }}
+            scroll={{ x: true }}
+            locale={{ emptyText: 'برای این گزارش داده‌ای پیدا نشد' }}
+          />
         )}
       </div>
     </div>

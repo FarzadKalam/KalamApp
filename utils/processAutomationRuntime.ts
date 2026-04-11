@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient';
 import { normalizeNoteScope } from './noteScope';
 import { createProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveTaskSourceLink } from './taskMeta';
-import { evaluateWorkflowCondition, executeWorkflowAction } from './workflowRuntime';
+import { evaluateWorkflowCondition, executeWorkflowAction, formatWorkflowTemplateValue } from './workflowRuntime';
 import {
   normalizeProcessAutomationRules,
   ProcessAutomationRule,
@@ -144,7 +144,7 @@ const renderAutomationTemplateWithBoldMarkers = (template: string, record: Recor
     const fieldKey = String(key || '').trim();
     const value = record?.[fieldKey];
     if (value === null || value === undefined) return '';
-    const resolved = String(value).trim();
+    const resolved = formatWorkflowTemplateValue(value).trim();
     return resolved ? `**${resolved}**` : '';
   });
 

@@ -80,7 +80,7 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
   const statusTagColor = getTaskStatusColor(normalizedStatusValue, task, resolvedStatusOptions);
 
   return (
-    <div className="w-80 max-w-[80vw] p-1 font-['Vazirmatn']">
+    <div className="w-full max-w-full p-1 font-['Vazirmatn'] md:w-80 md:max-w-[80vw] h-full flex flex-col min-h-0">
       <div className="mb-3 border-b border-[rgba(var(--brand-200-rgb),0.45)] pb-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
         <h4 className="m-0 text-sm font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100 line-clamp-2">
           {task?.title || task?.name || 'بدون عنوان'}
@@ -93,7 +93,7 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
         ) : null}
       </div>
 
-      <div className="mb-3 space-y-3">
+      <div className="mb-3 space-y-3 flex-1 min-h-0 overflow-y-auto">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-gray-500">مسئول:</span>
           <Select

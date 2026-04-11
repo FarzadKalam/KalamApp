@@ -83,6 +83,22 @@ const PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS = new Set([
   'invoices',
   'purchase_invoices',
 ]);
+const MARKETING_LEAD_LOCKED_FROM_CUSTOMER_FIELD_KEYS = new Set([
+  'prefix',
+  'first_name',
+  'last_name',
+  'industry',
+  'customer_interests',
+  'mobile',
+  'mobile_2',
+  'assistant_phone',
+  'email',
+  'province',
+  'city',
+  'address',
+  'location',
+]);
+const CUSTOMER_INTEREST_SOURCE_CATEGORIES = ['product_goods_categories', 'product_service_categories'] as const;
 
 const SmartForm: React.FC<SmartFormProps> = ({ 
   module, visible, onCancel, onSave, recordId, title, isBulkEdit = false,
@@ -113,6 +129,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const bomConfirmOpenRef = useRef<string | null>(null);
   const [lastAppliedProcessTemplateId, setLastAppliedProcessTemplateId] = useState<string | null>(null);
   const processConfirmOpenRef = useRef<string | null>(null);
+  const marketingLeadCustomerSyncRef = useRef<string | null>(null);
   const processDraftFieldKey = useMemo(() => {
     const hasProcessTemplateField = module.fields.some((f) => f.key === 'process_template_id');
     if (!hasProcessTemplateField) return null;
@@ -502,6 +519,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
     module.blocks?.forEach(b => {
       b.tableColumns?.forEach((c: any) => { if (c.dynamicOptionsCategory) categoriesToFetch.add(c.dynamicOptionsCategory); });
     });
+    if (
+      (module.id === 'customers' || module.id === 'marketing_leads')
+      && module.fields.some((field) => field.key === 'customer_interests')
+    ) {
+      CUSTOMER_INTEREST_SOURCE_CATEGORIES.forEach((category) => categoriesToFetch.add(category));
+      categoriesToFetch.add('customer_interests');
+    }
 
     const newOptions: Record<string, any[]> = await fetchDynamicOptionsMap(supabase, Array.from(categoriesToFetch));
     try {
@@ -946,6 +970,68 @@ const SmartForm: React.FC<SmartFormProps> = ({
     form.setFieldValue('full_name', nextFullName);
     setFormData((prev: any) => ({ ...prev, full_name: nextFullName }));
   }, [module.id, watchedValues, formData, form]);
+
+  useEffect(() => {
+    if (module.id !== 'marketing_leads' || !visible) return;
+    const leadType = String(form.getFieldValue('lead_type') ?? formData?.lead_type ?? '').trim();
+    const customerId = String(form.getFieldValue('customer_id') ?? formData?.customer_id ?? '').trim();
+
+    if (leadType !== 'existing_customer' || !customerId) {
+      marketingLeadCustomerSyncRef.current = null;
+      return;
+    }
+
+    const syncKey = `${leadType}:${customerId}`;
+    if (marketingLeadCustomerSyncRef.current === syncKey) return;
+
+    let cancelled = false;
+    const syncFromCustomer = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id,prefix,first_name,last_name,industry,customer_interests,mobile_1,mobile_2,assistant_phone,email,province,city,address,location')
+          .eq('id', customerId)
+          .maybeSingle();
+        if (cancelled || error || !data) return;
+
+        const patch = {
+          prefix: data.prefix || null,
+          first_name: data.first_name || '',
+          last_name: data.last_name || '',
+          industry: data.industry || null,
+          customer_interests: Array.isArray(data.customer_interests)
+            ? data.customer_interests.filter(Boolean)
+            : (typeof data.customer_interests === 'string'
+              ? data.customer_interests
+                .replace(/\|\s*##\s*\|/g, ',')
+                .replace(/\s+-\s+/g, ',')
+                .split(/[,،;|\n\r]+/g)
+                .map((item: string) => item.trim())
+                .filter(Boolean)
+              : []),
+          mobile: data.mobile_1 || '',
+          mobile_2: data.mobile_2 || '',
+          assistant_phone: data.assistant_phone || '',
+          email: data.email || '',
+          province: data.province || null,
+          city: data.city || null,
+          address: data.address || '',
+          location: data.location || null,
+        };
+
+        form.setFieldsValue(patch);
+        setFormData((prev: any) => ({ ...prev, ...patch }));
+        marketingLeadCustomerSyncRef.current = syncKey;
+      } catch {
+        // keep form usable when sync fails
+      }
+    };
+
+    void syncFromCustomer();
+    return () => {
+      cancelled = true;
+    };
+  }, [form, formData?.customer_id, formData?.lead_type, module.id, visible, watchedValues?.customer_id, watchedValues?.lead_type]);
 
   useEffect(() => {
     if (module.id !== 'products') return;
@@ -1628,6 +1714,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (field.key === 'preferred_notification_channel') {
       return dynamicOptions[ACTIVE_NOTIFICATION_BOTS_CATEGORY] || field.options;
     }
+    if (
+      field.key === 'customer_interests'
+      && (module.id === 'customers' || module.id === 'marketing_leads')
+    ) {
+      let merged = mergeSelectOptions(field.options, dynamicOptions['customer_interests']);
+      CUSTOMER_INTEREST_SOURCE_CATEGORIES.forEach((category) => {
+        merged = mergeSelectOptions(merged, dynamicOptions[category]);
+      });
+      return merged;
+    }
     if (field.dynamicOptionsCategory) {
       return mergeSelectOptions(field.options, dynamicOptions[field.dynamicOptionsCategory]);
     }
@@ -1637,6 +1733,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const currentValues = watchedValues && Object.keys(watchedValues).length > 0
     ? watchedValues
     : formData;
+  const isMarketingLeadFromExistingCustomer =
+    module.id === 'marketing_leads'
+    && String((currentValues as any)?.lead_type || '').trim() === 'existing_customer'
+    && String((currentValues as any)?.customer_id || '').trim() !== '';
   const getPreparedField = useCallback((field: any) => {
     let nextField = field;
     if (module.id === 'products' && !recordId && field?.blockId === 'sales_info') {
@@ -1654,8 +1754,21 @@ const SmartForm: React.FC<SmartFormProps> = ({
         },
       };
     }
+    if (
+      module.id === 'marketing_leads'
+      && isMarketingLeadFromExistingCustomer
+      && MARKETING_LEAD_LOCKED_FROM_CUSTOMER_FIELD_KEYS.has(String(nextField?.key || ''))
+    ) {
+      nextField = { ...nextField, readonly: true };
+    }
     return nextField;
-  }, [currentValues?.related_to_module, currentValues?.source_module_id, module.id, recordId]);
+  }, [
+    currentValues?.related_to_module,
+    currentValues?.source_module_id,
+    isMarketingLeadFromExistingCustomer,
+    module.id,
+    recordId,
+  ]);
   const projectProcessLinkedFields = useMemo(() => {
     if (module.id !== 'projects' || !processDraftFieldKey || shouldHideProcessUiInSmartForm) return [] as Array<{
       moduleId: string;

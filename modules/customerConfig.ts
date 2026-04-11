@@ -137,21 +137,6 @@ export const customerModule: ModuleDefinition = {
       dynamicOptionsCategory: 'lead_source',
     },
     {
-      key: 'customer_relationship_group',
-      labels: { fa: 'گروه ارتباطی مشتری', en: 'Customer Relationship Group' },
-      type: FieldType.SELECT,
-      blockId: 'basic_info',
-      order: 4.55,
-      dynamicOptionsCategory: 'customer_relationship_group',
-    },
-    {
-      key: 'customer_group_link',
-      labels: { fa: 'لینک گروه مشتری', en: 'Customer Group Link' },
-      type: FieldType.LINK,
-      blockId: 'basic_info',
-      order: 4.56,
-    },
-    {
       key: 'industry',
       labels: { fa: 'صنعت', en: 'Industry' },
       type: FieldType.SELECT,
@@ -237,7 +222,12 @@ export const customerModule: ModuleDefinition = {
       type: FieldType.SELECT,
       blockId: 'portal_info',
       order: 3,
-      options: [{ label: 'بدون بات', value: 'none' }],
+      options: [
+        { label: 'روبیکا', value: 'rubika' },
+        { label: 'تلگرام', value: 'telegram' },
+        { label: 'بله', value: 'bale' },
+        { label: 'بدون بات', value: 'none' }
+      ],
       defaultValue: 'none',
       logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } }
     },
@@ -308,6 +298,14 @@ export const customerModule: ModuleDefinition = {
       icon: 'ShoppingOutlined',
       relationType: 'customer_products',
       targetModule: 'products'
+    },
+    {
+      id: 'customer_bot_groups',
+      title: 'گروه‌های بات',
+      icon: 'AppstoreOutlined',
+      relationType: 'fk',
+      targetModule: 'counterparty_bot_groups',
+      foreignKey: 'customer_id'
     }
   ],
   actionButtons: [

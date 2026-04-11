@@ -65,6 +65,32 @@ const resolveMergedOptionLabel = (
   resolveOptionLabel(relationOptions[key] || [], value) ||
   resolveOptionLabel(Object.values(relationOptions).flat(), value);
 
+const resolveAssigneeComboLabel = (
+  rawValue: string,
+  relationOptions: Record<string, any[]>,
+): string => {
+  const match = String(rawValue || '').trim().match(/^(user|role)_(.+)$/i);
+  if (!match) return '';
+  const assigneeType = String(match[1] || '').toLowerCase();
+  const assigneeId = String(match[2] || '').trim();
+  if (!assigneeId) return '';
+
+  const roleOptions = [
+    ...(relationOptions.org_roles || []),
+    ...(relationOptions.roles || []),
+  ];
+  const userOptions = [
+    ...(relationOptions.assignee_id || []),
+    ...(relationOptions.profiles || []),
+  ];
+  const exact = resolveOptionLabel(Object.values(relationOptions).flat(), rawValue);
+  if (exact) return exact;
+
+  return assigneeType === 'role'
+    ? (resolveOptionLabel(roleOptions, assigneeId) || resolveOptionLabel(Object.values(relationOptions).flat(), assigneeId))
+    : (resolveOptionLabel(userOptions, assigneeId) || resolveOptionLabel(Object.values(relationOptions).flat(), assigneeId));
+};
+
 const formatArrayItemLabel = (
   item: any,
   field: ListFieldDefinition,
@@ -169,6 +195,11 @@ export const formatListCellValue = (
   const parsedArrayValue = parseArrayLikeValue(rawValue);
 
   if (rawValue === null || rawValue === undefined || rawValue === '') return '-';
+
+  if (typeof rawValue === 'string') {
+    const assigneeComboLabel = resolveAssigneeComboLabel(rawValue, relationOptions);
+    if (assigneeComboLabel) return formatDigitsForLocale(assigneeComboLabel, digitLocale);
+  }
 
   if (field?.type === FieldType.CHECKBOX) {
     return rawValue ? 'بله' : 'خیر';

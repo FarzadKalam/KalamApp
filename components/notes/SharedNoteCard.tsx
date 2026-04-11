@@ -40,6 +40,8 @@ interface SharedNoteCardProps {
   renderTemplateBold?: boolean;
 }
 
+const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
+
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   authorName,
   createdAtLabel,
@@ -66,18 +68,47 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   variant = 'default',
   renderTemplateBold = false,
 }) => {
+  const renderLinkifiedText = (value: string) => {
+    const source = String(value || '');
+    if (!source.trim()) return source;
+    const matches = Array.from(source.matchAll(URL_REGEX));
+    if (!matches.length) return source;
+    const nodes: React.ReactNode[] = [];
+    let cursor = 0;
+    matches.forEach((match, index) => {
+      const matched = String(match[0] || '');
+      const start = typeof match.index === 'number' ? match.index : -1;
+      if (!matched || start < 0) return;
+      if (start > cursor) nodes.push(source.slice(cursor, start));
+      nodes.push(
+        <a
+          key={`link-${index}-${start}`}
+          href={matched}
+          target="_blank"
+          rel="noreferrer"
+          className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
+        >
+          {matched}
+        </a>
+      );
+      cursor = start + matched.length;
+    });
+    if (cursor < source.length) nodes.push(source.slice(cursor));
+    return nodes.length ? nodes : source;
+  };
+
   const renderText = (value: string) => {
-    if (!renderTemplateBold) return value;
+    if (!renderTemplateBold) return renderLinkifiedText(value);
     const segments = parseNoteTemplateTextSegments(value);
-    if (segments.length === 0) return value;
+    if (segments.length === 0) return renderLinkifiedText(value);
     return segments.map((segment, index) => (
       segment.bold ? (
         <strong key={`${index}-${segment.text}`} className="font-bold">
-          {segment.text}
+          {renderLinkifiedText(segment.text)}
         </strong>
       ) : (
         <React.Fragment key={`${index}-${segment.text}`}>
-          {segment.text}
+          {renderLinkifiedText(segment.text)}
         </React.Fragment>
       )
     ));

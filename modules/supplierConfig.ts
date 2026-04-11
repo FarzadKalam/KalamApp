@@ -113,6 +113,14 @@ export const supplierModule: ModuleDefinition = {
       relationType: 'supplier_products',
       targetModule: 'products'
     },
+    {
+      id: 'supplier_bot_groups',
+      title: 'گروه‌های بات',
+      icon: 'AppstoreOutlined',
+      relationType: 'fk',
+      targetModule: 'counterparty_bot_groups',
+      foreignKey: 'supplier_id'
+    },
   ],
   table: 'suppliers'
 };
