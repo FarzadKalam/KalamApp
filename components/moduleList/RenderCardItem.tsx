@@ -11,6 +11,7 @@ import { getModuleCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } 
 import { resolveTaskSourceLink } from "../../utils/taskMeta";
 import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
+import TaskActionButtons from "../tasks/TaskActionButtons";
 
 export interface RenderCardItemProps {
   item: any;
@@ -59,10 +60,15 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 }) => {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const [standaloneTaskPopoverOpen, setStandaloneTaskPopoverOpen] = React.useState(false);
+  const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
   const isSelected = selectedRowKeys.includes(item.id);
-  const imageUrl = imageField ? item[imageField] : null;
-  const title = getRecordTitle(item, moduleConfig, { fallback: "-" });
   const isTasks = moduleId === 'tasks';
+  React.useEffect(() => {
+    setTaskPatch({});
+  }, [item?.id, item?.updated_at]);
+  const cardItem = isTasks ? { ...item, ...taskPatch } : item;
+  const imageUrl = imageField ? cardItem[imageField] : null;
+  const title = getRecordTitle(cardItem, moduleConfig, { fallback: "-" });
   const processRecordKeyByModule: Record<string, string> = {
     projects: 'project_id',
     customers: 'related_customer',
@@ -72,13 +78,13 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   };
   const isProductionTask = (
     isTasks
-    && String(item?.related_to_module || '') === 'production_orders'
-    && item?.related_production_order
-    && item?.production_line_id
+    && String(cardItem?.related_to_module || '') === 'production_orders'
+    && cardItem?.related_production_order
+    && cardItem?.production_line_id
   );
-  const relatedProcessModuleId = String(item?.related_to_module || '');
+  const relatedProcessModuleId = String(cardItem?.related_to_module || '');
   const relatedProcessRecordKey = processRecordKeyByModule[relatedProcessModuleId];
-  const relatedProcessRecordId = relatedProcessRecordKey ? item?.[relatedProcessRecordKey] : null;
+  const relatedProcessRecordId = relatedProcessRecordKey ? cardItem?.[relatedProcessRecordKey] : null;
   const isExecutionProcessTask = (
     isTasks
     && !isProductionTask
@@ -90,21 +96,21 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const statusFieldConfig = moduleConfig?.fields.find(
     (f: any) => f.type === FieldType.STATUS || f.key === statusField,
   );
-  const status = statusField ? item[statusField] : null;
+  const status = statusField ? cardItem[statusField] : null;
   const statusOption = statusFieldConfig?.options?.find((o: any) => o.value === status);
 
   const categoryFieldConfig = moduleConfig?.fields.find((f: any) => f.key === categoryField);
-  const category = categoryField ? item[categoryField] : null;
+  const category = categoryField ? cardItem[categoryField] : null;
   const categoryLabel = categoryFieldConfig?.options?.find((o: any) => o.value === category)?.label || category;
 
-  const assigneeId = getResolvedAssigneeId(item);
-  const assigneeType = item.assignee_type;
+  const assigneeId = getResolvedAssigneeId(cardItem);
+  const assigneeType = cardItem.assignee_type;
   const assigneeLabel = getAssigneeLabel(moduleId);
-  const dueDate = item.due_date;
+  const dueDate = cardItem.due_date;
   const assigneeAllowed = canViewField ? canViewField('assignee_id') !== false : true;
   const dueAllowed = canViewField ? canViewField('due_date') !== false : true;
   const categoryAllowed = canViewField ? canViewField(categoryFieldConfig?.key || 'related_to_module') !== false : true;
-  const sourceLink = isTasks ? resolveTaskSourceLink(item) : { moduleId: null, recordId: null };
+  const sourceLink = isTasks ? resolveTaskSourceLink(cardItem) : { moduleId: null, recordId: null };
   const relatedRelationFields = isTasks
     ? (moduleConfig?.fields || []).filter(
         (f: any) => (
@@ -121,22 +127,22 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     marketing_leads: 'marketing_lead_id',
     purchase_invoices: 'purchase_invoice_id',
   };
-  const fallbackRelationKey = fallbackRelationKeyByModule[String(item?.related_to_module || '')];
-  const fallbackRelationRecordId = fallbackRelationKey ? item?.[fallbackRelationKey] : null;
+  const fallbackRelationKey = fallbackRelationKeyByModule[String(cardItem?.related_to_module || '')];
+  const fallbackRelationRecordId = fallbackRelationKey ? cardItem?.[fallbackRelationKey] : null;
   const selectedRelationField = isTasks
     ? (
-        relatedRelationFields.find((f: any) => f?.relationConfig?.targetModule === item?.related_to_module && item?.[f.key])
-        || relatedRelationFields.find((f: any) => item?.[f.key])
+        relatedRelationFields.find((f: any) => f?.relationConfig?.targetModule === cardItem?.related_to_module && cardItem?.[f.key])
+        || relatedRelationFields.find((f: any) => cardItem?.[f.key])
         || (
           fallbackRelationKey && fallbackRelationRecordId
-            ? { key: fallbackRelationKey, relationConfig: { targetModule: item?.related_to_module } }
+            ? { key: fallbackRelationKey, relationConfig: { targetModule: cardItem?.related_to_module } }
             : null
         )
       )
     : null;
-  const relatedRecordId = sourceLink.recordId || (selectedRelationField ? item?.[selectedRelationField.key] : null);
+  const relatedRecordId = sourceLink.recordId || (selectedRelationField ? cardItem?.[selectedRelationField.key] : null);
   const relatedModuleId = isTasks
-    ? (sourceLink.moduleId || item?.related_to_module || selectedRelationField?.relationConfig?.targetModule || null)
+    ? (sourceLink.moduleId || cardItem?.related_to_module || selectedRelationField?.relationConfig?.targetModule || null)
     : null;
   const relatedFieldAllowed = sourceLink.recordId
     ? true
@@ -161,9 +167,9 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     ? (MODULES as Record<string, any>)?.[String(relatedModuleId)]?.titles?.fa || String(relatedModuleId)
     : null;
   const showRelatedRecord = isTasks && relatedRecordId && relatedModuleId && relatedFieldAllowed;
-  const recordCode = item.system_code || item.manual_code || null;
-  const cardStatusMeta = resolveCardStatusMeta(item, moduleConfig, statusField);
-  const cardTags = getRecordCardTags(item, tagsField);
+  const recordCode = cardItem.system_code || cardItem.manual_code || null;
+  const cardStatusMeta = resolveCardStatusMeta(cardItem, moduleConfig, statusField);
+  const cardTags = getRecordCardTags(cardItem, tagsField);
   const summaryExcludedKeys = [
     statusFieldConfig?.key || statusField || '',
     cardStatusMeta?.field?.key || '',
@@ -307,11 +313,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <span>موعد انجام</span>
           {renderDueDate()}
         </div>
-        {String(item?.description || '').trim() ? (
+        {String(cardItem?.description || '').trim() ? (
           <div className="pt-1">
             <div className="mb-1 text-gray-500">شرح فعالیت</div>
             <div className="rounded-xl border border-gray-200 bg-gray-50 px-2 py-2 leading-6 text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 whitespace-pre-wrap break-words">
-              {String(item.description).trim()}
+              {String(cardItem.description).trim()}
             </div>
           </div>
         ) : null}
@@ -418,7 +424,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             {summaryFields.length > 0 ? (
               <div className="mt-2 space-y-1.5 text-xs">
                 {summaryFields.map((field: any) => {
-                  const value = item?.[field.key];
+                  const value = cardItem?.[field.key];
                   if (value === undefined || value === null || value === '') return null;
                   return (
                     <div
@@ -481,19 +487,19 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           ) : <span />}
 
           <div className="flex items-end gap-3">
-            {item.buy_price && (canViewField ? canViewField('buy_price') !== false : true) ? (
+            {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) ? (
               <div className="flex flex-col gap-0">
                 <span className="text-gray-500 dark:text-gray-400 text-[8px]">خرید</span>
                 <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
-                  {formatPersianPrice(item.buy_price, true)}
+                  {formatPersianPrice(cardItem.buy_price, true)}
                 </span>
               </div>
             ) : null}
-            {item.sell_price && (canViewField ? canViewField('sell_price') !== false : true) ? (
+            {cardItem.sell_price && (canViewField ? canViewField('sell_price') !== false : true) ? (
               <div className="flex flex-col gap-0">
                 <span className="text-gray-500 dark:text-gray-400 text-[8px]">فروش</span>
                 <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
-                  {formatPersianPrice(item.sell_price, true)}
+                  {formatPersianPrice(cardItem.sell_price, true)}
                 </span>
               </div>
             ) : null}
@@ -521,6 +527,17 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Checkbox checked={isSelected} onChange={toggleSelect} />
         </div>
       )}
+
+      {isTasks && imageUrl ? (
+        <div className={`mb-2 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 ${minimal ? 'h-24' : 'h-32'}`}>
+          <img
+            src={String(imageUrl)}
+            alt={title}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        </div>
+      ) : null}
 
       <div className="mb-2 flex items-start justify-between gap-3">
         {!isTasks && (
@@ -576,14 +593,26 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             </Tag>
           )}
         </div>
-        {cardStatusMeta ? (
-          <Tag
-            color={cardStatusMeta.color || "default"}
-            className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold shrink-0"
-          >
-            {cardStatusMeta.label}
-          </Tag>
-        ) : null}
+        <div className="flex items-center gap-1 shrink-0">
+          {isTasks ? (
+            <TaskActionButtons
+              task={cardItem}
+              onTaskUpdated={async (updatedTask) => {
+                setTaskPatch((prev) => ({ ...prev, ...updatedTask }));
+              }}
+              buttonClassName="!px-1 !text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
+              modalZIndex={12100}
+            />
+          ) : null}
+          {cardStatusMeta ? (
+            <Tag
+              color={cardStatusMeta.color || "default"}
+              className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold shrink-0"
+            >
+              {cardStatusMeta.label}
+            </Tag>
+          ) : null}
+        </div>
       </div>
 
       {!minimal && (
@@ -596,7 +625,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                 </Tag>
               )}
 
-              {category && (canViewField ? canViewField(categoryFieldConfig?.key || 'category') !== false : true) && (
+              {!isTasks && category && (canViewField ? canViewField(categoryFieldConfig?.key || 'category') !== false : true) && (
                 <Tag
                   color="default"
                   style={{
@@ -612,9 +641,9 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               )}
             </div>
 
-            {!isTasks && tagsField && item[tagsField] && (
+            {!isTasks && tagsField && cardItem[tagsField] && (
               <div className="flex flex-wrap gap-1 justify-end flex-1">
-                {(Array.isArray(item[tagsField]) ? item[tagsField] : [item[tagsField]]).slice(0, 1).map((t: any, idx: number) => {
+                {(Array.isArray(cardItem[tagsField]) ? cardItem[tagsField] : [cardItem[tagsField]]).slice(0, 1).map((t: any, idx: number) => {
                   const tagTitle = typeof t === "string" ? t : t.title || t.label;
                   const tagColor = typeof t === "string" ? "blue" : t.color || "blue";
                   return (
@@ -623,11 +652,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                     </Tag>
                   );
                 })}
-                {Array.isArray(item[tagsField]) && item[tagsField].length > 1 && (
+                {Array.isArray(cardItem[tagsField]) && cardItem[tagsField].length > 1 && (
                   <Popover
                     content={
                       <div className="flex flex-wrap gap-1">
-                        {item[tagsField].slice(1).map((t: any, idx: number) => {
+                        {cardItem[tagsField].slice(1).map((t: any, idx: number) => {
                           const tagTitle = typeof t === "string" ? t : t.title || t.label;
                           const tagColor = typeof t === "string" ? "blue" : t.color || "blue";
                           return (
@@ -638,11 +667,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                         })}
                       </div>
                     }
-                    title={`${item[tagsField].length - 1} برچسب بیشتر`}
+                    title={`${cardItem[tagsField].length - 1} برچسب بیشتر`}
                     trigger="click"
                   >
                     <span className="text-[9px] text-gray-500 px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 font-medium">
-                      +{item[tagsField].length - 1}
+                      +{cardItem[tagsField].length - 1}
                     </span>
                   </Popover>
                 )}
@@ -668,19 +697,19 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               </>
             ) : (
               <>
-                {item.buy_price && (canViewField ? canViewField('buy_price') !== false : true) && (
+                {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) && (
                   <div className="flex flex-col gap-0">
                     <span className="text-gray-500 dark:text-gray-400 text-[8px]">خرید</span>
                     <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
-                      {formatPersianPrice(item.buy_price, true)}
+                      {formatPersianPrice(cardItem.buy_price, true)}
                     </span>
                   </div>
                 )}
-                {item.sell_price && (canViewField ? canViewField('sell_price') !== false : true) && (
+                {cardItem.sell_price && (canViewField ? canViewField('sell_price') !== false : true) && (
                   <div className="flex flex-col gap-0">
                     <span className="text-gray-500 dark:text-gray-400 text-[8px]">فروش</span>
                     <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
-                      {formatPersianPrice(item.sell_price, true)}
+                      {formatPersianPrice(cardItem.sell_price, true)}
                     </span>
                   </div>
                 )}
@@ -741,23 +770,23 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 
       {isProductionTask && (
         <div
-          className={`${minimal ? 'mt-2' : 'mt-3'} rounded-lg border border-[#d6c2ab] bg-[#faf5ef] dark:border-[#4b3a2b] dark:bg-[#2b241e] p-2`}
+          className={`${minimal ? 'mt-2' : 'mt-3'}`}
           onClick={(e) => e.stopPropagation()}
         >
           <ProductionStagesField
-            recordId={String(item.related_production_order)}
+            recordId={String(cardItem.related_production_order)}
             moduleId="production_orders"
             readOnly
             compact
             cardCompact
             allowReportEditInReadOnly
-            onlyLineId={String(item.production_line_id)}
+            onlyLineId={String(cardItem.production_line_id)}
           />
         </div>
       )}
       {isExecutionProcessTask && (
         <div
-          className={`${minimal ? 'mt-2' : 'mt-3'} rounded-lg border border-[#d6c2ab] bg-[#faf5ef] dark:border-[#4b3a2b] dark:bg-[#2b241e] p-2`}
+          className={`${minimal ? 'mt-2' : 'mt-3'}`}
           onClick={(e) => e.stopPropagation()}
         >
           <ProductionStagesField

@@ -4,7 +4,6 @@ import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
   DashboardOutlined, 
-  SkinOutlined, 
   TeamOutlined, 
   SettingOutlined,
   SearchOutlined,
@@ -35,6 +34,8 @@ import { getRecordTitle } from '../utils/recordTitle';
 import {
   ACCOUNTING_PERMISSION_KEY,
   REPORTS_PERMISSION_KEY,
+  SETTINGS_PERMISSION_KEY,
+  resolveFilesAccessPermissions,
   resolvePreferredRoleModuleIds,
   type PermissionMap,
 } from '../utils/permissions';
@@ -164,6 +165,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   useEffect(() => {
     let isMounted = true;
+    const updateViewportVars = () => {
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty('--app-viewport-height', `${viewportHeight}px`);
+      document.documentElement.style.setProperty('--app-mobile-footer-height', '64px');
+    };
+
     const getUser = async () => {
       try {
         const snapshot = await fetchSessionBootstrap(supabase);
@@ -187,7 +194,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const handleResize = () => {
       const width = window.innerWidth;
       const mobile = width < 768;
-      
+      updateViewportVars();
+
       setIsMobile(mobile);
       setIsKeyboardVisible(window.innerHeight < 500);
       
@@ -198,20 +206,29 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
     handleResize();
     window.addEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('scroll', handleResize);
     return () => {
       isMounted = false;
       window.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('scroll', handleResize);
     };
   }, []);
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
+  const canViewSettingsRoot = rolePermissions?.[SETTINGS_PERMISSION_KEY]?.view !== false;
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
+  const canViewCashBank =
+    canViewAccountingDashboard &&
+    rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.fields?.cash_bank_page !== false;
   const canViewAccountingSettings =
     canViewAccountingDashboard &&
     rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.fields?.settings_links !== false;
   const canViewReportsHub =
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.view !== false &&
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.fields?.hub_page !== false;
+  const filesAccess = resolveFilesAccessPermissions(rolePermissions);
 
   // Collapse sidebar on route change
   useEffect(() => {
@@ -248,7 +265,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
       {
         key: 'resources',
-        icon: <SkinOutlined />,
+        icon: <AppstoreOutlined />,
         label: 'منابع',
         children: [
           { key: '/products', label: 'کالاها و خدمات' },
@@ -349,9 +366,68 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     ];
   }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, rolePermissions]);
 
+  const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
+    const canShowMenuKey = (key?: string) => {
+      if (!key) return true;
+      switch (key) {
+        case '/':
+          return true;
+        case '/accounting':
+          return canViewAccountingDashboard;
+        case '/cash_bank':
+          return canViewCashBank;
+        case '/accounting/settings':
+          return canViewAccountingSettings;
+        case '/reports':
+          return canViewReportsHub;
+        case '/gallery':
+          return filesAccess.canViewGallery;
+        case RECYCLE_BIN_ROUTE:
+          return filesAccess.canViewRecycleBin;
+        case '/settings':
+          return canViewSettingsRoot;
+        case '/accounting/account-review':
+          return canViewModule('journal_entries') && canViewModule('chart_of_accounts');
+        default: {
+          if (!key.startsWith('/')) return true;
+          const moduleId = key.slice(1).split('/')[0];
+          return canViewModule(moduleId);
+        }
+      }
+    };
+
+    const filterItems = (items: NonNullable<MenuProps['items']>): NonNullable<MenuProps['items']> =>
+      items.reduce<NonNullable<MenuProps['items']>>((acc, item) => {
+        if (!item || typeof item !== 'object' || !('key' in item)) return acc;
+        const nextItem: any = { ...item };
+        if ('children' in item && Array.isArray(item.children)) {
+          nextItem.children = filterItems(item.children);
+          if (!nextItem.children.length) return acc;
+          acc.push(nextItem);
+          return acc;
+        }
+        if (canShowMenuKey(String(item.key || ''))) {
+          acc.push(nextItem);
+        }
+        return acc;
+      }, []);
+
+    return filterItems(rawMenuItems);
+  }, [
+    rawMenuItems,
+    canViewAccountingDashboard,
+    canViewAccountingSettings,
+    canViewCashBank,
+    canViewReportsHub,
+    canViewSettingsRoot,
+    filesAccess.canViewGallery,
+    filesAccess.canViewRecycleBin,
+    rolePermissions,
+  ]);
+
   const menuItems = useMemo<MenuProps['items']>(() => {
-    return mapSidebarMenuItems(rawMenuItems);
-  }, [rawMenuItems]);
+    return mapSidebarMenuItems(visibleRawMenuItems);
+  }, [visibleRawMenuItems]);
 
   const searchableModules = useMemo(() => {
     return Object.entries(MODULES).map(([id, config]) => {
@@ -483,7 +559,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       attendance_logs: 'تردد',
     };
     const iconMap: Record<string, React.ReactNode> = {
-      products: <SkinOutlined />,
+      products: <AppstoreOutlined />,
       product_bundles: <AppstoreOutlined />,
       price_lists: <AppstoreOutlined />,
       production_orders: <CheckSquareOutlined />,
@@ -519,7 +595,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   };
 
   return (
-    <AntLayout className="h-screen overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300">
+    <AntLayout
+      className="overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
+      style={{ height: 'var(--app-viewport-height, 100dvh)' }}
+    >
       
       {isMobile && !collapsed && (
         <div 
@@ -536,7 +615,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         zeroWidthTriggerStyle={{ display: 'none' }}
         className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1100] overflow-visible ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
         style={{ 
-          height: '100vh', 
+          height: 'var(--app-viewport-height, 100dvh)',
           position: 'fixed', 
           right: 0, 
           top: 0,
@@ -565,7 +644,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           />
         )}
 
-        <div className="h-[calc(100vh-64px)] overflow-y-auto">
+        <div className="h-[calc(var(--app-viewport-height,100dvh)-64px)] overflow-y-auto">
             <Menu
             theme={isDarkMode ? 'dark' : 'light'}
             mode="inline"
@@ -587,10 +666,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       </Sider>
 
       <AntLayout 
-        className="bg-gray-100 dark:bg-dark-bg transition-all duration-300 h-screen overflow-hidden flex flex-col"
+        className="bg-gray-100 dark:bg-dark-bg transition-all duration-300 overflow-hidden flex flex-col"
         style={{ 
           paddingRight: isMobile ? 0 : (collapsed ? 80 : 260), 
-          width: '100%' 
+          width: '100%',
+          height: 'var(--app-viewport-height, 100dvh)',
         }}
       >
         <Header 
@@ -709,7 +789,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           </div>
         )}
 
-        <Content className={`layout-main-scroll relative flex-1 overflow-y-auto overflow-x-hidden ${isMobile && !isKeyboardVisible ? 'pb-20' : ''}`}>
+        <Content
+          className="layout-main-scroll relative flex-1 overflow-y-auto overflow-x-hidden"
+          style={isMobile && !isKeyboardVisible ? { paddingBottom: 'calc(var(--app-mobile-footer-height, 64px) + 32px + env(safe-area-inset-bottom, 0px))' } : undefined}
+        >
           {children}
         </Content>
 

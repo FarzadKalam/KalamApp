@@ -21,7 +21,16 @@ type RuntimeBrandingResult = {
   currency: CurrencyConfig;
 };
 
+const RUNTIME_BRANDING_TTL_MS = 5 * 60_000;
+
 let runtimeBrandingPromise: Promise<RuntimeBrandingResult> | null = null;
+let runtimeBrandingCache: {
+  data: RuntimeBrandingResult | null;
+  expiresAt: number;
+} = {
+  data: null,
+  expiresAt: 0,
+};
 
 const toObjectRecord = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -182,11 +191,19 @@ const loadAuthenticatedBranding = async (): Promise<RuntimeBrandingResult> => {
 
 export const clearRuntimeBrandingCache = () => {
   runtimeBrandingPromise = null;
+  runtimeBrandingCache = {
+    data: null,
+    expiresAt: 0,
+  };
 };
 
 export const loadRuntimeBranding = async (
   options?: { force?: boolean }
 ): Promise<RuntimeBrandingResult> => {
+  if (!options?.force && runtimeBrandingCache.data && runtimeBrandingCache.expiresAt > Date.now()) {
+    return runtimeBrandingCache.data;
+  }
+
   if (!options?.force && runtimeBrandingPromise) {
     return runtimeBrandingPromise;
   }
@@ -205,7 +222,12 @@ export const loadRuntimeBranding = async (
 
   runtimeBrandingPromise = pending;
   try {
-    return await pending;
+    const result = await pending;
+    runtimeBrandingCache = {
+      data: result,
+      expiresAt: Date.now() + RUNTIME_BRANDING_TTL_MS,
+    };
+    return result;
   } finally {
     if (runtimeBrandingPromise === pending) {
       runtimeBrandingPromise = null;

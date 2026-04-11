@@ -26,6 +26,9 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
+import ProductionStagesField from '../components/ProductionStagesField';
+import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import PersianDatePicker from '../components/PersianDatePicker';
 import { parseDateValue, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
@@ -663,7 +666,14 @@ const WorkSchedulesPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 animate-fadeIn">
+    <div className={`space-y-6 animate-fadeIn ${recordId && !isCreate ? 'md:pl-20' : ''}`}>
+      {recordId && !isCreate && MODULES.work_schedules && (
+        <RelatedSidebar
+          moduleConfig={MODULES.work_schedules}
+          recordId={String(recordId)}
+          recordName={scheduleTitle || 'برنامه حضور'}
+        />
+      )}
       <div className="bg-white dark:bg-[#1a1a1a] p-6 rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 relative overflow-hidden">
         <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-leather-500 to-leather-800 opacity-80" />
         <div className="flex flex-col gap-5">
@@ -769,6 +779,22 @@ const WorkSchedulesPage: React.FC = () => {
       </div>
 
       <div className="bg-white dark:bg-[#1a1a1a] rounded-[2rem] shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden">
+        {pageMode === 'view' && recordId && (
+          <div className="border-b border-gray-200 dark:border-gray-800 p-5">
+            <div className="mb-4 flex items-center gap-2">
+              <span className="inline-block h-6 w-1 rounded-full bg-leather-500" />
+              <div className="text-lg font-black text-gray-800 dark:text-white">فرآیندها</div>
+            </div>
+            <ProductionStagesField
+              recordId={String(recordId)}
+              moduleId="work_schedules"
+              readOnly
+              compact
+              cardCompact
+              forceProcessRecordMode
+            />
+          </div>
+        )}
         {pageMode === 'view' ? (
           assignedVisibleColumns.length === 0 ? (
             <div className="py-16">

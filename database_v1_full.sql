@@ -120,6 +120,7 @@ alter table public.company_settings
   add column if not exists address text,
   add column if not exists website text,
   add column if not exists email text,
+  add column if not exists qr_scan_enabled boolean not null default false,
   add column if not exists instagram_id text,
   add column if not exists telegram_id text,
   add column if not exists youtube_url text,
@@ -350,6 +351,24 @@ create trigger trg_notes_normalize_scope
 before insert or update on public.notes
 for each row
 execute function public.normalize_note_scope();
+
+create table if not exists public.chat_groups (
+  id uuid primary key default gen_random_uuid()
+);
+
+alter table public.chat_groups
+  add column if not exists org_id uuid references public.organizations(id) on delete cascade default public.current_org_id(),
+  add column if not exists name text not null default '',
+  add column if not exists user_ids uuid[] not null default '{}'::uuid[],
+  add column if not exists role_ids uuid[] not null default '{}'::uuid[],
+  add column if not exists created_by uuid references public.profiles(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists idx_chat_groups_org_id on public.chat_groups(org_id);
+create index if not exists idx_chat_groups_created_by on public.chat_groups(created_by);
+create index if not exists idx_chat_groups_user_ids on public.chat_groups using gin(user_ids);
+create index if not exists idx_chat_groups_role_ids on public.chat_groups using gin(role_ids);
 
 create table if not exists public.sidebar_unread (
   id uuid primary key default gen_random_uuid()
@@ -1232,6 +1251,7 @@ create table if not exists public.tasks (
 alter table public.tasks
   add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
   add column if not exists name text not null default '',
+  add column if not exists image_url text,
   add column if not exists system_code text,
   add column if not exists status text not null default 'todo',
   add column if not exists priority text not null default 'medium',
@@ -1992,7 +2012,7 @@ declare
 begin
   foreach t in array array[
     'organizations','org_roles','profiles','company_settings','integration_settings',
-    'dynamic_options','saved_views','tags','notes','sidebar_unread','workflows',
+    'dynamic_options','saved_views','tags','notes','chat_groups','sidebar_unread','workflows',
     'warehouses','shelves','suppliers','customers','work_schedules','employees','attendance_logs','products','product_images',
     'product_inventory','production_group_orders','production_boms','production_orders',
     'production_lines','stock_transfers','invoices','purchase_invoices','tasks',
@@ -2043,7 +2063,7 @@ declare
 begin
   foreach t in array array[
     'org_roles','profiles','company_settings','integration_settings','dynamic_options',
-    'saved_views','tags','record_tags','changelogs','user_login_events','notes','sidebar_unread',
+    'saved_views','tags','record_tags','changelogs','user_login_events','notes','chat_groups','sidebar_unread',
     'workflows','workflow_logs','warehouses','shelves','suppliers','customers','work_schedules','employees','attendance_logs',
     'products','product_images','product_inventory','production_group_orders',
     'production_boms','production_orders','production_lines','product_lines',

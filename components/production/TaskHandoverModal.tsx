@@ -9,6 +9,7 @@ import gregorianEn from 'react-date-object/locales/gregorian_en';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import QrScanPopover from '../QrScanPopover';
 import { HARD_CODED_UNIT_OPTIONS } from '../../utils/unitConversions';
+import TaskActionButtons from '../tasks/TaskActionButtons';
 
 export type StageHandoverPiece = {
   key: string;
@@ -66,6 +67,8 @@ interface TaskHandoverModalProps {
   open: boolean;
   loading: boolean;
   locked?: boolean;
+  task?: any;
+  currentUser?: { id?: string | null; fullName?: string | null } | null;
   taskName: string;
   sourceStageName: string;
   giverName: string;
@@ -97,6 +100,7 @@ interface TaskHandoverModalProps {
   onTargetShelfScan: (shelfId: string) => void;
   onConfirmGiver: () => void;
   onConfirmReceiver: () => void;
+  onTaskUpdated?: (task: any) => void | Promise<void>;
 }
 
 const toEnglishDigits = (value: any) =>
@@ -179,6 +183,8 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
   open,
   loading,
   locked = false,
+  task = null,
+  currentUser = null,
   taskName,
   sourceStageName,
   giverName,
@@ -200,6 +206,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
   onTargetShelfScan,
   onConfirmGiver,
   onConfirmReceiver,
+  onTaskUpdated,
 }) => {
   const [selectedRowKeysByGroup, setSelectedRowKeysByGroup] = useState<Record<string, string[]>>({});
   const [sourceTabByGroup, setSourceTabByGroup] = useState<Record<string, 'previous' | 'order' | 'next'>>({});
@@ -290,14 +297,29 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
       confirmLoading={loading}
       destroyOnHidden
       styles={{ body: { maxHeight: '72vh', overflowY: 'auto' } }}
-      footer={[
-        <Button key="cancel" onClick={onCancel}>
-          انصراف
-        </Button>,
-        <Button key="save" type="primary" loading={loading} onClick={onSave}>
-          ثبت فرم
-        </Button>,
-      ]}
+      footer={(
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
+            {task ? (
+              <TaskActionButtons
+                task={task}
+                currentUser={currentUser}
+                onTaskUpdated={onTaskUpdated}
+                buttonClassName="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
+                modalZIndex={13000}
+              />
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button key="cancel" onClick={onCancel}>
+              انصراف
+            </Button>
+            <Button key="save" type="primary" loading={loading} onClick={onSave}>
+              ثبت فرم
+            </Button>
+          </div>
+        </div>
+      )}
     >
       <div className="space-y-4">
         <div className="text-sm text-gray-700">

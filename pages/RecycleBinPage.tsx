@@ -4,7 +4,11 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, RollbackOutlined, SearchOutlined } from "@ant-design/icons";
 import BulkActionsBar from "../components/moduleList/BulkActionsBar";
 import { supabase } from "../supabaseClient";
-import { fetchCurrentUserRolePermissions, type PermissionMap } from "../utils/permissions";
+import {
+  fetchCurrentUserRolePermissions,
+  resolveFilesAccessPermissions,
+  type PermissionMap,
+} from "../utils/permissions";
 import { safeJalaliFormat, toPersianNumber } from "../utils/persianNumberFormatter";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import {
@@ -24,6 +28,7 @@ const RecycleBinPage: React.FC = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [permissions, setPermissions] = useState<PermissionMap | null>(null);
+  const [canViewPage, setCanViewPage] = useState(true);
 
   useEffect(() => {
     window.dispatchEvent(
@@ -50,8 +55,10 @@ const RecycleBinPage: React.FC = () => {
           .order("deleted_at", { ascending: false }),
       ]);
       if (rowsResult.error) throw rowsResult.error;
+      const filesAccess = resolveFilesAccessPermissions(rolePermissions);
+      setCanViewPage(filesAccess.canViewRecycleBin);
       setPermissions(rolePermissions);
-      setRows((rowsResult.data || []) as RecycleBinRecord[]);
+      setRows(filesAccess.canViewRecycleBin ? ((rowsResult.data || []) as RecycleBinRecord[]) : []);
     } catch (error) {
       message.error(toFaErrorMessage(error as any, "خواندن سطل بازیافت ناموفق بود."));
     } finally {
@@ -64,6 +71,7 @@ const RecycleBinPage: React.FC = () => {
   }, [loadRecycleBin]);
 
   const visibleRows = useMemo(() => {
+    if (!canViewPage) return [];
     const normalizedSearch = String(searchTerm || "").trim().toLocaleLowerCase("fa");
     return rows.filter((row) => {
       if (permissions?.[row.module_id]?.view === false) return false;
@@ -78,7 +86,7 @@ const RecycleBinPage: React.FC = () => {
         || String(row.source_record_id || "").toLocaleLowerCase("fa").includes(normalizedSearch)
       );
     });
-  }, [permissions, rows, searchTerm]);
+  }, [canViewPage, permissions, rows, searchTerm]);
 
   const selectedRows = useMemo(() => {
     const selectedIdSet = new Set(selectedRowKeys.map((key) => String(key)));
@@ -91,6 +99,14 @@ const RecycleBinPage: React.FC = () => {
   );
 
   const canRestoreSelection = selectedRows.length > 0 && selectedRows.every(canRestoreRow);
+
+  if (!loading && !canViewPage) {
+    return (
+      <div className="h-[70vh] flex items-center justify-center">
+        <Empty description="دسترسی به سطل بازیافت ندارید" />
+      </div>
+    );
+  }
 
   const performRestore = useCallback(
     async (ids: string[]) => {

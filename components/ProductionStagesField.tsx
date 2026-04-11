@@ -6,6 +6,8 @@ import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
 import DynamicSelectField from './DynamicSelectField';
+import SmartFieldRenderer from './SmartFieldRenderer';
+import RecordImageBox from './RecordImageBox';
 import TaskHandoverModal, { type StageHandoverConfirm, type StageHandoverGroup, type StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import TaskHandoverFormsModal, {
   type StageHandoverFormListRow,
@@ -51,14 +53,17 @@ import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import WorkflowActionsBuilder from './workflows/WorkflowActionsBuilder';
 import HelpHint from './HelpHint';
 import {
+  createProcessLinkedFieldKey,
   doesProcessTemplateSupportModule,
   getProcessTargetModuleFields,
   getRelationFieldLinksForModules,
   mergeProcessLinkMaps,
   normalizeProcessTargetModuleIds,
+  parseProcessLinkMap,
   syncProcessTemplateTargetModules,
 } from '../utils/processTargets';
 import {
+  buildPreviousStageTaskCustomAutomationFields,
   buildProcessTaskCustomAutomationFields,
   getProcessTaskCustomFieldValuesFromRecurrence,
   getProcessTaskCustomFieldsFromRecurrence,
@@ -68,6 +73,7 @@ import {
   mergeProcessTaskCustomFieldValues,
   normalizeProcessTaskCustomFieldKey,
   normalizeProcessTaskCustomFields,
+  PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX,
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
   withProcessTaskCustomFieldValues,
@@ -86,6 +92,9 @@ import {
   PROCESS_TASK_STATUS_OPTIONS_KEY,
   PROCESS_TASK_STATUS_START_ANCHOR,
 } from '../utils/processTaskStatusOptions';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { getRecordTitle } from '../utils/recordTitle';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -104,6 +113,7 @@ interface ProductionStagesFieldProps {
   draftStages?: any[];
   onDraftStagesChange?: (stages: any[]) => void | Promise<void>;
   showWageSummary?: boolean;
+  forceProcessRecordMode?: boolean;
 }
 
 type StageHandoverSide = 'giver' | 'receiver';
@@ -219,6 +229,75 @@ const processTaskDynamicOptionCapableTypes = new Set<FieldType>([
   FieldType.STATUS,
 ]);
 
+const TEMPLATE_TOKEN_REGEX = /\{\{\s*([^}]+)\s*\}\}/g;
+const EXACT_TEMPLATE_TOKEN_REGEX = /^\s*\{\{\s*([^}]+)\s*\}\}\s*$/;
+
+const stringifyTemplateValue = (value: any): string => {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return value.map((item) => String(item ?? '')).filter(Boolean).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+};
+
+const getInputLikeElement = (target: any): HTMLInputElement | HTMLTextAreaElement | null =>
+  target?.input
+  || target?.resizableTextArea?.textArea
+  || target
+  || null;
+
+const insertTextAtSelection = (
+  currentValue: string,
+  insertedText: string,
+  selection?: { start: number; end: number } | null,
+) => {
+  const safeValue = String(currentValue ?? '');
+  const start = Math.max(0, Math.min(selection?.start ?? safeValue.length, safeValue.length));
+  const end = Math.max(start, Math.min(selection?.end ?? start, safeValue.length));
+  const nextValue = `${safeValue.slice(0, start)}${insertedText}${safeValue.slice(end)}`;
+  const caret = start + insertedText.length;
+  return { nextValue, caret };
+};
+
+const coerceResolvedTemplateValue = (value: any, fieldType?: FieldType) => {
+  if (!fieldType) return value;
+  if (fieldType === FieldType.CHECKBOX) {
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    return Boolean(value);
+  }
+  if ([FieldType.NUMBER, FieldType.PRICE, FieldType.PERCENTAGE, FieldType.STOCK].includes(fieldType)) {
+    if (typeof value === 'number') return value;
+    const parsed = parseFloat(String(value ?? '').replace(/,/g, '').trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if ([FieldType.MULTI_SELECT, FieldType.TAGS].includes(fieldType)) {
+    if (Array.isArray(value)) return value;
+    const normalized = String(value ?? '').trim();
+    return normalized ? normalized.split(',').map((item) => item.trim()).filter(Boolean) : [];
+  }
+  return value;
+};
+
+const renderTemplateValueFromRecord = (
+  rawValue: any,
+  record: Record<string, any>,
+  fieldType?: FieldType,
+) => {
+  if (typeof rawValue !== 'string') return rawValue;
+  const exactMatch = rawValue.match(EXACT_TEMPLATE_TOKEN_REGEX);
+  if (exactMatch) {
+    const tokenKey = String(exactMatch[1] || '').trim();
+    return coerceResolvedTemplateValue(record?.[tokenKey], fieldType);
+  }
+  return String(rawValue || '').replace(TEMPLATE_TOKEN_REGEX, (_token, key: string) => {
+    const tokenKey = String(key || '').trim();
+    return stringifyTemplateValue(record?.[tokenKey]);
+  });
+};
+
 const supportsProcessTaskDynamicCategory = (fieldType: FieldType) =>
   processTaskDynamicOptionCapableTypes.has(fieldType);
 
@@ -249,7 +328,7 @@ const parseProcessTaskFieldOptions = (value: string): Array<{ label: string; val
 
 const TASK_MODAL_CUSTOM_FIELD_DRAFT_ID = '__task_modal_custom_fields__';
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false }) => {
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
@@ -289,12 +368,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [processTemplateOptions, setProcessTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [processTemplateOptionsLoading, setProcessTemplateOptionsLoading] = useState(false);
   const [appendProcessModalOpen, setAppendProcessModalOpen] = useState(false);
+  const [appendProcessModalMode, setAppendProcessModalMode] = useState<'append' | 'links'>('append');
+  const [appendProcessModalGroupId, setAppendProcessModalGroupId] = useState<string | null>(null);
   const [appendProcessTemplateId, setAppendProcessTemplateId] = useState<string | null>(null);
   const [appendProcessTargetModuleIds, setAppendProcessTargetModuleIds] = useState<string[]>([]);
   const [appendProcessLinkedRecords, setAppendProcessLinkedRecords] = useState<Record<string, string | null>>({});
   const [appendProcessRelationOptions, setAppendProcessRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [appendProcessRelationLoading, setAppendProcessRelationLoading] = useState<Record<string, boolean>>({});
+  const [, setAppendProcessRelationLoading] = useState<Record<string, boolean>>({});
   const [showEmptyProcessDetails, setShowEmptyProcessDetails] = useState(false);
+  const [showCompletedProcessGroups, setShowCompletedProcessGroups] = useState(false);
+  const [processOriginTitleMap, setProcessOriginTitleMap] = useState<Record<string, string>>({});
+  const [draftTemplatePickerSearch, setDraftTemplatePickerSearch] = useState('');
   const [activeProcessGroupMeta, setActiveProcessGroupMeta] = useState<{
     id: string;
     label: string | null;
@@ -319,9 +403,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [automationRelationOptions, setAutomationRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
   const [savingReportIds, setSavingReportIds] = useState<Record<string, boolean>>({});
+  const [tasksLoaded, setTasksLoaded] = useState(false);
   const autoOpenedTaskIdRef = useRef<string | null>(null);
   const taskQuickModalHistoryRef = useRef<string | null>(null);
+  const draftTemplateSelectionRef = useRef<Record<string, { start: number; end: number }>>({});
+  const draftStageNameInputRef = useRef<any>(null);
+  const draftStageDescriptionInputRef = useRef<any>(null);
+  const draftCustomFieldDefaultInputRefs = useRef<Record<string, any>>({});
+  const handoverFormsHistoryRef = useRef<string | null>(null);
+  const handoverEditorHistoryRef = useRef<string | null>(null);
   const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
+  const watchedDraftStageSortOrder = Form.useWatch('sort_order', { form: draftForm, preserve: true });
   const activeTaskQuickModalTask = useMemo(
     () => (
       openTaskPopoverId
@@ -330,6 +422,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     ),
     [openTaskPopoverId, tasks]
   );
+  const resetHandoverState = useCallback(() => {
+    handoverFormsHistoryRef.current = null;
+    handoverEditorHistoryRef.current = null;
+    setHandoverFormsModalOpen(false);
+    setHandoverEditorOpen(false);
+    setHandoverTask(null);
+    setHandoverContext(null);
+    setHandoverGroups([]);
+    setHandoverForms([]);
+    setActiveHandoverFormId(null);
+  }, []);
   const closeTaskQuickModal = useCallback((syncHistory = true) => {
     if (syncHistory && typeof window !== 'undefined') {
       const marker = taskQuickModalHistoryRef.current;
@@ -365,6 +468,49 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       window.removeEventListener('popstate', handlePopState);
     };
   }, [closeTaskQuickModal, openTaskPopoverId]);
+  useEffect(() => {
+    if (!handoverFormsModalOpen || typeof window === 'undefined') return;
+
+    const marker = `task-handover-forms:${String(handoverTask?.id || 'task')}:${Date.now()}`;
+    handoverFormsHistoryRef.current = marker;
+    window.history.pushState(
+      { ...(window.history.state || {}), kalamappTaskHandoverForms: marker },
+      '',
+      window.location.href
+    );
+
+    const handlePopState = () => {
+      if (handoverFormsHistoryRef.current !== marker) return;
+      resetHandoverState();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [handoverFormsModalOpen, handoverTask?.id, resetHandoverState]);
+  useEffect(() => {
+    if (!handoverEditorOpen || typeof window === 'undefined') return;
+
+    const marker = `task-handover-editor:${String(handoverTask?.id || 'task')}:${Date.now()}`;
+    handoverEditorHistoryRef.current = marker;
+    window.history.pushState(
+      { ...(window.history.state || {}), kalamappTaskHandoverEditor: marker },
+      '',
+      window.location.href
+    );
+
+    const handlePopState = () => {
+      if (handoverEditorHistoryRef.current !== marker) return;
+      handoverEditorHistoryRef.current = null;
+      setHandoverEditorOpen(false);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [handoverEditorOpen, handoverTask?.id]);
   const modalSelectProps = useMemo(
     () => ({
       allowClear: true,
@@ -435,19 +581,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       ).values()
     ),
     [automationScopeModuleIds, draftCustomAutomationFields]
-  );
-  const automationActionVariableFields = useMemo(
-    () => Array.from(
-      new Map(
-        [
-          ...createProcessAutomationTaskVariableFields(),
-          ...automationActionModuleFields,
-        ]
-          .filter((field) => !!String(field?.key || '').trim())
-          .map((field) => [String(field.key), field] as const)
-      ).values()
-    ),
-    [automationActionModuleFields]
   );
   const workflowModuleOptions = useMemo(
     () => getProjectModuleOptions(),
@@ -622,7 +755,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     [draftStages, normalizeDraftStageForEditor]
   );
   const isProcessRecordModule = (
-    moduleId === 'projects'
+    forceProcessRecordMode
+    || moduleId === 'projects'
     || moduleId === 'marketing_leads'
     || moduleId === 'customers'
     || moduleId === 'invoices'
@@ -663,6 +797,46 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const templateName = String(stage?.source_template_name || '').trim() || null;
     return { groupId, groupLabel, templateId, templateName };
   }, []);
+  const previousDraftStage = useMemo(() => {
+    const currentSortOrder = Number(watchedDraftStageSortOrder || editingDraft?.sort_order || 0);
+    const editingId = String(editingDraft?.id || '').trim();
+    const currentGroupId = editingDraft ? getStageProcessGroupMeta(editingDraft).groupId : '';
+    const candidates = (Array.isArray(draftLocal) ? draftLocal : [])
+      .filter((stage: any) => {
+        if (editingId && String(stage?.id || '').trim() === editingId) return false;
+        if (currentGroupId && getStageProcessGroupMeta(stage).groupId !== currentGroupId) return false;
+        if (currentSortOrder > 0) return Number(stage?.sort_order || 0) < currentSortOrder;
+        return true;
+      })
+      .sort((a: any, b: any) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0));
+    return candidates[0] || null;
+  }, [draftLocal, editingDraft, getStageProcessGroupMeta, watchedDraftStageSortOrder]);
+  const previousStageVariableFields = useMemo(
+    () => buildPreviousStageTaskCustomAutomationFields(getProcessTaskCustomFieldsFromStage(previousDraftStage)),
+    [previousDraftStage]
+  );
+  const automationActionVariableFields = useMemo(
+    () => Array.from(
+      new Map(
+        [
+          ...createProcessAutomationTaskVariableFields(),
+          ...previousStageVariableFields,
+          ...automationActionModuleFields,
+        ]
+          .filter((field) => !!String(field?.key || '').trim())
+          .map((field) => [String(field.key), field] as const)
+      ).values()
+    ),
+    [automationActionModuleFields, previousStageVariableFields]
+  );
+  const stageTemplateVariableOptions = useMemo(
+    () => automationActionVariableFields.map((field) => ({
+      key: String(field?.key || '').trim(),
+      label: String(field?.labels?.fa || field?.key || '').trim(),
+      token: `{{${String(field?.key || '').trim()}}}`,
+    })).filter((item) => item.key && item.label),
+    [automationActionVariableFields]
+  );
   const getTaskProcessGroupMeta = useCallback((task: any) => {
     const rawRecurrence = task?.recurrence_info;
     let recurrence: any = {};
@@ -820,6 +994,131 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
     );
   }, [parseRecurrenceInfo]);
+
+  const rememberDraftTemplateSelection = useCallback((targetKey: string, target: any) => {
+    const node = getInputLikeElement(target);
+    if (!node) return;
+    const start = typeof node.selectionStart === 'number' ? node.selectionStart : String(node.value || '').length;
+    const end = typeof node.selectionEnd === 'number' ? node.selectionEnd : start;
+    draftTemplateSelectionRef.current[targetKey] = { start, end };
+  }, []);
+
+  const focusDraftTemplateTarget = useCallback((targetKey: string, caret: number) => {
+    const refTarget = targetKey === 'name'
+      ? draftStageNameInputRef.current
+      : targetKey === 'description'
+        ? draftStageDescriptionInputRef.current
+        : draftCustomFieldDefaultInputRefs.current[targetKey.replace('custom:', '')];
+    const node = getInputLikeElement(refTarget);
+    if (!node) return;
+    window.setTimeout(() => {
+      node.focus?.();
+      node.setSelectionRange?.(caret, caret);
+    }, 0);
+  }, []);
+
+  const insertDraftTemplateToken = useCallback((targetKey: string, token: string) => {
+    const selection = draftTemplateSelectionRef.current[targetKey] || null;
+    if (targetKey === 'name' || targetKey === 'description') {
+      const currentValue = String(draftForm.getFieldValue(targetKey) || '');
+      const { nextValue, caret } = insertTextAtSelection(currentValue, token, selection);
+      draftForm.setFieldValue(targetKey, nextValue);
+      focusDraftTemplateTarget(targetKey, caret);
+      return;
+    }
+    if (targetKey.startsWith('custom:')) {
+      const fieldKey = targetKey.replace('custom:', '');
+      let nextCaret = 0;
+      setDraftCustomFields((prev) => prev.map((field) => {
+        if (String(field?.key || '') !== fieldKey) return field;
+        const currentValue = stringifyTemplateValue(field?.defaultValue);
+        const inserted = insertTextAtSelection(currentValue, token, selection);
+        nextCaret = inserted.caret;
+        return {
+          ...field,
+          defaultValue: inserted.nextValue,
+        };
+      }));
+      focusDraftTemplateTarget(targetKey, nextCaret);
+    }
+  }, [draftForm, focusDraftTemplateTarget]);
+
+  const buildTaskTemplateContextRecord = useCallback(async ({
+    taskName,
+    taskType,
+    dueDate,
+    processLinkMap,
+    previousTask,
+  }: {
+    taskName?: string | null;
+    taskType?: string | null;
+    dueDate?: string | null;
+    processLinkMap?: Record<string, any> | null;
+    previousTask?: any;
+  }) => {
+    const record: Record<string, any> = {
+      task_name: String(taskName || '').trim(),
+      task_type: String(taskType || '').trim(),
+      task_status: 'todo',
+      status_label: getTaskStatusLabel('todo'),
+      task_status_label: getTaskStatusLabel('todo'),
+      task_due_date: dueDate || '',
+    };
+
+    if (recordId && moduleId) {
+      try {
+        const { data: sourceRecord, error } = await supabase
+          .from(MODULES[moduleId]?.table || moduleId)
+          .select('*')
+          .eq('id', recordId)
+          .maybeSingle();
+        if (error) throw error;
+        Object.assign(record, sourceRecord || {});
+      } catch (error) {
+        console.warn('Could not load source record for task template rendering', error);
+      }
+    }
+
+    const mergedLinks = mergeProcessLinkMaps(
+      recordId && moduleId ? { [moduleId]: String(recordId) } : {},
+      processLinkMap && typeof processLinkMap === 'object' ? processLinkMap : {},
+    );
+
+    await Promise.all(
+      Object.entries(mergedLinks).map(async ([linkedModuleId, linkedRecordId]) => {
+        const normalizedModuleId = String(linkedModuleId || '').trim();
+        const normalizedRecordId = String(linkedRecordId || '').trim();
+        if (!normalizedModuleId || !normalizedRecordId) return;
+        if (normalizedModuleId === moduleId && normalizedRecordId === String(recordId || '')) return;
+        try {
+          const { data, error } = await supabase
+            .from(MODULES[normalizedModuleId]?.table || normalizedModuleId)
+            .select('*')
+            .eq('id', normalizedRecordId)
+            .maybeSingle();
+          if (error) throw error;
+          if (!data) return;
+          Object.entries(data).forEach(([fieldKey, value]) => {
+            record[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
+          });
+        } catch (error) {
+          console.warn('Could not load linked process record for task template rendering', error);
+        }
+      })
+    );
+
+    const previousTaskRecord = previousTask ? withProcessTaskCustomFieldValues(previousTask) : null;
+    const previousTaskCustomFields = previousTask
+      ? getProcessTaskCustomFieldsFromRecurrence(parseRecurrenceInfo(previousTask?.recurrence_info))
+      : [];
+    previousTaskCustomFields.forEach((field) => {
+      const fieldKey = String(field?.key || '').trim();
+      if (!fieldKey) return;
+      record[`${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}${fieldKey}`] = previousTaskRecord?.[fieldKey];
+    });
+
+    return record;
+  }, [moduleId, parseRecurrenceInfo, recordId]);
 
   const loadTaskCustomFieldOptions = useCallback(async (inputFields?: ModuleField[]) => {
     const sourceFields = normalizeProcessTaskCustomFields(
@@ -1190,6 +1489,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'escalation_level',
       'production_line_id',
       'production_shelf_id',
+      'image_url',
       'recurrence_info',
     ];
     if (options.runAutomation !== false && !previousTask) {
@@ -1361,10 +1661,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (isDraftOnlyModule) return [] as any[];
     if (!recordId) {
       setTasks([]);
+      setTasksLoaded(true);
       return [] as any[];
     }
     try {
       setLoading(true);
+      setTasksLoaded(false);
       let query = supabase
         .from('tasks')
         .select(`
@@ -1379,7 +1681,35 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       if (isProcessRecordModule) {
-        query = applyTaskSourceRecordFilter(query, moduleId, recordId);
+        const [sourceResult, linkedResult] = await Promise.all([
+          applyTaskSourceRecordFilter(query, moduleId, recordId)
+            .order('sort_order', { ascending: true }),
+          supabase
+            .from('tasks')
+            .select(`
+              *,
+              assignee:profiles!tasks_assignee_id_fkey(full_name, email, mobile_1, avatar_url),
+              assigned_role:org_roles(title)
+            `)
+            .contains('recurrence_info', { process_links: { [String(moduleId || '')]: String(recordId || '') } })
+            .order('sort_order', { ascending: true }),
+        ]);
+
+        if (sourceResult.error) throw sourceResult.error;
+        if (linkedResult.error) throw linkedResult.error;
+
+        const mergedRows = [
+          ...(sourceResult.data || []),
+          ...((linkedResult.data || []).filter((row: any) => {
+            const processLinks = parseProcessLinkMap(parseRecurrenceInfo(row?.recurrence_info)?.process_links);
+            return String(processLinks[String(moduleId || '')] || '').trim() === String(recordId || '').trim();
+          })),
+        ];
+        const next = Array.from(
+          new Map(mergedRows.map((row: any) => [String(row?.id || `${row?.name || ''}_${row?.sort_order || ''}`), row])).values()
+        ).map((row: any) => withProcessTaskCustomFieldValues(row));
+        setTasks(next);
+        return next;
       } else {
         query = applyTaskSourceRecordFilter(query, 'production_orders', recordId);
       }
@@ -1395,6 +1725,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return [] as any[];
     } finally {
       setLoading(false);
+      setTasksLoaded(true);
     }
   };
 
@@ -2553,17 +2884,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [buildHandoverFormId, handoverContext, recalcHandoverGroup]);
 
   const closeHandoverEditor = useCallback(() => {
+    handoverEditorHistoryRef.current = null;
     setHandoverEditorOpen(false);
   }, []);
 
   const closeHandoverModal = useCallback(() => {
-    setHandoverFormsModalOpen(false);
-    setHandoverEditorOpen(false);
-    setHandoverTask(null);
-    setHandoverContext(null);
-    setHandoverGroups([]);
-    setHandoverForms([]);
-    setActiveHandoverFormId(null);
+    resetHandoverState();
+  }, [resetHandoverState]);
+  const handleHandoverTaskUpdated = useCallback(async (updatedTask: any) => {
+    if (!updatedTask?.id) return;
+    setTasks((prev) => prev.map((item: any) => (
+      String(item?.id || '') === String(updatedTask.id)
+        ? { ...item, ...updatedTask }
+        : item
+    )));
+    setHandoverTask((prev: any) => (
+      prev && String(prev?.id || '') === String(updatedTask.id)
+        ? { ...prev, ...updatedTask }
+        : prev
+    ));
   }, []);
 
   const handleConfirmGiver = useCallback(async () => {
@@ -2687,10 +3026,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const stageAutomationRules = normalizeProcessAutomationRules(draftToCreate?.automation_rules);
       const stageCustomFields = getProcessTaskCustomFieldsFromStage(draftToCreate);
       const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(draftToCreate);
-      const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(
-        stageCustomFields,
-        taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {}
-      );
       const stageProcessLinkMap = draftToCreate?.process_link_map && typeof draftToCreate.process_link_map === 'object'
         ? draftToCreate.process_link_map
         : {};
@@ -2698,6 +3033,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         draftToCreate?.process_target_module_ids,
         moduleId
       );
+      const currentSortOrder = Number(values?.sort_order || draftToCreate?.sort_order || 0);
+      const previousTaskForTemplate = getLineTaskChain(activeLineId)
+        .filter((task: any) => Number(task?.sort_order || 0) < currentSortOrder)
+        .sort((a: any, b: any) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0] || null;
       const durationValue = Math.max(0, Number(values?.duration_value || 0));
       const durationUnit = String(values?.duration_unit || 'day') === 'hour' ? 'hour' : 'day';
       const durationFrom = String(values?.duration_from || 'project_start') === 'previous_stage_end'
@@ -2730,14 +3069,47 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         dueDate = computedDueAt ? computedDueAt.toISOString() : null;
       }
 
+      const templateContext = await buildTaskTemplateContextRecord({
+        taskName: values?.name,
+        taskType,
+        dueDate,
+        processLinkMap: stageProcessLinkMap,
+        previousTask: previousTaskForTemplate,
+      });
+      const resolvedTaskName = String(
+        renderTemplateValueFromRecord(values?.name, templateContext, FieldType.TEXT) ?? values?.name ?? ''
+      ).trim();
+      const resolvedTaskDescription = String(
+        renderTemplateValueFromRecord(taskDescription, {
+          ...templateContext,
+          task_name: resolvedTaskName || String(values?.name || '').trim(),
+        }, FieldType.LONG_TEXT) ?? taskDescription ?? ''
+      ).trim() || null;
+      const resolvedStageCustomFields = stageCustomFields.map((field) => ({
+        ...field,
+        defaultValue: renderTemplateValueFromRecord(
+          field?.defaultValue,
+          {
+            ...templateContext,
+            task_name: resolvedTaskName || String(values?.name || '').trim(),
+            description: resolvedTaskDescription || '',
+          },
+          field.type
+        ),
+      }));
+      const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(
+        resolvedStageCustomFields,
+        taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {}
+      );
+
       const payload: any = {
-        name: values.name,
+        name: resolvedTaskName || values.name,
         status: 'todo',
         assignee_id: assigneeType === 'user' ? assigneeId : null,
         assignee_role_id: assigneeType === 'role' ? assigneeId : null,
         assignee_type: assigneeType,
         due_date: dueDate,
-        description: taskDescription,
+        description: resolvedTaskDescription,
         task_type: taskType,
         wage: values.wage || null,
         weight: values.weight || 0,
@@ -2752,11 +3124,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         ? values.recurrence_info
         : {};
 
-      if (stageCustomFields.length > 0) {
+      if (resolvedStageCustomFields.length > 0) {
         payload.recurrence_info = {
           ...currentRecurrence,
           ...(taskType ? { task_type: taskType } : {}),
-          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         };
@@ -2775,7 +3147,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_automation_rules: stageAutomationRules,
           process_target_module_ids: stageTargetModuleIds,
           process_links: stageProcessLinkMap,
-          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
+          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         };
@@ -2975,6 +3347,67 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       message.error(toFaErrorMessage(err, 'خطا در ثبت مقدار تولید شده'));
     }
   };
+  const handleTaskMainImageChange = useCallback(async (task: any, url: string | null) => {
+    if (!task?.id) return;
+    const taskId = String(task.id);
+    try {
+      await updateTaskWithFallback(taskId, { image_url: url }, { previousTask: task, runAutomation: false });
+      setTasks((prev) => prev.map((item: any) => (
+        String(item?.id) === taskId
+          ? withProcessTaskCustomFieldValues({ ...item, image_url: url })
+          : item
+      )));
+      message.success('تصویر اصلی فعالیت بروزرسانی شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'بروزرسانی تصویر اصلی فعالیت ناموفق بود'));
+    }
+  }, [updateTaskWithFallback]);
+  const handleTaskImageUpload = useCallback(async (task: any, file: File) => {
+    if (!task?.id) return false;
+    const taskId = String(task.id);
+    try {
+      const ext = String(file.name.split('.').pop() || '').trim();
+      const baseName = String(file.name || 'image').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+      const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${baseName}${ext && !baseName.toLowerCase().endsWith(`.${ext.toLowerCase()}`) ? `.${ext}` : ''}`;
+      const filePath = `record_files/tasks/${taskId}/${fileName}`;
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: filePath,
+        file,
+        label: file.name || 'تصویر',
+        detail: 'تصویر اصلی فعالیت',
+      });
+      const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+      const imageUrl = String(urlData?.publicUrl || '').trim();
+      if (!imageUrl) throw new Error('TASK_IMAGE_URL_MISSING');
+      await updateTaskWithFallback(taskId, { image_url: imageUrl }, { previousTask: task, runAutomation: false });
+      const { error: fileInsertError } = await supabase
+        .from('record_files')
+        .insert([{
+          module_id: 'tasks',
+          record_id: taskId,
+          file_url: imageUrl,
+          file_type: 'image',
+          file_name: file.name || null,
+          mime_type: file.type || null,
+          sort_order: 0,
+        }]);
+      if (fileInsertError) {
+        console.warn('Could not append uploaded task image to record_files', fileInsertError);
+      }
+      setTasks((prev) => prev.map((item: any) => (
+        String(item?.id) === taskId
+          ? withProcessTaskCustomFieldValues({ ...item, image_url: imageUrl })
+          : item
+      )));
+      message.success('تصویر فعالیت بروزرسانی شد');
+    } catch (error: any) {
+      if (isUploadCanceledError(error)) return false;
+      message.error(toFaErrorMessage(error, 'آپلود تصویر فعالیت ناموفق بود'));
+    }
+    return false;
+  }, [updateTaskWithFallback]);
   const handleUnlinkTaskFromProcess = useCallback(async (task: any) => {
     if (!task?.id) return;
     const taskId = String(task.id);
@@ -3378,6 +3811,59 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     );
   }, [getProcessTaskFieldOptions, loadTaskCustomFieldOptions, savingTaskCustomFields, updateTaskCustomFieldDraft]);
 
+  const filteredStageTemplateVariableOptions = useMemo(() => {
+    const needle = String(draftTemplatePickerSearch || '').trim().toLowerCase();
+    if (!needle) return stageTemplateVariableOptions;
+    return stageTemplateVariableOptions.filter((item) => (
+      String(item?.label || '').toLowerCase().includes(needle)
+      || String(item?.token || '').toLowerCase().includes(needle)
+      || String(item?.key || '').toLowerCase().includes(needle)
+    ));
+  }, [draftTemplatePickerSearch, stageTemplateVariableOptions]);
+
+  const renderDraftTemplatePicker = useCallback((targetKey: string) => (
+    <Popover
+      trigger="click"
+      placement="bottomRight"
+      content={(
+        <div
+          className="w-[min(88vw,24rem)] space-y-2 select-text"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Input
+            value={draftTemplatePickerSearch}
+            onChange={(event) => setDraftTemplatePickerSearch(event.target.value)}
+            allowClear
+            size="small"
+            placeholder="جستجو در متغیرها"
+          />
+          <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+          {filteredStageTemplateVariableOptions.length === 0 ? (
+            <div className="px-2 py-3 text-xs text-gray-500">متغیری در دسترس نیست.</div>
+          ) : filteredStageTemplateVariableOptions.map((item) => (
+            <button
+              key={`${targetKey}-${item.key}`}
+              type="button"
+              className="w-full rounded-lg border border-transparent px-2 py-2 text-right transition-colors hover:border-[rgba(var(--brand-200-rgb),0.75)] hover:bg-[rgba(var(--brand-50-rgb),0.55)] select-text"
+              onClick={() => insertDraftTemplateToken(targetKey, item.token)}
+            >
+              <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.label}</div>
+              <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400" dir="ltr">{item.token}</div>
+            </button>
+          ))}
+          </div>
+        </div>
+      )}
+    >
+      <Button
+        type="text"
+        size="small"
+        icon={<CopyOutlined />}
+        className="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
+      />
+    </Popover>
+  ), [draftTemplatePickerSearch, filteredStageTemplateVariableOptions, insertDraftTemplateToken]);
+
   const renderPopupContent = (task: any) => {
     const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
     const currentAssigneeCombo = task?.assignee_role_id
@@ -3416,6 +3902,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </div>
             ) : null}
           </div>
+        </div>
+
+        <div className="mb-3">
+          <RecordImageBox
+            moduleId="tasks"
+            recordId={String(task?.id || '')}
+            imageUrl={task?.image_url || null}
+            canEdit={!readOnly}
+            canViewFilesManager
+            canEditFilesManager={!readOnly}
+            canDeleteFilesManager={!readOnly}
+            onImageUpdate={(file) => handleTaskImageUpload(task, file)}
+            onMainImageChange={(url) => { void handleTaskMainImageChange(task, url); }}
+          />
         </div>
 
         <div className="space-y-3 mb-3">
@@ -3699,8 +4199,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       const activeRows = rows.filter((row: any) => row?.is_active !== false);
-      const scopedRows = activeRows.filter((row: any) => doesProcessTemplateSupportModule(row, targetModule));
-      const sourceRows = scopedRows.length > 0 ? scopedRows : activeRows;
+      const sourceRows = activeRows.filter((row: any) => doesProcessTemplateSupportModule(row, targetModule));
 
       setProcessTemplateOptions(
         sourceRows
@@ -3723,8 +4222,32 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     void loadProcessTemplateOptions();
   }, [isProcessRecordModule, loadProcessTemplateOptions, readOnly]);
 
-  const handleOpenAppendProcessModal = useCallback(async () => {
+  const handleOpenAppendProcessModal = useCallback(async (
+    mode: 'append' | 'links' = 'append',
+    group?: { id?: string | null; templateId?: string | null; stages?: any[] }
+  ) => {
     if (!isProcessRecordModule || readOnly) return;
+    const normalizedTemplateId = String(group?.templateId || '').trim() || null;
+    const stageSeed = Array.isArray(group?.stages) ? group?.stages : [];
+    const seededTargetModuleIds = normalizeProcessTargetModuleIds(
+      stageSeed.flatMap((stage: any) => Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
+      moduleId
+    );
+    const seededLinks = stageSeed.reduce<Record<string, string | null>>((acc, stage: any) => {
+      const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+        ? stage.process_link_map
+        : {};
+      Object.entries(rawMap).forEach(([targetModuleId, linkedRecordId]) => {
+        const normalizedTargetModuleId = String(targetModuleId || '').trim();
+        const normalizedRecordId = String(linkedRecordId || '').trim();
+        if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
+          acc[normalizedTargetModuleId] = normalizedRecordId;
+        }
+      });
+      return acc;
+    }, {});
+    setAppendProcessModalMode(mode);
+    setAppendProcessModalGroupId(mode === 'links' ? (String(group?.id || '').trim() || null) : null);
     setAppendProcessTemplateId(null);
     setAppendProcessTargetModuleIds([]);
     setAppendProcessLinkedRecords({});
@@ -3732,7 +4255,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setAppendProcessRelationLoading({});
     setAppendProcessModalOpen(true);
     await loadProcessTemplateOptions();
-  }, [isProcessRecordModule, loadProcessTemplateOptions, readOnly]);
+    if (mode === 'links') {
+      setAppendProcessTemplateId(normalizedTemplateId);
+      setAppendProcessTargetModuleIds(seededTargetModuleIds);
+      setAppendProcessLinkedRecords(seededLinks);
+    }
+  }, [isProcessRecordModule, loadProcessTemplateOptions, moduleId, readOnly]);
 
   const loadAppendProcessRelationOptions = useCallback(async (targetModuleId: string, exactId?: string | null) => {
     const normalizedTargetModuleId = String(targetModuleId || '').trim();
@@ -3789,12 +4317,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, [moduleId, recordId]);
 
+  const hasObjectKeys = (value: Record<string, any> | null | undefined) =>
+    Object.keys(value || {}).length > 0;
+
+  const areStringArraysEqual = (left: string[], right: string[]) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+
+  const areProcessLinkMapsEqual = (
+    left: Record<string, string | null>,
+    right: Record<string, string | null>,
+  ) => {
+    const leftKeys = Object.keys(left || {});
+    const rightKeys = Object.keys(right || {});
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => (left[key] ?? null) === (right[key] ?? null));
+  };
+
   useEffect(() => {
-    if (!appendProcessTemplateId || !appendProcessModalOpen) {
-      setAppendProcessTargetModuleIds([]);
-      setAppendProcessLinkedRecords({});
-      setAppendProcessRelationOptions({});
-      setAppendProcessRelationLoading({});
+    if ((!appendProcessTemplateId && appendProcessModalMode === 'append') || !appendProcessModalOpen) {
+      setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
+      if (appendProcessModalMode !== 'links') {
+        setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
+      }
+      setAppendProcessRelationOptions((prev) => (hasObjectKeys(prev) ? {} : prev));
+      setAppendProcessRelationLoading((prev) => (hasObjectKeys(prev) ? {} : prev));
       return;
     }
 
@@ -3814,11 +4360,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           syncedTemplate.module_id
         );
         if (cancelled) return;
-        setAppendProcessTargetModuleIds(targetModuleIds);
+        setAppendProcessTargetModuleIds((prev) => (
+          areStringArraysEqual(prev, targetModuleIds) ? prev : targetModuleIds
+        ));
 
-        const knownLinks = await resolveKnownProcessLinks(targetModuleIds) || {};
+        const knownLinks = appendProcessModalMode === 'links'
+          ? (appendProcessLinkedRecords || {})
+          : (await resolveKnownProcessLinks(targetModuleIds) || {});
         if (cancelled) return;
-        setAppendProcessLinkedRecords(knownLinks);
+        setAppendProcessLinkedRecords((prev) => (
+          areProcessLinkMapsEqual(prev, knownLinks) ? prev : knownLinks
+        ));
 
         await Promise.all(
           targetModuleIds.map((targetModuleId) =>
@@ -3828,8 +4380,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       } catch (error) {
         console.warn('Could not load selected process template targets', error);
         if (!cancelled) {
-          setAppendProcessTargetModuleIds([]);
-          setAppendProcessLinkedRecords({});
+          setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
+          if (appendProcessModalMode !== 'links') {
+            setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
+          }
         }
       }
     };
@@ -3839,6 +4393,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       cancelled = true;
     };
   }, [
+    appendProcessLinkedRecords,
+    appendProcessModalMode,
     appendProcessModalOpen,
     appendProcessTemplateId,
     loadAppendProcessRelationOptions,
@@ -3953,6 +4509,39 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     buildProcessGroupId,
     draftLocal,
     processTemplateOptions,
+    saveDraftStages,
+  ]);
+
+  const handleSaveProcessLinksToGroup = useCallback(async () => {
+    const normalizedGroupId = String(appendProcessModalGroupId || '').trim();
+    if (!normalizedGroupId) {
+      setAppendProcessModalOpen(false);
+      return;
+    }
+    try {
+      setLoading(true);
+      const nextStages = (Array.isArray(draftLocal) ? draftLocal : []).map((stage: any) => {
+        const stageGroupId = String(stage?.process_group_id || stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
+        if (stageGroupId !== normalizedGroupId) return stage;
+        return {
+          ...stage,
+          process_target_module_ids: appendProcessTargetModuleIds,
+          process_link_map: appendProcessLinkedRecords,
+        };
+      });
+      await saveDraftStages(nextStages);
+      setAppendProcessModalOpen(false);
+      message.success('رکوردهای مرتبط این فرآیند بروزرسانی شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره رکوردهای مرتبط فرآیند ناموفق بود'));
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    appendProcessLinkedRecords,
+    appendProcessModalGroupId,
+    appendProcessTargetModuleIds,
+    draftLocal,
     saveDraftStages,
   ]);
 
@@ -4270,7 +4859,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           .filter(Boolean)
       );
 
-      const payload = stageRows
+      const payload: any[] = [];
+      let previousResolvedTask: any = null;
+      const creatableStages = stageRows
         .filter((stage: any) => {
           const stageName = String(stage?.name || stage?.title || '').trim();
           const stageMeta = getStageProcessGroupMeta(stage);
@@ -4279,57 +4870,95 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           existingByStageKey.add(stageKey);
           return true;
         })
-        .map((stage: any, index: number) => {
-          const stageName = String(stage?.name || stage?.title || `مرحله ${index + 1}`).trim();
-          const normalized = normalizeStageName(stageName);
-          const stageMeta = getStageProcessGroupMeta(stage);
-          const assignee = parseStageAssignee(stage);
-          const recurrenceBase = stage?.recurrence_info && typeof stage.recurrence_info === 'object'
-            ? stage.recurrence_info
-            : {};
-          const stageTaskType = String(stage?.task_type || '').trim() || null;
-          const stageDescription = String(stage?.description || '').trim() || null;
-          const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
-          const stageCustomFields = getProcessTaskCustomFieldsFromStage(stage);
-          const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
-          const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(stageCustomFields, {});
-          const taskRow: any = {
-            name: stageName,
-            status: 'todo',
-            source_template_id: stageMeta.templateId,
-            source_stage_sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-            process_group_id: stageMeta.groupId,
-            production_line_id: null,
-            production_shelf_id: null,
-            produced_qty: 0,
-            description: stageDescription,
-            task_type: stageTaskType,
-            assignee_type: assignee.assigneeType,
-            assignee_id: assignee.assigneeType === 'user' ? assignee.assigneeId : null,
-            assignee_role_id: assignee.assigneeType === 'role' ? assignee.assigneeId : null,
-            wage: Number(stage?.wage || 0),
-            weight: Number(stage?.weight || 0),
-            sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-            due_date: dueByStageKey.get(buildProcessStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null,
-            created_by: userId,
-            recurrence_info: {
-              ...recurrenceBase,
-              ...(stageTaskType ? { task_type: stageTaskType } : {}),
-              process_automation_rules: stageAutomationRules,
-              [PROCESS_TASK_CUSTOM_FIELDS_KEY]: stageCustomFields,
-              [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
-              [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
-              process_group: {
-                id: stageMeta.groupId,
-                name: stageMeta.groupLabel,
-                template_id: stageMeta.templateId,
-                template_name: stageMeta.templateName,
-              },
-            },
-            ...buildTaskSourceInitialValues(moduleId, recordId),
-          };
-          return taskRow;
+        .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+
+      for (const [index, stage] of creatableStages.entries()) {
+        const stageName = String(stage?.name || stage?.title || `مرحله ${index + 1}`).trim();
+        const normalized = normalizeStageName(stageName);
+        const stageMeta = getStageProcessGroupMeta(stage);
+        const assignee = parseStageAssignee(stage);
+        const recurrenceBase = stage?.recurrence_info && typeof stage.recurrence_info === 'object'
+          ? stage.recurrence_info
+          : {};
+        const stageTaskType = String(stage?.task_type || '').trim() || null;
+        const stageDescription = String(stage?.description || '').trim() || null;
+        const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
+        const stageCustomFields = getProcessTaskCustomFieldsFromStage(stage);
+        const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
+        const dueDate = dueByStageKey.get(buildProcessStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null;
+        const processLinkMap = recurrenceBase?.process_links && typeof recurrenceBase.process_links === 'object'
+          ? recurrenceBase.process_links
+          : {};
+        const templateContext = await buildTaskTemplateContextRecord({
+          taskName: stageName,
+          taskType: stageTaskType,
+          dueDate,
+          processLinkMap,
+          previousTask: previousResolvedTask,
         });
+        const resolvedStageName = String(
+          renderTemplateValueFromRecord(stageName, templateContext, FieldType.TEXT) ?? stageName
+        ).trim() || stageName;
+        const resolvedStageDescription = String(
+          renderTemplateValueFromRecord(stageDescription, {
+            ...templateContext,
+            task_name: resolvedStageName,
+          }, FieldType.LONG_TEXT) ?? stageDescription ?? ''
+        ).trim() || null;
+        const resolvedStageCustomFields = stageCustomFields.map((field) => ({
+          ...field,
+          defaultValue: renderTemplateValueFromRecord(
+            field?.defaultValue,
+            {
+              ...templateContext,
+              task_name: resolvedStageName,
+              description: resolvedStageDescription || '',
+            },
+            field.type
+          ),
+        }));
+        const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, {});
+        const taskRow: any = {
+          name: resolvedStageName,
+          status: 'todo',
+          source_template_id: stageMeta.templateId,
+          source_stage_sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+          process_group_id: stageMeta.groupId,
+          production_line_id: null,
+          production_shelf_id: null,
+          produced_qty: 0,
+          description: resolvedStageDescription,
+          task_type: stageTaskType,
+          assignee_type: assignee.assigneeType,
+          assignee_id: assignee.assigneeType === 'user' ? assignee.assigneeId : null,
+          assignee_role_id: assignee.assigneeType === 'role' ? assignee.assigneeId : null,
+          wage: Number(stage?.wage || 0),
+          weight: Number(stage?.weight || 0),
+          sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+          due_date: dueDate,
+          created_by: userId,
+          recurrence_info: {
+            ...recurrenceBase,
+            ...(stageTaskType ? { task_type: stageTaskType } : {}),
+            process_automation_rules: stageAutomationRules,
+            [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
+            [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
+            [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
+            process_group: {
+              id: stageMeta.groupId,
+              name: stageMeta.groupLabel,
+              template_id: stageMeta.templateId,
+              template_name: stageMeta.templateName,
+            },
+          },
+          ...buildTaskSourceInitialValues(moduleId, recordId),
+        };
+        previousResolvedTask = {
+          ...taskRow,
+          ...stageCustomFieldValues,
+        };
+        payload.push(taskRow);
+      }
 
       if (!payload.length) {
         message.info('برای همه مراحل فعالیت ثبت شده است');
@@ -4344,6 +4973,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setLoading(false);
     }
   }, [
+    buildTaskTemplateContextRecord,
     buildProcessStageTaskKey,
     computeStageDueAt,
     draftLocal,
@@ -5083,6 +5713,85 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return !!stageKey && !existingKeys.has(stageKey);
     });
   }, [buildProcessStageTaskKey, getStageProcessGroupMeta, getTaskProcessGroupMeta]);
+  const hasProcessGroupStarted = useCallback((group: any) =>
+    (Array.isArray(group?.tasks) ? group.tasks : []).some((task: any) => {
+      const normalizedStatus = String(task?.status || '').trim().toLowerCase();
+      return ['in_progress', 'done', 'completed', 'confirmed', 'final', 'settled'].includes(normalizedStatus);
+    }),
+  []);
+  const getProcessGroupOriginLabel = useCallback((group: any) => {
+    const firstTask = (Array.isArray(group?.tasks) ? group.tasks : []).find((task: any) =>
+      String(task?.source_module_id || '').trim() || String(task?.source_record_id || '').trim()
+    );
+    const originModuleId = String(firstTask?.source_module_id || moduleId || '').trim();
+    const originRecordId = String(firstTask?.source_record_id || recordId || '').trim();
+    const originModuleLabel = MODULES[originModuleId]?.titles?.faSingular
+      || MODULES[originModuleId]?.titles?.fa
+      || originModuleId
+      || 'رکورد';
+    const originKey = originModuleId && originRecordId ? `${originModuleId}:${originRecordId}` : '';
+    const originRecordLabel = originKey ? processOriginTitleMap[originKey] : '';
+    return originRecordLabel
+      ? `${originModuleLabel}: ${toPersianNumber(originRecordLabel)}`
+      : originModuleLabel;
+  }, [moduleId, processOriginTitleMap, recordId]);
+  const isProcessGroupCompleted = useCallback((group: any) => {
+    const groupTasks = Array.isArray(group?.tasks) ? group.tasks : [];
+    if (groupTasks.length === 0) return false;
+    return groupTasks.every((task: any) => {
+      const normalizedStatus = String(task?.status || '').trim().toLowerCase();
+      return ['done', 'completed', 'confirmed', 'final', 'settled'].includes(normalizedStatus);
+    });
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProcessOriginTitles = async () => {
+      const groupedIds = new Map<string, Set<string>>();
+      (tasks || []).forEach((task: any) => {
+        const originModuleId = String(task?.source_module_id || '').trim();
+        const originRecordId = String(task?.source_record_id || '').trim();
+        if (!originModuleId || !originRecordId || !MODULES[originModuleId]) return;
+        if (!groupedIds.has(originModuleId)) {
+          groupedIds.set(originModuleId, new Set<string>());
+        }
+        groupedIds.get(originModuleId)!.add(originRecordId);
+      });
+
+      if (groupedIds.size === 0) {
+        setProcessOriginTitleMap({});
+        return;
+      }
+
+      const nextMap: Record<string, string> = {};
+      await Promise.all(
+        Array.from(groupedIds.entries()).map(async ([originModuleId, ids]) => {
+          const moduleConfig = MODULES[originModuleId];
+          const tableName = moduleConfig?.table || originModuleId;
+          const idList = Array.from(ids).filter(Boolean);
+          if (!tableName || idList.length === 0) return;
+          const { data } = await supabase
+            .from(tableName)
+            .select('*')
+            .in('id', idList);
+          (data || []).forEach((row: any) => {
+            const title = getRecordTitle(row, moduleConfig, { fallback: '' });
+            if (!title) return;
+            nextMap[`${originModuleId}:${row.id}`] = title;
+          });
+        })
+      );
+
+      if (!cancelled) {
+        setProcessOriginTitleMap(nextMap);
+      }
+    };
+
+    void loadProcessOriginTitles();
+    return () => {
+      cancelled = true;
+    };
+  }, [tasks]);
 
   const handleCopyLine = async (line: any) => {
     if (!recordId || !line?.id || !isProductionOrder) return;
@@ -5237,6 +5946,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const normalizedProcessLineGroups = processLineGroups.length > 0
           ? processLineGroups
           : [{ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: [], lineSegments: [] as any[] }];
+        const visibleProcessLineGroups = normalizedProcessLineGroups.filter((group: any) =>
+          showCompletedProcessGroups || !isProcessGroupCompleted(group)
+        );
         const isProcessEmptyState = isProcessRecordModule
           && normalizedProcessLineGroups.length === 1
           && (!Array.isArray(normalizedProcessLineGroups[0]?.stages) || normalizedProcessLineGroups[0].stages.length === 0)
@@ -5415,35 +6127,57 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             {isProcessRecordModule ? (
               <>
-                {isProcessEmptyState && !showEmptyProcessDetails ? (
-                  <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">فرآیندی ثبت نشده است</span>
-                    <div className="flex items-center gap-2">
-                      {!readOnly && !!recordId && (
-                        <Button
-                          size={compact ? 'small' : 'middle'}
-                          onClick={() => { void handleOpenAppendProcessModal(); }}
-                          className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
-                        >
-                          افزودن فرآیند
-                        </Button>
-                      )}
-                      <Button
-                        size={compact ? 'small' : 'middle'}
-                        onClick={() => setShowEmptyProcessDetails(true)}
-                      >
-                        نمایش جزئیات
-                      </Button>
-                    </div>
+                {readOnly && !tasksLoaded ? (
+                  <div
+                    className={
+                      (compact || cardCompact)
+                        ? "rounded-lg border border-dashed border-gray-300/80 dark:border-gray-700 px-2 py-1.5 text-center text-[10px] leading-4 text-gray-400 dark:text-gray-500"
+                        : "rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-3 py-4 text-center text-xs text-gray-400 dark:text-gray-500"
+                    }
+                  >
+                    در حال بارگذاری فرآیند...
                   </div>
+                ) : isProcessEmptyState && !showEmptyProcessDetails ? (
+                  readOnly || !recordId ? (
+                    <div
+                      className={
+                        (compact || cardCompact)
+                          ? "rounded-lg border border-dashed border-gray-300/80 dark:border-gray-700 px-2 py-1.5 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400"
+                          : "rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-3 py-3 text-center text-xs text-gray-500 dark:text-gray-400"
+                      }
+                    >
+                      هنوز فرآیندی ایجاد نشده است
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowEmptyProcessDetails(true);
+                        void handleOpenAppendProcessModal();
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[rgba(var(--brand-300-rgb),0.8)] bg-[rgba(var(--brand-50-rgb),0.42)] px-3 py-3 text-sm font-medium text-[rgba(var(--brand-700-rgb),1)] transition-colors hover:border-[rgba(var(--brand-500-rgb),0.9)] hover:bg-[rgba(var(--brand-50-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.3)] dark:bg-[rgba(var(--brand-700-rgb),0.12)]"
+                    >
+                      <PlusOutlined />
+                      <span>ایجاد فرآیند</span>
+                    </button>
+                  )
                 ) : (
                   <div className="space-y-2">
-                    {normalizedProcessLineGroups.map((group: any, groupIndex: number) => {
+                    {visibleProcessLineGroups.map((group: any, groupIndex: number) => {
                       const showAutoAssignButton = canAutoAssignProcessGroup(group);
+                      const isTemplateLocked = hasProcessGroupStarted(group);
+                      const processOriginLabel = getProcessGroupOriginLabel(group);
                       return (
-                      <div key={`${line.id}-${group.id}-${groupIndex}`} className="space-y-1">
+                      <div
+                        key={`${line.id}-${group.id}-${groupIndex}`}
+                        className={
+                          cardCompact
+                            ? 'space-y-2'
+                            : 'space-y-3 rounded-2xl border border-[rgba(255,255,255,0.8)] bg-white/80 p-3 shadow-sm dark:border-gray-700 dark:bg-[#151515]'
+                        }
+                      >
                         {!readOnly && !!recordId && (
-                          <div className="flex flex-wrap items-end gap-2">
+                          <div className="flex flex-wrap items-end gap-3">
                             <div className="min-w-[220px] flex-1 max-w-[360px]">
                               <div className="flex flex-col gap-1">
                                 <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
@@ -5460,22 +6194,29 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   loading={processTemplateOptionsLoading}
                                   className="w-full"
                                   placeholder="انتخاب الگوی فرآیند"
+                                  disabled={isTemplateLocked}
                                 />
-                                {!readOnly && !!recordId && groupIndex === normalizedProcessLineGroups.length - 1 ? (
-                                  <Button
-                                    type="link"
-                                    size="small"
-                                    className="w-fit px-0 text-[12px] text-[rgba(var(--brand-700-rgb),1)]"
-                                    onClick={() => {
-                                      setShowEmptyProcessDetails(true);
-                                      void handleOpenAppendProcessModal();
-                                    }}
-                                  >
-                                    افزودن الگوی فرآیند جدید
-                                  </Button>
+                                {isTemplateLocked ? (
+                                  <span className="text-[11px] text-gray-500">بعد از شروع این فرآیند، الگوی آن قابل تغییر نیست.</span>
                                 ) : null}
                               </div>
                             </div>
+                            <Button
+                              type="link"
+                              size="small"
+                              className="px-0"
+                              icon={<LinkOutlined />}
+                              disabled={!group?.templateId}
+                              onClick={() => {
+                                void handleOpenAppendProcessModal('links', {
+                                  id: String(group?.id || ''),
+                                  templateId: group?.templateId || null,
+                                  stages: group?.stages || [],
+                                });
+                              }}
+                            >
+                              مشاهده بخش های مرتبط این فرآیند
+                            </Button>
                             {showAutoAssignButton ? (
                               <Button
                                 size={compact ? 'small' : 'middle'}
@@ -5519,6 +6260,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             </Tooltip>
                           </div>
                         )}
+                        {!compact && !cardCompact ? (
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500">
+                            <span>مبدا فرآیند: {processOriginLabel}</span>
+                          </div>
+                        ) : null}
                         <div className="w-full flex items-center gap-2">
                           {renderSegmentsBar(group?.lineSegments || [], `${line.id}-${group.id}-${groupIndex}`)}
                           {!readOnly && !!recordId && (
@@ -5545,7 +6291,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     )})}
                   </div>
                 )}
-                {!readOnly && !!recordId && (
+                {!readOnly && !!recordId && !(isProcessEmptyState && !showEmptyProcessDetails) && (
                   <div className="flex justify-start">
                     <Button
                       size={compact ? 'small' : 'middle'}
@@ -5556,6 +6302,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                     >
                       افزودن فرآیند جدید
+                    </Button>
+                  </div>
+                )}
+                {normalizedProcessLineGroups.some((group: any) => isProcessGroupCompleted(group)) && (
+                  <div className="flex justify-center">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={showCompletedProcessGroups ? <UpOutlined /> : <DownOutlined />}
+                      onClick={() => setShowCompletedProcessGroups((prev) => !prev)}
+                      className="px-0 text-xs text-gray-500 hover:!text-leather-600"
+                    >
+                      {showCompletedProcessGroups ? 'پنهان کردن فرآیندهای تکمیل شده' : 'مشاهده فرآیندهای تکمیل شده'}
                     </Button>
                   </div>
                 )}
@@ -5628,9 +6387,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         title={null}
         centered
         destroyOnHidden
-        width={560}
+        width={typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(100vw - 1rem)' : 560}
         zIndex={12000}
-        styles={{ body: { padding: 0 } }}
+        style={{ maxWidth: 'calc(100vw - 1rem)' }}
+        styles={{
+          body: { padding: 0, overflow: 'hidden' },
+          content: { overflow: 'hidden' },
+        }}
       >
         {activeTaskQuickModalTask ? renderPopupContent(activeTaskQuickModalTask) : null}
       </Modal>
@@ -5898,8 +6661,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           {draftModalTabKey === 'stage' && (
             <div className="grid grid-cols-12 gap-3 pt-2">
                     <div className="col-span-9">
-                      <Form.Item name="name" label="عنوان مرحله" rules={[{ required: true, message: 'الزامی' }]}>
-                        <Input placeholder="مثلا: برشکاری..." />
+                      <Form.Item
+                        name="name"
+                        label={(
+                          <div className="flex items-center justify-between gap-2">
+                            <span>عنوان مرحله</span>
+                            {renderDraftTemplatePicker('name')}
+                          </div>
+                        )}
+                        rules={[{ required: true, message: 'الزامی' }]}
+                      >
+                        <Input
+                          ref={draftStageNameInputRef}
+                          placeholder="مثلا: برشکاری..."
+                          onSelect={(event) => rememberDraftTemplateSelection('name', event.currentTarget)}
+                          onClick={(event) => rememberDraftTemplateSelection('name', event.currentTarget)}
+                          onKeyUp={(event) => rememberDraftTemplateSelection('name', event.currentTarget)}
+                        />
                       </Form.Item>
                     </div>
                     <div className="col-span-3">
@@ -5938,8 +6716,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           </Form.Item>
                         </div>
                         <div className="col-span-12">
-                          <Form.Item name="description" label="توضیحات">
-                            <Input.TextArea placeholder="توضیحات مرحله پیش‌نویس" autoSize={{ minRows: 2, maxRows: 4 }} />
+                          <Form.Item
+                            name="description"
+                            label={(
+                              <div className="flex items-center justify-between gap-2">
+                                <span>توضیحات</span>
+                                {renderDraftTemplatePicker('description')}
+                              </div>
+                            )}
+                          >
+                            <Input.TextArea
+                              ref={draftStageDescriptionInputRef}
+                              placeholder="توضیحات مرحله پیش‌نویس"
+                              autoSize={{ minRows: 2, maxRows: 4 }}
+                              onSelect={(event) => rememberDraftTemplateSelection('description', event.currentTarget)}
+                              onClick={(event) => rememberDraftTemplateSelection('description', event.currentTarget)}
+                              onKeyUp={(event) => rememberDraftTemplateSelection('description', event.currentTarget)}
+                            />
                           </Form.Item>
                         </div>
                         <div className="col-span-12">
@@ -6143,53 +6936,95 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     ) : (
                       <div className="space-y-3">
                         {draftCustomFields.map((field) => (
-                          <div
-                            key={field.key}
-                            className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/95 p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]"
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div className="space-y-2">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                                    {field.labels?.fa || field.key}
+                            <div
+                              key={field.key}
+                              className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/95 p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]"
+                            >
+                              <div className="space-y-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="space-y-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                                        {field.labels?.fa || field.key}
+                                      </div>
+                                      <Tag color="default">{processTaskCustomFieldTypeLabels[field.type] || field.type}</Tag>
+                                      <Tag>{field.key}</Tag>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                                      {field.dynamicOptionsCategory ? <span>دسته داینامیک: {field.dynamicOptionsCategory}</span> : null}
+                                      {field.relationConfig?.targetModule ? (
+                                        <span>ماژول مرتبط: {MODULES[String(field.relationConfig.targetModule)]?.titles?.fa || field.relationConfig.targetModule}</span>
+                                      ) : null}
+                                      {field.options?.length ? <span>{toPersianNumber(field.options.length)} گزینه ثابت</span> : null}
+                                    </div>
                                   </div>
-                                  <Tag color="default">{processTaskCustomFieldTypeLabels[field.type] || field.type}</Tag>
-                                  <Tag>{field.key}</Tag>
+                                  <div className="flex items-center gap-2">
+                                    <Button size="small" htmlType="button" icon={<EditOutlined />} onClick={() => openDraftCustomFieldModal(field)}>
+                                      ویرایش
+                                    </Button>
+                                    {processTaskOptionEditableTypes.has(field.type) && (
+                                      <Button
+                                        size="small"
+                                        htmlType="button"
+                                        icon={<SettingOutlined />}
+                                        onClick={() => openDraftCustomFieldOptionsEditor(field)}
+                                      >
+                                        گزینه‌ها
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="small"
+                                      htmlType="button"
+                                      danger
+                                      icon={<DeleteOutlined />}
+                                      onClick={() => removeDraftCustomField(String(field.key))}
+                                    >
+                                      حذف
+                                    </Button>
+                                  </div>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                                  {field.dynamicOptionsCategory ? <span>دسته داینامیک: {field.dynamicOptionsCategory}</span> : null}
-                                  {field.relationConfig?.targetModule ? (
-                                    <span>ماژول مرتبط: {MODULES[String(field.relationConfig.targetModule)]?.titles?.fa || field.relationConfig.targetModule}</span>
-                                  ) : null}
-                                  {field.options?.length ? <span>{toPersianNumber(field.options.length)} گزینه ثابت</span> : null}
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs text-gray-500">مقدار پیش‌فرض / قالب</div>
+                                    {renderDraftTemplatePicker(`custom:${String(field.key)}`)}
+                                  </div>
+                                  {field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT ? (
+                                    <Input.TextArea
+                                      ref={(node) => {
+                                        draftCustomFieldDefaultInputRefs.current[String(field.key)] = node;
+                                      }}
+                                      value={stringifyTemplateValue(field?.defaultValue)}
+                                      autoSize={{ minRows: 2, maxRows: 4 }}
+                                      placeholder="در صورت نیاز مقدار یا متغیر قرار دهید"
+                                      onChange={(event) => setDraftCustomFields((prev) => prev.map((item) => (
+                                        String(item?.key || '') === String(field.key)
+                                          ? { ...item, defaultValue: event.target.value }
+                                          : item
+                                      )))}
+                                      onSelect={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                      onClick={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                      onKeyUp={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                    />
+                                  ) : (
+                                    <Input
+                                      ref={(node) => {
+                                        draftCustomFieldDefaultInputRefs.current[String(field.key)] = node;
+                                      }}
+                                      value={stringifyTemplateValue(field?.defaultValue)}
+                                      placeholder="در صورت نیاز مقدار یا متغیر قرار دهید"
+                                      onChange={(event) => setDraftCustomFields((prev) => prev.map((item) => (
+                                        String(item?.key || '') === String(field.key)
+                                          ? { ...item, defaultValue: event.target.value }
+                                          : item
+                                      )))}
+                                      onSelect={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                      onClick={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                      onKeyUp={(event) => rememberDraftTemplateSelection(`custom:${String(field.key)}`, event.currentTarget)}
+                                    />
+                                  )}
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Button size="small" htmlType="button" icon={<EditOutlined />} onClick={() => openDraftCustomFieldModal(field)}>
-                                  ویرایش
-                                </Button>
-                                {processTaskOptionEditableTypes.has(field.type) && (
-                                  <Button
-                                    size="small"
-                                    htmlType="button"
-                                    icon={<SettingOutlined />}
-                                    onClick={() => openDraftCustomFieldOptionsEditor(field)}
-                                  >
-                                    گزینه‌ها
-                                  </Button>
-                                )}
-                                <Button
-                                  size="small"
-                                  htmlType="button"
-                                  danger
-                                  icon={<DeleteOutlined />}
-                                  onClick={() => removeDraftCustomField(String(field.key))}
-                                >
-                                  حذف
-                                </Button>
                               </div>
                             </div>
-                          </div>
                         ))}
                       </div>
                     )}
@@ -6607,35 +7442,70 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
-        title="افزودن فرآیند جدید"
+        title={appendProcessModalMode === 'links' ? 'رکوردهای مرتبط با این فرآیند' : 'افزودن فرآیند جدید'}
         open={appendProcessModalOpen}
         onCancel={() => {
           setAppendProcessModalOpen(false);
+          setAppendProcessModalGroupId(null);
+          setAppendProcessModalMode('append');
           setAppendProcessTemplateId(null);
         }}
-        footer={[
-          <Button key="raw" onClick={() => { void handleCreateRawProcessGroup(); }} loading={loading}>
-            ایجاد فرآیند خام
-          </Button>,
-          <Button key="cancel" onClick={() => { setAppendProcessModalOpen(false); setAppendProcessTemplateId(null); }}>
-            انصراف
-          </Button>,
-          <Button
-            key="add"
-            type="primary"
-            className="border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
-            loading={loading}
-            onClick={() => { void handleAppendProcessTemplate(); }}
-            disabled={!appendProcessTemplateId}
-          >
-            افزودن از الگو
-          </Button>,
-        ]}
+        footer={appendProcessModalMode === 'links'
+          ? [
+              <Button
+                key="cancel"
+                onClick={() => {
+                  setAppendProcessModalOpen(false);
+                  setAppendProcessModalGroupId(null);
+                  setAppendProcessModalMode('append');
+                  setAppendProcessTemplateId(null);
+                }}
+              >
+                انصراف
+              </Button>,
+              <Button
+                key="save-links"
+                type="primary"
+                className="border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+                loading={loading}
+                onClick={() => { void handleSaveProcessLinksToGroup(); }}
+              >
+                ثبت رکوردهای مرتبط
+              </Button>,
+            ]
+          : [
+              <Button key="raw" onClick={() => { void handleCreateRawProcessGroup(); }} loading={loading}>
+                ایجاد فرآیند خام
+              </Button>,
+              <Button
+                key="cancel"
+                onClick={() => {
+                  setAppendProcessModalOpen(false);
+                  setAppendProcessModalGroupId(null);
+                  setAppendProcessModalMode('append');
+                  setAppendProcessTemplateId(null);
+                }}
+              >
+                انصراف
+              </Button>,
+              <Button
+                key="add"
+                type="primary"
+                className="border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+                loading={loading}
+                onClick={() => { void handleAppendProcessTemplate(); }}
+                disabled={!appendProcessTemplateId}
+              >
+                افزودن از الگو
+              </Button>,
+            ]}
         destroyOnHidden
       >
         <div className="space-y-3 pt-2">
           <div className="text-xs text-gray-500">
-            یک الگو انتخاب کنید تا یک نوار فرآیند جدید ساخته شود.
+            {appendProcessModalMode === 'links'
+              ? 'رکوردهای مرتبط این فرآیند را در همین‌جا بررسی و بروزرسانی کنید.'
+              : 'یک الگو انتخاب کنید تا یک نوار فرآیند جدید ساخته شود.'}
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
@@ -6648,6 +7518,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               loading={processTemplateOptionsLoading}
               className="w-full"
               allowClear
+              disabled={appendProcessModalMode === 'links'}
             />
           </div>
           {appendProcessTargetModuleIds.length > 0 ? (
@@ -6658,21 +7529,29 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {appendProcessTargetModuleIds.map((targetModuleId) => (
-                  <div key={targetModuleId}>
+                  <div key={targetModuleId} className="min-w-0">
                     <div className="mb-1 text-xs text-gray-500">
                       {MODULES[targetModuleId]?.titles?.fa || targetModuleId}
                     </div>
-                    <Select
-                      {...modalSelectProps}
+                    <SmartFieldRenderer
+                      field={{
+                        key: `process_link_record_${targetModuleId}`,
+                        type: FieldType.RELATION,
+                        labels: { fa: MODULES[targetModuleId]?.titles?.fa || targetModuleId, en: targetModuleId },
+                        relationConfig: { targetModule: targetModuleId },
+                      } as ModuleField}
                       value={appendProcessLinkedRecords[targetModuleId] || undefined}
-                      options={appendProcessRelationOptions[targetModuleId] || []}
-                      loading={!!appendProcessRelationLoading[targetModuleId]}
                       onChange={(value) => setAppendProcessLinkedRecords((prev) => ({
                         ...prev,
                         [targetModuleId]: value ? String(value) : null,
                       }))}
-                      placeholder={`انتخاب رکورد ${MODULES[targetModuleId]?.titles?.fa || targetModuleId}`}
-                      allowClear
+                      forceEditMode={true}
+                      options={appendProcessRelationOptions[targetModuleId] || []}
+                      onOptionsUpdate={() => { void loadAppendProcessRelationOptions(targetModuleId, appendProcessLinkedRecords[targetModuleId] || null); }}
+                      allValues={appendProcessLinkedRecords}
+                      moduleId={moduleId}
+                      recordId={recordId}
+                      overlayZIndexBase={2200}
                     />
                   </div>
                 ))}
@@ -6702,6 +7581,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             open={handoverEditorOpen && !!handoverTask && !!handoverContext}
             loading={handoverLoading}
             locked={!!(handoverContext?.giverConfirmation?.confirmed || handoverContext?.receiverConfirmation?.confirmed)}
+            task={handoverTask}
+            currentUser={{
+              id: currentUser.id,
+              fullName: currentUser.fullName,
+            }}
             taskName={String(handoverTask?.name || handoverTask?.title || 'مرحله')}
             sourceStageName={String(handoverContext?.sourceStageName || 'شروع تولید')}
             giverName={String(handoverContext?.giver?.label || 'تعیین نشده')}
@@ -6723,6 +7607,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             onTargetShelfScan={handleHandoverShelfScan}
             onConfirmGiver={() => { void handleConfirmGiver(); }}
             onConfirmReceiver={() => { void handleConfirmReceiver(); }}
+            onTaskUpdated={handleHandoverTaskUpdated}
           />
         </>
       )}

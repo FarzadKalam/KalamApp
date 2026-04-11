@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Image, Input, List, Modal, Tag, Typography, Upload } from 'antd';
+import { App, Button, Checkbox, Image, Input, List, Modal, Select, Tag, Typography, Upload } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -14,6 +14,7 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
+import { MODULES } from '../moduleRegistry';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import {
   detectRecordFilesTable,
@@ -22,7 +23,12 @@ import {
   setRecordFilesTableAvailability,
 } from '../utils/recordFilesAvailability';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
-import { parseNoteContent } from '../utils/noteContent';
+import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
+import { normalizeNoteScope } from '../utils/noteScope';
+import { fetchAssigneeDirectory } from '../utils/referenceData';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
+import { getRecordTitle } from '../utils/recordTitle';
+import { parseProcessLinkMap } from '../utils/processTargets';
 
 export type RecordFileType = 'image' | 'video' | 'file';
 
@@ -35,7 +41,28 @@ export interface RecordFileItem {
   file_name: string | null;
   mime_type: string | null;
   sort_order: number;
+  source_module_id?: string | null;
+  source_record_id?: string | null;
+  source_record_title?: string | null;
   created_at?: string;
+}
+
+interface ShareTargetOption {
+  label: string;
+  value: string;
+}
+
+interface RelatedRecordShareTarget {
+  moduleId: string;
+  recordId: string;
+  title: string;
+}
+
+interface UploadedFileResult {
+  url: string;
+  fileType: RecordFileType;
+  fileName: string;
+  mimeType: string | null;
 }
 
 interface RecordFilesManagerProps {
@@ -115,6 +142,9 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const [pendingFileName, setPendingFileName] = useState('');
   const [pendingFileExtension, setPendingFileExtension] = useState('');
   const [nameModalOpen, setNameModalOpen] = useState(false);
+  const [shareTargetOptions, setShareTargetOptions] = useState<ShareTargetOption[]>([]);
+  const [shareTargetIds, setShareTargetIds] = useState<string[]>([]);
+  const [shareInRelatedRecords, setShareInRelatedRecords] = useState(false);
   const canDeleteFiles = canDelete ?? canEdit;
 
   const imageItems = useMemo(
@@ -216,7 +246,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
       const { data, error } = await supabase
         .from('record_files')
-        .select('id, module_id, record_id, file_url, file_type, file_name, mime_type, sort_order, created_at')
+        .select('id, module_id, record_id, file_url, file_type, file_name, mime_type, sort_order, source_module_id, source_record_id, source_record_title, created_at')
         .eq('module_id', moduleId)
         .eq('record_id', recordId)
         .order('sort_order', { ascending: true })
@@ -235,6 +265,9 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           file_name: row.file_name ? String(row.file_name) : null,
           mime_type: row.mime_type ? String(row.mime_type) : null,
           sort_order: Number.isFinite(row.sort_order) ? row.sort_order : idx,
+          source_module_id: row.source_module_id ? String(row.source_module_id) : null,
+          source_record_id: row.source_record_id ? String(row.source_record_id) : null,
+          source_record_title: row.source_record_title ? String(row.source_record_title) : null,
           created_at: row.created_at ? String(row.created_at) : undefined,
         }));
       setItems(await mergeItemsWithNoteAttachments(baseItems));
@@ -259,6 +292,33 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!open) return;
     void loadFiles(false);
   }, [open, moduleId, recordId]);
+
+  useEffect(() => {
+    if (!open || moduleId !== 'tasks') return;
+    let active = true;
+    const loadShareTargets = async () => {
+      try {
+        const directory = await fetchAssigneeDirectory(supabase);
+        if (!active) return;
+        setShareTargetOptions(
+          (directory.users || [])
+            .map((user) => ({
+              value: String(user.id),
+              label: String(user.display_name || user.full_name || user.email || user.mobile_1 || user.id),
+            }))
+            .filter((item) => item.value && item.label)
+            .sort((a, b) => a.label.localeCompare(b.label, 'fa'))
+        );
+      } catch (error) {
+        console.warn('Could not load task file share targets', error);
+        if (active) setShareTargetOptions([]);
+      }
+    };
+    void loadShareTargets();
+    return () => {
+      active = false;
+    };
+  }, [moduleId, open]);
 
   const buildStoredFileName = (file: File, desiredName: string) => {
     const ext = file.name.includes('.') ? String(file.name.split('.').pop() || '').trim() : '';
@@ -286,10 +346,126 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     return fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath).data.publicUrl;
   };
 
-  const uploadFile = async (file: File, desiredName: string) => {
+  const resetUploadPrompt = () => {
+    setNameModalOpen(false);
+    setPendingFile(null);
+    setPendingFileName('');
+    setPendingFileExtension('');
+    setShareTargetIds([]);
+    setShareInRelatedRecords(false);
+  };
+
+  const resolveTaskRelatedTargets = async (): Promise<RelatedRecordShareTarget[]> => {
+    if (moduleId !== 'tasks' || !recordId) return [];
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('id, name, source_module_id, source_record_id, related_product, related_customer, related_supplier, related_production_order, related_invoice, project_id, purchase_invoice_id, marketing_lead_id, recurrence_info')
+      .eq('id', recordId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return [];
+
+    const targetMap = new Map<string, { moduleId: string; recordId: string }>();
+    const addTarget = (nextModuleId: unknown, nextRecordId: unknown) => {
+      const normalizedModuleId = String(nextModuleId || '').trim();
+      const normalizedRecordId = String(nextRecordId || '').trim();
+      if (!normalizedModuleId || !normalizedRecordId) return;
+      if (normalizedModuleId === moduleId && normalizedRecordId === String(recordId)) return;
+      targetMap.set(`${normalizedModuleId}:${normalizedRecordId}`, {
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+      });
+    };
+
+    addTarget(data.source_module_id, data.source_record_id);
+    addTarget('products', data.related_product);
+    addTarget('customers', data.related_customer);
+    addTarget('suppliers', data.related_supplier);
+    addTarget('production_orders', data.related_production_order);
+    addTarget('invoices', data.related_invoice);
+    addTarget('projects', data.project_id);
+    addTarget('purchase_invoices', data.purchase_invoice_id);
+    addTarget('marketing_leads', data.marketing_lead_id);
+
+    const processLinks = parseProcessLinkMap((data as any)?.recurrence_info?.process_links);
+    Object.entries(processLinks).forEach(([linkedModuleId, linkedRecordId]) => {
+      addTarget(linkedModuleId, linkedRecordId);
+    });
+
+    const targets = Array.from(targetMap.values());
+    const titledTargets = await Promise.all(targets.map(async (target) => {
+      try {
+        const moduleConfig = MODULES[target.moduleId];
+        const { data: targetRecord } = await supabase
+          .from(target.moduleId)
+          .select('*')
+          .eq('id', target.recordId)
+          .maybeSingle();
+        return {
+          ...target,
+          title: getRecordTitle(targetRecord || { id: target.recordId }, moduleConfig, { fallback: target.recordId }) || target.recordId,
+        };
+      } catch {
+        return {
+          ...target,
+          title: target.recordId,
+        };
+      }
+    }));
+
+    return titledTargets;
+  };
+
+  const shareUploadedFileInChats = async (file: UploadedFileResult, recipientIds: string[] = shareTargetIds) => {
+    const targetIds = Array.from(new Set(recipientIds.map((item) => String(item || '').trim()).filter(Boolean)));
+    if (targetIds.length === 0) return;
+    const scope = normalizeNoteScope(moduleId, recordId);
+    const snapshot = await fetchSessionBootstrap(supabase);
+    const payload = {
+      module_id: scope.module_id,
+      record_id: scope.record_id,
+      content: serializeNoteContent('', [{
+        name: file.fileName,
+        url: file.url,
+        mimeType: file.mimeType,
+      }]),
+      reply_to: null,
+      mention_user_ids: targetIds,
+      mention_role_ids: [],
+      author_id: snapshot.user?.id || null,
+      author_name: snapshot.profile?.full_name || null,
+    };
+    const { error } = await supabase.from('notes').insert([payload]);
+    if (error) throw error;
+  };
+
+  const shareUploadedFileWithRelatedRecords = async (file: UploadedFileResult, shouldShare = shareInRelatedRecords) => {
+    if (!shouldShare || moduleId !== 'tasks' || !recordId) return 0;
+    if (!recordFilesEnabled) return 0;
+    const targets = await resolveTaskRelatedTargets();
+    if (targets.length === 0) return 0;
+    const sourceTitle = file.fileName || pendingFileName || 'فعالیت';
+    const rows = targets.map((target, index) => ({
+      module_id: target.moduleId,
+      record_id: target.recordId,
+      file_url: file.url,
+      file_type: file.fileType,
+      file_name: file.fileName,
+      mime_type: file.mimeType,
+      sort_order: index,
+      source_module_id: moduleId,
+      source_record_id: String(recordId),
+      source_record_title: sourceTitle,
+    }));
+    const { error } = await supabase.from('record_files').insert(rows);
+    if (error) throw error;
+    return rows.length;
+  };
+
+  const uploadFile = async (file: File, desiredName: string): Promise<UploadedFileResult | null> => {
     if (!recordId) {
       msg.warning('ابتدا رکورد را ذخیره کنید');
-      return false;
+      return null;
     }
 
     const type = getFileType(file);
@@ -304,7 +480,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
       if (useLegacy && !(moduleId === 'products' && type === 'image')) {
         msg.error('برای آپلود فیلم و فایل، ابتدا migration جدول record_files را اجرا کنید.');
-        return false;
+        return null;
       }
 
       const url = await uploadToStorage(file, desiredName);
@@ -334,7 +510,12 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         ]);
         if (!mainImage && onMainImageChange) onMainImageChange(url);
         msg.success('فایل اضافه شد');
-        return false;
+        return {
+          url,
+          fileType: 'image',
+          fileName: desiredName,
+          mimeType: file.type || null,
+        };
       }
 
       const nextOrder = type === 'image' ? imageItems.length : type === 'video' ? videoItems.length : 0;
@@ -351,7 +532,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             sort_order: nextOrder,
           },
         ])
-        .select('id, module_id, record_id, file_url, file_type, file_name, mime_type, sort_order, created_at')
+        .select('id, module_id, record_id, file_url, file_type, file_name, mime_type, sort_order, source_module_id, source_record_id, source_record_title, created_at')
         .single();
       if (error) throw error;
 
@@ -366,15 +547,25 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           file_name: data.file_name ? String(data.file_name) : null,
           mime_type: data.mime_type ? String(data.mime_type) : null,
           sort_order: Number.isFinite(data.sort_order) ? data.sort_order : nextOrder,
+          source_module_id: data.source_module_id ? String(data.source_module_id) : null,
+          source_record_id: data.source_record_id ? String(data.source_record_id) : null,
+          source_record_title: data.source_record_title ? String(data.source_record_title) : null,
           created_at: data.created_at ? String(data.created_at) : undefined,
         },
       ]);
 
       if (type === 'image' && !mainImage && onMainImageChange) onMainImageChange(url);
       msg.success('فایل اضافه شد');
+      return {
+        url,
+        fileType: type,
+        fileName: desiredName,
+        mimeType: file.type || null,
+      };
+      msg.success('فایل اضافه شد');
     } catch (error: any) {
       if (isUploadCanceledError(error)) {
-        return false;
+        return null;
       }
       if (isMissingRecordFilesError(error)) {
         recordFilesTableExistsCache = false;
@@ -385,7 +576,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         msg.error('خطا در ثبت فایل: ' + (error?.message || 'نامشخص'));
       }
     }
-    return false;
+    return null;
   };
 
   const handleBeforeUpload = (file: File) => {
@@ -404,7 +595,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     return false;
   };
 
-  const handleConfirmUpload = () => {
+  const handleConfirmUpload = async () => {
     if (!pendingFile) return false;
     const finalName = pendingFileName.trim();
     if (!finalName) {
@@ -414,19 +605,30 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
     const file = pendingFile;
     const finalFileName = pendingFileExtension ? `${finalName}.${pendingFileExtension}` : finalName;
-    setNameModalOpen(false);
-    setPendingFile(null);
-    setPendingFileName('');
-    setPendingFileExtension('');
-    void uploadFile(file, finalFileName);
+    const recipientIds = [...shareTargetIds];
+    const shouldShareInRelatedRecords = shareInRelatedRecords;
+    resetUploadPrompt();
+    const uploaded = await uploadFile(file, finalFileName);
+    if (!uploaded) return false;
+    try {
+      await shareUploadedFileInChats(uploaded, recipientIds);
+      const copiedCount = await shareUploadedFileWithRelatedRecords(uploaded, shouldShareInRelatedRecords);
+      if (recipientIds.length > 0 && copiedCount > 0) {
+        msg.success('فایل آپلود و همزمان ارسال شد');
+      } else if (recipientIds.length > 0) {
+        msg.success('فایل آپلود و در گفتگو ارسال شد');
+      } else if (copiedCount > 0) {
+        msg.success(`فایل در ${copiedCount} رکورد مرتبط هم نمایش داده شد`);
+      }
+    } catch (error) {
+      console.warn('Record file post-upload sharing failed', error);
+      msg.warning('فایل آپلود شد ولی اشتراک‌گذاری کامل نشد');
+    }
     return false;
   };
 
   const handleCancelUploadPrompt = () => {
-    setNameModalOpen(false);
-    setPendingFile(null);
-    setPendingFileName('');
-    setPendingFileExtension('');
+    resetUploadPrompt();
   };
 
   const handleDelete = async (fileId: string) => {
@@ -512,9 +714,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const isMain = item.file_type === 'image' && mainImage === item.file_url;
     const isHighlighted = highlightFileId && highlightFileId === item.id;
     const isNoteAttachment = isSyntheticNoteAttachmentId(item.id);
+    const isSharedFromReference = Boolean(item.source_module_id && item.source_record_id);
     const fileLabel = getDisplayFileName(item);
     return (
-      <div key={item.id} className={`relative group border rounded-lg p-1 ${isHighlighted ? 'border-leather-500 ring-2 ring-leather-200' : 'border-gray-100'}`}>
+      <div key={item.id} className={`relative group border rounded-lg p-1 ${isHighlighted ? 'border-leather-500 ring-2 ring-leather-200' : (isSharedFromReference ? 'border-sky-300 bg-sky-50/30' : 'border-gray-100')}`}>
         <div className="h-40 overflow-hidden rounded">
           {item.file_type === 'video' ? (
             <video src={item.file_url} controls className="w-full h-full object-cover rounded" preload="metadata" />
@@ -549,13 +752,21 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           <div className="text-xs text-gray-600 truncate" title={fileLabel}>
             {fileLabel}
           </div>
+          {isSharedFromReference ? (
+            <div className="mt-1 text-[11px] text-sky-700">
+              رکورد مرجع:{' '}
+              <a href={`/${item.source_module_id}/${item.source_record_id}`} className="text-sky-700 hover:underline">
+                {item.source_record_title || item.source_record_id}
+              </a>
+            </div>
+          ) : null}
         </div>
       </div>
     );
   };
 
   return (
-    <Modal title="مدیریت فایل‌ها" open={open} onCancel={onClose} footer={null} destroyOnHidden zIndex={1600} width={950}>
+    <Modal title="مدیریت فایل‌ها" open={open} onCancel={onClose} footer={null} destroyOnHidden zIndex={13000} width={950}>
       {!recordFilesEnabled && (
         <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 flex items-center justify-between gap-2">
           <span>حالت سازگاری فعال است: جدول `record_files` روی دیتابیس ایجاد نشده. فعلا فقط عکس‌های محصول از `product_images` خوانده می‌شود.</span>
@@ -588,9 +799,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             const fileLabel = getDisplayFileName(item);
             const isHighlighted = highlightFileId && highlightFileId === item.id;
             const isNoteAttachment = isSyntheticNoteAttachmentId(item.id);
+            const isSharedFromReference = Boolean(item.source_module_id && item.source_record_id);
             return (
               <List.Item
-                className={`rounded-lg px-3 ${isHighlighted ? 'bg-leather-50 border border-leather-200' : ''}`}
+                className={`rounded-lg px-3 ${isHighlighted ? 'bg-leather-50 border border-leather-200' : (isSharedFromReference ? 'border border-sky-200 bg-sky-50/30' : '')}`}
                 actions={[
                   <Button key={`download-${item.id}`} size="small" icon={<DownloadOutlined />} onClick={() => downloadFile(item)}>دانلود</Button>,
                   <Button key={`delete-${item.id}`} size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteFiles || isNoteAttachment} onClick={() => handleDelete(item.id)}>حذف</Button>,
@@ -627,6 +839,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         okText="آپلود"
         cancelText="انصراف"
         destroyOnHidden
+        zIndex={13010}
       >
         <Input
           autoFocus
@@ -639,6 +852,31 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           <div className="mt-3 flex items-center gap-2 text-xs" style={{ color: 'var(--ant-color-text-secondary)' }}>
             <span>پسوند:</span>
             <Typography.Text code>.{pendingFileExtension}</Typography.Text>
+          </div>
+        ) : null}
+        {moduleId === 'tasks' ? (
+          <div className="mt-4 space-y-4">
+            <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.5)] p-3">
+              <div className="mb-2 text-sm font-medium text-gray-700">اشتراک‌گذاری داخلی</div>
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                value={shareTargetIds}
+                onChange={(values) => setShareTargetIds((values || []).map((value) => String(value)))}
+                options={shareTargetOptions}
+                placeholder="انتخاب گفت‌وگوها"
+                optionFilterProp="label"
+                className="w-full"
+                getPopupContainer={(trigger) => trigger.parentElement || document.body}
+                styles={{ popup: { root: { zIndex: 13120 } } }}
+                listHeight={280}
+                maxTagCount="responsive"
+              />
+            </div>
+            <Checkbox checked={shareInRelatedRecords} onChange={(event) => setShareInRelatedRecords(event.target.checked)}>
+              اشتراک‌گذاری در رکوردهای مرتبط
+            </Checkbox>
           </div>
         ) : null}
       </Modal>

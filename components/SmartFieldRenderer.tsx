@@ -2724,6 +2724,17 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   }, [clearPendingAutoNameToggleWrite]);
 
   useEffect(() => {
+    if (!open || typeof window === 'undefined') return;
+    const stateKey = `quickCreate:${moduleId}:${label}`;
+    window.history.pushState({ quickCreateModal: stateKey }, '', window.location.href);
+    const handlePopState = () => handleQuickCreateCancel();
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [handleQuickCreateCancel, label, moduleId, open]);
+
+  useEffect(() => {
     if (!open || !supportsAssignee) return;
     let cancelled = false;
 
@@ -2839,12 +2850,19 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       destroyOnHidden
       zIndex={overlayZIndexBase}
       getContainer={typeof document === 'undefined' ? undefined : () => document.body}
+      width={typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(100vw - 0.75rem)' : 560}
+      style={{ top: typeof window !== 'undefined' && window.innerWidth < 768 ? 8 : undefined }}
+      styles={{
+        body: {
+          paddingBottom: typeof window !== 'undefined' && window.innerWidth < 768 ? 8 : undefined,
+        },
+      }}
     >
       <Form
         form={form}
         layout="vertical"
         onFinish={handleQuickCreateOk}
-        className="max-h-[60vh] overflow-y-auto pr-1"
+        className="max-h-[72dvh] overflow-y-auto pr-1"
       >
         {showAutoNameToggle && (
           <div className="mb-4 flex flex-col gap-3">

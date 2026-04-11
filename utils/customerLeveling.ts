@@ -63,6 +63,13 @@ const toNumber = (value: unknown, fallback = 0) => {
   return Number.isFinite(num) ? num : fallback;
 };
 
+const normalizeInvoiceStatus = (value: unknown): string => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'cancelled') return 'canceled';
+  return normalized;
+};
+
 const normalizeRule = (rule: any, fallback: RankRule): RankRule => ({
   min_purchase_count: Math.max(0, toNumber(rule?.min_purchase_count, fallback.min_purchase_count)),
   min_total_spend: Math.max(0, toNumber(rule?.min_total_spend, fallback.min_total_spend)),
@@ -104,7 +111,7 @@ const isReceivedPaymentStatus = (status: unknown): boolean => {
 export const normalizeLevelingConfig = (config: any): CustomerLevelingConfig => {
   if (!config || typeof config !== 'object') return DEFAULT_LEVELING_CONFIG;
   const statuses = Array.isArray(config.eligible_statuses)
-    ? config.eligible_statuses.map((s: any) => String(s || '').trim()).filter(Boolean)
+    ? config.eligible_statuses.map((s: any) => normalizeInvoiceStatus(s)).filter(Boolean)
     : DEFAULT_LEVELING_CONFIG.eligible_statuses;
 
   return {
@@ -314,15 +321,22 @@ export const calculateCustomerStatsFromInvoices = (
   customerCreatedAt?: string | null
 ): CustomerDerivedStats => {
   const allRows = Array.isArray(invoiceRows) ? invoiceRows : [];
-  const eligibleRows = allRows.filter((row: any) => config.eligible_statuses.includes(String(row?.status || '')));
+  const eligibleStatusSet = new Set(
+    (Array.isArray(config?.eligible_statuses) ? config.eligible_statuses : [])
+      .map((status) => normalizeInvoiceStatus(status))
+      .filter(Boolean)
+  );
+  const eligibleRows = allRows.filter((row: any) =>
+    eligibleStatusSet.has(normalizeInvoiceStatus(row?.status))
+  );
 
   const purchaseCount = eligibleRows.length;
   const totalSpend = eligibleRows.reduce((sum: number, row: any) => sum + toNumber(row?.total_invoice_amount), 0);
-  const totalPaidAmount = allRows.reduce((sum: number, row: any) => {
+  const totalPaidAmount = eligibleRows.reduce((sum: number, row: any) => {
     const payments = Array.isArray(row?.payments) ? row.payments : [];
     const received = payments.reduce((pSum: number, payment: any) => {
       if (!isReceivedPaymentStatus(payment?.status)) return pSum;
-      return pSum + toNumber(payment?.amount);
+      return pSum + Math.abs(toNumber(payment?.amount));
     }, 0);
     return sum + received;
   }, 0);

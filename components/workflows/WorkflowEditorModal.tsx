@@ -18,7 +18,7 @@ import { supabase } from '../../supabaseClient';
 import { supportsGlobalRoleAssignee } from '../../utils/assigneeSupport';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { doesProcessTemplateSupportModule } from '../../utils/processTargets';
-import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from '../../utils/relationTargetField';
+import { getRelationOptionSelectVariants, getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { supportsSystemCode } from '../../utils/systemCode';
 import {
   getWorkflowConditionFields,
@@ -118,12 +118,34 @@ const loadWorkflowFieldOptions = async (
   }
 
   if (field.type === FieldType.USER) {
-    const { data, error } = await supabase.from('profiles').select('id, full_name').limit(300);
-    if (error) throw error;
-    return (data || []).map((row: any) => ({
-      label: String(row?.full_name || row?.id || ''),
-      value: String(row?.id || ''),
-    })).filter((item) => item.value);
+    const selectVariants = [
+      'id, full_name, first_name, last_name',
+      'id, first_name, last_name',
+      'id',
+    ];
+
+    let rows: any[] = [];
+    for (const selectColumns of selectVariants) {
+      const result = await supabase.from('profiles').select(selectColumns).limit(300);
+      if (!result.error) {
+        rows = result.data || [];
+        break;
+      }
+      const errorCode = String((result.error as any)?.code || '').toUpperCase();
+      const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
+      const isMissingColumn =
+        errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+      if (!isMissingColumn) throw result.error;
+    }
+
+    return (rows || []).map((row: any) => {
+      const fullName = String(row?.full_name || '').trim();
+      const composedName = `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim();
+      return {
+        label: fullName || composedName || String(row?.id || ''),
+        value: String(row?.id || ''),
+      };
+    }).filter((item) => item.value);
   }
 
   const targetModule = String(field?.relationConfig?.targetModule || '').trim();
@@ -150,13 +172,11 @@ const loadWorkflowFieldOptions = async (
 
   const targetField = getPreferredRelationTargetField(targetModule, field?.relationConfig?.targetField);
   const includeSystemCode = supportsSystemCode(targetModule);
-  const fallbackFields = getRelationLabelFallbackFields(targetModule);
-  const selectVariants = [
-    Array.from(
-      new Set(['id', targetField, ...(includeSystemCode ? ['system_code'] : []), ...fallbackFields])
-    ).filter(Boolean).join(', '),
-    Array.from(new Set(['id', targetField, ...fallbackFields])).filter(Boolean).join(', '),
-  ];
+  const selectVariants = getRelationOptionSelectVariants(
+    targetModule,
+    field?.relationConfig?.targetField,
+    includeSystemCode
+  );
 
   let rows: any[] = [];
   for (const selectColumns of selectVariants) {

@@ -15,6 +15,8 @@ import {
   WORKFLOWS_PERMISSION_FIELDS,
   GOALS_PERMISSION_KEY,
   GOALS_PERMISSION_FIELDS,
+  FILES_PERMISSION_KEY,
+  FILES_PERMISSION_FIELDS,
   ACCOUNTING_PERMISSION_KEY,
   ACCOUNTING_PERMISSION_FIELDS,
   REPORTS_PERMISSION_KEY,
@@ -764,8 +766,37 @@ const RolesTab: React.FC = () => {
                   className="dark:border-gray-800"
                   header={
                     <div className="flex items-center justify-between w-full dark:text-gray-200">
-                      <span className="font-bold">تنظیمات</span>
-                    </div>
+                      <span className="font-bold">تنظیمات</span>`r`n                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(SETTINGS_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(SETTINGS_PERMISSION_KEY, 'view', undefined, e.target.checked)
+                          }
+                        >
+                          ??????
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(SETTINGS_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(SETTINGS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(SETTINGS_PERMISSION_KEY, 'edit', undefined, e.target.checked)
+                          }
+                        >
+                          ??????/?????
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(SETTINGS_PERMISSION_KEY).delete !== false}
+                          disabled={getModulePerms(SETTINGS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(SETTINGS_PERMISSION_KEY, 'delete', undefined, e.target.checked)
+                          }
+                        >
+                          ???
+                        </Checkbox>
+                      </div>                    </div>
                   }
                 >
                   <div className="pl-6 pt-2">
@@ -936,6 +967,58 @@ const RolesTab: React.FC = () => {
                 </Panel>
 
                 <Panel
+                  key={FILES_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <span className="font-bold">فایل‌ها</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(FILES_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(FILES_PERMISSION_KEY, 'view', undefined, e.target.checked)
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(FILES_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(FILES_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(FILES_PERMISSION_KEY, 'edit', undefined, e.target.checked)
+                          }
+                        >
+                          ویرایش/ایجاد
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(FILES_PERMISSION_KEY).delete !== false}
+                          disabled={getModulePerms(FILES_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(FILES_PERMISSION_KEY, 'delete', undefined, e.target.checked)
+                          }
+                        >
+                          حذف
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی بخش‌های فایل
+                    </Divider>
+                    {renderFieldSwitches(
+                      FILES_PERMISSION_KEY,
+                      FILES_PERMISSION_FIELDS,
+                      getModulePerms(FILES_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
                   key={ACCOUNTING_PERMISSION_KEY}
                   className="dark:border-gray-800"
                   header={
@@ -1089,3 +1172,4 @@ const RolesTab: React.FC = () => {
 };
 
 export default RolesTab;
+

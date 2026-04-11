@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { supabase } from '../../supabaseClient';
 import { toPersianNumber, safeJalaliFormat } from '../persianNumberFormatter';
 import { readCurrencyConfig } from '../currency';
-import { buildListTableHtml, type ListFieldDefinition } from '../listPrintExport';
+import { buildListCatalogHtml, buildListTableHtml, type ListFieldDefinition } from '../listPrintExport';
 import {
   buildDefaultTemplatesForModule,
   loadPrintTemplatesStore,
@@ -156,13 +156,31 @@ export const useListPrintManager = ({
   }, [availableTemplates, selectedTemplateId]);
 
   const printableFieldsForTemplate = useMemo(() => printableFields || [], [printableFields]);
+  const isCatalogTemplate = useMemo(
+    () => String(selectedStoredTemplate?.id || '').includes('_catalog_a4_portrait'),
+    [selectedStoredTemplate?.id]
+  );
 
   useEffect(() => {
     if (!selectedTemplateId) return;
-    const defaultKeys =
+    const rawDefaultKeys =
       (Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
         ? selectedStoredTemplate.selectedFieldKeys
         : printableFieldsForTemplate.map((field) => field.key)) || [];
+
+    const defaultKeys = isCatalogTemplate
+      ? (() => {
+          const imageKeys = printableFieldsForTemplate
+            .filter((field) => String(field?.type || '').toLowerCase() === 'image' && rawDefaultKeys.includes(field.key))
+            .map((field) => field.key)
+            .slice(0, 1);
+          const contentKeys = printableFieldsForTemplate
+            .filter((field) => String(field?.type || '').toLowerCase() !== 'image' && rawDefaultKeys.includes(field.key))
+            .map((field) => field.key)
+            .slice(0, 5);
+          return [...imageKeys, ...contentKeys];
+        })()
+      : rawDefaultKeys;
 
     if (!defaultKeys.length) return;
 
@@ -173,17 +191,25 @@ export const useListPrintManager = ({
         [selectedTemplateId]: defaultKeys,
       };
     });
-  }, [printableFieldsForTemplate, selectedStoredTemplate?.selectedFieldKeys, selectedTemplateId]);
+  }, [isCatalogTemplate, printableFieldsForTemplate, selectedStoredTemplate?.selectedFieldKeys, selectedTemplateId]);
 
   const selectedColumns = useMemo(() => {
     const selected = selectedPrintFields[selectedTemplateId] || [];
     if (selected.length === 0) return printableFieldsForTemplate;
     const selectedSet = new Set(selected);
     const filtered = printableFieldsForTemplate.filter((field) => selectedSet.has(field.key));
-    return filtered.length > 0 ? filtered : printableFieldsForTemplate;
-  }, [printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]);
+    const resolved = filtered.length > 0 ? filtered : printableFieldsForTemplate;
+    if (!isCatalogTemplate) return resolved;
+
+    const imageFields = resolved.filter((field) => String(field?.type || '').toLowerCase() === 'image').slice(0, 1);
+    const contentFields = resolved.filter((field) => String(field?.type || '').toLowerCase() !== 'image').slice(0, 5);
+    return [...imageFields, ...contentFields];
+  }, [isCatalogTemplate, printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]);
 
   const rowsPerPage = useMemo(() => {
+    if (String(selectedStoredTemplate?.id || '').includes('_catalog_a4_portrait')) {
+      return 6;
+    }
     const orientation = selectedStoredTemplate?.orientation || 'portrait';
     const columnCount = Math.max(1, selectedColumns.length);
     let base = orientation === 'landscape' ? 22 : 16;
@@ -210,6 +236,9 @@ export const useListPrintManager = ({
     if (path === 'system.list_table') {
       return buildListTableHtml(selectedColumns, pageRows, relationOptions, currencyLabel, rowOffset);
     }
+    if (path === 'system.list_catalog_a4') {
+      return buildListCatalogHtml(selectedColumns, pageRows, relationOptions, currencyLabel);
+    }
     if (path.startsWith('company.')) {
       const key = path.replace(/^company\./, '');
       return String(companyInfo?.[key] || '');
@@ -233,9 +262,21 @@ export const useListPrintManager = ({
       if (current.includes(fieldName)) {
         return { ...prev, [templateId]: current.filter((item) => item !== fieldName) };
       }
+      if (String(templateId).includes('_catalog_a4_portrait')) {
+        if (current.length >= 6) return prev;
+        const targetField = printableFieldsForTemplate.find((field) => field.key === fieldName);
+        const isImageField = String(targetField?.type || '').toLowerCase() === 'image';
+        if (isImageField) {
+          const hasImageAlready = current.some((key) => {
+            const field = printableFieldsForTemplate.find((item) => item.key === key);
+            return String(field?.type || '').toLowerCase() === 'image';
+          });
+          if (hasImageAlready) return prev;
+        }
+      }
       return { ...prev, [templateId]: [...current, fieldName] };
     });
-  }, []);
+  }, [printableFieldsForTemplate]);
 
   const handleSavePrintFields = useCallback(async () => {
     if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;

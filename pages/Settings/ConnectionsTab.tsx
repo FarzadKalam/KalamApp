@@ -1024,6 +1024,11 @@ const ConnectionsTab: React.FC = () => {
         text: testText.trim(),
         overrideSettings: buildSmsOverrideSettings(smsValues),
         allowDirectFallback: true,
+        title: 'پیامک تست',
+        metadata: {
+          source_type: 'settings_test_sms',
+          source_module: 'settings_connections',
+        },
       });
       const providerResult = Array.isArray(result?.provider_results) ? result.provider_results[0] : null;
       const providerToken = String(providerResult?.result || '').trim();

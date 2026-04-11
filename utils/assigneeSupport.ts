@@ -9,7 +9,6 @@ const GLOBAL_ASSIGNEE_MODULE_IDS = [
   'tasks',
   'attendance_logs',
   'customers',
-  'projects',
 ] as const;
 
 const GLOBAL_ROLE_ASSIGNEE_MODULE_IDS = [
@@ -23,7 +22,6 @@ const GLOBAL_ROLE_ASSIGNEE_MODULE_IDS = [
   'tasks',
   'attendance_logs',
   'customers',
-  'projects',
 ] as const;
 
 export const GLOBAL_ASSIGNEE_MODULES = new Set<string>(GLOBAL_ASSIGNEE_MODULE_IDS);

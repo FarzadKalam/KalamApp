@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { App, Form, Input, Button, Upload, Select } from 'antd';
+import { App, Form, Input, Button, Upload, Select, Checkbox } from 'antd';
 import { SaveOutlined, UploadOutlined, CloudUploadOutlined, GlobalOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../../theme/brandTheme';
@@ -33,6 +33,7 @@ const CompanyTab: React.FC = () => {
         trade_name: data.trade_name || data.company_name || '',
         company_name_en: data.company_name_en || '',
         palette_key: data.brand_palette_key || DEFAULT_BRANDING.paletteKey,
+        qr_scan_enabled: Boolean(data.qr_scan_enabled),
         currency_code: normalizeCurrencyConfig({
           code: data.currency_code,
           label: data.currency_label,
@@ -53,6 +54,7 @@ const CompanyTab: React.FC = () => {
       trade_name: DEFAULT_BRANDING.shortName,
       company_name_en: '',
       palette_key: DEFAULT_BRANDING.paletteKey,
+      qr_scan_enabled: false,
       currency_code: DEFAULT_CURRENCY.code,
     });
     persistCurrencyConfig(DEFAULT_CURRENCY);
@@ -200,6 +202,15 @@ const CompanyTab: React.FC = () => {
             className="dark:bg-white/5 dark:border-gray-700 dark:text-white"
             options={CURRENCY_OPTIONS}
           />
+        </Form.Item>
+        <Form.Item
+          name="qr_scan_enabled"
+          valuePropName="checked"
+          className="md:col-span-2"
+        >
+          <Checkbox className="dark:text-gray-300">
+            اسکن qr فعال باشد
+          </Checkbox>
         </Form.Item>
 
         <Form.Item label={<span className="dark:text-gray-300">نام مدیرعامل</span>} name="ceo_name">

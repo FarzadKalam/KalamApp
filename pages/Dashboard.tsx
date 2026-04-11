@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Col, Empty, Row, Spin, Statistic, Table, Tag } from 'antd';
+import { Button, Card, Col, Empty, Grid, Row, Spin, Statistic, Table, Tag } from 'antd';
 import {
   AppstoreOutlined,
   BankOutlined,
@@ -21,7 +21,14 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, type ModuleDefinition } from '../types';
-import { DASHBOARD_PERMISSION_KEY, resolvePreferredRoleModuleIds } from '../utils/permissions';
+import {
+  DASHBOARD_PERMISSION_KEY,
+  canAccessAssignedRecord,
+  fetchCurrentUserRecordAccessContext,
+  resolvePreferredRoleModuleIds,
+  type CurrentUserRecordAccessContext,
+  type PermissionMap,
+} from '../utils/permissions';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { readCurrencyConfig, useCurrencyConfig } from '../utils/currency';
@@ -92,6 +99,10 @@ let dashboardBootstrapCache: {
 
 let dashboardBootstrapPromiseKey: string | null = null;
 let dashboardBootstrapPromise: Promise<DashboardBootstrapResult> | null = null;
+const dashboardCardCache = new Map<string, { data: DashboardCardItem | null; expiresAt: number }>();
+const dashboardCardPromiseCache = new Map<string, Promise<DashboardCardItem | null>>();
+const dashboardRecentSectionCache = new Map<string, { data: DashboardRecentSection | null; expiresAt: number }>();
+const dashboardRecentSectionPromiseCache = new Map<string, Promise<DashboardRecentSection | null>>();
 
 const getTodayPersianDate = () => {
   try {
@@ -224,23 +235,99 @@ const countRows = async (table: string, apply?: (query: any) => any) => {
   return Number(count || 0);
 };
 
-const buildAssignmentFilter = (
-  userId: string | null,
-  roleId: string | null,
-  userField = 'assignee_id',
-  roleField = 'assignee_role_id'
+const getModuleRecordScope = (permissions: PermissionMap | null | undefined, moduleId: string) => {
+  const modulePerm = permissions?.[moduleId] || {};
+  return modulePerm.record_scope ?? (modulePerm.view === false ? 'own' : 'all');
+};
+
+const moduleSupportsScopedRecords = (moduleId: string) => {
+  const module = MODULES[moduleId];
+  const fieldKeys = new Set((module?.fields || []).map((field: any) => String(field?.key || '')));
+  return fieldKeys.has('assignee_id') || fieldKeys.has('assignee_type') || fieldKeys.has('assignee_role_id');
+};
+
+const filterRowsByRecordScope = (
+  rows: any[],
+  moduleId: string,
+  recordAccess: CurrentUserRecordAccessContext
 ) => {
-  const filters: string[] = [];
-  if (userId) filters.push(`${userField}.eq.${userId}`);
-  if (roleId) filters.push(`${roleField}.eq.${roleId}`);
-  return filters.join(',');
+  const recordScope = getModuleRecordScope(recordAccess.permissions, moduleId);
+  if (recordScope === 'all') return rows;
+  if (!moduleSupportsScopedRecords(moduleId)) return [];
+  return rows.filter((row) =>
+    canAccessAssignedRecord(row, recordAccess.userId, recordAccess.roleId, recordScope, {
+      currentOrgId: recordAccess.orgId,
+      allowedRoleIds: recordAccess.allowedRoleIds,
+      allowedUserIds: recordAccess.allowedUserIds,
+    })
+  );
+};
+
+const getDashboardCardCacheKey = (
+  moduleId: string,
+  recordAccess: CurrentUserRecordAccessContext
+) =>
+  [
+    moduleId,
+    recordAccess.userId || 'no-user',
+    recordAccess.roleId || 'no-role',
+    getModuleRecordScope(recordAccess.permissions, moduleId),
+    [...(recordAccess.allowedRoleIds || [])].sort().join(',') || 'no-roles',
+    [...(recordAccess.allowedUserIds || [])].sort().join(',') || 'no-users',
+  ].join(':');
+
+const getDashboardRecentSectionCacheKey = (moduleId: string, recordAccess: CurrentUserRecordAccessContext) =>
+  [
+    moduleId,
+    recordAccess.userId || 'no-user',
+    recordAccess.roleId || 'no-role',
+    getModuleRecordScope(recordAccess.permissions, moduleId),
+    [...(recordAccess.allowedRoleIds || [])].sort().join(',') || 'no-roles',
+    [...(recordAccess.allowedUserIds || [])].sort().join(',') || 'no-users',
+  ].join(':');
+
+const resolveDashboardModuleIds = (
+  permissions: PermissionMap | null | undefined,
+  preferredModuleIds: string[]
+) => {
+  const next: string[] = [];
+  const visibleModuleIds = Object.keys(MODULES).filter((moduleId) => permissions?.[moduleId]?.view !== false);
+
+  const pushUnique = (moduleId: string) => {
+    if (!moduleId || !MODULES[moduleId] || !visibleModuleIds.includes(moduleId) || next.includes(moduleId)) return;
+    next.push(moduleId);
+  };
+
+  preferredModuleIds.forEach(pushUnique);
+
+  visibleModuleIds
+    .filter((moduleId) => {
+      const module = MODULES[moduleId];
+      if (!module?.dashboard) return false;
+      if (!moduleSupportsScopedRecords(moduleId)) return false;
+      return getModuleRecordScope(permissions, moduleId) !== 'all';
+    })
+    .forEach(pushUnique);
+
+  return next;
 };
 
 const loadCardForModule = async (
   moduleId: string,
-  currentUserId: string | null,
-  currentRoleId: string | null
+  recordAccess: CurrentUserRecordAccessContext
 ): Promise<DashboardCardItem | null> => {
+  const cacheKey = getDashboardCardCacheKey(moduleId, recordAccess);
+  const cached = dashboardCardCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const pendingCard = dashboardCardPromiseCache.get(cacheKey);
+  if (pendingCard) {
+    return pendingCard;
+  }
+
+  const pending: Promise<DashboardCardItem | null> = (async () => {
   const module = MODULES[moduleId];
   if (!module) return null;
 
@@ -250,13 +337,14 @@ const loadCardForModule = async (
 
   switch (preset) {
     case 'tasks_pending_mine': {
-      const assigneeFilter = buildAssignmentFilter(currentUserId, currentRoleId);
-      const pendingCount = await countRows('tasks', (query) =>
-        query
-          .in('status', ['todo', 'in_progress', 'review'])
-          .or(assigneeFilter)
-      );
-      const totalCount = await countRows('tasks');
+      const { data } = await supabase
+        .from('tasks')
+        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, status');
+      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const pendingCount = scopedRows.filter((row: any) =>
+        ['todo', 'in_progress', 'review'].includes(String(row?.status || ''))
+      ).length;
+      const totalCount = scopedRows.length;
       return {
         moduleId,
         title,
@@ -267,12 +355,12 @@ const loadCardForModule = async (
     }
 
     case 'invoices_total_amount_mine': {
-      const assigneeFilter = buildAssignmentFilter(currentUserId, currentRoleId);
-      const { data, count } = await supabase
+      const { data } = await supabase
         .from('invoices')
-        .select('id, total_invoice_amount', { count: 'exact' })
-        .or(assigneeFilter);
-      const totalAmount = (data || []).reduce((sum: number, row: any) => sum + Number(row?.total_invoice_amount || 0), 0);
+        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, total_invoice_amount');
+      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const totalAmount = scopedRows.reduce((sum: number, row: any) => sum + Number(row?.total_invoice_amount || 0), 0);
+      const count = scopedRows.length;
       return {
         moduleId,
         title,
@@ -283,12 +371,11 @@ const loadCardForModule = async (
     }
 
     case 'customers_new_mine': {
-      const assigneeFilter = buildAssignmentFilter(currentUserId, currentRoleId);
-      const newCount = await countRows('customers', (query) =>
-        query
-          .gte('created_at', recentSince)
-          .or(assigneeFilter)
-      );
+      const { data } = await supabase
+        .from('customers')
+        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, created_at');
+      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
       return {
         moduleId,
         title,
@@ -299,10 +386,13 @@ const loadCardForModule = async (
     }
 
     case 'projects_in_progress': {
+      if (getModuleRecordScope(recordAccess.permissions, moduleId) !== 'all') {
+        return null;
+      }
       const activeProjects = await countRows('projects', (query) => query.eq('status', 'in_progress'));
-      const memberProjects = currentUserId
+      const memberProjects = recordAccess.userId
         ? await countRows('project_members', (query) =>
-            query.eq('user_id', currentUserId).eq('is_active', true)
+            query.eq('user_id', recordAccess.userId).eq('is_active', true)
           )
         : 0;
       return {
@@ -315,8 +405,12 @@ const loadCardForModule = async (
     }
 
     case 'billboards_opening': {
-      const openingCount = await countRows('billboards', (query) => query.eq('status', 'opening'));
-      const freeCount = await countRows('billboards', (query) => query.eq('status', 'free'));
+      const { data } = await supabase
+        .from('billboards')
+        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, status');
+      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const openingCount = scopedRows.filter((row: any) => String(row?.status || '') === 'opening').length;
+      const freeCount = scopedRows.filter((row: any) => String(row?.status || '') === 'free').length;
       return {
         moduleId,
         title,
@@ -327,8 +421,12 @@ const loadCardForModule = async (
     }
 
     case 'products_total': {
-      const totalCount = await countRows('products');
-      const newCount = await countRows('products', (query) => query.gte('created_at', recentSince));
+      const { data } = await supabase
+        .from('products')
+        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, created_at');
+      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const totalCount = scopedRows.length;
+      const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
       return {
         moduleId,
         title,
@@ -339,8 +437,15 @@ const loadCardForModule = async (
     }
 
     default: {
-      const totalCount = await countRows(module.table);
-      const newCount = await countRows(module.table, (query) => query.gte('created_at', recentSince));
+      const selectFields = moduleSupportsScopedRecords(moduleId)
+        ? 'id, org_id, assignee_id, assignee_role_id, assignee_type, created_at'
+        : 'id, created_at';
+      const { data } = await supabase
+        .from(module.table)
+        .select(selectFields);
+      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const totalCount = scopedRows.length;
+      const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
       return {
         moduleId,
         title,
@@ -350,21 +455,55 @@ const loadCardForModule = async (
       };
     }
   }
+  })();
+
+  dashboardCardPromiseCache.set(cacheKey, pending);
+  try {
+    const result = await pending;
+    dashboardCardCache.set(cacheKey, {
+      data: result,
+      expiresAt: Date.now() + DASHBOARD_BOOTSTRAP_TTL_MS,
+    });
+    return result;
+  } finally {
+    if (dashboardCardPromiseCache.get(cacheKey) === pending) {
+      dashboardCardPromiseCache.delete(cacheKey);
+    }
+  }
 };
 
-const loadRecentSection = async (moduleId: string): Promise<DashboardRecentSection | null> => {
+const loadRecentSection = async (
+  moduleId: string,
+  recordAccess: CurrentUserRecordAccessContext
+): Promise<DashboardRecentSection | null> => {
+  const cacheKey = getDashboardRecentSectionCacheKey(moduleId, recordAccess);
+  const cached = dashboardRecentSectionCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const pendingSection = dashboardRecentSectionPromiseCache.get(cacheKey);
+  if (pendingSection) {
+    return pendingSection;
+  }
+
+  const pending: Promise<DashboardRecentSection | null> = (async () => {
   const module = MODULES[moduleId];
   if (!module) return null;
 
   const fieldKeys = Array.from(new Set(['id', ...getRecentFieldKeys(module)]));
   const selectKeys = Array.from(new Set([...fieldKeys, 'created_at', 'updated_at']));
 
+  const scopedSelectKeys = moduleSupportsScopedRecords(moduleId)
+    ? Array.from(new Set([...selectKeys, 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type']))
+    : selectKeys;
+
   const { data } = await supabase
     .from(module.table)
-    .select(selectKeys.join(','))
+    .select(scopedSelectKeys.join(','))
     .order('updated_at', { ascending: false })
     .order('created_at', { ascending: false })
-    .limit(RECENT_RECORDS_LIMIT);
+    .limit(RECENT_RECORDS_LIMIT * 5);
 
   const columns = getRecentFieldKeys(module).map((fieldKey) => ({
     title: getFieldMeta(module, fieldKey)?.labels?.fa || fieldKey,
@@ -378,12 +517,30 @@ const loadRecentSection = async (moduleId: string): Promise<DashboardRecentSecti
     moduleId,
     title: module.titles.fa,
     columns,
-    rows: data || [],
+    rows: filterRowsByRecordScope(data || [], moduleId, recordAccess).slice(0, RECENT_RECORDS_LIMIT),
   };
+  })();
+
+  dashboardRecentSectionPromiseCache.set(cacheKey, pending);
+  try {
+    const result = await pending;
+    dashboardRecentSectionCache.set(cacheKey, {
+      data: result,
+      expiresAt: Date.now() + DASHBOARD_BOOTSTRAP_TTL_MS,
+    });
+    return result;
+  } finally {
+    if (dashboardRecentSectionPromiseCache.get(cacheKey) === pending) {
+      dashboardRecentSectionPromiseCache.delete(cacheKey);
+    }
+  }
 };
 
 const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
-  const snapshot = await fetchSessionBootstrap(supabase);
+  const [snapshot, recordAccess] = await Promise.all([
+    fetchSessionBootstrap(supabase),
+    fetchCurrentUserRecordAccessContext(supabase),
+  ]);
   const userId = snapshot.user?.id ? String(snapshot.user.id) : null;
   const roleId = snapshot.roleId ? String(snapshot.roleId) : null;
   const permissions = snapshot.permissions || {};
@@ -408,7 +565,15 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
   }
 
   const preferredModuleIds = resolvePreferredRoleModuleIds(permissions, MODULES, 4);
-  const cacheKey = `${userId}:${roleId || 'no-role'}:${preferredModuleIds.join(',')}`;
+  const dashboardModuleIds = resolveDashboardModuleIds(permissions, preferredModuleIds);
+  const cacheKey = [
+    userId,
+    roleId || 'no-role',
+    preferredModuleIds.join(','),
+    dashboardModuleIds.join(','),
+    [...(recordAccess.allowedRoleIds || [])].sort().join(',') || 'no-roles',
+    [...(recordAccess.allowedUserIds || [])].sort().join(',') || 'no-users',
+  ].join(':');
 
   if (
     dashboardBootstrapCache.key === cacheKey &&
@@ -430,10 +595,10 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
       description: getModuleTitle(moduleId),
     }));
 
-    const [cards, recentSections] = await Promise.all([
-      Promise.all(preferredModuleIds.map((moduleId) => loadCardForModule(moduleId, userId, roleId))),
-      Promise.all(preferredModuleIds.map((moduleId) => loadRecentSection(moduleId))),
-    ]);
+      const [cards, recentSections] = await Promise.all([
+      Promise.all(dashboardModuleIds.map((moduleId) => loadCardForModule(moduleId, recordAccess))),
+      Promise.all(dashboardModuleIds.map((moduleId) => loadRecentSection(moduleId, recordAccess))),
+      ]);
 
     const result: DashboardBootstrapResult = {
       widgetPermissions: (dashboardPermissions.fields || {}) as Record<string, boolean>,
@@ -464,6 +629,8 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const currency = useCurrencyConfig();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = useState(true);
   const [dashboardReady, setDashboardReady] = useState(false);
   const [brandTitle, setBrandTitle] = useState(() => readRuntimeBranding().appTitle || DEFAULT_BRANDING.brandName);
@@ -544,7 +711,7 @@ const Dashboard: React.FC = () => {
               <OccasionsWidget />
             </div>
             <div className="w-full xl:max-w-[430px]">
-              <GoalProgressSlider placement="dashboard" />
+              <GoalProgressSlider placement="dashboard" hideWhenEmpty={isMobile} />
             </div>
           </div>
         </div>

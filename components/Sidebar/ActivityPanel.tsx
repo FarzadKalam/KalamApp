@@ -28,6 +28,7 @@ import {
   RelationValueMap,
 } from '../../utils/recordDisplayFormatter';
 import { NOTES_UPDATED_EVENT } from '../../utils/aiAssistantEvents';
+import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../utils/noteDispatch';
 
 interface ActivityPanelProps {
   moduleId: string;
@@ -66,6 +67,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [replyToId, setReplyToId] = useState<string | null>(null);
+  const [smsNotificationEnabled, setSmsNotificationEnabled] = useState(false);
   const [currentUser, setCurrentUser] = useState<{ id: string | null; full_name: string | null }>({ id: null, full_name: null });
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
@@ -556,8 +558,17 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         created_at: new Date().toISOString(),
       } as any;
 
-      const { error } = await supabase.from('notes').insert([payload]);
-      if (error) throw error;
+      await insertNotesWithFallback([payload]);
+      if (smsNotificationEnabled) {
+        await sendNoteSmsNotifications({
+          authorName: String(currentUser.full_name || '').trim() || 'کاربر',
+          noteText: newItem,
+          mentionUserIds: mention_user_ids,
+          mentionRoleIds: mention_role_ids,
+          moduleId: scope.module_id,
+          recordId: scope.record_id,
+        });
+      }
 
       message.success('یادداشت ثبت شد');
       setNewItem('');
@@ -565,6 +576,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setMentionPickerOpen(false);
       setPendingFiles([]);
       setReplyToId(null);
+      setSmsNotificationEnabled(false);
       await fetchData();
     } catch (err: any) {
       console.error(err);
@@ -688,6 +700,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
             }}
             replyActive={Boolean(replyToId)}
             onClearReply={() => setReplyToId(null)}
+            smsNotificationEnabled={smsNotificationEnabled}
+            onSmsNotificationChange={setSmsNotificationEnabled}
             submitDisabled={!newItem.trim() && pendingFiles.length === 0}
           />
         </div>
@@ -712,6 +726,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                 renderItem={(item: any) => {
                   const parsedContent = parseNoteContent(item.content);
                   const isAi = isAiNote(item);
+                  const isSystem = String(item?.source_type || '').trim() === 'system'
+                    || String(item?.metadata?.source_type || '').trim() === 'system';
                   const authorName = isAi ? 'دستیار هوشمند' : (item.author_name || authorNameMap[item.author_id] || 'کاربر سیستم');
                   const replyTarget = items.find((note) => note.id === item.reply_to);
                   const replyAuthorName = replyTarget
@@ -730,6 +746,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         mentionUsers={mentionUsers}
                         mentionRoles={mentionRoles}
                         variant={isAi ? 'ai' : 'default'}
+                        renderTemplateBold={isSystem}
                         replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
                         replyAuthorName={replyAuthorName}
                         isEditing={editingId === item.id}
@@ -782,6 +799,13 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         .eq('id', taskId);
                       if (error) throw error;
                       await fetchData();
+                    }}
+                    onTaskUpdated={async () => {
+                      await fetchData();
+                    }}
+                    currentUser={{
+                      id: currentUser.id,
+                      fullName: currentUser.full_name,
                     }}
                   />
                 )}

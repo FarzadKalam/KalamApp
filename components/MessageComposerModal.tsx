@@ -385,7 +385,18 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
           msg.warning('شماره دریافت‌کننده مشخص نیست.');
           return;
         }
-        await sendSmsViaGateway({ to: [recipient], text: finalText });
+        await sendSmsViaGateway({
+          to: [recipient],
+          text: finalText,
+          moduleId: moduleId || undefined,
+          recordId: record?.id ? String(record.id) : undefined,
+          customerId: moduleId === 'customers' && record?.id ? String(record.id) : undefined,
+          title: 'ارسال پیامک',
+          metadata: {
+            source_type: 'message_composer_modal',
+            mode: 'sms',
+          },
+        });
         msg.success('پیامک ارسال شد.');
       } else {
         const channel = selectedBotChannel;
@@ -429,6 +440,16 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       width={1080}
       destroyOnHidden
       zIndex={12500}
+      maskClosable={false}
+      getContainer={() => document.body}
+      modalRender={(node) => (
+        <div
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {node}
+        </div>
+      )}
       footer={[
         <Button key="cancel" onClick={onCancel}>
           انصراف

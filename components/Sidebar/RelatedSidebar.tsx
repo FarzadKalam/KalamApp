@@ -1,16 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Badge, Drawer, Tooltip } from 'antd';
-import { 
-    FileTextOutlined, CheckSquareOutlined, HistoryOutlined, 
+import {
+    FileTextOutlined, CheckSquareOutlined, HistoryOutlined,
     RightOutlined, SkinOutlined, AppstoreOutlined,
     BgColorsOutlined, ScissorOutlined, ToolOutlined, ExperimentOutlined,
-    DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined,
+    DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined, NodeIndexOutlined,
     ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
 import { ModuleDefinition, RelatedTabConfig } from '../../types';
 import { supabase } from '../../supabaseClient';
+import { applyTaskSourceRecordFilter } from '../../utils/taskMeta';
 
 // نقشه آیکون‌ها: نام متنی را به کامپوننت واقعی وصل می‌کند
 const iconMap: Record<string, React.ReactNode> = {
@@ -50,6 +51,8 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
       { key: 'changelogs', icon: <HistoryOutlined />, label: 'تغییرات', color: 'text-orange-500' }
   ];
 
+  fixedTabs.splice(2, 0, { key: 'processes', icon: <NodeIndexOutlined />, label: 'فرآیندها', color: 'text-violet-500' });
+
     const relatedTabs = (moduleConfig.relatedTabs || [])
       .filter((tab) => String(tab?.targetModule || '').trim() !== 'tasks')
       .map((tab) => ({
@@ -59,18 +62,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
         label: tab.title,
     }));
 
-    const allTabs = [...fixedTabs, ...relatedTabs];
-
-    const taskRelationMap: Record<string, string> = useMemo(() => ({
-        products: 'related_product',
-        customers: 'related_customer',
-        suppliers: 'related_supplier',
-        production_orders: 'related_production_order',
-        invoices: 'related_invoice',
-        purchase_invoices: 'purchase_invoice_id',
-        projects: 'project_id',
-        marketing_leads: 'marketing_lead_id',
-    }), []);
+    const allTabs = [...fixedTabs, ...relatedTabs].filter((tab) => String(tab?.key || '') !== 'processes');
 
     const loadUnreadMap = async () => {
         try {
@@ -125,15 +117,31 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 }
 
                 if (tab.key === 'tasks') {
-                    const field = taskRelationMap[moduleConfig.id];
-                    if (!field) return null;
-                    const { data } = await supabase
-                        .from('tasks')
-                        .select('created_at')
-                        .eq(field, recordId)
+                    const scopedQuery = applyTaskSourceRecordFilter(
+                        supabase
+                            .from('tasks')
+                            .select('created_at'),
+                        moduleConfig.id,
+                        recordId
+                    );
+                    const { data } = await scopedQuery
                         .order('created_at', { ascending: false })
                         .limit(1);
                     return data?.[0]?.created_at || null;
+                }
+
+                if (tab.key === 'processes') {
+                    const scopedQuery = applyTaskSourceRecordFilter(
+                        supabase
+                            .from('tasks')
+                            .select('updated_at, created_at'),
+                        moduleConfig.id,
+                        recordId
+                    );
+                    const { data } = await scopedQuery
+                        .order('updated_at', { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.updated_at || data?.[0]?.created_at || null;
                 }
 
                 if ((tab as RelatedTabConfig).relationType === 'customer_payments') {

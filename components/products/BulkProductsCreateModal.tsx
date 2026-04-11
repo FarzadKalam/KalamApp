@@ -374,7 +374,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       ? draftRows.map((row: any) => ({
           ...row,
           key: String(row?.key || makeKey()),
-          auto_name_enabled: normalizeAutoNameEnabled(row?.auto_name_enabled, true),
+          auto_name_enabled: normalizeAutoNameEnabled(row?.auto_name_enabled, false),
         }))
       : [createEmptyRow()];
     setProductType(String(draft?.productType || defaultType));
@@ -506,7 +506,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
 
       for (let i = 0; i < rows.length; i += 1) {
         const row = rows[i];
-        const autoNameEnabled = normalizeAutoNameEnabled(row.auto_name_enabled, true);
+        const autoNameEnabled = normalizeAutoNameEnabled(row.auto_name_enabled, false);
         const payload: Record<string, unknown> = { product_type: productType };
         payload.category = productType === 'goods' ? norm(rawCategory) : null;
         payload.product_category = productType === 'service' ? norm(productCategory) : null;
@@ -567,7 +567,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
     ...(productType === 'goods'
       ? [{ key: 'opening_stock', title: 'موجودی اول دوره', type: FieldType.NUMBER, width: 140, defaultValue: 0 }]
       : []),
-    { key: 'auto_name_enabled', title: 'نامگذاری خودکار', type: FieldType.CHECKBOX, width: 140, defaultValue: true },
+    { key: 'auto_name_enabled', title: 'نامگذاری خودکار', type: FieldType.CHECKBOX, width: 140, defaultValue: false },
     { key: 'name', title: nameField?.labels?.fa || 'نام', type: nameField?.type || FieldType.TEXT, width: 260, readonlyWhen: { field: 'auto_name_enabled', equals: true } },
   ], [imageField?.type, manualCodeField?.labels?.fa, manualCodeField?.type, nameField?.labels?.fa, nameField?.type, productType, rowFields]);
 

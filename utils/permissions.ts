@@ -73,11 +73,13 @@ export const GOALS_PERMISSION_FIELDS = [
 
 export const FILES_PERMISSION_FIELDS = [
   { key: 'gallery_page', label: 'گالری فایل‌ها' },
+  { key: 'recycle_bin_page', label: 'سطل بازیافت' },
   { key: 'record_files_manager', label: 'مدیریت فایل‌ها' },
 ];
 
 export const ACCOUNTING_PERMISSION_FIELDS = [
   { key: 'dashboard_page', label: 'نمایش داشبورد حسابداری' },
+  { key: 'cash_bank_page', label: 'نمایش نقد و بانک' },
   { key: 'overview_cards', label: 'کارت های خلاصه مالی' },
   { key: 'operation_links', label: 'لینک های عملیات ضروری' },
   { key: 'reports_hub', label: 'گزارشات حسابداری' },
@@ -345,19 +347,12 @@ export const collectDescendantRoleIds = (
   if (!normalizedRootId) return new Set<string>();
 
   const result = new Set<string>([normalizedRootId]);
-  const queue = [normalizedRootId];
   const childrenMap = buildRoleChildrenMap(roles);
-
-  while (queue.length > 0) {
-    const currentId = String(queue.shift() || '').trim();
-    if (!currentId) continue;
-    (childrenMap.get(currentId) || []).forEach((childId) => {
-      const normalizedChildId = String(childId || '').trim();
-      if (!normalizedChildId || result.has(normalizedChildId)) return;
-      result.add(normalizedChildId);
-      queue.push(normalizedChildId);
-    });
-  }
+  (childrenMap.get(normalizedRootId) || []).forEach((childId) => {
+    const normalizedChildId = String(childId || '').trim();
+    if (!normalizedChildId) return;
+    result.add(normalizedChildId);
+  });
 
   return result;
 };
@@ -415,7 +410,13 @@ export const canAccessAssignedRecord = (
   if (!resolvedAssigneeId) return false;
 
   if (recordScope === 'team') {
-    return !!currentUserRoleId && record?.assignee_type === 'role' && resolvedAssigneeId === currentUserRoleId;
+    if (record?.assignee_type === 'role') {
+      return !!currentUserRoleId && resolvedAssigneeId === currentUserRoleId;
+    }
+    if (record?.assignee_type === 'user') {
+      return !!currentUserId && resolvedAssigneeId === currentUserId;
+    }
+    return false;
   }
 
   if (recordScope === 'subtree') {
@@ -527,12 +528,14 @@ export const resolveFilesAccessPermissions = (permissions: PermissionMap | null 
   const canDeleteRoot = perm.delete !== false;
 
   const canViewGallery = canViewRoot && fields.gallery_page !== false;
+  const canViewRecycleBin = canViewRoot && fields.recycle_bin_page !== false;
   const canViewRecordFilesManager = canViewRoot && fields.record_files_manager !== false;
 
   return {
     canViewGallery,
     canEditGallery: canViewGallery && canEditRoot,
     canDeleteGallery: canViewGallery && canDeleteRoot,
+    canViewRecycleBin,
     canViewRecordFilesManager,
     canEditRecordFilesManager: canViewRecordFilesManager && canEditRoot,
     canDeleteRecordFilesManager: canViewRecordFilesManager && canDeleteRoot,

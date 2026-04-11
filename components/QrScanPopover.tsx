@@ -3,6 +3,8 @@ import { Popover, Input, Button } from 'antd';
 import type { ButtonProps } from 'antd';
 import { QrcodeOutlined } from '@ant-design/icons';
 import { Html5Qrcode } from 'html5-qrcode';
+import { supabase } from '../supabaseClient';
+import { BRANDING_UPDATED_EVENT } from '../theme/brandTheme';
 
 interface QrScanResult {
   raw: string;
@@ -16,6 +18,35 @@ interface QrScanPopoverProps {
   buttonClassName?: string;
   buttonProps?: ButtonProps;
 }
+
+let cachedQrScanEnabled: boolean | null = null;
+let qrScanEnabledPromise: Promise<boolean> | null = null;
+
+const loadQrScanEnabled = async (): Promise<boolean> => {
+  if (cachedQrScanEnabled !== null) return cachedQrScanEnabled;
+  if (!qrScanEnabledPromise) {
+    qrScanEnabledPromise = (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('company_settings')
+          .select('qr_scan_enabled')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) {
+          console.warn('Could not read qr_scan_enabled from company settings', error);
+          cachedQrScanEnabled = false;
+          return false;
+        }
+        cachedQrScanEnabled = Boolean(data?.qr_scan_enabled);
+        return cachedQrScanEnabled;
+      } finally {
+        qrScanEnabledPromise = null;
+      }
+    })();
+  }
+  return qrScanEnabledPromise || false;
+};
 
 const parseQr = (raw: string): QrScanResult => {
   const trimmed = raw.trim();
@@ -34,6 +65,7 @@ const parseQr = (raw: string): QrScanResult => {
 const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن', buttonClassName, buttonProps }) => {
   const [value, setValue] = useState('');
   const [open, setOpen] = useState(false);
+  const [enabled, setEnabled] = useState<boolean | null>(cachedQrScanEnabled);
   const mergedClassName = [buttonProps?.className, buttonClassName].filter(Boolean).join(' ');
   const scannerId = useMemo(() => `qr-reader-${Math.random().toString(36).slice(2)}`, []);
   const qrRef = useRef<Html5Qrcode | null>(null);
@@ -41,8 +73,7 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
 
   const handleSubmit = () => {
     if (!value.trim()) return;
-    const parsed = parseQr(value);
-    onScan(parsed);
+    onScan(parseQr(value));
     setValue('');
     setOpen(false);
   };
@@ -50,21 +81,47 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
   const stopScanner = async () => {
     if (!qrRef.current) return;
     try {
-      const isScanning = qrRef.current.isScanning;
-      if (isScanning) {
+      if (qrRef.current.isScanning) {
         await qrRef.current.stop();
       }
       await qrRef.current.clear();
     } catch {
-      // ignore
+      // ignore cleanup failures
     } finally {
       qrRef.current = null;
     }
   };
 
   useEffect(() => {
-    if (!open) {
-      stopScanner();
+    let mounted = true;
+    const syncState = async () => {
+      const nextEnabled = await loadQrScanEnabled();
+      if (mounted) setEnabled(nextEnabled);
+    };
+    void syncState();
+
+    const handleSettingsUpdate = () => {
+      cachedQrScanEnabled = null;
+      qrScanEnabledPromise = null;
+      void syncState();
+    };
+
+    window.addEventListener(BRANDING_UPDATED_EVENT, handleSettingsUpdate);
+    return () => {
+      mounted = false;
+      window.removeEventListener(BRANDING_UPDATED_EVENT, handleSettingsUpdate);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      setOpen(false);
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!open || !enabled) {
+      void stopScanner();
       setCameraError(null);
       return;
     }
@@ -81,25 +138,29 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
           { fps: 10, qrbox: { width: 220, height: 220 } },
           (decodedText) => {
             if (cancelled) return;
-            const parsed = parseQr(decodedText);
-            onScan(parsed);
+            onScan(parseQr(decodedText));
             setOpen(false);
           },
           () => undefined
         );
-      } catch (err: any) {
+      } catch (error: any) {
         if (cancelled) return;
-        setCameraError(err?.message || 'دسترسی به دوربین ممکن نیست');
+        setCameraError(error?.message || 'دسترسی به دوربین ممکن نیست');
       }
     };
 
-    const timer = window.setTimeout(startScanner, 0);
+    const timer = window.setTimeout(() => {
+      void startScanner();
+    }, 0);
+
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      stopScanner();
+      void stopScanner();
     };
-  }, [open, scannerId, onScan]);
+  }, [enabled, open, onScan, scannerId]);
+
+  if (!enabled) return null;
 
   return (
     <Popover
@@ -108,27 +169,29 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
       onOpenChange={setOpen}
       getPopupContainer={(node) => node?.parentElement || document.body}
       overlayStyle={{ zIndex: 6000 }}
-      content={
+      content={(
         <div className="w-72">
-          <div className="rounded-lg overflow-hidden border border-gray-200 bg-black/90">
-            <div id={scannerId} className="w-full h-56" />
+          <div className="overflow-hidden rounded-lg border border-gray-200 bg-black/90">
+            <div id={scannerId} className="h-56 w-full" />
           </div>
-          {cameraError && (
+          {cameraError ? (
             <div className="mt-2 text-xs text-red-500">{cameraError}</div>
-          )}
+          ) : null}
           <div className="mt-3">
             <Input
               placeholder="اگر لازم شد، کد را دستی وارد کنید..."
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(event) => setValue(event.target.value)}
               onPressEnter={handleSubmit}
             />
             <div className="mt-2 flex justify-end">
-              <Button size="small" type="primary" onClick={handleSubmit}>تایید</Button>
+              <Button size="small" type="primary" onClick={handleSubmit}>
+                تایید
+              </Button>
             </div>
           </div>
         </div>
-      }
+      )}
     >
       <Button icon={<QrcodeOutlined />} {...buttonProps} className={mergedClassName}>
         {label}

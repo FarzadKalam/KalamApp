@@ -421,6 +421,8 @@ const InquiryForm = () => {
         ? "number"
         : field.field_type === "date"
           ? "date"
+          : field.field_type === "time"
+            ? "time"
           : field.field_type === "datetime"
             ? "datetime-local"
             : field.field_type === "phone"

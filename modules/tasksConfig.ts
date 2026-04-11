@@ -40,6 +40,7 @@ export const tasksModule: ModuleDefinition = {
   supportedViewModes: [ViewMode.KANBAN, ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.KANBAN,
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0.5, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فعالیت', en: 'Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'status', labels: { fa: 'وضعیت', en: 'Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'انجام نشده', value: 'todo', color: 'red' }, { label: 'در حال انجام', value: 'in_progress', color: 'blue' }, { label: 'بازبینی', value: 'review', color: 'orange' }, { label: 'تکمیل شده', value: 'done', color: 'green' }, { label: 'لغو شده', value: 'canceled', color: 'gray' }], defaultValue: 'todo', validation: { required: true }, nature: FieldNature.STANDARD, isTableColumn: true },
@@ -68,6 +69,16 @@ export const tasksModule: ModuleDefinition = {
       isTableColumn: true,
     },
     {
+      key: 'source_record_id',
+      labels: { fa: 'رکورد مرتبط', en: 'Related Record' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 6.1,
+      relationConfig: { targetModule: '', dependsOn: 'related_to_module' },
+      nature: FieldNature.STANDARD,
+      logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.NOT_EQUALS, value: '' } },
+    },
+    {
       key: 'task_type',
       labels: { fa: 'نوع فعالیت', en: 'Activity Type Category' },
       type: FieldType.SELECT,
@@ -90,12 +101,13 @@ export const tasksModule: ModuleDefinition = {
     { key: 'description', labels: { fa: 'شرح فعالیت', en: 'Activity Description' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'general', order: 1, nature: FieldNature.STANDARD },
     { key: 'task_report', labels: { fa: 'گزارش فعالیت', en: 'Activity Report' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'general', order: 1.5, nature: FieldNature.STANDARD },
 
-    { key: 'start_date', labels: { fa: 'تاریخ شروع', en: 'Start Date' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 1, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'start_date', labels: { fa: 'زمان شروع', en: 'Start Date' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 1, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'due_date', labels: { fa: 'مهلت انجام', en: 'Due Date' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 2, nature: FieldNature.STANDARD, isTableColumn: true },
-    { key: 'completed_at', labels: { fa: 'زمان تکمیل', en: 'Completed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 2.5, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'estimated_hours', labels: { fa: 'ساعات تخمینی', en: 'Estimated Hours' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 3, nature: FieldNature.STANDARD },
-    { key: 'spent_hours', labels: { fa: 'ساعات صرف شده', en: 'Spent Hours' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 4, readonly: true, nature: FieldNature.SYSTEM },
-    { key: 'start_time', labels: { fa: 'زمان آغاز', en: 'Start Time' }, type: FieldType.TIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 5, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'completed_at', labels: { fa: 'زمان تکمیل', en: 'Completed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 2.5, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true, hideInCreateForm: true },
+    { key: 'actual_start_at', labels: { fa: 'زمان واقعی شروع', en: 'Actual Start At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true, hideInCreateForm: true },
+    { key: 'actual_end_at', labels: { fa: 'زمان واقعی پایان', en: 'Actual End At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 4, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true, hideInCreateForm: true },
+    { key: 'schedule_variance_hours', labels: { fa: 'تعجیل / تاخیر (ساعت)', en: 'Schedule Variance (Hours)' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 5, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true, hideInCreateForm: true },
+    { key: 'spent_hours', labels: { fa: 'ساعات صرف شده', en: 'Spent Hours' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'scheduling', order: 6, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'wage', labels: { fa: 'دستمزد', en: 'Wage' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'general', order: 7, nature: FieldNature.STANDARD },
     { key: 'weight', labels: { fa: 'وزن', en: 'Weight' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'general', order: 7.5, nature: FieldNature.STANDARD },
     {
@@ -127,15 +139,15 @@ export const tasksModule: ModuleDefinition = {
     },
 
     {
-      key: 'source_record_id',
+      key: '__task_source_record_legacy_hidden__',
       labels: { fa: 'رکورد مرتبط', en: 'Related Record' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'general',
       order: 1.9,
       relationConfig: { targetModule: '', dependsOn: 'related_to_module' },
-      nature: FieldNature.STANDARD,
-      logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.NOT_EQUALS, value: '' } },
+      nature: FieldNature.SYSTEM,
+      hideInCreateForm: true,
     },
 
     { key: 'related_product', labels: { fa: 'محصول مرتبط', en: 'Related Product' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 2, relationConfig: { targetModule: 'products', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'products' } } },

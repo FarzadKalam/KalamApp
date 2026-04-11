@@ -29,8 +29,10 @@ export const automationExecutionReportsConfig: ModuleDefinition = {
       order: 1,
       isTableColumn: true,
       options: [
-        { label: 'فرآیند شرطی', value: 'process_conditional', color: 'blue' },
-        { label: 'فرآیند زماندار', value: 'process_scheduled', color: 'cyan' },
+        { label: 'گردش کار', value: 'process_conditional', color: 'blue' },
+        { label: 'گردش کار زمان‌دار', value: 'process_scheduled', color: 'cyan' },
+        { label: 'گردش کار', value: 'workflow_conditional', color: 'blue' },
+        { label: 'گردش کار زمان‌دار', value: 'workflow_scheduled', color: 'cyan' },
         { label: 'اتوماسیون شرطی', value: 'automation_conditional', color: 'green' },
         { label: 'اتوماسیون زماندار', value: 'automation_scheduled', color: 'orange' },
       ],
@@ -38,7 +40,7 @@ export const automationExecutionReportsConfig: ModuleDefinition = {
     },
     {
       key: 'automation_name',
-      labels: { fa: 'نام فرآیند / اتوماسیون', en: 'Automation Name' },
+      labels: { fa: 'نام گردش‌کار / اتوماسیون', en: 'Workflow / Automation Name' },
       type: FieldType.TEXT,
       location: FieldLocation.HEADER,
       order: 2,

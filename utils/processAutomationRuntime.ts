@@ -13,10 +13,12 @@ import {
   getProcessTaskCustomFieldValuesFromRecurrence,
   getProcessTaskCustomFieldsFromRecurrence,
   mergeProcessTaskCustomFieldValues,
+  PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX,
   TASK_AUTOMATION_FIELD_PREFIX,
   withProcessTaskCustomFieldValues,
 } from './processTaskCustomFields';
 import { getTaskStatusLabel } from './processTaskStatusOptions';
+import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 
 type AutomationActor = {
   id?: string | null;
@@ -137,11 +139,13 @@ const isRunnableProcessAutomationCondition = (condition: WorkflowCondition) => {
   return !isBlankConditionValue(condition?.value);
 };
 
-const renderAutomationTemplateFromRecord = (template: string, record: Record<string, any>) =>
+const renderAutomationTemplateWithBoldMarkers = (template: string, record: Record<string, any>) =>
   String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
     const fieldKey = String(key || '').trim();
     const value = record?.[fieldKey];
-    return value === null || value === undefined ? '' : String(value);
+    if (value === null || value === undefined) return '';
+    const resolved = String(value).trim();
+    return resolved ? `**${resolved}**` : '';
   });
 
 const buildMentionTargetFromTask = (task: Record<string, any> | null | undefined): MentionTarget => {
@@ -344,9 +348,18 @@ const buildAutomationActionRecordWithLinks = async (
     const userId = String(row?.assignee_id || '').trim();
     return userId ? `user_${userId}` : '';
   };
+  const previousTaskRecord = previousTask ? withProcessTaskCustomFieldValues(previousTask) : null;
+  const previousTaskCustomFields = previousTask
+    ? getProcessTaskCustomFieldsFromRecurrence(parseRecurrenceInfo(previousTask?.recurrence_info))
+    : [];
   actionRecord.__comm_recipient__current_task_assignee = toCombo(task);
   actionRecord.__comm_recipient__previous_stage_assignee = toCombo(previousTask);
   actionRecord.__comm_recipient__next_stage_assignee = toCombo(nextTask);
+  previousTaskCustomFields.forEach((field) => {
+    const fieldKey = String(field?.key || '').trim();
+    if (!fieldKey) return;
+    actionRecord[`${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}${fieldKey}`] = previousTaskRecord?.[fieldKey];
+  });
 
   return actionRecord;
 };
@@ -462,9 +475,10 @@ const insertAutomationNote = async (
   rule: ProcessAutomationRule,
   target: MentionTarget,
   actionRecord: Record<string, any>,
-  currentUser?: AutomationActor | null
+  _currentUser?: AutomationActor | null,
+  sendSmsNotice = false
 ) => {
-  const noteText = renderAutomationTemplateFromRecord(getRuleNoteText(rule), actionRecord).trim();
+  const noteText = renderAutomationTemplateWithBoldMarkers(getRuleNoteText(rule), actionRecord).trim();
   if (!noteText) return;
 
   const sourceLink = resolveTaskSourceLink(task);
@@ -490,13 +504,18 @@ const insertAutomationNote = async (
     },
   };
 
-  const currentUserId = String(currentUser?.id || '').trim();
-  if (currentUserId) payload.author_id = currentUserId;
-  const currentUserName = String(currentUser?.fullName || '').trim();
-  if (currentUserName) payload.author_name = currentUserName;
-
-  const { error } = await supabase.from('notes').insert(payload);
-  if (error) throw error;
+  await insertNotesWithFallback([payload]);
+  if (sendSmsNotice) {
+    await sendNoteSmsNotifications({
+      authorName: 'سیستم',
+      noteText,
+      mentionUserIds: mentionTarget.userIds,
+      mentionRoleIds: mentionTarget.roleIds,
+      moduleId: scope.module_id,
+      recordId: scope.record_id,
+      title: 'ارسال یادداشت خودکار',
+    });
+  }
 };
 
 export const runProcessAutomationsForTaskEvent = async ({
@@ -596,7 +615,7 @@ export const runProcessAutomationsForTaskEvent = async ({
         );
 
         for (const action of actions) {
-          if (String(action?.type || '') === 'send_note') {
+          if (String(action?.type || '') === 'send_note' || String(action?.type || '') === 'send_note_sms') {
             const actionRecipientFields = Array.isArray((action as any)?.config?.recipient_fields)
               ? (action as any).config.recipient_fields
               : [];
@@ -628,7 +647,8 @@ export const runProcessAutomationsForTaskEvent = async ({
               },
               noteTarget,
               actionRecord,
-              currentUser
+              currentUser,
+              String(action?.type || '') === 'send_note_sms'
             );
             continue;
           }
@@ -769,6 +789,7 @@ const logProcessAutomationRun = async ({
     message: errorMessage || null,
     details: {
       process_automation_rule_id: String(rule?.id || '').trim() || null,
+      process_automation_rule_name: String(rule?.name || '').trim() || null,
       process_automation_trigger_type: String(rule?.trigger_type || '').trim() || null,
       process_automation_event: event,
       action_count: Array.isArray(rule?.actions) ? rule.actions.length : 0,

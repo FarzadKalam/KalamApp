@@ -4,6 +4,7 @@ import { FieldNature, FieldType, ModuleField } from '../types';
 export const PROCESS_TASK_CUSTOM_FIELDS_KEY = 'process_task_custom_fields';
 export const PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY = 'process_task_custom_field_values';
 export const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
+export const PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX = 'previous_stage__';
 
 const UNSUPPORTED_PROCESS_TASK_CUSTOM_FIELD_TYPES = new Set<FieldType>([
   FieldType.IMAGE,
@@ -176,6 +177,17 @@ export const buildProcessTaskCustomAutomationFields = (fields: ModuleField[]): M
     labels: {
       ...field.labels,
       fa: `${field.labels?.fa || field.key} (فعالیت)`,
+    },
+    ...( { workflowOptionScopeModuleId: 'tasks' } as any ),
+  }));
+
+export const buildPreviousStageTaskCustomAutomationFields = (fields: ModuleField[]): ModuleField[] =>
+  normalizeProcessTaskCustomFields(fields).map((field) => ({
+    ...field,
+    key: `${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}${field.key}`,
+    labels: {
+      ...field.labels,
+      fa: `${field.labels?.fa || field.key} (مرحله قبل)`,
     },
     ...( { workflowOptionScopeModuleId: 'tasks' } as any ),
   }));

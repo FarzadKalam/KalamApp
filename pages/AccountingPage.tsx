@@ -86,6 +86,7 @@ const AccountingPage: React.FC = () => {
           acc[id] = permissions?.[id]?.view !== false;
           return acc;
         }, {});
+        modulePermMap.cash_bank = canViewAccounting && accountingPerms.fields?.cash_bank_page !== false;
 
         if (active) {
           setCanViewPage(canViewAccounting);

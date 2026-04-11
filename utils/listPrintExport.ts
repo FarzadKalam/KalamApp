@@ -42,10 +42,64 @@ const formatEnglishPrice = (value: any): string => {
   return number.toLocaleString('en-US');
 };
 
+const parseArrayLikeValue = (value: any): any[] | null => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveMergedOptionLabel = (
+  key: string,
+  field: ListFieldDefinition,
+  relationOptions: Record<string, any[]>,
+  value: any,
+) =>
+  resolveOptionLabel(field?.options, value) ||
+  resolveOptionLabel(relationOptions[key] || [], value) ||
+  resolveOptionLabel(Object.values(relationOptions).flat(), value);
+
+const formatArrayItemLabel = (
+  item: any,
+  field: ListFieldDefinition,
+  key: string,
+  relationOptions: Record<string, any[]>,
+  currencyLabel: string,
+  digitLocale: 'fa' | 'en',
+): string => {
+  if (item === null || item === undefined || item === '') return '';
+
+  if (typeof item === 'object') {
+    const objectLabel = String(
+      item?.label ||
+      item?.title ||
+      item?.name ||
+      item?.full_name ||
+      item?.business_name ||
+      item?.value ||
+      item?.id ||
+      ''
+    ).trim();
+    if (objectLabel) return formatDigitsForLocale(objectLabel, digitLocale);
+  }
+
+  const optionLabel = resolveMergedOptionLabel(key, field, relationOptions, item);
+  if (optionLabel) return formatDigitsForLocale(optionLabel, digitLocale);
+
+  return formatListCellValue({ ...field, type: FieldType.TEXT }, { [key]: item }, relationOptions, currencyLabel, digitLocale);
+};
+
 export const buildListPrintableFields = (
   moduleConfig: any,
   canViewField?: (fieldKey: string) => boolean,
   visibleFieldKeys: string[] = [],
+  dynamicOptions: Record<string, any[]> = {},
 ): ListFieldDefinition[] => {
   const visibleSet = new Set((visibleFieldKeys || []).map((item) => String(item || '').trim()).filter(Boolean));
   const sourceFields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
@@ -60,7 +114,12 @@ export const buildListPrintableFields = (
       key: String(field.key),
       label: String(field?.labels?.fa || field.key),
       type: field?.type,
-      options: Array.isArray(field?.options) ? field.options : [],
+      options: [
+        ...(Array.isArray(field?.options) ? field.options : []),
+        ...(field?.dynamicOptionsCategory && Array.isArray(dynamicOptions?.[field.dynamicOptionsCategory])
+          ? dynamicOptions[field.dynamicOptionsCategory]
+          : []),
+      ],
     }));
 
   const canShowAssignee = canViewField ? canViewField('assignee_id') !== false : true;
@@ -105,7 +164,9 @@ export const formatListCellValue = (
         : resolveOptionLabel(userOptions, resolvedAssigneeId);
     return label || String(row?.assignee_name || row?.responsible_name || row?.created_by_name || resolvedAssigneeId);
   }
+
   const rawValue = row?.[key];
+  const parsedArrayValue = parseArrayLikeValue(rawValue);
 
   if (rawValue === null || rawValue === undefined || rawValue === '') return '-';
 
@@ -123,32 +184,39 @@ export const formatListCellValue = (
   }
 
   if (field?.type === FieldType.DATE) {
-    return safeJalaliFormat(rawValue, 'YYYY/MM/DD')
-      ? formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD'), digitLocale)
-      : toEnglishDigits(String(rawValue));
+    return formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD') || String(rawValue), digitLocale);
   }
 
   if (field?.type === FieldType.DATETIME) {
-    return safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm')
-      ? formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm'), digitLocale)
-      : toEnglishDigits(String(rawValue));
+    return formatDigitsForLocale(safeJalaliFormat(rawValue, 'YYYY/MM/DD HH:mm') || String(rawValue), digitLocale);
   }
 
   if (field?.type === FieldType.TIME) {
     return formatDigitsForLocale(String(rawValue), digitLocale);
   }
 
-  if (field?.type === FieldType.RELATION || field?.type === FieldType.SELECT || field?.type === FieldType.STATUS) {
-    const label =
-      resolveOptionLabel(field?.options, rawValue) ||
-      resolveOptionLabel(relationOptions[key] || [], rawValue) ||
-      resolveOptionLabel(Object.values(relationOptions).flat(), rawValue);
+  if (
+    field?.type === FieldType.RELATION ||
+    field?.type === FieldType.SELECT ||
+    field?.type === FieldType.STATUS ||
+    field?.type === FieldType.USER
+  ) {
+    const label = resolveMergedOptionLabel(key, field, relationOptions, rawValue);
     return label || String(rawValue);
   }
 
-  if (Array.isArray(rawValue)) {
-    return rawValue
-      .map((item) => formatListCellValue({ ...field, type: FieldType.TEXT }, { [key]: item }, relationOptions, currencyLabel, digitLocale))
+  if (field?.type === FieldType.MULTI_SELECT || field?.type === FieldType.TAGS) {
+    const values = Array.isArray(rawValue) ? rawValue : (parsedArrayValue || [rawValue]);
+    const labels = values
+      .map((item) => formatArrayItemLabel(item, field, key, relationOptions, currencyLabel, digitLocale))
+      .filter(Boolean);
+    return labels.length ? labels.join('، ') : '-';
+  }
+
+  if (Array.isArray(rawValue) || parsedArrayValue) {
+    const values = Array.isArray(rawValue) ? rawValue : (parsedArrayValue || []);
+    return values
+      .map((item) => formatArrayItemLabel(item, field, key, relationOptions, currencyLabel, digitLocale))
       .join('، ');
   }
 
@@ -159,7 +227,29 @@ export const formatListCellValue = (
     );
   }
 
+  if (field?.type === FieldType.LINK) {
+    return String(rawValue);
+  }
+
   return formatDigitsForLocale(String(rawValue), digitLocale);
+};
+
+export const formatListCellHtml = (
+  field: ListFieldDefinition,
+  row: Record<string, any>,
+  relationOptions: Record<string, any[]> = {},
+  currencyLabel: string = '',
+): string => {
+  const key = String(field?.key || '').trim();
+  const rawValue = row?.[key];
+
+  if (field?.type === FieldType.IMAGE) {
+    const imageUrl = String(rawValue || '').trim();
+    if (!imageUrl) return '-';
+    return `<div style="display:flex;justify-content:center;align-items:center;"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(field.label || key)}" style="display:block;width:52px;height:52px;max-width:52px;max-height:52px;border-radius:10px;object-fit:cover;border:1px solid rgba(148,163,184,0.35);background:#fff;" /></div>`;
+  }
+
+  return escapeHtml(formatListCellValue(field, row, relationOptions, currencyLabel));
 };
 
 export const buildListTableHtml = (
@@ -177,8 +267,8 @@ export const buildListTableHtml = (
     ? rows.map((row, index) => {
         const cells = fields
           .map((field) => {
-            const value = formatListCellValue(field, row, relationOptions, currencyLabel);
-            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word;">${escapeHtml(value)}</td>`;
+            const valueHtml = formatListCellHtml(field, row, relationOptions, currencyLabel);
+            return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word;">${valueHtml}</td>`;
           })
           .join('');
         return `<tr><td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; text-align:center; background:rgba(var(--brand-50-rgb),0.18);">${toPersianNumber(startIndex + index + 1)}</td>${cells}</tr>`;
@@ -197,6 +287,73 @@ export const buildListTableHtml = (
     ${rowsHtml}
   </tbody>
 </table>
+`.trim();
+};
+
+export const buildListCatalogHtml = (
+  fields: ListFieldDefinition[],
+  rows: Array<Record<string, any>>,
+  relationOptions: Record<string, any[]> = {},
+  currencyLabel: string = '',
+) => {
+  const imageField = fields.find((field) => String(field?.type || '').toLowerCase() === String(FieldType.IMAGE).toLowerCase()) || null;
+  const contentFields = fields.filter((field) => field.key !== imageField?.key);
+  const titleField =
+    contentFields.find((field) => ['name', 'title', 'business_name'].includes(String(field?.key || '').trim())) ||
+    contentFields[0] ||
+    null;
+  const detailFields = contentFields.filter((field) => field.key !== titleField?.key).slice(0, 4);
+
+  const cardsHtml = rows.length > 0
+    ? rows.map((row) => {
+        const imageHtml = imageField
+          ? (() => {
+              const imageUrl = String(row?.[imageField.key] || '').trim();
+              if (!imageUrl) {
+                return `
+<div style="height:118px; border:1px dashed rgba(148,163,184,0.45); border-radius:14px; background:rgba(248,250,252,0.95); display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:10px;">
+  بدون تصویر
+</div>`.trim();
+              }
+              return `
+<div style="height:118px; border:1px solid rgba(148,163,184,0.28); border-radius:14px; background:#fff; overflow:hidden; display:flex; align-items:center; justify-content:center;">
+  <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageField.label || '')}" style="display:block; width:100%; height:100%; object-fit:cover;" />
+</div>`.trim();
+            })()
+          : '';
+
+        const titleHtml = titleField
+          ? `<div style="font-size:13px; font-weight:800; color:#111827; line-height:1.9; min-height:24px;">${escapeHtml(formatListCellValue(titleField, row, relationOptions, currencyLabel))}</div>`
+          : '';
+
+        const detailRows = detailFields
+          .map((field) => {
+            const value = formatListCellValue(field, row, relationOptions, currencyLabel);
+            if (!String(value || '').trim() || value === '-') return '';
+            return `
+<div style="display:flex; align-items:flex-start; justify-content:space-between; gap:8px; border-top:1px solid rgba(226,232,240,0.9); padding-top:5px;">
+  <span style="font-size:10px; color:#64748b; flex:0 0 42%;">${escapeHtml(field.label)}</span>
+  <span style="font-size:10.5px; color:#0f172a; text-align:left; flex:1 1 auto; word-break:break-word;">${escapeHtml(value)}</span>
+</div>`.trim();
+          })
+          .filter(Boolean)
+          .join('');
+
+        return `
+<div style="break-inside:avoid; border:1px solid rgba(148,163,184,0.28); border-radius:18px; background:#fff; padding:10px; display:flex; flex-direction:column; gap:8px; box-shadow:0 4px 14px rgba(15,23,42,0.05); min-height:0;">
+  ${imageHtml}
+  ${titleHtml}
+  <div style="display:flex; flex-direction:column; gap:5px;">
+    ${detailRows || '<div style="font-size:10px; color:#94a3b8;">&nbsp;</div>'}
+  </div>
+</div>`.trim();
+      }).join('')
+    : `<div style="border:1px solid rgba(148,163,184,0.28); border-radius:18px; padding:18px; text-align:center; color:#64748b;">داده‌ای برای چاپ انتخاب نشده است.</div>`;
+
+  return `
+<div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; direction:rtl;">
+  ${cardsHtml}
+</div>
 `.trim();
 };
 

@@ -112,12 +112,23 @@ const buildCompactFieldsTemplateForCopy = (moduleId: string, selectedFieldKeys: 
       const key = String(field?.key || '').trim();
       if (!key) return false;
       if (PRINT_COLUMN_IGNORE_KEYS.has(key)) return false;
-      if (String(field?.type || '').toLowerCase() === 'image') return false;
       return shouldIncludeSystemField(selectedFieldKeys, `record.${key}`);
     })
     .forEach((field: any) => {
       const key = String(field?.key || '').trim();
-      const token = `{{record.${key}}}`;
+      const isImageField = String(field?.type || '').toLowerCase() === 'image';
+      const token = isImageField
+        ? `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:4px;background:#fff;"><img src="{{record.${key}}}" alt="${field.labels?.fa || key}" style="display:block;width:64px;height:64px;max-width:64px;max-height:64px;object-fit:cover;border-radius:8px;" /></div>`
+        : `{{record.${key}}}`;
+      if (isImageField) {
+        regularRows.push(`
+        <tr>
+          <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${field.labels?.fa || key}</td>
+          <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; text-align:center;">${token}</td>
+        </tr>
+      `);
+        return;
+      }
       if (isLongTextType(field?.type)) {
         longTextRows.push(`
 <div style="margin-top:8px;">
@@ -1035,6 +1046,65 @@ const buildListA4DefaultTemplate = (
   };
 };
 
+const buildListCatalogA4PortraitDefaultTemplate = (
+  moduleId: string,
+  now: string,
+): StoredPrintTemplate => {
+  const moduleTitle = getModuleTitle(moduleId) || 'فهرست';
+
+  return {
+    id: `default_${moduleId}_catalog_a4_portrait`,
+    moduleId,
+    scope: 'list',
+    title: 'کاتالوگ A4 عمودی',
+    description: `قالب سیستمی کاتالوگی ${moduleTitle} در قطع A4 عمودی با ۶ کارت در هر صفحه`,
+    paperSize: 'A4',
+    orientation: 'portrait',
+    isActive: true,
+    isSystem: true,
+    showHeader: true,
+    showFooter: true,
+    headerHeight: 84,
+    footerHeight: 40,
+    pageMarginTop: 8,
+    pageMarginRight: 8,
+    pageMarginBottom: 8,
+    pageMarginLeft: 8,
+    headerHtml: `
+<table style="width:100%; border-collapse:collapse; direction:rtl; border:1px solid rgba(148,163,184,0.3); border-radius:14px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:16%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.45); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:34px; max-height:34px; object-fit:contain;" />
+      </td>
+      <td style="width:54%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:15px; font-weight:800; color:rgb(var(--brand-500-rgb));">{{system.list_title}}</div>
+        <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
+      </td>
+      <td style="width:30%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.22); text-align:right; font-size:11px; line-height:1.8;">
+        <div>تاریخ چاپ: {{system.print_date}}</div>
+        <div>تعداد رکورد: {{system.selected_count}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+    contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit;">
+  {{system.list_catalog_a4}}
+</div>
+`.trim(),
+    footerHtml: `
+<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; color:#64748b; direction:rtl;">
+  <span>کاتالوگ چاپی</span>
+  <span>صفحه {{system.page_index}} از {{system.page_count}}</span>
+</div>
+`.trim(),
+    createdAt: now,
+    updatedAt: now,
+  };
+};
+
 export const buildDefaultTemplatesForModule = (
   moduleId: string,
   scope: 'all' | 'record' | 'list' = 'all'
@@ -1045,9 +1115,10 @@ export const buildDefaultTemplatesForModule = (
   const compactA6Template = buildCompactA6DefaultTemplate(moduleId, now);
   const listPortraitTemplate = buildListA4DefaultTemplate(moduleId, now, 'portrait');
   const listLandscapeTemplate = buildListA4DefaultTemplate(moduleId, now, 'landscape');
+  const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(moduleId, now);
 
   if (!isInvoiceModule(moduleId)) {
-    const defaults: StoredPrintTemplate[] = [compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate];
+    const defaults: StoredPrintTemplate[] = [compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
     return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
   }
 
@@ -1363,6 +1434,7 @@ export const buildDefaultTemplatesForModule = (
     compactA6Template,
     listPortraitTemplate,
     listLandscapeTemplate,
+    listCatalogPortraitTemplate,
   ];
 
   return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);

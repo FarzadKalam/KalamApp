@@ -17,6 +17,16 @@ export const PROCESS_TASK_STATUS_COLOR_META: Array<{ label: string; value: strin
 export const PROCESS_TASK_STATUS_COLOR_OPTIONS: Array<{ label: string; value: string }> =
   PROCESS_TASK_STATUS_COLOR_META.map(({ label, value }) => ({ label, value }));
 
+const LEGACY_TASK_STATUS_FALLBACKS: Record<string, SelectOption> = {
+  pending: { value: 'pending', label: 'در انتظار', color: 'orange' },
+  completed: { value: 'completed', label: 'تکمیل شده', color: 'green' },
+  done: { value: 'done', label: 'تکمیل شده', color: 'green' },
+  in_progress: { value: 'in_progress', label: 'در حال انجام', color: 'blue' },
+  review: { value: 'review', label: 'بازبینی', color: 'gold' },
+  todo: { value: 'todo', label: 'انجام نشده', color: 'red' },
+  canceled: { value: 'canceled', label: 'لغو شده', color: 'default' },
+};
+
 const parseRecurrenceInfo = (value: any): Record<string, any> => {
   if (value && typeof value === 'object') return value;
   if (typeof value !== 'string') return {};
@@ -138,10 +148,16 @@ export const rebuildProcessTaskStatusOptionsByMergedOrder = (
 export const getTaskStatusOptions = (task?: any, baseOptions?: any[] | null): SelectOption[] => {
   const recurrence = parseRecurrenceInfo(task?.recurrence_info);
   const base = normalizeProcessTaskStatusOptions(baseOptions);
-  return mergeTaskStatusOptions(
+  const merged = mergeTaskStatusOptions(
     base.length ? base : getBaseTaskStatusOptions(),
     getProcessTaskStatusOptionsFromRecurrence(recurrence)
   );
+  const currentStatus = String(task?.status || '').trim().toLowerCase();
+  const fallback = currentStatus ? LEGACY_TASK_STATUS_FALLBACKS[currentStatus] : null;
+  if (fallback && !merged.some((option) => String(option?.value || '').trim().toLowerCase() === currentStatus)) {
+    return [...merged, fallback];
+  }
+  return merged;
 };
 
 export const getTaskStatusOption = (status: unknown, task?: any, baseOptions?: any[] | null): SelectOption | null => {
@@ -149,7 +165,7 @@ export const getTaskStatusOption = (status: unknown, task?: any, baseOptions?: a
   if (!normalizedStatus) return null;
   return getTaskStatusOptions(task, baseOptions).find(
     (option) => String(option?.value || '').trim() === normalizedStatus
-  ) || null;
+  ) || LEGACY_TASK_STATUS_FALLBACKS[normalizedStatus.toLowerCase()] || null;
 };
 
 export const getTaskStatusLabel = (status: unknown, task?: any, baseOptions?: any[] | null): string =>
@@ -161,6 +177,7 @@ export const getTaskStatusColor = (status: unknown, task?: any, baseOptions?: an
 
   const normalizedStatus = String(status || '').trim().toLowerCase();
   if (normalizedStatus === 'done' || normalizedStatus === 'completed') return 'green';
+  if (normalizedStatus === 'pending') return 'orange';
   if (normalizedStatus === 'in_progress') return 'blue';
   if (normalizedStatus === 'review') return 'gold';
   if (normalizedStatus === 'todo') return 'red';

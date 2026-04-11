@@ -24,7 +24,23 @@ type GoalProgressSliderProps = {
   moduleId?: string | null;
   placement: 'module_list' | 'dashboard';
   className?: string;
+  hideWhenEmpty?: boolean;
 };
+
+const GOAL_PROGRESS_CACHE_TTL_MS = 60_000;
+
+let goalProgressFiscalYearCache: {
+  data: FiscalYearSnapshot | null;
+  expiresAt: number;
+  promise: Promise<FiscalYearSnapshot | null> | null;
+} = {
+  data: null,
+  expiresAt: 0,
+  promise: null,
+};
+
+const goalProgressCardsCache = new Map<string, { data: GoalProgressSnapshot[]; expiresAt: number }>();
+const goalProgressCardsPromiseCache = new Map<string, Promise<GoalProgressSnapshot[]>>();
 
 const canAccessGoalModule = (permissions: any, targetModuleId?: string | null) => {
   if (!targetModuleId) return true;
@@ -76,6 +92,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   moduleId,
   placement,
   className = '',
+  hideWhenEmpty = false,
 }) => {
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<GoalProgressSnapshot[]>([]);
@@ -90,8 +107,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const placementField = placement === 'dashboard' ? 'dashboard_widget' : 'module_list_cards';
 
   const loadFiscalYear = useCallback(async () => {
+    if (goalProgressFiscalYearCache.data && goalProgressFiscalYearCache.expiresAt > Date.now()) {
+      fiscalYearRef.current = goalProgressFiscalYearCache.data;
+      return;
+    }
+
+    if (goalProgressFiscalYearCache.promise) {
+      fiscalYearRef.current = await goalProgressFiscalYearCache.promise;
+      return;
+    }
+
     const today = new Date().toISOString().slice(0, 10);
-    try {
+    const pending = (async () => {
+      try {
       const { data } = await supabase
         .from('fiscal_years')
         .select('id, title, start_date, end_date, is_active')
@@ -102,8 +130,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         .limit(1);
 
       if (Array.isArray(data) && data[0]) {
-        fiscalYearRef.current = data[0] as FiscalYearSnapshot;
-        return;
+        return data[0] as FiscalYearSnapshot;
       }
 
       const fallback = await supabase
@@ -112,9 +139,25 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         .eq('is_active', true)
         .order('start_date', { ascending: false })
         .limit(1);
-      fiscalYearRef.current = (fallback.data || [])[0] || null;
-    } catch {
-      fiscalYearRef.current = null;
+      return (fallback.data || [])[0] || null;
+      } catch {
+        return null;
+      }
+    })();
+
+    goalProgressFiscalYearCache.promise = pending;
+    try {
+      const result = await pending;
+      goalProgressFiscalYearCache = {
+        data: result,
+        expiresAt: Date.now() + GOAL_PROGRESS_CACHE_TTL_MS,
+        promise: null,
+      };
+      fiscalYearRef.current = result;
+    } finally {
+      if (goalProgressFiscalYearCache.promise === pending) {
+        goalProgressFiscalYearCache.promise = null;
+      }
     }
   }, []);
 
@@ -122,6 +165,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     setLoading(true);
     try {
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
+      const resolvedSelections = nextSelections || subperiodSelections;
+      const cacheKey = JSON.stringify({
+        placementField,
+        moduleId: moduleId || null,
+        userId: roleContext.userId || null,
+        roleId: roleContext.roleId || null,
+        selections: Object.keys(resolvedSelections)
+          .sort()
+          .reduce<Record<string, GoalPeriodUnit>>((acc, key) => {
+            acc[key] = resolvedSelections[key];
+            return acc;
+          }, {}),
+      });
 
       if (!canViewGoalPlacement(roleContext.permissions, placementField)) {
         setCards([]);
@@ -139,56 +195,89 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         await loadFiscalYear();
       }
 
+      const cached = goalProgressCardsCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        setCards(cached.data);
+        setActiveIndex((current) => (cached.data.length === 0 ? 0 : Math.min(current, cached.data.length - 1)));
+        setLoading(false);
+        return;
+      }
+
+      const pendingCards = goalProgressCardsPromiseCache.get(cacheKey);
+      if (pendingCards) {
+        const sharedCards = await pendingCards;
+        setCards(sharedCards);
+        setActiveIndex((current) => (sharedCards.length === 0 ? 0 : Math.min(current, sharedCards.length - 1)));
+        setLoading(false);
+        return;
+      }
+
       await ensureDefaultSalesInvoiceGoal({ userId: roleContext.userId });
 
-      let query = supabase
-        .from('goals')
-        .select('*')
-        .eq('is_active', true)
-        .order('updated_at', { ascending: false });
+      const cardsPromise = (async () => {
+        let query = supabase
+          .from('goals')
+          .select('*')
+          .eq('is_active', true)
+          .order('updated_at', { ascending: false });
 
-      if (moduleId) {
-        query = query.eq('module_id', moduleId);
-      }
+        if (moduleId) {
+          query = query.eq('module_id', moduleId);
+        }
 
-      const { data, error } = await query;
-      if (error) throw error;
+        const { data, error } = await query;
+        if (error) throw error;
 
-      const visibleGoals = dedupeGoalsForDisplay(
-        (data || [])
-          .map((item) => normalizeGoalRecord(item))
-          .filter((goal) => canAccessGoalModule(roleContext.permissions, goal.module_id))
-          .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId))
-      );
+        const visibleGoals = dedupeGoalsForDisplay(
+          (data || [])
+            .map((item) => normalizeGoalRecord(item))
+            .filter((goal) => canAccessGoalModule(roleContext.permissions, goal.module_id))
+            .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId))
+        );
 
-      const prepared: GoalProgressSnapshot[] = [];
-      for (const goal of visibleGoals) {
-        const selectedSubperiodUnit =
-          nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit;
-        try {
-          const snapshot = await executeGoalProgress(goal, {
-            userId: roleContext.userId,
-            roleId: roleContext.roleId,
-            orgId: roleContext.orgId,
-            allowedRoleIds: roleContext.allowedRoleIds,
-            allowedUserIds: roleContext.allowedUserIds,
-            permissions: roleContext.permissions,
-            fiscalYear: fiscalYearRef.current,
-            selectedSubperiodUnit,
-            cache: rowCacheRef.current,
-          });
-          if (snapshot) prepared.push(snapshot);
-        } catch {
-          const fallbackSnapshot = buildGoalFallbackProgressSnapshot(goal, {
-            fiscalYear: fiscalYearRef.current,
-            selectedSubperiodUnit,
-          });
-          if (fallbackSnapshot) prepared.push(fallbackSnapshot);
+        const prepared: GoalProgressSnapshot[] = [];
+        for (const goal of visibleGoals) {
+          const selectedSubperiodUnit =
+            nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit;
+          try {
+            const snapshot = await executeGoalProgress(goal, {
+              userId: roleContext.userId,
+              roleId: roleContext.roleId,
+              orgId: roleContext.orgId,
+              allowedRoleIds: roleContext.allowedRoleIds,
+              allowedUserIds: roleContext.allowedUserIds,
+              permissions: roleContext.permissions,
+              fiscalYear: fiscalYearRef.current,
+              selectedSubperiodUnit,
+              cache: rowCacheRef.current,
+            });
+            if (snapshot) prepared.push(snapshot);
+          } catch {
+            const fallbackSnapshot = buildGoalFallbackProgressSnapshot(goal, {
+              fiscalYear: fiscalYearRef.current,
+              selectedSubperiodUnit,
+            });
+            if (fallbackSnapshot) prepared.push(fallbackSnapshot);
+          }
+        }
+
+        return prepared;
+      })();
+
+      goalProgressCardsPromiseCache.set(cacheKey, cardsPromise);
+      try {
+        const prepared = await cardsPromise;
+        goalProgressCardsCache.set(cacheKey, {
+          data: prepared,
+          expiresAt: Date.now() + GOAL_PROGRESS_CACHE_TTL_MS,
+        });
+        setCards(prepared);
+        setActiveIndex((current) => (prepared.length === 0 ? 0 : Math.min(current, prepared.length - 1)));
+      } finally {
+        if (goalProgressCardsPromiseCache.get(cacheKey) === cardsPromise) {
+          goalProgressCardsPromiseCache.delete(cacheKey);
         }
       }
-
-      setCards(prepared);
-      setActiveIndex((current) => (prepared.length === 0 ? 0 : Math.min(current, prepared.length - 1)));
     } catch {
       setCards([]);
     } finally {
@@ -290,6 +379,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }
 
   if (!activeCard) {
+    if (hideWhenEmpty) return null;
     return placement === 'dashboard' ? (
       <div className={`rounded-[1.6rem] border border-dashed border-gray-200 bg-white/80 p-4 text-center text-sm text-gray-400 dark:border-gray-800 dark:bg-[#1a1a1a] ${className}`}>
         <Empty description="هدف فعالی برای نمایش وجود ندارد." image={Empty.PRESENTED_IMAGE_SIMPLE} />

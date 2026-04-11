@@ -28,6 +28,8 @@ import { MODULES } from '../moduleRegistry';
 import { FieldLocation, FieldNature, FieldType, ModuleField } from '../types';
 import PersianDatePicker from '../components/PersianDatePicker';
 import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
+import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
+import ProductionStagesField from '../components/ProductionStagesField';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
@@ -883,7 +885,14 @@ const AccountingRecordPage: React.FC = () => {
   const sortedBlocks = (moduleConfig.blocks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
 
   return (
-    <div className="p-4 md:p-6 max-w-[1200px] mx-auto animate-fadeIn">
+    <div className={`p-4 md:p-6 max-w-[1200px] mx-auto animate-fadeIn ${!isCreate && id ? 'md:pl-20' : ''}`}>
+      {!isCreate && id && moduleConfig && (
+        <RelatedSidebar
+          moduleConfig={moduleConfig}
+          recordId={String(id)}
+          recordName={recordTitle}
+        />
+      )}
       <Card className="rounded-2xl border border-gray-200 dark:border-gray-800">
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="flex items-center gap-2">
@@ -981,6 +990,23 @@ const AccountingRecordPage: React.FC = () => {
                   </Form.Item>
                 ))}
               </div>
+            )}
+
+            {!isCreate && id && (
+              <Card
+                size="small"
+                title="فرآیندها"
+                className="mb-4 rounded-xl border border-gray-200 dark:border-gray-800"
+              >
+                <ProductionStagesField
+                  recordId={String(id)}
+                  moduleId={moduleId}
+                  readOnly
+                  compact
+                  cardCompact
+                  forceProcessRecordMode
+                />
+              </Card>
             )}
 
             {sortedBlocks.map((block) => {

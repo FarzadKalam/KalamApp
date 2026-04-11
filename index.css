@@ -215,28 +215,35 @@ body.ant-scrolling-effect {
   min-height: 0;
 }
 
-.smarttable-shell .ant-table-header,
-.smarttable-shell .ant-table-content,
-.smarttable-shell .ant-table-body {
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
-}
-
 .smarttable-shell .ant-table-body,
 .smarttable-shell .ant-table-content {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   scrollbar-gutter: stable;
+}
+
+.smarttable-shell .ant-table-header {
+  overflow-x: hidden !important;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.smarttable-shell .ant-table-body {
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: scroll-position;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {
   flex: 0 0 auto;
-  margin: 8px 0 0 !important;
-  padding: 10px 12px 10px;
+  margin: 0 !important;
+  padding: 12px 12px 14px;
   position: relative;
   z-index: 2;
   touch-action: manipulation;
   row-gap: 8px;
-  border-top: 1px solid rgba(148, 163, 184, 0.14);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(var(--brand-50-rgb), 0.36) 100%);
+  border-top: 0;
+  background: transparent;
 }
 
 .smarttable-shell .ant-pagination,
@@ -496,6 +503,24 @@ body.ant-scrolling-effect {
   overflow: hidden;
 }
 
+.quick-preview-modal .ant-modal-content {
+  border-radius: 24px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.quick-preview-modal .ant-modal-body {
+  overflow: hidden;
+  padding: 0 !important;
+}
+
+.quick-preview-modal .ant-modal-close {
+  top: 10px;
+  left: 10px;
+  right: auto;
+  z-index: 3;
+}
+
 @media (max-width: 640px) {
   .task-quick-modal-root .ant-modal-wrap {
     overflow: hidden;
@@ -517,6 +542,31 @@ body.ant-scrolling-effect {
   }
 
   .task-quick-modal .ant-modal-body {
+    flex: 1;
+    overflow: auto;
+    padding: 0 !important;
+  }
+
+  .quick-preview-modal-root .ant-modal-wrap {
+    overflow: hidden;
+  }
+
+  .quick-preview-modal {
+    top: 0 !important;
+    max-width: 100vw !important;
+    margin: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  .quick-preview-modal .ant-modal-content {
+    min-height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0 !important;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .quick-preview-modal .ant-modal-body {
     flex: 1;
     overflow: auto;
     padding: 0 !important;

@@ -1,16 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { Progress, theme } from 'antd';
+import { Button, Progress, theme } from 'antd';
 import {
+  BellOutlined,
   CheckCircleFilled,
+  CheckOutlined,
   CloseCircleFilled,
   CloseOutlined,
   LoadingOutlined,
   MinusOutlined,
   ReloadOutlined,
   StopFilled,
+  TeamOutlined,
   UpOutlined,
 } from '@ant-design/icons';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
+import { dismissUiNotificationOverlayItem, useUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
+import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 
 const formatBytes = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return '0 B';
@@ -42,6 +47,7 @@ const statusMeta = {
 
 const UploadProgressOverlay: React.FC = () => {
   const tasks = useUploadTasks();
+  const notifications = useUiNotificationOverlayItems();
   const { token } = theme.useToken();
   const [minimized, setMinimized] = useState(false);
 
@@ -50,7 +56,23 @@ const UploadProgressOverlay: React.FC = () => {
     [tasks],
   );
 
-  if (tasks.length === 0) return null;
+  const notificationCount = notifications.length;
+  const hasUploads = tasks.length > 0;
+  const hasNotifications = notificationCount > 0;
+  const overlayTitle = hasUploads && hasNotifications
+    ? 'آپلودها و اعلان‌ها'
+    : hasNotifications
+      ? 'اعلان‌های جدید'
+      : 'آپلود فایل';
+  const overlaySubtitle = hasUploads && hasNotifications
+    ? `${toPersianNumber(String(notificationCount))} اعلان و ${toPersianNumber(String(tasks.length))} مورد آپلود`
+    : hasNotifications
+      ? `${toPersianNumber(String(notificationCount))} اعلان در انتظار بررسی`
+      : activeCount > 0
+        ? `${toPersianNumber(String(activeCount))} مورد در حال آپلود`
+        : `${toPersianNumber(String(tasks.length))} مورد در صف نمایش`;
+
+  if (!hasUploads && !hasNotifications) return null;
 
   if (minimized) {
     return (
@@ -67,10 +89,10 @@ const UploadProgressOverlay: React.FC = () => {
         >
           <div className="min-w-0">
             <div className="text-sm font-semibold" style={{ color: token.colorTextHeading }}>
-              آپلود فایل
+              {overlayTitle}
             </div>
             <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-              {activeCount > 0 ? `${activeCount} مورد در حال آپلود` : `${tasks.length} مورد آماده بررسی`}
+              {overlaySubtitle}
             </div>
           </div>
           <UpOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
@@ -95,10 +117,10 @@ const UploadProgressOverlay: React.FC = () => {
         >
           <div className="min-w-0">
             <div className="text-sm font-semibold" style={{ color: token.colorTextHeading }}>
-              آپلود فایل
+              {overlayTitle}
             </div>
             <div className="text-xs" style={{ color: token.colorTextTertiary }}>
-              {activeCount > 0 ? `${activeCount} مورد در حال آپلود` : `${tasks.length} مورد در صف نمایش`}
+              {overlaySubtitle}
             </div>
           </div>
           <button
@@ -114,6 +136,68 @@ const UploadProgressOverlay: React.FC = () => {
 
         <div className="max-h-[55vh] overflow-y-auto px-3 py-3">
           <div className="flex flex-col gap-2.5">
+            {notifications.map((item) => {
+              const icon = item.kind === 'note'
+                ? <BellOutlined />
+                : item.kind === 'task'
+                  ? <CheckOutlined />
+                  : <TeamOutlined />;
+              const accentColor = item.kind === 'note'
+                ? '#2563eb'
+                : item.kind === 'task'
+                  ? token.colorSuccess
+                  : '#d97706';
+
+              return (
+                <div
+                  key={item.id}
+                  className="rounded-[18px] border px-3 py-3"
+                  style={{
+                    borderColor: token.colorBorderSecondary,
+                    background: token.colorFillTertiary,
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    <div
+                      className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full text-sm"
+                      style={{
+                        color: accentColor,
+                        background: token.colorBgElevated,
+                      }}
+                    >
+                      {icon}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={item.onOpen}
+                      className="min-w-0 flex-1 text-right"
+                    >
+                      <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
+                        <span>{item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : 'مسئولیت'}</span>
+                        <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
+                      </div>
+                      <div className="mt-1 truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
+                        {item.title}
+                      </div>
+                      <div className="mt-1 line-clamp-2 text-[12px] leading-5" style={{ color: token.colorTextSecondary }}>
+                        {item.body}
+                      </div>
+                      {item.hasAttachments ? (
+                        <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
+                          دارای پیوست
+                        </div>
+                      ) : null}
+                    </button>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CloseOutlined />}
+                      onClick={() => dismissUiNotificationOverlayItem(item.id)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
             {tasks.map((task) => {
               const meta = statusMeta[task.status];
               const percentLabel = task.total > 0 ? `${task.progress}%` : '';

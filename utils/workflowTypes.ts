@@ -6,6 +6,7 @@ export type WorkflowExecutionMode = 'first_match' | 'every_match';
 
 export type WorkflowActionType =
   | 'send_note'
+  | 'send_note_sms'
   | 'send_sms'
   | 'send_email'
   | 'send_bale_bot'

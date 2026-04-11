@@ -220,7 +220,7 @@ const fieldsArray: any[] = [
   { key: 'crm_code', labels: { fa: 'کد CRM', en: 'CRM Code' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.6, nature: FieldNature.STANDARD },
   { key: 'product_identifier', labels: { fa: 'شناسه کالا', en: 'Product Identifier' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.7, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'commission_percentage', labels: { fa: 'پورسانت', en: 'Commission (%)' }, type: FieldType.PERCENTAGE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.8, nature: FieldNature.STANDARD },
-  { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: true },
+  { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: false },
 
   { key: 'total_sold_amount', labels: { fa: 'جمع مبلغ فروخته شده', en: 'Total Sold Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'sales_info', order: 1, nature: FieldNature.SYSTEM, readonly: true, isTableColumn: false },
   { key: 'total_sold_quantity', labels: { fa: 'جمع واحد فروخته شده', en: 'Total Sold Quantity' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'sales_info', order: 2, nature: FieldNature.SYSTEM, readonly: true, isTableColumn: false },

@@ -14,6 +14,7 @@ import {
   WorkflowRecord,
 } from './workflowTypes';
 import { sendSmsViaGateway } from './smsGateway';
+import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 
 type WorkflowEvent = 'create' | 'upsert';
 
@@ -126,6 +127,16 @@ const renderTemplate = (template: string, record: Record<string, any>) => {
   });
 };
 
+const renderTemplateWithBoldMarkers = (template: string, record: Record<string, any>) => {
+  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
+    const fieldKey = String(key || '').trim();
+    const val = record?.[fieldKey];
+    if (val === null || val === undefined) return '';
+    const resolved = String(val).trim();
+    return resolved ? `**${resolved}**` : '';
+  });
+};
+
 const fetchRecordTags = async (
   moduleId: string,
   recordId: string,
@@ -149,6 +160,50 @@ const fetchRecordTags = async (
 
   context.tagsCache.set(cacheKey, tagIds);
   return tagIds;
+};
+
+const copyRecordFilesToTask = async ({
+  sourceModuleId,
+  sourceRecordId,
+  targetTaskId,
+  orgId,
+  userId,
+}: {
+  sourceModuleId: string;
+  sourceRecordId: string;
+  targetTaskId: string;
+  orgId?: string | null;
+  userId?: string | null;
+}) => {
+  try {
+    const { data, error } = await supabase
+      .from('record_files')
+      .select('file_url, file_type, file_name, mime_type, sort_order')
+      .eq('module_id', sourceModuleId)
+      .eq('record_id', sourceRecordId)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    const rows = Array.isArray(data) ? data : [];
+    if (!rows.length) return;
+
+    const payload = rows.map((row: any, index: number) => ({
+      org_id: orgId || null,
+      module_id: 'tasks',
+      record_id: targetTaskId,
+      file_url: row?.file_url,
+      file_type: row?.file_type || 'file',
+      file_name: row?.file_name || null,
+      mime_type: row?.mime_type || null,
+      sort_order: Number.isFinite(row?.sort_order) ? row.sort_order : index,
+      created_by: userId || null,
+    }));
+    const { error: insertError } = await supabase.from('record_files').insert(payload);
+    if (insertError) throw insertError;
+  } catch (error) {
+    console.warn('Could not copy related record files to task', error);
+  }
 };
 
 const fetchRelatedRecord = async (
@@ -642,10 +697,39 @@ const sendSmsDirectLegacy = async (to: string[], text: string) => {
   }
 };
 
-const sendSms = async (to: string[], text: string) => {
+type WorkflowSmsSendArgs = {
+  to: string[];
+  text: string;
+  moduleId?: string;
+  recordId?: string;
+  customerId?: string;
+  title?: string;
+  metadata?: Record<string, any>;
+};
+
+const sendSms = async ({
+  to,
+  text,
+  moduleId,
+  recordId,
+  customerId,
+  title,
+  metadata,
+}: WorkflowSmsSendArgs) => {
   try {
-    await sendSmsViaGateway({ to, text, allowDirectFallback: false });
-  } catch {
+    await sendSmsViaGateway({
+      to,
+      text,
+      allowDirectFallback: true,
+      moduleId,
+      recordId,
+      customerId,
+      title,
+      metadata,
+    });
+  } catch (error) {
+    const useLegacyFallback = String(import.meta.env.VITE_SMS_LEGACY_FALLBACK || '').trim() === 'true';
+    if (!useLegacyFallback) throw error;
     await sendSmsDirectLegacy(to, text);
   }
 };
@@ -751,6 +835,48 @@ const resolveCommunicationValuesFromFields = async ({
   return Array.from(new Set(resolvedValues));
 };
 
+const resolveNoteRecipientsFromFields = async ({
+  currentRecord,
+  moduleId,
+  recipientFields,
+}: {
+  currentRecord: Record<string, any>;
+  moduleId: string;
+  recipientFields: any[];
+}) => {
+  const userIds = new Set<string>();
+  const roleIds = new Set<string>();
+  const context: WorkflowEvaluationContext = {
+    moduleId,
+    relatedRecordCache: new Map(),
+    tagsCache: new Map(),
+  };
+
+  for (const fieldKey of asArray(recipientFields)) {
+    const rawValue = await resolveConditionFieldValue(
+      String(fieldKey || ''),
+      currentRecord,
+      moduleId,
+      context
+    );
+    asArray(rawValue).forEach((entry) => {
+      const token = parseCommunicationRecipientToken(entry);
+      if (token?.kind === 'user') {
+        userIds.add(token.id);
+        return;
+      }
+      if (token?.kind === 'role') {
+        roleIds.add(token.id);
+      }
+    });
+  }
+
+  return {
+    mentionUserIds: Array.from(userIds),
+    mentionRoleIds: Array.from(roleIds),
+  };
+};
+
 const resolveConfiguredActionValue = async (
   moduleId: string,
   config: Record<string, any>,
@@ -844,27 +970,57 @@ export const executeWorkflowAction = async (
       new Set([...recipientsFromFields, ...recipientsManual, ...fallbackRecipients])
     ).filter(isValidIranMobile);
     if (recipients.length === 0) return;
-    await sendSms(recipients, messageText);
+    await sendSms({
+      to: recipients,
+      text: messageText,
+      moduleId,
+      recordId: currentRecord?.id ? String(currentRecord.id) : undefined,
+      customerId: moduleId === 'customers' && currentRecord?.id ? String(currentRecord.id) : undefined,
+      title: 'ارسال پیامک خودکار',
+      metadata: {
+        source_type: 'workflow',
+        workflow_action_type: 'send_sms',
+        workflow_action_id: (action as any)?.id || null,
+      },
+    });
     return;
   }
 
-  if (action.type === 'send_note') {
-    const noteText = renderTemplate(String(config.note_text || ''), currentRecord).trim();
+  if (action.type === 'send_note' || action.type === 'send_note_sms') {
+    const noteText = renderTemplateWithBoldMarkers(String(config.note_text || ''), currentRecord).trim();
     if (!noteText) return;
     const recordId = currentRecord?.id;
     const scope = normalizeNoteScope(moduleId, recordId ? String(recordId) : null);
     if (!scope.hasLinkedRecord) return;
-    await supabase.from('notes').insert({
+    const recipients = await resolveNoteRecipientsFromFields({
+      currentRecord,
+      moduleId,
+      recipientFields: asArray(config.recipient_fields),
+    });
+    await insertNotesWithFallback([{
       module_id: scope.module_id,
       record_id: scope.record_id,
       content: noteText,
+      mention_user_ids: recipients.mentionUserIds,
+      mention_role_ids: recipients.mentionRoleIds,
       source_type: 'system',
       metadata: {
         source_type: 'system',
-        workflow_action_type: 'send_note',
+        workflow_action_type: action.type,
         workflow_action_id: (action as any)?.id || null,
       },
-    });
+    }]);
+    if (action.type === 'send_note_sms') {
+      await sendNoteSmsNotifications({
+        authorName: 'سیستم',
+        noteText,
+        mentionUserIds: recipients.mentionUserIds,
+        mentionRoleIds: recipients.mentionRoleIds,
+        moduleId: scope.module_id,
+        recordId: scope.record_id,
+        title: 'ارسال یادداشت خودکار',
+      });
+    }
     return;
   }
 
@@ -973,8 +1129,22 @@ export const executeWorkflowAction = async (
       payload[targetField] = mapping?.value ?? null;
     }
 
-    const { error } = await supabase.from(getModuleTable(targetModuleId)).insert(payload);
+    const { data: insertedRecord, error } = await supabase
+      .from(getModuleTable(targetModuleId))
+      .insert(payload)
+      .select('id')
+      .maybeSingle();
     if (error) throw error;
+
+    if (targetModuleId === 'tasks' && insertedRecord?.id) {
+      await copyRecordFilesToTask({
+        sourceModuleId,
+        sourceRecordId,
+        targetTaskId: String(insertedRecord.id),
+        orgId,
+        userId: user?.id || null,
+      });
+    }
     return;
   }
 

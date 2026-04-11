@@ -46,6 +46,7 @@ type CreateRelatedFieldMapping = {
 const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
   switch (type) {
     case 'send_note':
+    case 'send_note_sms':
       return { recipient_fields: [], note_text: '', variable_field: '', variable_target: 'note_text' };
     case 'send_sms':
       return {
@@ -145,11 +146,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   const variableFieldOptions = useMemo(
     () =>
       (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
-        .filter((f) => !!f?.key && f?.nature !== 'system')
+        .filter((f) => !!f?.key)
         .map((field) => ({
           label: getFieldLabel(field),
           value: field.key,
         })),
+    [currentModuleFields, variableFields]
+  );
+  const communicationFieldSource = useMemo(
+    () => (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields),
     [currentModuleFields, variableFields]
   );
   const relatedVariableFieldOptions = useMemo(
@@ -168,7 +173,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   );
   const assigneeRecipientFieldOptions = useMemo(
     () =>
-      currentModuleFields
+      communicationFieldSource
         .filter((field) => {
           const key = String(field?.key || '');
           return key === '__workflow_assignee'
@@ -177,7 +182,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             || key.startsWith('__comm_recipient__');
         })
         .map((field) => ({ label: getFieldLabel(field), value: field.key })),
-    [currentModuleFields]
+    [communicationFieldSource]
   );
   const recipientFieldOptions = useMemo(
     () => Array.from(new Map([
@@ -207,10 +212,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   const processTemplateOptions = relationOptions.process_template_id || [];
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
   const effectiveActionTypeOptions = useMemo(() => {
+    const supplementalOptions: Array<{ label: string; value: WorkflowActionType }> = [
+      { label: 'ارسال یادداشت + اطلاع‌رسانی پیامکی', value: 'send_note_sms' as WorkflowActionType },
+    ];
     const baseOptions = actionOptions && actionOptions.length > 0
       ? actionOptions
       : actionTypeOptions.filter((option) => option.value !== 'send_email');
-    const optionsByValue = new Map(baseOptions.map((option) => [String(option.value), option] as const));
+    const optionsByValue = new Map(
+      [...baseOptions, ...supplementalOptions].map((option) => [String(option.value), option] as const)
+    );
     safeValue.forEach((action) => {
       const actionType = String(action?.type || '') as WorkflowActionType;
       if (!actionType || optionsByValue.has(actionType)) return;
@@ -608,7 +618,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     const actionType = action.type;
     const config = action.config || {};
 
-    if (actionType === 'send_note') {
+    if (actionType === 'send_note' || actionType === 'send_note_sms') {
       return (
         <div className="space-y-2">
           <div className="text-xs text-gray-500">گیرنده یادداشت</div>
@@ -636,7 +646,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (actionType === 'send_sms') {
-      const phoneFields = currentModuleFields
+      const phoneFields = communicationFieldSource
         .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
         .map((f) => ({ label: getFieldLabel(f), value: f.key }));
       const smsRecipientOptions = Array.from(new Map([
@@ -679,7 +689,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (actionType === 'send_email') {
-      const emailFields = currentModuleFields
+      const emailFields = communicationFieldSource
         .filter((f) => /email/i.test(f.key))
         .map((f) => ({ label: getFieldLabel(f), value: f.key }));
       const emailRecipientOptions = Array.from(new Map([
@@ -731,7 +741,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (actionType === 'send_bale_bot') {
-      const chatIdFields = currentModuleFields
+      const chatIdFields = communicationFieldSource
         .filter((f) => /bale.*chat|chat.*bale|bale_chat_id/i.test(f.key))
         .map((f) => ({ label: getFieldLabel(f), value: f.key }));
       const baleRecipientOptions = Array.from(new Map([

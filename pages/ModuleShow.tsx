@@ -37,6 +37,7 @@ import {
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
+import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, type RecordScope } from '../utils/permissions';
 import { normalizeAutoNameEnabled } from '../utils/autoName';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
@@ -55,7 +56,7 @@ import { syncRecordTags } from '../utils/recordTags';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { createProcessLinkedFieldKey, doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
-import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
+import { applyTaskSourceRecordFilter, buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
@@ -63,6 +64,8 @@ import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
+import { serializeNoteContent } from '../utils/noteContent';
+import { normalizeNoteScope } from '../utils/noteScope';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -204,6 +207,8 @@ const ModuleShow: React.FC = () => {
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [autoSyncedBomId, setAutoSyncedBomId] = useState<string | null>(null);
   const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
+  const [processTemplateFieldOptions, setProcessTemplateFieldOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [hasStartedProcessExecution, setHasStartedProcessExecution] = useState(false);
   const bomCopyPromptRef = useRef<string | null>(null);
   const processTemplatePromptRef = useRef<string | null>(null);
   const processDraftFieldKey = useMemo(() => {
@@ -282,6 +287,8 @@ const ModuleShow: React.FC = () => {
     setLoading(!hasFreshSnapshot);
     setAutoSyncedBomId(null);
     setAutoSyncedProcessTemplateId(null);
+    setProcessTemplateFieldOptions([]);
+    setHasStartedProcessExecution(false);
     setDynamicOptions(cachedOptionSnapshot?.dynamicOptions || {});
     setRelationOptions(cachedOptionSnapshot?.relationOptions || {});
     setOptionsReady(!!cachedOptionSnapshot);
@@ -818,6 +825,16 @@ const ModuleShow: React.FC = () => {
 
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
+  const [printShareModalOpen, setPrintShareModalOpen] = useState(false);
+  const [printShareTargetIds, setPrintShareTargetIds] = useState<string[]>([]);
+  const [printShareSubmitting, setPrintShareSubmitting] = useState(false);
+  const [printShareGroups, setPrintShareGroups] = useState<Array<{
+    id: string;
+    name: string;
+    user_ids: string[];
+    role_ids: string[];
+  }>>([]);
+  const [pendingPrintShareFile, setPendingPrintShareFile] = useState<{ url: string; name: string } | null>(null);
 
   const mergeUsersById = (rows: any[]) =>
     rows.reduce((acc: any[], row: any) => {
@@ -1746,6 +1763,72 @@ const ModuleShow: React.FC = () => {
   }, [moduleId, data, autoSyncedBomId]);
 
   useEffect(() => {
+    if (!processDraftFieldKey) {
+      setProcessTemplateFieldOptions([]);
+      return;
+    }
+    let cancelled = false;
+    const loadScopedProcessTemplateOptions = async () => {
+      try {
+        const { data: templates, error } = await supabase
+          .from('process_templates')
+          .select('id,name,module_id,module_ids,is_active')
+          .order('name', { ascending: true });
+        if (error) throw error;
+        if (cancelled) return;
+        setProcessTemplateFieldOptions(
+          (templates || [])
+            .filter((row: any) => row?.is_active !== false && doesProcessTemplateSupportModule(row, moduleId))
+            .map((row: any) => ({
+              value: String(row.id),
+              label: String(row?.name || row?.id),
+            }))
+        );
+      } catch (error) {
+        console.warn('بارگذاری گزینه‌های الگوی فرآیند ناموفق بود', error);
+        if (!cancelled) setProcessTemplateFieldOptions([]);
+      }
+    };
+    void loadScopedProcessTemplateOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleId, processDraftFieldKey]);
+
+  useEffect(() => {
+    if (!processDraftFieldKey || !id) {
+      setHasStartedProcessExecution(false);
+      return;
+    }
+    let cancelled = false;
+    const loadProcessStartedState = async () => {
+      try {
+        const startedQuery = applyTaskSourceRecordFilter(
+          supabase.from('tasks').select('id,status').limit(200),
+          moduleId,
+          String(id)
+        );
+        const { data: taskRows, error } = await startedQuery;
+        if (error) throw error;
+        if (cancelled) return;
+        setHasStartedProcessExecution(
+          (taskRows || []).some((row: any) => {
+            const normalizedStatus = String(row?.status || '').trim().toLowerCase();
+            return ['in_progress', 'done', 'completed', 'confirmed', 'final', 'settled'].includes(normalizedStatus);
+          })
+        );
+      } catch (error) {
+        console.warn('Could not resolve started-process state', error);
+        if (!cancelled) setHasStartedProcessExecution(false);
+      }
+    };
+    void loadProcessStartedState();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, moduleId, processDraftFieldKey, data?.updated_at]);
+
+  useEffect(() => {
     if (!processDraftFieldKey || !data?.process_template_id || !data?.id) return;
     if (autoSyncedProcessTemplateId === data.process_template_id) return;
 
@@ -1755,6 +1838,18 @@ const ModuleShow: React.FC = () => {
 
     const syncFromProcessTemplate = async () => {
       try {
+        const existingTasksQuery = applyTaskSourceRecordFilter(
+          supabase.from('tasks').select('id').limit(1),
+          moduleId,
+          String(data.id)
+        );
+        const { data: existingTasks, error: existingTasksError } = await existingTasksQuery;
+        if (existingTasksError) throw existingTasksError;
+        if (Array.isArray(existingTasks) && existingTasks.length > 0) {
+          setAutoSyncedProcessTemplateId(data.process_template_id);
+          return;
+        }
+
         const { data: stages, error } = await supabase
           .from('process_template_stages')
           .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
@@ -2551,6 +2646,183 @@ const ModuleShow: React.FC = () => {
     return false;
   }, [canEditModule, id, moduleId, msg]);
 
+  const recordSupportsFileSave = useMemo(
+    () => Boolean((moduleConfig?.fields || []).some((field: any) => String(field?.key || '').trim() === 'image_url')),
+    [moduleConfig]
+  );
+
+  const sanitizePrintFileName = useCallback((rawName: string) => {
+    const baseName = String(rawName || 'print')
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '_')
+      .replace(/\s+/g, '_')
+      .slice(0, 120) || 'print';
+    return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
+  }, []);
+
+  const uploadGeneratedPdf = useCallback(async (blob: Blob, rawFileName: string) => {
+    if (!id) {
+      throw new Error('record_missing');
+    }
+    const fileName = sanitizePrintFileName(rawFileName);
+    const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
+    const filePath = `record_files/${moduleId}/${id}/prints/${Date.now()}_${fileName}`;
+    await uploadFileWithProgress({
+      client: fileStorageClient,
+      bucket: FILE_STORAGE_BUCKET,
+      path: filePath,
+      file: pdfFile,
+      label: fileName,
+      detail: 'PDF چاپ',
+    });
+    const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+    return {
+      url: urlData.publicUrl,
+      name: fileName,
+    };
+  }, [id, moduleId, sanitizePrintFileName]);
+
+  const printShareTargetOptions = useMemo(() => [
+    ...printShareGroups.map((group) => ({
+      label: `گروه: ${group.name}`,
+      value: `group:${group.id}`,
+    })),
+    ...allUsers
+      .filter((user) => String(user?.id || '') !== String(currentUserId || ''))
+      .map((user) => ({
+        label: `گفتگو با ${user.full_name || user.email || user.mobile_1 || user.id}`,
+        value: `user:${user.id}`,
+      })),
+  ], [allUsers, currentUserId, printShareGroups]);
+
+  useEffect(() => {
+    if (!printShareModalOpen || !currentOrgId) return;
+    let cancelled = false;
+    const loadPrintShareGroups = async () => {
+      const { data: groupsData, error } = await supabase
+        .from('chat_groups')
+        .select('id, name, user_ids, role_ids')
+        .eq('org_id', currentOrgId)
+        .order('updated_at', { ascending: false })
+        .limit(200);
+      if (error) {
+        if (!cancelled) setPrintShareGroups([]);
+        return;
+      }
+      if (!cancelled) {
+        setPrintShareGroups((groupsData || []).map((group: any) => ({
+          id: String(group?.id || ''),
+          name: String(group?.name || 'گروه'),
+          user_ids: Array.isArray(group?.user_ids) ? group.user_ids.map((value: any) => String(value)) : [],
+          role_ids: Array.isArray(group?.role_ids) ? group.role_ids.map((value: any) => String(value)) : [],
+        })));
+      }
+    };
+    void loadPrintShareGroups();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentOrgId, printShareModalOpen]);
+
+  const handleSavePrintPdfToRecord = async () => {
+    if (!id) {
+      msg.warning('ابتدا رکورد را ذخیره کنید');
+      return;
+    }
+    const { blob, filename } = await printManager.generateCurrentPdfBlob();
+    const uploaded = await uploadGeneratedPdf(blob, filename);
+    const { error } = await supabase
+      .from('record_files')
+      .insert([{
+        module_id: moduleId,
+        record_id: id,
+        file_url: uploaded.url,
+        file_type: 'file',
+        file_name: uploaded.name,
+        mime_type: 'application/pdf',
+        sort_order: 0,
+      }]);
+    if (error) throw error;
+    msg.success('PDF در فایل‌های رکورد ذخیره شد.');
+  };
+
+  const handleOpenPrintShare = async () => {
+    if (!id) {
+      msg.warning('ابتدا رکورد را ذخیره کنید');
+      return;
+    }
+    const { blob, filename } = await printManager.generateCurrentPdfBlob();
+    const uploaded = await uploadGeneratedPdf(blob, filename);
+    setPendingPrintShareFile(uploaded);
+    setPrintShareTargetIds([]);
+    setPrintShareModalOpen(true);
+  };
+
+  const handleSubmitPrintShare = async () => {
+    if (!pendingPrintShareFile || !id) return;
+    const scope = normalizeNoteScope(moduleId, id);
+    const authorName = allUsers.find((user) => String(user?.id || '') === String(currentUserId || ''))?.full_name || null;
+    const attachment = [{ url: pendingPrintShareFile.url, name: pendingPrintShareFile.name, mimeType: 'application/pdf' }];
+    const payloads: Array<Record<string, any>> = [];
+    printShareTargetIds.forEach((targetId) => {
+      const normalizedTarget = String(targetId || '').trim();
+      if (!normalizedTarget) return;
+      if (normalizedTarget.startsWith('group:')) {
+        const groupId = normalizedTarget.replace('group:', '');
+        const group = printShareGroups.find((item) => item.id === groupId);
+        if (!group) return;
+        const roleDrivenUserIds = allUsers
+          .filter((user) => user?.role_id && group.role_ids.includes(String(user.role_id)))
+          .map((user) => String(user.id));
+        const mentionUserIds = Array.from(new Set([...group.user_ids, ...roleDrivenUserIds])).filter((userId) => userId !== String(currentUserId || ''));
+        payloads.push({
+          module_id: scope.module_id,
+          record_id: scope.record_id,
+          content: serializeNoteContent('', attachment as any),
+          reply_to: null,
+          mention_user_ids: mentionUserIds,
+          mention_role_ids: group.role_ids,
+          author_id: currentUserId,
+          author_name: authorName,
+          metadata: { chat_group_id: group.id },
+        });
+        return;
+      }
+      if (normalizedTarget.startsWith('user:')) {
+        const userId = normalizedTarget.replace('user:', '');
+        if (!userId || userId === String(currentUserId || '')) return;
+        payloads.push({
+          module_id: scope.module_id,
+          record_id: scope.record_id,
+          content: serializeNoteContent('', attachment as any),
+          reply_to: null,
+          mention_user_ids: [userId],
+          mention_role_ids: [],
+          author_id: currentUserId,
+          author_name: authorName,
+          metadata: null,
+        });
+      }
+    });
+
+    if (payloads.length === 0) {
+      msg.warning('حداقل یک مقصد معتبر انتخاب کنید');
+      return;
+    }
+
+    setPrintShareSubmitting(true);
+    try {
+      const { error } = await supabase.from('notes').insert(payloads);
+      if (error) throw error;
+      setPrintShareModalOpen(false);
+      setPendingPrintShareFile(null);
+      setPrintShareTargetIds([]);
+      msg.success('PDF ارسال شد.');
+    } finally {
+      setPrintShareSubmitting(false);
+    }
+  };
+
 
   const getFieldLabel = useCallback(
     (fieldKey: string) => moduleConfig?.fields?.find(f => f.key === fieldKey)?.labels?.fa || fieldKey,
@@ -2736,6 +3008,15 @@ const ModuleShow: React.FC = () => {
           console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
+      }
+      if (moduleId === 'invoices' && (key === 'status' || key === 'customer_id')) {
+        const nextCustomerId = key === 'customer_id'
+          ? newValue
+          : data?.customer_id;
+        await syncCustomerLevelsByInvoiceCustomers({
+          supabase: supabase as any,
+          customerIds: [data?.customer_id, nextCustomerId],
+        });
       }
       await runWorkflowsForEvent({
         moduleId,
@@ -2928,6 +3209,12 @@ const ModuleShow: React.FC = () => {
           console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
+      }
+      if (moduleId === 'invoices') {
+        await syncCustomerLevelsByInvoiceCustomers({
+          supabase: supabase as any,
+          customerIds: [previous?.customer_id, values?.customer_id],
+        });
       }
 
       await runWorkflowsForEvent({
@@ -3652,7 +3939,7 @@ const ModuleShow: React.FC = () => {
   const buildNewProductInitialValues = () => {
     const autoNameDefault = normalizeAutoNameEnabled(
       MODULES.products?.fields?.find((field) => field.key === 'auto_name_enabled')?.defaultValue,
-      true
+      false
     );
     return {
       name: data?.name || '',
@@ -3991,6 +4278,10 @@ const ModuleShow: React.FC = () => {
     else if (moduleId === 'tasks' && field.key === 'status') options = getTaskStatusOptions(data);
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
+    if (field.key === 'process_template_id' && processDraftFieldKey) {
+      options = processTemplateFieldOptions;
+    }
+    const isProcessTemplateFieldLocked = field.key === 'process_template_id' && hasStartedProcessExecution;
 
     if (isEditing) {
       return (
@@ -4000,6 +4291,7 @@ const ModuleShow: React.FC = () => {
               field={field}
               value={tempValue}
               onChange={(val) => {
+                if (isProcessTemplateFieldLocked) return;
                 setTempValues(prev => ({ ...prev, [field.key]: val }));
                 const shouldHandleBom =
                   (field.key === 'related_bom' && val && val !== data?.related_bom) ||
@@ -4030,6 +4322,7 @@ const ModuleShow: React.FC = () => {
             type="text"
             icon={<CheckOutlined />}
             onClick={() => saveEdit(field.key)}
+            disabled={isProcessTemplateFieldLocked}
             className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
           />
           <Button
@@ -4059,9 +4352,9 @@ const ModuleShow: React.FC = () => {
 
     if (isHeader) {
       return (
-        <div className="group flex items-center gap-2 cursor-pointer" onClick={() => !field.readonly && canEditModule && startEdit(field.key, value)}>
+        <div className="group flex items-center gap-2 cursor-pointer" onClick={() => !field.readonly && canEditModule && !isProcessTemplateFieldLocked && startEdit(field.key, value)}>
           {displayNode}
-          {!field.readonly && canEditModule && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
+          {!field.readonly && canEditModule && !isProcessTemplateFieldLocked && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
         </div>
       );
     }
@@ -4069,10 +4362,10 @@ const ModuleShow: React.FC = () => {
     return (
       <div
         className={`group flex justify-between min-h-[32px] hover:bg-gray-50 dark:hover:bg-white/5 px-3 rounded-lg -mx-3 transition-colors cursor-pointer border border-transparent hover:border-gray-100 dark:hover:border-gray-700 ${isSuperLongTextField ? 'items-start py-2' : 'items-center'}`}
-        onClick={() => !field.readonly && canEditModule && startEdit(field.key, value)}
+        onClick={() => !field.readonly && canEditModule && !isProcessTemplateFieldLocked && startEdit(field.key, value)}
       >
         <div className="text-gray-800 dark:text-gray-200 flex-1 min-w-0">{displayNode}</div>
-        {!field.readonly && canEditModule && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
+        {!field.readonly && canEditModule && !isProcessTemplateFieldLocked && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
       </div>
     );
   };
@@ -4653,6 +4946,8 @@ const ModuleShow: React.FC = () => {
         onClose={() => printManager.setIsPrintModalOpen(false)}
         onPreparePrint={printManager.preparePrint}
         onPrint={printManager.handlePrint}
+        onSendInternalPdf={handleOpenPrintShare}
+        onSavePdfToRecord={recordSupportsFileSave ? handleSavePrintPdfToRecord : undefined}
         printTemplates={printManager.printTemplates}
         selectedTemplateId={printManager.selectedTemplateId}
         onSelectTemplate={printManager.setSelectedTemplateId}
@@ -4667,6 +4962,38 @@ const ModuleShow: React.FC = () => {
         allowFieldSelectionTab={printManager.allowFieldSelectionTab}
         previewMeta={printManager.previewMeta}
       />
+      <Modal
+        title="ارسال داخلی PDF"
+        open={printShareModalOpen}
+        onCancel={() => {
+          setPrintShareModalOpen(false);
+          setPrintShareTargetIds([]);
+          setPendingPrintShareFile(null);
+        }}
+        onOk={() => { void handleSubmitPrintShare(); }}
+        confirmLoading={printShareSubmitting}
+        okText="ارسال"
+        cancelText="انصراف"
+        okButtonProps={{ disabled: printShareTargetIds.length === 0 }}
+      >
+        <div className="space-y-3">
+          <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] px-3 py-2 text-sm text-gray-700">
+            {pendingPrintShareFile?.name || 'فایل PDF آماده ارسال است.'}
+          </div>
+          <Select
+            mode="multiple"
+            showSearch
+            allowClear
+            value={printShareTargetIds}
+            onChange={(values) => setPrintShareTargetIds((values || []).map((value) => String(value)))}
+            options={printShareTargetOptions}
+            optionFilterProp="label"
+            placeholder="انتخاب گفتگو یا گروه"
+            className="w-full"
+            maxTagCount="responsive"
+          />
+        </div>
+      </Modal>
 
       <style>{`
         .animate-fadeIn { animation: fadeIn 0.5s ease-out; }

@@ -26,7 +26,7 @@ import {
   type StoredPrintTemplate,
 } from './store';
 import { buildPrintOutputName } from './outputName';
-import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
 import { printInIframe } from './printInIframe';
 
 interface UsePrintManagerProps {
@@ -640,6 +640,42 @@ export const usePrintManager = ({
     selectedStoredTemplate,
     selectedTemplateId,
   ]);
+
+  const generateCurrentPdfBlob = useCallback(async () => {
+    if (!selectedTemplateId) {
+      throw new Error('print_template_missing');
+    }
+
+    const printTitle = getPrintOutputName();
+    const currentTpl = selectedTemplateId.startsWith('custom:')
+      ? availableTemplates.find((tpl) => tpl.id === selectedTemplateId.replace('custom:', '')) || null
+      : null;
+    const currentPaperSize = currentTpl?.paperSize || (selectedTemplateId === 'product_label' ? 'A6' : 'A4');
+    const currentOrientation = currentTpl?.orientation === 'landscape' ? 'landscape' : 'portrait';
+    const pageSize = currentTpl
+      ? `${currentPaperSize} ${currentOrientation}`
+      : selectedTemplateId === 'product_label'
+        ? 'A6 portrait'
+        : 'A4 portrait';
+    const staticPrintHtml = renderToStaticMarkup(
+      React.createElement(
+        React.Fragment,
+        null,
+        buildPrintCardRef.current(selectedTemplateId.startsWith('custom:') ? Math.max(1, renderedPageCount) : null)
+      )
+    );
+
+    return {
+      blob: await generatePdfBlob({
+        pageSize,
+        sourceHtml: staticPrintHtml,
+        title: printTitle,
+        filename: printTitle,
+      }),
+      filename: `${printTitle}.pdf`,
+      title: printTitle,
+    };
+  }, [availableTemplates, getPrintOutputName, renderedPageCount, selectedTemplateId]);
 
   useEffect(() => {
     if (printMode) return;
@@ -1996,6 +2032,7 @@ export const usePrintManager = ({
     openPrintModal,
     closePrintModal,
     handlePrint,
+    generateCurrentPdfBlob,
     preparePrint,
     handleTogglePrintField,
     handleSavePrintFields,

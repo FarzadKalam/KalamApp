@@ -29,8 +29,8 @@ export const customerModule: ModuleDefinition = {
       location: FieldLocation.HEADER,
       order: 1.1,
       options: [
-        { label: 'حقیقی', value: 'real' },
-        { label: 'حقوقی', value: 'legal' }
+        { label: 'حقیقی', value: 'real', color: 'green' },
+        { label: 'حقوقی', value: 'legal', color: 'blue' }
       ],
       defaultValue: 'real',
       isTableColumn: true,
@@ -42,9 +42,9 @@ export const customerModule: ModuleDefinition = {
     { key: 'business_name', labels: { fa: 'نام کسب و کار', en: 'Business' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.5, isTableColumn: true },
 
     { key: 'system_code', labels: { fa: 'کد اشتراک', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, isTableColumn: true },
-    { key: 'legacy_contact_code', labels: { fa: 'کد سیستم قبلی', en: 'Legacy Contact Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2.05, isTableColumn: true },
+    { key: 'legacy_contact_code', labels: { fa: 'کد سیستم قبلی', en: 'Legacy Contact Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2.05, isTableColumn: false },
     {
-      key: 'rank', labels: { fa: 'سطح مشتری', en: 'Rank' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 2.1,
+      key: 'rank', labels: { fa: 'سطح مشتری', en: 'Rank' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 1.1,
       options: [
         { label: 'عادی', value: 'normal', color: 'blue' },
         { label: 'نقره‌ای', value: 'silver', color: 'gray' },
@@ -137,11 +137,26 @@ export const customerModule: ModuleDefinition = {
       dynamicOptionsCategory: 'lead_source',
     },
     {
+      key: 'customer_relationship_group',
+      labels: { fa: 'گروه ارتباطی مشتری', en: 'Customer Relationship Group' },
+      type: FieldType.SELECT,
+      blockId: 'basic_info',
+      order: 4.55,
+      dynamicOptionsCategory: 'customer_relationship_group',
+    },
+    {
+      key: 'customer_group_link',
+      labels: { fa: 'لینک گروه مشتری', en: 'Customer Group Link' },
+      type: FieldType.LINK,
+      blockId: 'basic_info',
+      order: 4.56,
+    },
+    {
       key: 'industry',
       labels: { fa: 'صنعت', en: 'Industry' },
       type: FieldType.SELECT,
       blockId: 'basic_info',
-      order: 4.6,
+      order: 2.05,
       dynamicOptionsCategory: 'customer_industry',
       isTableColumn: true,
     },
@@ -185,7 +200,7 @@ export const customerModule: ModuleDefinition = {
       logic: { visibleIf: { field: 'referrer_module', operator: LogicOperator.EQUALS, value: 'suppliers' } },
     },
     { key: 'organization_position', labels: { fa: 'سمت در سازمان', en: 'Position In Organization' }, type: FieldType.TEXT, blockId: 'basic_info', order: 4.69 },
-    { key: 'customer_interests', labels: { fa: 'علاقمندی‌های مشتری', en: 'Customer Interests' }, type: FieldType.MULTI_SELECT, blockId: 'basic_info', order: 4.7, dynamicOptionsCategory: 'customer_interests' },
+    { key: 'customer_interests', labels: { fa: 'علاقمندی‌های مشتری', en: 'Customer Interests' }, type: FieldType.MULTI_SELECT, blockId: 'basic_info', order: 4.7, dynamicOptionsCategory: 'customer_interests', isTableColumn: true },
     { key: 'notes', labels: { fa: 'توضیحات', en: 'notes' }, type: FieldType.LONG_TEXT, order: 20, blockId: 'basic_info' },
 
     { key: 'email', labels: { fa: 'ایمیل', en: 'Email' }, type: FieldType.TEXT, blockId: 'contact_info' },
@@ -200,7 +215,7 @@ export const customerModule: ModuleDefinition = {
     { key: 'instagram_id', labels: { fa: 'آیدی اینستاگرام', en: 'Instagram' }, type: FieldType.TEXT, blockId: 'contact_info' },
     { key: 'telegram_id', labels: { fa: 'آیدی تلگرام', en: 'Telegram' }, type: FieldType.TEXT, blockId: 'contact_info' },
 
-    { key: 'portal_enabled', labels: { fa: 'دسترسی پورتال', en: 'Portal Enabled' }, type: FieldType.CHECKBOX, blockId: 'portal_info', order: 1, isTableColumn: true },
+    { key: 'portal_enabled', labels: { fa: 'دسترسی پورتال', en: 'Portal Enabled' }, type: FieldType.CHECKBOX, blockId: 'portal_info', order: 1, isTableColumn: false },
     {
       key: 'portal_status',
       labels: { fa: 'وضعیت پورتال', en: 'Portal Status' },

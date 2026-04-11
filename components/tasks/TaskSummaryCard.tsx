@@ -1,12 +1,13 @@
 import React from 'react';
 import { InputNumber, Select } from 'antd';
-import { TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import ProductionStagesField from '../ProductionStagesField';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
+import TaskActionButtons from './TaskActionButtons';
 
 interface TaskSummaryCardProps {
   task: any;
@@ -18,6 +19,8 @@ interface TaskSummaryCardProps {
   onClose?: () => void;
   onStatusChange?: (taskId: string, status: string) => void | Promise<void>;
   onProducedQtyChange?: (taskId: string, value: number | null) => void | Promise<void>;
+  onTaskUpdated?: (task: any) => void | Promise<void>;
+  currentUser?: { id?: string | null; fullName?: string | null } | null;
 }
 
 const processRecordKeyByModule: Record<string, string> = {
@@ -49,6 +52,8 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   onClose,
   onStatusChange,
   onProducedQtyChange,
+  onTaskUpdated,
+  currentUser = null,
 }) => {
   const sourceLink = resolveTaskSourceLink(task);
   const resolvedStatusOptions = getTaskStatusOptions(task, statusOptions);
@@ -90,17 +95,25 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
           <Link to={`/tasks/${task.id}`} className="font-bold text-gray-800 dark:text-gray-200" onClick={onClose}>
             {toPersianNumber(String(task.name || 'بدون عنوان'))}
           </Link>
-          {onStatusChange ? (
-            <Select
-              size="small"
-              value={task.status}
-              onChange={(value) => {
-                void onStatusChange(String(task.id), String(value));
-              }}
-              options={resolvedStatusOptions.map((option) => ({ label: option.label, value: option.value }))}
-              style={{ minWidth: 120 }}
+          <div className="flex items-center gap-1">
+            <TaskActionButtons
+              task={task}
+              currentUser={currentUser}
+              onTaskUpdated={onTaskUpdated}
+              buttonClassName="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
             />
-          ) : null}
+            {onStatusChange ? (
+              <Select
+                size="small"
+                value={task.status}
+                onChange={(value) => {
+                  void onStatusChange(String(task.id), String(value));
+                }}
+                options={resolvedStatusOptions.map((option) => ({ label: option.label, value: option.value }))}
+                style={{ minWidth: 120 }}
+              />
+            ) : null}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2 mt-2">
@@ -114,6 +127,21 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
               موعد: {safeJalaliFormat(task.due_date, 'YYYY/MM/DD HH:mm')}
             </span>
           ) : null}
+        </div>
+
+        <div className="mt-3 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 h-32">
+          {String(task?.image_url || '').trim() ? (
+            <img
+              src={String(task.image_url)}
+              alt={String(task?.name || 'task-image')}
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-gray-400">
+              <AppstoreOutlined className="text-2xl opacity-40" />
+            </div>
+          )}
         </div>
 
         {isProductionTask ? (
@@ -149,7 +177,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
         </div>
 
         {isProductionTask ? (
-          <div className="mt-3 rounded-lg border border-[rgba(var(--brand-300-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.32)] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] p-2">
+          <div className="mt-3">
             <ProductionStagesField
               recordId={String(task.related_production_order)}
               moduleId="production_orders"
@@ -164,7 +192,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
         ) : null}
 
         {isExecutionProcessTask ? (
-          <div className="mt-3 rounded-lg border border-[rgba(var(--brand-300-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.32)] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] p-2">
+          <div className="mt-3">
             <ProductionStagesField
               recordId={String(relatedProcessRecordId)}
               moduleId={relatedModuleId}

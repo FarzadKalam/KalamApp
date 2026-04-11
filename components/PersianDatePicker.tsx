@@ -97,11 +97,17 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
     zIndex,
     plugins:
       type === "DATETIME" || type === "TIME"
-        ? [<TimePicker key="time" position="bottom" hideSeconds />]
+        ? [
+            <TimePicker
+              key="time"
+              position={type === "DATETIME" ? "right" : "bottom"}
+              hideSeconds
+              mStep={5}
+            />,
+          ]
         : [],
-    className: `rmdp-leather ${className || ''}`.trim(),
-    inputClass:
-      "kalam-rmdp-input w-full h-8 persian-number",
+    className: `rmdp-leather ${className || ""}`.trim(),
+    inputClass: "kalam-rmdp-input w-full h-8 persian-number",
     containerClassName: "w-full",
     disabled,
     placeholder,
@@ -115,9 +121,9 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
       if (date?.weekDay?.index === 6 && !isToday) {
         return {
           style: {
-            backgroundColor: 'rgb(var(--brand-500-rgb))',
-            color: 'white',
-            borderRadius: '6px',
+            backgroundColor: "rgb(var(--brand-500-rgb))",
+            color: "white",
+            borderRadius: "6px",
           },
         };
       }

@@ -178,6 +178,36 @@ html.dark .rmdp-leather .rmdp-time-picker div .rmdp-am {
   color: rgba(255, 255, 255, 0.75);
 }
 
+.rmdp-leather .rmdp-time-picker.right {
+  border-top: 0;
+  border-right: 1px solid #f0f0f0;
+  margin-top: 0;
+  margin-right: 8px;
+  padding-top: 0;
+  padding-right: 8px;
+  min-width: 110px;
+}
+
+html.dark .rmdp-leather .rmdp-time-picker.right {
+  border-right-color: #303030;
+}
+
+@media (max-width: 900px) {
+  .rmdp-leather .rmdp-time-picker.right {
+    border-right: 0;
+    border-top: 1px solid #f0f0f0;
+    margin-right: 0;
+    margin-top: 8px;
+    padding-right: 0;
+    padding-top: 8px;
+    min-width: 100%;
+  }
+
+  html.dark .rmdp-leather .rmdp-time-picker.right {
+    border-top-color: #303030;
+  }
+}
+
 .rmdp-container .rmdp-leather.ep-arrow[direction="top"] {
   border-bottom: 1px solid #d9d9d9;
 }
@@ -331,15 +361,123 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   scrollbar-gutter: stable;
 }
 
+.smarttable-shell .ant-table-header {
+  overflow-x: hidden !important;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.smarttable-shell .ant-table-body {
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: scroll-position;
+}
+
 .smarttable-shell .ant-table-pagination.ant-pagination {
-  margin: 12px 0 0 !important;
-  padding: 0 12px 12px;
+  margin: 0 !important;
+  padding: 12px 12px 14px;
   justify-content: center;
   row-gap: 8px;
 }
 
+.module-list-toolbar .module-list-view-segmented .ant-segmented-item-label {
+  font-size: 12px;
+}
+
 @media (max-width: 767px) {
+  .module-list-page .ant-btn,
+  .module-list-page .ant-input,
+  .module-list-page .ant-input-affix-wrapper,
+  .module-list-page .ant-segmented,
+  .module-list-page .ant-tabs-tab-btn {
+    font-size: 12px;
+  }
+
+  .module-list-page .ant-segmented-item-label {
+    font-size: 12px;
+    padding-inline: 8px;
+  }
+
+  .module-list-toolbar .module-list-view-segmented .ant-segmented-item-label {
+    font-size: 11px;
+    padding-inline: 7px;
+  }
+
+  .module-list-toolbar .module-list-view-segmented .ant-segmented-item {
+    min-height: 32px;
+  }
+
+  .module-list-page .smarttable-shell .ant-table-thead > tr > th,
+  .module-list-page .smarttable-shell .ant-table-tbody > tr > td {
+    padding: 8px 10px !important;
+  }
+
+  .module-list-page .smarttable-shell .ant-table-thead > tr > th {
+    font-size: 10px;
+  }
+
+  .module-list-page .smarttable-shell .ant-table-tbody > tr > td {
+    font-size: 11px;
+  }
+
   .smarttable-shell .ant-table-pagination.ant-pagination {
+    align-items: center;
+    gap: 8px 6px;
+    padding-inline: 8px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom));
   }
+
+  .smarttable-shell .ant-table-pagination .ant-pagination-item,
+  .smarttable-shell .ant-table-pagination .ant-pagination-prev,
+  .smarttable-shell .ant-table-pagination .ant-pagination-next {
+    min-width: 34px;
+    height: 34px;
+    line-height: 32px;
+    border-radius: 12px;
+    font-size: 12px;
+  }
+
+  .smarttable-shell .ant-table-pagination .ant-pagination-item a,
+  .smarttable-shell .ant-table-pagination .smart-pagination-nav,
+  .smarttable-shell .ant-table-pagination .ant-select-selection-item,
+  .smarttable-shell .ant-table-pagination .ant-pagination-options-quick-jumper,
+  .smarttable-shell .ant-table-pagination .ant-pagination-total-text {
+    font-size: 11px;
+    font-family: inherit;
+  }
+
+  .smarttable-shell .ant-table-pagination .ant-pagination-item-active,
+  .smarttable-shell .ant-table-pagination .ant-pagination-item:hover,
+  .smarttable-shell .ant-table-pagination .ant-pagination-prev:hover,
+  .smarttable-shell .ant-table-pagination .ant-pagination-next:hover {
+    border-color: rgb(var(--brand-500-rgb));
+  }
+
+  .smarttable-shell .ant-table-pagination .ant-pagination-item-active {
+    background: rgba(var(--brand-500-rgb), 0.1);
+  }
+
+  .smarttable-shell .ant-table-pagination .smart-pagination-nav {
+    color: rgb(var(--brand-600-rgb));
+    font-weight: 700;
+  }
+
+  .smarttable-shell .ant-table-pagination .ant-pagination-options {
+    margin-inline-start: 0;
+  }
+
+  .smarttable-shell .ant-table-pagination .ant-select-selector {
+    border-radius: 10px !important;
+  }
+
+}
+
+.notifications-drawer .ant-drawer-content,
+.notifications-drawer .ant-drawer-wrapper-body {
+  background: rgb(var(--brand-50-rgb));
+}
+
+.dark .notifications-drawer .ant-drawer-content,
+.dark .notifications-drawer .ant-drawer-wrapper-body {
+  background: rgb(var(--app-dark-surface-rgb));
 }

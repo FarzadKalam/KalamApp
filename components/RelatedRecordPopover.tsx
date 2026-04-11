@@ -94,6 +94,17 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     onOpenChange?.(next);
   };
 
+  useEffect(() => {
+    if (mode !== 'modal' || !open || typeof window === 'undefined') return;
+    const stateKey = `quickPreview:${moduleId}:${recordId}`;
+    window.history.pushState({ quickPreviewModal: stateKey }, '', window.location.href);
+    const handlePopState = () => setOpen(false);
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [mode, moduleId, open, recordId]);
+
   const fields = useMemo(
     () => (moduleConfig?.fields || []).filter((f) => f.isTableColumn && f.type !== FieldType.IMAGE),
     [moduleConfig]
@@ -357,13 +368,20 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
   const content = (
     <div
-      className="max-w-full"
+      className={`max-w-full bg-white p-3 dark:bg-[#1d1d1d] ${
+        mode === 'modal'
+          ? 'h-full rounded-none border-0'
+          : 'rounded-2xl border border-gray-200 dark:border-gray-700'
+      }`}
       style={{
-        width: isMobileViewport ? 'calc(100vw - 1rem)' : 'min(92vw, 420px)',
+        width: isMobileViewport ? 'calc(100vw - 1rem)' : 'min(92vw, 480px)',
         maxWidth: 'calc(100vw - 1rem)',
+        maxHeight: mode === 'modal'
+          ? (isMobileViewport ? '100dvh' : 'min(calc(100vh - 4rem), 42rem)')
+          : (isMobileViewport ? 'calc(100dvh - 1rem)' : 'calc(100vh - 4rem)'),
+        overflow: 'hidden',
       }}
     >
-      <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] p-3">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
             <div className="text-sm font-extrabold text-gray-800 dark:text-gray-100 truncate">{previewTitle}</div>
@@ -399,7 +417,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         ) : (
           <div
             className="space-y-2 text-xs text-gray-700 dark:text-gray-200 overflow-auto pr-1"
-            style={{ maxHeight: 'min(70vh, 32rem)' }}
+            style={{ maxHeight: previewImageUrl ? 'min(calc(100vh - 20rem), 30rem)' : 'min(calc(100vh - 16rem), 34rem)' }}
           >
             {fields.map((field) => (
               <div key={field.key} className="grid grid-cols-[110px_1fr] gap-2 items-start border-b border-gray-100 dark:border-gray-800 pb-1.5">
@@ -417,7 +435,6 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
             </Button>
           </div>
         ) : null}
-      </div>
     </div>
   );
 
@@ -430,9 +447,15 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         title={null}
         centered
         destroyOnHidden
-        width={isMobileViewport ? '92vw' : 460}
+        width={isMobileViewport ? 'calc(100vw - 1rem)' : 500}
         zIndex={overlayZIndex}
-        styles={{ body: { paddingTop: 8 } }}
+        className="quick-preview-modal"
+        wrapClassName="quick-preview-modal-root"
+        style={{ maxWidth: 'calc(100vw - 1rem)' }}
+        styles={{
+          body: { padding: 0, overflow: 'hidden' },
+          content: { overflow: 'hidden', padding: 0, borderRadius: isMobileViewport ? 0 : 24 },
+        }}
       >
         {content}
       </Modal>

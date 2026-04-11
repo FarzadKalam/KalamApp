@@ -8,6 +8,7 @@ export type WebFormFieldType =
   | "number"
   | "phone"
   | "date"
+  | "time"
   | "datetime"
   | "checkbox"
   | "select";
@@ -57,6 +58,7 @@ const WEB_FORM_SUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.PRICE,
   FieldType.PHONE,
   FieldType.DATE,
+  FieldType.TIME,
   FieldType.DATETIME,
   FieldType.CHECKBOX,
   FieldType.SELECT,
@@ -87,6 +89,7 @@ export const inferWebFormFieldType = (field?: ModuleField | null): WebFormFieldT
   if (field.type === FieldType.NUMBER || field.type === FieldType.PRICE) return "number";
   if (field.type === FieldType.PHONE) return "phone";
   if (field.type === FieldType.DATE) return "date";
+  if (field.type === FieldType.TIME) return "time";
   if (field.type === FieldType.DATETIME) return "datetime";
   if (field.type === FieldType.CHECKBOX) return "checkbox";
   if (field.type === FieldType.SELECT) return "select";
@@ -172,7 +175,7 @@ export const normalizeWebFormFieldRecord = (value: unknown, index = 0): WebFormF
     field_key: String(record.field_key || `field_${index + 1}`).trim() || `field_${index + 1}`,
     label: String(record.label || "").trim() || `فیلد ${index + 1}`,
     target_field_key: String(record.target_field_key || "").trim() || null,
-    field_type: (["text", "long_text", "number", "phone", "date", "datetime", "checkbox", "select"].includes(String(record.field_type || ""))
+    field_type: (["text", "long_text", "number", "phone", "date", "time", "datetime", "checkbox", "select"].includes(String(record.field_type || ""))
       ? String(record.field_type)
       : "text") as WebFormFieldType,
     placeholder: String(record.placeholder || "").trim() || null,

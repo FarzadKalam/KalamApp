@@ -536,13 +536,15 @@ const PrintTemplatesTab: React.FC = () => {
                 <List.Item
                   className="rounded-2xl border border-slate-200 dark:border-slate-800 px-4 py-3 mb-2"
                   actions={[
-                    <Tooltip key="copy" title="کپی قالب">
+                    <Tooltip key="copy" title={String(item?.id || '').includes('_catalog_a4_portrait') ? 'کپی برای این قالب سیستمی غیرفعال است' : 'کپی قالب'}>
                       <Button
                         size="small"
                         type="text"
                         icon={<CopyOutlined />}
+                        disabled={String(item?.id || '').includes('_catalog_a4_portrait')}
                         onClick={(event) => {
                           event.stopPropagation();
+                          if (String(item?.id || '').includes('_catalog_a4_portrait')) return;
                           handleCopyTemplate(item);
                         }}
                       />

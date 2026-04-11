@@ -31,7 +31,7 @@ import PrintSection from "../components/moduleShow/PrintSection";
 import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
 import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
 import { readCurrencyConfig } from "../utils/currency";
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions, fetchRecordTagsMap } from "../utils/referenceData";
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagsMap } from "../utils/referenceData";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
@@ -47,6 +47,7 @@ import { toPersianNumber } from "../utils/persianNumberFormatter";
 import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
 import RelatedRecordPopover from "../components/RelatedRecordPopover";
 
+const DEFAULT_LIST_PAGE_SIZE = 20;
 const getDefaultGridPageSize = () => 15;
 const getGridLoadStep = () => 15;
 const getDefaultKanbanPageSize = () => 15;
@@ -126,6 +127,18 @@ const stripStableIdSorter = (sorters?: CrudSort[] | null): CrudSort[] => {
     return normalized.slice(0, -1);
   }
   return normalized;
+};
+
+const sanitizePersistedSorters = (sorters?: CrudSort[] | null, moduleConfig?: ModuleDefinition | null): CrudSort[] => {
+  const normalized = normalizeCrudSorters(sorters);
+  if (!normalized.length) return [];
+  const moduleDefault = normalizeCrudSorters(getDefaultSorters(moduleConfig));
+  return areCrudSortersEqual(normalized, moduleDefault) ? [] : normalized;
+};
+
+const resolveCrudSortersWithDefault = (sorters?: CrudSort[] | null, moduleConfig?: ModuleDefinition | null): CrudSort[] => {
+  const normalized = normalizeCrudSorters(sorters);
+  return normalized.length > 0 ? normalized : getDefaultSorters(moduleConfig);
 };
 
 const areCrudSortersEqual = (left?: CrudSort[] | null, right?: CrudSort[] | null) =>
@@ -309,7 +322,7 @@ export const ModuleListRefine: React.FC<{
     [initialViewFiltersOverride, persistedState?.viewFilters]
   );
   const defaultSorters = useMemo(
-    () => (persistedState?.sorters?.length ? persistedState.sorters : getDefaultSorters(moduleConfig)),
+    () => resolveCrudSortersWithDefault(persistedState?.sorters, moduleConfig),
     [moduleConfig, persistedState?.sorters]
   );
 
@@ -332,7 +345,7 @@ export const ModuleListRefine: React.FC<{
   const [calendarDateField, setCalendarDateField] = useState<string>("");
   const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(effectiveInitialViewFilters);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(persistedState?.columnFilters || {});
-  const [visibleColumns, setVisibleColumns] = useState<string[]>([]);  // ✅ ستون‌های انتخاب‌شده
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(persistedState?.visibleColumns || []);  // ✅ ستون‌های انتخاب‌شده
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});  // ✅ اضافه شد
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});  // ✅ اضافه شد
   const [optionsReady, setOptionsReady] = useState(false);
@@ -366,6 +379,7 @@ export const ModuleListRefine: React.FC<{
   const searchSyncInitializedRef = useRef(false);
   const autoSortSyncDoneRef = useRef(false);
   const lastRequestedPageSizeRef = useRef<number | null>(null);
+  const lastAppliedFiltersSignatureRef = useRef<string | null>(null);
   const utilitySlotRef = useRef<HTMLDivElement | null>(null);
   const kanbanDragRef = useRef<{ record: any; sourceColumnKey: string; fieldKey: string } | null>(null);
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
@@ -375,7 +389,7 @@ export const ModuleListRefine: React.FC<{
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
     resource: resolvedModuleId,
     sorters: { initial: ensureStableCrudSorters(defaultSorters) },
-    pagination: { pageSize: 10 }, 
+    pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
       enabled: !!resolvedModuleId,
       staleTime: 30_000,
@@ -393,8 +407,8 @@ export const ModuleListRefine: React.FC<{
   const allData = tableQueryResult.data?.data || EMPTY_ROWS;
   const hasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
   const stableSorters = useMemo(
-    () => ensureStableCrudSorters((sorters as CrudSort[])?.length ? (sorters as CrudSort[]) : defaultSorters),
-    [defaultSorters, sorters]
+    () => ensureStableCrudSorters(resolveCrudSortersWithDefault(sorters as CrudSort[], moduleConfig)),
+    [moduleConfig, sorters]
   );
   const visibleSorters = useMemo(
     () => stripStableIdSorter(stableSorters),
@@ -426,17 +440,19 @@ export const ModuleListRefine: React.FC<{
   useEffect(() => {
     autoSortSyncDoneRef.current = false;
     lastRequestedPageSizeRef.current = null;
+    lastAppliedFiltersSignatureRef.current = null;
   }, [resolvedModuleId, viewMode]);
 
   useEffect(() => {
     if (!resolvedModuleId) return;
     const isListView = viewMode === ViewMode.LIST;
-    const fallbackPageSize = isListView ? 10 : getDefaultGridPageSize();
+    const fallbackPageSize = isListView ? DEFAULT_LIST_PAGE_SIZE : getDefaultGridPageSize();
     const desiredPageSize = isListView
-      ? 10
+      ? DEFAULT_LIST_PAGE_SIZE
       : Math.max(Number(tableQueryResult.data?.total || 0), fallbackPageSize);
     const currentPageSize = Number(pageSize || 0);
 
+    if (isListView && currentPageSize <= 0) return;
     if (!desiredPageSize || currentPageSize === desiredPageSize || lastRequestedPageSizeRef.current === desiredPageSize) return;
     lastRequestedPageSizeRef.current = desiredPageSize;
     if (current !== 1) {
@@ -459,7 +475,7 @@ export const ModuleListRefine: React.FC<{
     }
 
     const restoredState = readPersistedModuleListState(resolvedModuleId, storageKeySuffix);
-    const restoredSorters = restoredState?.sorters?.length ? restoredState.sorters : getDefaultSorters(moduleConfig);
+    const restoredSorters = resolveCrudSortersWithDefault(restoredState?.sorters, moduleConfig);
     const restoredViewFilters =
       Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
         ? initialViewFiltersOverride
@@ -588,8 +604,8 @@ export const ModuleListRefine: React.FC<{
   );
 
   const listPrintableFields = useMemo(
-    () => buildListPrintableFields(moduleConfig, canViewField, visibleColumns),
-    [canViewField, moduleConfig, visibleColumns]
+    () => buildListPrintableFields(moduleConfig, canViewField, visibleColumns, dynamicOptions),
+    [canViewField, dynamicOptions, moduleConfig, visibleColumns]
   );
   const handleVisibleDataChange = useCallback((rows: any[]) => {
     const nextKeys = rows.map((row: any) => row?.id).filter(Boolean);
@@ -655,7 +671,7 @@ export const ModuleListRefine: React.FC<{
   );
   const shouldLoadTags = useMemo(() => {
     if (!tagsField) return false;
-    if (viewMode !== ViewMode.LIST) return true;
+    if (viewMode === ViewMode.LIST) return true;
     return visibleListFieldKeys.includes(String(tagsField));
   }, [tagsField, viewMode, visibleListFieldKeys]);
 
@@ -898,13 +914,13 @@ export const ModuleListRefine: React.FC<{
       visibleColumns,
       viewFilters: viewFiltersState,
       columnFilters,
-      sorters: visibleSorters,
+      sorters: sanitizePersistedSorters(visibleSorters, moduleConfig),
     };
     window.localStorage.setItem(
       buildModuleListStateKey(resolvedModuleId, storageKeySuffix),
       JSON.stringify(stateToPersist)
     );
-  }, [columnFilters, currentView, resolvedModuleId, searchTerm, storageKeySuffix, viewFiltersState, viewMode, visibleColumns, visibleSorters]);
+  }, [columnFilters, currentView, moduleConfig, resolvedModuleId, searchTerm, storageKeySuffix, viewFiltersState, viewMode, visibleColumns, visibleSorters]);
 
   // ✅ اضافه شد: Fetch dynamic و relation options
   useEffect(() => {
@@ -959,46 +975,6 @@ export const ModuleListRefine: React.FC<{
           setOptionsReady(true);
         }
 
-        const latestSnapshot = readModuleOptionSnapshot(resolvedModuleId);
-        const shouldWarmDynamic =
-          optionPlan.allDynamicCategories.length > 0 &&
-          optionPlan.allDynamicCategories.some((category) => !(latestSnapshot?.dynamicOptions || {})[category]);
-        const shouldWarmRelations =
-          optionPlan.allRelationFields.length > 0 &&
-          optionPlan.allRelationFields.some((field) => !(latestSnapshot?.relationOptions || {})[field.key]);
-
-        if (shouldWarmDynamic || shouldWarmRelations) {
-          void (async () => {
-            try {
-              const [fullDynamicOptions, fullRelationOptions, formulas] = await Promise.all([
-                optionPlan.allDynamicCategories.length > 0
-                  ? fetchDynamicOptionsMap(supabase, optionPlan.allDynamicCategories)
-                  : Promise.resolve({} as Record<string, any[]>),
-                optionPlan.allRelationFields.length > 0
-                  ? fetchModuleListRelationOptions(supabase, optionPlan.allRelationFields, directory)
-                  : Promise.resolve({} as Record<string, any[]>),
-                fetchFormulaOptions(supabase).catch((error) => {
-                  console.warn('Could not load calculation formulas', error);
-                  return [] as any[];
-                }),
-              ]);
-
-              if (formulas.length > 0) {
-                fullDynamicOptions.calculation_formulas = formulas;
-              }
-
-              const fullSnapshot = writeModuleOptionSnapshot(resolvedModuleId, {
-                dynamicOptions: fullDynamicOptions,
-                relationOptions: fullRelationOptions,
-                allUsers: directory.users,
-                allRoles: directory.roles,
-              });
-              applySnapshotToState(fullSnapshot);
-            } catch (error) {
-              console.warn('Error warming full module list options', error);
-            }
-          })();
-        }
       } catch (error) {
         console.error('Error fetching options', error);
       } finally {
@@ -1082,6 +1058,17 @@ export const ModuleListRefine: React.FC<{
 
   const activeFilterBubbles = useMemo(() => {
     if (!moduleConfig) return [];
+    const tagLabelById = new Map<string, string>();
+    Object.values(tagsMap || {}).forEach((recordTags) => {
+      if (!Array.isArray(recordTags)) return;
+      recordTags.forEach((tag: any) => {
+        const id = String(tag?.id || "").trim();
+        const title = String(tag?.title || tag?.label || "").trim();
+        if (id && title && !tagLabelById.has(id)) {
+          tagLabelById.set(id, title);
+        }
+      });
+    });
 
     const operatorLabels: Record<string, string> = {
       contains: "شامل",
@@ -1095,16 +1082,35 @@ export const ModuleListRefine: React.FC<{
 
     const bubbles = viewFiltersState
       .map((filter, index) => {
-        const simpleFilter = filter as CrudFilter & { field?: string; operator?: string; value?: any };
-        const fieldKey = String(simpleFilter?.field || "");
+        const simpleFilter = filter as CrudFilter & {
+          field?: string;
+          operator?: string;
+          value?: any;
+          _displayField?: string;
+          _displayOperator?: string;
+          _displayValue?: any;
+        };
+        const fieldKey = String(simpleFilter?._displayField || simpleFilter?.field || "");
         if (!fieldKey) return null;
         const field = moduleConfig.fields.find((item) => item.key === fieldKey);
         const fieldLabel = field?.labels?.fa || fieldKey;
-        const rawValue = simpleFilter?.value;
+        const rawValue = simpleFilter?._displayValue ?? simpleFilter?.value;
         const valueLabel = field
-          ? getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)
+          ? field.type === FieldType.TAGS
+            ? (Array.isArray(rawValue)
+                ? rawValue
+                    .map((item) => {
+                      const normalized = String(item ?? "").trim();
+                      return tagLabelById.get(normalized) || getSingleOptionLabel(field, normalized, dynamicOptions, relationOptions);
+                    })
+                    .filter(Boolean)
+                    .join("، ")
+                : String(tagLabelById.get(String(rawValue ?? "").trim()) || getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)))
+            : getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)
           : String(rawValue ?? "");
-        const operatorLabel = operatorLabels[String(simpleFilter?.operator || "eq")] || String(simpleFilter?.operator || "eq");
+        const operatorLabel =
+          operatorLabels[String(simpleFilter?._displayOperator || simpleFilter?.operator || "eq")] ||
+          String(simpleFilter?._displayOperator || simpleFilter?.operator || "eq");
         return {
           id: `view:${fieldKey}:${index}:${JSON.stringify(rawValue ?? null)}`,
           label: `${fieldLabel}: ${operatorLabel} ${valueLabel}`,
@@ -1131,7 +1137,7 @@ export const ModuleListRefine: React.FC<{
     }
 
     return bubbles;
-  }, [columnFilters, currentView?.config?.filters, dynamicOptions, moduleConfig, relationOptions, searchTerm, viewFiltersState]);
+  }, [columnFilters, currentView?.config?.filters, dynamicOptions, moduleConfig, relationOptions, searchTerm, tagsMap, viewFiltersState]);
 
   const columnFilterBubbles = useMemo(() => {
     if (!moduleConfig) return [];
@@ -1166,6 +1172,20 @@ export const ModuleListRefine: React.FC<{
         const field = moduleConfig.fields.find((item) => item.key === fieldKey);
         if (!field) return [];
         const fieldLabel = field?.labels?.fa || fieldKey;
+        const tagLabelById = new Map<string, string>();
+
+        if (field.type === FieldType.TAGS) {
+          Object.values(tagsMap || {}).forEach((recordTags) => {
+            if (!Array.isArray(recordTags)) return;
+            recordTags.forEach((tag: any) => {
+              const id = String(tag?.id || "").trim();
+              const title = String(tag?.title || tag?.label || "").trim();
+              if (id && title && !tagLabelById.has(id)) {
+                tagLabelById.set(id, title);
+              }
+            });
+          });
+        }
 
         return values
           .map((raw) => String(raw ?? "").trim())
@@ -1182,6 +1202,8 @@ export const ModuleListRefine: React.FC<{
               const from = range.from !== undefined && range.from !== "" ? String(range.from) : "...";
               const to = range.to !== undefined && range.to !== "" ? String(range.to) : "...";
               valueLabel = `${from} تا ${to}`;
+            } else if (field.type === FieldType.TAGS) {
+              valueLabel = tagLabelById.get(rawValue) || rawValue;
             } else {
               valueLabel = String(
                 getSingleOptionLabel(field, rawValue, dynamicOptions, effectiveRelationOptions) || rawValue
@@ -1201,7 +1223,7 @@ export const ModuleListRefine: React.FC<{
             };
           });
       });
-  }, [allRoles, allUsers, columnFilters, dynamicOptions, effectiveRelationOptions, moduleConfig, searchTerm, viewFiltersState]);
+  }, [allRoles, allUsers, columnFilters, dynamicOptions, effectiveRelationOptions, moduleConfig, searchTerm, tagsMap, viewFiltersState]);
 
   const allListFilterBubbles = useMemo(
     () => [...activeFilterBubbles, ...columnFilterBubbles],
@@ -1400,7 +1422,7 @@ export const ModuleListRefine: React.FC<{
     return mergedFilters;
   }
 
-  function buildViewCrudFilters(nextViewFiltersConfig: any[]): CrudFilters {
+  async function buildViewCrudFilters(nextViewFiltersConfig: any[]): Promise<CrudFilters> {
     if (!moduleConfig || !Array.isArray(nextViewFiltersConfig)) return [];
 
     const buildDateBoundaryValue = (
@@ -1423,12 +1445,101 @@ export const ModuleListRefine: React.FC<{
 
     const filters: CrudFilters = [];
 
-    nextViewFiltersConfig.forEach((rawFilter: any) => {
+    for (const rawFilter of nextViewFiltersConfig) {
       const fieldKey = String(rawFilter?.field || "").trim();
       const operator = String(rawFilter?.operator || "").trim();
       const value = rawFilter?.value;
       const field = moduleConfig.fields.find((item) => String(item?.key || "").trim() === fieldKey);
-      if (!fieldKey || !operator || !field) return;
+      if (!fieldKey || !operator || !field) continue;
+
+      if (field.type === FieldType.TAGS) {
+        const normalizedTagIds = (Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [])
+          .map((item) => String(item ?? "").trim())
+          .filter(Boolean);
+
+        const loadTaggedRecordIds = async () => {
+          const query = supabase
+            .from("record_tags")
+            .select("record_id")
+            .eq("module_id", resolvedModuleId);
+
+          if (normalizedTagIds.length > 0) {
+            query.in("tag_id", normalizedTagIds);
+          }
+
+          const { data, error } = await query;
+          if (error) throw error;
+          return Array.from(
+            new Set(
+              (data || [])
+                .map((row: any) => String(row?.record_id || "").trim())
+                .filter(Boolean)
+            )
+          );
+        };
+
+        try {
+          const taggedRecordIds = await loadTaggedRecordIds();
+
+          if (operator === "is_null") {
+            if (taggedRecordIds.length > 0) {
+              filters.push({
+                field: "id",
+                operator: "nin",
+                value: taggedRecordIds,
+                _displayField: fieldKey,
+                _displayOperator: operator,
+                _displayValue: normalizedTagIds,
+              } as any);
+            }
+            continue;
+          }
+
+          if (operator === "not_null") {
+            filters.push({
+              field: "id",
+              operator: "in",
+              value: taggedRecordIds.length > 0 ? taggedRecordIds : ["__no_matching_record__"],
+              _displayField: fieldKey,
+              _displayOperator: operator,
+              _displayValue: normalizedTagIds,
+            } as any);
+            continue;
+          }
+
+          if (normalizedTagIds.length === 0) continue;
+
+          if (["eq", "in", "contains"].includes(operator)) {
+            filters.push({
+              field: "id",
+              operator: "in",
+              value: taggedRecordIds.length > 0 ? taggedRecordIds : ["__no_matching_record__"],
+              _displayField: fieldKey,
+              _displayOperator: operator,
+              _displayValue: normalizedTagIds,
+            } as any);
+            continue;
+          }
+
+          if (["neq", "not_in", "not_contains"].includes(operator)) {
+            if (taggedRecordIds.length > 0) {
+              filters.push({
+                field: "id",
+                operator: "nin",
+                value: taggedRecordIds,
+                _displayField: fieldKey,
+                _displayOperator: operator,
+                _displayValue: normalizedTagIds,
+              } as any);
+            }
+            continue;
+          }
+        } catch (error) {
+          console.warn("Could not resolve tag view filter", { moduleId: resolvedModuleId, fieldKey, operator, error });
+        }
+
+        continue;
+      }
 
       switch (operator) {
         case "eq":
@@ -1438,45 +1549,45 @@ export const ModuleListRefine: React.FC<{
         case "lt":
         case "lte":
           filters.push({ field: fieldKey, operator, value } as any);
-          return;
+          continue;
         case "neq":
           filters.push({ field: fieldKey, operator: "ne", value } as any);
-          return;
+          continue;
         case "not_contains":
           filters.push({ field: fieldKey, operator: "ncontains", value } as any);
-          return;
+          continue;
         case "starts_with":
           filters.push({ field: fieldKey, operator: "startswith", value } as any);
-          return;
+          continue;
         case "ends_with":
           filters.push({ field: fieldKey, operator: "endswith", value } as any);
-          return;
+          continue;
         case "in": {
           const values = Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [];
           if (values.length > 0) {
             filters.push({ field: fieldKey, operator: "in", value: values } as any);
           }
-          return;
+          continue;
         }
         case "not_in": {
           const values = Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [];
           if (values.length > 0) {
             filters.push({ field: fieldKey, operator: "nin", value: values } as any);
           }
-          return;
+          continue;
         }
         case "is_true":
           filters.push({ field: fieldKey, operator: "eq", value: true } as any);
-          return;
+          continue;
         case "is_false":
           filters.push({ field: fieldKey, operator: "eq", value: false } as any);
-          return;
+          continue;
         case "is_null":
           filters.push({ field: fieldKey, operator: "null", value: null } as any);
-          return;
+          continue;
         case "not_null":
           filters.push({ field: fieldKey, operator: "nnull", value: null } as any);
-          return;
+          continue;
         case "is_today":
         case "is_yesterday":
         case "is_tomorrow": {
@@ -1488,20 +1599,24 @@ export const ModuleListRefine: React.FC<{
             { field: fieldKey, operator: "gte", value: buildDateBoundaryValue(field, baseDate, "start") } as any,
             { field: fieldKey, operator: "lte", value: buildDateBoundaryValue(field, baseDate, "end") } as any
           );
-          return;
+          continue;
         }
         default:
-          return;
+          continue;
       }
-    });
+    }
 
     return filters;
   }
 
   function applyCombinedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, resetPage = true) {
     const mergedFilters = buildMergedFilters(nextViewFilters, nextSearchTerm, nextColumnFilters);
-    setFilters(mergedFilters, "replace");
-    if (resetPage) {
+    const nextSignature = JSON.stringify(mergedFilters);
+    if (lastAppliedFiltersSignatureRef.current !== nextSignature) {
+      lastAppliedFiltersSignatureRef.current = nextSignature;
+      setFilters(mergedFilters, "replace");
+    }
+    if (resetPage && current !== 1) {
       setCurrent?.(1);
     }
   }
@@ -1521,12 +1636,15 @@ export const ModuleListRefine: React.FC<{
     }
 
     setCurrentView(view);
-    const refineFilters: CrudFilters =
-      config && config.filters && Array.isArray(config.filters) && config.filters.length > 0
-        ? buildViewCrudFilters(config.filters)
-        : [];
-    setViewFiltersState(refineFilters);
-    applyCombinedFilters(refineFilters, searchTerm, columnFilters);
+    const applyViewFilters = async () => {
+      const refineFilters: CrudFilters =
+        config && config.filters && Array.isArray(config.filters) && config.filters.length > 0
+          ? await buildViewCrudFilters(config.filters)
+          : [];
+      setViewFiltersState(refineFilters);
+      applyCombinedFilters(refineFilters, searchTerm, columnFilters);
+    };
+    void applyViewFilters();
 
     // ✅ اعمال ستون‌های انتخاب‌شده
     if (config && config.columns && Array.isArray(config.columns) && config.columns.length > 0) {
@@ -1534,7 +1652,7 @@ export const ModuleListRefine: React.FC<{
     } else {
         setVisibleColumns([]);
     }
-  }, [columnFilters, currentView, searchTerm]);
+  }, [columnFilters, currentView, resolvedModuleId, searchTerm]);
 
   // ✅ FIX: سرچ فقط فیلتر سرچ را اضافه/حذف می‌کند و به فیلترهای View دست نمی‌زند
   useEffect(() => {
@@ -1557,13 +1675,13 @@ export const ModuleListRefine: React.FC<{
       const sorterList = Array.isArray(sorter) ? sorter : [sorter];
       const hasActiveSorter = sorterList.some((item: any) => item?.order === "ascend" || item?.order === "descend");
       if (!hasActiveSorter) {
-        setSorters(ensureStableCrudSorters(defaultSorters));
+        setSorters(ensureStableCrudSorters(getDefaultSorters(moduleConfig)));
         return;
       }
     }
 
     tableProps.onChange?.(pagination, tableFilters, sorter, extra);
-  }, [defaultSorters, setSorters, tableProps]);
+  }, [moduleConfig, setSorters, tableProps]);
 
   const handleSelectAllAcrossPages = useCallback(async () => {
     if (!resolvedModuleId || selectAllPagesLoading) return;
@@ -1800,7 +1918,7 @@ export const ModuleListRefine: React.FC<{
 
       const exportFields = listPrintableFields.length > 0
         ? listPrintableFields
-        : buildListPrintableFields(moduleConfig, canViewField, visibleColumns);
+        : buildListPrintableFields(moduleConfig, canViewField, visibleColumns, dynamicOptions);
       const currencyLabel = readCurrencyConfig().label || '';
       const headers = exportFields.map((field) => escapeCsvCell(field.label)).join(',');
       const rows = recordsToExport
@@ -1826,7 +1944,7 @@ export const ModuleListRefine: React.FC<{
     } finally {
       hide();
     }
-  }, [canViewField, fetchSelectedRecords, listPrintableFields, moduleConfig, relationOptions, resolvedModuleId, selectedRowKeys.length, showListMessage, visibleColumns]);
+  }, [canViewField, dynamicOptions, fetchSelectedRecords, listPrintableFields, moduleConfig, relationOptions, resolvedModuleId, selectedRowKeys.length, showListMessage, visibleColumns]);
 
   const handleExportPrint = useCallback(async () => {
     if (!selectedRowKeys.length) return;
@@ -2252,7 +2370,7 @@ export const ModuleListRefine: React.FC<{
           {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
         <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 shrink-0">
-            <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
+                <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
                 <span className="w-2 h-8 bg-leather-500 rounded-full inline-block shrink-0"></span>
                 <span className="truncate">{moduleConfig.titles.fa}</span>
             </h1>
@@ -2356,6 +2474,7 @@ export const ModuleListRefine: React.FC<{
                     type="primary"
                     icon={<PlusOutlined />}
                     onClick={() => navigate(`/${resolvedModuleId}/create`)}
+                    aria-label={`افزودن ${moduleConfig.titles.faSingular || moduleConfig.titles.fa}`}
                     className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/30 shrink-0"
                   >
                     افزودن
@@ -2473,6 +2592,7 @@ export const ModuleListRefine: React.FC<{
                     })}
                     dynamicOptions={dynamicOptions}
                      relationOptions={effectiveRelationOptions}
+                     tagsMap={tagsMap}
                      allUsers={allUsers}
                      allRoles={allRoles}
                     canViewField={canViewField}

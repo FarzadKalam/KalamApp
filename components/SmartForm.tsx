@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Form, Button, Spin, Divider, Select, Space, Modal, Checkbox, App } from 'antd';
+import { Form, Button, Spin, Divider, Select, Space, Modal, Checkbox, App, Switch } from 'antd';
 import { UserOutlined, TeamOutlined } from '@ant-design/icons';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
@@ -122,6 +122,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const processPreviewFieldKey = module.id === 'process_templates'
     ? 'template_stages_preview'
     : (module.id === 'process_runs' ? 'run_stages_preview' : null);
+  const shouldHideProcessUiInSmartForm = !!processDraftFieldKey
+    && module.id !== 'process_templates'
+    && module.id !== 'process_runs';
   const supportsAssignee = supportsGlobalAssignee(module.id);
   const supportsAssigneeType = supportsGlobalAssigneeType(module.id);
   const supportsRoleAssignee = supportsGlobalRoleAssignee(module.id);
@@ -140,7 +143,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   const getRelationFieldValueSignature = useMemo(() => {
     const combinedValues = { ...(formData || {}), ...((watchedValues as Record<string, any>) || {}) };
-    const projectProcessRelationFields = module.id === 'projects' && processDraftFieldKey
+    const projectProcessRelationFields = module.id === 'projects' && processDraftFieldKey && !shouldHideProcessUiInSmartForm
       ? normalizeProcessTargetModuleIds(
           (Array.isArray(combinedValues?.[processDraftFieldKey]) ? combinedValues[processDraftFieldKey] : []).flatMap((stage: any) => (
             Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []
@@ -163,7 +166,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         return `${field.key}:${normalized}`;
       })
       .join('|');
-  }, [formData, module.fields, module.id, processDraftFieldKey, watchedValues]);
+  }, [formData, module.fields, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm, watchedValues]);
   
   useEffect(() => {
     if (visible) {
@@ -917,7 +920,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   useEffect(() => {
     if (module.id !== 'products') return;
     const currentValues = getLiveFormValues();
-    if (!isAutoNameEnabled(currentValues?.auto_name_enabled)) return;
+    if (!getAutoNameToggleValue(normalizeAutoNameEnabled(currentValues?.auto_name_enabled, false))) return;
     const nextName = buildAutoProductName(currentValues);
     if (!nextName || nextName === currentValues?.name) return;
     form.setFieldValue('name', nextName);
@@ -927,7 +930,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   useEffect(() => {
     if (module.id !== 'production_orders') return;
     const currentValues = getLiveFormValues();
-    if (!isAutoNameEnabled(currentValues?.auto_name_enabled)) return;
+    if (!getAutoNameToggleValue(normalizeAutoNameEnabled(currentValues?.auto_name_enabled, false))) return;
     const nextName = buildAutoProductionOrderName(currentValues);
     if (!nextName || nextName === currentValues?.name) return;
     form.setFieldValue('name', nextName);
@@ -937,7 +940,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   useEffect(() => {
     if (module.id !== 'customers') return;
     const currentValues = getLiveFormValues();
-    if (!isAutoNameEnabled(currentValues?.auto_name_enabled)) return;
+    if (!getAutoNameToggleValue(normalizeAutoNameEnabled(currentValues?.auto_name_enabled, false))) return;
     const nextFullName = buildAutoCustomerName(currentValues);
     if (!nextFullName || nextFullName === currentValues?.full_name) return;
     form.setFieldValue('full_name', nextFullName);
@@ -1145,13 +1148,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
         delete values.__skipBomConfirm;
       }
 
-      if (module.id === 'products' && isAutoNameEnabled(values.auto_name_enabled)) {
+      if (module.fields.some((field) => field.key === 'auto_name_enabled')) {
+        values.auto_name_enabled = getAutoNameToggleValue(
+          normalizeAutoNameEnabled(values.auto_name_enabled, false)
+        );
+      }
+
+      if (module.id === 'products' && getAutoNameToggleValue(normalizeAutoNameEnabled(values.auto_name_enabled, false))) {
         const nextName = buildAutoProductName(values);
         if (nextName) {
           values.name = nextName;
         }
       }
-      if (module.id === 'production_orders' && isAutoNameEnabled(values.auto_name_enabled)) {
+      if (module.id === 'production_orders' && getAutoNameToggleValue(normalizeAutoNameEnabled(values.auto_name_enabled, false))) {
         const nextName = buildAutoProductionOrderName(values);
         if (nextName) {
           values.name = nextName;
@@ -1179,7 +1188,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         values = normalizeTaskSourceValues(values);
       }
       if (module.id === 'customers') {
-        if (isAutoNameEnabled(values.auto_name_enabled)) {
+        if (getAutoNameToggleValue(normalizeAutoNameEnabled(values.auto_name_enabled, false))) {
           const nextFullName = buildAutoCustomerName(values);
           if (nextFullName) {
             values.full_name = nextFullName;
@@ -1284,6 +1293,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
           previousCompletedAt: initialRecord?.completed_at ?? null,
           previousStatus: initialRecord?.status ?? null,
           previousStartDate: initialRecord?.start_date ?? null,
+          previousDueDate: initialRecord?.due_date ?? null,
+          previousActualStartAt: initialRecord?.actual_start_at ?? null,
+          previousActualEndAt: initialRecord?.actual_end_at ?? null,
         }) as any;
       }
       if (module.id === 'process_templates') {
@@ -1503,6 +1515,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
     let cleanedValues = Object.fromEntries(
       Object.entries(allValues || {}).filter(([, value]) => value !== undefined)
     );
+    const autoNameField = module.fields.find((field) => field.key === 'auto_name_enabled');
+    if (autoNameField) {
+      cleanedValues[autoNameField.key] = normalizeAutoNameEnabled(
+        form.getFieldValue(autoNameField.key),
+        normalizeAutoNameEnabled((formData as any)?.[autoNameField.key], normalizeAutoNameEnabled(autoNameField.defaultValue, false))
+      );
+    }
     if (module.id === 'tasks') {
       cleanedValues = normalizeTaskSourceValues(cleanedValues);
     }
@@ -1553,6 +1572,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const visibleSystemFieldKeys = new Set(
     module.id === 'products'
       ? ['product_type']
+      : module.id === 'tasks'
+        ? ['completed_at', 'actual_start_at', 'actual_end_at', 'schedule_variance_hours']
       : []
   );
   const canViewField = (fieldKey: string) => {
@@ -1616,8 +1637,27 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const currentValues = watchedValues && Object.keys(watchedValues).length > 0
     ? watchedValues
     : formData;
+  const getPreparedField = useCallback((field: any) => {
+    let nextField = field;
+    if (module.id === 'products' && !recordId && field?.blockId === 'sales_info') {
+      nextField = { ...field, readonly: false };
+    }
+    if (module.id === 'tasks' && String(nextField?.key || '') === 'source_record_id') {
+      const sourceModuleId = String(currentValues?.related_to_module || currentValues?.source_module_id || '').trim();
+      const sourceModule = sourceModuleId ? MODULES[sourceModuleId] : null;
+      const sourceLabel = sourceModule?.titles?.faSingular || sourceModule?.titles?.fa || '';
+      nextField = {
+        ...nextField,
+        labels: {
+          ...(nextField?.labels || {}),
+          fa: sourceLabel ? `${sourceLabel} مرتبط` : 'رکورد مرتبط',
+        },
+      };
+    }
+    return nextField;
+  }, [currentValues?.related_to_module, currentValues?.source_module_id, module.id, recordId]);
   const projectProcessLinkedFields = useMemo(() => {
-    if (module.id !== 'projects' || !processDraftFieldKey) return [] as Array<{
+    if (module.id !== 'projects' || !processDraftFieldKey || shouldHideProcessUiInSmartForm) return [] as Array<{
       moduleId: string;
       field: any;
       value?: string;
@@ -1665,7 +1705,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           value: String((currentValues as any)?.[fieldKey] || linkedRecordMap[targetModuleId] || '').trim() || undefined,
         };
       });
-  }, [currentValues, module.id, processDraftFieldKey]);
+  }, [currentValues, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm]);
   const currentSummaryData = getSummaryData(currentValues);
   const summaryConfigObj = module.blocks?.find(b => b.summaryConfig)?.summaryConfig;
   const isFieldRequired = (field?: any) => !isBulkEdit && field?.validation?.required === true;
@@ -1675,6 +1715,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
       {required ? <span className="text-red-500">*</span> : null}
     </span>
   );
+
+  const getAutoNameToggleValue = (fallback = false) =>
+    normalizeAutoNameEnabled(form.getFieldValue('auto_name_enabled'), fallback);
 
   const handleFormAction = (actionId: string) => {
     if (actionId === 'auto_name' && module.id === 'products') {
@@ -1826,26 +1869,22 @@ const SmartForm: React.FC<SmartFormProps> = ({
                         <span className="text-xs text-gray-400 shrink-0">
                           {renderInlineFieldLabel(autoNameToggleField.labels?.fa || 'نامگذاری خودکار', isFieldRequired(autoNameToggleField))}
                         </span>
-                        <div className="flex-1 min-w-0">
-                          <SmartFieldRenderer
-                            field={autoNameToggleField}
-                            value={(currentValues as any)?.[autoNameToggleField.key]}
-                            onChange={(val) => {
-                              form.setFieldValue(autoNameToggleField.key, val);
-                              setFormData((prev: any) => ({
-                                ...prev,
-                                [autoNameToggleField.key]: val,
-                              }));
-                            }}
-                            forceEditMode={true}
-                            compactMode={true}
-                            options={getResolvedOptions(autoNameToggleField)}
-                            disableRequired={isBulkEdit}
-                            moduleId={module.id}
-                            recordId={recordId}
-                            allValues={currentValues}
-                          />
-                        </div>
+                        <Switch
+                          checked={getAutoNameToggleValue(
+                            normalizeAutoNameEnabled(
+                              (currentValues as any)?.[autoNameToggleField.key],
+                              normalizeAutoNameEnabled(autoNameToggleField.defaultValue, false)
+                            )
+                          )}
+                          onChange={(checked) => {
+                            form.setFieldValue(autoNameToggleField.key, checked);
+                            setFormData((prev: any) => ({
+                              ...prev,
+                              [autoNameToggleField.key]: checked,
+                            }));
+                          }}
+                          disabled={autoNameToggleField.readonly === true || isBulkEdit}
+                        />
                       </div>
                     </div>
                   )}
@@ -1933,29 +1972,30 @@ const SmartForm: React.FC<SmartFormProps> = ({
               {headerFieldsWithoutStatus.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-5 bg-gray-50 dark:bg-white/5 p-3 md:p-4 rounded-2xl border border-gray-100 dark:border-gray-800">
                   {headerFieldsWithoutStatus.map(field => {
-                     if (field.logic && !checkVisibility(field.logic, currentValues)) return null;
-                     const options = getResolvedOptions(field);
+                     const preparedField = getPreparedField(field);
+                     if (preparedField.logic && !checkVisibility(preparedField.logic, currentValues)) return null;
+                     const options = getResolvedOptions(preparedField);
                      return (
-                        <div
-                          key={field.key}
-                          className={
-                            field.type === FieldType.IMAGE
-                              ? 'row-span-2'
-                              : field.type === FieldType.SUPER_LONG_TEXT
-                                ? 'md:col-span-2 lg:col-span-4'
-                                : ''
-                          }
-                        >
-                          <SmartFieldRenderer 
-                            field={field} 
-                            value={(currentValues as any)?.[field.key]} 
-                            onChange={(val) => {
-                              form.setFieldValue(field.key, val);
-                              setFormData((prev: any) => ({
-                                ...prev,
-                                [field.key]: val,
-                              }));
-                            }}
+                         <div
+                           key={preparedField.key}
+                           className={
+                             preparedField.type === FieldType.IMAGE
+                               ? 'row-span-2'
+                               : preparedField.type === FieldType.SUPER_LONG_TEXT
+                                 ? 'md:col-span-2 lg:col-span-4'
+                                 : ''
+                           }
+                         >
+                           <SmartFieldRenderer 
+                             field={preparedField} 
+                             value={(currentValues as any)?.[preparedField.key]} 
+                             onChange={(val) => {
+                               form.setFieldValue(preparedField.key, val);
+                               setFormData((prev: any) => ({
+                                 ...prev,
+                                 [preparedField.key]: val,
+                               }));
+                             }}
                             forceEditMode={true}
                             options={options}
                             disableRequired={isBulkEdit}
@@ -2011,9 +2051,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     .filter(f => f.blockId === block.id)
                     .filter((f) => recordId || f.hideInCreateForm !== true)
                     .filter((f) => !(!recordId && module.id === 'process_templates' && f.key === 'template_stages_preview'))
+                    .filter((f) => !(
+                      shouldHideProcessUiInSmartForm
+                      && (f.key === 'process_template_id' || f.key === processDraftFieldKey)
+                    ))
                     .filter((f) => {
                       if (f.key === processPreviewFieldKey) return true;
                       if (f.nature !== 'system') return true;
+                      if (visibleSystemFieldKeys.has(f.key)) return true;
                       return module.id === 'products' && !recordId && block.id === 'sales_info';
                     })
                     .filter((f) => !(module.id === 'marketing_leads'
@@ -2038,10 +2083,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       </Divider>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {blockFields.map(field => {
-                            if (field.logic && !checkVisibility(field.logic, currentValues)) return null;
-                            const preparedField = module.id === 'products' && !recordId && block.id === 'sales_info'
-                              ? { ...field, readonly: false }
-                              : field;
+                            const preparedField = getPreparedField(field);
+                            if (preparedField.logic && !checkVisibility(preparedField.logic, currentValues)) return null;
                              let fieldValue = (currentValues as any)?.[preparedField.key];
                             let isReadOnly = false;
                             // فیلدهای خلاصه اگر محاسبه شده باشند
@@ -2082,7 +2125,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                            );
                          })}
                       </div>
-                      {module.id === 'projects' && block.id === 'process' && projectProcessLinkedFields.length > 0 && (
+                      {!shouldHideProcessUiInSmartForm && module.id === 'projects' && block.id === 'process' && projectProcessLinkedFields.length > 0 && (
                         <div className="mt-4 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.45)] p-4">
                           <div className="mb-3 text-sm font-semibold text-[rgba(var(--brand-800-rgb),1)]">رکوردهای مرتبط فرآیند</div>
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

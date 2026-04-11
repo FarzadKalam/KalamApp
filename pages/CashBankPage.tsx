@@ -9,6 +9,7 @@ import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { useCurrencyConfig } from '../utils/currency';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
+import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
 
 const { Title, Text } = Typography;
 
@@ -83,6 +84,7 @@ const CashBankPage: React.FC = () => {
   const { label: currencyLabel } = useCurrencyConfig();
 
   const [loading, setLoading] = useState(true);
+  const [canViewPage, setCanViewPage] = useState(true);
   const [rows, setRows] = useState<RowItem[]>([]);
   const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
   const [banks, setBanks] = useState<any[]>([]);
@@ -153,6 +155,17 @@ const CashBankPage: React.FC = () => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      const context = await fetchCurrentUserRoleContext(supabase);
+      const accountingPerms = context.permissions?.[ACCOUNTING_PERMISSION_KEY] || {};
+      const canViewCashBankPage =
+        accountingPerms.view !== false &&
+        accountingPerms.fields?.cash_bank_page !== false;
+      setCanViewPage(canViewCashBankPage);
+      if (!canViewCashBankPage) {
+        setRows([]);
+        return;
+      }
+
       const [
         banksRes,
         cashRes,
@@ -628,6 +641,16 @@ const CashBankPage: React.FC = () => {
     return (
       <div className="h-[70vh] flex items-center justify-center">
         <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (!canViewPage) {
+    return (
+      <div className="h-[70vh] flex items-center justify-center">
+        <Card className="max-w-md text-center">
+          دسترسی به بخش نقد و بانک ندارید
+        </Card>
       </div>
     );
   }

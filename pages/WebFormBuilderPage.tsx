@@ -408,6 +408,14 @@ const WebFormBuilderPage: React.FC = () => {
       );
     }
 
+    if (fieldType === "time") {
+      return (
+        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+          <Input type="time" placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
+        </Form.Item>
+      );
+    }
+
     if (fieldType === "datetime") {
       return (
         <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>

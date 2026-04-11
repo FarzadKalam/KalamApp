@@ -353,7 +353,14 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                 <span className="leading-none">{view.name}</span>
                 {currentView?.id === view.id && (
                   <div className="mr-0 flex shrink-0 items-center gap-0.5">
-                  <Tooltip title="ویرایش" placement="top" mouseEnterDelay={0.45} destroyOnHidden>
+                  <Tooltip
+                    title="ویرایش"
+                    placement="bottom"
+                    align={{ offset: [0, 8] }}
+                    mouseEnterDelay={0.45}
+                    getPopupContainer={() => document.body}
+                    destroyOnHidden
+                  >
                     <span
                       className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/10"
                       onClick={(e) => handleEditView(view, e)}
@@ -399,7 +406,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
               className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
             >
               <PlusOutlined className="text-[11px]" />
-              <span className="leading-none">لیست جدید</span>
+              <span className="hidden md:inline leading-none">لیست جدید</span>
             </button>
           </Tooltip>
         </div>

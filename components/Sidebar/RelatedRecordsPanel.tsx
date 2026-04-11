@@ -14,6 +14,7 @@ import {
   resolveOptionLabel,
 } from '../../utils/recordDisplayFormatter';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { getTaskStatusOption } from '../../utils/processTaskStatusOptions';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
@@ -62,7 +63,9 @@ const resolveStatusMeta = (item: any, moduleId: string) => {
   const statusField = (moduleConfig?.fields || []).find((field: any) => String(field?.key || '') === 'status');
   const rawValue = item?.status;
   if (!statusField || rawValue === undefined || rawValue === null || rawValue === '') return null;
-  const option = (statusField.options || []).find((entry: any) => String(entry?.value || '') === String(rawValue));
+  const option = moduleId === 'tasks'
+    ? getTaskStatusOption(rawValue, item, statusField.options || [])
+    : (statusField.options || []).find((entry: any) => String(entry?.value || '') === String(rawValue));
   return option
     ? { label: String(option.label || rawValue), color: String(option.color || 'default') }
     : null;

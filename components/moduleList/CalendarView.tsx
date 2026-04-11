@@ -15,6 +15,7 @@ import { getHolidaySummaryForDate, type HolidayDaySummary } from "../../utils/ho
 import { formatRecordDisplayValue } from "../../utils/recordDisplayFormatter";
 import { getRecordTitle } from "../../utils/recordTitle";
 import { parseDateValue, toPersianNumber } from "../../utils/persianNumberFormatter";
+import { getTaskStatusLabel } from "../../utils/processTaskStatusOptions";
 
 export type ModuleCalendarMode = "month" | "week";
 
@@ -188,7 +189,11 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
       const key = toDateKey(eventDate);
       const current = next.get(key) || [];
       const statusLabel = statusField && item?.[statusField.key] !== undefined && item?.[statusField.key] !== null
-        ? formatRecordDisplayValue(item[statusField.key], statusField)
+        ? (
+            moduleId === "tasks" && String(statusField?.key || "") === "status"
+              ? getTaskStatusLabel(item[statusField.key], item, statusField.options || [])
+              : formatRecordDisplayValue(item[statusField.key], statusField)
+          )
         : null;
       current.push({
         key: `${String(item?.id || key)}:${selectedDateField.key}`,

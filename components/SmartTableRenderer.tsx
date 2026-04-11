@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip } from 'antd';
-import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, CloseOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
@@ -35,6 +35,7 @@ interface SmartTableRendererProps {
   scrollX?: string | number;
   tableLayout?: 'auto' | 'fixed';
   disableScroll?: boolean;
+  tagsMap?: Record<string, any[]>;
   dynamicOptions?: Record<string, any[]>;  // ✅ گزینه‌های dynamic برای نمایش برچسب‌های فارسی
   relationOptions?: Record<string, any[]>;  // ✅ گزینه‌های relation برای نمایش برچسب‌های فارسی
   allUsers?: any[];  // ✅ لیست کاربران
@@ -50,7 +51,7 @@ interface SmartTableRendererProps {
   showFilterBar?: boolean;
 }
 
-export const buildSmartTablePagination = (pagination: any) =>
+export const buildSmartTablePagination = (pagination: any, isMobileViewport = false) =>
   pagination === false
     ? false
     : {
@@ -58,25 +59,27 @@ export const buildSmartTablePagination = (pagination: any) =>
         position: ['bottomCenter'],
         size: 'small',
         showSizeChanger: true,
+        showLessItems: isMobileViewport,
+        responsive: !isMobileViewport,
         pageSizeOptions: [10, 20, 50, 100],
+        style: isMobileViewport ? undefined : { marginTop: 10 },
         showTotal: (total: number, range: [number, number]) =>
-          `${toPersianNumber(range[0])}-${toPersianNumber(range[1])} از ${toPersianNumber(total)}`,
+          isMobileViewport
+            ? `${toPersianNumber(total)} ${'\u0631\u06a9\u0648\u0631\u062f'}`
+            : `${toPersianNumber(range[0])}-${toPersianNumber(range[1])} ${'\u0627\u0632'} ${toPersianNumber(total)}`,
         itemRender: (page: number, type: string, originalElement: React.ReactNode) => {
           if (type === 'page') {
             return <span className="persian-number">{toPersianNumber(page)}</span>;
           }
+          if (isMobileViewport && type === 'prev') {
+            return <span className="smart-pagination-nav">{'\u0642\u0628\u0644\u06cc'}</span>;
+          }
+          if (isMobileViewport && type === 'next') {
+            return <span className="smart-pagination-nav">{'\u0628\u0639\u062f\u06cc'}</span>;
+          }
           return originalElement;
         },
       };
-
-const getInitialScrollHeight = () => {
-  if (typeof window === 'undefined') return 440;
-  const viewportHeight = window.innerHeight || 800;
-  if (window.innerWidth < 768) {
-    return Math.min(520, Math.max(300, viewportHeight - 290));
-  }
-  return Math.min(700, Math.max(440, viewportHeight - 320));
-};
 
 const OverflowTooltipText: React.FC<{ label: string; className: string }> = ({ label, className }) => {
   const textRef = useRef<HTMLSpanElement>(null);
@@ -143,6 +146,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   scrollX,
   tableLayout,
   disableScroll,
+  tagsMap = {},
   dynamicOptions = {},  // ✅ اضافه شد
   relationOptions = {},   // ✅ اضافه شد
   allUsers = [],  // ✅ اضافه شد
@@ -160,8 +164,15 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const searchInput = useRef<InputRef>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const filterBarRef = useRef<HTMLDivElement>(null);
+  const tagFilterTriggerRef = useRef<HTMLButtonElement>(null);
+  const tagFilterPopoverRef = useRef<HTMLDivElement>(null);
   const lastVisibleRowSignatureRef = useRef('');
-  const [scrollHeight, setScrollHeight] = useState<number>(() => getInitialScrollHeight());
+  const [scrollHeight, setScrollHeight] = useState<number>(440);
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 768;
+  });
+  const [isTagFilterPopoverOpen, setIsTagFilterPopoverOpen] = useState(false);
   const [internalColumnFilters, setInternalColumnFilters] = useState<Record<string, FilterValue | null>>({});
   const assigneeLabel = getAssigneeLabel(moduleConfig?.id);
   const { label: currencyLabel } = useCurrencyConfig();
@@ -220,24 +231,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     }),
     []
   );
-
-  // ✅ Responsive scroll height
-  useEffect(() => {
-    const updateScrollHeight = () => {
-      const viewportHeight = window.innerHeight || 800;
-      if (window.innerWidth < 768) {
-        const mobileHeight = Math.min(520, Math.max(300, viewportHeight - 290));
-        setScrollHeight(mobileHeight); // موبایل
-      } else {
-        const desktopHeight = Math.min(700, Math.max(440, viewportHeight - 320));
-        setScrollHeight(desktopHeight); // دسکتاپ
-      }
-    };
-    
-    updateScrollHeight();
-    window.addEventListener('resize', updateScrollHeight);
-    return () => window.removeEventListener('resize', updateScrollHeight);
-  }, []);
 
   useEffect(() => {
     if (!isColumnFiltersControlled) {
@@ -516,7 +509,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   });
 
   // ✅ فیلتر تگ‌ها (برای ستون‌های تگ) - مشابه MULTI_SELECT
-  const getTagFilterProps = (dataIndex: string, _title: string) => {
+  const getTagFilterProps = useCallback((dataIndex: string, _title: string) => {
     const allTags = new Map<string, string>();
     data.forEach((record: any) => {
       const tags = record[dataIndex];
@@ -540,7 +533,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         });
       }
     };
-  };
+  }, [data]);
 
   // --- ساخت ستون‌ها ---
   let tableFields = moduleConfig.fields
@@ -568,15 +561,165 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const keyField = tableFields.find(f => f.isKey || ['name', 'title', 'business_name'].includes(f.key));
   const otherFields = tableFields.filter(f => f !== tagsField && f !== imageField && f !== keyField);
   
-  if (imageField && keyField && tagsField) {
-    tableFields = [imageField, keyField, tagsField, ...otherFields];
-  } else if (keyField && tagsField) {
-    tableFields = [keyField, tagsField, ...otherFields];
-  } else if (imageField && keyField) {
+  if (imageField && keyField) {
     tableFields = [imageField, keyField, ...otherFields];
   } else if (keyField) {
     tableFields = [keyField, ...otherFields];
   }
+
+  const resolvedTagFilterProps = tagsField ? getTagFilterProps(tagsField.key, tagsField.labels.fa) : null;
+  const activeTagFilterValues = tagsField && Array.isArray(activeColumnFilters[tagsField.key])
+    ? activeColumnFilters[tagsField.key]!.map((value) => String(value))
+    : [];
+  const keyFieldMobileWidth = !isMobileViewport || !keyField
+    ? null
+    : Math.min(
+        280,
+        Math.max(
+          156,
+          (data.reduce((maxLength, record: any) => {
+            const rawValue = record?.[keyField.key];
+            const normalized = rawValue === null || rawValue === undefined || rawValue === '' ? '-' : String(rawValue).trim();
+            return Math.max(maxLength, normalized.length);
+          }, 0) * 9) + 52
+        )
+      );
+
+  const updateTagFilters = (nextValues: string[]) => {
+    if (!tagsField) return;
+    updateColumnFilters({
+      ...activeColumnFilters,
+      [tagsField.key]: nextValues.length > 0 ? nextValues : null,
+    });
+  };
+
+  const toggleTagFilterValue = (tagValue: string) => {
+    const nextValues = activeTagFilterValues.includes(tagValue)
+      ? activeTagFilterValues.filter((item) => item !== tagValue)
+      : [...activeTagFilterValues, tagValue];
+    updateTagFilters(nextValues);
+  };
+
+  const renderCompactTags = (tags: any[]) => {
+    if (!Array.isArray(tags) || tags.length === 0) return null;
+    const visibleTags = tags.slice(0, 2);
+    const hiddenTags = tags.slice(2);
+    return (
+      <div className="mt-0.5 flex max-w-full items-center gap-1 overflow-hidden whitespace-nowrap">
+        {visibleTags.map((tag: any, index: number) => {
+          const tagLabel = String(typeof tag === 'string' ? tag : (tag.title || tag.label || tag.id || '')).trim();
+          const tagColor = typeof tag === 'string' ? undefined : tag.color;
+          if (!tagLabel) return null;
+          return (
+            <Tag
+              key={`${tagLabel}-${index}`}
+              color={tagColor || 'default'}
+              style={{ marginRight: 0, paddingInline: 4 }}
+              className="!m-0 max-w-[88px] truncate rounded-full !text-[8px] !leading-[12px]"
+            >
+              {tagLabel}
+            </Tag>
+          );
+        })}
+        {hiddenTags.length > 0 ? (
+          <Popover
+            content={
+              <div className="flex max-w-[220px] flex-wrap gap-1">
+                {hiddenTags.map((tag: any, index: number) => {
+                  const tagLabel = String(typeof tag === 'string' ? tag : (tag.title || tag.label || tag.id || '')).trim();
+                  const tagColor = typeof tag === 'string' ? undefined : tag.color;
+                  if (!tagLabel) return null;
+                  return (
+                    <Tag key={`${tagLabel}-${index}`} color={tagColor || 'default'} className="!m-0 rounded-full !text-[9px]">
+                      {tagLabel}
+                    </Tag>
+                  );
+                })}
+              </div>
+            }
+            trigger="click"
+          >
+            <button
+              type="button"
+              className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[8px] font-medium leading-[12px] text-gray-500 transition hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+              onClick={(event) => event.stopPropagation()}
+            >
+              +{hiddenTags.length}
+            </button>
+          </Popover>
+        ) : null}
+        <button
+          type="button"
+          className="inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/10 dark:hover:text-gray-200"
+          onClick={() => setIsTagFilterPopoverOpen(false)}
+          aria-label="close-tag-filter"
+        >
+          <CloseOutlined className="text-[10px]" />
+        </button>
+      </div>
+    );
+  };
+
+  const keyFieldTagFilterContent = resolvedTagFilterProps ? (
+    <div ref={tagFilterPopoverRef} className="w-[220px] max-w-[70vw]" onClick={(event) => event.stopPropagation()}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[10px] font-semibold text-gray-500">فیلتر برچسب</span>
+        {activeTagFilterValues.length > 0 ? (
+          <button
+            type="button"
+            className="text-[10px] text-leather-600 transition hover:text-leather-500"
+            onClick={() => updateTagFilters([])}
+          >
+            حذف
+          </button>
+        ) : null}
+      </div>
+      {(resolvedTagFilterProps.filters as Array<{ text: string; value: string }> | undefined)?.length ? (
+        <div className="flex max-h-40 flex-wrap gap-1 overflow-y-auto">
+          {(resolvedTagFilterProps.filters as Array<{ text: string; value: string }>).map((tagOption) => {
+            const tagValue = String(tagOption.value);
+            const isActive = activeTagFilterValues.includes(tagValue);
+            return (
+              <button
+                key={tagValue}
+                type="button"
+                className={`rounded-full border px-2 py-1 text-[10px] transition ${
+                  isActive
+                    ? 'border-leather-500 bg-leather-50 text-leather-700 dark:bg-leather-500/15 dark:text-leather-200'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-leather-300 hover:text-leather-600 dark:border-white/10 dark:bg-[#111827] dark:text-gray-200'
+                }`}
+                onClick={() => toggleTagFilterValue(tagValue)}
+              >
+                {tagOption.text}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-[10px] text-gray-400">برچسبی در این صفحه وجود ندارد.</div>
+      )}
+    </div>
+  ) : null;
+
+  useEffect(() => {
+    if (!isTagFilterPopoverOpen) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (tagFilterPopoverRef.current?.contains(target)) return;
+      if (tagFilterTriggerRef.current?.contains(target)) return;
+      setIsTagFilterPopoverOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+    };
+  }, [isTagFilterPopoverOpen]);
 
   const resolveFieldFilterOptions = (field: any) => {
     let options: { text: string; value: string | number }[] = [];
@@ -673,7 +816,41 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ].includes(field.type);
 
     return {
-      title: <span className="text-[11px] text-gray-500">{field.labels.fa}</span>,
+      title: isKeyLikeField && keyFieldTagFilterContent ? (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-[10px] md:text-[11px] text-gray-500">{field.labels.fa}</span>
+          <Popover
+            content={keyFieldTagFilterContent}
+            placement="bottomRight"
+            open={isTagFilterPopoverOpen}
+            getPopupContainer={() => document.body}
+          >
+            <button
+              ref={tagFilterTriggerRef}
+              type="button"
+              className={`inline-flex h-5 w-5 items-center justify-center rounded-full transition ${
+                activeTagFilterValues.length > 0
+                  ? 'text-leather-600'
+                  : 'text-gray-400 hover:text-leather-500'
+              }`}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setIsTagFilterPopoverOpen((prev) => !prev);
+              }}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              aria-label="tag-filter"
+            >
+              <TagOutlined className="text-[10px]" />
+            </button>
+          </Popover>
+        </span>
+      ) : (
+        <span className="text-[10px] md:text-[11px] text-gray-500">{field.labels.fa}</span>
+      ),
       dataIndex: field.key,
       key: field.key,
       width:
@@ -682,7 +859,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           : field.type === FieldType.IMAGE
             ? 80
           : isKeyLikeField
-            ? (moduleConfig?.id === 'products' ? 380 : 340)
+            ? (isMobileViewport && keyFieldMobileWidth ? keyFieldMobileWidth : (moduleConfig?.id === 'products' ? 380 : 340))
             : isTagField
               ? 120
               : field.type === FieldType.RELATION || field.type === FieldType.USER
@@ -703,6 +880,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       sortOrder,
       sortDirections: ['ascend', 'descend', null],
       showSorterTooltip: false,
+      filterSearch: field.type === FieldType.RELATION || field.type === FieldType.USER ? true : undefined,
       sortIcon: () =>
         canSortField ? (
           <span className="inline-flex flex-col leading-none text-[9px] mr-1 text-gray-300">
@@ -738,7 +916,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             : field
         );
         // Shared fallback for empty/invalid dates
-        const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[11px]">-</span>;
+        const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[10px] md:text-[11px]">-</span>;
         
         if (field.type === FieldType.IMAGE) {
             return <Avatar src={value} icon={<AppstoreOutlined />} shape="square" size="default" className="bg-gray-100 border border-gray-200" />;
@@ -758,17 +936,17 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         if (field.type === FieldType.DATE && value) {
           const formatted = formatPersianDate(value, 'DATE');
           if (!formatted) return emptyDateCell;
-          return <span className="dir-ltr text-gray-500 font-medium text-[11px]">{formatted}</span>;
+          return <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>;
         }
         if (field.type === FieldType.TIME && value) {
           const formatted = formatPersianDate(value, 'TIME');
           if (!formatted) return emptyDateCell;
-          return <span className="dir-ltr text-gray-500 font-medium text-[11px]">{formatted}</span>;
+          return <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>;
         }
         if (field.type === FieldType.DATETIME && value) {
           const formatted = formatPersianDate(value, 'DATETIME');
           if (!formatted) return emptyDateCell;
-          return <span className="dir-ltr text-gray-500 font-medium text-[11px]">{formatted}</span>;
+          return <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>;
         }
         if (field.type === FieldType.CHECKBOX) {
             return (
@@ -840,12 +1018,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             : String(field.key || 'production_stages_draft');
           const draftStages = Array.isArray(record?.[draftKey]) ? record[draftKey] : [];
           return (
-            <div style={{ minWidth: 200, minHeight: 20 }}>
+            <div style={{ minWidth: 160, minHeight: 20 }}>
               <ProductionStagesField
                 recordId={record.id}
                 moduleId={moduleConfig?.id}
                 readOnly={true}
                 compact={true}
+                cardCompact
                 allowReportEditInReadOnly={true}
                 lazyLoad={true}
                 draftStages={draftStages}
@@ -926,9 +1105,11 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             if (value === null || value === undefined || value === '') return '-';
             const persianPrice = formatPersianPrice(value, true);
             return (
-              <div className="leading-tight">
-                <span className="font-bold text-gray-700 dark:text-gray-300 text-xs persian-number">{persianPrice}</span>
-                <div className="text-[10px] text-gray-400 dark:text-gray-500 truncate">{currencyLabel}</div>
+              <div className="inline-flex max-w-full items-baseline gap-1 whitespace-nowrap leading-tight">
+                <span className="font-bold text-gray-700 dark:text-gray-300 text-[11px] md:text-xs persian-number">{persianPrice}</span>
+                {currencyLabel ? (
+                  <span className="truncate text-[9px] md:text-[10px] text-gray-400 dark:text-gray-500">{currencyLabel}</span>
+                ) : null}
               </div>
             );
         }
@@ -938,6 +1119,15 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                const reorderPoint = record.reorder_point || 10;
                const color = value <= 0 ? 'red' : value <= reorderPoint ? 'orange' : 'green';
                return <span style={{ color }} className="font-bold text-xs persian-number">{persianNum}</span>;
+             }
+             if (String(field?.key || '') === 'schedule_variance_hours') {
+               const numericValue = Number(value || 0);
+               const varianceClass = numericValue > 0
+                 ? 'text-green-700 dark:text-green-400'
+                 : numericValue < 0
+                   ? 'text-red-700 dark:text-red-400'
+                   : 'text-gray-600 dark:text-gray-300';
+               return <span className={`text-xs font-semibold persian-number ${varianceClass}`}>{persianNum}</span>;
              }
              return <span className="text-xs text-gray-600 dark:text-gray-300 persian-number">{persianNum}</span>;
         }
@@ -957,10 +1147,22 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
              );
         }
         if (isKeyLikeField) {
-             return renderStableTextCell(
-               formatDisplayText(value),
-               "block w-full truncate text-leather-600 font-bold text-sm hover:underline"
-             );
+             const inlineTags = tagsField ? record?.[tagsField.key] : [];
+              if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
+                return renderStableTextCell(
+                  formatDisplayText(value),
+                  "block w-full truncate text-[13px] md:text-sm font-bold text-gray-700 dark:text-gray-200"
+                );
+              }
+              return (
+                <div className="flex min-h-[28px] w-full flex-col justify-center overflow-hidden">
+                  <OverflowTooltipText
+                    label={formatDisplayText(value)}
+                    className="block w-full truncate text-[13px] leading-4 font-bold text-gray-700 dark:text-gray-200"
+                  />
+                  {renderCompactTags(inlineTags)}
+                </div>
+              );
         }
         return <span className="block max-w-[220px] truncate text-xs text-gray-600 dark:text-gray-300">{value}</span>;
       }
@@ -1046,6 +1248,20 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   const activeColumnFilterBubbles = (() => {
     const fieldsMap = new Map(tableFields.map((field: any) => [field.key, field]));
+    const tagLabelById = new Map<string, string>();
+    Object.values(tagsMap || {}).forEach((recordTags) => {
+      if (!Array.isArray(recordTags)) return;
+      recordTags.forEach((tag: any) => {
+        const id = String(tag?.id || '').trim();
+        const title = String(tag?.title || tag?.label || '').trim();
+        if (id && title && !tagLabelById.has(id)) {
+          tagLabelById.set(id, title);
+        }
+      });
+    });
+    if (tagsField && !fieldsMap.has(tagsField.key)) {
+      fieldsMap.set(tagsField.key, tagsField);
+    }
     if (!fieldsMap.has('assignee_id') && (!canViewField || canViewField('assignee_id') !== false)) {
       fieldsMap.set('assignee_id', {
         key: 'assignee_id',
@@ -1059,7 +1275,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       if (!Array.isArray(values) || values.length === 0) return;
       const field: any = fieldsMap.get(fieldKey);
       const fieldLabel = field?.labels?.fa || fieldKey;
-      const options = field ? resolveFieldFilterOptions(field) || [] : [];
+      const options =
+        field?.type === FieldType.TAGS
+          ? ((resolvedTagFilterProps?.filters as Array<{ text: string; value: string }> | undefined) || [])
+          : (field ? resolveFieldFilterOptions(field) || [] : []);
 
       values.forEach((raw) => {
         if (raw === undefined || raw === null || raw === '') return;
@@ -1084,7 +1303,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           }
         } else if (options.length > 0) {
           const selected = options.find((opt) => String(opt.value) === rawValue);
-          if (selected) valueLabel = String(selected.text);
+          if (selected) {
+            valueLabel = String(selected.text);
+          } else if (field?.type === FieldType.TAGS) {
+            valueLabel = tagLabelById.get(rawValue) || rawValue;
+          }
+        } else if (field?.type === FieldType.TAGS) {
+          valueLabel = tagLabelById.get(rawValue) || rawValue;
         }
 
         bubbles.push({
@@ -1100,7 +1325,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   })();
 
   const filterColumnsByKey = useMemo(() => {
-    return new Map(
+    const map = new Map(
       columns
         .map((column) => {
           const key = (column as any).key ?? (column as any).dataIndex;
@@ -1108,7 +1333,11 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         })
         .filter(Boolean) as Array<[string, ColumnsType<any>[number]]>
     );
-  }, [columns]);
+    if (tagsField && resolvedTagFilterProps && !map.has(tagsField.key)) {
+      map.set(tagsField.key, resolvedTagFilterProps as ColumnsType<any>[number]);
+    }
+    return map;
+  }, [columns, resolvedTagFilterProps, tagsField]);
 
   const filteredData = useMemo(() => {
     const activeFilters = Object.entries(activeColumnFilters).filter(([, values]) => Array.isArray(values) && values.length > 0);
@@ -1147,20 +1376,28 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const root = rootRef.current;
     if (!root) return;
 
-    const isMobileViewport = window.innerWidth < 768;
-    const containerHeight = root.clientHeight;
+    const nextIsMobileViewport = window.innerWidth < 768;
+    setIsMobileViewport((prev) => (prev === nextIsMobileViewport ? prev : nextIsMobileViewport));
+
+    const viewportHeight = window.visualViewport?.height || window.innerHeight || 800;
+    const rootRect = root.getBoundingClientRect();
+    const parentHeight = root.parentElement?.clientHeight || 0;
+    const mobileFooterReserve = nextIsMobileViewport ? 96 : 0;
+    const viewportAvailableHeight = Math.max(0, viewportHeight - rootRect.top - mobileFooterReserve);
+    const containerHeight = Math.max(root.clientHeight, parentHeight, viewportAvailableHeight);
     if (!containerHeight) return;
 
     const filterBarHeight = filterBarRef.current?.offsetHeight || 0;
     const paginationEl = root.querySelector('.ant-pagination') as HTMLElement | null;
     const headerEl = root.querySelector('.ant-table-thead') as HTMLElement | null;
-    const paginationHeight = pagination === false ? 0 : (paginationEl?.offsetHeight || (isMobileViewport ? 60 : 52));
+    const paginationHeight = pagination === false ? 0 : (paginationEl?.offsetHeight || (nextIsMobileViewport ? 60 : 52));
     const headerHeight = headerEl?.offsetHeight || 44;
-    const safetyOffset = isMobileViewport ? 24 : 16;
-    const minBodyHeight = isMobileViewport ? 180 : 240;
+    const desktopPaginationReserve = pagination === false || nextIsMobileViewport ? 0 : 24;
+    const safetyOffset = nextIsMobileViewport ? 12 : 8;
+    const minBodyHeight = nextIsMobileViewport ? 220 : 280;
     const nextHeight = Math.max(
       minBodyHeight,
-      containerHeight - filterBarHeight - paginationHeight - headerHeight - safetyOffset
+      containerHeight - filterBarHeight - paginationHeight - desktopPaginationReserve - headerHeight - safetyOffset
     );
 
     setScrollHeight((prev) => (Math.abs(prev - nextHeight) > 1 ? nextHeight : prev));
@@ -1212,7 +1449,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     };
   }, [disableScroll, updateScrollHeight, filteredData.length, mergedFilterBubbles.length, columns.length, pagination]);
 
-  const tablePagination = buildSmartTablePagination(pagination);
+  const tablePagination = buildSmartTablePagination(pagination, isMobileViewport);
 
   return (
     <div
@@ -1251,14 +1488,15 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           ) : null}
         </div>
       ) : null}
-      <div className="smarttable-table-host flex min-h-0 flex-1 flex-col">
+      <div className="smarttable-table-host flex h-full min-h-0 flex-1 flex-col">
       <Table 
-          className="smarttable-table min-h-0"
+          className="smarttable-table h-full min-h-0"
           columns={columns} 
           dataSource={filteredData} 
           rowKey="id" 
           loading={loading} 
           size="small" 
+          style={{ height: '100%' }}
           tableLayout={tableLayout}
           pagination={tablePagination} 
           onChange={handleTableChange}

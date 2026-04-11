@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { getActiveChannelSettings } from './channelSettings';
+import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
 
 type SmsMode = 'rest' | 'soap';
 
@@ -38,6 +39,74 @@ type SendSmsViaGatewayArgs = {
   text: string;
   overrideSettings?: SmsSettings;
   allowDirectFallback?: boolean;
+  moduleId?: string;
+  recordId?: string;
+  customerId?: string;
+  title?: string;
+  provider?: string;
+  metadata?: Record<string, any>;
+  skipReportLog?: boolean;
+};
+
+type SmsLogRowRef = {
+  id: string;
+  recipient: string;
+};
+
+const normalizeMetadata = (value: unknown): Record<string, any> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return { ...(value as Record<string, any>) };
+};
+
+const createSmsPendingLogs = async ({
+  recipients,
+  messageText,
+  moduleId,
+  recordId,
+  customerId,
+  title,
+  provider,
+  metadata,
+}: {
+  recipients: string[];
+  messageText: string;
+  moduleId?: string;
+  recordId?: string;
+  customerId?: string;
+  title?: string;
+  provider?: string;
+  metadata?: Record<string, any>;
+}): Promise<SmsLogRowRef[]> => {
+  const rows: SmsLogRowRef[] = [];
+  const baseMetadata = normalizeMetadata(metadata);
+
+  for (const recipient of recipients) {
+    try {
+      const row = await createOutboundMessageLog({
+        channelType: 'sms',
+        provider: String(provider || 'meli_payamak'),
+        moduleId,
+        recordId,
+        customerId,
+        recipient,
+        title,
+        messageText,
+        metadata: {
+          ...baseMetadata,
+          channel: 'sms',
+        },
+      });
+
+      const id = String(row?.id || '').trim();
+      if (id) {
+        rows.push({ id, recipient });
+      }
+    } catch (error) {
+      console.warn('Could not create outbound SMS log row', error);
+    }
+  }
+
+  return rows;
 };
 
 const toMode = (value: unknown): SmsMode => (String(value || '').toLowerCase() === 'soap' ? 'soap' : 'rest');
@@ -241,6 +310,13 @@ export const sendSmsViaGateway = async ({
   text,
   overrideSettings,
   allowDirectFallback = true,
+  moduleId,
+  recordId,
+  customerId,
+  title,
+  provider,
+  metadata,
+  skipReportLog = false,
 }: SendSmsViaGatewayArgs): Promise<SmsGatewaySendResult> => {
   const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
   const messageText = String(text || '').trim();
@@ -252,26 +328,93 @@ export const sendSmsViaGateway = async ({
     throw new Error('متن پیامک خالی است.');
   }
 
+  const pendingLogRows = skipReportLog
+    ? []
+    : await createSmsPendingLogs({
+        recipients,
+        messageText,
+        moduleId,
+        recordId,
+        customerId,
+        title,
+        provider,
+        metadata,
+      });
+  const baseMetadata = normalizeMetadata(metadata);
+  const attemptedAt = new Date().toISOString();
+
   try {
-    return await invokeSmsFunction(recipients, messageText, overrideSettings);
-  } catch (edgeError: any) {
-    if (!allowDirectFallback) throw edgeError;
-    const rawMessage = String(edgeError?.message || edgeError || '').toLowerCase();
-    const shouldFallbackDirect =
-      rawMessage.includes('failed to fetch') ||
-      rawMessage.includes('network') ||
-      rawMessage.includes('fetcherror') ||
-      rawMessage.includes('functionsfetcherror') ||
-      rawMessage.includes('gateway timeout') ||
-      rawMessage.includes('http 502') ||
-      rawMessage.includes('http 503') ||
-      rawMessage.includes('http 504');
-    if (!shouldFallbackDirect) throw edgeError;
+    let sendResult: SmsGatewaySendResult;
+    try {
+      sendResult = await invokeSmsFunction(recipients, messageText, overrideSettings);
+    } catch (edgeError: any) {
+      if (!allowDirectFallback) throw edgeError;
+      const rawMessage = String(edgeError?.message || edgeError || '').toLowerCase();
+      const shouldFallbackDirect =
+        rawMessage.includes('failed to fetch') ||
+        rawMessage.includes('network') ||
+        rawMessage.includes('fetcherror') ||
+        rawMessage.includes('functionsfetcherror') ||
+        rawMessage.includes('gateway timeout') ||
+        rawMessage.includes('http 502') ||
+        rawMessage.includes('http 503') ||
+        rawMessage.includes('http 504');
+      if (!shouldFallbackDirect) throw edgeError;
+
+      const smsSettings = overrideSettings && Object.keys(overrideSettings).length > 0
+        ? overrideSettings
+        : await getActiveSmsSettings();
+      sendResult = await sendSmsDirect(recipients, messageText, smsSettings);
+    }
+
+    if (pendingLogRows.length > 0) {
+      const providerResultMap = new Map<string, SmsProviderResult>();
+      (sendResult?.provider_results || []).forEach((item) => {
+        const key = String(item?.recipient || '').trim();
+        if (key) providerResultMap.set(key, item);
+      });
+
+      for (const row of pendingLogRows) {
+        const providerResult = providerResultMap.get(row.recipient);
+        try {
+          await updateOutboundMessageStatus(row.id, 'sent', {
+            providerMessageId: String(providerResult?.result || '').trim() || null,
+            sentAt: attemptedAt,
+            metadata: {
+              ...baseMetadata,
+              channel: 'sms',
+              provider_method: String(sendResult?.provider_method || providerResult?.method || '').trim() || null,
+              provider_attempts: sendResult?.provider_attempts || [],
+              provider_result: String(providerResult?.result || '').trim() || null,
+              provider_raw: String(providerResult?.raw || '').trim() || null,
+              build: String(sendResult?.build || '').trim() || null,
+            },
+          });
+        } catch (error) {
+          console.warn('Could not update outbound SMS log row as sent', error);
+        }
+      }
+    }
+
+    return sendResult;
+  } catch (sendError: any) {
+    if (pendingLogRows.length > 0) {
+      const errorMessage = String(sendError?.message || sendError || 'SMS send failed');
+      for (const row of pendingLogRows) {
+        try {
+          await updateOutboundMessageStatus(row.id, 'failed', {
+            errorMessage,
+            sentAt: attemptedAt,
+            metadata: {
+              ...baseMetadata,
+              channel: 'sms',
+            },
+          });
+        } catch (error) {
+          console.warn('Could not update outbound SMS log row as failed', error);
+        }
+      }
+    }
+    throw sendError;
   }
-
-  const smsSettings = overrideSettings && Object.keys(overrideSettings).length > 0
-    ? overrideSettings
-    : await getActiveSmsSettings();
-
-  return await sendSmsDirect(recipients, messageText, smsSettings);
 };

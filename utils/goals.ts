@@ -352,8 +352,26 @@ const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
 };
 
 const DEFAULT_SALES_INVOICE_GOAL_SEED_KEY = 'sales_invoices_monthly_paid_total_v1';
+const DEFAULT_SALES_INVOICE_GOAL_CHECK_TTL_MS = 5 * 60_000;
+
+let defaultSalesInvoiceGoalCheckCache: {
+  checkedAt: number;
+  promise: Promise<void> | null;
+} = {
+  checkedAt: 0,
+  promise: null,
+};
 
 export const ensureDefaultSalesInvoiceGoal = async (options?: { userId?: string | null }) => {
+  const now = Date.now();
+  if (defaultSalesInvoiceGoalCheckCache.checkedAt > 0 && (now - defaultSalesInvoiceGoalCheckCache.checkedAt) < DEFAULT_SALES_INVOICE_GOAL_CHECK_TTL_MS) {
+    return;
+  }
+  if (defaultSalesInvoiceGoalCheckCache.promise) {
+    return defaultSalesInvoiceGoalCheckCache.promise;
+  }
+
+  const pending = (async () => {
   try {
     const { data: existingRows, error: existingError } = await supabase
       .from('goals')
@@ -411,6 +429,17 @@ export const ensureDefaultSalesInvoiceGoal = async (options?: { userId?: string 
     if (error) throw error;
   } catch {
     return;
+  }
+  })();
+
+  defaultSalesInvoiceGoalCheckCache.promise = pending;
+  try {
+    await pending;
+    defaultSalesInvoiceGoalCheckCache.checkedAt = Date.now();
+  } finally {
+    if (defaultSalesInvoiceGoalCheckCache.promise === pending) {
+      defaultSalesInvoiceGoalCheckCache.promise = null;
+    }
   }
 };
 

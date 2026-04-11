@@ -10,6 +10,7 @@ import {
   PaperClipOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
+import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 
 interface SharedNoteCardProps {
@@ -36,6 +37,7 @@ interface SharedNoteCardProps {
   onDelete?: () => void;
   onForward?: () => void;
   variant?: 'default' | 'ai';
+  renderTemplateBold?: boolean;
 }
 
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
@@ -62,7 +64,26 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onDelete,
   onForward,
   variant = 'default',
-}) => (
+  renderTemplateBold = false,
+}) => {
+  const renderText = (value: string) => {
+    if (!renderTemplateBold) return value;
+    const segments = parseNoteTemplateTextSegments(value);
+    if (segments.length === 0) return value;
+    return segments.map((segment, index) => (
+      segment.bold ? (
+        <strong key={`${index}-${segment.text}`} className="font-bold">
+          {segment.text}
+        </strong>
+      ) : (
+        <React.Fragment key={`${index}-${segment.text}`}>
+          {segment.text}
+        </React.Fragment>
+      )
+    ));
+  };
+
+  return (
   <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
       <Avatar
@@ -92,7 +113,9 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             <span className="font-medium text-gray-700 dark:text-gray-200">
               پاسخ به یادداشت "{replyAuthorName || 'کاربر'}":
             </span>{' '}
-            <span className="whitespace-pre-wrap">"{replyText}"</span>
+            <span className="whitespace-pre-wrap">
+              "{renderText(replyText)}"
+            </span>
           </div>
         ) : null}
 
@@ -114,7 +137,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
           </div>
         ) : (
           <div className="whitespace-pre-wrap text-[13px] leading-6 text-gray-800 dark:text-gray-200">
-            {text}
+            {renderText(text)}
           </div>
         )}
 
@@ -163,5 +186,6 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
     </div>
   </div>
 );
+};
 
 export default SharedNoteCard;

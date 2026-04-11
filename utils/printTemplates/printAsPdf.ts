@@ -205,7 +205,7 @@ const writeSuccessState = ({
     <div class="print-pdf-success">
       <strong>فایل PDF آماده شد.</strong>
       <span>اگر دانلود یا باز شدن فایل به صورت خودکار شروع نشد، از دکمه زیر استفاده کنید.</span>
-      <a id="pdf-download-link" href="${safePdfUrl}" download="${safeFilename}" target="_blank" rel="noopener">باز کردن / دانلود PDF</a>
+      <a id="pdf-download-link" href="${safePdfUrl}" download="${safeFilename}" target="_self" rel="noopener">باز کردن / دانلود PDF</a>
     </div>
     <script>
       window.setTimeout(function () {
@@ -251,6 +251,32 @@ const requestPdfBlob = async ({
   return response.blob();
 };
 
+export const generatePdfBlob = async (options: {
+  pageSize?: string;
+  sourceHtml?: string;
+  sourceNode?: HTMLElement | null;
+  title?: string;
+  filename?: string;
+}) => {
+  const sourceHtml = getSourceHtml(options).trim();
+  if (!sourceHtml) {
+    throw new Error('print_source_missing');
+  }
+
+  const documentHtml = await buildPrintDocumentHtml({
+    pageSize: options.pageSize,
+    sourceHtml,
+    title: options.title,
+  });
+
+  return requestPdfBlob({
+    documentHtml,
+    filename: options.filename,
+    pageSize: options.pageSize,
+    title: options.title,
+  });
+};
+
 export const prepareGeneratedPdfWindow = (title?: string) => {
   if (!shouldUseGeneratedPdfPrint()) return null;
 
@@ -270,20 +296,14 @@ export const printAsPdf = async (options: PrintAsPdfOptions) => {
   }
 
   try {
-    const documentHtml = await buildPrintDocumentHtml({
-      pageSize: options.pageSize,
-      sourceHtml,
-      title: options.title,
-    });
-
     const targetWindow =
       options.targetWindow && !options.targetWindow.closed ? options.targetWindow : null;
     if (targetWindow) ensureTargetWindowName(targetWindow);
 
-    const pdfBlob = await requestPdfBlob({
-      documentHtml,
+    const pdfBlob = await generatePdfBlob({
       filename: options.filename,
       pageSize: options.pageSize,
+      sourceHtml,
       title: options.title,
     });
 

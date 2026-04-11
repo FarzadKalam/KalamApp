@@ -9,6 +9,8 @@ interface PrintSectionProps {
   onClose: () => void;
   onPrint: () => void;
   onPreparePrint?: () => void;
+  onSendInternalPdf?: () => void | Promise<void>;
+  onSavePdfToRecord?: () => void | Promise<void>;
   onRefreshPreview?: () => void | Promise<void>;
   printTemplates: { id: string; title: string; description: string; isSystem?: boolean }[];
   selectedTemplateId: string;
@@ -48,6 +50,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onClose,
   onPrint,
   onPreparePrint,
+  onSendInternalPdf,
+  onSavePdfToRecord,
   onRefreshPreview,
   printTemplates,
   selectedTemplateId,
@@ -64,6 +68,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState('preview');
   const [refreshing, setRefreshing] = useState(false);
+  const [sendingInternal, setSendingInternal] = useState(false);
+  const [savingPdfToRecord, setSavingPdfToRecord] = useState(false);
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
@@ -191,6 +197,26 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     onClose();
   };
 
+  const handleSendInternalPdf = async () => {
+    if (!onSendInternalPdf) return;
+    setSendingInternal(true);
+    try {
+      await onSendInternalPdf();
+    } finally {
+      setSendingInternal(false);
+    }
+  };
+
+  const handleSavePdfToRecord = async () => {
+    if (!onSavePdfToRecord) return;
+    setSavingPdfToRecord(true);
+    try {
+      await onSavePdfToRecord();
+    } finally {
+      setSavingPdfToRecord(false);
+    }
+  };
+
   return (
     <>
       <Modal
@@ -198,6 +224,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         open={isPrintModalOpen}
         onCancel={handleCancel}
         onOk={handleRequestPrint}
+        footer={(_, { CancelBtn, OkBtn }) => (
+          <div className={`flex ${isMobile ? 'flex-col-reverse items-stretch gap-2' : 'items-center justify-end gap-2'}`}>
+            <CancelBtn />
+            {onSendInternalPdf ? (
+              <Button onClick={() => { void handleSendInternalPdf(); }} loading={sendingInternal}>
+                ارسال داخلی
+              </Button>
+            ) : null}
+            {onSavePdfToRecord ? (
+              <Button onClick={() => { void handleSavePdfToRecord(); }} loading={savingPdfToRecord}>
+                ذخیره در نرم افزار
+              </Button>
+            ) : null}
+            <OkBtn />
+          </div>
+        )}
         afterOpenChange={(open) => {
           if (open || !pendingPrintRef.current) return;
           pendingPrintRef.current = false;

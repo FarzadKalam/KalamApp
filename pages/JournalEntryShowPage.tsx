@@ -15,6 +15,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import PersianDatePicker from '../components/PersianDatePicker';
+import ProductionStagesField from '../components/ProductionStagesField';
 import HeaderActions from '../components/moduleShow/HeaderActions';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../utils/permissions';
@@ -1646,6 +1647,17 @@ const JournalEntryShowPage: React.FC = () => {
 
           {canEditDraft && <Button onClick={saveHeader}>ذخیره اطلاعات سند</Button>}
         </Form>
+      </Card>
+
+      <Card title="فرآیندها" className="rounded-2xl border border-gray-200 dark:border-gray-800 mb-4">
+        <ProductionStagesField
+          recordId={String(entry.id)}
+          moduleId="journal_entries"
+          readOnly
+          compact
+          cardCompact
+          forceProcessRecordMode
+        />
       </Card>
 
       <Card

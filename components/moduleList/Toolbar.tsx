@@ -43,7 +43,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onCalendarDateFieldChange,
 }) => {
   return (
-    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <div className="module-list-toolbar flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
       <div className="flex items-center gap-2 flex-1">
         <Input.Search
           placeholder="جستجو..."
@@ -57,6 +57,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
       <div className="flex w-full md:w-auto flex-col md:flex-row md:items-center gap-2">
         <div className="flex items-center gap-2">
           <Segmented
+            className="module-list-view-segmented"
             options={[
               { label: "جدول", value: ViewMode.LIST, icon: <TableOutlined /> },
               { label: "گرید", value: ViewMode.GRID, icon: <AppstoreOutlined /> },
@@ -72,7 +73,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         {viewMode === ViewMode.KANBAN && kanbanEnabled && (
           <div className="max-w-full overflow-x-auto no-scrollbar">
             <Segmented
-              className="min-w-max"
+              className="module-list-view-segmented min-w-max"
               options={kanbanGroupOptions}
               value={kanbanGroupBy || kanbanGroupOptions?.[0]?.value}
               onChange={(val) => onKanbanGroupChange(val as string)}
@@ -83,7 +84,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         {viewMode === ViewMode.CALENDAR && calendarEnabled && (
           <div className="max-w-full overflow-x-auto no-scrollbar">
             <Segmented
-              className="min-w-max"
+              className="module-list-view-segmented min-w-max"
               options={calendarDateFieldOptions}
               value={calendarDateField || calendarDateFieldOptions?.[0]?.value}
               onChange={(val) => onCalendarDateFieldChange(val as string)}
