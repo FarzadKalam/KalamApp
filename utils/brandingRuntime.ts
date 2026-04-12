@@ -115,15 +115,29 @@ const upsertFaviconLink = () => {
   return next;
 };
 
+const DEFAULT_FAVICON_PATH = "./favicon.svg";
+
+const resolveSafeFaviconHref = (iconUrl?: string | null) => {
+  const rawValue = String(iconUrl || "").trim();
+  if (!rawValue) return DEFAULT_FAVICON_PATH;
+  if (typeof window === "undefined") return DEFAULT_FAVICON_PATH;
+
+  try {
+    const resolved = new URL(rawValue, window.location.origin);
+    if (resolved.origin !== window.location.origin) {
+      return DEFAULT_FAVICON_PATH;
+    }
+    return resolved.href;
+  } catch {
+    return DEFAULT_FAVICON_PATH;
+  }
+};
+
 const applyFavicon = (iconUrl?: string | null) => {
   if (typeof document === "undefined") return;
   const favicon = upsertFaviconLink();
   if (!favicon) return;
-  if (iconUrl && iconUrl.trim()) {
-    favicon.href = iconUrl.trim();
-  } else {
-    favicon.removeAttribute("href");
-  }
+  favicon.href = resolveSafeFaviconHref(iconUrl);
 };
 
 export const readRuntimeBranding = (): BrandingConfig => {

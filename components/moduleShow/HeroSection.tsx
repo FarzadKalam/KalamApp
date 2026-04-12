@@ -248,7 +248,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <SafetyCertificateOutlined className="text-green-600" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">Ø§ÛŒØ¬Ø§Ø¯ Ú©Ù†Ù†Ø¯Ù‡</span>
+                  <span className="opacity-70">ایجاد کننده</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300">{resolveActorLabel(data?.created_by_name, data?.created_by)}</span>
                 </div>
               </div>
@@ -258,7 +258,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <ClockCircleOutlined className="text-blue-500" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">Ø²Ù…Ø§Ù† Ø§ÛŒØ¬Ø§Ø¯</span>
+                  <span className="opacity-70">زمان ایجاد</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300 dir-ltr">
                     {renderDate(data.created_at)}
                   </span>
@@ -270,7 +270,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <EditOutlined className="text-orange-500" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">Ø¢Ø®Ø±ÛŒÙ† ÙˆÛŒØ±Ø§ÛŒØ´Ú¯Ø±</span>
+                  <span className="opacity-70">آخرین ویرایشگر</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300">{resolveActorLabel(data?.updated_by_name, data?.updated_by)}</span>
                 </div>
               </div>
@@ -280,7 +280,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <HistoryOutlined className="text-purple-500" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">Ø²Ù…Ø§Ù† ÙˆÛŒØ±Ø§ÛŒØ´</span>
+                  <span className="opacity-70">زمان ویرایش</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300 dir-ltr">
                     {renderDate(data.updated_at)}
                   </span>

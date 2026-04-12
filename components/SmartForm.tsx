@@ -63,6 +63,68 @@ const isMissingAuditColumnError = (error: any) => {
     || text.includes('updated_by')
   );
 };
+const isMissingColumnLikeError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  if (code === '42703' || code === 'PGRST204' || code === 'PGRST200') return true;
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return text.includes('column') || text.includes('schema cache') || text.includes('does not exist');
+};
+const extractMissingColumnName = (error: any): string | null => {
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  if (!text) return null;
+  const patterns = [
+    /column\s+"([^"]+)"/i,
+    /column\s+'([^']+)'/i,
+    /could not find the\s+'([^']+)'\s+column/i,
+    /([a-z0-9_]+)\s+does not exist/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return null;
+};
+const omitColumnIfPresent = (payload: Record<string, any>, column: string | null) => {
+  if (!column) return payload;
+  if (!Object.prototype.hasOwnProperty.call(payload, column)) return payload;
+  const next = { ...payload };
+  delete next[column];
+  return next;
+};
+const buildErrorDebugText = (error: any) => {
+  const code = String(error?.code || '').trim();
+  const message = String(error?.message || '').trim();
+  const details = String(error?.details || '').trim();
+  const hint = String(error?.hint || '').trim();
+  return [code, message, details, hint].filter(Boolean).join(' | ');
+};
+const buildMinimalSupplierPayload = (payload: Record<string, any>) => {
+  const allowedKeys = new Set([
+    'business_name',
+    'first_name',
+    'last_name',
+    'mobile_1',
+    'mobile_2',
+    'phone',
+    'prefix',
+    'province',
+    'city',
+    'address',
+    'location',
+    'website',
+    'supply_type',
+    'rank',
+    'image_url',
+    'created_by',
+    'updated_by',
+    'system_code',
+  ]);
+  return Object.keys(payload || {}).reduce<Record<string, any>>((acc, key) => {
+    if (!allowedKeys.has(key)) return acc;
+    acc[key] = payload[key];
+    return acc;
+  }, {});
+};
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || '').trim() === '57014'
   || String(error?.message || '').toLowerCase().includes('statement timeout');
@@ -1327,6 +1389,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
           }
         }
       }
+      if (module.id === 'suppliers' && Array.isArray(values?.rank)) {
+        values.rank = values.rank.map((item: any) => String(item || '').trim()).filter(Boolean).join(',');
+      }
       if (module.id === 'products') {
         delete values.product_inventory;
       }
@@ -1418,11 +1483,23 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (mode === 'create' && supportsSystemCode(module.id) && !payload.system_code) {
             payload.system_code = await buildClientFallbackSystemCode(supabase, module.id, module.table);
           }
-          const auditedPayload = withAuditFields(payload, mode);
+          let writablePayload = { ...payload };
+          let auditedPayload = withAuditFields(writablePayload, mode);
           if (mode === 'update' && targetRecordId) {
             let result = await supabase.from(module.table).update(auditedPayload).eq('id', targetRecordId);
             if (result.error && isMissingAuditColumnError(result.error)) {
-              result = await supabase.from(module.table).update(payload).eq('id', targetRecordId);
+              result = await supabase.from(module.table).update(writablePayload).eq('id', targetRecordId);
+            }
+            while (result.error && isMissingColumnLikeError(result.error)) {
+              const missingColumn = extractMissingColumnName(result.error);
+              const nextPayload = omitColumnIfPresent(writablePayload, missingColumn);
+              if (nextPayload === writablePayload) break;
+              writablePayload = nextPayload;
+              auditedPayload = withAuditFields(writablePayload, mode);
+              result = await supabase.from(module.table).update(auditedPayload).eq('id', targetRecordId);
+              if (result.error && isMissingAuditColumnError(result.error)) {
+                result = await supabase.from(module.table).update(writablePayload).eq('id', targetRecordId);
+              }
             }
             return result;
           }
@@ -1435,9 +1512,28 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
             insertResult = await supabase
               .from(module.table)
-              .insert(payload)
+              .insert(writablePayload)
               .select('id')
               .single();
+          }
+          while (insertResult.error && isMissingColumnLikeError(insertResult.error)) {
+            const missingColumn = extractMissingColumnName(insertResult.error);
+            const nextPayload = omitColumnIfPresent(writablePayload, missingColumn);
+            if (nextPayload === writablePayload) break;
+            writablePayload = nextPayload;
+            auditedPayload = withAuditFields(writablePayload, mode);
+            insertResult = await supabase
+              .from(module.table)
+              .insert(auditedPayload)
+              .select('id')
+              .single();
+            if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+              insertResult = await supabase
+                .from(module.table)
+                .insert(writablePayload)
+                .select('id')
+                .single();
+            }
           }
           if (
             insertResult.error
@@ -1445,7 +1541,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             && (isStatementTimeoutError(insertResult.error) || isDuplicateSystemCodeError(insertResult.error))
           ) {
             const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, module.id, module.table);
-            const payloadWithSystemCode = { ...payload, system_code: fallbackSystemCode };
+            const payloadWithSystemCode = { ...writablePayload, system_code: fallbackSystemCode };
             const auditedPayloadWithSystemCode = withAuditFields(payloadWithSystemCode, mode);
 
             insertResult = await supabase
@@ -1460,6 +1556,44 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 .insert(payloadWithSystemCode)
                 .select('id')
                 .single();
+            }
+          }
+          if (insertResult.error && module.id === 'suppliers') {
+            let minimalPayload = buildMinimalSupplierPayload(writablePayload);
+            let minimalAuditedPayload = withAuditFields(minimalPayload, mode);
+            let minimalInsertResult = await supabase
+              .from(module.table)
+              .insert(minimalAuditedPayload)
+              .select('id')
+              .single();
+            if (minimalInsertResult.error && isMissingAuditColumnError(minimalInsertResult.error)) {
+              minimalInsertResult = await supabase
+                .from(module.table)
+                .insert(minimalPayload)
+                .select('id')
+                .single();
+            }
+            while (minimalInsertResult.error && isMissingColumnLikeError(minimalInsertResult.error)) {
+              const missingColumn = extractMissingColumnName(minimalInsertResult.error);
+              const nextPayload = omitColumnIfPresent(minimalPayload, missingColumn);
+              if (nextPayload === minimalPayload) break;
+              minimalPayload = nextPayload;
+              minimalAuditedPayload = withAuditFields(minimalPayload, mode);
+              minimalInsertResult = await supabase
+                .from(module.table)
+                .insert(minimalAuditedPayload)
+                .select('id')
+                .single();
+              if (minimalInsertResult.error && isMissingAuditColumnError(minimalInsertResult.error)) {
+                minimalInsertResult = await supabase
+                  .from(module.table)
+                  .insert(minimalPayload)
+                  .select('id')
+                  .single();
+              }
+            }
+            if (!minimalInsertResult.error) {
+              insertResult = minimalInsertResult as any;
             }
           }
           return insertResult;
@@ -1582,7 +1716,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
         onCancel();
       }
     } catch (err: any) {
-      messageApi.error(toFaErrorMessage(err, 'ثبت اطلاعات ناموفق بود'));
+      const baseMessage = toFaErrorMessage(err, 'ثبت اطلاعات ناموفق بود');
+      const debugText = buildErrorDebugText(err);
+      if (module.id === 'suppliers' && debugText) {
+        messageApi.error(`${baseMessage}\n${debugText}`);
+      } else {
+        messageApi.error(baseMessage);
+      }
+      if (module.id === 'suppliers') {
+        console.error('Supplier create/update failed:', {
+          moduleId: module.id,
+          error: err,
+          debugText,
+        });
+      }
     } finally {
       setLoading(false);
     }

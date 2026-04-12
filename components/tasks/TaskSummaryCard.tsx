@@ -1,6 +1,6 @@
 import React from 'react';
 import { InputNumber, Select } from 'antd';
-import { AppstoreOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, FileOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import ProductionStagesField from '../ProductionStagesField';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -43,6 +43,9 @@ const toNumber = (value: any) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const isVideoUrl = (value: unknown) => /\.(mp4|webm|ogg|mov|m4v|avi|mkv)(\?|#|$)/i.test(String(value || '').trim());
+const isImageUrl = (value: unknown) => /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif)(\?|#|$)/i.test(String(value || '').trim());
+
 const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   task,
   statusOptions,
@@ -84,6 +87,8 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   );
 
   const canEditProducedQty = !['todo', 'pending'].includes(String(task?.status || '').toLowerCase());
+  const taskMainFileUrl = String(task?.image_url || '').trim();
+  const taskMainFileName = taskMainFileUrl.split('?')[0].split('/').pop() || 'file';
   const assigneeId = String(getResolvedAssigneeId(task) || '');
   const assigneeLabel = task.assignee_type === 'role'
     ? (roleNameMap[assigneeId] || 'نقش')
@@ -138,13 +143,29 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
         </div>
 
         <div className="mt-3 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 h-32">
-          {String(task?.image_url || '').trim() ? (
-            <img
-              src={String(task.image_url)}
-              alt={String(task?.name || 'task-image')}
-              className="h-full w-full object-cover"
-              loading="lazy"
-            />
+          {taskMainFileUrl ? (
+            isVideoUrl(taskMainFileUrl) ? (
+              <video
+                src={taskMainFileUrl}
+                className="h-full w-full object-cover"
+                preload="metadata"
+                controls
+              />
+            ) : isImageUrl(taskMainFileUrl) ? (
+              <img
+                src={taskMainFileUrl}
+                alt={String(task?.name || 'task-image')}
+                className="h-full w-full object-cover"
+                loading="lazy"
+              />
+            ) : (
+              <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-gray-50 to-gray-200 text-gray-600 dark:from-gray-800 dark:to-gray-900 dark:text-gray-200">
+                <FileOutlined className="text-xl opacity-70" />
+                <span className="max-w-[90%] truncate text-[11px]" title={taskMainFileName}>
+                  {toPersianNumber(String(taskMainFileName))}
+                </span>
+              </div>
+            )
           ) : (
             <div className="flex h-full w-full items-center justify-center text-gray-400">
               <AppstoreOutlined className="text-2xl opacity-40" />

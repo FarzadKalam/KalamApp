@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
   DeleteOutlined,
   PlusOutlined,
+  SnippetsOutlined,
 } from '@ant-design/icons';
 import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
+import MessageComposerModal from '../MessageComposerModal';
 import PersianDatePicker from '../PersianDatePicker';
 import { MODULES } from '../../moduleRegistry';
 import {
@@ -135,6 +137,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   disabled = false,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
   const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
 
   const commonSelectProps = {
@@ -218,16 +221,59 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ]).values()),
     [additionalRecipientFieldOptions, assigneeRecipientFieldOptions]
   );
-  const assigneeDirectoryOptions = useMemo(
+  const assigneeDirectoryOptions = useMemo(() => {
+    const optionsByValue = new Map<string, { label: string; value: string }>();
+    Object.entries(relationOptions || {}).forEach(([fieldKey, items]) => {
+      const normalizedFieldKey = String(fieldKey || '').trim();
+      const isAssigneeField =
+        normalizedFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
+        || normalizedFieldKey === `__task__${WORKFLOW_ASSIGNEE_FIELD_KEY}`
+        || normalizedFieldKey.endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`)
+        || normalizedFieldKey.endsWith(`::${WORKFLOW_ASSIGNEE_FIELD_KEY}`);
+      if (!isAssigneeField) return;
+      (Array.isArray(items) ? items : []).forEach((item) => {
+        const value = String(item?.value || '').trim();
+        const label = String(item?.label || item?.value || '').trim();
+        if (!value || !label || optionsByValue.has(value)) return;
+        optionsByValue.set(value, { label, value });
+      });
+    });
+    return Array.from(optionsByValue.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+  }, [relationOptions]);
+  const templateVariableOptions = useMemo(
     () =>
-      (relationOptions?.[WORKFLOW_ASSIGNEE_FIELD_KEY] || [])
-        .map((item) => ({
-          label: String(item?.label || item?.value || ''),
-          value: String(item?.value || ''),
-        }))
-        .filter((item) => item.value),
-    [relationOptions]
+      (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
+        .filter((field) => !!String(field?.key || '').trim())
+        .map((field) => {
+          const key = String(field?.key || '').trim();
+          return {
+            key,
+            label: String(field?.labels?.fa || field?.key || '').trim() || key,
+            token: `{{${key}}}`,
+          };
+        }),
+    [currentModuleFields, variableFields]
   );
+  const botRecipientFieldOptions = useMemo(() => {
+    const optionsByValue = new Map<string, { label: string; value: string }>();
+    recipientFieldOptions.forEach((item) => optionsByValue.set(String(item.value), item));
+    communicationFieldSource.forEach((field) => {
+      const fieldKey = String(field?.key || '').trim();
+      if (!fieldKey) return;
+      const relationTarget = String(field?.relationConfig?.targetModule || '').trim();
+      const isCounterpartyField =
+        relationTarget === 'customers'
+        || relationTarget === 'suppliers'
+        || fieldKey === 'customer_id'
+        || fieldKey === 'supplier_id'
+        || fieldKey === 'related_customer'
+        || fieldKey === 'related_supplier'
+        || /customer|supplier/i.test(fieldKey);
+      if (!isCounterpartyField || optionsByValue.has(fieldKey)) return;
+      optionsByValue.set(fieldKey, { label: getFieldLabel(field), value: fieldKey });
+    });
+    return Array.from(optionsByValue.values());
+  }, [communicationFieldSource, recipientFieldOptions]);
   const noteAttachmentFieldOptions = useMemo(() => {
     const optionsByValue = new Map<string, { label: string; value: string }>();
     const addOption = (value: string, label: string) => {
@@ -366,6 +412,32 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   const removeAction = (id: string) => {
     onChange(safeValue.filter((item) => item.id !== id));
   };
+
+  const appendTemplateTextToActionField = useCallback((actionId: string, fieldKey: string, insertedText: string) => {
+    const normalizedText = String(insertedText || '');
+    if (!normalizedText) return;
+    const action = safeValue.find((item) => item.id === actionId);
+    const currentValue = String(action?.config?.[fieldKey] || '');
+    const nextValue = currentValue
+      ? `${currentValue}${currentValue.endsWith('\n') ? '' : '\n'}${normalizedText}`
+      : normalizedText;
+    updateActionConfig(actionId, { [fieldKey]: nextValue });
+  }, [safeValue]);
+
+  const openTemplateModal = useCallback((actionId: string, fieldKey: string, title: string) => {
+    setTemplateModalTarget({ actionId, fieldKey, title });
+  }, []);
+
+  const renderMessageTemplateButton = useCallback((actionId: string, fieldKey: string, title: string) => (
+    <Button
+      size="small"
+      icon={<SnippetsOutlined />}
+      disabled={disabled}
+      onClick={() => openTemplateModal(actionId, fieldKey, title)}
+    >
+      پیام‌های آماده
+    </Button>
+  ), [disabled, openTemplateModal]);
 
   const moveAction = (fromIndex: number, direction: -1 | 1) => {
     const toIndex = fromIndex + direction;
@@ -731,7 +803,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               options={recipientFieldOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder="Note recipients from fields"
+              placeholder="گیرنده‌های یادداشت از روی فیلدها"
               className="w-full"
               maxTagCount="responsive"
             />
@@ -742,12 +814,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               options={assigneeDirectoryOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="Recipient selection (optional)"
+              placeholder="انتخاب کاربر/نقش تکمیلی (اختیاری)"
               className="w-full"
               maxTagCount="responsive"
             />
           </div>
-          <div className="text-xs text-gray-500">Attachment/image fields</div>
+          <div className="text-xs text-gray-500">فیلدهای تصویر/فایل پیوست</div>
           <Select
             {...commonSelectProps}
             mode="multiple"
@@ -755,18 +827,21 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             disabled={disabled || noteAttachmentFieldOptions.length === 0}
             options={noteAttachmentFieldOptions}
             onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
-            placeholder={noteAttachmentFieldOptions.length > 0 ? 'Attachment/image fields' : 'No related image fields found'}
+            placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
             className="w-full"
             maxTagCount="responsive"
           />
+          <div className="flex justify-end">
+            {renderMessageTemplateButton(action.id, 'note_text', 'پیام‌های آماده یادداشت')}
+          </div>
           <Input.TextArea
             rows={4}
             value={config.note_text}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { note_text: e.target.value })}
-            placeholder="Note text"
+            placeholder="متن یادداشت"
           />
-          {renderVariableTools(action, [{ key: 'note_text', label: 'Note text' }])}
+          {renderVariableTools(action, [{ key: 'note_text', label: 'متن یادداشت' }])}
         </div>
       );
     }
@@ -789,7 +864,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               options={smsRecipientOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder="Phone destination fields"
+              placeholder="فیلدهای مقصد شماره تماس"
             />
             <Select
               {...commonSelectProps}
@@ -798,7 +873,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               options={assigneeDirectoryOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="Recipient selection (optional)"
+              placeholder="انتخاب کاربر/نقش تکمیلی (اختیاری)"
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -809,17 +884,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               onChange={(nextVal) => updateActionConfig(action.id, { manual_numbers: nextVal })}
               tokenSeparators={[',', ';', ' ']}
-              placeholder="Manual phone numbers"
+              placeholder="شماره‌های دستی"
             />
+          </div>
+          <div className="flex justify-end">
+            {renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده پیامک')}
           </div>
           <Input.TextArea
             rows={4}
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
-            placeholder="SMS text"
+            placeholder="متن پیامک"
           />
-          {renderVariableTools(action, [{ key: 'message', label: 'SMS text' }])}
+          {renderVariableTools(action, [{ key: 'message', label: 'متن پیامک' }])}
         </div>
       );
     }
@@ -860,6 +938,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             onChange={(e) => updateActionConfig(action.id, { subject: e.target.value })}
             placeholder="موضوع ایمیل"
           />
+          <div className="flex justify-end">
+            {renderMessageTemplateButton(action.id, 'body', 'پیام‌های آماده ایمیل')}
+          </div>
           <Input.TextArea
             rows={4}
             value={config.body}
@@ -877,13 +958,25 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
     if (actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
       const isRubika = actionType === 'send_rubika_bot';
-      const providerLabel = isRubika ? 'Rubika' : 'Bale';
+      const providerLabel = isRubika ? 'روبیکا' : 'بله';
 
       return (
         <div className="space-y-2">
           <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-            گیرنده پیام به‌صورت خودکار از اتصال بات مشتری/تامین‌کننده رکورد جاری انتخاب می‌شود.
+            اگر مقصدی انتخاب نکنید، گیرنده از اتصال بات مشتری/تامین‌کننده رکورد جاری تشخیص داده می‌شود.
           </div>
+          {isRubika ? (
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+              disabled={disabled}
+              options={botRecipientFieldOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+              placeholder="مشتری/تامین‌کننده/گیرنده‌های مرتبط (اختیاری)"
+              maxTagCount="responsive"
+            />
+          ) : null}
           <Select
             {...commonSelectProps}
             mode="multiple"
@@ -891,24 +984,28 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             disabled={disabled}
             options={assigneeDirectoryOptions}
             onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-            placeholder="گیرنده‌های تکمیلی (اختیاری)"
+            placeholder="کاربر/نقش تکمیلی (اختیاری)"
+            maxTagCount="responsive"
           />
           <Input
             value={config.title}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
-            placeholder={`Message title (${providerLabel})`}
+            placeholder={`عنوان پیام (${providerLabel})`}
           />
+          <div className="flex justify-end">
+            {renderMessageTemplateButton(action.id, 'message', `پیام‌های آماده ${providerLabel}`)}
+          </div>
           <Input.TextArea
             rows={4}
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
-            placeholder={`Message text (${providerLabel})`}
+            placeholder={`متن پیام (${providerLabel})`}
           />
           {renderVariableTools(action, [
-            { key: 'title', label: `Message title (${providerLabel})` },
-            { key: 'message', label: `Message text (${providerLabel})` },
+            { key: 'title', label: `عنوان پیام (${providerLabel})` },
+            { key: 'message', label: `متن پیام (${providerLabel})` },
           ])}
         </div>
       );
@@ -1298,6 +1395,23 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       <Button type="dashed" icon={<PlusOutlined />} onClick={addAction} disabled={disabled}>
         افزودن اقدام
       </Button>
+      {templateModalTarget ? (
+        <MessageComposerModal
+          open
+          mode="template"
+          moduleId={currentModuleId || null}
+          templateOnlyTitle={templateModalTarget.title}
+          templateVariableOptions={templateVariableOptions}
+          onCancel={() => setTemplateModalTarget(null)}
+          onApplyTemplate={(value) => {
+            appendTemplateTextToActionField(templateModalTarget.actionId, templateModalTarget.fieldKey, value);
+            setTemplateModalTarget(null);
+          }}
+          onInsertVariable={(token) => {
+            appendTemplateTextToActionField(templateModalTarget.actionId, templateModalTarget.fieldKey, token);
+          }}
+        />
+      ) : null}
     </div>
   );
 };

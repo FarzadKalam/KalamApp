@@ -56,7 +56,6 @@ const BLOCKS = {
         title: 'قیمت واحد',
         type: FieldType.PRICE,
         width: 150,
-        readonly: true,
       },
       {
         key: 'discount',

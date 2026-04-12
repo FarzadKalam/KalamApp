@@ -135,7 +135,10 @@ const UploadProgressOverlay: React.FC = () => {
           </button>
         </div>
 
-        <div className="max-h-[55vh] overflow-y-auto px-3 py-3">
+        <div
+          className="max-h-[55vh] overflow-y-auto px-3 py-3"
+          style={{ scrollbarGutter: 'stable both-edges', overscrollBehavior: 'contain' }}
+        >
           <div className="flex flex-col gap-2.5">
             {notifications.map((item) => {
               const icon = item.kind === 'note'

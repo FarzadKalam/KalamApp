@@ -3,6 +3,7 @@ import { App } from 'antd';
 import { supabase } from '../../supabaseClient';
 import ProductionStagesField from '../ProductionStagesField';
 import { OPEN_TASK_PROCESS_MODAL_EVENT } from '../../utils/taskProcessModalEvents';
+import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 
 type TaskProcessTarget = {
   moduleId: string;
@@ -37,7 +38,21 @@ const resolveTaskProcessTarget = (task: any): TaskProcessTarget | null => {
   };
 };
 
-const TASK_MODAL_SELECT = 'id,name,title,status,related_to_module,related_production_order,project_id,marketing_lead_id,related_customer,related_supplier,related_invoice,purchase_invoice_id,production_line_id';
+const TASK_MODAL_SELECT_COLUMNS = [
+  'id',
+  'name',
+  'title',
+  'status',
+  'related_to_module',
+  'related_production_order',
+  'project_id',
+  'marketing_lead_id',
+  'related_customer',
+  'related_supplier',
+  'related_invoice',
+  'purchase_invoice_id',
+  'production_line_id',
+] as const;
 
 const GlobalTaskProcessModalHost: React.FC = () => {
   const { message } = App.useApp();
@@ -58,12 +73,18 @@ const GlobalTaskProcessModalHost: React.FC = () => {
       if (!mountedRef.current) return;
       setLoading(true);
       try {
-        const { data, error } = await supabase
-          .from('tasks')
-          .select(TASK_MODAL_SELECT)
-          .eq('id', resolvedTaskId)
-          .maybeSingle();
-        if (error) throw error;
+        const result = await runSelectWithCompatibleColumns<any>({
+          cacheKey: 'tasks:modal',
+          columns: TASK_MODAL_SELECT_COLUMNS,
+          execute: (selectExpr) =>
+            supabase
+              .from('tasks')
+              .select(selectExpr)
+              .eq('id', resolvedTaskId)
+              .maybeSingle(),
+        });
+        if (result.error) throw result.error;
+        const data = result.data;
         const nextTask = data || providedTask;
         if (!nextTask) {
           message.warning('فعالیت موردنظر پیدا نشد.');

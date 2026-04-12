@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient';
 import { sendSmsViaGateway } from './smsGateway';
 
 const NOTE_OPTIONAL_INSERT_COLUMNS = ['author_name', 'metadata', 'reply_to', 'mention_role_ids', 'mention_user_ids'] as const;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const omitKey = <T extends Record<string, any>>(value: T, key: string): T => {
   const next = { ...value };
@@ -31,8 +32,39 @@ const normalizePhone = (value: any): string => {
 
 const isValidIranMobile = (phone: string) => /^09\d{9}$/.test(String(phone || ''));
 
+const normalizeUuidArray = (value: any): string[] => {
+  const rawArray = Array.isArray(value)
+    ? value
+    : (typeof value === 'string'
+      ? value.replace(/^\{|\}$/g, '').split(',')
+      : []);
+  return Array.from(new Set(
+    rawArray
+      .map((item: any) => String(item || '').replace(/"/g, '').trim())
+      .filter((item) => UUID_PATTERN.test(item))
+  ));
+};
+
+const sanitizeNoteInsertRow = (row: Record<string, any>) => {
+  const next = { ...row };
+  if (!Object.prototype.hasOwnProperty.call(next, 'metadata') || next.metadata == null) {
+    next.metadata = {};
+  }
+  if (Object.prototype.hasOwnProperty.call(next, 'mention_user_ids')) {
+    next.mention_user_ids = normalizeUuidArray(next.mention_user_ids);
+  }
+  if (Object.prototype.hasOwnProperty.call(next, 'mention_role_ids')) {
+    next.mention_role_ids = normalizeUuidArray(next.mention_role_ids);
+  }
+  if (Object.prototype.hasOwnProperty.call(next, 'reply_to')) {
+    const replyTo = String(next.reply_to || '').trim();
+    next.reply_to = UUID_PATTERN.test(replyTo) ? replyTo : null;
+  }
+  return next;
+};
+
 export const insertNotesWithFallback = async (rows: Record<string, any>[]) => {
-  let payloads = rows.map((row) => ({ ...row }));
+  let payloads = rows.map((row) => sanitizeNoteInsertRow({ ...row }));
   const omittedColumns = new Set<string>();
 
   while (true) {

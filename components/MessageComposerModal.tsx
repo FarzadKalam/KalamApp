@@ -44,6 +44,7 @@ type MessageComposerModalProps = {
   templateOnlyTitle?: string;
   onApplyTemplate?: (value: string) => void;
   onInsertVariable?: (token: string) => void;
+  templateVariableOptions?: Array<{ key: string; label: string; token: string }>;
 };
 
 const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
@@ -57,6 +58,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   templateOnlyTitle,
   onApplyTemplate,
   onInsertVariable,
+  templateVariableOptions,
 }) => {
   const { message: msg } = App.useApp();
   const messageInputRef = useRef<any>(null);
@@ -119,12 +121,23 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   }, [activeBots, botTargets]);
 
   const variableOptions = useMemo(() => {
-    return getMessageTemplateVariables(moduleId, record).map((item) => ({
-      label: `${item.label} (${item.key})`,
-      value: item.token,
-      searchText: `${item.label} ${item.key} ${item.token}`.toLowerCase(),
-    }));
-  }, [moduleId, record]);
+    const optionsByToken = new Map<string, { label: string; value: string; searchText: string }>();
+    [
+      ...getMessageTemplateVariables(moduleId, record),
+      ...(Array.isArray(templateVariableOptions) ? templateVariableOptions : []),
+    ].forEach((item) => {
+      const token = String(item?.token || '').trim();
+      const key = String(item?.key || '').trim();
+      const label = String(item?.label || key || token).trim();
+      if (!token || optionsByToken.has(token)) return;
+      optionsByToken.set(token, {
+        label: `${label} (${key || token})`,
+        value: token,
+        searchText: `${label} ${key} ${token}`.toLowerCase(),
+      });
+    });
+    return Array.from(optionsByToken.values());
+  }, [moduleId, record, templateVariableOptions]);
 
   const selectPopupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
   const commonSelectFilter = (input: string, option?: { label?: unknown; searchText?: unknown }) =>

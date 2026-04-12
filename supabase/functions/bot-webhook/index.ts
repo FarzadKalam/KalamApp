@@ -80,6 +80,40 @@ const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: strin
   return `${normalizedBase}${normalizedPath}`;
 };
 
+const pickPublicApiBaseUrl = (requestUrl: string, headers?: Headers, settings?: Record<string, any>) => {
+  const candidates = [
+    settings?.public_api_base_url,
+    settings?.public_supabase_url,
+    Deno.env.get('BOT_WEBHOOK_PUBLIC_BASE_URL'),
+    Deno.env.get('PUBLIC_API_BASE_URL'),
+    Deno.env.get('VITE_SUPABASE_URL'),
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeBaseUrl(String(candidate || '').trim());
+    if (normalized) return normalized;
+  }
+
+  const forwardedProto = pick(headers?.get('x-forwarded-proto'), headers?.get('x-forwarded-protocol'));
+  const forwardedHost = pick(headers?.get('x-forwarded-host')).split(',')[0]?.trim();
+  if (forwardedProto && forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+  }
+
+  const host = pick(headers?.get('host')).split(',')[0]?.trim();
+  if (host) {
+    return `https://${host}`.replace(/\/+$/, '');
+  }
+
+  try {
+    const origin = new URL(String(requestUrl || '')).origin.replace(/\/+$/, '');
+    if (origin) return origin;
+  } catch {
+    // ignore invalid request url
+  }
+
+  return '';
+};
+
 const getDisplayName = (obj: Record<string, any> | null | undefined) => {
   if (!obj || typeof obj !== 'object') return '';
   const first = String(obj.first_name || obj.firstName || '').trim();
@@ -91,13 +125,23 @@ const getDisplayName = (obj: Record<string, any> | null | undefined) => {
 
 const extractChatTitle = (payload: Record<string, any>, message: Record<string, any> | null) => {
   const rubikaUpdate = payload?.update || null;
+  const rubikaRootMessage = payload?.new_message || null;
   const rubikaNewMessage = rubikaUpdate?.new_message || null;
   const rubikaInlineMessage = payload?.inline_message || null;
   return pick(
     message?.chat?.title,
     message?.chat?.name,
+    message?.chat?.username,
+    message?.chat?.first_name,
+    message?.chat?.last_name,
+    message?.chat?.chat_title,
+    message?.chat?.group_title,
     message?.chat_title,
     message?.group_title,
+    rubikaRootMessage?.chat?.title,
+    rubikaRootMessage?.chat?.chat_title,
+    rubikaRootMessage?.chat_title,
+    rubikaRootMessage?.group_title,
     rubikaUpdate?.chat_title,
     rubikaUpdate?.group_title,
     rubikaNewMessage?.chat?.title,
@@ -124,6 +168,7 @@ const getPathChannelAndSecret = (pathname: string) => {
 
 const extractContact = (payload: Record<string, any>) => {
   const rubikaUpdate = payload?.update || null;
+  const rubikaRootMessage = payload?.new_message || null;
   const rubikaNewMessage = rubikaUpdate?.new_message || null;
   const rubikaInlineMessage = payload?.inline_message || null;
   const callbackQuery = payload?.callback_query || payload?.body?.callback_query || payload?.data?.callback_query || null;
@@ -136,6 +181,7 @@ const extractContact = (payload: Record<string, any>) => {
     payload?.update?.message ||
     callbackQuery?.message ||
     rubikaNewMessage ||
+    rubikaRootMessage ||
     rubikaInlineMessage ||
     null;
 
@@ -144,6 +190,7 @@ const extractContact = (payload: Record<string, any>) => {
     message?.sender ||
     callbackQuery?.from ||
     rubikaUpdate?.sender ||
+    rubikaRootMessage?.sender ||
     rubikaInlineMessage?.sender ||
     payload?.from ||
     payload?.sender ||
@@ -161,6 +208,7 @@ const extractContact = (payload: Record<string, any>) => {
 
   const chatId = pick(
     message?.chat?.id,
+    message?.chat?.chat_id,
     message?.chat_id,
     message?.object_guid,
     message?.objectGuid,
@@ -169,6 +217,8 @@ const extractContact = (payload: Record<string, any>) => {
     callbackQuery?.message?.object_guid,
     rubikaUpdate?.chat_id,
     rubikaUpdate?.object_guid,
+    rubikaRootMessage?.chat_id,
+    rubikaRootMessage?.object_guid,
     rubikaInlineMessage?.chat_id,
     rubikaInlineMessage?.object_guid,
     rubikaNewMessage?.chat_id,
@@ -220,6 +270,7 @@ const extractContact = (payload: Record<string, any>) => {
     message?.text,
     message?.body,
     callbackQuery?.data,
+    rubikaRootMessage?.text,
     rubikaNewMessage?.text,
     rubikaInlineMessage?.text,
     payload?.text,
@@ -269,6 +320,7 @@ const extractContact = (payload: Record<string, any>) => {
 
 const extractMediaInfo = (payload: Record<string, any>) => {
   const rubikaUpdate = payload?.update || null;
+  const rubikaRootMessage = payload?.new_message || null;
   const rubikaNewMessage = rubikaUpdate?.new_message || null;
   const rubikaInlineMessage = payload?.inline_message || null;
   const message =
@@ -278,6 +330,7 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     payload?.event?.message ||
     payload?.update?.message ||
     rubikaNewMessage ||
+    rubikaRootMessage ||
     rubikaInlineMessage ||
     null;
 
@@ -299,6 +352,9 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.video?.file_url,
     message?.photo?.file_url,
     rubikaUpdate?.new_message?.file?.url,
+    rubikaRootMessage?.file?.url,
+    rubikaRootMessage?.media?.url,
+    rubikaRootMessage?.media_url,
     rubikaUpdate?.new_message?.media?.url,
     rubikaUpdate?.new_message?.media_url,
     rubikaNewMessage?.file?.url,
@@ -320,6 +376,8 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.media?.download_url,
     rubikaNewMessage?.file?.download_url,
     rubikaNewMessage?.media?.download_url,
+    rubikaRootMessage?.file?.download_url,
+    rubikaRootMessage?.media?.download_url,
     payload?.file?.download_url,
     payload?.media?.download_url
   );
@@ -353,23 +411,32 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   };
   const fileId = pick(
     message?.file_id,
+    message?.file?.file_id,
+    message?.file?.id,
     message?.fileId,
     message?.photo?.file_id,
     message?.document?.file_id,
     message?.video?.file_id,
     message?.audio?.file_id,
     rubikaNewMessage?.file_id,
+    rubikaNewMessage?.file?.file_id,
+    rubikaRootMessage?.file_id,
+    rubikaRootMessage?.file?.file_id,
     payload?.file_id,
     payload?.fileId
   );
   const fileName = pick(
     message?.file_name,
+    message?.file?.file_name,
+    message?.file?.fileName,
     message?.fileName,
     message?.document?.file_name,
     message?.document?.fileName,
     message?.video?.file_name,
     rubikaNewMessage?.file?.file_name,
     rubikaNewMessage?.file_name,
+    rubikaRootMessage?.file?.file_name,
+    rubikaRootMessage?.file_name,
     payload?.document?.file_name,
     payload?.video?.file_name,
     payload?.photo?.file_name,
@@ -383,6 +450,8 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   );
   const mimeType = pick(
     message?.mime_type,
+    message?.file?.mime_type,
+    message?.file?.mimeType,
     message?.mimeType,
     message?.document?.mime_type,
     message?.document?.mimeType,
@@ -390,6 +459,7 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.file?.mime_type,
     message?.media?.mime_type,
     rubikaNewMessage?.file?.mime_type,
+    rubikaRootMessage?.file?.mime_type,
     payload?.mime_type,
     payload?.mimeType
   );
@@ -398,7 +468,17 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     payload: payload || null,
   }).toLowerCase();
   const hasPhoto = Boolean(message?.photo || payload?.photo);
-  const hasDocument = Boolean(message?.document || payload?.document || fileName || directUrl || fileId);
+  const hasDocument = Boolean(
+    message?.file
+    || message?.document
+    || payload?.file
+    || payload?.document
+    || rubikaRootMessage?.file
+    || rubikaNewMessage?.file
+    || fileName
+    || directUrl
+    || fileId
+  );
   const hasVideo = Boolean(message?.video || payload?.video);
   const hasAudio = Boolean(message?.audio || payload?.audio);
   const mimeLower = String(mimeType || '').toLowerCase();
@@ -513,15 +593,28 @@ const buildStorageObjectPath = ({
   return `per_org/${baseOrg}/${String(channel || 'bot').trim() || 'bot'}/inbound/${yyyy}/${mm}/${dd}/${stamped}`;
 };
 
-const buildPublicObjectUrl = (supabaseUrl: string, bucket: string, objectPath: string) =>
-  `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/public/${encodeURIComponent(bucket)}/${objectPath
+const buildPublicObjectUrl = (publicBaseUrl: string, bucket: string, objectPath: string) =>
+  `${publicBaseUrl.replace(/\/+$/, '')}/storage/v1/object/public/${encodeURIComponent(bucket)}/${objectPath
     .split('/')
     .map((part) => encodeURIComponent(part))
     .join('/')}`;
 
+const isRubikaHostedUrl = (value: string | null | undefined) => {
+  const target = String(value || '').trim();
+  if (!target) return false;
+  try {
+    const parsed = new URL(target);
+    const host = String(parsed.hostname || '').trim().toLowerCase();
+    return host === 'rubika.ir' || host.endsWith('.rubika.ir');
+  } catch {
+    return /(^https?:\/\/)?([^.]+\.)*rubika\.ir(\/|$)/i.test(target);
+  }
+};
+
 const uploadBinaryToStorage = async ({
   supabaseUrl,
   serviceRoleKey,
+  publicBaseUrl,
   bucket,
   objectPath,
   bytes,
@@ -529,6 +622,7 @@ const uploadBinaryToStorage = async ({
 }: {
   supabaseUrl: string;
   serviceRoleKey: string;
+  publicBaseUrl: string;
   bucket: string;
   objectPath: string;
   bytes: Uint8Array;
@@ -553,7 +647,7 @@ const uploadBinaryToStorage = async ({
   if (!response.ok) {
     throw new Error(raw || 'Could not upload media file to storage');
   }
-  return buildPublicObjectUrl(supabaseUrl, bucket, objectPath);
+  return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
 };
 
 const downloadBinaryFromUrl = async (url: string) => {
@@ -625,6 +719,8 @@ const tryRubikaGetFile = async ({
 const resolveAndStoreInboundMedia = async ({
   supabaseUrl,
   serviceRoleKey,
+  requestUrl,
+  requestHeaders,
   channel,
   orgId,
   integrationSettings,
@@ -632,6 +728,8 @@ const resolveAndStoreInboundMedia = async ({
 }: {
   supabaseUrl: string;
   serviceRoleKey: string;
+  requestUrl: string;
+  requestHeaders: Headers;
   channel: BotChannel;
   orgId: string;
   integrationSettings: IntegrationSettings;
@@ -656,7 +754,12 @@ const resolveAndStoreInboundMedia = async ({
   let resolvedMime = String(mediaInfo.mimeType || '').trim() || null;
   let bytes: Uint8Array | null = null;
 
-  if (channel === 'rubika' && !resolvedUrl && String(mediaInfo.fileId || '').trim()) {
+  const shouldPreferRubikaFileApi =
+    channel === 'rubika'
+    && String(mediaInfo.fileId || '').trim().length > 0
+    && (!resolvedUrl || isRubikaHostedUrl(resolvedUrl));
+
+  if (shouldPreferRubikaFileApi) {
     const byFileId = await tryRubikaGetFile({
       settings: integrationSettings,
       fileId: String(mediaInfo.fileId || '').trim(),
@@ -678,7 +781,7 @@ const resolveAndStoreInboundMedia = async ({
 
   if (!bytes || !bytes.length) {
     return {
-      fileUrl: resolvedUrl || null,
+      fileUrl: channel === 'rubika' && isRubikaHostedUrl(resolvedUrl) ? null : resolvedUrl || null,
       fileName: mediaInfo.fileName,
       mimeType: resolvedMime || mediaInfo.mimeType || null,
       stored: false,
@@ -691,9 +794,19 @@ const resolveAndStoreInboundMedia = async ({
     fileName: mediaInfo.fileName || 'file',
     mimeType: resolvedMime || mediaInfo.mimeType || null,
   });
+  const publicBaseUrl = pickPublicApiBaseUrl(requestUrl, requestHeaders, integrationSettings || {});
+  if (!publicBaseUrl) {
+    return {
+      fileUrl: null as string | null,
+      fileName: mediaInfo.fileName,
+      mimeType: resolvedMime || mediaInfo.mimeType || null,
+      stored: false,
+    };
+  }
   const publicUrl = await uploadBinaryToStorage({
     supabaseUrl,
     serviceRoleKey,
+    publicBaseUrl,
     bucket: DEFAULT_FILE_STORAGE_BUCKET,
     objectPath,
     bytes,
@@ -1162,15 +1275,23 @@ Deno.serve(async (req) => {
       const mediaStored = await resolveAndStoreInboundMedia({
         supabaseUrl,
         serviceRoleKey,
+        requestUrl: req.url,
+        requestHeaders: req.headers,
         channel,
         orgId: normalizedOrgId,
         integrationSettings: (integration?.settings || {}) as IntegrationSettings,
         mediaInfo,
       });
-      const attachmentEntry = mediaStored?.fileUrl
+      const fallbackSourceUrl = String(mediaInfo.fileUrl || '').trim();
+      const finalMediaUrl = String(
+        mediaStored?.fileUrl
+        || (channel === 'rubika' && isRubikaHostedUrl(fallbackSourceUrl) ? '' : fallbackSourceUrl)
+        || ''
+      ).trim();
+      const attachmentEntry = finalMediaUrl
         ? [{
           name: String(mediaStored?.fileName || mediaInfo.fileName || 'فایل').trim() || 'فایل',
-          url: String(mediaStored.fileUrl || '').trim(),
+          url: finalMediaUrl,
           mime_type: String(mediaStored?.mimeType || mediaInfo.mimeType || '').trim() || null,
         }]
         : [];
@@ -1184,7 +1305,7 @@ Deno.serve(async (req) => {
         message_type: mediaInfo.messageType,
         chat_id: String(contact.chatId || '').trim() || null,
         content_text: String(contact.text || '').trim() || null,
-        file_url: mediaStored?.fileUrl || mediaInfo.fileUrl,
+        file_url: finalMediaUrl || null,
         file_name: mediaStored?.fileName || mediaInfo.fileName,
         mime_type: mediaStored?.mimeType || mediaInfo.mimeType,
         payload: {

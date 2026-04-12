@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
@@ -44,6 +44,7 @@ import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions,
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   intervalUnitOptions,
+  parseWorkflowRelatedFieldKey,
   triggerTypeOptions,
   type WorkflowActionType,
   type WorkflowCondition,
@@ -93,6 +94,7 @@ import {
   PROCESS_TASK_STATUS_OPTIONS_KEY,
   PROCESS_TASK_STATUS_START_ANCHOR,
 } from '../utils/processTaskStatusOptions';
+import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { getRecordTitle } from '../utils/recordTitle';
@@ -309,6 +311,28 @@ const renderTemplateValueFromRecord = (
     const tokenKey = String(key || '').trim();
     return stringifyTemplateValue(record?.[tokenKey]);
   });
+};
+
+const resolveProcessTaskCustomFieldsFromRecord = (
+  fields: ModuleField[],
+  record: Record<string, any>,
+) => fields.map((field) => ({
+  ...field,
+  defaultValue: renderTemplateValueFromRecord(field?.defaultValue, record, field.type),
+}));
+
+const resolveProcessTaskCustomFieldDraftValuesFromRecord = (
+  fields: ModuleField[],
+  rawValues: Record<string, any> | null | undefined,
+  record: Record<string, any>,
+) => {
+  const sourceValues = rawValues && typeof rawValues === 'object' ? rawValues : {};
+  return fields.reduce<Record<string, any>>((acc, field) => {
+    const key = String(field?.key || '').trim();
+    if (!key || !Object.prototype.hasOwnProperty.call(sourceValues, key)) return acc;
+    acc[key] = renderTemplateValueFromRecord(sourceValues[key], record, field.type);
+    return acc;
+  }, {});
 };
 
 const supportsProcessTaskDynamicCategory = (fieldType: FieldType) =>
@@ -1139,16 +1163,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       task_status_label: getTaskStatusLabel('todo'),
       task_due_date: dueDate || '',
     };
+    const relatedRecordCache = new Map<string, Record<string, any>>();
+    let sourceRecordSnapshot: Record<string, any> | null = null;
 
     if (recordId && moduleId) {
       try {
         const { data: sourceRecord, error } = await supabase
           .from(MODULES[moduleId]?.table || moduleId)
           .select('*')
-          .eq('id', recordId)
-          .maybeSingle();
+            .eq('id', recordId)
+            .maybeSingle();
         if (error) throw error;
-        Object.assign(record, sourceRecord || {});
+        sourceRecordSnapshot = (sourceRecord || null) as Record<string, any> | null;
+        Object.assign(record, sourceRecordSnapshot || {});
+        if (sourceRecordSnapshot) {
+          record[WORKFLOW_ASSIGNEE_FIELD_KEY] = buildResolvedAssigneeCombo(sourceRecordSnapshot);
+        }
       } catch (error) {
         console.warn('Could not load source record for task template rendering', error);
       }
@@ -1173,12 +1203,53 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             .maybeSingle();
           if (error) throw error;
           if (!data) return;
+          const linkedRecord = data as Record<string, any>;
           Object.entries(data).forEach(([fieldKey, value]) => {
             record[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
           });
+          record[createProcessLinkedFieldKey(normalizedModuleId, WORKFLOW_ASSIGNEE_FIELD_KEY)] = buildResolvedAssigneeCombo(linkedRecord);
         } catch (error) {
           console.warn('Could not load linked process record for task template rendering', error);
         }
+      })
+    );
+
+    const relatedFieldEntries = automationActionVariableFields
+      .map((field) => {
+        const fieldKey = String(field?.key || '').trim();
+        return {
+          fieldKey,
+          meta: parseWorkflowRelatedFieldKey(fieldKey),
+        };
+      })
+      .filter((item): item is { fieldKey: string; meta: NonNullable<ReturnType<typeof parseWorkflowRelatedFieldKey>> } => Boolean(item.meta));
+
+    await Promise.all(
+      relatedFieldEntries.map(async ({ fieldKey, meta }) => {
+        if (!sourceRecordSnapshot) return;
+        const relationId = String(sourceRecordSnapshot?.[meta.relationFieldKey] || '').trim();
+        if (!relationId) return;
+        const cacheKey = `${meta.targetModuleId}:${relationId}`;
+        let relatedRecord = relatedRecordCache.get(cacheKey);
+        if (!relatedRecord) {
+          try {
+            const { data, error } = await supabase
+              .from(MODULES[meta.targetModuleId]?.table || meta.targetModuleId)
+              .select('*')
+              .eq('id', relationId)
+              .maybeSingle();
+            if (error) throw error;
+            if (!data) return;
+            relatedRecord = data as Record<string, any>;
+            relatedRecordCache.set(cacheKey, relatedRecord);
+          } catch (error) {
+            console.warn('Could not load related record for task template rendering', error);
+            return;
+          }
+        }
+        record[fieldKey] = meta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
+          ? buildResolvedAssigneeCombo(relatedRecord)
+          : relatedRecord?.[meta.targetFieldKey];
       })
     );
 
@@ -1193,7 +1264,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     });
 
     return record;
-  }, [moduleId, parseRecurrenceInfo, recordId]);
+  }, [automationActionVariableFields, moduleId, parseRecurrenceInfo, recordId]);
 
   const loadTaskCustomFieldOptions = useCallback(async (inputFields?: ModuleField[]) => {
     const sourceFields = normalizeProcessTaskCustomFields(
@@ -3176,21 +3247,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           task_name: resolvedTaskName || String(values?.name || '').trim(),
         }, FieldType.LONG_TEXT) ?? taskDescription ?? ''
       ).trim() || null;
-      const resolvedStageCustomFields = stageCustomFields.map((field) => ({
-        ...field,
-        defaultValue: renderTemplateValueFromRecord(
-          field?.defaultValue,
-          {
-            ...templateContext,
-            task_name: resolvedTaskName || String(values?.name || '').trim(),
-            description: resolvedTaskDescription || '',
-          },
-          field.type
-        ),
-      }));
+      const resolvedCustomFieldContext = {
+        ...templateContext,
+        task_name: resolvedTaskName || String(values?.name || '').trim(),
+        description: resolvedTaskDescription || '',
+      };
+      const resolvedStageCustomFields = resolveProcessTaskCustomFieldsFromRecord(
+        stageCustomFields,
+        resolvedCustomFieldContext,
+      );
+      const resolvedDraftCustomFieldValues = resolveProcessTaskCustomFieldDraftValuesFromRecord(
+        stageCustomFields,
+        taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {},
+        resolvedCustomFieldContext,
+      );
       const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(
         resolvedStageCustomFields,
-        taskCustomFieldDrafts[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID] || {}
+        resolvedDraftCustomFieldValues
       );
 
       const payload: any = {
@@ -3943,8 +4016,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const renderDraftTemplatePicker = useCallback((targetKey: string) => (
     <Popover
-      trigger="click"
+      trigger={[]}
       placement="bottomRight"
+      getPopupContainer={(node) => node?.parentElement || document.body}
+      overlayStyle={{ zIndex: 10020, maxWidth: 'calc(100vw - 1rem)' }}
       open={draftTemplatePickerOpenKey === targetKey}
       onOpenChange={(open) => {
         setDraftTemplatePickerOpenKey(open ? targetKey : null);
@@ -3953,6 +4028,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       content={(
         <div
           className="w-[min(88vw,24rem)] space-y-2 select-text"
+          style={{ userSelect: 'text' }}
           onClick={(event) => event.stopPropagation()}
         >
           <Input
@@ -3965,34 +4041,79 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <div
             className="space-y-1 pr-1"
             style={{ maxHeight: '18rem', overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}
-            onWheelCapture={(event) => event.stopPropagation()}
-            onTouchMove={(event) => event.stopPropagation()}
           >
           {filteredStageTemplateVariableOptions.length === 0 ? (
             <div className="px-2 py-3 text-xs text-gray-500">متغیری در دسترس نیست.</div>
           ) : filteredStageTemplateVariableOptions.map((item) => (
-            <button
+            <div
               key={`${targetKey}-${item.key}`}
-              type="button"
               className="w-full rounded-lg border border-transparent px-2 py-2 text-right transition-colors hover:border-[rgba(var(--brand-200-rgb),0.75)] hover:bg-[rgba(var(--brand-50-rgb),0.55)] select-text"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => handleDraftTemplateTokenPick(targetKey, item.token)}
             >
-              <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.label}</div>
-              <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400" dir="ltr">{item.token}</div>
-            </button>
+              <div className="flex items-start justify-between gap-2">
+                <div
+                  className="min-w-0 flex-1 cursor-pointer"
+                  onClick={() => handleDraftTemplateTokenPick(targetKey, item.token)}
+                >
+                  <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.label}</div>
+                  <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 break-all" dir="ltr">{item.token}</div>
+                </div>
+                <Space size={4}>
+                  <Tooltip title="درج متغیر">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<SnippetsOutlined />}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDraftTemplateTokenPick(targetKey, item.token);
+                      }}
+                    />
+                  </Tooltip>
+                  <Tooltip title="کپی متغیر">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CopyOutlined />}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void copyDraftTemplateTokenToClipboard(item.token);
+                      }}
+                    />
+                  </Tooltip>
+                </Space>
+              </div>
+            </div>
           ))}
           </div>
         </div>
       )}
     >
-      <Button
-        type="text"
-        size="small"
-        icon={<CopyOutlined />}
-        className="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
-        onMouseDown={(event) => event.preventDefault()}
-      />
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label="نمایش متغیرهای قابل کپی"
+        className="inline-flex cursor-pointer items-center justify-center rounded-md p-1 text-gray-500 transition-colors hover:text-[rgba(var(--brand-700-rgb),1)]"
+        style={{ userSelect: 'auto' }}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDraftTemplatePickerOpenKey((prev) => (prev === targetKey ? null : targetKey));
+          setDraftTemplatePickerSearch('');
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          event.stopPropagation();
+          setDraftTemplatePickerOpenKey((prev) => (prev === targetKey ? null : targetKey));
+          setDraftTemplatePickerSearch('');
+        }}
+      >
+        <CopyOutlined />
+      </span>
     </Popover>
   ), [draftTemplatePickerOpenKey, draftTemplatePickerSearch, filteredStageTemplateVariableOptions, handleDraftTemplateTokenPick]);
 
@@ -5081,18 +5202,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             task_name: resolvedStageName,
           }, FieldType.LONG_TEXT) ?? stageDescription ?? ''
         ).trim() || null;
-        const resolvedStageCustomFields = stageCustomFields.map((field) => ({
-          ...field,
-          defaultValue: renderTemplateValueFromRecord(
-            field?.defaultValue,
-            {
-              ...templateContext,
-              task_name: resolvedStageName,
-              description: resolvedStageDescription || '',
-            },
-            field.type
-          ),
-        }));
+        const resolvedStageCustomFields = resolveProcessTaskCustomFieldsFromRecord(
+          stageCustomFields,
+          {
+            ...templateContext,
+            task_name: resolvedStageName,
+            description: resolvedStageDescription || '',
+          },
+        );
         const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, {});
         const taskRow: any = {
           name: resolvedStageName,

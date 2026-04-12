@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs } from 'antd';
-import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined, SnippetsOutlined } from '@ant-design/icons';
+import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined, SnippetsOutlined, DownloadOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -370,6 +370,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(null);
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
+  const [importingRubikaMessageId, setImportingRubikaMessageId] = useState<string | null>(null);
   const [botGroupSearch, setBotGroupSearch] = useState('');
   const [botMessageSearch, setBotMessageSearch] = useState('');
   const [botReplyToId, setBotReplyToId] = useState<string | null>(null);

@@ -278,10 +278,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         setRecordFilesEnabled(false);
         const legacyItems = await loadLegacyProductImages().catch(() => []);
         setItems(await mergeItemsWithNoteAttachments(legacyItems));
-        msg.warning('Ø¬Ø¯ÙˆÙ„ record_files Ù‡Ù†ÙˆØ² Ø±ÙˆÛŒ Ø¯ÛŒØªØ§Ø¨ÛŒØ³ Ø§ÛŒØ¬Ø§Ø¯ Ù†Ø´Ø¯Ù‡ Ø§Ø³Øª. Ù„Ø·ÙØ§ migration Ø±Ø§ Ø§Ø¬Ø±Ø§ Ú©Ù†ÛŒØ¯.');
+        msg.warning('جدول record_files هنوز روی دیتابیس ایجاد نشده است. لطفا migration را اجرا کنید.');
       } else {
         console.warn('Could not load record files', error);
-        msg.error('Ø¨Ø§Ø±Ú¯Ø°Ø§Ø±ÛŒ ÙØ§ÛŒÙ„â€ŒÙ‡Ø§ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯');
+        msg.error('بارگذاری فایل‌ها ناموفق بود');
       }
     } finally {
       setLoading(false);
@@ -340,7 +340,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       bucket: FILE_STORAGE_BUCKET,
       path: filePath,
       file,
-      label: desiredName || file.name || 'ÙØ§ÛŒÙ„',
+      label: desiredName || file.name || 'فایل',
       detail: moduleId,
     });
     return fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath).data.publicUrl;
@@ -444,7 +444,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!recordFilesEnabled) return 0;
     const targets = await resolveTaskRelatedTargets();
     if (targets.length === 0) return 0;
-    const sourceTitle = file.fileName || pendingFileName || 'ÙØ¹Ø§Ù„ÛŒØª';
+    const sourceTitle = file.fileName || pendingFileName || 'فعالیت';
     const rows = targets.map((target, index) => ({
       module_id: target.moduleId,
       record_id: target.recordId,
@@ -464,7 +464,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
   const uploadFile = async (file: File, desiredName: string): Promise<UploadedFileResult | null> => {
     if (!recordId) {
-      msg.warning('Ø§Ø¨ØªØ¯Ø§ Ø±Ú©ÙˆØ±Ø¯ Ø±Ø§ Ø°Ø®ÛŒØ±Ù‡ Ú©Ù†ÛŒØ¯');
+      msg.warning('ابتدا رکورد را ذخیره کنید');
       return null;
     }
 
@@ -479,7 +479,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       }
 
       if (useLegacy && !(moduleId === 'products' && type === 'image')) {
-        msg.error('Ø¨Ø±Ø§ÛŒ Ø¢Ù¾Ù„ÙˆØ¯ ÙÛŒÙ„Ù… Ùˆ ÙØ§ÛŒÙ„ØŒ Ø§Ø¨ØªØ¯Ø§ migration Ø¬Ø¯ÙˆÙ„ record_files Ø±Ø§ Ø§Ø¬Ø±Ø§ Ú©Ù†ÛŒØ¯.');
+        msg.error('برای آپلود فیلم و فایل، ابتدا migration جدول record_files را اجرا کنید.');
         return null;
       }
 
@@ -509,7 +509,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           },
         ]);
         if (!mainImage && onMainImageChange) onMainImageChange(url);
-        msg.success('ÙØ§ÛŒÙ„ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯');
+        msg.success('فایل اضافه شد');
         return {
           url,
           fileType: 'image',
@@ -555,14 +555,14 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       ]);
 
       if (!mainImage && onMainImageChange) onMainImageChange(url);
-      msg.success('ÙØ§ÛŒÙ„ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯');
+      msg.success('فایل اضافه شد');
       return {
         url,
         fileType: type,
         fileName: desiredName,
         mimeType: file.type || null,
       };
-      msg.success('ÙØ§ÛŒÙ„ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯');
+      msg.success('فایل اضافه شد');
     } catch (error: any) {
       if (isUploadCanceledError(error)) {
         return null;
@@ -571,9 +571,9 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         recordFilesTableExistsCache = false;
         setRecordFilesTableAvailability(false);
         setRecordFilesEnabled(false);
-        msg.error('Ø¬Ø¯ÙˆÙ„ record_files ÙˆØ¬ÙˆØ¯ Ù†Ø¯Ø§Ø±Ø¯. migration Ø±Ø§ Ø§Ø¬Ø±Ø§ Ú©Ù†ÛŒØ¯.');
+        msg.error('جدول record_files وجود ندارد. migration را اجرا کنید.');
       } else {
-        msg.error('Ø®Ø·Ø§ Ø¯Ø± Ø«Ø¨Øª ÙØ§ÛŒÙ„: ' + (error?.message || 'Ù†Ø§Ù…Ø´Ø®Øµ'));
+        msg.error('خطا در ثبت فایل: ' + (error?.message || 'نامشخص'));
       }
     }
     return null;
@@ -581,7 +581,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
   const handleBeforeUpload = (file: File) => {
     if (!recordId) {
-      msg.warning('Ø§Ø¨ØªØ¯Ø§ Ø±Ú©ÙˆØ±Ø¯ Ø±Ø§ Ø°Ø®ÛŒØ±Ù‡ Ú©Ù†ÛŒØ¯');
+      msg.warning('ابتدا رکورد را ذخیره کنید');
       return false;
     }
     const fileName = String(file.name || '').trim();
@@ -599,7 +599,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!pendingFile) return false;
     const finalName = pendingFileName.trim();
     if (!finalName) {
-      msg.warning('Ù†Ø§Ù… ÙØ§ÛŒÙ„ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª');
+      msg.warning('نام فایل الزامی است');
       return false;
     }
 
@@ -614,15 +614,15 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       await shareUploadedFileInChats(uploaded, recipientIds);
       const copiedCount = await shareUploadedFileWithRelatedRecords(uploaded, shouldShareInRelatedRecords);
       if (recipientIds.length > 0 && copiedCount > 0) {
-        msg.success('ÙØ§ÛŒÙ„ Ø¢Ù¾Ù„ÙˆØ¯ Ùˆ Ù‡Ù…Ø²Ù…Ø§Ù† Ø§Ø±Ø³Ø§Ù„ Ø´Ø¯');
+        msg.success('فایل آپلود و همزمان ارسال شد');
       } else if (recipientIds.length > 0) {
-        msg.success('ÙØ§ÛŒÙ„ Ø¢Ù¾Ù„ÙˆØ¯ Ùˆ Ø¯Ø± Ú¯ÙØªÚ¯Ùˆ Ø§Ø±Ø³Ø§Ù„ Ø´Ø¯');
+        msg.success('فایل آپلود و در گفتگو ارسال شد');
       } else if (copiedCount > 0) {
-        msg.success(`ÙØ§ÛŒÙ„ Ø¯Ø± ${copiedCount} Ø±Ú©ÙˆØ±Ø¯ Ù…Ø±ØªØ¨Ø· Ù‡Ù… Ù†Ù…Ø§ÛŒØ´ Ø¯Ø§Ø¯Ù‡ Ø´Ø¯`);
+        msg.success(`فایل در ${copiedCount} رکورد مرتبط هم نمایش داده شد`);
       }
     } catch (error) {
       console.warn('Record file post-upload sharing failed', error);
-      msg.warning('ÙØ§ÛŒÙ„ Ø¢Ù¾Ù„ÙˆØ¯ Ø´Ø¯ ÙˆÙ„ÛŒ Ø§Ø´ØªØ±Ø§Ú©â€ŒÚ¯Ø°Ø§Ø±ÛŒ Ú©Ø§Ù…Ù„ Ù†Ø´Ø¯');
+      msg.warning('فایل آپلود شد ولی اشتراک‌گذاری کامل نشد');
     }
     return false;
   };
@@ -633,11 +633,11 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
   const handleDelete = async (fileId: string) => {
     if (!canDeleteFiles) {
-      msg.warning('Ø¯Ø³ØªØ±Ø³ÛŒ Ø­Ø°Ù ÙØ§ÛŒÙ„ Ù†Ø¯Ø§Ø±ÛŒØ¯');
+      msg.warning('دسترسی حذف فایل ندارید');
       return;
     }
     if (isSyntheticNoteAttachmentId(fileId)) {
-      msg.warning('Ø¨Ø±Ø§ÛŒ Ø­Ø°Ù Ø§ÛŒÙ† ÙØ§ÛŒÙ„ØŒ Ù¾ÛŒÙˆØ³Øª Ø±Ø§ Ø§Ø² Ø®ÙˆØ¯ ÛŒØ§Ø¯Ø¯Ø§Ø´Øª Ø­Ø°Ù Ú©Ù†ÛŒØ¯');
+      msg.warning('برای حذف این فایل، پیوست را از خود یادداشت حذف کنید');
       return;
     }
     try {
@@ -656,10 +656,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       if (target?.file_url === mainImage) {
         onMainImageChange?.(nextItems[0]?.file_url || null);
       }
-      msg.success('ÙØ§ÛŒÙ„ Ø­Ø°Ù Ø´Ø¯');
+      msg.success('فایل حذف شد');
     } catch (error) {
       console.warn('Delete file failed', error);
-      msg.error('Ø­Ø°Ù ÙØ§ÛŒÙ„ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯');
+      msg.error('حذف فایل ناموفق بود');
     }
   };
 
@@ -671,7 +671,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const current = typedItems[index];
     const target = typedItems[nextIndex];
     if (isSyntheticNoteAttachmentId(current?.id) || isSyntheticNoteAttachmentId(target?.id)) {
-      msg.warning('ØªØ±ØªÛŒØ¨ Ù¾ÛŒÙˆØ³Øªâ€ŒÙ‡Ø§ÛŒ ÛŒØ§Ø¯Ø¯Ø§Ø´Øª Ø§Ø² Ø§ÛŒÙ† Ø¨Ø®Ø´ Ù‚Ø§Ø¨Ù„ ØªØºÛŒÛŒØ± Ù†ÛŒØ³Øª');
+      msg.warning('ترتیب پیوست‌های یادداشت از این بخش قابل تغییر نیست');
       return;
     }
     const swappedA = { ...current, sort_order: target.sort_order };
@@ -694,7 +694,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       }
     } catch {
       setItems(previous);
-      msg.error('Ø¨Ù‡â€ŒØ±ÙˆØ²Ø±Ø³Ø§Ù†ÛŒ ØªØ±ØªÛŒØ¨ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯');
+      msg.error('به‌روزرسانی ترتیب ناموفق بود');
     }
   };
 
@@ -738,13 +738,13 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
         <div className="absolute bottom-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition">
           <Button size="small" icon={<StarOutlined />} onClick={() => onMainImageChange?.(item.file_url)} disabled={!canEdit || isNoteAttachment}>فایل اصلی</Button>
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} disabled={!canDeleteFiles || isNoteAttachment}>Ø­Ø°Ù</Button>
+          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} disabled={!canDeleteFiles || isNoteAttachment}>حذف</Button>
         </div>
 
         <div className="absolute top-1 left-1 flex items-center gap-1">
-          {isMain && <Tag color="gold">Ø§ØµÙ„ÛŒ</Tag>}
-          {item.file_type === 'video' ? <Tag icon={<VideoCameraOutlined />}>ÙÛŒÙ„Ù…</Tag> : <Tag icon={<PictureOutlined />}>Ø¹Ú©Ø³</Tag>}
-          {isNoteAttachment ? <Tag color="blue">ÛŒØ§Ø¯Ø¯Ø§Ø´Øª</Tag> : null}
+          {isMain && <Tag color="gold">اصلی</Tag>}
+          {item.file_type === 'video' ? <Tag icon={<VideoCameraOutlined />}>فیلم</Tag> : <Tag icon={<PictureOutlined />}>عکس</Tag>}
+          {isNoteAttachment ? <Tag color="blue">یادداشت</Tag> : null}
         </div>
         <div className="px-1 pt-2">
           <div className="text-xs text-gray-600 truncate" title={fileLabel}>
@@ -752,7 +752,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           </div>
           {isSharedFromReference ? (
             <div className="mt-1 text-[11px] text-sky-700">
-              Ø±Ú©ÙˆØ±Ø¯ Ù…Ø±Ø¬Ø¹:{' '}
+              رکورد مرجع:{' '}
               <a href={`/${item.source_module_id}/${item.source_record_id}`} className="text-sky-700 hover:underline">
                 {item.source_record_title || item.source_record_id}
               </a>
@@ -764,37 +764,38 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   };
 
   return (
-    <Modal title="Ù…Ø¯ÛŒØ±ÛŒØª ÙØ§ÛŒÙ„â€ŒÙ‡Ø§" open={open} onCancel={onClose} footer={null} destroyOnHidden zIndex={13000} width={950}>
+    <Modal title="مدیریت فایل‌ها" open={open} onCancel={onClose} footer={null} destroyOnHidden zIndex={13000} width={950}>
       {!recordFilesEnabled && (
         <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 flex items-center justify-between gap-2">
-          <span>Ø­Ø§Ù„Øª Ø³Ø§Ø²Ú¯Ø§Ø±ÛŒ ÙØ¹Ø§Ù„ Ø§Ø³Øª: Ø¬Ø¯ÙˆÙ„ `record_files` Ø±ÙˆÛŒ Ø¯ÛŒØªØ§Ø¨ÛŒØ³ Ø§ÛŒØ¬Ø§Ø¯ Ù†Ø´Ø¯Ù‡. ÙØ¹Ù„Ø§ ÙÙ‚Ø· Ø¹Ú©Ø³â€ŒÙ‡Ø§ÛŒ Ù…Ø­ØµÙˆÙ„ Ø§Ø² `product_images` Ø®ÙˆØ§Ù†Ø¯Ù‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.</span>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadFiles(true)}>Ø¨Ø±Ø±Ø³ÛŒ Ù…Ø¬Ø¯Ø¯</Button>
+          <span>حالت سازگاری فعال است: جدول `record_files` روی دیتابیس ایجاد نشده. فعلا فقط عکس‌های محصول از `product_images` خوانده می‌شود.</span>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadFiles(true)}>بررسی مجدد</Button>
         </div>
       )}
 
       <div className="mt-2">
-        <div className="mb-2 text-sm font-bold text-gray-700">Ø¹Ú©Ø³â€ŒÙ‡Ø§ ({imageItems.length})</div>
+        <div className="mb-2 text-sm font-bold text-gray-700">عکس‌ها ({imageItems.length})</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {imageItems.map((item, idx) => renderMediaCard(item, idx, 'image', imageItems.length))}
-          {imageItems.length === 0 && <div className="text-xs text-gray-400 col-span-full py-4">Ø¹Ú©Ø³ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡ Ø§Ø³Øª.</div>}
+          {imageItems.length === 0 && <div className="text-xs text-gray-400 col-span-full py-4">عکسی ثبت نشده است.</div>}
         </div>
       </div>
 
       <div className="mt-6">
-        <div className="mb-2 text-sm font-bold text-gray-700">ÙÛŒÙ„Ù…â€ŒÙ‡Ø§ ({videoItems.length})</div>
+        <div className="mb-2 text-sm font-bold text-gray-700">فیلم‌ها ({videoItems.length})</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {videoItems.map((item, idx) => renderMediaCard(item, idx, 'video', videoItems.length))}
-          {videoItems.length === 0 && <div className="text-xs text-gray-400 col-span-full py-4">ÙÛŒÙ„Ù…ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡ Ø§Ø³Øª.</div>}
+          {videoItems.length === 0 && <div className="text-xs text-gray-400 col-span-full py-4">فیلمی ثبت نشده است.</div>}
         </div>
       </div>
 
       <div className="mt-6">
-        <div className="mb-2 text-sm font-bold text-gray-700">ÙØ§ÛŒÙ„â€ŒÙ‡Ø§ ({documentItems.length})</div>
+        <div className="mb-2 text-sm font-bold text-gray-700">فایل‌ها ({documentItems.length})</div>
         <List
-          locale={{ emptyText: 'ÙØ§ÛŒÙ„ÛŒ Ø«Ø¨Øª Ù†Ø´Ø¯Ù‡ Ø§Ø³Øª.' }}
+          locale={{ emptyText: 'فایلی ثبت نشده است.' }}
           dataSource={documentItems}
           renderItem={(item) => {
             const fileLabel = getDisplayFileName(item);
+            const isMain = mainImage === item.file_url;
             const isHighlighted = highlightFileId && highlightFileId === item.id;
             const isNoteAttachment = isSyntheticNoteAttachmentId(item.id);
             const isSharedFromReference = Boolean(item.source_module_id && item.source_record_id);
@@ -802,14 +803,28 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
               <List.Item
                 className={`rounded-lg px-3 ${isHighlighted ? 'bg-leather-50 border border-leather-200' : (isSharedFromReference ? 'border border-sky-200 bg-sky-50/30' : '')}`}
                 actions={[
-                  <Button key={`download-${item.id}`} size="small" icon={<DownloadOutlined />} onClick={() => downloadFile(item)}>Ø¯Ø§Ù†Ù„ÙˆØ¯</Button>,
-                  <Button key={`delete-${item.id}`} size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteFiles || isNoteAttachment} onClick={() => handleDelete(item.id)}>Ø­Ø°Ù</Button>,
+                  <Button
+                    key={`main-${item.id}`}
+                    size="small"
+                    icon={<StarOutlined />}
+                    onClick={() => onMainImageChange?.(item.file_url)}
+                    disabled={!canEdit || isNoteAttachment}
+                  >
+                    فایل اصلی
+                  </Button>,
+                  <Button key={`download-${item.id}`} size="small" icon={<DownloadOutlined />} onClick={() => downloadFile(item)}>دانلود</Button>,
+                  <Button key={`delete-${item.id}`} size="small" danger icon={<DeleteOutlined />} disabled={!canDeleteFiles || isNoteAttachment} onClick={() => handleDelete(item.id)}>حذف</Button>,
                 ]}
               >
                 <List.Item.Meta
                   avatar={<FileOutlined className="text-gray-500" />}
-                  title={<span className="text-sm">{fileLabel}</span>}
-                  description={<span className="text-xs text-gray-500">{isNoteAttachment ? `Ù¾ÛŒÙˆØ³Øª ÛŒØ§Ø¯Ø¯Ø§Ø´Øª${item.mime_type ? ` â€¢ ${item.mime_type}` : ''}` : (item.mime_type || 'ÙØ§ÛŒÙ„ Ø¶Ù…ÛŒÙ…Ù‡')}</span>}
+                  title={(
+                    <span className="flex items-center gap-2 text-sm">
+                      <span>{fileLabel}</span>
+                      {isMain ? <Tag color="gold" className="!m-0">اصلی</Tag> : null}
+                    </span>
+                  )}
+                  description={<span className="text-xs text-gray-500">{isNoteAttachment ? `پیوست یادداشت${item.mime_type ? ` • ${item.mime_type}` : ''}` : (item.mime_type || 'فایل ضمیمه')}</span>}
                 />
               </List.Item>
             );
@@ -819,23 +834,23 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
       <div className="mt-4 flex items-center justify-between">
         <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canEdit} fileList={[]}>
-          <Button icon={<UploadOutlined />}>Ø§ÙØ²ÙˆØ¯Ù† ÙØ§ÛŒÙ„ (Ø¹Ú©Ø³ØŒ ÙÛŒÙ„Ù…ØŒ ÙØ§ÛŒÙ„)</Button>
+          <Button icon={<UploadOutlined />}>افزودن فایل (عکس، فیلم، فایل)</Button>
         </Upload>
         <div className="text-xs text-gray-400 flex items-center gap-2">
           <PaperClipOutlined />
-          <span>{items.length} ÙØ§ÛŒÙ„</span>
+          <span>{items.length} فایل</span>
         </div>
       </div>
 
-      {loading && <div className="text-xs text-gray-500 mt-2">Ø¯Ø± Ø­Ø§Ù„ Ø¨Ø§Ø±Ú¯Ø°Ø§Ø±ÛŒ...</div>}
+      {loading && <div className="text-xs text-gray-500 mt-2">در حال بارگذاری...</div>}
 
       <Modal
-        title="Ù†Ø§Ù… ÙØ§ÛŒÙ„ Ø¢Ù¾Ù„ÙˆØ¯ÛŒ"
+        title="نام فایل آپلودی"
         open={nameModalOpen}
         onOk={handleConfirmUpload}
         onCancel={handleCancelUploadPrompt}
-        okText="Ø¢Ù¾Ù„ÙˆØ¯"
-        cancelText="Ø§Ù†ØµØ±Ø§Ù"
+        okText="آپلود"
+        cancelText="انصراف"
         destroyOnHidden
         zIndex={13010}
       >
@@ -843,19 +858,19 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           autoFocus
           value={pendingFileName}
           onChange={(e) => setPendingFileName(e.target.value)}
-          placeholder="Ù†Ø§Ù… ÙØ§ÛŒÙ„ Ø±Ø§ ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯"
+          placeholder="نام فایل را وارد کنید"
           onPressEnter={handleConfirmUpload}
         />
         {pendingFileExtension ? (
           <div className="mt-3 flex items-center gap-2 text-xs" style={{ color: 'var(--ant-color-text-secondary)' }}>
-            <span>Ù¾Ø³ÙˆÙ†Ø¯:</span>
+            <span>پسوند:</span>
             <Typography.Text code>.{pendingFileExtension}</Typography.Text>
           </div>
         ) : null}
         {moduleId === 'tasks' ? (
           <div className="mt-4 space-y-4">
             <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.5)] p-3">
-              <div className="mb-2 text-sm font-medium text-gray-700">Ø§Ø´ØªØ±Ø§Ú©â€ŒÚ¯Ø°Ø§Ø±ÛŒ Ø¯Ø§Ø®Ù„ÛŒ</div>
+              <div className="mb-2 text-sm font-medium text-gray-700">اشتراک‌گذاری داخلی</div>
               <Select
                 mode="multiple"
                 allowClear
@@ -863,7 +878,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
                 value={shareTargetIds}
                 onChange={(values) => setShareTargetIds((values || []).map((value) => String(value)))}
                 options={shareTargetOptions}
-                placeholder="Ø§Ù†ØªØ®Ø§Ø¨ Ú¯ÙØªâ€ŒÙˆÚ¯ÙˆÙ‡Ø§"
+                placeholder="انتخاب گفتگوها"
                 optionFilterProp="label"
                 className="w-full"
                 getPopupContainer={(trigger) => trigger.parentElement || document.body}
@@ -873,7 +888,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
               />
             </div>
             <Checkbox checked={shareInRelatedRecords} onChange={(event) => setShareInRelatedRecords(event.target.checked)}>
-              Ø§Ø´ØªØ±Ø§Ú©â€ŒÚ¯Ø°Ø§Ø±ÛŒ Ø¯Ø± Ø±Ú©ÙˆØ±Ø¯Ù‡Ø§ÛŒ Ù…Ø±ØªØ¨Ø·
+              اشتراک‌گذاری در رکوردهای مرتبط
             </Checkbox>
           </div>
         ) : null}

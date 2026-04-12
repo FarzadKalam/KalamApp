@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Avatar, Button, Input, Tag } from 'antd';
+import { Avatar, Button, Input, Tag, theme } from 'antd';
 import {
   CheckOutlined,
   CloseOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EnterOutlined,
   EditOutlined,
@@ -75,6 +76,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   animateOnMount = false,
 }) => {
   const [entered, setEntered] = useState<boolean>(!animateOnMount);
+  const { token } = theme.useToken();
 
   useEffect(() => {
     if (!animateOnMount) {
@@ -174,6 +176,63 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
     ));
   };
 
+  const handleCopyText = () => {
+    const raw = String(text || '');
+    if (!raw.trim()) return;
+    void navigator.clipboard?.writeText(raw);
+  };
+
+  const cardStyle: React.CSSProperties = variant === 'ai'
+    ? {
+        background: token.colorInfoBg,
+        border: `1px solid ${token.colorInfoBorder}`,
+        color: token.colorText,
+        boxShadow: token.boxShadowSecondary,
+      }
+    : isMine
+      ? {
+          background: token.colorPrimaryBg,
+          border: `1px solid ${token.colorPrimaryBorder}`,
+          color: token.colorText,
+          boxShadow: token.boxShadowSecondary,
+        }
+      : {
+          background: token.colorBgElevated,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          color: token.colorText,
+          boxShadow: token.boxShadowSecondary,
+        };
+
+  const subtleTextStyle: React.CSSProperties = {
+    color: token.colorTextSecondary,
+  };
+
+  const replyStyle: React.CSSProperties = {
+    background: token.colorFillSecondary,
+    color: token.colorTextSecondary,
+    boxShadow: `inset 0 0 0 1px ${token.colorBorderSecondary}`,
+  };
+
+  const bodyStyle: React.CSSProperties = {
+    color: token.colorText,
+  };
+
+  const attachmentStyle: React.CSSProperties = {
+    borderColor: isMine ? token.colorPrimaryBorder : token.colorBorderSecondary,
+    background: token.colorFillTertiary,
+    color: token.colorTextSecondary,
+  };
+
+  const mentionUserStyle: React.CSSProperties = {
+    background: token.colorPrimaryBg,
+    color: token.colorPrimaryText,
+  };
+
+  const mentionRoleStyle: React.CSSProperties = {
+    background: token.colorFillSecondary,
+    color: token.colorTextSecondary,
+  };
+
   return (
   <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -192,15 +251,10 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             : isMine
               ? 'opacity-0 translate-x-2 translate-y-1 scale-[0.985]'
               : 'opacity-0 -translate-x-2 translate-y-1 scale-[0.985]'
-        } ${
-          variant === 'ai'
-            ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-700-rgb),0.35)] dark:text-[rgb(var(--brand-100-rgb))] rounded-tl-sm'
-            : isMine
-            ? 'bg-[rgb(var(--brand-700-rgb))] text-white dark:bg-[rgb(var(--brand-500-rgb))] dark:text-white rounded-tr-sm'
-            : 'bg-[rgba(var(--brand-50-rgb),0.96)] text-[rgb(var(--brand-800-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)] dark:text-[rgb(var(--brand-100-rgb))] rounded-tl-sm'
-        }`}
+        } ${variant === 'ai' ? 'rounded-tl-sm' : isMine ? 'rounded-tr-sm' : 'rounded-tl-sm'}`}
+        style={cardStyle}
       >
-          <div className="mb-1 flex items-center justify-between gap-2 text-[8px] text-gray-400">
+          <div className="mb-1 flex items-center justify-between gap-2 text-[8px]" style={subtleTextStyle}>
           <span className="truncate">{authorName}</span>
           <span className="shrink-0 inline-flex items-center gap-1">
             {statusNode}
@@ -209,8 +263,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         </div>
 
         {replyText ? (
-          <div className="mb-2 rounded-xl bg-white/65 px-2 py-1.5 text-[10px] text-gray-600 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)] dark:bg-black/20 dark:text-gray-300 dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
-            <span className="font-medium text-gray-700 dark:text-gray-200">
+          <div className="mb-2 rounded-xl px-2 py-1.5 text-[10px]" style={replyStyle}>
+            <span className="font-medium" style={{ color: token.colorText }}>
               پاسخ به یادداشت "{replyAuthorName || 'کاربر'}":
             </span>{' '}
             <span className="whitespace-pre-wrap">
@@ -236,7 +290,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             </div>
           </div>
         ) : (
-          <div className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] leading-5 ${isMine ? 'text-white' : 'text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-100-rgb))]'}`}>
+          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] leading-5" style={bodyStyle}>
             {renderText(text)}
           </div>
         )}
@@ -249,11 +303,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
                 href={attachment.url}
                 target="_blank"
                 rel="noreferrer"
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] ${
-                  isMine
-                    ? 'border border-white/35 bg-white/15 text-white'
-                    : 'border border-[rgba(var(--brand-300-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.92)] text-[rgb(var(--brand-700-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgba(var(--brand-700-rgb),0.2)] dark:text-[rgb(var(--brand-200-rgb))]'
-                }`}
+                className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px]"
+                style={attachmentStyle}
               >
                 <PaperClipOutlined />
                 <span className="max-w-[180px] truncate">{attachment.name}</span>
@@ -265,22 +316,23 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         {(mentionUsers.length > 0 || mentionRoles.length > 0) ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {mentionUsers.map((label) => (
-              <Tag key={`user-${label}`} className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-100-rgb),0.95)] !px-2 !py-0.5 !text-[9px] !text-[rgb(var(--brand-700-rgb))]">
+              <Tag key={`user-${label}`} className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[9px]" style={mentionUserStyle}>
                 @{label}
               </Tag>
             ))}
             {mentionRoles.map((label) => (
-              <Tag key={`role-${label}`} className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-700-rgb),0.14)] !px-2 !py-0.5 !text-[9px] !text-[rgb(var(--brand-700-rgb))] dark:!text-[rgb(var(--brand-300-rgb))]">
+              <Tag key={`role-${label}`} className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[9px]" style={mentionRoleStyle}>
                 @{label}
               </Tag>
             ))}
           </div>
         ) : null}
 
-        {footer ? <div className="mt-2 text-[9px] text-gray-500">{footer}</div> : null}
-        {isEdited ? <div className="mt-1.5 text-[9px] text-gray-400">ویرایش شده</div> : null}
+        {footer ? <div className="mt-2 text-[9px]" style={subtleTextStyle}>{footer}</div> : null}
+        {isEdited ? <div className="mt-1.5 text-[9px]" style={subtleTextStyle}>ویرایش شده</div> : null}
 
         <div className="mt-1.5 flex items-center gap-0.5">
+          <Button type="text" size="small" icon={<CopyOutlined />} onClick={handleCopyText} disabled={!String(text || '').trim()} />
           {onForward ? <Button type="text" size="small" icon={<ForwardOutlined />} onClick={onForward} /> : null}
           {onReply ? <Button type="text" size="small" icon={<EnterOutlined />} onClick={onReply} /> : null}
           {onEdit ? <Button type="text" size="small" icon={<EditOutlined />} onClick={onEdit} /> : null}

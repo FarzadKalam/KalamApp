@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { App, Button, Modal, Tooltip } from 'antd';
-import { CheckOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import PersianDatePicker from '../PersianDatePicker';
 import { isTaskDoneStatus } from '../../utils/taskCompletion';
 import { updateTaskDueDateWithAutomation, updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
@@ -28,6 +28,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [draftDueDate, setDraftDueDate] = useState<string | null>(task?.due_date || null);
   const [savingReschedule, setSavingReschedule] = useState(false);
+  const [savingStart, setSavingStart] = useState(false);
   const [savingComplete, setSavingComplete] = useState(false);
 
   useEffect(() => {
@@ -68,6 +69,29 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     }
   };
 
+  const handleStart = async (event?: React.SyntheticEvent) => {
+    stopEvent(event);
+    if (!task?.id || String(task?.status || '').toLowerCase() === 'in_progress' || isTaskDoneStatus(task?.status)) return;
+    setSavingStart(true);
+    try {
+      const optimisticTask = { ...(task || {}), status: 'in_progress' };
+      await emitTaskUpdate(optimisticTask);
+      const updatedTask = await updateTaskStatusWithAutomation({
+        taskId: String(task.id),
+        nextStatus: 'in_progress',
+        previousTask: task,
+        currentUser: currentUser || null,
+      });
+      await emitTaskUpdate(updatedTask);
+      message.success('فعالیت در حال انجام شد');
+    } catch (error: any) {
+      await emitTaskUpdate(task);
+      message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
+    } finally {
+      setSavingStart(false);
+    }
+  };
+
   const handleSaveReschedule = async () => {
     if (!task?.id) return;
     setSavingReschedule(true);
@@ -101,6 +125,17 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
               stopEvent(event);
               setRescheduleOpen(true);
             }}
+          />
+        </Tooltip>
+        <Tooltip title="در حال انجام">
+          <Button
+            type="text"
+            size={size}
+            icon={<CaretRightOutlined />}
+            className={buttonClassName}
+            loading={savingStart}
+            disabled={String(task?.status || '').toLowerCase() === 'in_progress' || isTaskDoneStatus(task?.status)}
+            onClick={handleStart}
           />
         </Tooltip>
         <Tooltip title="تکمیل فعالیت">

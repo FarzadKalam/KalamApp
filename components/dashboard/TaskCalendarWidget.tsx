@@ -402,7 +402,7 @@ const TaskCalendarWidget: React.FC = () => {
         }}
         footer={null}
         width={420}
-        destroyOnClose
+        destroyOnHidden
         title="مشاهده سریع فعالیت"
       >
         {quickTaskLoading ? (

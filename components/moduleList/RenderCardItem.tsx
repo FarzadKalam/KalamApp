@@ -8,7 +8,7 @@ import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { getResolvedAssigneeId } from "../../utils/assigneeValue";
 import { formatRecordDisplayValue } from "../../utils/recordDisplayFormatter";
 import { getModuleCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
-import { resolveTaskSourceLink } from "../../utils/taskMeta";
+import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
 import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
 import TaskActionButtons from "../tasks/TaskActionButtons";
@@ -145,6 +145,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const relatedModuleId = isTasks
     ? (sourceLink.moduleId || cardItem?.related_to_module || selectedRelationField?.relationConfig?.targetModule || null)
     : null;
+  const sourceRelationFieldKey = isTasks ? getTaskRelationFieldKey(relatedModuleId) : null;
   const relatedFieldAllowed = sourceLink.recordId
     ? true
     : (
@@ -152,7 +153,15 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         ? (canViewField ? canViewField(selectedRelationField.key) !== false : true)
         : false
     );
-  const relatedOptions = selectedRelationField ? relationOptions?.[selectedRelationField.key] || [] : [];
+  const relatedOptions = (
+    selectedRelationField
+      ? relationOptions?.[selectedRelationField.key] || []
+      : (
+        sourceRelationFieldKey
+          ? relationOptions?.[sourceRelationFieldKey] || []
+          : []
+      )
+  );
   const relatedOptionLabel = relatedRecordId
     ? relatedOptions.find((opt: any) => opt?.value === relatedRecordId)?.label
     : null;

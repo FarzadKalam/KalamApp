@@ -24,6 +24,27 @@ const emit = () => {
 
 const snapshot = () => notifications;
 
+const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiNotificationOverlayItem[]) => {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftItem = left[index];
+    const rightItem = right[index];
+    if (
+      leftItem?.id !== rightItem?.id
+      || leftItem?.kind !== rightItem?.kind
+      || leftItem?.kindLabel !== rightItem?.kindLabel
+      || leftItem?.title !== rightItem?.title
+      || leftItem?.body !== rightItem?.body
+      || leftItem?.createdAt !== rightItem?.createdAt
+      || Boolean(leftItem?.hasAttachments) !== Boolean(rightItem?.hasAttachments)
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const recompute = () => {
   notifications = Object.values(notificationsBySource)
     .flat()
@@ -32,6 +53,11 @@ const recompute = () => {
 };
 
 export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[], source = 'default') => {
+  const previous = notificationsBySource[source] || [];
+  if (areItemsPresentationEqual(previous, items)) {
+    notificationsBySource[source] = items;
+    return;
+  }
   notificationsBySource[source] = items;
   recompute();
   emit();
