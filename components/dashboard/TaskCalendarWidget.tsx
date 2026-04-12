@@ -12,6 +12,7 @@ import PersianDatePicker from '../PersianDatePicker';
 import TaskQuickPopoverContent from '../tasks/TaskQuickPopoverContent';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { getResolvedAssigneeId } from '../../utils/assigneeValue';
+import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 
 type TaskCalendarRow = {
   id: string;
@@ -281,17 +282,18 @@ const TaskCalendarWidget: React.FC = () => {
     },
     [message]
   );
+  void openQuickTaskModal;
 
   const handleCalendarNavigate = useCallback(
     (path: string) => {
       const match = String(path || '').match(/^\/tasks\/([^/]+)$/);
       if (match?.[1]) {
-        void openQuickTaskModal(match[1]);
+        openTaskProcessModal({ taskId: match[1] });
         return;
       }
       navigate(path);
     },
-    [navigate, openQuickTaskModal]
+    [navigate]
   );
 
   if (!tasksModule) return null;

@@ -258,7 +258,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
     .sort((a, b) => (a.order || 0) - (b.order || 0)), [visibility]);
 
   const createEmptyRow = useCallback((): BulkRow => {
-    const r: BulkRow = { key: makeKey(), auto_name_enabled: true, name: '', manual_code: '', image_url: '', opening_stock: 0 };
+    const r: BulkRow = { key: makeKey(), auto_name_enabled: false, name: '', manual_code: '', image_url: '', opening_stock: 0 };
     rowFields.forEach((f) => { if (f.defaultValue !== undefined) r[f.key] = f.defaultValue; });
     return r;
   }, [rowFields]);

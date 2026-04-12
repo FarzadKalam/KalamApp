@@ -147,16 +147,16 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
   return (
     <>
-      <div className="border-t border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.25)] bg-[rgba(var(--brand-50-rgb),0.72)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)] px-4 py-3">
+      <div className="border-t border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)] bg-white/90 dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)] px-3 py-2.5">
         {header ? <div className="mb-2">{header}</div> : null}
 
-        <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/90 p-3 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
+        <div className="rounded-[1.05rem] border border-[rgba(var(--brand-200-rgb),0.62)] bg-white/95 p-2.5 shadow-[0_4px_14px_rgba(15,23,42,0.06)] dark:border-[rgba(var(--brand-300-rgb),0.24)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.8)] dark:shadow-[0_4px_14px_rgba(0,0,0,0.22)]">
           <Input.TextArea
             placeholder={placeholder}
             value={value}
             onChange={(event) => onChange(event.target.value)}
             autoSize={{ minRows: 2, maxRows: 5 }}
-            className="!border-0 !bg-transparent !shadow-none"
+            className="!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none"
           />
 
           {mentionPickerOpen ? (
@@ -223,7 +223,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                 <Checkbox
                   checked={smsNotificationEnabled}
                   onChange={(event) => onSmsNotificationChange(event.target.checked)}
-                  className="mr-2 text-xs"
+                  className="mr-2 text-[11px]"
                 >
                   اطلاع‌رسانی پیامکی
                 </Checkbox>
@@ -246,6 +246,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               icon={<SendOutlined />}
               onClick={onSubmit}
               disabled={submitDisabled}
+              size="small"
             >
               ارسال
             </Button>

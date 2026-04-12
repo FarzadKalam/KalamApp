@@ -36,6 +36,7 @@ import { isTaskDoneStatus, normalizeTaskStatus } from '../utils/taskCompletion';
 import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import PersianDatePicker from '../components/PersianDatePicker';
+import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 
 type TaskRecord = {
   id: string;
@@ -1378,7 +1379,14 @@ const HRPage: React.FC = () => {
   const renderTaskMobileCard = (row: TaskDetailRow) => (
     <Card key={row.key} className="mb-3" styles={{ body: { padding: 12 } }}>
       <div className="mb-1">
-        <a href={`/tasks/${row.taskId}`} className="font-bold text-leather-700 hover:underline">
+        <a
+          href={`/tasks/${row.taskId}`}
+          className="font-bold text-leather-700 hover:underline"
+          onClick={(event) => {
+            event.preventDefault();
+            openTaskProcessModal({ taskId: row.taskId });
+          }}
+        >
           {row.name}
         </a>
       </div>
@@ -1476,7 +1484,14 @@ const HRPage: React.FC = () => {
       dataIndex: 'name',
       key: 'name',
       render: (_: string, row: TaskDetailRow) => (
-        <a href={`/tasks/${row.taskId}`} className="font-medium text-leather-700 hover:underline">
+        <a
+          href={`/tasks/${row.taskId}`}
+          className="font-medium text-leather-700 hover:underline"
+          onClick={(event) => {
+            event.preventDefault();
+            openTaskProcessModal({ taskId: row.taskId });
+          }}
+        >
           {row.name}
         </a>
       ),

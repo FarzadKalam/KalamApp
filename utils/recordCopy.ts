@@ -86,6 +86,12 @@ const LINE_OMIT_KEYS = new Set([
   'updated_at',
 ]);
 
+const PROCESS_TEMPLATE_STAGE_OMIT_KEYS = new Set([
+  'id',
+  'created_at',
+  'updated_at',
+]);
+
 export const copyProductionOrderRelations = async (
   supabaseClient: any,
   sourceOrderId: string,
@@ -148,4 +154,36 @@ export const copyProductionOrderRelations = async (
 
   const { error: insertTasksError } = await supabaseClient.from('tasks').insert(taskPayloads);
   if (insertTasksError) throw insertTasksError;
+};
+
+export const copyProcessTemplateStagesRelations = async (
+  supabaseClient: any,
+  sourceTemplateId: string,
+  targetTemplateId: string
+) => {
+  if (!supabaseClient || !sourceTemplateId || !targetTemplateId) return;
+
+  const { data: sourceStages, error: sourceError } = await supabaseClient
+    .from('process_template_stages')
+    .select('*')
+    .eq('template_id', sourceTemplateId)
+    .order('sort_order', { ascending: true });
+  if (sourceError) throw sourceError;
+
+  const stageRows = sourceStages || [];
+  if (!stageRows.length) return;
+
+  const payloads = stageRows.map((sourceStage: Record<string, any>) => {
+    const payload: Record<string, any> = {};
+    Object.entries(sourceStage || {}).forEach(([key, value]) => {
+      if (!key || PROCESS_TEMPLATE_STAGE_OMIT_KEYS.has(key) || key.startsWith('__')) return;
+      if (value === undefined) return;
+      payload[key] = cloneCopyValue(value);
+    });
+    payload.template_id = targetTemplateId;
+    return payload;
+  });
+
+  const { error: insertError } = await supabaseClient.from('process_template_stages').insert(payloads);
+  if (insertError) throw insertError;
 };

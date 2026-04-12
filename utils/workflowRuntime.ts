@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
 import { sendBotMessageViaGateway } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
+import { renderTemplateText, formatTemplateValueByField } from './messageTemplateRenderer';
 import { normalizeNoteScope } from './noteScope';
 import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
@@ -120,75 +121,15 @@ const isSameDate = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
-const TEHRAN_TIME_ZONE = 'Asia/Tehran';
-
-const DATE_TIME_LIKE_REGEX =
-  /^\d{4}-\d{2}-\d{2}[tT ]\d{2}:\d{2}(:\d{2}(?:\.\d{1,6})?)?(?:[zZ]|[+-]\d{2}:?\d{2})?$/;
-
-const toTehranDateTime = (value: unknown): string | null => {
-  if (value === null || value === undefined) return null;
-
-  let date: Date | null = null;
-  if (value instanceof Date) {
-    date = Number.isNaN(value.getTime()) ? null : value;
-  } else if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed || !DATE_TIME_LIKE_REGEX.test(trimmed)) return null;
-    const parsed = new Date(trimmed);
-    date = Number.isNaN(parsed.getTime()) ? null : parsed;
-  } else {
-    return null;
-  }
-  if (!date) return null;
-
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: TEHRAN_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const year = byType.year || '';
-  const month = byType.month || '';
-  const day = byType.day || '';
-  const hour = byType.hour || '';
-  const minute = byType.minute || '';
-  if (!year || !month || !day || !hour || !minute) return null;
-  return `${year}/${month}/${day} ${hour}:${minute}`;
-};
-
 export const formatWorkflowTemplateValue = (value: unknown): string => {
-  if (value === null || value === undefined) return '';
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => formatWorkflowTemplateValue(item))
-      .filter(Boolean)
-      .join(', ');
-  }
-  if (typeof value === 'object') return JSON.stringify(value);
-  return toTehranDateTime(value) || String(value);
+  return formatTemplateValueByField({ value });
 };
 
-const renderTemplate = (template: string, record: Record<string, any>) => {
-  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
-    const fieldKey = String(key || '').trim();
-    const val = record?.[fieldKey];
-    return formatWorkflowTemplateValue(val);
-  });
-};
+const renderTemplate = (template: string, record: Record<string, any>, moduleId?: string | null) =>
+  renderTemplateText(template, record, { moduleId });
 
-const renderTemplateWithBoldMarkers = (template: string, record: Record<string, any>) => {
-  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
-    const fieldKey = String(key || '').trim();
-    const val = record?.[fieldKey];
-    if (val === null || val === undefined) return '';
-    const resolved = formatWorkflowTemplateValue(val).trim();
-    return resolved ? `**${resolved}**` : '';
-  });
-};
+const renderTemplateWithBoldMarkers = (template: string, record: Record<string, any>, moduleId?: string | null) =>
+  renderTemplateText(template, record, { moduleId, bold: true });
 
 const ATTACHMENT_FILE_NAME_REGEX = /[^0-9a-zA-Z._\-\u0600-\u06FF]+/g;
 
@@ -886,6 +827,45 @@ const getProfileCommunicationSelect = (channel: CommunicationChannel) => {
   return 'id, rubika_chat_id';
 };
 
+const isMissingColumnError = (error: any, columnName: string) => {
+  const code = String(error?.code || '').toUpperCase();
+  if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  const normalizedColumn = String(columnName || '').toLowerCase();
+  return (
+    text.includes(`column "${normalizedColumn}"`)
+    || text.includes(`${normalizedColumn} does not exist`)
+    || (text.includes('schema cache') && text.includes(normalizedColumn))
+  );
+};
+
+const queryProfilesWithCommunicationFallback = async (
+  filterField: 'id' | 'role_id',
+  filterValues: string[],
+  channel: CommunicationChannel,
+) => {
+  const values = (filterValues || []).map((value) => String(value || '').trim()).filter(Boolean);
+  if (!values.length) return [] as Array<Record<string, any>>;
+  const primarySelect = getProfileCommunicationSelect(channel);
+  const primaryResult = await supabase
+    .from('profiles')
+    .select(primarySelect)
+    .in(filterField, values);
+  if (!primaryResult.error) return (primaryResult.data || []) as Array<Record<string, any>>;
+
+  const fallbackColumn = channel === 'rubika' ? 'rubika_chat_id' : channel === 'bale' ? 'bale_chat_id' : '';
+  if (!fallbackColumn || !isMissingColumnError(primaryResult.error, fallbackColumn)) {
+    throw primaryResult.error;
+  }
+
+  const fallbackResult = await supabase
+    .from('profiles')
+    .select('id')
+    .in(filterField, values);
+  if (fallbackResult.error) throw fallbackResult.error;
+  return (fallbackResult.data || []) as Array<Record<string, any>>;
+};
+
 const parseCommunicationRecipientToken = (value: any) => {
   const raw = String(value || '').trim();
   const match = raw.match(/^(user|role)[:_](.+)$/i);
@@ -894,6 +874,33 @@ const parseCommunicationRecipientToken = (value: any) => {
   const id = String(match[2] || '').trim();
   if (!id || (kind !== 'user' && kind !== 'role')) return null;
   return { kind: kind as 'user' | 'role', id };
+};
+
+const collectRecipientTargets = (
+  values: any[],
+  {
+    directValues,
+    userIds,
+    roleIds,
+  }: {
+    directValues: string[];
+    userIds: Set<string>;
+    roleIds: Set<string>;
+  }
+) => {
+  asArray(values).forEach((entry) => {
+    const token = parseCommunicationRecipientToken(entry);
+    if (token?.kind === 'user') {
+      userIds.add(token.id);
+      return;
+    }
+    if (token?.kind === 'role') {
+      roleIds.add(token.id);
+      return;
+    }
+    const normalized = String(entry || '').trim();
+    if (normalized) directValues.push(normalized);
+  });
 };
 
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -935,15 +942,77 @@ const resolveRubikaCounterpartyGroupChatIds = async (candidateValues: string[]) 
   return Array.from(new Set([...customerChatIds, ...supplierChatIds]));
 };
 
+const resolveCounterpartyBotGroupChatIds = async (
+  channel: 'rubika' | 'bale',
+  customerIds: string[],
+  supplierIds: string[]
+) => {
+  const normalizedCustomerIds = Array.from(new Set(customerIds.map((value) => String(value || '').trim()).filter((value) => UUID_LIKE_REGEX.test(value))));
+  const normalizedSupplierIds = Array.from(new Set(supplierIds.map((value) => String(value || '').trim()).filter((value) => UUID_LIKE_REGEX.test(value))));
+  const chatIds: string[] = [];
+
+  if (normalizedCustomerIds.length > 0) {
+    const { data, error } = await supabase
+      .from('counterparty_bot_groups')
+      .select('bot_chat_id')
+      .eq('channel_type', channel)
+      .eq('status', 'active')
+      .in('customer_id', normalizedCustomerIds);
+    if (error) throw error;
+    chatIds.push(...((data || []) as Array<Record<string, any>>).map((row) => String(row?.bot_chat_id || '').trim()).filter(Boolean));
+  }
+
+  if (normalizedSupplierIds.length > 0) {
+    const { data, error } = await supabase
+      .from('counterparty_bot_groups')
+      .select('bot_chat_id')
+      .eq('channel_type', channel)
+      .eq('status', 'active')
+      .in('supplier_id', normalizedSupplierIds);
+    if (error) throw error;
+    chatIds.push(...((data || []) as Array<Record<string, any>>).map((row) => String(row?.bot_chat_id || '').trim()).filter(Boolean));
+  }
+
+  return Array.from(new Set(chatIds));
+};
+
+const resolveCounterpartyBotChatIdsForRecord = async (
+  channel: 'rubika' | 'bale',
+  moduleId: string,
+  currentRecord: Record<string, any>
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const customerIds = new Set<string>();
+  const supplierIds = new Set<string>();
+
+  const directCustomerId = String(currentRecord?.customer_id || currentRecord?.related_customer || '').trim();
+  const directSupplierId = String(currentRecord?.supplier_id || currentRecord?.related_supplier || '').trim();
+  if (directCustomerId) customerIds.add(directCustomerId);
+  if (directSupplierId) supplierIds.add(directSupplierId);
+
+  if (normalizedModuleId === 'customers') {
+    const id = String(currentRecord?.id || '').trim();
+    if (id) customerIds.add(id);
+  }
+  if (normalizedModuleId === 'suppliers') {
+    const id = String(currentRecord?.id || '').trim();
+    if (id) supplierIds.add(id);
+  }
+
+  return resolveCounterpartyBotGroupChatIds(channel, Array.from(customerIds), Array.from(supplierIds));
+};
+
 const resolveCommunicationValuesFromFields = async ({
   currentRecord,
   moduleId,
   recipientFields,
+  recipientAssignees = [],
   channel,
 }: {
   currentRecord: Record<string, any>;
   moduleId: string;
   recipientFields: any[];
+  recipientAssignees?: any[];
   channel: CommunicationChannel;
 }) => {
   const directValues: string[] = [];
@@ -955,6 +1024,8 @@ const resolveCommunicationValuesFromFields = async ({
     tagsCache: new Map(),
   };
 
+  collectRecipientTargets(recipientAssignees, { directValues, userIds, roleIds });
+
   for (const fieldKey of asArray(recipientFields)) {
     const rawValue = await resolveConditionFieldValue(
       String(fieldKey || ''),
@@ -962,38 +1033,15 @@ const resolveCommunicationValuesFromFields = async ({
       moduleId,
       context
     );
-    asArray(rawValue).forEach((entry) => {
-      const token = parseCommunicationRecipientToken(entry);
-      if (token?.kind === 'user') {
-        userIds.add(token.id);
-        return;
-      }
-      if (token?.kind === 'role') {
-        roleIds.add(token.id);
-        return;
-      }
-      const normalized = String(entry || '').trim();
-      if (normalized) directValues.push(normalized);
-    });
+    collectRecipientTargets(rawValue, { directValues, userIds, roleIds });
   }
 
   const profileRows: Array<Record<string, any>> = [];
-  const profileSelect = getProfileCommunicationSelect(channel);
   if (userIds.size > 0) {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select(profileSelect)
-      .in('id', Array.from(userIds));
-    if (error) throw error;
-    profileRows.push(...((data || []) as Array<Record<string, any>>));
+    profileRows.push(...await queryProfilesWithCommunicationFallback('id', Array.from(userIds), channel));
   }
   if (roleIds.size > 0) {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select(profileSelect)
-      .in('role_id', Array.from(roleIds));
-    if (error) throw error;
-    profileRows.push(...((data || []) as Array<Record<string, any>>));
+    profileRows.push(...await queryProfilesWithCommunicationFallback('role_id', Array.from(roleIds), channel));
   }
 
   const resolvedValues = (() => {
@@ -1032,10 +1080,12 @@ const resolveNoteRecipientsFromFields = async ({
   currentRecord,
   moduleId,
   recipientFields,
+  recipientAssignees = [],
 }: {
   currentRecord: Record<string, any>;
   moduleId: string;
   recipientFields: any[];
+  recipientAssignees?: any[];
 }) => {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
@@ -1045,6 +1095,8 @@ const resolveNoteRecipientsFromFields = async ({
     tagsCache: new Map(),
   };
 
+  collectRecipientTargets(recipientAssignees, { directValues: [], userIds, roleIds });
+
   for (const fieldKey of asArray(recipientFields)) {
     const rawValue = await resolveConditionFieldValue(
       String(fieldKey || ''),
@@ -1052,16 +1104,7 @@ const resolveNoteRecipientsFromFields = async ({
       moduleId,
       context
     );
-    asArray(rawValue).forEach((entry) => {
-      const token = parseCommunicationRecipientToken(entry);
-      if (token?.kind === 'user') {
-        userIds.add(token.id);
-        return;
-      }
-      if (token?.kind === 'role') {
-        roleIds.add(token.id);
-      }
-    });
+    collectRecipientTargets(rawValue, { directValues: [], userIds, roleIds });
   }
 
   return {
@@ -1186,12 +1229,13 @@ export const executeWorkflowAction = async (
   const config = action?.config || {};
 
   if (action.type === 'send_sms') {
-    const messageText = renderTemplate(String(config.message || ''), currentRecord).trim();
+    const messageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
     if (!messageText) return;
     const recipientsFromFields = await resolveCommunicationValuesFromFields({
       currentRecord,
       moduleId,
       recipientFields: asArray(config.recipient_fields),
+      recipientAssignees: asArray(config.recipient_assignees),
       channel: 'sms',
     });
     const recipientsManual = asArray(config.manual_numbers)
@@ -1224,7 +1268,7 @@ export const executeWorkflowAction = async (
   }
 
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
-    const noteText = renderTemplateWithBoldMarkers(String(config.note_text || ''), currentRecord).trim();
+    const noteText = renderTemplateWithBoldMarkers(String(config.note_text || ''), currentRecord, moduleId).trim();
     const attachments = await resolveNoteAttachmentsFromFields({
       currentRecord,
       moduleId,
@@ -1238,6 +1282,7 @@ export const executeWorkflowAction = async (
       currentRecord,
       moduleId,
       recipientFields: asArray(config.recipient_fields),
+      recipientAssignees: asArray(config.recipient_assignees),
     });
     await insertNotesWithFallback([{
       module_id: scope.module_id,
@@ -1269,13 +1314,14 @@ export const executeWorkflowAction = async (
   if (action.type === 'send_bale_bot' || action.type === 'send_rubika_bot') {
     const isRubika = action.type === 'send_rubika_bot';
     const channel: 'bale' | 'rubika' = isRubika ? 'rubika' : 'bale';
-    const messageText = renderTemplate(String(config.message || ''), currentRecord).trim();
+    const messageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
     if (!messageText) return;
-    const titleText = renderTemplate(String(config.title || ''), currentRecord).trim();
+    const titleText = renderTemplate(String(config.title || ''), currentRecord, moduleId).trim();
     const recipientsFromFields = await resolveCommunicationValuesFromFields({
       currentRecord,
       moduleId,
       recipientFields: asArray(config.recipient_fields),
+      recipientAssignees: asArray(config.recipient_assignees),
       channel,
     });
     const recipientsManual = asArray(config.manual_chat_ids)
@@ -1287,7 +1333,10 @@ export const executeWorkflowAction = async (
     const fallbackRecipients =
       recipientsFromFields.length > 0 || recipientsManual.length > 0
         ? []
-        : [directFallbackChatId].filter(Boolean);
+        : [
+            ...[directFallbackChatId].filter(Boolean),
+            ...(await resolveCounterpartyBotChatIdsForRecord(channel, moduleId, currentRecord)),
+          ];
     const recipients = Array.from(
       new Set([...recipientsFromFields, ...recipientsManual, ...fallbackRecipients])
     ).filter(Boolean);

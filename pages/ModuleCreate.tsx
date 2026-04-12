@@ -15,7 +15,7 @@ import { fetchCurrentUserRoleContext } from "../utils/permissions";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
-import { copyProductionOrderRelations } from "../utils/recordCopy";
+import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -115,6 +115,10 @@ export const ModuleCreate = () => {
     if (!moduleId || !insertedId) return;
     if (moduleId === "production_orders" && copySource?.copyRelations && copySource?.sourceRecordId) {
       await copyProductionOrderRelations(supabase, String(copySource.sourceRecordId), String(insertedId));
+      return;
+    }
+    if (moduleId === "process_templates" && copySource?.copyRelations && copySource?.sourceRecordId) {
+      await copyProcessTemplateStagesRelations(supabase, String(copySource.sourceRecordId), String(insertedId));
     }
   };
 

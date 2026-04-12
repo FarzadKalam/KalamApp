@@ -36,10 +36,14 @@ type ReadyTextRow = {
 type MessageComposerModalProps = {
   open: boolean;
   onCancel: () => void;
-  mode: 'sms' | 'bot';
+  mode: 'sms' | 'bot' | 'template';
   moduleId?: string | null;
   record?: Record<string, any> | null;
   initialPhone?: string | null;
+  smsRecipients?: string[];
+  templateOnlyTitle?: string;
+  onApplyTemplate?: (value: string) => void;
+  onInsertVariable?: (token: string) => void;
 };
 
 const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
@@ -49,12 +53,17 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   moduleId,
   record,
   initialPhone,
+  smsRecipients,
+  templateOnlyTitle,
+  onApplyTemplate,
+  onInsertVariable,
 }) => {
   const { message: msg } = App.useApp();
   const messageInputRef = useRef<any>(null);
   const [messageText, setMessageText] = useState('');
   const [selectedVariable, setSelectedVariable] = useState<string | undefined>(undefined);
   const [selectedPhone, setSelectedPhone] = useState('');
+  const [selectedPhones, setSelectedPhones] = useState<string[]>([]);
   const [selectedBotChannel, setSelectedBotChannel] = useState<NotificationBotChannel | undefined>(undefined);
   const [sending, setSending] = useState(false);
 
@@ -81,15 +90,20 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   const moduleConfig = moduleId ? MODULES[moduleId] : null;
   const scopedModuleId = getReadyTextScopeModuleId(moduleId, 'message');
   const globalScopedModuleId = getReadyTextScopeModuleId(null, 'message');
+  const isTemplateMode = mode === 'template';
+  const isBulkSmsMode = mode === 'sms' && Array.isArray(smsRecipients) && smsRecipients.length > 0;
 
   const phoneOptions = useMemo(
     () =>
-      getRecordPhoneCandidates(moduleId, record, initialPhone).map((value) => ({
+      (isBulkSmsMode
+        ? Array.from(new Set((smsRecipients || []).map((value) => String(value || '').trim()).filter(Boolean)))
+        : getRecordPhoneCandidates(moduleId, record, initialPhone)
+      ).map((value) => ({
         label: <PhoneDisplay value={value} size="md" className="w-full" />,
         value,
         searchText: String(value || '').toLowerCase(),
       })),
-    [initialPhone, moduleId, record]
+    [initialPhone, isBulkSmsMode, moduleId, record, smsRecipients]
   );
 
   const botTargets = useMemo(() => getRecordBotTargets(record), [record]);
@@ -118,7 +132,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       .toLowerCase()
       .includes(String(input || '').toLowerCase());
 
-  const renderedPreview = useMemo(() => renderRecordTemplate(messageText, record || {}), [messageText, record]);
+  const renderedPreview = useMemo(
+    () => renderRecordTemplate(messageText, record || {}, moduleId),
+    [messageText, record, moduleId]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +163,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     if (!open) return;
     setMessageText('');
     setSelectedVariable(undefined);
+    setSelectedPhones(() => {
+      if (!isBulkSmsMode) return [];
+      return phoneOptions.map((item) => String(item.value || '')).filter(Boolean);
+    });
     setSelectedPhone((prev) => {
       const current = String(prev || '').trim();
       if (current && phoneOptions.some((item) => item.value === current)) return current;
@@ -158,7 +179,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       }
       return availableBotOptions[0]?.value as NotificationBotChannel | undefined;
     });
-  }, [open, phoneOptions, availableBotOptions]);
+  }, [open, phoneOptions, availableBotOptions, isBulkSmsMode]);
 
   const loadReadyTexts = async () => {
     if (!readyTextPermissions.canView) {
@@ -237,6 +258,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
 
   const insertTokenIntoMessage = (token: string) => {
     if (!token) return;
+    if (isTemplateMode) {
+      onInsertVariable?.(String(token));
+      return;
+    }
     const nextValue = String(token);
     const textarea = messageInputRef.current?.resizableTextArea?.textArea as HTMLTextAreaElement | undefined;
     if (!textarea) {
@@ -371,6 +396,11 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   };
 
   const handleSend = async () => {
+    if (isTemplateMode) {
+      onCancel();
+      return;
+    }
+
     const finalText = String(renderedPreview || '').trim();
     if (!finalText) {
       msg.warning('متن پیام خالی است.');
@@ -380,24 +410,28 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     setSending(true);
     try {
       if (mode === 'sms') {
-        const recipient = String(selectedPhone || '').trim();
-        if (!recipient) {
+        const recipients = isBulkSmsMode
+          ? selectedPhones.map((value) => String(value || '').trim()).filter(Boolean)
+          : [String(selectedPhone || '').trim()].filter(Boolean);
+        if (!recipients.length) {
           msg.warning('شماره دریافت‌کننده مشخص نیست.');
           return;
         }
         await sendSmsViaGateway({
-          to: [recipient],
+          to: recipients,
           text: finalText,
           moduleId: moduleId || undefined,
-          recordId: record?.id ? String(record.id) : undefined,
+          recordId: !isBulkSmsMode && record?.id ? String(record.id) : undefined,
           customerId: moduleId === 'customers' && record?.id ? String(record.id) : undefined,
-          title: 'ارسال پیامک',
+          title: isBulkSmsMode ? 'ارسال پیامک گروهی' : 'ارسال پیامک',
           metadata: {
             source_type: 'message_composer_modal',
             mode: 'sms',
+            bulk_send: isBulkSmsMode,
+            recipient_count: recipients.length,
           },
         });
-        msg.success('پیامک ارسال شد.');
+        msg.success(isBulkSmsMode ? 'پیامک گروهی ارسال شد.' : 'پیامک ارسال شد.');
       } else {
         const channel = selectedBotChannel;
         if (!channel) {
@@ -428,7 +462,9 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     }
   };
 
-  const title = mode === 'sms' ? 'ارسال پیامک' : 'ارسال پیام با بات';
+  const title = isTemplateMode
+    ? (templateOnlyTitle || 'پیام‌های آماده')
+    : (mode === 'sms' ? 'ارسال پیامک' : 'ارسال پیام با بات');
   const noBotTarget = mode === 'bot' && !availableBotOptions.length && !activeBotsLoading;
   const noPhoneTarget = mode === 'sms' && !phoneOptions.length;
 
@@ -452,18 +488,22 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       )}
       footer={[
         <Button key="cancel" onClick={onCancel}>
-          انصراف
+          بستن
         </Button>,
-        <Button
-          key="send"
-          type="primary"
-          icon={<SendOutlined />}
-          loading={sending}
-          disabled={noBotTarget || noPhoneTarget}
-          onClick={() => void handleSend()}
-        >
-          ارسال
-        </Button>,
+        ...(!isTemplateMode
+          ? [
+              <Button
+                key="send"
+                type="primary"
+                icon={<SendOutlined />}
+                loading={sending}
+                disabled={noBotTarget || noPhoneTarget}
+                onClick={() => void handleSend()}
+              >
+                ارسال
+              </Button>,
+            ]
+          : []),
       ]}
     >
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.2fr)_360px]">
@@ -478,25 +518,45 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
               {record?.business_name ? <Tag>{String(record.business_name)}</Tag> : null}
             </div>
 
-            {mode === 'sms' ? (
+            {!isTemplateMode && mode === 'sms' ? (
               <div className="mb-3">
-                <div className="mb-1 text-xs text-gray-500">شماره مقصد</div>
-                <Select
-                  value={selectedPhone || undefined}
-                  onChange={setSelectedPhone}
-                  className="w-full"
-                  options={phoneOptions}
-                  optionFilterProp="searchText"
-                  filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').toLowerCase())}
-                  getPopupContainer={selectPopupContainer}
-                  popupMatchSelectWidth={false}
-                  listHeight={240}
-                  virtual={false}
-                  styles={{ popup: { root: { zIndex: 12600 } } }}
-                  placeholder="شماره‌ای برای ارسال پیدا نشد"
-                />
+                <div className="mb-1 text-xs text-gray-500">{isBulkSmsMode ? 'شماره‌های مقصد' : 'شماره مقصد'}</div>
+                {isBulkSmsMode ? (
+                  <Select
+                    mode="multiple"
+                    value={selectedPhones}
+                    onChange={(values) => setSelectedPhones((values || []).map((value) => String(value)))}
+                    className="w-full"
+                    options={phoneOptions}
+                    optionFilterProp="searchText"
+                    filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').toLowerCase())}
+                    getPopupContainer={selectPopupContainer}
+                    popupMatchSelectWidth={false}
+                    listHeight={240}
+                    virtual={false}
+                    styles={{ popup: { root: { zIndex: 12600 } } }}
+                    placeholder="شماره‌ای برای ارسال پیدا نشد"
+                    maxTagCount="responsive"
+                  />
+                ) : (
+                  <Select
+                    value={selectedPhone || undefined}
+                    onChange={setSelectedPhone}
+                    className="w-full"
+                    options={phoneOptions}
+                    optionFilterProp="searchText"
+                    filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').toLowerCase())}
+                    getPopupContainer={selectPopupContainer}
+                    popupMatchSelectWidth={false}
+                    listHeight={240}
+                    virtual={false}
+                    styles={{ popup: { root: { zIndex: 12600 } } }}
+                    placeholder="شماره‌ای برای ارسال پیدا نشد"
+                  />
+                )}
               </div>
-            ) : (
+            ) : null}
+            {!isTemplateMode && mode === 'bot' ? (
               <div className="mb-3">
                 <div className="mb-1 text-xs text-gray-500">بات مقصد</div>
                 <Select
@@ -516,7 +576,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
                   placeholder={activeBotsLoading ? 'در حال دریافت بات‌های فعال...' : 'بات فعالی برای این رکورد موجود نیست'}
                 />
               </div>
-            )}
+            ) : null}
 
             <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_120px]">
               <Select
@@ -545,15 +605,22 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
               </Button>
             </div>
 
-            <Input.TextArea
-              ref={messageInputRef}
-              value={messageText}
-              onChange={(event) => setMessageText(event.target.value)}
-              autoSize={{ minRows: 8, maxRows: 14 }}
-              placeholder="متن پیام را بنویسید یا از الگوهای پیام استفاده کنید..."
-            />
+            {!isTemplateMode ? (
+              <Input.TextArea
+                ref={messageInputRef}
+                value={messageText}
+                onChange={(event) => setMessageText(event.target.value)}
+                autoSize={{ minRows: 8, maxRows: 14 }}
+                placeholder="متن پیام را بنویسید یا از الگوهای پیام استفاده کنید..."
+              />
+            ) : (
+              <div className="rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
+                الگوهای آماده را از ستون کنار انتخاب کنید. درج متغیر هم مستقیم در متن چت انجام می‌شود.
+              </div>
+            )}
           </div>
 
+          {!isTemplateMode ? (
           <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-white/5">
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
               {mode === 'sms' ? <SendOutlined /> : <RobotOutlined />}
@@ -569,6 +636,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
               </div>
             )}
           </div>
+          ) : null}
         </div>
 
         <div className="space-y-3">
@@ -650,7 +718,17 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
                               </div>
                             </div>
                             <div className="flex items-center gap-1">
-                              <Button size="small" onClick={() => setMessageText(item.content)}>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  if (isTemplateMode) {
+                                    onApplyTemplate?.(item.content);
+                                    onCancel();
+                                    return;
+                                  }
+                                  setMessageText(item.content);
+                                }}
+                              >
                                 استفاده
                               </Button>
                               <Button size="small" icon={<CopyOutlined />} onClick={() => void copyReadyText(item.content)} />
@@ -697,3 +775,4 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
 };
 
 export default MessageComposerModal;
+

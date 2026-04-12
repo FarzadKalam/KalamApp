@@ -1384,7 +1384,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const headerEl = root.querySelector('.ant-table-thead') as HTMLElement | null;
     const paginationHeight = pagination === false ? 0 : (paginationEl?.offsetHeight || (nextIsMobileViewport ? 60 : 52));
     const headerHeight = headerEl?.offsetHeight || 44;
-    const desktopPaginationReserve = pagination === false || nextIsMobileViewport ? 0 : 24;
+    const tableBodyEl = root.querySelector('.ant-table-body') as HTMLElement | null;
+    const horizontalScrollbarHeight = tableBodyEl
+      ? Math.max(0, tableBodyEl.offsetHeight - tableBodyEl.clientHeight)
+      : 0;
+    const desktopPaginationReserve = pagination === false || nextIsMobileViewport
+      ? 0
+      : Math.max(24, horizontalScrollbarHeight + 28);
     const safetyOffset = nextIsMobileViewport ? 12 : 8;
     const minBodyHeight = nextIsMobileViewport ? 220 : 280;
     const nextHeight = Math.max(

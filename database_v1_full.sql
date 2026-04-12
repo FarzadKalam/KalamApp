@@ -1668,6 +1668,7 @@ alter table public.marketing_leads
   add column if not exists mobile text,
   add column if not exists email text,
   add column if not exists source text,
+  add column if not exists legacy_system_code text,
   add column if not exists status text not null default 'new',
   add column if not exists score integer not null default 0,
   add column if not exists owner_id uuid references public.profiles(id) on delete set null,

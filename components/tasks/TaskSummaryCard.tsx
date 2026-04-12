@@ -8,6 +8,7 @@ import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import TaskActionButtons from './TaskActionButtons';
+import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 
 interface TaskSummaryCardProps {
   task: any;
@@ -92,9 +93,16 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
     <div className="mb-2">
       <div className={`border ${statusColor} rounded-2xl bg-white/95 p-3 shadow-sm transition-all hover:border-[rgba(var(--brand-400-rgb),0.75)] hover:shadow-md dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)]`}>
         <div className="flex items-center justify-between gap-3">
-          <Link to={`/tasks/${task.id}`} className="font-bold text-gray-800 dark:text-gray-200" onClick={onClose}>
+          <button
+            type="button"
+            className="font-bold text-gray-800 dark:text-gray-200 hover:underline text-right"
+            onClick={() => {
+              openTaskProcessModal({ task });
+              onClose?.();
+            }}
+          >
             {toPersianNumber(String(task.name || 'بدون عنوان'))}
-          </Link>
+          </button>
           <div className="flex items-center gap-1">
             <TaskActionButtons
               task={task}
@@ -210,3 +218,5 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
 };
 
 export default TaskSummaryCard;
+
+

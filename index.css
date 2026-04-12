@@ -239,7 +239,7 @@ body.ant-scrolling-effect {
   margin: 0 !important;
   padding: 12px 12px 14px;
   position: relative;
-  z-index: 2;
+  z-index: 0;
   touch-action: manipulation;
   row-gap: 8px;
   border-top: 0;
@@ -522,31 +522,6 @@ body.ant-scrolling-effect {
 }
 
 @media (max-width: 640px) {
-  .task-quick-modal-root .ant-modal-wrap {
-    overflow: hidden;
-  }
-
-  .task-quick-modal {
-    top: 0 !important;
-    max-width: 100vw !important;
-    margin: 0 !important;
-    padding-bottom: 0 !important;
-  }
-
-  .task-quick-modal .ant-modal-content {
-    min-height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0 !important;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .task-quick-modal .ant-modal-body {
-    flex: 1;
-    overflow: auto;
-    padding: 0 !important;
-  }
-
   .quick-preview-modal-root .ant-modal-wrap {
     overflow: hidden;
   }

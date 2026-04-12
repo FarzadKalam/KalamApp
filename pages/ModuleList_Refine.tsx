@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useTable } from "@refinedev/antd";
 import { CrudFilter, CrudFilters, CrudSort, useDeleteMany } from "@refinedev/core";
 import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase";
@@ -9,7 +9,7 @@ import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMod
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
-import { AppstoreAddOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, PlusOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
+import { AppstoreAddOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
 import ViewManager from "../components/ViewManager";
 import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
@@ -23,7 +23,7 @@ import RenderCardItem from "../components/moduleList/RenderCardItem";
 import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, GOALS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, type RecordScope } from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
-import { buildCopyPayload, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
+import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { fetchTaskSourceRecordOptions, getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
 import ExcelImportWizard from "../components/moduleList/ExcelImportWizard";
@@ -46,6 +46,9 @@ import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../uti
 import { toPersianNumber } from "../utils/persianNumberFormatter";
 import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
 import RelatedRecordPopover from "../components/RelatedRecordPopover";
+import { getRecordPhoneCandidates } from "../utils/recordMessaging";
+import { formatIranMobileForInput } from "../utils/phoneNumber";
+import MessageComposerModal from "../components/MessageComposerModal";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const getDefaultGridPageSize = () => 15;
@@ -368,6 +371,9 @@ export const ModuleListRefine: React.FC<{
   const [isWorkflowsModalOpen, setIsWorkflowsModalOpen] = useState(false);
   const [isGoalsModalOpen, setIsGoalsModalOpen] = useState(false);
   const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState(false);
+  const [isBulkSmsComposerOpen, setIsBulkSmsComposerOpen] = useState(false);
+  const [bulkSmsRecipients, setBulkSmsRecipients] = useState<string[]>([]);
+  const [bulkSmsSourceRecord, setBulkSmsSourceRecord] = useState<Record<string, any> | null>(null);
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
   const [canOpenGoals, setCanOpenGoals] = useState(true);
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
@@ -426,6 +432,10 @@ export const ModuleListRefine: React.FC<{
     if (!selectedRows.length) return false;
     return selectedRows.every((row: any) => String(row?.status || '') === 'pending');
   }, [resolvedModuleId, selectedRows]);
+  const canBulkSendSms = useMemo(
+    () => ['customers', 'suppliers', 'employees'].includes(String(resolvedModuleId || '')),
+    [resolvedModuleId]
+  );
   const showContentSkeleton = queryPending && !hasQueryResult;
   const bulkBuildSourceModule = getBulkBuildSourceModule(resolvedModuleId);
   const totalFilteredRecordCount = useMemo(
@@ -1862,6 +1872,43 @@ export const ModuleListRefine: React.FC<{
     });
   }, [moduleConfig, resolvedModuleId, selectedRowKeys]);
 
+  const handleBulkSmsOpen = useCallback(async () => {
+    if (!canBulkSendSms) return;
+    if (!selectedRowKeys.length) {
+      showListMessage("warning", "ابتدا حداقل یک رکورد انتخاب کنید.");
+      return;
+    }
+    try {
+      const rows = await fetchSelectedRecords();
+      if (!rows.length) {
+        showListMessage("warning", "رکوردی برای ارسال پیامک پیدا نشد.");
+        return;
+      }
+
+      const recipientSet = new Set<string>();
+      rows.forEach((row: any) => {
+        const candidates = getRecordPhoneCandidates(resolvedModuleId, row);
+        candidates.forEach((phone) => {
+          const normalized = formatIranMobileForInput(phone);
+          if (/^09\d{9}$/.test(String(normalized || ''))) {
+            recipientSet.add(normalized);
+          }
+        });
+      });
+
+      const recipients = Array.from(recipientSet);
+      if (!recipients.length) {
+        showListMessage("warning", "در رکوردهای انتخاب‌شده شماره موبایل معتبر پیدا نشد.");
+        return;
+      }
+      setBulkSmsRecipients(recipients);
+      setBulkSmsSourceRecord(rows[0] || null);
+      setIsBulkSmsComposerOpen(true);
+    } catch (error: any) {
+      showListMessage("error", toFaErrorMessage(error, "ارسال پیامک گروهی ناموفق بود."));
+    }
+  }, [canBulkSendSms, fetchSelectedRecords, resolvedModuleId, selectedRowKeys.length, showListMessage]);
+
   const bulkBuildModule = useMemo(() => {
     if (!bulkBuildTarget) return null;
     if (bulkBuildTarget === "product_bundles") {
@@ -1987,7 +2034,7 @@ export const ModuleListRefine: React.FC<{
             return;
           }
           const nameField = detectCopyNameField(moduleConfig);
-          if (resolvedModuleId === 'production_orders') {
+          if (resolvedModuleId === 'production_orders' || resolvedModuleId === 'process_templates') {
             let copiedCount = 0;
             for (let idx = 0; idx < records.length; idx += 1) {
               const record = records[idx];
@@ -1999,7 +2046,11 @@ export const ModuleListRefine: React.FC<{
                 .single();
               if (insertError) throw insertError;
               if (inserted?.id) {
-                await copyProductionOrderRelations(supabase, String(record.id), String(inserted.id));
+                if (resolvedModuleId === 'production_orders') {
+                  await copyProductionOrderRelations(supabase, String(record.id), String(inserted.id));
+                } else {
+                  await copyProcessTemplateStagesRelations(supabase, String(record.id), String(inserted.id));
+                }
               }
               copiedCount += 1;
             }
@@ -2068,7 +2119,7 @@ export const ModuleListRefine: React.FC<{
               initialValues: payload,
               copySource: {
                 sourceRecordId: String(record.id),
-                copyRelations: resolvedModuleId === "production_orders",
+                copyRelations: resolvedModuleId === "production_orders" || resolvedModuleId === "process_templates",
               },
             },
           });
@@ -2414,8 +2465,8 @@ export const ModuleListRefine: React.FC<{
                       onDelete={selectedRowKeys.length && canDeleteModule && !isSystemManagedModule ? handleBulkDelete : undefined}
                       onExport={selectedRowKeys.length ? handleExport : undefined}
                       exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
-                      extraActions={
-                        bulkBuildSourceModule && selectedRowKeys.length > 0 && canEditModule && !isSystemManagedModule
+                      extraActions={[
+                        ...(bulkBuildSourceModule && selectedRowKeys.length > 0 && canEditModule && !isSystemManagedModule
                           ? [
                               {
                                 key: "build_package",
@@ -2430,8 +2481,18 @@ export const ModuleListRefine: React.FC<{
                                 onClick: () => setBulkBuildTarget("price_lists"),
                               },
                             ]
-                          : []
-                      }
+                          : []),
+                        ...(selectedRowKeys.length > 0 && canBulkSendSms
+                          ? [
+                              {
+                                key: "bulk_sms",
+                                icon: <MessageOutlined />,
+                                tooltip: "ارسال پیامک گروهی",
+                                onClick: handleBulkSmsOpen,
+                              },
+                            ]
+                          : []),
+                      ]}
                       primaryActionLabel={
                         selectedRowKeys.length > 0 && resolvedModuleId === 'production_orders'
                           ? 'ایجاد سفارش گروهی جدید'
@@ -2837,6 +2898,20 @@ export const ModuleListRefine: React.FC<{
         allowFieldSelectionTab={listPrintManager.allowFieldSelectionTab}
         previewMeta={listPrintManager.previewMeta}
       />
+            {isBulkSmsComposerOpen ? (
+        <MessageComposerModal
+          open
+          mode="sms"
+          moduleId={resolvedModuleId}
+          record={bulkSmsSourceRecord}
+          smsRecipients={bulkSmsRecipients}
+          onCancel={() => {
+            setIsBulkSmsComposerOpen(false);
+            setBulkSmsRecipients([]);
+            setBulkSmsSourceRecord(null);
+          }}
+        />
+      ) : null}
       {previewRecordId && useQuickPreviewModal ? (
         <RelatedRecordPopover
           mode="modal"
@@ -2859,4 +2934,6 @@ export const ModuleListRefine: React.FC<{
 };
 
 export default ModuleListRefine;
+
+
 

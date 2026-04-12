@@ -212,6 +212,7 @@ create table if not exists public.marketing_leads (
   mobile text,
   email text,
   source text,
+  legacy_system_code text,
   status text not null default 'new'
     check (status in ('new', 'contacted', 'qualified', 'proposal', 'won', 'lost', 'archived')),
   score integer not null default 0,

@@ -1,4 +1,5 @@
 import { MODULES } from '../moduleRegistry';
+import { renderTemplateText } from './messageTemplateRenderer';
 import { normalizePhoneForStorage } from './phoneNumber';
 
 export type MessageReadyTextKind = 'field' | 'message';
@@ -8,53 +9,22 @@ export const MESSAGE_READY_TEXT_SCOPE_PREFIX = '__message__:';
 
 const DEFAULT_PHONE_KEYS = ['mobile_1', 'mobile_2', 'phone'];
 
-const toText = (value: any): string => {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) {
-    return value.map((item) => toText(item)).filter(Boolean).join('، ');
-  }
-  if (typeof value === 'object') {
-    const preferredKeys = ['label', 'title', 'name', 'full_name', 'business_name', 'system_code'];
-    for (const key of preferredKeys) {
-      const candidate = value?.[key];
-      if (candidate !== null && candidate !== undefined && String(candidate).trim()) {
-        return String(candidate);
-      }
-    }
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return '';
-    }
-  }
-  return String(value);
-};
-
 export const getReadyTextScopeModuleId = (
   moduleId?: string | null,
   kind: MessageReadyTextKind = 'field'
 ) => {
   const normalizedModuleId = String(moduleId || '').trim();
   if (kind === 'field') return normalizedModuleId || null;
-  return normalizedModuleId ? `${MESSAGE_READY_TEXT_SCOPE_PREFIX}${normalizedModuleId}` : GLOBAL_MESSAGE_READY_TEXT_SCOPE;
+  return normalizedModuleId
+    ? `${MESSAGE_READY_TEXT_SCOPE_PREFIX}${normalizedModuleId}`
+    : GLOBAL_MESSAGE_READY_TEXT_SCOPE;
 };
 
-export const renderRecordTemplate = (template: string, record?: Record<string, any> | null) => {
-  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, rawKey: string) => {
-    const path = String(rawKey || '').trim();
-    if (!path) return '';
-
-    const segments = path.split('.').map((part) => part.trim()).filter(Boolean);
-    let current: any = record || {};
-    for (const segment of segments) {
-      current = current?.[segment];
-      if (current === null || current === undefined) break;
-    }
-    return toText(current);
-  });
-};
+export const renderRecordTemplate = (
+  template: string,
+  record?: Record<string, any> | null,
+  moduleId?: string | null
+) => renderTemplateText(template, record, { moduleId });
 
 export const getRecordPhoneCandidates = (
   moduleId?: string | null,
@@ -138,7 +108,12 @@ export const getMessageTemplateVariables = (
       }
       const blockScopedKey = `${String(block?.id || '').trim()}.${key}`;
       if (String(block?.id || '').trim() && !labelMap.has(blockScopedKey)) {
-        labelMap.set(blockScopedKey, `${String(block?.titles?.fa || block?.title || block?.id || '').trim() || 'جدول'}: ${String(column?.title || key).trim() || key}`);
+        labelMap.set(
+          blockScopedKey,
+          `${String(block?.titles?.fa || block?.title || block?.id || '').trim() || 'جدول'}: ${
+            String(column?.title || key).trim() || key
+          }`
+        );
       }
     });
   });

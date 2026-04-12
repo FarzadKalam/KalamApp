@@ -419,6 +419,297 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   };
 };
 
+const DEFAULT_FILE_STORAGE_BUCKET = String(
+  Deno.env.get('FILE_STORAGE_BUCKET')
+  || Deno.env.get('VITE_FILE_STORAGE_BUCKET')
+  || 'images'
+).trim() || 'images';
+
+const safeFileName = (value: string, fallback = 'file') => {
+  const raw = String(value || '').trim();
+  const normalized = raw
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized || fallback;
+};
+
+const extensionFromMime = (value: string) => {
+  const mime = String(value || '').trim().toLowerCase();
+  if (!mime) return '';
+  if (mime.includes('jpeg')) return 'jpg';
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('bmp')) return 'bmp';
+  if (mime.includes('svg')) return 'svg';
+  if (mime.includes('mp4')) return 'mp4';
+  if (mime.includes('mpeg')) return 'mpeg';
+  if (mime.includes('quicktime')) return 'mov';
+  if (mime.includes('webm')) return 'webm';
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('zip')) return 'zip';
+  if (mime.includes('rar')) return 'rar';
+  if (mime.includes('7z')) return '7z';
+  if (mime.includes('ogg')) return 'ogg';
+  if (mime.includes('mp3')) return 'mp3';
+  if (mime.includes('wav')) return 'wav';
+  if (mime.includes('aac')) return 'aac';
+  if (mime.includes('json')) return 'json';
+  return '';
+};
+
+const findDeepDownloadUrl = (node: any): string | null => {
+  const seen = new Set<any>();
+  const stack = [node];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    if (Array.isArray(current)) {
+      current.forEach((item) => stack.push(item));
+      continue;
+    }
+    for (const [key, value] of Object.entries(current)) {
+      const lowerKey = String(key || '').toLowerCase();
+      if (typeof value === 'string') {
+        const trimmed = String(value || '').trim();
+        if (
+          /^https?:\/\//i.test(trimmed)
+          && (lowerKey.includes('url') || lowerKey.includes('download') || lowerKey.includes('link'))
+        ) {
+          return trimmed;
+        }
+      } else if (value && typeof value === 'object') {
+        stack.push(value);
+      }
+    }
+  }
+  return null;
+};
+
+const buildStorageObjectPath = ({
+  orgId,
+  channel,
+  fileName,
+  mimeType,
+}: {
+  orgId: string;
+  channel: string;
+  fileName: string;
+  mimeType: string | null;
+}) => {
+  const now = new Date();
+  const yyyy = String(now.getUTCFullYear());
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(now.getUTCDate()).padStart(2, '0');
+  const baseOrg = safeFileName(String(orgId || 'unknown_org').trim(), 'unknown_org');
+  const sourceName = safeFileName(fileName || 'file', 'file');
+  const hasExt = /\.[a-z0-9]{2,8}$/i.test(sourceName);
+  const ext = extensionFromMime(String(mimeType || ''));
+  const finalName = hasExt || !ext ? sourceName : `${sourceName}.${ext}`;
+  const randomPart = Math.random().toString(36).slice(2, 8);
+  const stamped = `${Date.now()}_${randomPart}_${finalName}`;
+  return `per_org/${baseOrg}/${String(channel || 'bot').trim() || 'bot'}/inbound/${yyyy}/${mm}/${dd}/${stamped}`;
+};
+
+const buildPublicObjectUrl = (supabaseUrl: string, bucket: string, objectPath: string) =>
+  `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/public/${encodeURIComponent(bucket)}/${objectPath
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/')}`;
+
+const uploadBinaryToStorage = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  bucket,
+  objectPath,
+  bytes,
+  contentType,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  bucket: string;
+  objectPath: string;
+  bytes: Uint8Array;
+  contentType: string;
+}) => {
+  const encodedPath = objectPath
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  const url = `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': contentType || 'application/octet-stream',
+      'x-upsert': 'true',
+    },
+    body: bytes,
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(raw || 'Could not upload media file to storage');
+  }
+  return buildPublicObjectUrl(supabaseUrl, bucket, objectPath);
+};
+
+const downloadBinaryFromUrl = async (url: string) => {
+  const target = String(url || '').trim();
+  if (!target) return null;
+  const response = await fetch(target, { method: 'GET' });
+  if (!response.ok) return null;
+  const contentType = String(response.headers.get('content-type') || '').trim() || 'application/octet-stream';
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.length) return null;
+  return { bytes, contentType };
+};
+
+const tryRubikaGetFile = async ({
+  settings,
+  fileId,
+}: {
+  settings: IntegrationSettings;
+  fileId: string;
+}) => {
+  const token = String(settings?.bot_token || '').trim();
+  if (!token || !fileId) return null;
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url || DEFAULT_API_BASE_URL.rubika);
+  if (!baseUrl) return null;
+  const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/getFile`;
+  const bodies: Array<Record<string, any>> = [
+    { file_id: fileId },
+    { fileId },
+    { id: fileId },
+    { file: fileId },
+    { file_id: fileId, download_type: 'file' },
+  ];
+
+  for (const body of bodies) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) continue;
+
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+      const mayBeJson = contentType.includes('application/json') || contentType.includes('text/json') || !contentType;
+      if (mayBeJson) {
+        const parsed = await response.clone().json().catch(() => null);
+        if (parsed && typeof parsed === 'object') {
+          const url = findDeepDownloadUrl(parsed);
+          if (url) {
+            return { fileUrl: url, bytes: null as Uint8Array | null, contentType: null as string | null };
+          }
+        }
+      }
+
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.length) continue;
+      return {
+        fileUrl: null as string | null,
+        bytes,
+        contentType: contentType || 'application/octet-stream',
+      };
+    } catch {
+      // continue fallback bodies
+    }
+  }
+  return null;
+};
+
+const resolveAndStoreInboundMedia = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  channel,
+  orgId,
+  integrationSettings,
+  mediaInfo,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  channel: BotChannel;
+  orgId: string;
+  integrationSettings: IntegrationSettings;
+  mediaInfo: {
+    messageType: string;
+    fileUrl: string | null;
+    fileName: string | null;
+    mimeType: string | null;
+    fileId: string | null;
+  };
+}) => {
+  if (mediaInfo.messageType === 'text') {
+    return {
+      fileUrl: null as string | null,
+      fileName: mediaInfo.fileName,
+      mimeType: mediaInfo.mimeType,
+      stored: false,
+    };
+  }
+
+  let resolvedUrl = String(mediaInfo.fileUrl || '').trim() || null;
+  let resolvedMime = String(mediaInfo.mimeType || '').trim() || null;
+  let bytes: Uint8Array | null = null;
+
+  if (channel === 'rubika' && !resolvedUrl && String(mediaInfo.fileId || '').trim()) {
+    const byFileId = await tryRubikaGetFile({
+      settings: integrationSettings,
+      fileId: String(mediaInfo.fileId || '').trim(),
+    });
+    if (byFileId) {
+      if (byFileId.fileUrl) resolvedUrl = String(byFileId.fileUrl || '').trim() || resolvedUrl;
+      if (byFileId.bytes?.length) bytes = byFileId.bytes;
+      if (byFileId.contentType) resolvedMime = String(byFileId.contentType || '').trim() || resolvedMime;
+    }
+  }
+
+  if (!bytes && resolvedUrl) {
+    const downloaded = await downloadBinaryFromUrl(resolvedUrl);
+    if (downloaded?.bytes?.length) {
+      bytes = downloaded.bytes;
+      resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
+    }
+  }
+
+  if (!bytes || !bytes.length) {
+    return {
+      fileUrl: resolvedUrl || null,
+      fileName: mediaInfo.fileName,
+      mimeType: resolvedMime || mediaInfo.mimeType || null,
+      stored: false,
+    };
+  }
+
+  const objectPath = buildStorageObjectPath({
+    orgId,
+    channel,
+    fileName: mediaInfo.fileName || 'file',
+    mimeType: resolvedMime || mediaInfo.mimeType || null,
+  });
+  const publicUrl = await uploadBinaryToStorage({
+    supabaseUrl,
+    serviceRoleKey,
+    bucket: DEFAULT_FILE_STORAGE_BUCKET,
+    objectPath,
+    bytes,
+    contentType: resolvedMime || mediaInfo.mimeType || 'application/octet-stream',
+  });
+
+  return {
+    fileUrl: publicUrl,
+    fileName: mediaInfo.fileName,
+    mimeType: resolvedMime || mediaInfo.mimeType || null,
+    stored: true,
+    storagePath: objectPath,
+    storageBucket: DEFAULT_FILE_STORAGE_BUCKET,
+  };
+};
+
 const findIntegrationBySecret = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -867,6 +1158,22 @@ Deno.serve(async (req) => {
 
     try {
       const mediaInfo = extractMediaInfo(payload);
+      const normalizedOrgId = String(integration?.org_id || '').trim() || 'unknown_org';
+      const mediaStored = await resolveAndStoreInboundMedia({
+        supabaseUrl,
+        serviceRoleKey,
+        channel,
+        orgId: normalizedOrgId,
+        integrationSettings: (integration?.settings || {}) as IntegrationSettings,
+        mediaInfo,
+      });
+      const attachmentEntry = mediaStored?.fileUrl
+        ? [{
+          name: String(mediaStored?.fileName || mediaInfo.fileName || 'فایل').trim() || 'فایل',
+          url: String(mediaStored.fileUrl || '').trim(),
+          mime_type: String(mediaStored?.mimeType || mediaInfo.mimeType || '').trim() || null,
+        }]
+        : [];
       await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
         org_id: integration.org_id || null,
         bot_group_id: matchedGroup?.id || null,
@@ -877,15 +1184,19 @@ Deno.serve(async (req) => {
         message_type: mediaInfo.messageType,
         chat_id: String(contact.chatId || '').trim() || null,
         content_text: String(contact.text || '').trim() || null,
-        file_url: mediaInfo.fileUrl,
-        file_name: mediaInfo.fileName,
-        mime_type: mediaInfo.mimeType,
+        file_url: mediaStored?.fileUrl || mediaInfo.fileUrl,
+        file_name: mediaStored?.fileName || mediaInfo.fileName,
+        mime_type: mediaStored?.mimeType || mediaInfo.mimeType,
         payload: {
           ...(payload && typeof payload === 'object' ? payload : {}),
           sender_id: String(contact.senderId || '').trim() || null,
           sender_display_name: String(contact.displayName || '').trim() || null,
           username: String(contact.username || '').trim() || null,
           media_file_id: mediaInfo.fileId,
+          media_stored: Boolean(mediaStored?.stored),
+          media_storage_bucket: mediaStored?.storageBucket || null,
+          media_storage_path: mediaStored?.storagePath || null,
+          attachments: attachmentEntry,
         },
       });
     } catch (error) {

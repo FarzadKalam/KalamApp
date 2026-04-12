@@ -92,7 +92,7 @@ export const productionOrderModule: ModuleDefinition = {
       type: FieldType.CHECKBOX,
       location: FieldLocation.HEADER,
       order: 2.7,
-      defaultValue: true,
+      defaultValue: false,
       nature: FieldNature.STANDARD,
     },
     { key: 'quantity', labels: { fa: 'تعداد تولید', en: 'Production Qty' }, type: FieldType.STOCK, location: FieldLocation.HEADER, order: 3, validation: { required: true }, readonly: true, nature: FieldNature.SYSTEM },

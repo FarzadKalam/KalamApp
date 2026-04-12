@@ -59,7 +59,7 @@ export const customerModule: ModuleDefinition = {
       type: FieldType.CHECKBOX,
       blockId: 'basic_info',
       order: 3.2,
-      defaultValue: true,
+      defaultValue: false,
       isTableColumn: false,
     },
 

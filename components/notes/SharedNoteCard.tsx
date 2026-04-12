@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Avatar, Button, Input, Tag } from 'antd';
 import {
   CheckOutlined,
@@ -39,11 +39,12 @@ interface SharedNoteCardProps {
   onForward?: () => void;
   variant?: 'default' | 'ai';
   renderTemplateBold?: boolean;
+  animateOnMount?: boolean;
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
 const HTML_ANCHOR_REGEX = /<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
-const LINK_CLASS_NAME = 'underline decoration-dotted underline-offset-2 break-all [overflow-wrap:anywhere] text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]';
+const LINK_CLASS_NAME = 'underline decoration-dotted underline-offset-2 break-all [overflow-wrap:anywhere] text-current';
 
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   authorName,
@@ -71,7 +72,20 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onForward,
   variant = 'default',
   renderTemplateBold = false,
+  animateOnMount = false,
 }) => {
+  const [entered, setEntered] = useState<boolean>(!animateOnMount);
+
+  useEffect(() => {
+    if (!animateOnMount) {
+      setEntered(true);
+      return;
+    }
+    setEntered(false);
+    const raf = window.requestAnimationFrame(() => setEntered(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, [animateOnMount]);
+
   const renderPlainLinkifiedText = (value: string, keyPrefix = 'link') => {
     const source = String(value || '');
     if (!source.trim()) return source;
@@ -164,7 +178,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
       <Avatar
-        size={30}
+        size={26}
         src={avatarUrl || undefined}
         className={`mt-0.5 shrink-0 ${variant === 'ai' ? '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]' : ''}`}
       >
@@ -172,15 +186,21 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       </Avatar>
       <div
         dir="rtl"
-        className={`min-w-0 max-w-[calc(100%-2.3rem)] text-right rounded-2xl px-2.5 py-2 border shadow-sm ${
-          variant === 'ai'
-            ? 'bg-[#fdf2f8] dark:bg-[#3b1022] border-[#f0abfc] dark:border-[#be185d]/45 rounded-tl-sm'
+        className={`min-w-0 max-w-[calc(100%-2.3rem)] text-right rounded-[1.05rem] px-2.5 py-2 shadow-[0_3px_10px_rgba(15,23,42,0.08)] dark:shadow-[0_3px_10px_rgba(0,0,0,0.22)] transition-all duration-300 ease-out will-change-transform ${
+          entered
+            ? 'opacity-100 translate-x-0 translate-y-0 scale-100'
             : isMine
-            ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-tr-sm'
-            : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-tl-sm'
+              ? 'opacity-0 translate-x-2 translate-y-1 scale-[0.985]'
+              : 'opacity-0 -translate-x-2 translate-y-1 scale-[0.985]'
+        } ${
+          variant === 'ai'
+            ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-700-rgb),0.35)] dark:text-[rgb(var(--brand-100-rgb))] rounded-tl-sm'
+            : isMine
+            ? 'bg-[rgb(var(--brand-700-rgb))] text-white dark:bg-[rgb(var(--brand-500-rgb))] dark:text-white rounded-tr-sm'
+            : 'bg-[rgba(var(--brand-50-rgb),0.96)] text-[rgb(var(--brand-800-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)] dark:text-[rgb(var(--brand-100-rgb))] rounded-tl-sm'
         }`}
       >
-        <div className="mb-1 flex items-center justify-between gap-2 text-[9px] text-gray-400">
+          <div className="mb-1 flex items-center justify-between gap-2 text-[8px] text-gray-400">
           <span className="truncate">{authorName}</span>
           <span className="shrink-0 inline-flex items-center gap-1">
             {statusNode}
@@ -189,7 +209,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         </div>
 
         {replyText ? (
-          <div className="mb-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.82)] px-2 py-1.5 text-[10px] text-gray-600 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-700-rgb),0.2)] dark:text-gray-300">
+          <div className="mb-2 rounded-xl bg-white/65 px-2 py-1.5 text-[10px] text-gray-600 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)] dark:bg-black/20 dark:text-gray-300 dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
             <span className="font-medium text-gray-700 dark:text-gray-200">
               پاسخ به یادداشت "{replyAuthorName || 'کاربر'}":
             </span>{' '}
@@ -216,7 +236,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             </div>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-6 text-gray-800 dark:text-gray-200">
+          <div className={`whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] leading-5 ${isMine ? 'text-white' : 'text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-100-rgb))]'}`}>
             {renderText(text)}
           </div>
         )}
@@ -229,7 +249,11 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
                 href={attachment.url}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 rounded-full border border-[rgba(var(--brand-300-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.9)] px-2 py-0.5 text-[10px] text-[rgb(var(--brand-700-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] dark:text-[rgb(var(--brand-300-rgb))]"
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] ${
+                  isMine
+                    ? 'border border-white/35 bg-white/15 text-white'
+                    : 'border border-[rgba(var(--brand-300-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.92)] text-[rgb(var(--brand-700-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgba(var(--brand-700-rgb),0.2)] dark:text-[rgb(var(--brand-200-rgb))]'
+                }`}
               >
                 <PaperClipOutlined />
                 <span className="max-w-[180px] truncate">{attachment.name}</span>
@@ -241,19 +265,19 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         {(mentionUsers.length > 0 || mentionRoles.length > 0) ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {mentionUsers.map((label) => (
-              <Tag key={`user-${label}`} className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-100-rgb),0.95)] !px-2 !py-0.5 !text-[10px] !text-[rgb(var(--brand-700-rgb))]">
+              <Tag key={`user-${label}`} className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-100-rgb),0.95)] !px-2 !py-0.5 !text-[9px] !text-[rgb(var(--brand-700-rgb))]">
                 @{label}
               </Tag>
             ))}
             {mentionRoles.map((label) => (
-              <Tag key={`role-${label}`} className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-700-rgb),0.14)] !px-2 !py-0.5 !text-[10px] !text-[rgb(var(--brand-700-rgb))] dark:!text-[rgb(var(--brand-300-rgb))]">
+              <Tag key={`role-${label}`} className="!m-0 !rounded-full !border-0 !bg-[rgba(var(--brand-700-rgb),0.14)] !px-2 !py-0.5 !text-[9px] !text-[rgb(var(--brand-700-rgb))] dark:!text-[rgb(var(--brand-300-rgb))]">
                 @{label}
               </Tag>
             ))}
           </div>
         ) : null}
 
-        {footer ? <div className="mt-2 text-[10px] text-gray-500">{footer}</div> : null}
+        {footer ? <div className="mt-2 text-[9px] text-gray-500">{footer}</div> : null}
         {isEdited ? <div className="mt-1.5 text-[9px] text-gray-400">ویرایش شده</div> : null}
 
         <div className="mt-1.5 flex items-center gap-0.5">

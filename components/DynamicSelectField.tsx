@@ -185,6 +185,14 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
     setLocalOptions((prev) => mergeDynamicOptions(prev, [option]));
   };
 
+  const keepDropdownOpenOnMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const interactive = target.closest('input, textarea, button, .ant-input, .ant-btn, .ant-select, .ant-select-selector');
+    if (interactive) return;
+    event.preventDefault();
+  };
+
   const loadCategoryRows = async () => {
     const { data, error } = await supabase
       .from('dynamic_options')
@@ -587,7 +595,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
             {menu}
             <Divider style={{ margin: '8px 0' }} />
             <div
-              onMouseDown={(e) => e.preventDefault()}
+              onMouseDown={keepDropdownOpenOnMouseDown}
               style={{
                 padding: isMobileViewport ? '8px' : '8px 10px 10px',
                 position: 'sticky',

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs } from 'antd';
-import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined } from '@ant-design/icons';
+import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -29,6 +29,9 @@ import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlaySto
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import AssistantPanel from './ai/AssistantPanel';
+import { renderRecordTemplate } from '../utils/recordMessaging';
+import MessageComposerModal from './MessageComposerModal';
+import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -42,6 +45,7 @@ const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
 const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
 const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
+const SEEN_BOT_MESSAGES_STORAGE_KEY = 'notif_seen_bot_messages_v1';
 const DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY = 'notif_dismissed_ui_v1';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, 'primary' | 'id_only' | 'none'>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages';
@@ -180,6 +184,7 @@ const resolveOptionLabel = (value: any, options?: { label: string; value: any }[
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const formatBadgeCount = (count: number) => (count ? toPersianNumber(count) : 0);
+const ENTRY_ANIMATION_WINDOW_MS = 12_000;
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
@@ -372,6 +377,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [editingBotMessageId, setEditingBotMessageId] = useState<string | null>(null);
   const [editingBotMessageValue, setEditingBotMessageValue] = useState('');
   const [botMentionPickerOpen, setBotMentionPickerOpen] = useState(false);
+  const [botTemplateRecord, setBotTemplateRecord] = useState<Record<string, any> | null>(null);
   const [mobileBotSearchOpen, setMobileBotSearchOpen] = useState(false);
   const [noteNewIncomingCount, setNoteNewIncomingCount] = useState(0);
   const [botNewIncomingCount, setBotNewIncomingCount] = useState(0);
@@ -403,8 +409,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [noteUserSearch, setNoteUserSearch] = useState('');
   const [noteMessageSearch, setNoteMessageSearch] = useState('');
   const [noteMentionPickerOpen, setNoteMentionPickerOpen] = useState(false);
+  const [noteTemplateRecord, setNoteTemplateRecord] = useState<Record<string, any> | null>(null);
   const [noteMessageSearchOpen, setNoteMessageSearchOpen] = useState(false);
   const [mobileNoteSearchOpen, setMobileNoteSearchOpen] = useState(false);
+  const [templateComposerContext, setTemplateComposerContext] = useState<'notes' | 'bot' | null>(null);
   const [mentionOptions, setMentionOptions] = useState<{ label: string; value: string }[]>([]);
   const [mentionValues, setMentionValues] = useState<string[]>([]);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -418,12 +426,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [responsibilitySortDirection, setResponsibilitySortDirection] = useState<CreatedSortDirection>('desc');
   const [previewRecord, setPreviewRecord] = useState<{ moduleId: string; recordId: string; label?: string } | null>(null);
   const [taskProcessModalTask, setTaskProcessModalTask] = useState<any | null>(null);
-  const [taskProcessHostKey, setTaskProcessHostKey] = useState(0);
+  const [taskProcessHostKey] = useState(0);
   const [selectedConversationNotes, setSelectedConversationNotes] = useState<any[] | null>(null);
   const [seenNoteIds, setSeenNoteIds] = useState<Set<string>>(() => loadSeenSet(SEEN_NOTES_STORAGE_KEY));
   const [seenTaskIds, setSeenTaskIds] = useState<Set<string>>(() => loadSeenSet(SEEN_TASKS_STORAGE_KEY));
   const [seenResponsibilityIds, setSeenResponsibilityIds] = useState<Set<string>>(() => loadSeenSet(SEEN_RESP_STORAGE_KEY));
   const [seenCompletedTaskIds, setSeenCompletedTaskIds] = useState<Set<string>>(() => loadSeenSet(SEEN_COMPLETED_TASKS_STORAGE_KEY));
+  const [seenBotMessageIds, setSeenBotMessageIds] = useState<Set<string>>(() => loadSeenSet(SEEN_BOT_MESSAGES_STORAGE_KEY));
   const [dismissedUiNotificationIds, setDismissedUiNotificationIds] = useState<Set<string>>(() => loadSeenSet(DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY));
   const [uiNotifications, setUiNotifications] = useState<UiNotificationItem[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
@@ -449,12 +458,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     bot_messages: 0,
   });
   const liveRefreshTimerRef = useRef<number | null>(null);
+  const liveSectionRefreshTimersRef = useRef<Partial<Record<NotificationSectionKey, number>>>({});
   const realtimeDisabledRef = useRef(false);
   const refreshAllRef = useRef<((notify?: boolean, options?: { force?: boolean }) => Promise<void>) | null>(null);
+  const refreshSectionRef = useRef<((section: NotificationSectionKey, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const notificationSoundWindowRef = useRef<{ startedAt: number; plays: number }>({ startedAt: 0, plays: 0 });
   const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const botShouldStickToBottomRef = useRef(true);
   const botForceScrollToBottomRef = useRef(false);
+  const templateRecordCacheRef = useRef<Map<string, Record<string, any> | null>>(new Map());
   const noteConversationKeyRef = useRef<string | null>(null);
   const noteConversationMessageIdsRef = useRef<Set<string>>(new Set());
   const botConversationKeyRef = useRef<string | null>(null);
@@ -467,9 +479,120 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     const parsed = parseFloat(value);
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  const shouldAnimateChatEntry = useCallback((createdAt: any) => {
+    const time = new Date(createdAt || '').getTime();
+    if (!Number.isFinite(time)) return false;
+    return Date.now() - time <= ENTRY_ANIMATION_WINDOW_MS;
+  }, []);
   const moduleOptions = Object.values(MODULES)
     .filter((mod: any) => mod?.id && (mod?.table || mod?.id))
     .map((mod: any) => ({ label: mod.titles?.fa || mod.id, value: mod.id }));
+  const selectedBotGroup = useMemo(
+    () => botGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
+    [botGroups, selectedBotGroupId]
+  );
+  const selectedBotModuleId = useMemo(() => {
+    if (!selectedBotGroup) return null;
+    return String(selectedBotGroup.target_type || '').trim() === 'customers' ? 'customers' : 'suppliers';
+  }, [selectedBotGroup]);
+  const selectedBotRecordId = useMemo(() => {
+    if (!selectedBotGroup) return null;
+    return selectedBotModuleId === 'customers'
+      ? String(selectedBotGroup.customer_id || '').trim() || null
+      : String(selectedBotGroup.supplier_id || '').trim() || null;
+  }, [selectedBotGroup, selectedBotModuleId]);
+
+  const fetchTemplateRecord = useCallback(async (moduleId?: string | null, recordId?: string | null) => {
+    const normalizedModuleId = String(moduleId || '').trim();
+    const normalizedRecordId = String(recordId || '').trim();
+    if (!normalizedModuleId || !normalizedRecordId) return null;
+
+    const cacheKey = `${normalizedModuleId}:${normalizedRecordId}`;
+    if (templateRecordCacheRef.current.has(cacheKey)) {
+      return templateRecordCacheRef.current.get(cacheKey) || null;
+    }
+
+    const table = MODULES[normalizedModuleId]?.table || normalizedModuleId;
+    const { data, error } = await supabase
+      .from(table)
+      .select('*')
+      .eq('id', normalizedRecordId)
+      .maybeSingle();
+    if (error) throw error;
+    const normalized = (data || null) as Record<string, any> | null;
+    templateRecordCacheRef.current.set(cacheKey, normalized);
+    return normalized;
+  }, []);
+
+  const openReadyTextsModal = useCallback((context: 'notes' | 'bot') => {
+    setTemplateComposerContext(context);
+  }, []);
+
+  const insertTemplateToken = useCallback((token: string) => {
+    const normalizedToken = String(token || '').trim();
+    if (!normalizedToken) return;
+    if (templateComposerContext === 'bot') {
+      setBotMessageText((prev) => `${String(prev || '')}${normalizedToken}`);
+      return;
+    }
+    setNoteText((prev) => `${String(prev || '')}${normalizedToken}`);
+  }, [templateComposerContext]);
+
+  const applyReadyText = useCallback((content: string) => {
+    const normalizedContent = String(content || '');
+    if (!normalizedContent.trim()) return;
+    if (templateComposerContext === 'bot') {
+      setBotMessageText((prev) => (String(prev || '').trim() ? `${String(prev || '').trim()}\n${normalizedContent}` : normalizedContent));
+      return;
+    }
+    setNoteText((prev) => (String(prev || '').trim() ? `${String(prev || '').trim()}\n${normalizedContent}` : normalizedContent));
+  }, [templateComposerContext]);
+
+  const activeTemplateModuleId = templateComposerContext === 'bot' ? selectedBotModuleId : noteModuleId;
+  const activeTemplateRecord = templateComposerContext === 'bot' ? botTemplateRecord : noteTemplateRecord;
+useEffect(() => {
+    let cancelled = false;
+    if (!noteModuleId || !noteRecordId) {
+      setNoteTemplateRecord(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const load = async () => {
+      try {
+        const row = await fetchTemplateRecord(noteModuleId, noteRecordId);
+        if (!cancelled) setNoteTemplateRecord(row);
+      } catch {
+        if (!cancelled) setNoteTemplateRecord(null);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchTemplateRecord, noteModuleId, noteRecordId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedBotModuleId || !selectedBotRecordId) {
+      setBotTemplateRecord(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const load = async () => {
+      try {
+        const row = await fetchTemplateRecord(selectedBotModuleId, selectedBotRecordId);
+        if (!cancelled) setBotTemplateRecord(row);
+      } catch {
+        if (!cancelled) setBotTemplateRecord(null);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchTemplateRecord, selectedBotModuleId, selectedBotRecordId]);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -495,6 +618,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   useEffect(() => {
     persistSeenSet(SEEN_COMPLETED_TASKS_STORAGE_KEY, seenCompletedTaskIds);
   }, [seenCompletedTaskIds]);
+
+  useEffect(() => {
+    persistSeenSet(SEEN_BOT_MESSAGES_STORAGE_KEY, seenBotMessageIds);
+  }, [seenBotMessageIds]);
 
   useEffect(() => {
     persistSeenSet(DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY, dismissedUiNotificationIds);
@@ -1405,7 +1532,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     try {
       notesPollingPausedRef.current = false;
       notesPollingPauseLoggedRef.current = false;
-      await refreshAll(false, { force: true });
+      const currentTab = isMobile ? mobileActiveKey : desktopActiveKey;
+      const activeSection = isSectionTabKey(currentTab) ? currentTab : null;
+      if (activeSection) {
+        await refreshSection(activeSection, { force: true });
+        void refreshAll(false, { force: true });
+      } else {
+        await refreshAll(false, { force: true });
+      }
     } finally {
       setRefreshing(false);
     }
@@ -1414,6 +1548,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   useEffect(() => {
     refreshAllRef.current = refreshAll;
   }, [refreshAll]);
+
+  useEffect(() => {
+    refreshSectionRef.current = refreshSection;
+  }, [refreshSection]);
 
   const activeDrawerTab = isMobile ? mobileActiveKey : desktopActiveKey;
   const activeDrawerSection = isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null;
@@ -1519,12 +1657,27 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       return false;
     };
 
-    const scheduleLiveRefresh = () => {
+    const scheduleLiveRefresh = (section?: NotificationSectionKey) => {
       if (liveRefreshTimerRef.current !== null && typeof window !== 'undefined') {
         window.clearTimeout(liveRefreshTimerRef.current);
       }
       if (typeof window === 'undefined') {
-        void refreshAllRef.current?.(true, { force: true });
+        if (section) {
+          void refreshSectionRef.current?.(section, { force: true });
+        } else {
+          void refreshAllRef.current?.(true, { force: true });
+        }
+        return;
+      }
+      if (section) {
+        const currentSectionTimer = liveSectionRefreshTimersRef.current[section];
+        if (typeof currentSectionTimer === 'number') {
+          window.clearTimeout(currentSectionTimer);
+        }
+        liveSectionRefreshTimersRef.current[section] = window.setTimeout(() => {
+          delete liveSectionRefreshTimersRef.current[section];
+          void refreshSectionRef.current?.(section, { force: true });
+        }, 250);
         return;
       }
       liveRefreshTimerRef.current = window.setTimeout(() => {
@@ -1537,31 +1690,31 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
 
     channel
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notes' }, (payload: any) => {
-        if (hasNoteMatch(payload?.new)) scheduleLiveRefresh();
+        if (hasNoteMatch(payload?.new)) scheduleLiveRefresh('notes');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notes' }, (payload: any) => {
-        if (hasNoteMatch(payload?.new) || hasNoteMatch(payload?.old)) scheduleLiveRefresh();
+        if (hasNoteMatch(payload?.new) || hasNoteMatch(payload?.old)) scheduleLiveRefresh('notes');
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tasks' }, (payload: any) => {
-        if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh();
+        if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('tasks');
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tasks' }, (payload: any) => {
-        if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh();
+        if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('tasks');
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_groups' }, () => {
-        scheduleLiveRefresh();
+        scheduleLiveRefresh('bot_messages');
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_messages' }, () => {
-        scheduleLiveRefresh();
+        scheduleLiveRefresh('bot_messages');
       });
 
     RESPONSIBILITY_REALTIME_TABLES.forEach((table) => {
       channel
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table }, (payload: any) => {
-          if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh();
+          if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('responsibilities');
         })
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table }, (payload: any) => {
-          if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh();
+          if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('responsibilities');
         });
     });
 
@@ -1577,6 +1730,12 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
         window.clearTimeout(liveRefreshTimerRef.current);
         liveRefreshTimerRef.current = null;
       }
+      if (typeof window !== 'undefined') {
+        Object.values(liveSectionRefreshTimersRef.current).forEach((timerId) => {
+          if (typeof timerId === 'number') window.clearTimeout(timerId);
+        });
+      }
+      liveSectionRefreshTimersRef.current = {};
       supabase.removeChannel(channel);
     };
   }, [profile.id, profile.role_id]);
@@ -1584,7 +1743,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const notesCount = notes.filter((n: any) => !seenNoteIds.has(String(n.id))).length;
   const tasksCount = tasks.filter((t: any) => !seenTaskIds.has(String(t.id))).length;
   const responsibilitiesCount = responsibilities.filter((r: any) => !seenResponsibilityIds.has(String(r.id))).length;
-  const botMessagesCount = botMessages.length;
+  const botMessagesCount = botMessages.filter((row) => (
+    String(row?.direction || '').trim() === 'inbound'
+    && !seenBotMessageIds.has(String(row?.id || '').trim())
+  )).length;
   const chatTotalCount = notesCount + botMessagesCount;
   const alertsTotalCount = tasksCount + responsibilitiesCount;
   const totalCount = variant === 'chat' ? chatTotalCount : alertsTotalCount;
@@ -1730,9 +1892,65 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       isDirectConversationNote(note, currentUserId, targetUserId, noteLookup)
     );
   }, [noteLookup, notes, profile.id, selectedChatGroupId, selectedConversationNotes, selectedNoteUserId]);
+  const inferredDirectUsers = useMemo(() => {
+    const currentUserId = String(profile.id || '').trim();
+    if (!currentUserId) return [] as Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
+
+    const nameById: Record<string, string> = {};
+    notes.forEach((note: any) => {
+      const authorId = String(note?.author_id || '').trim();
+      const authorName = String(note?.author_name || '').trim();
+      if (authorId && authorName && !nameById[authorId]) {
+        nameById[authorId] = authorName;
+      }
+    });
+
+    const candidateIds = new Set<string>();
+    notes.forEach((note: any) => {
+      const authorId = String(note?.author_id || '').trim();
+      if (authorId && authorId !== currentUserId) candidateIds.add(authorId);
+      const mentionIds = Array.isArray(note?.mention_user_ids) ? note.mention_user_ids : [];
+      mentionIds.forEach((id: any) => {
+        const normalized = String(id || '').trim();
+        if (normalized && normalized !== currentUserId) candidateIds.add(normalized);
+      });
+    });
+
+    const result: Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }> = [];
+    candidateIds.forEach((userId) => {
+      if (directoryUserMap[userId]) return;
+      const hasConversation = notes.some((note: any) =>
+        isDirectConversationNote(note, currentUserId, userId, noteLookup)
+      );
+      if (!hasConversation) return;
+      result.push({
+        id: userId,
+        display_name: nameById[userId] || authorNameMap[userId] || `کاربر ${userId.slice(0, 8)}`,
+        avatar_url: null,
+        role_id: null,
+      });
+    });
+    return result;
+  }, [authorNameMap, directoryUserMap, noteLookup, notes, profile.id]);
+  const availableDirectUsers = useMemo(
+    () => {
+      const byId = new Map<string, { id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>();
+      directoryUsers
+        .filter((user) => String(user.id) !== String(profile.id || ''))
+        .forEach((user) => {
+          byId.set(String(user.id), user);
+        });
+      inferredDirectUsers.forEach((user) => {
+        if (!byId.has(String(user.id))) {
+          byId.set(String(user.id), user);
+        }
+      });
+      return Array.from(byId.values());
+    },
+    [directoryUsers, inferredDirectUsers, profile.id]
+  );
   const noteUsersWithActivity = useMemo(() => (
-    directoryUsers
-      .filter((user) => String(user.id) !== String(profile.id || ''))
+    availableDirectUsers
       .map((user) => {
         const conversationNotes = notes.filter((note: any) =>
           isDirectConversationNote(note, String(profile.id || ''), String(user.id), noteLookup)
@@ -1758,7 +1976,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
         if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
         return String(a.display_name || '').localeCompare(String(b.display_name || ''), 'fa');
       })
-  ), [directoryUsers, noteLookup, notes, profile.id, seenNoteIds]);
+  ), [availableDirectUsers, noteLookup, notes, profile.id, seenNoteIds]);
   const noteGroupsWithActivity = useMemo(() => (
     chatGroups
       .map((group) => {
@@ -1837,8 +2055,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     if (selectedChatGroupId) {
       return null;
     }
-    return directoryUserMap[String(selectedNoteUserId)] || null;
-  }, [directoryUserMap, selectedChatGroupId, selectedNoteUserId]);
+    return directoryUserMap[String(selectedNoteUserId)] || inferredDirectUsers.find((user) => String(user.id) === String(selectedNoteUserId)) || null;
+  }, [directoryUserMap, inferredDirectUsers, selectedChatGroupId, selectedNoteUserId]);
   const orderedFilteredNotes = useMemo(
     () => [...filteredNotes].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     [filteredNotes]
@@ -1883,7 +2101,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
         value: `${CHAT_GROUP_PREFIX}${group.id}`,
         searchText: `گروه ${group.name}`.toLowerCase(),
       })),
-      ...directoryUsers
+      ...availableDirectUsers
         .filter((user) => String(user.id) !== String(profile.id || ''))
         .map((user) => {
           const roleLabel = user.role_id ? roleLookup[String(user.role_id)] : '';
@@ -1894,7 +2112,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           };
         }),
     ],
-    [botGroups, chatGroups, directoryUsers, profile.id, roleLookup]
+    [availableDirectUsers, botGroups, chatGroups, profile.id, roleLookup]
   );
 
   const isBotGroupForwardSelection = (value: string) => String(value || '').startsWith(BOT_GROUP_FORWARD_PREFIX);
@@ -2053,6 +2271,24 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
     });
   }
+  const markBotMessagesAsSeen = useCallback((rows: CounterpartyBotMessageRow[]) => {
+    const inboundIds = rows
+      .filter((row) => String(row?.direction || '').trim() === 'inbound')
+      .map((row) => String(row?.id || '').trim())
+      .filter(Boolean);
+    if (inboundIds.length === 0) return;
+    setSeenBotMessageIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      inboundIds.forEach((id) => {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, []);
   const handleNotesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const node = event.currentTarget;
     const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -2067,8 +2303,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     botShouldStickToBottomRef.current = distanceToBottom <= 80;
     if (distanceToBottom <= 80) {
       setBotNewIncomingCount(0);
+      markBotMessagesAsSeen(botMessages);
     }
-  }, []);
+  }, [botMessages, markBotMessagesAsSeen]);
 
   const handleClose = useCallback(() => {
     mobileDrawerHistoryActiveRef.current = false;
@@ -2082,6 +2319,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     setBotNewIncomingCount(0);
     if (variant === 'chat') {
       setSeenNoteIds((prev) => new Set([...prev, ...notes.map((n: any) => String(n.id))]));
+      setSeenBotMessageIds((prev) => new Set([
+        ...prev,
+        ...botMessages
+          .filter((row) => String(row?.direction || '').trim() === 'inbound')
+          .map((row) => String(row?.id || '').trim())
+          .filter(Boolean),
+      ]));
     } else {
       setSeenTaskIds((prev) => new Set([...prev, ...tasks.map((t: any) => String(t.id))]));
       setSeenResponsibilityIds((prev) => new Set([...prev, ...responsibilities.map((r: any) => String(r.id))]));
@@ -2089,7 +2333,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     setPreviewRecord(null);
     setTaskProcessModalTask(null);
     setOpen(false);
-  }, [notes, responsibilities, tasks, variant]);
+  }, [botMessages, notes, responsibilities, tasks, variant]);
 
   useEffect(() => {
     setNoteMessageSearch('');
@@ -2225,6 +2469,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     scrollBotMessagesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     botForceScrollToBottomRef.current = false;
   }, [activeDrawerSection, botMessages, open, selectedBotGroupId]);
+
+  useEffect(() => {
+    if (!open || activeDrawerSection !== 'bot_messages') return;
+    if (!selectedBotGroupId) return;
+    if (!botShouldStickToBottomRef.current) return;
+    markBotMessagesAsSeen(botMessages);
+  }, [activeDrawerSection, botMessages, markBotMessagesAsSeen, open, selectedBotGroupId]);
 
   useEffect(() => {
     const currentUserId = String(profile.id || '').trim();
@@ -2444,6 +2695,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
 
     try {
       const scope = normalizeNoteScope(noteModuleId, noteRecordId);
+      const renderedNoteText = noteModuleId && noteTemplateRecord
+        ? renderRecordTemplate(noteText, noteTemplateRecord, noteModuleId)
+        : noteText;
       const { mentionUserIds, mentionRoleIds } = parseMentionSelections(mentionValues);
       const groupPayload = getChatGroupPayload(selectedChatGroup);
       const attachments = noteAttachments.length > 0
@@ -2453,7 +2707,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       const payload = {
         module_id: scope.module_id,
         record_id: scope.record_id,
-        content: serializeNoteContent(noteText, attachments),
+        content: serializeNoteContent(renderedNoteText, attachments),
         reply_to: noteReplyTo || null,
         mention_user_ids: Array.from(new Set([...mentionUserIds, ...groupPayload.mentionUserIds])),
         mention_role_ids: Array.from(new Set([...mentionRoleIds, ...groupPayload.mentionRoleIds])),
@@ -2466,7 +2720,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       if (noteSmsNotificationEnabled) {
         await sendNoteSmsNotifications({
           authorName: String(directoryUserMap[String(profile.id || '')]?.display_name || '').trim() || 'کاربر',
-          noteText,
+          noteText: renderedNoteText,
           mentionUserIds: payload.mention_user_ids,
           mentionRoleIds: payload.mention_role_ids,
           moduleId: scope.module_id,
@@ -2878,10 +3132,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       if (kind === 'note') return !seenNoteIds.has(entityId);
       if (kind === 'task') return !seenTaskIds.has(entityId);
       if (kind === 'responsibility') return !seenResponsibilityIds.has(entityId);
-      if (kind === 'bot') return true;
+      if (kind === 'bot') return !seenBotMessageIds.has(entityId);
       return false;
     }));
-  }, [dismissedUiNotificationIds, seenNoteIds, seenResponsibilityIds, seenTaskIds]);
+  }, [dismissedUiNotificationIds, seenBotMessageIds, seenNoteIds, seenResponsibilityIds, seenTaskIds]);
 
   const handleDismissUiNotification = useCallback((notificationId: string) => {
     setDismissedUiNotificationIds((prev) => new Set(prev).add(notificationId));
@@ -2911,8 +3165,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     if (item.kind === 'task' && item.task) {
       const sourceLink = resolveTaskSourceLink(item.task);
       if (sourceLink.moduleId && sourceLink.recordId) {
-        setTaskProcessModalTask({ ...item.task });
-        setTaskProcessHostKey((prev) => prev + 1);
+        openTaskProcessModal({ task: item.task });
         return;
       }
       setDesktopActiveKey('tasks');
@@ -2983,8 +3236,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     return (
       <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
         {withUserSidebar ? (
-          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.14)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.22)]">
+          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.18)] bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)]">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گفتگوها</div>
                 <Button
@@ -3099,8 +3352,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           </div>
         ) : null}
 
-        <div className="flex flex-col flex-1 min-h-0 bg-[rgba(255,255,255,0.98)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-          <div className="border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.96)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.14)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+        <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div className="border-b border-[rgba(var(--brand-200-rgb),0.55)] bg-white px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex items-center gap-3">
                 {selectedChatGroup || selectedNoteUser ? (
@@ -3236,6 +3489,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
                       replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
                       replyAuthorName={replyAuthorName}
                       isMine={Boolean(isMine)}
+                      animateOnMount={shouldAnimateChatEntry(note.created_at)}
                       variant="default"
                       renderTemplateBold={isSystem}
                       isEdited={Boolean(note.is_edited)}
@@ -3382,10 +3636,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
             smsNotificationEnabled={noteSmsNotificationEnabled}
             onSmsNotificationChange={setNoteSmsNotificationEnabled}
             submitDisabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0)}
+            extraActions={(
+              <Button
+                type="text"
+                size="small"
+                icon={<SnippetsOutlined />}
+                onClick={() => openReadyTextsModal('notes')}
+              />
+            )}
           />
         </div>
         {withMobileUserRail ? (
-          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:border-[rgba(var(--brand-300-rgb),0.14)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.55)] bg-white dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
             <div className="flex h-full flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden px-1 py-2">
               <div className="sticky top-0 z-10 flex w-full justify-center">
                 <Popover
@@ -3639,7 +3901,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
             </Button>
           )}
         </div>
-        <div className="border-t border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.25)] bg-[rgba(var(--brand-50-rgb),0.98)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.98)] px-4 py-3">
+      <div className="border-t border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)] bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))] px-4 py-3">
           <div className="flex items-center gap-2 mb-2">
             <Select
               placeholder="ماژول"
@@ -3680,7 +3942,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
               autoSize={{ minRows: 2, maxRows: 4 }}
-              className="rounded-lg border-gray-300"
+              className="rounded-[0.9rem] !border-[rgba(var(--brand-200-rgb),0.72)] dark:!border-[rgba(var(--brand-300-rgb),0.26)]"
               disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
             />
             <Select
@@ -3724,7 +3986,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const renderBotMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
     const withDesktopSidebar = layout === 'desktop';
     const withMobileUserRail = layout === 'mobile';
-    const selectedGroup = botGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null;
+    const selectedGroup = selectedBotGroup;
     const statusLabel = BOT_STATUS_LABELS_FA[String(selectedGroup?.status || '')] || String(selectedGroup?.status || 'نامشخص');
     const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
     const groupTitle = String(selectedGroup?.group_title || '').trim() || String(selectedGroup?.group_join_link || '').trim() || 'گروه بدون عنوان';
@@ -3759,10 +4021,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
       }
       setBotSending(true);
       try {
-        const recordModuleId = selectedGroup.target_type === 'customers' ? 'customers' : 'suppliers';
+        const recordModuleId = selectedBotModuleId || (selectedGroup.target_type === 'customers' ? 'customers' : 'suppliers');
         const recordId = selectedGroup.target_type === 'customers'
           ? String(selectedGroup.customer_id || '').trim()
           : String(selectedGroup.supplier_id || '').trim();
+        const renderedText = recordModuleId && botTemplateRecord
+          ? renderRecordTemplate(text, botTemplateRecord, recordModuleId)
+          : text;
         const attachments = botAttachments.length > 0
           ? await uploadNoteAttachments(recordModuleId, recordId || null, botAttachments)
           : [];
@@ -3770,7 +4035,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           .map((item) => `${String(item?.name || 'فایل').trim()}: ${String(item?.url || '').trim()}`)
           .filter(Boolean)
           .join('\n');
-        const finalText = [text, attachmentText].filter(Boolean).join('\n');
+        const finalText = [renderedText, attachmentText].filter(Boolean).join('\n');
         if (!String(finalText || '').trim()) {
           message.warning('متن پیام خالی است.');
           return;
@@ -3800,8 +4065,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     return (
       <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
         {withDesktopSidebar ? (
-          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.14)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.22)]">
+          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.18)] bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)]">
               <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گروه‌های بات</div>
               <Input
                 size="small"
@@ -3851,8 +4116,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           </div>
         ) : null}
 
-        <div className="flex flex-col flex-1 min-h-0 bg-[rgba(255,255,255,0.98)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-          <div className="border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.96)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.14)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+        <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div className="border-b border-[rgba(var(--brand-200-rgb),0.55)] bg-white px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
             <div className="flex items-center gap-3">
               <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
                 <RobotOutlined />
@@ -3940,6 +4205,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
                       replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
                       replyAuthorName={replyAuthorName}
                       isMine={outgoing}
+                      animateOnMount={shouldAnimateChatEntry(row.created_at)}
                       isEdited={Boolean(payload?.is_edited)}
                       isEditing={isEditing}
                       editingValue={editingBotMessageValue}
@@ -3994,6 +4260,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
                   botShouldStickToBottomRef.current = true;
                   botForceScrollToBottomRef.current = true;
                   setBotNewIncomingCount(0);
+                  markBotMessagesAsSeen(botMessages);
                   scrollBotMessagesToBottom('smooth');
                 }}
               >
@@ -4028,11 +4295,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
             replyActive={Boolean(botReplyToId)}
             onClearReply={() => setBotReplyToId(null)}
             submitDisabled={!selectedGroup || !canSend || botSending || (!String(botMessageText || '').trim() && botAttachments.length === 0)}
+            extraActions={(
+              <Button
+                type="text"
+                size="small"
+                icon={<SnippetsOutlined />}
+                onClick={() => openReadyTextsModal('bot')}
+              />
+            )}
           />
         </div>
 
         {withMobileUserRail ? (
-          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:border-[rgba(var(--brand-300-rgb),0.14)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.55)] bg-white dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
             <div className="flex h-full flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden px-1 py-2">
               <div className="sticky top-0 z-10 flex w-full justify-center">
                 <Popover
@@ -4205,14 +4480,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
                   allRoles={directoryRoles}
                   selectedRowKeys={[]}
                   setSelectedRowKeys={() => undefined}
-                  navigate={(path) => {
-                    const [, moduleId, recordId] = String(path || '').split('/');
-                    if (!moduleId || !recordId) return;
-                    if (moduleId === 'tasks') {
-                      setTaskProcessModalTask({ ...task });
-                      setTaskProcessHostKey((prev) => prev + 1);
-                      return;
-                    }
+                    navigate={(path) => {
+                      const [, moduleId, recordId] = String(path || '').split('/');
+                      if (!moduleId || !recordId) return;
+                      if (moduleId === 'tasks') {
+                        openTaskProcessModal({ task });
+                        return;
+                      }
                     openPreviewRecord(
                       moduleId,
                       recordId,
@@ -4243,18 +4517,36 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
                     onClose={handleClose}
                     onStatusChange={async (taskId, status) => {
                       const currentTask = tasks.find((row: any) => String(row?.id) === String(taskId)) || null;
-                      const updatedTask = await updateTaskStatusWithAutomation({
-                        taskId,
-                        nextStatus: status,
-                        previousTask: currentTask,
-                        currentUser: {
-                          id: profile.id,
-                          fullName: createdByNameMap[String(profile.id || '')] || null,
-                        },
-                      });
+                      const previousTask = currentTask ? { ...currentTask } : null;
                       setTasks((prev) => prev.map((row: any) => (
-                        row.id === taskId ? { ...row, ...updatedTask } : row
+                        String(row?.id || '') === String(taskId)
+                          ? { ...row, status }
+                          : row
                       )));
+                      try {
+                        const updatedTask = await updateTaskStatusWithAutomation({
+                          taskId,
+                          nextStatus: status,
+                          previousTask: currentTask,
+                          currentUser: {
+                            id: profile.id,
+                            fullName: createdByNameMap[String(profile.id || '')] || null,
+                          },
+                        });
+                        setTasks((prev) => prev.map((row: any) => (
+                          row.id === taskId ? { ...row, ...updatedTask } : row
+                        )));
+                        lastLoadedAtRef.current.tasks = 0;
+                      } catch (error) {
+                        if (previousTask) {
+                          setTasks((prev) => prev.map((row: any) => (
+                            String(row?.id || '') === String(taskId)
+                              ? { ...row, ...previousTask }
+                              : row
+                          )));
+                        }
+                        throw error;
+                      }
                     }}
                     onProducedQtyChange={async (taskId, value) => {
                       await handleTaskProducedQtyChange(taskId, value);
@@ -4346,18 +4638,36 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
                   onClose={handleClose}
                   onStatusChange={async (taskId, status) => {
                     const currentTask = filteredTasks.find((row: any) => String(row?.id) === String(taskId)) || null;
-                    const updatedTask = await updateTaskStatusWithAutomation({
-                      taskId,
-                      nextStatus: status,
-                      previousTask: currentTask,
-                      currentUser: {
-                        id: profile.id,
-                        fullName: createdByNameMap[String(profile.id || '')] || null,
-                      },
-                    });
+                    const previousTask = currentTask ? { ...currentTask } : null;
                     setTasks((prev) => prev.map((row: any) => (
-                      row.id === taskId ? { ...row, ...updatedTask } : row
+                      String(row?.id || '') === String(taskId)
+                        ? { ...row, status }
+                        : row
                     )));
+                    try {
+                      const updatedTask = await updateTaskStatusWithAutomation({
+                        taskId,
+                        nextStatus: status,
+                        previousTask: currentTask,
+                        currentUser: {
+                          id: profile.id,
+                          fullName: createdByNameMap[String(profile.id || '')] || null,
+                        },
+                      });
+                      setTasks((prev) => prev.map((row: any) => (
+                        row.id === taskId ? { ...row, ...updatedTask } : row
+                      )));
+                      lastLoadedAtRef.current.tasks = 0;
+                    } catch (error) {
+                      if (previousTask) {
+                        setTasks((prev) => prev.map((row: any) => (
+                          String(row?.id || '') === String(taskId)
+                            ? { ...row, ...previousTask }
+                            : row
+                        )));
+                      }
+                      throw error;
+                    }
                   }}
                   onProducedQtyChange={async (taskId, value) => {
                     await handleTaskProducedQtyChange(taskId, value);
@@ -4813,6 +5123,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           height="100dvh"
           open={open}
           onClose={requestDrawerClose}
+          forceRender
+          destroyOnHidden={false}
           getContainer={drawerContainer}
           rootClassName="notifications-drawer"
           styles={{ body: mobileDrawerBodyStyle, header: drawerHeaderStyle, content: drawerContentStyle }}
@@ -4837,6 +5149,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           width={800}
           open={open}
           onClose={handleClose}
+          forceRender
+          destroyOnHidden={false}
           getContainer={drawerContainer}
           rootClassName="notifications-drawer"
           styles={{ body: desktopDrawerBodyStyle, header: drawerHeaderStyle, content: drawerContentStyle }}
@@ -4914,6 +5228,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
           </div>
         </div>
       </Modal>
+      {templateComposerContext ? (
+        <MessageComposerModal
+          open
+          mode="template"
+          moduleId={activeTemplateModuleId}
+          record={activeTemplateRecord || null}
+          templateOnlyTitle={templateComposerContext === 'bot' ? 'پیام‌های آماده چت بات' : 'پیام‌های آماده یادداشت'}
+          onApplyTemplate={applyReadyText}
+          onInsertVariable={insertTemplateToken}
+          onCancel={() => setTemplateComposerContext(null)}
+        />
+      ) : null}
       <Modal
         title="فوروارد پیام"
         open={Boolean(forwardingNote)}
@@ -4959,4 +5285,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
 };
 
 export default NotificationsPopover;
+
+
+
+
 

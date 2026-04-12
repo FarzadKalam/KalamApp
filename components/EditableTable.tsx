@@ -2757,7 +2757,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       ) {
         const { data: fetchedInvoiceRow, error: summarySourceError } = await supabase
           .from(moduleId)
-          .select('invoiceItems,payments')
+          .select('*')
           .eq('id', recordId)
           .maybeSingle();
         if (summarySourceError) throw summarySourceError;

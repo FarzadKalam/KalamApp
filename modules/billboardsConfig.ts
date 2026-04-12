@@ -172,7 +172,7 @@ const fieldsArray: any[] = [
   { key: 'related_customer', labels: { fa: 'مشتری مرتبط', en: 'Related Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 10, relationConfig: { targetModule: 'customers', targetField: 'business_name' }, nature: FieldNature.STANDARD, },
   { key: 'related_invoice', labels: { fa: 'فاکتور مرتبط', en: 'Related invoice' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'openingInfo', order: 12, relationConfig: { targetModule: 'invoices', targetField: 'name' }, nature: FieldNature.STANDARD, },
 
-  { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: true },
+  { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: false },
 ];
 
 const BLOCKS = {

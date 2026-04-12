@@ -1,9 +1,9 @@
 import React from 'react';
 import { Button, Checkbox, Input, InputNumber, Select, Space, Tag } from 'antd';
 import { ArrowRightOutlined, ClockCircleOutlined, OrderedListOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getBaseTaskStatusOptions, getTaskStatusColor, getTaskStatusLabel, getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
+import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 
 interface TaskQuickPopoverContentProps {
   task: any;
@@ -233,14 +233,19 @@ const TaskQuickPopoverContent: React.FC<TaskQuickPopoverContentProps> = ({
         ) : (
           <span />
         )}
-        <Link to={`/tasks/${task?.id}`} target="_blank">
-          <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]">
-            جزئیات کامل
-          </Button>
-        </Link>
+        <Button
+          size="small"
+          type="link"
+          icon={<ArrowRightOutlined />}
+          className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
+          onClick={() => openTaskProcessModal({ task })}
+        >
+          جزئیات کامل
+        </Button>
       </div>
     </div>
   );
 };
 
 export default TaskQuickPopoverContent;
+

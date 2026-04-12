@@ -6,9 +6,9 @@ import { resolveTaskSourceLink } from './taskMeta';
 import {
   evaluateWorkflowCondition,
   executeWorkflowAction,
-  formatWorkflowTemplateValue,
   resolveNoteAttachmentsFromFields,
 } from './workflowRuntime';
+import { renderTemplateText } from './messageTemplateRenderer';
 import {
   normalizeProcessAutomationRules,
   ProcessAutomationRule,
@@ -147,14 +147,11 @@ const isRunnableProcessAutomationCondition = (condition: WorkflowCondition) => {
   return !isBlankConditionValue(condition?.value);
 };
 
-const renderAutomationTemplateWithBoldMarkers = (template: string, record: Record<string, any>) =>
-  String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key: string) => {
-    const fieldKey = String(key || '').trim();
-    const value = record?.[fieldKey];
-    if (value === null || value === undefined) return '';
-    const resolved = formatWorkflowTemplateValue(value).trim();
-    return resolved ? `**${resolved}**` : '';
-  });
+const renderAutomationTemplateWithBoldMarkers = (
+  template: string,
+  record: Record<string, any>,
+  moduleId?: string | null
+) => renderTemplateText(template, record, { moduleId, bold: true });
 
 const buildMentionTargetFromTask = (task: Record<string, any> | null | undefined): MentionTarget => {
   if (!task) return { userIds: [], roleIds: [] };
@@ -217,6 +214,25 @@ const getProfileCommunicationSelect = (channels: Set<CommunicationChannel>) => {
   return columns.join(', ');
 };
 
+const isMissingColumnError = (error: any, columnName: string) => {
+  const code = String(error?.code || '').toUpperCase();
+  if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  const normalizedColumn = String(columnName || '').toLowerCase();
+  return (
+    text.includes(`column "${normalizedColumn}"`)
+    || text.includes(`${normalizedColumn} does not exist`)
+    || (text.includes('schema cache') && text.includes(normalizedColumn))
+  );
+};
+
+const buildProfileFallbackSelect = (channels: Set<CommunicationChannel>) => {
+  const columns = ['id'];
+  if (channels.has('sms')) columns.push('mobile_1');
+  if (channels.has('email')) columns.push('email');
+  return columns.join(', ');
+};
+
 const resolveCommunicationTargets = async (
   target: MentionTarget,
   channels: Set<CommunicationChannel>
@@ -235,8 +251,20 @@ const resolveCommunicationTargets = async (
       .from('profiles')
       .select(profileSelect)
       .in('id', userIds);
-    if (error) throw error;
-    directUsers = Array.isArray(data) ? data : [];
+    if (error) {
+      const shouldFallback =
+        (channels.has('rubika') && isMissingColumnError(error, 'rubika_chat_id'))
+        || (channels.has('bale') && isMissingColumnError(error, 'bale_chat_id'));
+      if (!shouldFallback) throw error;
+      const fallback = await supabase
+        .from('profiles')
+        .select(buildProfileFallbackSelect(channels))
+        .in('id', userIds);
+      if (fallback.error) throw fallback.error;
+      directUsers = Array.isArray(fallback.data) ? fallback.data : [];
+    } else {
+      directUsers = Array.isArray(data) ? data : [];
+    }
   }
 
   let roleUsers: any[] = [];
@@ -245,8 +273,20 @@ const resolveCommunicationTargets = async (
       .from('profiles')
       .select(profileSelect)
       .in('role_id', roleIds);
-    if (error) throw error;
-    roleUsers = Array.isArray(data) ? data : [];
+    if (error) {
+      const shouldFallback =
+        (channels.has('rubika') && isMissingColumnError(error, 'rubika_chat_id'))
+        || (channels.has('bale') && isMissingColumnError(error, 'bale_chat_id'));
+      if (!shouldFallback) throw error;
+      const fallback = await supabase
+        .from('profiles')
+        .select(buildProfileFallbackSelect(channels))
+        .in('role_id', roleIds);
+      if (fallback.error) throw fallback.error;
+      roleUsers = Array.isArray(fallback.data) ? fallback.data : [];
+    } else {
+      roleUsers = Array.isArray(data) ? data : [];
+    }
   }
 
   const allUsers = [...directUsers, ...roleUsers];
@@ -256,6 +296,53 @@ const resolveCommunicationTargets = async (
     baleChatIds: Array.from(new Set(allUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
     rubikaChatIds: Array.from(new Set(allUsers.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean))),
   };
+};
+
+const resolveCounterpartyBotChatIdsFromSource = async (
+  channel: 'rubika' | 'bale',
+  sourceModuleId?: string | null,
+  sourceRecord?: Record<string, any> | null
+) => {
+  if (!sourceRecord || typeof sourceRecord !== 'object') return [] as string[];
+  const moduleId = String(sourceModuleId || '').trim();
+  const customerIds = new Set<string>();
+  const supplierIds = new Set<string>();
+  const rawCustomerId = String(
+    sourceRecord?.customer_id
+    || sourceRecord?.related_customer
+    || (moduleId === 'customers' ? sourceRecord?.id : '')
+    || ''
+  ).trim();
+  const rawSupplierId = String(
+    sourceRecord?.supplier_id
+    || sourceRecord?.related_supplier
+    || (moduleId === 'suppliers' ? sourceRecord?.id : '')
+    || ''
+  ).trim();
+  if (rawCustomerId) customerIds.add(rawCustomerId);
+  if (rawSupplierId) supplierIds.add(rawSupplierId);
+  const chatIds: string[] = [];
+  if (customerIds.size > 0) {
+    const { data, error } = await supabase
+      .from('counterparty_bot_groups')
+      .select('bot_chat_id')
+      .eq('channel_type', channel)
+      .eq('status', 'active')
+      .in('customer_id', Array.from(customerIds));
+    if (error) throw error;
+    chatIds.push(...((data || []) as Array<Record<string, any>>).map((row) => String(row?.bot_chat_id || '').trim()).filter(Boolean));
+  }
+  if (supplierIds.size > 0) {
+    const { data, error } = await supabase
+      .from('counterparty_bot_groups')
+      .select('bot_chat_id')
+      .eq('channel_type', channel)
+      .eq('status', 'active')
+      .in('supplier_id', Array.from(supplierIds));
+    if (error) throw error;
+    chatIds.push(...((data || []) as Array<Record<string, any>>).map((row) => String(row?.bot_chat_id || '').trim()).filter(Boolean));
+  }
+  return Array.from(new Set(chatIds));
 };
 
 const getSameProcessTasks = async (task: Record<string, any>) => {
@@ -500,10 +587,13 @@ const insertAutomationNote = async (
     const actionType = String(action?.type || '').trim();
     return actionType === 'send_note' || actionType === 'send_note_sms';
   });
-  const noteText = renderAutomationTemplateWithBoldMarkers(getRuleNoteText(rule), actionRecord).trim();
-
   const sourceLink = resolveTaskSourceLink(task);
   const resolvedModuleId = sourceLink.moduleId || 'tasks';
+  const noteText = renderAutomationTemplateWithBoldMarkers(
+    getRuleNoteText(rule),
+    actionRecord,
+    resolvedModuleId
+  ).trim();
   const attachments = await resolveNoteAttachmentsFromFields({
     currentRecord: actionRecord,
     moduleId: resolvedModuleId,
@@ -720,6 +810,18 @@ export const runProcessAutomationsForTaskEvent = async ({
             directConfigPatch.manual_chat_ids = Array.from(new Set([
               ...communicationTargets.rubikaChatIds,
             ]));
+          }
+          if ((actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') && actionRecipientFields.length === 0 && !hasManualChatIds) {
+            const fallbackChannel = actionType === 'send_rubika_bot' ? 'rubika' : 'bale';
+            const sourceChatIds = await resolveCounterpartyBotChatIdsFromSource(
+              fallbackChannel,
+              sourceContext?.moduleId || null,
+              sourceContext?.record || null
+            );
+            if (sourceChatIds.length > 0) {
+              const existing = Array.isArray(directConfigPatch.manual_chat_ids) ? directConfigPatch.manual_chat_ids : [];
+              directConfigPatch.manual_chat_ids = Array.from(new Set([...existing, ...sourceChatIds]));
+            }
           }
 
           await executeWorkflowAction(

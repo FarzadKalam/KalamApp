@@ -11,6 +11,7 @@ import DynamicSelectField from '../DynamicSelectField';
 import PersianDatePicker from '../PersianDatePicker';
 import { MODULES } from '../../moduleRegistry';
 import {
+  WORKFLOW_ASSIGNEE_FIELD_KEY,
   WorkflowAction,
   WorkflowActionType,
   WorkflowModuleOption,
@@ -52,6 +53,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'send_note_sms':
       return {
         recipient_fields: [],
+        recipient_assignees: [],
         note_text: '',
         attachment_fields: [],
         variable_field: '',
@@ -60,6 +62,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'send_sms':
       return {
         recipient_fields: [],
+        recipient_assignees: [],
         manual_numbers: [],
         message: '',
         variable_field: '',
@@ -78,6 +81,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'send_rubika_bot':
       return {
         recipient_fields: [],
+        recipient_assignees: [],
         manual_chat_ids: [],
         title: '',
         message: '',
@@ -213,6 +217,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       ...assigneeRecipientFieldOptions.map((item) => [String(item.value), item] as const),
     ]).values()),
     [additionalRecipientFieldOptions, assigneeRecipientFieldOptions]
+  );
+  const assigneeDirectoryOptions = useMemo(
+    () =>
+      (relationOptions?.[WORKFLOW_ASSIGNEE_FIELD_KEY] || [])
+        .map((item) => ({
+          label: String(item?.label || item?.value || ''),
+          value: String(item?.value || ''),
+        }))
+        .filter((item) => item.value),
+    [relationOptions]
   );
   const noteAttachmentFieldOptions = useMemo(() => {
     const optionsByValue = new Map<string, { label: string; value: string }>();
@@ -709,19 +723,31 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (actionType === 'send_note' || actionType === 'send_note_sms') {
       return (
         <div className="space-y-2">
-          <div className="text-xs text-gray-500">گیرنده یادداشت</div>
-          <Select
-            {...commonSelectProps}
-            mode="multiple"
-            value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
-            disabled={disabled}
-            options={recipientFieldOptions}
-            onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-            placeholder="گیرنده(های) یادداشت"
-            className="w-full"
-            maxTagCount="responsive"
-          />
-          <div className="text-xs text-gray-500">فایل/تصویر از فیلد</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+              disabled={disabled}
+              options={recipientFieldOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+              placeholder="Note recipients from fields"
+              className="w-full"
+              maxTagCount="responsive"
+            />
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
+              disabled={disabled}
+              options={assigneeDirectoryOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
+              placeholder="Recipient selection (optional)"
+              className="w-full"
+              maxTagCount="responsive"
+            />
+          </div>
+          <div className="text-xs text-gray-500">Attachment/image fields</div>
           <Select
             {...commonSelectProps}
             mode="multiple"
@@ -729,7 +755,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             disabled={disabled || noteAttachmentFieldOptions.length === 0}
             options={noteAttachmentFieldOptions}
             onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
-            placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلد(های) تصویر/فایل' : 'فیلد تصویری مرتبط پیدا نشد'}
+            placeholder={noteAttachmentFieldOptions.length > 0 ? 'Attachment/image fields' : 'No related image fields found'}
             className="w-full"
             maxTagCount="responsive"
           />
@@ -738,13 +764,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.note_text}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { note_text: e.target.value })}
-            placeholder="متن یادداشت"
+            placeholder="Note text"
           />
-          {renderVariableTools(action, [{ key: 'note_text', label: 'متن یادداشت' }])}
+          {renderVariableTools(action, [{ key: 'note_text', label: 'Note text' }])}
         </div>
       );
     }
-
     if (actionType === 'send_sms') {
       const phoneFields = communicationFieldSource
         .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
@@ -764,8 +789,19 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               options={smsRecipientOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder="فیلد(های) شماره مقصد"
+              placeholder="Phone destination fields"
             />
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
+              disabled={disabled}
+              options={assigneeDirectoryOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
+              placeholder="Recipient selection (optional)"
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Select
               {...commonSelectProps}
               mode="tags"
@@ -773,7 +809,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               disabled={disabled}
               onChange={(nextVal) => updateActionConfig(action.id, { manual_numbers: nextVal })}
               tokenSeparators={[',', ';', ' ']}
-              placeholder="شماره تماس اختیاری"
+              placeholder="Manual phone numbers"
             />
           </div>
           <Input.TextArea
@@ -781,13 +817,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
-            placeholder="متن پیامک"
+            placeholder="SMS text"
           />
-          {renderVariableTools(action, [{ key: 'message', label: 'متن پیامک' }])}
+          {renderVariableTools(action, [{ key: 'message', label: 'SMS text' }])}
         </div>
       );
     }
-
     if (actionType === 'send_email') {
       const emailFields = communicationFieldSource
         .filter((f) => /email/i.test(f.key))
@@ -842,62 +877,42 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
     if (actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
       const isRubika = actionType === 'send_rubika_bot';
-      const chatFieldRegex = isRubika
-        ? /rubika.*chat|chat.*rubika|rubika_chat_id/i
-        : /bale.*chat|chat.*bale|bale_chat_id/i;
-      const counterpartyFieldRegex = /(^|_)(customer|supplier)(_id)?$|(^|_)related_(customer|supplier)$|__workflow_related__.*::(customers|suppliers)::/i;
-      const chatIdFields = communicationFieldSource
-        .filter((f) => chatFieldRegex.test(String(f.key || '')) || (isRubika && counterpartyFieldRegex.test(String(f.key || ''))))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const botRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...chatIdFields.map((item) => [String(item.value), item] as const),
-      ]).values());
-      const providerLabel = isRubika ? 'روبیکا' : 'بله';
+      const providerLabel = isRubika ? 'Rubika' : 'Bale';
 
       return (
         <div className="space-y-2">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            <Select
-              {...commonSelectProps}
-              mode="multiple"
-              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
-              disabled={disabled}
-              options={botRecipientOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder={`فیلد(های) گیرنده ${providerLabel}`}
-            />
-            <Select
-              {...commonSelectProps}
-              mode="tags"
-              value={Array.isArray(config.manual_chat_ids) ? config.manual_chat_ids : []}
-              disabled={disabled}
-              onChange={(nextVal) => updateActionConfig(action.id, { manual_chat_ids: nextVal })}
-              tokenSeparators={[',', ';', ' ']}
-              placeholder="شناسه چت اختیاری"
-            />
+          <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
+            گیرنده پیام به‌صورت خودکار از اتصال بات مشتری/تامین‌کننده رکورد جاری انتخاب می‌شود.
           </div>
+          <Select
+            {...commonSelectProps}
+            mode="multiple"
+            value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
+            disabled={disabled}
+            options={assigneeDirectoryOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
+            placeholder="گیرنده‌های تکمیلی (اختیاری)"
+          />
           <Input
             value={config.title}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
-            placeholder={`عنوان پیام ${providerLabel}`}
+            placeholder={`Message title (${providerLabel})`}
           />
           <Input.TextArea
             rows={4}
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
-            placeholder={`متن پیام ${providerLabel}`}
+            placeholder={`Message text (${providerLabel})`}
           />
           {renderVariableTools(action, [
-            { key: 'title', label: `عنوان پیام ${providerLabel}` },
-            { key: 'message', label: `متن پیام ${providerLabel}` },
+            { key: 'title', label: `Message title (${providerLabel})` },
+            { key: 'message', label: `Message text (${providerLabel})` },
           ])}
         </div>
       );
     }
-
     if (actionType === 'update_record') {
       return (
         <div className="grid grid-cols-1 gap-2 md:grid-cols-12">

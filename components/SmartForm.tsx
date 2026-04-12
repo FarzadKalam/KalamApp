@@ -146,6 +146,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const supportsAssigneeType = supportsGlobalAssigneeType(module.id);
   const supportsRoleAssignee = supportsGlobalRoleAssignee(module.id);
   const assigneeLabel = getAssigneeLabel(module.id);
+  const hasAutoNameToggle = module.fields.some((field) => field.key === 'auto_name_enabled');
 
   const buildAssigneeCombo = (assigneeType?: string | null, assigneeId?: string | null) => {
     if (!assigneeType || !assigneeId) return null;
@@ -192,14 +193,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
         const hasInitialProps = initialValues && Object.keys(initialValues).length > 0;
         if (hasInitialProps) {
           const assigneeCombo = buildResolvedAssigneeCombo(initialValues);
-          const prefetchedValues = { ...initialValues, assignee_combo: assigneeCombo };
+          const prefetchedValues = {
+            ...initialValues,
+            assignee_combo: assigneeCombo,
+            ...(hasAutoNameToggle ? { auto_name_enabled: false } : {}),
+          };
           setFormData(prefetchedValues);
           form.setFieldsValue(prefetchedValues);
         }
         fetchRecord(!hasInitialProps);
             } else if (isBulkEdit) {
         form.resetFields();
-        setFormData({});
+        const bulkDefaults = hasAutoNameToggle ? { auto_name_enabled: false } : {};
+        form.setFieldsValue(bulkDefaults);
+        setFormData(bulkDefaults);
         setInitialRecord(null);
         setLastAppliedBomId(null);
         setLastAppliedProcessTemplateId(null);
@@ -247,11 +254,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
             finalValues = normalizeTaskSourceValues(finalValues);
           }
           if (Object.prototype.hasOwnProperty.call(finalValues, 'auto_name_enabled')) {
-            const autoNameField = module.fields.find((field) => field.key === 'auto_name_enabled');
             finalValues.auto_name_enabled = normalizeAutoNameEnabled(
               finalValues.auto_name_enabled,
-              normalizeAutoNameEnabled(autoNameField?.defaultValue, false)
+              false
             );
+          }
+          if (hasAutoNameToggle) {
+            finalValues.auto_name_enabled = false;
           }
 
           setFormData(finalValues);
@@ -264,7 +273,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       // فراخوانی توابع کمکی
       fetchUserPermissions();
     }
-  }, [visible, recordId, isBulkEdit, module, initialValues, supportsAssignee, supportsAssigneeType]);
+  }, [visible, recordId, isBulkEdit, module, initialValues, supportsAssignee, supportsAssigneeType, hasAutoNameToggle]);
 
   const fetchAssignees = useCallback(async () => {
     try {
@@ -758,6 +767,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         nextValues = { ...nextValues, assignee_combo: assigneeCombo };
         if (module.id === 'tasks') {
           nextValues = normalizeTaskSourceValues(nextValues);
+        }
+        if (hasAutoNameToggle) {
+          nextValues.auto_name_enabled = false;
         }
         form.setFieldsValue(nextValues);
         setFormData(nextValues);
@@ -1605,7 +1617,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (autoNameField) {
       cleanedValues[autoNameField.key] = normalizeAutoNameEnabled(
         form.getFieldValue(autoNameField.key),
-        normalizeAutoNameEnabled((formData as any)?.[autoNameField.key], normalizeAutoNameEnabled(autoNameField.defaultValue, false))
+        normalizeAutoNameEnabled((formData as any)?.[autoNameField.key], false)
       );
     }
     if (module.id === 'tasks') {
@@ -1986,7 +1998,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                           checked={getAutoNameToggleValue(
                             normalizeAutoNameEnabled(
                               (currentValues as any)?.[autoNameToggleField.key],
-                              normalizeAutoNameEnabled(autoNameToggleField.defaultValue, false)
+                              false
                             )
                           )}
                           onChange={(checked) => {
@@ -1996,7 +2008,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                               [autoNameToggleField.key]: checked,
                             }));
                           }}
-                          disabled={autoNameToggleField.readonly === true || isBulkEdit}
+                          disabled={autoNameToggleField.readonly === true}
                         />
                       </div>
                     </div>

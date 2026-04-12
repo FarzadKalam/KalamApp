@@ -1,8 +1,7 @@
 ﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined } from '@ant-design/icons';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
-import { Link } from 'react-router-dom';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
 import DynamicSelectField from './DynamicSelectField';
@@ -38,6 +37,7 @@ import {
   type ProcessAutomationRule,
 } from '../utils/processAutomationTypes';
 import { runProcessAutomationsForTaskEvent } from '../utils/processAutomationRuntime';
+import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
@@ -96,6 +96,7 @@ import {
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { getRecordTitle } from '../utils/recordTitle';
+import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -124,6 +125,16 @@ type StageAssignee = {
   type: 'user' | 'role' | null;
   label: string;
 };
+
+const TASK_RELATED_FIELD_DEFINITIONS: Array<{ fieldKey: string; moduleId: string; label: string }> = [
+  { fieldKey: 'related_customer', moduleId: 'customers', label: 'مشتری مرتبط' },
+  { fieldKey: 'related_invoice', moduleId: 'invoices', label: 'فاکتور فروش مرتبط' },
+  { fieldKey: 'purchase_invoice_id', moduleId: 'purchase_invoices', label: 'فاکتور خرید مرتبط' },
+  { fieldKey: 'project_id', moduleId: 'projects', label: 'پروژه مرتبط' },
+  { fieldKey: 'marketing_lead_id', moduleId: 'marketing_leads', label: 'لید بازاریابی مرتبط' },
+  { fieldKey: 'related_supplier', moduleId: 'suppliers', label: 'تامین کننده مرتبط' },
+  { fieldKey: 'related_production_order', moduleId: 'production_orders', label: 'سفارش تولید مرتبط' },
+];
 
 type StageHandoverContext = {
   taskId: string;
@@ -356,6 +367,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const isProcessTemplateModule = moduleId === 'process_templates';
   const isDraftOnlyModule = isBom || isProcessTemplateModule;
   const [currentUser, setCurrentUser] = useState<{ id: string | null; roleId: string | null; fullName: string }>({ id: null, roleId: null, fullName: 'کاربر' });
+  const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
+  const [relatedRecordTitleMap, setRelatedRecordTitleMap] = useState<Record<string, string>>({});
+  const [processTemplateNameMap, setProcessTemplateNameMap] = useState<Record<string, string>>({});
   const [handoverTask, setHandoverTask] = useState<any | null>(null);
   const [handoverContext, setHandoverContext] = useState<StageHandoverContext | null>(null);
   const [handoverGroups, setHandoverGroups] = useState<StageHandoverGroup[]>([]);
@@ -369,6 +383,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [openTaskPopoverId, setOpenTaskPopoverId] = useState<string | null>(null);
   const [processTemplateOptions, setProcessTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [processTemplateOptionsLoading, setProcessTemplateOptionsLoading] = useState(false);
+  const [draftStageChooserOpen, setDraftStageChooserOpen] = useState(false);
+  const [draftSourceTemplateOptions, setDraftSourceTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [draftSourceTemplateLoading, setDraftSourceTemplateLoading] = useState(false);
+  const [draftSourceTemplateId, setDraftSourceTemplateId] = useState<string | null>(null);
+  const [draftSourceTemplateStages, setDraftSourceTemplateStages] = useState<any[]>([]);
+  const [draftSourceTemplateStagesLoading, setDraftSourceTemplateStagesLoading] = useState(false);
   const [appendProcessModalOpen, setAppendProcessModalOpen] = useState(false);
   const [appendProcessModalMode, setAppendProcessModalMode] = useState<'append' | 'links'>('append');
   const [appendProcessModalGroupId, setAppendProcessModalGroupId] = useState<string | null>(null);
@@ -527,6 +547,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }),
     []
   );
+  const filesAccess = useMemo(
+    () => resolveFilesAccessPermissions(rolePermissions),
+    [rolePermissions]
+  );
+  const canViewModuleByPermissions = useCallback((targetModuleId: string) => {
+    const normalized = String(targetModuleId || '').trim();
+    if (!normalized) return false;
+    return rolePermissions?.[normalized]?.view !== false;
+  }, [rolePermissions]);
   const processAutomationTriggerTypeOptions = useMemo(
     () => triggerTypeOptions.map((option) => {
       if (option.value === 'on_create') {
@@ -1647,8 +1676,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const fetchCurrentUser = useCallback(async () => {
     try {
-      const { data: authData } = await supabase.auth.getUser();
-      const userId = authData?.user?.id || null;
+      const roleContext = await fetchCurrentUserRoleContext(supabase);
+      const userId = roleContext?.userId || null;
+      setRolePermissions((roleContext?.permissions || null) as PermissionMap | null);
       if (!userId) return;
       const { data: profile } = await supabase
         .from('profiles')
@@ -1713,6 +1743,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     try {
       setLoading(true);
       setTasksLoaded(false);
+      if (moduleId === 'tasks' && forceProcessRecordMode) {
+        const { data: singleTask, error: singleTaskError } = await supabase
+          .from('tasks')
+          .select(`
+            *,
+            assignee:profiles!tasks_assignee_id_fkey(full_name, email, mobile_1, avatar_url),
+            assigned_role:org_roles(title)
+          `)
+          .eq('id', recordId)
+          .maybeSingle();
+        if (singleTaskError) throw singleTaskError;
+        const nextSingleTask = singleTask ? [withProcessTaskCustomFieldValues(singleTask)] : [];
+        setTasks(nextSingleTask);
+        return nextSingleTask;
+      }
       let query = supabase
         .from('tasks')
         .select(`
@@ -2365,8 +2410,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!targetTask) return;
 
     autoOpenedTaskIdRef.current = String(autoOpenTaskId);
-    void openTaskHandoverModal(targetTask, tasks);
-  }, [autoOpenTaskId, openTaskHandoverModal, tasks]);
+    setOpenTaskPopoverId(String(targetTask.id));
+  }, [autoOpenTaskId, tasks]);
 
   const setHandoverGroupCollapsed = useCallback((groupIndex: number, collapsed: boolean) => {
     setHandoverGroups((prev) => {
@@ -3243,8 +3288,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   };
 
   const handleStatusChange = async (taskId: string, newStatus: string) => {
+    const currentTask = tasks.find((item: any) => String(item?.id) === String(taskId)) || null;
     try {
-      const currentTask = tasks.find((item: any) => String(item?.id) === String(taskId)) || null;
+      setTasks((prev) => prev.map((item: any) => (
+        String(item?.id) === String(taskId)
+          ? withProcessTaskCustomFieldValues({ ...item, status: newStatus })
+          : item
+      )));
       const updatedTask = await updateTaskStatusWithAutomation({
         taskId,
         nextStatus: newStatus,
@@ -3263,6 +3313,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const nextTasks = await fetchTasks();
       await maybeOpenHandoverByStatus(taskId, newStatus, nextTasks);
     } catch (err: any) {
+      if (currentTask) {
+        setTasks((prev) => prev.map((item: any) => (
+          String(item?.id) === String(taskId)
+            ? withProcessTaskCustomFieldValues({ ...item, ...currentTask })
+            : item
+        )));
+      }
       message.error(toFaErrorMessage(err, 'خطا در بروزرسانی وضعیت'));
     }
   };
@@ -3594,6 +3651,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return Boolean(assigneeUserId && String(assigneeUserId) === String(currentUser.id));
   }, [currentUser.id, currentUser.roleId]);
 
+  const getTaskStageProgress = useCallback((task: any) => {
+    const taskId = String(task?.id || '').trim();
+    if (!taskId) return null as { index: number; total: number } | null;
+
+    const lineId = task?.production_line_id ? String(task.production_line_id) : null;
+    const chain = lineId
+      ? getLineTaskChain(lineId)
+      : (isProcessModule
+        ? getLineTaskChain(processLineId)
+        : tasks.slice().sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)));
+
+    if (!Array.isArray(chain) || chain.length === 0) return null;
+    const index = chain.findIndex((row: any) => String(row?.id || '') === taskId);
+    if (index < 0) return null;
+    return { index: index + 1, total: chain.length };
+  }, [getLineTaskChain, isProcessModule, processLineId, tasks]);
+
   const renderDate = (dateVal: any) => {
     if (!dateVal) return null;
     try {
@@ -3924,6 +3998,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const renderPopupContent = (task: any) => {
     const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
+    const isTaskCreator = Boolean(currentUser.id && String(task?.created_by || '') === String(currentUser.id));
+    const canEditTaskByRolePermissions = rolePermissions?.tasks?.edit !== false;
+    const canEditTaskAssignee = isTaskCreator || canEditTaskByRolePermissions;
+    const canManageTaskFiles = filesAccess.canEditRecordFilesManager && canEditTaskByRolePermissions;
+    const canDeleteTaskFiles = filesAccess.canDeleteRecordFilesManager && canEditTaskByRolePermissions;
     const currentAssigneeCombo = task?.assignee_role_id
       ? `role:${String(task.assignee_role_id)}`
       : (task?.assignee_id ? `user:${String(task.assignee_id)}` : undefined);
@@ -3939,6 +4018,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const taskStatusOptions = getTaskStatusOptions(task);
     const taskStatusLabel = getTaskStatusLabel(taskStatusValue, task, taskStatusOptions) || null;
     const taskStatusTagColor = getTaskStatusColor(taskStatusValue, task, taskStatusOptions);
+    const stageProgress = getTaskStageProgress(task);
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    const processTemplateId = String(task?.process_template_id || recurrence?.process_source?.template_id || '').trim();
+    const processTemplateName = String(
+      recurrence?.process_source?.template_name
+      || task?.source_template_name
+      || (processTemplateId ? processTemplateNameMap[processTemplateId] : '')
+      || ''
+    ).trim();
+    const relatedRows = TASK_RELATED_FIELD_DEFINITIONS
+      .map((meta) => {
+        const relatedId = String(task?.[meta.fieldKey] || '').trim();
+        if (!relatedId) return null;
+        if (!canViewModuleByPermissions(meta.moduleId)) return null;
+        const titleKey = `${meta.moduleId}:${relatedId}`;
+        const title = relatedRecordTitleMap[titleKey] || relatedId;
+        return { label: meta.label, value: title };
+      })
+      .filter(Boolean) as Array<{ label: string; value: string }>;
 
     return (
       <div
@@ -3967,10 +4065,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             moduleId="tasks"
             recordId={String(task?.id || '')}
             imageUrl={task?.image_url || null}
-            canEdit={!readOnly}
-            canViewFilesManager
-            canEditFilesManager={!readOnly}
-            canDeleteFilesManager={!readOnly}
+            canEdit={canManageTaskFiles}
+            canViewFilesManager={filesAccess.canViewRecordFilesManager}
+            canEditFilesManager={canManageTaskFiles}
+            canDeleteFilesManager={canDeleteTaskFiles}
             onImageUpdate={(file) => handleTaskImageUpload(task, file)}
             onMainImageChange={(url) => { void handleTaskMainImageChange(task, url); }}
           />
@@ -3984,7 +4082,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               value={currentAssigneeCombo}
               onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
               className="w-full sm:w-44"
-              disabled={readOnly}
+              disabled={!canEditTaskAssignee}
               allowClear
               showSearch
               optionFilterProp="label"
@@ -4089,12 +4187,28 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <div className="space-y-2 break-words rounded-lg border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.55)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[#111827] dark:text-gray-300">
             <div className="flex items-center gap-2">
               <OrderedListOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
-              <span>ترتیب: {toPersianNumber(task.sort_order || '-')}</span>
+              <span>
+                {stageProgress
+                  ? `مرحله ${toPersianNumber(stageProgress.index)} از ${toPersianNumber(stageProgress.total)}`
+                  : `مرحله ${toPersianNumber(task.sort_order || '-')}`}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               {task.assignee_type === 'role' ? <TeamOutlined className="text-[rgba(var(--brand-700-rgb),1)]" /> : <UserOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />}
               <span>مسئول: {getAssigneeLabel(task)}</span>
             </div>
+            {processTemplateName ? (
+              <div className="flex items-center gap-2">
+                <SettingOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
+                <span>الگوی فرآیند: {toPersianNumber(processTemplateName)}</span>
+              </div>
+            ) : null}
+            {relatedRows.map((row) => (
+              <div key={`${task.id}-${row.label}`} className="flex items-center gap-2">
+                <LinkOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
+                <span>{row.label}: {toPersianNumber(row.value)}</span>
+              </div>
+            ))}
             {hasWage && (
               <div className="flex items-center gap-2">
                 <span className="text-[rgba(var(--brand-700-rgb),1)]">💰</span>
@@ -4199,11 +4313,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   }}
                 />
               </Tooltip>
-              <Link to={`/tasks/${task.id}`} target="_blank">
-                <Button size="small" type="link" icon={<ArrowRightOutlined />} className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]">
-                  جزئیات کامل
-                </Button>
-              </Link>
+              <Button
+                size="small"
+                type="link"
+                icon={<ArrowRightOutlined />}
+                className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
+                onClick={() => openTaskProcessModal({ task })}
+              >
+                جزئیات کامل
+              </Button>
             </div>
           </div>
         </div>
@@ -5288,6 +5406,83 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setIsDraftModalOpen(true);
   }, [normalizeDraftStageForEditor]);
 
+  const loadDraftSourceTemplateOptions = useCallback(async () => {
+    try {
+      setDraftSourceTemplateLoading(true);
+      const primary = await supabase
+        .from('process_templates')
+        .select('id,name,is_active')
+        .order('name', { ascending: true });
+      const rows = (primary.error ? [] : (primary.data || []))
+        .filter((row: any) => row?.is_active !== false)
+        .filter((row: any) => {
+          const rowId = String(row?.id || '').trim();
+          const currentId = String(recordId || '').trim();
+          return !!rowId && rowId !== currentId;
+        });
+      setDraftSourceTemplateOptions(
+        rows.map((row: any) => ({
+          value: String(row.id),
+          label: String(row?.name || row?.id),
+        }))
+      );
+    } catch (error) {
+      console.warn('Could not load process templates for draft stage copy', error);
+      setDraftSourceTemplateOptions([]);
+    } finally {
+      setDraftSourceTemplateLoading(false);
+    }
+  }, [recordId]);
+
+  const openDraftStageChooser = useCallback(() => {
+    if (!isProcessTemplateModule) {
+      openDraftStageModal(null, 'stage');
+      return;
+    }
+    setDraftSourceTemplateId(null);
+    setDraftSourceTemplateStages([]);
+    setDraftStageChooserOpen(true);
+    void loadDraftSourceTemplateOptions();
+  }, [isProcessTemplateModule, loadDraftSourceTemplateOptions, openDraftStageModal]);
+
+  const handleDraftSourceTemplateChange = useCallback(async (templateId?: string) => {
+    const normalizedTemplateId = String(templateId || '').trim();
+    setDraftSourceTemplateId(normalizedTemplateId || null);
+    setDraftSourceTemplateStages([]);
+    if (!normalizedTemplateId) return;
+    try {
+      setDraftSourceTemplateStagesLoading(true);
+      const { data, error } = await supabase
+        .from('process_template_stages')
+        .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+        .eq('template_id', normalizedTemplateId)
+        .order('sort_order', { ascending: true });
+      if (error) throw error;
+      setDraftSourceTemplateStages(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.warn('Could not load process template stages for copy', error);
+      setDraftSourceTemplateStages([]);
+    } finally {
+      setDraftSourceTemplateStagesLoading(false);
+    }
+  }, []);
+
+  const handleCopyDraftStageFromTemplate = useCallback((sourceStage: any) => {
+    const normalized = normalizeDraftStageForEditor(sourceStage, draftLocal.length);
+    const sourceStageName = String(normalized?.name || normalized?.stage_name || '').trim();
+    const copiedStage = {
+      ...normalized,
+      id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      template_stage_id: null,
+      source_template_stage_id: String(sourceStage?.id || '').trim() || null,
+      name: sourceStageName || `مرحله ${draftLocal.length + 1}`,
+      stage_name: sourceStageName || `مرحله ${draftLocal.length + 1}`,
+      sort_order: Number(normalized?.sort_order || ((draftLocal.length + 1) * 10)),
+    };
+    setDraftStageChooserOpen(false);
+    openDraftStageModal(copiedStage, 'stage');
+  }, [draftLocal.length, normalizeDraftStageForEditor, openDraftStageModal]);
+
   const guardDraftAutomationConditionAdd = useCallback(() => {
     if (draftStageTaskType) return true;
     message.warning('ابتدا در "بخش مرحله الگوی فرآیند" نوع فعالیت را انتخاب کنید.');
@@ -5861,6 +6056,96 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
   }, [tasks]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRelatedTitles = async () => {
+      const groupedIds = new Map<string, Set<string>>();
+      (tasks || []).forEach((task: any) => {
+        TASK_RELATED_FIELD_DEFINITIONS.forEach((meta) => {
+          const rawId = String(task?.[meta.fieldKey] || '').trim();
+          if (!rawId || !MODULES[meta.moduleId] || !canViewModuleByPermissions(meta.moduleId)) return;
+          if (!groupedIds.has(meta.moduleId)) groupedIds.set(meta.moduleId, new Set<string>());
+          groupedIds.get(meta.moduleId)!.add(rawId);
+        });
+      });
+
+      if (groupedIds.size === 0) {
+        setRelatedRecordTitleMap({});
+        return;
+      }
+
+      const nextMap: Record<string, string> = {};
+      await Promise.all(
+        Array.from(groupedIds.entries()).map(async ([targetModuleId, ids]) => {
+          const moduleConfig = MODULES[targetModuleId];
+          const tableName = moduleConfig?.table || targetModuleId;
+          const idList = Array.from(ids).filter(Boolean);
+          if (!tableName || idList.length === 0) return;
+          const { data } = await supabase
+            .from(tableName)
+            .select('*')
+            .in('id', idList);
+          (data || []).forEach((row: any) => {
+            const title = getRecordTitle(row, moduleConfig, { fallback: String(row?.id || '') });
+            if (!title) return;
+            nextMap[`${targetModuleId}:${String(row.id)}`] = title;
+          });
+        })
+      );
+
+      if (!cancelled) {
+        setRelatedRecordTitleMap(nextMap);
+      }
+    };
+
+    void loadRelatedTitles();
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewModuleByPermissions, tasks]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProcessTemplateNames = async () => {
+      const templateIds = Array.from(new Set(
+        (tasks || [])
+          .map((task: any) => {
+            const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+            return String(task?.process_template_id || recurrence?.process_source?.template_id || '').trim();
+          })
+          .filter(Boolean)
+      ));
+
+      if (templateIds.length === 0) {
+        setProcessTemplateNameMap({});
+        return;
+      }
+
+      const { data } = await supabase
+        .from('process_templates')
+        .select('id,name')
+        .in('id', templateIds);
+
+      const nextMap = (data || []).reduce<Record<string, string>>((acc, row: any) => {
+        const id = String(row?.id || '').trim();
+        if (!id) return acc;
+        acc[id] = String(row?.name || row?.id || '').trim();
+        return acc;
+      }, {});
+
+      if (!cancelled) {
+        setProcessTemplateNameMap(nextMap);
+      }
+    };
+
+    void loadProcessTemplateNames();
+    return () => {
+      cancelled = true;
+    };
+  }, [tasks, parseRecurrenceInfo]);
+
   const handleCopyLine = async (line: any) => {
     if (!recordId || !line?.id || !isProductionOrder) return;
     try {
@@ -5990,15 +6275,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           {!readOnly && (
             <div className="flex justify-start">
               <Tooltip title="افزودن مرحله پیش‌نویس">
-                <Button
-                  type="dashed"
-                  icon={<PlusOutlined />}
-                  size={compact ? 'small' : 'middle'}
-                  onClick={() => openDraftStageModal(null, 'stage')}
-                  className="border-amber-300 text-amber-700 hover:!border-amber-600 hover:!text-amber-600 hover:!bg-amber-50"
-                >
-                  افزودن مرحله
-                </Button>
+                  <Button
+                    type="dashed"
+                    icon={<PlusOutlined />}
+                    size={compact ? 'small' : 'middle'}
+                    onClick={openDraftStageChooser}
+                    className="border-amber-300 text-amber-700 hover:!border-amber-600 hover:!text-amber-600 hover:!bg-amber-50"
+                  >
+                    افزودن مرحله
+                  </Button>
               </Tooltip>
             </div>
           )}
@@ -6055,12 +6340,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        setOpenTaskPopoverId(String(segment.id));
+                        openTaskProcessModal({ task: segment });
                       }}
                     >
                       <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
-                        <span className={`text-white font-medium truncate w-full text-center drop-shadow-md ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                          {shouldCompactSegments ? getCompactLabel(segment.title || segment.name) : (segment.title || segment.name)}
+                        <span className={`inline-flex items-center justify-center gap-1 text-white font-medium truncate w-full text-center drop-shadow-md ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
+                          {String(segment?.status || '').toLowerCase() === 'canceled' ? <CloseOutlined className={compact ? 'text-[8px]' : 'text-[10px]'} /> : (
+                            ['done', 'completed'].includes(String(segment?.status || '').toLowerCase())
+                              ? <CheckOutlined className={compact ? 'text-[8px]' : 'text-[10px]'} />
+                              : <HourglassOutlined className={compact ? 'text-[8px]' : 'text-[10px]'} />
+                          )}
+                          <span className="truncate">
+                            {shouldCompactSegments ? getCompactLabel(segment.title || segment.name) : (segment.title || segment.name)}
+                          </span>
                         </span>
                         {!compact && segment.sort_order && (
                           <span className="text-[8px] text-white/90 absolute bottom-0.5 right-1 bg-black/10 px-1 rounded-sm">
@@ -6455,7 +6747,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         title={null}
         centered
         destroyOnHidden
-        width={typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(100vw - 1rem)' : 560}
+        width={560}
         zIndex={12000}
         style={{ maxWidth: 'calc(100vw - 1rem)' }}
         styles={{
@@ -6495,6 +6787,65 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </Button>
           </div>
         </Form>
+      </Modal>
+
+      <Modal
+        title="افزودن مرحله الگوی فرآیند"
+        open={draftStageChooserOpen}
+        onCancel={() => setDraftStageChooserOpen(false)}
+        footer={null}
+        width={560}
+        centered
+        destroyOnHidden
+      >
+        <div className="space-y-3 pt-2">
+          <Button
+            type="primary"
+            className="w-full rounded-lg border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+            onClick={() => {
+              setDraftStageChooserOpen(false);
+              openDraftStageModal(null, 'stage');
+            }}
+          >
+            ساخت مرحله الگوی فرآیند خام
+          </Button>
+          <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.55)] p-3">
+            <div className="mb-2 text-sm font-medium text-[rgba(var(--brand-800-rgb),1)]">کپی از دیگر الگوهای فرآیند</div>
+            <Select
+              {...modalSelectProps}
+              value={draftSourceTemplateId || undefined}
+              placeholder="انتخاب الگوی فرآیند"
+              loading={draftSourceTemplateLoading}
+              options={draftSourceTemplateOptions}
+              className="w-full"
+              onChange={(value) => { void handleDraftSourceTemplateChange(String(value || '')); }}
+            />
+            <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/90 p-2 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5">
+              {draftSourceTemplateStagesLoading ? (
+                <div className="flex items-center justify-center py-4 text-xs text-gray-500">در حال بارگذاری مراحل...</div>
+              ) : draftSourceTemplateStages.length === 0 ? (
+                <div className="py-4 text-center text-xs text-gray-500">مرحله‌ای برای نمایش وجود ندارد</div>
+              ) : (
+                <div className="space-y-2">
+                  {draftSourceTemplateStages.map((stage: any, index: number) => {
+                    const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
+                    return (
+                      <button
+                        key={`${String(stage?.id || 'stage')}-${index}`}
+                        type="button"
+                        className="flex w-full items-center justify-between rounded-lg border border-[rgba(var(--brand-200-rgb),0.8)] bg-white px-3 py-2 text-right transition-colors hover:border-[rgba(var(--brand-500-rgb),0.6)] hover:bg-[rgba(var(--brand-50-rgb),0.75)] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5"
+                        onClick={() => handleCopyDraftStageFromTemplate(stage)}
+                      >
+                        <span className="truncate text-sm text-[rgba(var(--brand-900-rgb),1)] dark:text-[rgba(var(--brand-50-rgb),0.95)]">{stageName}</span>
+                        <span className="text-xs text-[rgba(var(--brand-700-rgb),1)]">کپی و ویرایش</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </Modal>
 
       <Modal

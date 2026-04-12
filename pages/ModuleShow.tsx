@@ -2197,7 +2197,7 @@ const ModuleShow: React.FC = () => {
               initialValues: payload,
               copySource: {
                 sourceRecordId: String(id),
-                copyRelations: moduleId === 'production_orders',
+                copyRelations: moduleId === 'production_orders' || moduleId === 'process_templates',
               },
             },
           });
@@ -2378,6 +2378,7 @@ const ModuleShow: React.FC = () => {
     const existingChatId = String(existingRow?.bot_chat_id || '').trim();
     const existingJoinLink = String(existingRow?.group_join_link || '').trim();
     const hasJoinLink = Boolean(String(botStatusJoinLink || '').trim());
+    const normalizedGroupTitle = String(botStatusGroupTitle || '').trim();
     const nextStatus = forceCapture
       ? (hasJoinLink ? 'pending_join' : 'pending_join_link')
       : (
@@ -2402,6 +2403,7 @@ const ModuleShow: React.FC = () => {
       channel_type: nextChannel,
       status: nextStatus,
       group_join_link: botStatusJoinLink || null,
+      group_title: normalizedGroupTitle || null,
       metadata: {
         ...existingRowMetadata,
         activation_code: String(botStatusActivationCode || '').trim().toUpperCase(),
@@ -2442,7 +2444,7 @@ const ModuleShow: React.FC = () => {
       await updateCustomerBotLegacyFieldsWithFallback(context.counterpartyId, legacyPatch);
       setData((prev: any) => ({ ...prev, preferred_notification_channel: legacyPatch.preferred_notification_channel }));
     }
-  }, [botStatusActivationCode, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusJoinLink, botStatusModalContext, botStatusWaitingForFirstMessage]);
+  }, [botStatusActivationCode, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusGroupTitle, botStatusJoinLink, botStatusModalContext, botStatusWaitingForFirstMessage]);
 
   const handleCloseBotStatusModal = useCallback(() => {
     clearBotStatusWatchTimer();
@@ -3448,6 +3450,9 @@ const ModuleShow: React.FC = () => {
         'marketing_lead_id',
       ]);
       if (moduleId === 'tasks' && key === 'status') {
+        const optimisticStatus = String(newValue || '');
+        setData((prev: any) => ({ ...(prev || {}), status: optimisticStatus }));
+        setTempValues((prev) => ({ ...(prev || {}), status: optimisticStatus }));
         const updatedTask = await updateTaskStatusWithAutomation({
           taskId: String(id),
           nextStatus: String(newValue || ''),
@@ -3541,7 +3546,14 @@ const ModuleShow: React.FC = () => {
       });
       msg.success('ذخیره شد');
       setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
-    } catch (error: any) { msg.error(error.message); } finally { setSavingField(null); }
+    } catch (error: any) {
+      if (moduleId === 'tasks' && key === 'status') {
+        const fallbackStatus = data?.status ?? null;
+        setData((prev: any) => ({ ...(prev || {}), status: fallbackStatus }));
+        setTempValues((prev) => ({ ...(prev || {}), status: fallbackStatus }));
+      }
+      msg.error(error.message);
+    } finally { setSavingField(null); }
   };
 
   const areValuesEqual = (a: any, b: any) => {
@@ -5001,7 +5013,7 @@ const ModuleShow: React.FC = () => {
   };
 
   return (
-    <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-hidden pl-0 md:pl-16 scrollbar-wide">
+    <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-x-visible pl-0 md:pl-16 scrollbar-wide">
       <div className="mb-4 md:mb-0">
         <RelatedSidebar
           moduleConfig={moduleConfig}
@@ -5452,6 +5464,7 @@ const ModuleShow: React.FC = () => {
         onCopyActivationCode={() => void handleCopyBotActivationCode()}
         onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
         onChangeJoinLink={setBotStatusJoinLink}
+        onChangeGroupTitle={setBotStatusGroupTitle}
         onChangeAllowedUserIds={setBotStatusAllowedUserIds}
         onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
       />

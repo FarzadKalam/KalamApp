@@ -474,10 +474,26 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
 
 .notifications-drawer .ant-drawer-content,
 .notifications-drawer .ant-drawer-wrapper-body {
-  background: rgb(var(--brand-50-rgb));
+  background: #ffffff !important;
+}
+
+.notifications-drawer .ant-drawer-content {
+  border-inline-start: 0 !important;
+}
+
+.notifications-drawer .ant-drawer-body {
+  background: #ffffff !important;
 }
 
 .dark .notifications-drawer .ant-drawer-content,
 .dark .notifications-drawer .ant-drawer-wrapper-body {
-  background: rgb(var(--app-dark-surface-rgb));
+  background: rgb(var(--app-dark-surface-rgb)) !important;
+}
+
+.dark .notifications-drawer .ant-drawer-content {
+  border-inline-start: 0 !important;
+}
+
+.dark .notifications-drawer .ant-drawer-body {
+  background: rgb(var(--app-dark-surface-rgb)) !important;
 }

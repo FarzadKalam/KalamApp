@@ -12,6 +12,7 @@ import { resolveTaskSourceLink } from "../../utils/taskMeta";
 import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
 import TaskActionButtons from "../tasks/TaskActionButtons";
+import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
 
 export interface RenderCardItemProps {
   item: any;
@@ -255,6 +256,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     );
   };
   const handleCardClick = () => {
+    if (isTasks) {
+      openTaskProcessModal({ task: cardItem });
+      return;
+    }
     if (isTasks && (isProductionTask || isExecutionProcessTask) && cardRef.current) {
       const segment = cardRef.current.querySelector<HTMLElement>(`[data-task-segment-id="${String(item.id)}"]`);
       if (segment) {
@@ -328,7 +333,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           onClick={(event) => {
             event.stopPropagation();
             setStandaloneTaskPopoverOpen(false);
-            navigate(`/tasks/${item.id}`);
+            openTaskProcessModal({ task: cardItem });
           }}
           className="text-xs font-medium text-[rgba(var(--brand-700-rgb),1)] hover:underline"
         >

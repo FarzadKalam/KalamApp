@@ -507,6 +507,11 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setLoading(false);
     }
   };
+  const shouldAnimateChatEntry = (createdAt: unknown) => {
+    const time = new Date(createdAt as any).getTime();
+    if (!Number.isFinite(time)) return false;
+    return Date.now() - time <= 12_000;
+  };
 
   useEffect(() => {
     if (view !== 'notes') return;
@@ -746,6 +751,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         mentionUsers={mentionUsers}
                         mentionRoles={mentionRoles}
                         variant={isAi ? 'ai' : 'default'}
+                        animateOnMount={shouldAnimateChatEntry(item.created_at)}
                         renderTemplateBold={isSystem}
                         replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
                         replyAuthorName={replyAuthorName}
@@ -780,16 +786,37 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                     roleNameMap={roleNameMap}
                     recordTitle={recordName || null}
                     onStatusChange={async (taskId, status) => {
-                      await updateTaskStatusWithAutomation({
-                        taskId,
-                        nextStatus: status,
-                        previousTask: item,
-                        currentUser: {
-                          id: currentUser.id,
-                          fullName: currentUser.full_name,
-                        },
-                      });
-                      await fetchData();
+                      const previousTask = item ? { ...item } : null;
+                      setItems((prev) => prev.map((row: any) => (
+                        String(row?.id || '') === String(taskId)
+                          ? { ...row, status }
+                          : row
+                      )));
+                      try {
+                        const updatedTask = await updateTaskStatusWithAutomation({
+                          taskId,
+                          nextStatus: status,
+                          previousTask: item,
+                          currentUser: {
+                            id: currentUser.id,
+                            fullName: currentUser.full_name,
+                          },
+                        });
+                        setItems((prev) => prev.map((row: any) => (
+                          String(row?.id || '') === String(taskId)
+                            ? { ...row, ...updatedTask }
+                            : row
+                        )));
+                      } catch (error) {
+                        if (previousTask) {
+                          setItems((prev) => prev.map((row: any) => (
+                            String(row?.id || '') === String(taskId)
+                              ? { ...row, ...previousTask }
+                              : row
+                          )));
+                        }
+                        throw error;
+                      }
                     }}
                     onProducedQtyChange={async (taskId, value) => {
                       const nextProducedQty = Math.max(0, Number(value || 0));

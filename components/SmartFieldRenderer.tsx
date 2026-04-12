@@ -1292,7 +1292,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     });
     if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.defaultValue !== undefined) {
       defaults[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(
-        resolveConfiguredDefaultValue(quickCreateAutoNameToggleField.defaultValue),
+        false,
         false
       );
     }
@@ -1442,7 +1442,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.key) {
         payload[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(
           values?.[quickCreateAutoNameToggleField.key],
-          normalizeAutoNameEnabled(quickCreateAutoNameToggleField.defaultValue, false)
+          false
         );
       }
 
@@ -2600,7 +2600,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   );
   const showAutoNameToggle = !!autoNameToggleField && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers');
   const autoNameToggleKey = autoNameToggleField?.key || '';
-  const autoNameToggleDefault = normalizeAutoNameEnabled(autoNameToggleField?.defaultValue, false);
+  const autoNameToggleDefault = false;
   const watchedAssigneeCombo = Form.useWatch('assignee_combo', form);
   const watchedQuickCreateValues = Form.useWatch([], form) || {};
   const childOverlayZIndexBase = overlayZIndexBase + 20;

@@ -1,13 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Image, Select, Space, Tag, Upload } from 'antd';
+﻿import React, { useMemo } from 'react';
+import { Select, Space, Tag } from 'antd';
 import {
   AppstoreOutlined,
   ClockCircleOutlined,
   EditOutlined,
-  FileImageOutlined,
   HistoryOutlined,
   SafetyCertificateOutlined,
-  UploadOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import DateObject from 'react-date-object';
@@ -16,7 +14,7 @@ import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { FieldLocation, FieldType } from '../../types';
-import RecordFilesManager from '../RecordFilesManager';
+import RecordImageBox from '../RecordImageBox';
 import TagInput from '../TagInput';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { buildResolvedAssigneeCombo } from '../../utils/assigneeValue';
@@ -73,13 +71,11 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   const location = useLocation();
   const imageField = moduleConfig?.fields?.find((f: any) => f.type === FieldType.IMAGE);
   const canShowImage = !!imageField && (canViewField ? canViewField(imageField.key) !== false : true);
-  const canOpenFilesGallery = Boolean(canShowImage && data?.id && moduleId && canViewFilesManager);
   const assigneeLabel = getAssigneeLabel(moduleId);
 
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const shouldOpenGalleryFromQuery = queryParams.get('gallery') === '1';
   const highlightFileId = queryParams.get('fileId');
-  const [isGalleryOpen, setIsGalleryOpen] = useState(false);
   const displayRecordTitle = useMemo(
     () => toPersianNumber(String(recordTitle || data.name || data.system_code || '-')),
     [data.name, data.system_code, recordTitle]
@@ -90,14 +86,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
     return String(raw);
   }, [data.custom_code, data.system_code]);
 
-  useEffect(() => {
-    if (canOpenFilesGallery && shouldOpenGalleryFromQuery) {
-      setIsGalleryOpen(true);
-    }
-  }, [canOpenFilesGallery, shouldOpenGalleryFromQuery]);
-
-  const handleCloseGallery = () => {
-    setIsGalleryOpen(false);
+  const handleCloseFilesManager = () => {
     if (!shouldOpenGalleryFromQuery && !highlightFileId) return;
 
     const nextParams = new URLSearchParams(location.search);
@@ -131,7 +120,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 
   const resolveActorLabel = (rawName: any, userId: any) => {
     const normalizedRaw = String(rawName || '').trim();
-    const placeholderValues = new Set(['سیستم/نامشخص', 'نامشخص', '-', 'system/unknown']);
+    const placeholderValues = new Set(['Ø³ÛŒØ³ØªÙ…/Ù†Ø§Ù…Ø´Ø®Øµ', 'Ù†Ø§Ù…Ø´Ø®Øµ', '-', 'system/unknown']);
     if (normalizedRaw && !placeholderValues.has(normalizedRaw.toLowerCase()) && !placeholderValues.has(normalizedRaw)) {
       return normalizedRaw;
     }
@@ -144,33 +133,22 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 
       <div className="flex flex-col lg:flex-row gap-8 items-stretch">
         {canShowImage && (
-          <div className="w-full lg:w-56 h-48 lg:h-56 shrink-0 rounded-2xl border-4 border-white dark:border-gray-700 shadow-xl relative group overflow-hidden bg-gray-100 dark:bg-black/20 self-center lg:self-start">
-            {data.image_url ? (
-              <Image
-                src={data.image_url}
-                className="w-full h-full object-cover"
-                wrapperStyle={{ width: '100%', height: '100%' }}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2">
-                <FileImageOutlined className="text-3xl opacity-30" />
-                <span className="text-xs">بدون تصویر</span>
-              </div>
-            )}
-
-            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center backdrop-blur-sm gap-2">
-              <Upload showUploadList={false} beforeUpload={onImageUpdate}>
-                <Button type="primary" icon={<UploadOutlined />} className="bg-leather-500 border-none" disabled={!canEditModule}>
-                  تغییر تصویر
-                </Button>
-              </Upload>
-              {canOpenFilesGallery && (
-                <Button type="default" size="small" onClick={() => setIsGalleryOpen(true)}>
-                  گالری
-                </Button>
-              )}
-            </div>
+          <div className="w-full lg:w-56 h-48 lg:h-56 shrink-0 self-center lg:self-start">
+            <RecordImageBox
+              moduleId={moduleId}
+              recordId={String(data?.id || '')}
+              imageUrl={data?.image_url || null}
+              canEdit={!!canEditModule}
+              canViewFilesManager={!!canViewFilesManager}
+              canEditFilesManager={!!canEditFilesManager && !!canEditModule}
+              canDeleteFilesManager={!!canDeleteFilesManager}
+              onImageUpdate={onImageUpdate}
+              onMainImageChange={onMainImageChange}
+              openFilesManagerByDefault={shouldOpenGalleryFromQuery}
+              highlightFileId={highlightFileId}
+              onFilesManagerClose={handleCloseFilesManager}
+              filesButtonLabel="فایل ها"
+            />
           </div>
         )}
 
@@ -193,7 +171,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                     variant="borderless"
                     value={buildResolvedAssigneeCombo(data)}
                     onChange={handleAssigneeChange}
-                    placeholder="جستجو یا انتخاب مسئول / نقش"
+                    placeholder="Ø¬Ø³ØªØ¬Ùˆ ÛŒØ§ Ø§Ù†ØªØ®Ø§Ø¨ Ù…Ø³Ø¦ÙˆÙ„ / Ù†Ù‚Ø´"
                     className="min-w-[140px] font-bold text-gray-700 dark:text-gray-300"
                     styles={{ popup: { root: { minWidth: 200 } } }}
                     options={getAssigneeOptions()}
@@ -270,7 +248,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <SafetyCertificateOutlined className="text-green-600" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">ایجاد کننده</span>
+                  <span className="opacity-70">Ø§ÛŒØ¬Ø§Ø¯ Ú©Ù†Ù†Ø¯Ù‡</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300">{resolveActorLabel(data?.created_by_name, data?.created_by)}</span>
                 </div>
               </div>
@@ -280,7 +258,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <ClockCircleOutlined className="text-blue-500" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">زمان ایجاد</span>
+                  <span className="opacity-70">Ø²Ù…Ø§Ù† Ø§ÛŒØ¬Ø§Ø¯</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300 dir-ltr">
                     {renderDate(data.created_at)}
                   </span>
@@ -292,7 +270,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <EditOutlined className="text-orange-500" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">آخرین ویرایشگر</span>
+                  <span className="opacity-70">Ø¢Ø®Ø±ÛŒÙ† ÙˆÛŒØ±Ø§ÛŒØ´Ú¯Ø±</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300">{resolveActorLabel(data?.updated_by_name, data?.updated_by)}</span>
                 </div>
               </div>
@@ -302,7 +280,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <HistoryOutlined className="text-purple-500" />
                 </div>
                 <div className="flex flex-col">
-                  <span className="opacity-70">زمان ویرایش</span>
+                  <span className="opacity-70">Ø²Ù…Ø§Ù† ÙˆÛŒØ±Ø§ÛŒØ´</span>
                   <span className="font-bold text-gray-700 dark:text-gray-300 dir-ltr">
                     {renderDate(data.updated_at)}
                   </span>
@@ -313,22 +291,10 @@ const HeroSection: React.FC<HeroSectionProps> = ({
         </div>
       </div>
 
-      {canOpenFilesGallery && (
-        <RecordFilesManager
-          open={isGalleryOpen}
-          onClose={handleCloseGallery}
-          moduleId={moduleId}
-          recordId={data.id}
-          mainImage={data.image_url}
-          onMainImageChange={onMainImageChange}
-          canEdit={!!canEditModule && !!canEditFilesManager}
-          canDelete={!!canDeleteFilesManager}
-          highlightFileId={highlightFileId}
-        />
-      )}
     </div>
   );
 };
 
 export default HeroSection;
+
 

@@ -89,6 +89,15 @@ export const marketingLeadsModule: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
+    {
+      key: 'legacy_system_code',
+      labels: { fa: 'کد سیستم قبلی', en: 'Legacy System Code' },
+      type: FieldType.TEXT,
+      location: FieldLocation.HEADER,
+      order: 6.1,
+      isTableColumn: false,
+      nature: FieldNature.STANDARD,
+    },
     //{
       //key: 'lead_source',
       //labels: { fa: 'منبع لید', en: 'Source Detail' },

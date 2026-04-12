@@ -28,6 +28,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import NotificationsPopover from './NotificationsPopover';
+import GlobalTaskProcessModalHost from './tasks/GlobalTaskProcessModalHost';
 import { getRecordTitle } from '../utils/recordTitle';
 import {
   ACCOUNTING_PERMISSION_KEY,
@@ -811,6 +812,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
              })}
           </div>
         )}
+        <GlobalTaskProcessModalHost />
       </AntLayout>
     </AntLayout>
   );

@@ -42,6 +42,7 @@ export type CounterpartyBotStatusModalProps = {
   onCopyActivationCode: () => void;
   onChangeChannel: (channel: BotChannel) => void;
   onChangeJoinLink: (value: string) => void;
+  onChangeGroupTitle: (value: string) => void;
   onChangeAllowedUserIds: (value: string[]) => void;
   onChangeAllowedRoleIds: (value: string[]) => void;
 };
@@ -69,6 +70,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   onCopyActivationCode,
   onChangeChannel,
   onChangeJoinLink,
+  onChangeGroupTitle,
   onChangeAllowedUserIds,
   onChangeAllowedRoleIds,
 }) => {
@@ -140,7 +142,11 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
           </div>
           <div>
             <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نام گروه شناسایی‌شده</div>
-            <Input value={groupTitle || '-'} disabled />
+            <Input
+              value={groupTitle}
+              placeholder="نام گروه بات"
+              onChange={(event) => onChangeGroupTitle(String(event.target.value || ''))}
+            />
           </div>
           <div>
             <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای این گروه بات</div>

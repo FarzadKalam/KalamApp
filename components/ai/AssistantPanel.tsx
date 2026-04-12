@@ -287,21 +287,21 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
     return (
       <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
         <Avatar
-          size={32}
+          size={28}
           className={isUser ? '' : '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]'}
           icon={isUser ? <UserOutlined /> : <AiSparkleIcon className="h-4 w-4" />}
         />
         <div className={`min-w-0 max-w-[82%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
           <div
-            className={`whitespace-pre-wrap rounded-lg border px-3 py-2 text-sm leading-6 shadow-sm ${
+            className={`whitespace-pre-wrap rounded-[1.1rem] px-2.5 py-2 text-[12px] leading-5 shadow-[0_3px_10px_rgba(15,23,42,0.08)] dark:shadow-[0_3px_10px_rgba(0,0,0,0.22)] ${
               isUser
-                ? 'rounded-tr-sm border-[rgba(var(--brand-300-rgb),0.55)] bg-[rgba(var(--brand-100-rgb),0.9)] text-gray-800 dark:bg-[rgba(var(--brand-600-rgb),0.2)] dark:text-gray-100'
-                : 'rounded-tl-sm border-[#f0abfc] bg-[#fdf2f8] text-gray-800 dark:border-[#be185d]/45 dark:bg-[#3b1022] dark:text-gray-100'
+                ? 'rounded-tr-sm bg-[rgb(var(--brand-700-rgb))] text-white dark:bg-[rgb(var(--brand-500-rgb))] dark:text-white'
+                : 'rounded-tl-sm bg-[rgba(var(--brand-50-rgb),0.96)] text-[rgb(var(--brand-800-rgb))] dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)] dark:text-[rgb(var(--brand-100-rgb))]'
             }`}
           >
             {item.content}
           </div>
-          <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] leading-4 text-gray-400">
+          <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] leading-4 text-gray-400">
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
             {!isUser && usageText ? <span>{usageText}</span> : null}
@@ -316,8 +316,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
       <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.85)]">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-sm font-bold">دستیار هوشمند</div>
-            <div className="truncate text-[11px] font-normal text-gray-500 dark:text-gray-400">{contextLabel}</div>
+            <div className="text-[13px] font-bold">دستیار هوشمند</div>
+            <div className="truncate text-[10px] font-normal text-gray-500 dark:text-gray-400">{contextLabel}</div>
           </div>
           <Space size={4}>
             <Tooltip title="بارگذاری دوباره">
@@ -377,6 +377,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
           }}
           placeholder="سوال خود را بنویسید..."
           autoSize={{ minRows: 2, maxRows: 5 }}
+          className="!text-[12px] !leading-5"
         />
         <div className="mt-2 flex items-center justify-end gap-2">
           <Button
@@ -385,6 +386,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
             loading={submitting}
             disabled={!input.trim()}
             onClick={submitChat}
+            size="small"
           >
             ارسال
           </Button>
@@ -395,4 +397,3 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
 };
 
 export default AssistantPanel;
-

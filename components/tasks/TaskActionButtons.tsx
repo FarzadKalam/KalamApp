@@ -50,6 +50,8 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     if (!task?.id || isTaskDoneStatus(task?.status)) return;
     setSavingComplete(true);
     try {
+      const optimisticTask = { ...(task || {}), status: 'done' };
+      await emitTaskUpdate(optimisticTask);
       const updatedTask = await updateTaskStatusWithAutomation({
         taskId: String(task.id),
         nextStatus: 'done',
@@ -59,6 +61,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       await emitTaskUpdate(updatedTask);
       message.success('فعالیت تکمیل شد');
     } catch (error: any) {
+      await emitTaskUpdate(task);
       message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
     } finally {
       setSavingComplete(false);
@@ -142,3 +145,4 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 };
 
 export default TaskActionButtons;
+
