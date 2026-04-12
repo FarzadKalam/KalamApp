@@ -5,6 +5,7 @@ export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot'
 export interface UiNotificationOverlayItem {
   id: string;
   kind: OverlayNotificationKind;
+  kindLabel?: string;
   title: string;
   body: string;
   createdAt: string | null;
@@ -14,6 +15,7 @@ export interface UiNotificationOverlayItem {
 }
 
 const listeners = new Set<() => void>();
+let notificationsBySource: Record<string, UiNotificationOverlayItem[]> = {};
 let notifications: UiNotificationOverlayItem[] = [];
 
 const emit = () => {
@@ -22,8 +24,16 @@ const emit = () => {
 
 const snapshot = () => notifications;
 
-export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[]) => {
-  notifications = items;
+const recompute = () => {
+  notifications = Object.values(notificationsBySource)
+    .flat()
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, 6);
+};
+
+export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[], source = 'default') => {
+  notificationsBySource[source] = items;
+  recompute();
   emit();
 };
 
@@ -31,7 +41,10 @@ export const dismissUiNotificationOverlayItem = (id: string) => {
   const target = notifications.find((item) => item.id === id);
   if (!target) return;
   target.onDismiss?.();
-  notifications = notifications.filter((item) => item.id !== id);
+  Object.keys(notificationsBySource).forEach((source) => {
+    notificationsBySource[source] = (notificationsBySource[source] || []).filter((item) => item.id !== id);
+  });
+  recompute();
   emit();
 };
 

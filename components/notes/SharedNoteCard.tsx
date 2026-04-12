@@ -27,6 +27,7 @@ interface SharedNoteCardProps {
   isMine?: boolean;
   isEdited?: boolean;
   footer?: React.ReactNode;
+  statusNode?: React.ReactNode;
   isEditing?: boolean;
   editingValue?: string;
   onEditingChange?: (value: string) => void;
@@ -41,6 +42,8 @@ interface SharedNoteCardProps {
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
+const HTML_ANCHOR_REGEX = /<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
+const LINK_CLASS_NAME = 'underline decoration-dotted underline-offset-2 break-all [overflow-wrap:anywhere] text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]';
 
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   authorName,
@@ -56,6 +59,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   isMine = false,
   isEdited = false,
   footer,
+  statusNode,
   isEditing = false,
   editingValue = '',
   onEditingChange,
@@ -68,7 +72,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   variant = 'default',
   renderTemplateBold = false,
 }) => {
-  const renderLinkifiedText = (value: string) => {
+  const renderPlainLinkifiedText = (value: string, keyPrefix = 'link') => {
     const source = String(value || '');
     if (!source.trim()) return source;
     const matches = Array.from(source.matchAll(URL_REGEX));
@@ -82,11 +86,11 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       if (start > cursor) nodes.push(source.slice(cursor, start));
       nodes.push(
         <a
-          key={`link-${index}-${start}`}
+          key={`${keyPrefix}-plain-${index}-${start}`}
           href={matched}
           target="_blank"
           rel="noreferrer"
-          className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
+          className={LINK_CLASS_NAME}
         >
           {matched}
         </a>
@@ -94,6 +98,48 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       cursor = start + matched.length;
     });
     if (cursor < source.length) nodes.push(source.slice(cursor));
+    return nodes.length ? nodes : source;
+  };
+
+  const renderLinkifiedText = (value: string, keyPrefix = 'link') => {
+    const source = String(value || '');
+    if (!source.trim()) return source;
+
+    const anchorMatches = Array.from(source.matchAll(HTML_ANCHOR_REGEX));
+    if (!anchorMatches.length) return renderPlainLinkifiedText(source, keyPrefix);
+
+    const nodes: React.ReactNode[] = [];
+    let cursor = 0;
+    anchorMatches.forEach((match, index) => {
+      const full = String(match[0] || '');
+      const href = String(match[1] || '').trim();
+      const label = String(match[2] || '').trim();
+      const start = typeof match.index === 'number' ? match.index : -1;
+      if (!full || start < 0) return;
+      if (start > cursor) {
+        nodes.push(renderPlainLinkifiedText(source.slice(cursor, start), `${keyPrefix}-before-${index}`));
+      }
+      if (href) {
+        nodes.push(
+          <a
+            key={`${keyPrefix}-anchor-${index}-${start}`}
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className={LINK_CLASS_NAME}
+          >
+            {label || href}
+          </a>
+        );
+      } else {
+        nodes.push(full);
+      }
+      cursor = start + full.length;
+    });
+
+    if (cursor < source.length) {
+      nodes.push(renderPlainLinkifiedText(source.slice(cursor), `${keyPrefix}-tail`));
+    }
     return nodes.length ? nodes : source;
   };
 
@@ -136,7 +182,10 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       >
         <div className="mb-1 flex items-center justify-between gap-2 text-[9px] text-gray-400">
           <span className="truncate">{authorName}</span>
-          <span className="shrink-0">{createdAtLabel}</span>
+          <span className="shrink-0 inline-flex items-center gap-1">
+            {statusNode}
+            <span>{createdAtLabel}</span>
+          </span>
         </div>
 
         {replyText ? (
@@ -167,7 +216,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             </div>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap text-[13px] leading-6 text-gray-800 dark:text-gray-200">
+          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-6 text-gray-800 dark:text-gray-200">
             {renderText(text)}
           </div>
         )}

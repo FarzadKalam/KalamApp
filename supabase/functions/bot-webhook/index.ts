@@ -290,14 +290,67 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.url,
     message?.video?.url,
     message?.audio?.url,
+    message?.voice?.url,
+    message?.image?.url,
+    message?.file?.url,
+    message?.media?.url,
+    message?.media?.file_url,
+    message?.document?.file_url,
+    message?.video?.file_url,
+    message?.photo?.file_url,
+    rubikaUpdate?.new_message?.file?.url,
+    rubikaUpdate?.new_message?.media?.url,
+    rubikaUpdate?.new_message?.media_url,
     rubikaNewMessage?.file?.url,
     rubikaNewMessage?.file_url,
+    rubikaNewMessage?.media?.url,
+    rubikaNewMessage?.media_url,
     rubikaInlineMessage?.file?.url,
+    rubikaInlineMessage?.media?.url,
     payload?.file_url,
     payload?.fileUrl,
     payload?.media_url,
-    payload?.mediaUrl
+    payload?.mediaUrl,
+    payload?.document?.url,
+    payload?.video?.url,
+    payload?.photo?.url,
+    payload?.audio?.url,
+    message?.file?.download_url,
+    message?.file?.downloadUrl,
+    message?.media?.download_url,
+    rubikaNewMessage?.file?.download_url,
+    rubikaNewMessage?.media?.download_url,
+    payload?.file?.download_url,
+    payload?.media?.download_url
   );
+  const findDeepUrl = (node: any): string | null => {
+    const seen = new Set<any>();
+    const stack = [node];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current || typeof current !== 'object' || seen.has(current)) continue;
+      seen.add(current);
+      if (Array.isArray(current)) {
+        current.forEach((item) => stack.push(item));
+        continue;
+      }
+      for (const [key, value] of Object.entries(current)) {
+        const lowerKey = String(key || '').toLowerCase();
+        if (typeof value === 'string') {
+          const trimmed = String(value || '').trim();
+          if (
+            /^https?:\/\//i.test(trimmed)
+            && (lowerKey.includes('url') || lowerKey.includes('download') || lowerKey.includes('link'))
+          ) {
+            return trimmed;
+          }
+        } else if (value && typeof value === 'object') {
+          stack.push(value);
+        }
+      }
+    }
+    return null;
+  };
   const fileId = pick(
     message?.file_id,
     message?.fileId,
@@ -315,9 +368,18 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.file_name,
     message?.document?.fileName,
     message?.video?.file_name,
+    rubikaNewMessage?.file?.file_name,
     rubikaNewMessage?.file_name,
+    payload?.document?.file_name,
+    payload?.video?.file_name,
+    payload?.photo?.file_name,
     payload?.file_name,
-    payload?.fileName
+    payload?.fileName,
+    message?.file?.name,
+    message?.file?.filename,
+    message?.media?.name,
+    rubikaNewMessage?.file?.name,
+    payload?.file?.name
   );
   const mimeType = pick(
     message?.mime_type,
@@ -325,20 +387,32 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.mime_type,
     message?.document?.mimeType,
     message?.video?.mime_type,
+    message?.file?.mime_type,
+    message?.media?.mime_type,
+    rubikaNewMessage?.file?.mime_type,
     payload?.mime_type,
     payload?.mimeType
   );
+  const payloadText = JSON.stringify({
+    message: message || null,
+    payload: payload || null,
+  }).toLowerCase();
   const hasPhoto = Boolean(message?.photo || payload?.photo);
   const hasDocument = Boolean(message?.document || payload?.document || fileName || directUrl || fileId);
   const hasVideo = Boolean(message?.video || payload?.video);
   const hasAudio = Boolean(message?.audio || payload?.audio);
+  const mimeLower = String(mimeType || '').toLowerCase();
+  const nameLower = String(fileName || '').toLowerCase();
+  const looksLikeImage = mimeLower.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(nameLower) || payloadText.includes('"photo"');
+  const looksLikeVideo = mimeLower.startsWith('video/') || /\.(mp4|mkv|mov|avi|webm|3gp)$/i.test(nameLower) || payloadText.includes('"video"');
   const messageType =
-    hasPhoto ? 'image'
-      : (hasDocument || hasVideo || hasAudio) ? 'file'
-        : 'text';
+    (hasPhoto || looksLikeImage) ? 'image'
+      : (hasVideo || looksLikeVideo) ? 'file'
+        : (hasDocument || hasAudio) ? 'file'
+          : 'text';
   return {
     messageType,
-    fileUrl: directUrl || null,
+    fileUrl: directUrl || findDeepUrl(message) || findDeepUrl(payload) || null,
     fileName: fileName || null,
     mimeType: mimeType || null,
     fileId: fileId || null,
@@ -442,10 +516,17 @@ const patchCounterpartyBotGroup = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   id: string,
-  patch: Record<string, any>
+  patch: Record<string, any>,
+  options?: {
+    onlyIfBotChatIdNull?: boolean;
+  }
 ) => {
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_groups`);
   url.searchParams.set('id', `eq.${id}`);
+  if (options?.onlyIfBotChatIdNull) {
+    // Treat both NULL and empty-string as unbound to handle legacy rows.
+    url.searchParams.set('or', '(bot_chat_id.is.null,bot_chat_id.eq.)');
+  }
   const response = await fetch(url.toString(), {
     method: 'PATCH',
     headers: {
@@ -458,6 +539,25 @@ const patchCounterpartyBotGroup = async (
   if (!response.ok) throw new Error(raw || 'Could not patch counterparty bot group');
   const parsed = raw ? JSON.parse(raw) : [];
   return Array.isArray(parsed) ? parsed[0] : parsed;
+};
+
+const loadCounterpartyBotGroupById = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  id: string
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_groups`);
+  url.searchParams.set('id', `eq.${id}`);
+  url.searchParams.set('select', 'id,customer_id,supplier_id,status,group_join_link,group_title,bot_chat_id,metadata');
+  url.searchParams.set('limit', '1');
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not load counterparty bot group by id');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
 };
 
 const loadCounterpartyLabel = async (
@@ -557,7 +657,7 @@ const syncCounterpartyBotGroupByInbound = async ({
   contact: Record<string, any>;
 }) => {
   try {
-    if (contact?.isGroup !== true) return null;
+    if (contact?.isGroup !== true) return { group: null, activatedNow: false };
     const rows = await loadOrgCounterpartyBotGroups(supabaseUrl, serviceRoleKey, orgId, channel);
     const chatId = String(contact?.chatId || '').trim();
     const usernameToken = normalizeLinkToken(contact?.username);
@@ -606,8 +706,8 @@ const syncCounterpartyBotGroupByInbound = async ({
     const matchedByTitle = matchedByTitleRows.length === 1 ? matchedByTitleRows[0] : null;
 
     const matched = matchedByChatId || matchedByActivation || matchedByLinkToken || matchedByTitle || matchedByCaptureSingle || null;
-    if (!matched) return null;
-    if (!chatId) return null;
+    if (!matched) return { group: null, activatedNow: false };
+    if (!chatId) return { group: null, activatedNow: false };
 
     const nextPatch: Record<string, any> = {
       bot_chat_id: chatId || null,
@@ -626,10 +726,42 @@ const syncCounterpartyBotGroupByInbound = async ({
       nextPatch.group_title = resolvedTitle;
     }
 
-    return patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, String(matched.id), nextPatch);
+    const matchedChatId = String(matched?.bot_chat_id || '').trim();
+    if (matchedChatId) {
+      const patchedExisting = await patchCounterpartyBotGroup(
+        supabaseUrl,
+        serviceRoleKey,
+        String(matched.id),
+        nextPatch
+      );
+      return {
+        group: patchedExisting || matched,
+        activatedNow: false,
+      };
+    }
+
+    const claimedActivation = await patchCounterpartyBotGroup(
+      supabaseUrl,
+      serviceRoleKey,
+      String(matched.id),
+      nextPatch,
+      { onlyIfBotChatIdNull: true }
+    );
+    if (claimedActivation?.id) {
+      return {
+        group: claimedActivation,
+        activatedNow: true,
+      };
+    }
+
+    const latest = await loadCounterpartyBotGroupById(supabaseUrl, serviceRoleKey, String(matched.id));
+    return {
+      group: latest,
+      activatedNow: false,
+    };
   } catch (error) {
     console.warn('[bot-webhook] counterparty group sync skipped', error);
-    return null;
+    return { group: null, activatedNow: false };
   }
 };
 
@@ -693,21 +825,21 @@ Deno.serve(async (req) => {
     if (contact.text) rowPayload.last_message_text = contact.text;
 
     const saved = await upsertInboundContact(supabaseUrl, serviceRoleKey, rowPayload);
-    const matchedGroup = await syncCounterpartyBotGroupByInbound({
+    const syncResult = await syncCounterpartyBotGroupByInbound({
       supabaseUrl,
       serviceRoleKey,
       orgId: String(integration?.org_id || ''),
       channel,
       contact,
     });
+    const matchedGroup = syncResult?.group || null;
 
     const shouldSendConnectionAck = Boolean(
+      syncResult?.activatedNow === true
+      &&
       matchedGroup?.id
       && String(matchedGroup?.status || '').trim() === 'active'
-      && (
-        matchedGroup?.metadata?.activation_confirmation_sent !== true
-        || String(matchedGroup?.metadata?.activation_confirmation_chat_id || '').trim() !== String(contact?.chatId || '').trim()
-      )
+      && matchedGroup?.metadata?.activation_confirmation_sent !== true
     );
     if (shouldSendConnectionAck) {
       try {

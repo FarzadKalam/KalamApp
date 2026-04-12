@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import { Button, Progress, theme } from 'antd';
 import {
   BellOutlined,
@@ -9,6 +9,7 @@ import {
   LoadingOutlined,
   MinusOutlined,
   ReloadOutlined,
+  RobotOutlined,
   StopFilled,
   TeamOutlined,
   UpOutlined,
@@ -141,11 +142,15 @@ const UploadProgressOverlay: React.FC = () => {
                 ? <BellOutlined />
                 : item.kind === 'task'
                   ? <CheckOutlined />
+                  : item.kind === 'bot'
+                    ? <RobotOutlined />
                   : <TeamOutlined />;
               const accentColor = item.kind === 'note'
                 ? '#2563eb'
                 : item.kind === 'task'
                   ? token.colorSuccess
+                  : item.kind === 'bot'
+                    ? '#2563eb'
                   : '#d97706';
 
               return (
@@ -173,7 +178,7 @@ const UploadProgressOverlay: React.FC = () => {
                       className="min-w-0 flex-1 text-right"
                     >
                       <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
-                        <span>{item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : 'مسئولیت'}</span>
+                        <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : 'مسئولیت')}</span>
                         <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
                       </div>
                       <div className="mt-1 truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>

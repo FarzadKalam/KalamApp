@@ -27,6 +27,7 @@ interface SharedNoteComposerProps {
   submitDisabled?: boolean;
   smsNotificationEnabled?: boolean;
   onSmsNotificationChange?: (value: boolean) => void;
+  extraActions?: React.ReactNode;
 }
 
 type PendingFilePrompt = {
@@ -86,6 +87,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   submitDisabled = false,
   smsNotificationEnabled = false,
   onSmsNotificationChange,
+  extraActions,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingPrompts, setPendingPrompts] = useState<PendingFilePrompt[]>([]);
@@ -216,6 +218,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                 icon={<PaperClipOutlined />}
                 onClick={() => fileInputRef.current?.click()}
               />
+              {extraActions}
               {onSmsNotificationChange ? (
                 <Checkbox
                   checked={smsNotificationEnabled}

@@ -3,7 +3,12 @@ import { supabase } from '../supabaseClient';
 import { normalizeNoteScope } from './noteScope';
 import { createProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveTaskSourceLink } from './taskMeta';
-import { evaluateWorkflowCondition, executeWorkflowAction, formatWorkflowTemplateValue } from './workflowRuntime';
+import {
+  evaluateWorkflowCondition,
+  executeWorkflowAction,
+  formatWorkflowTemplateValue,
+  resolveNoteAttachmentsFromFields,
+} from './workflowRuntime';
 import {
   normalizeProcessAutomationRules,
   ProcessAutomationRule,
@@ -19,6 +24,7 @@ import {
 } from './processTaskCustomFields';
 import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
+import { serializeNoteContent } from './noteContent';
 
 type AutomationActor = {
   id?: string | null;
@@ -43,9 +49,10 @@ type CommunicationTarget = {
   phones: string[];
   emails: string[];
   baleChatIds: string[];
+  rubikaChatIds: string[];
 };
 
-type CommunicationChannel = 'sms' | 'email' | 'bale';
+type CommunicationChannel = 'sms' | 'email' | 'bale' | 'rubika';
 
 const isTaskAutomationFieldKey = (fieldKey?: string | null) =>
   String(fieldKey || '').startsWith(TASK_AUTOMATION_FIELD_PREFIX);
@@ -101,6 +108,7 @@ const buildAutomationActionRecord = (
     status_label: getTaskStatusLabel(task?.status, task),
     task_status_label: getTaskStatusLabel(task?.status, task),
     task_due_date: task?.due_date ?? '',
+    task_image_url: task?.image_url ?? '',
     source_module_id: sourceModuleId || sourceLink.moduleId || '',
     source_record_id: sourceLink.recordId ?? '',
     process_group_id: task?.process_group_id ?? parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id ?? '',
@@ -191,6 +199,10 @@ const getRequestedCommunicationChannels = (actions: any[]): Set<CommunicationCha
     }
     if (actionType === 'send_bale_bot') {
       channels.add('bale');
+      return;
+    }
+    if (actionType === 'send_rubika_bot') {
+      channels.add('rubika');
     }
   });
   return channels;
@@ -201,6 +213,7 @@ const getProfileCommunicationSelect = (channels: Set<CommunicationChannel>) => {
   if (channels.has('sms')) columns.push('mobile_1');
   if (channels.has('email')) columns.push('email');
   if (channels.has('bale')) columns.push('bale_chat_id');
+  if (channels.has('rubika')) columns.push('rubika_chat_id');
   return columns.join(', ');
 };
 
@@ -209,7 +222,7 @@ const resolveCommunicationTargets = async (
   channels: Set<CommunicationChannel>
 ): Promise<CommunicationTarget> => {
   if (channels.size === 0) {
-    return { phones: [], emails: [], baleChatIds: [] };
+    return { phones: [], emails: [], baleChatIds: [], rubikaChatIds: [] };
   }
 
   const userIds = Array.from(new Set((target?.userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
@@ -241,6 +254,7 @@ const resolveCommunicationTargets = async (
     phones: Array.from(new Set(allUsers.map((row) => String(row?.mobile_1 || '').trim()).filter(Boolean))),
     emails: Array.from(new Set(allUsers.map((row) => String(row?.email || '').trim()).filter(Boolean))),
     baleChatIds: Array.from(new Set(allUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
+    rubikaChatIds: Array.from(new Set(allUsers.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean))),
   };
 };
 
@@ -360,6 +374,7 @@ const buildAutomationActionRecordWithLinks = async (
     if (!fieldKey) return;
     actionRecord[`${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}${fieldKey}`] = previousTaskRecord?.[fieldKey];
   });
+  actionRecord[`${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}image_url`] = previousTaskRecord?.image_url;
 
   return actionRecord;
 };
@@ -422,7 +437,10 @@ const evaluateProcessAutomationConditions = async ({
 
 const getRuleNoteText = (rule: ProcessAutomationRule) =>
   String(
-    rule?.actions?.find((action) => String(action?.type || '') === 'send_note')?.config?.note_text
+    rule?.actions?.find((action) => {
+      const actionType = String(action?.type || '').trim();
+      return actionType === 'send_note' || actionType === 'send_note_sms';
+    })?.config?.note_text
     || rule?.note_text
     || ''
   ).trim();
@@ -478,12 +496,24 @@ const insertAutomationNote = async (
   _currentUser?: AutomationActor | null,
   sendSmsNotice = false
 ) => {
+  const ruleNoteAction = (rule?.actions || []).find((action) => {
+    const actionType = String(action?.type || '').trim();
+    return actionType === 'send_note' || actionType === 'send_note_sms';
+  });
   const noteText = renderAutomationTemplateWithBoldMarkers(getRuleNoteText(rule), actionRecord).trim();
-  if (!noteText) return;
 
   const sourceLink = resolveTaskSourceLink(task);
+  const resolvedModuleId = sourceLink.moduleId || 'tasks';
+  const attachments = await resolveNoteAttachmentsFromFields({
+    currentRecord: actionRecord,
+    moduleId: resolvedModuleId,
+    attachmentFields: Array.isArray((ruleNoteAction as any)?.config?.attachment_fields)
+      ? (ruleNoteAction as any).config.attachment_fields
+      : [],
+  });
+  if (!noteText && attachments.length === 0) return;
   const scope = normalizeNoteScope(
-    sourceLink.moduleId || 'tasks',
+    resolvedModuleId,
     sourceLink.recordId || String(task?.id || '')
   );
   if (!scope.hasLinkedRecord) return;
@@ -493,14 +523,14 @@ const insertAutomationNote = async (
   const payload: Record<string, any> = {
     module_id: scope.module_id,
     record_id: scope.record_id,
-    content: noteText,
+    content: serializeNoteContent(noteText, attachments),
     mention_user_ids: mentionTarget.userIds,
     mention_role_ids: mentionTarget.roleIds,
     source_type: 'system',
     metadata: {
       source_type: 'system',
       process_automation_rule_id: String(rule?.id || '').trim() || null,
-      workflow_action_type: 'send_note',
+      workflow_action_type: String((ruleNoteAction as any)?.type || 'send_note').trim() || 'send_note',
     },
   };
 
@@ -654,7 +684,7 @@ export const runProcessAutomationsForTaskEvent = async ({
           }
 
           const actionType = String(action?.type || '');
-          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_bale_bot'].includes(actionType);
+          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_bale_bot', 'send_rubika_bot'].includes(actionType);
           if ((!sourceContext?.moduleId || !sourceContext?.record) && !canRunWithoutSourceRecord) continue;
 
           const actionConfig = (action as any)?.config || {};
@@ -684,6 +714,11 @@ export const runProcessAutomationsForTaskEvent = async ({
           if (actionType === 'send_bale_bot' && communicationTargets.baleChatIds.length > 0 && actionRecipientFields.length === 0 && !hasManualChatIds) {
             directConfigPatch.manual_chat_ids = Array.from(new Set([
               ...communicationTargets.baleChatIds,
+            ]));
+          }
+          if (actionType === 'send_rubika_bot' && communicationTargets.rubikaChatIds.length > 0 && actionRecipientFields.length === 0 && !hasManualChatIds) {
+            directConfigPatch.manual_chat_ids = Array.from(new Set([
+              ...communicationTargets.rubikaChatIds,
             ]));
           }
 

@@ -10,6 +10,7 @@ type BotAdminBody = {
   chatId?: string;
   text?: string;
   skipLog?: boolean;
+  extraPayload?: Record<string, any>;
 };
 
 type InboundContact = {
@@ -692,7 +693,8 @@ const sendProviderMessage = async (
   channel: BotChannel,
   settings: Record<string, any>,
   chatId: string,
-  text: string
+  text: string,
+  extraPayload?: Record<string, any>
 ) => {
   const token = pick(settings?.bot_token);
   if (!token) throw new Error('توکن بات تنظیم نشده است.');
@@ -701,23 +703,26 @@ const sendProviderMessage = async (
 
   let lastError: any = null;
   for (let attempt = 1; attempt <= (channel === 'rubika' ? 3 : 1); attempt += 1) {
+    const baseBody = channel === 'rubika'
+      ? {
+        chat_id: chatId,
+        text,
+      }
+      : {
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+      };
+    const requestBody = {
+      ...baseBody,
+      ...(extraPayload && typeof extraPayload === 'object' ? extraPayload : {}),
+    };
     const response = await fetch(buildSendMessageUrl(baseUrl, token, sendMessagePath), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(
-        channel === 'rubika'
-          ? {
-            chat_id: chatId,
-            text,
-          }
-          : {
-            chat_id: chatId,
-            text,
-            parse_mode: 'HTML',
-          }
-      ),
+      body: JSON.stringify(requestBody),
     });
 
     const payload = await parseResponse(response);
@@ -754,7 +759,7 @@ const sendTestMessage = async (
   channel: BotChannel,
   chatId: string,
   text: string,
-  options?: { skipLog?: boolean }
+  options?: { skipLog?: boolean; extraPayload?: Record<string, any> }
 ) => {
   const shouldLog = options?.skipLog !== true;
   const logRow = shouldLog
@@ -773,7 +778,13 @@ const sendTestMessage = async (
     : null;
 
   try {
-    const payload = await sendProviderMessage(channel, integration?.settings || {}, chatId, text);
+    const payload = await sendProviderMessage(
+      channel,
+      integration?.settings || {},
+      chatId,
+      text,
+      options?.extraPayload
+    );
     if (logRow?.id) {
       await updateOutboundLog(supabaseUrl, serviceRoleKey, String(logRow.id), {
         status: 'sent',
@@ -783,11 +794,13 @@ const sendTestMessage = async (
           ? {
             channel,
             source: 'settings_test_send',
+            request_extra_payload: options?.extraPayload || null,
             response: payload,
           }
           : {
             channel,
             source: 'function_proxy',
+            request_extra_payload: options?.extraPayload || null,
             response: payload,
           },
       });
@@ -886,6 +899,9 @@ Deno.serve(async (req) => {
       }
       const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text, {
         skipLog: body?.skipLog === true,
+        extraPayload: body?.extraPayload && typeof body.extraPayload === 'object'
+          ? body.extraPayload
+          : undefined,
       });
       return json(200, {
         success: true,

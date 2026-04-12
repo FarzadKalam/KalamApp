@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs } from 'antd';
-import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined } from '@ant-design/icons';
+import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -28,9 +28,12 @@ import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
 import { getActiveChannelSettings } from '../utils/channelSettings';
+import AssistantPanel from './ai/AssistantPanel';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
+  variant?: 'chat' | 'alerts';
+  requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'assistant';
 }
 
 const MAX_ITEMS = 10;
@@ -42,7 +45,22 @@ const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
 const DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY = 'notif_dismissed_ui_v1';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, 'primary' | 'id_only' | 'none'>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages';
+type DrawerTabKey = NotificationSectionKey | 'assistant';
 type CreatedSortDirection = 'desc' | 'asc';
+const CHAT_TAB_KEYS: DrawerTabKey[] = ['notes', 'bot_messages', 'assistant'];
+const ALERT_TAB_KEYS: DrawerTabKey[] = ['tasks', 'responsibilities'];
+const normalizeTabForVariant = (
+  variant: 'chat' | 'alerts',
+  value: DrawerTabKey | null | undefined,
+): DrawerTabKey => {
+  const key = String(value || '').trim() as DrawerTabKey;
+  if (variant === 'chat') {
+    return CHAT_TAB_KEYS.includes(key) ? key : 'notes';
+  }
+  return ALERT_TAB_KEYS.includes(key) ? key : 'tasks';
+};
+const isSectionTabKey = (value: DrawerTabKey): value is NotificationSectionKey =>
+  value === 'notes' || value === 'tasks' || value === 'responsibilities' || value === 'bot_messages';
 const SYSTEM_MESSAGES_USER_ID = '__system_messages__';
 const CHAT_GROUP_PREFIX = 'group:';
 const BOT_GROUP_FORWARD_PREFIX = 'botgroup:';
@@ -334,9 +352,10 @@ const shouldPauseNotesPolling = (error: any) => {
   return false;
 };
 
-const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile }) => {
+const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, variant = 'alerts', requestedTab }) => {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const initialTab = normalizeTabForVariant(variant, requestedTab);
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -353,6 +372,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [editingBotMessageId, setEditingBotMessageId] = useState<string | null>(null);
   const [editingBotMessageValue, setEditingBotMessageValue] = useState('');
   const [botMentionPickerOpen, setBotMentionPickerOpen] = useState(false);
+  const [mobileBotSearchOpen, setMobileBotSearchOpen] = useState(false);
+  const [noteNewIncomingCount, setNoteNewIncomingCount] = useState(0);
+  const [botNewIncomingCount, setBotNewIncomingCount] = useState(0);
   const [showMore, setShowMore] = useState({ notes: false, tasks: false, responsibilities: false });
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
@@ -390,8 +412,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const [forwardingNote, setForwardingNote] = useState<any | null>(null);
   const [forwardTargetUserIds, setForwardTargetUserIds] = useState<string[]>([]);
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
-  const [desktopActiveKey, setDesktopActiveKey] = useState<'notes' | 'tasks' | 'responsibilities' | 'bot_messages'>('tasks');
-  const [mobileActiveKey, setMobileActiveKey] = useState<'notes' | 'tasks' | 'responsibilities' | 'bot_messages'>('tasks');
+  const [desktopActiveKey, setDesktopActiveKey] = useState<DrawerTabKey>(initialTab);
+  const [mobileActiveKey, setMobileActiveKey] = useState<DrawerTabKey>(initialTab);
   const [responsibilityViewKey, setResponsibilityViewKey] = useState('all');
   const [responsibilitySortDirection, setResponsibilitySortDirection] = useState<CreatedSortDirection>('desc');
   const [previewRecord, setPreviewRecord] = useState<{ moduleId: string; recordId: string; label?: string } | null>(null);
@@ -433,6 +455,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const botShouldStickToBottomRef = useRef(true);
   const botForceScrollToBottomRef = useRef(false);
+  const noteConversationKeyRef = useRef<string | null>(null);
+  const noteConversationMessageIdsRef = useRef<Set<string>>(new Set());
+  const botConversationKeyRef = useRef<string | null>(null);
+  const botConversationMessageIdsRef = useRef<Set<string>>(new Set());
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -1389,10 +1415,22 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     refreshAllRef.current = refreshAll;
   }, [refreshAll]);
 
-  const activeDrawerSection = isMobile ? mobileActiveKey : desktopActiveKey;
+  const activeDrawerTab = isMobile ? mobileActiveKey : desktopActiveKey;
+  const activeDrawerSection = isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null;
 
   useEffect(() => {
-    if (open) {
+    setDesktopActiveKey((prev) => normalizeTabForVariant(variant, prev));
+    setMobileActiveKey((prev) => normalizeTabForVariant(variant, prev));
+  }, [variant]);
+
+  useEffect(() => {
+    const nextRequested = normalizeTabForVariant(variant, requestedTab);
+    setDesktopActiveKey(nextRequested);
+    setMobileActiveKey(nextRequested);
+  }, [requestedTab, variant]);
+
+  useEffect(() => {
+    if (open && activeDrawerSection) {
       void refreshSection(activeDrawerSection);
     }
   }, [activeDrawerSection, open, profile.id]);
@@ -1547,7 +1585,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   const tasksCount = tasks.filter((t: any) => !seenTaskIds.has(String(t.id))).length;
   const responsibilitiesCount = responsibilities.filter((r: any) => !seenResponsibilityIds.has(String(r.id))).length;
   const botMessagesCount = botMessages.length;
-  const totalCount = notesCount + tasksCount + responsibilitiesCount + botMessagesCount;
+  const chatTotalCount = notesCount + botMessagesCount;
+  const alertsTotalCount = tasksCount + responsibilitiesCount;
+  const totalCount = variant === 'chat' ? chatTotalCount : alertsTotalCount;
   const filteredTasks = useMemo(() => {
     const parseTime = (value: any) => {
       if (!value) return null;
@@ -2017,34 +2057,57 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     const node = event.currentTarget;
     const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
     noteShouldStickToBottomRef.current = distanceToBottom <= 80;
+    if (distanceToBottom <= 80) {
+      setNoteNewIncomingCount(0);
+    }
   }, []);
   const handleBotMessagesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const node = event.currentTarget;
     const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
     botShouldStickToBottomRef.current = distanceToBottom <= 80;
+    if (distanceToBottom <= 80) {
+      setBotNewIncomingCount(0);
+    }
   }, []);
 
   const handleClose = useCallback(() => {
     mobileDrawerHistoryActiveRef.current = false;
     setMobileNoteSearchOpen(false);
+    setMobileBotSearchOpen(false);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
     setForwardingNote(null);
     setForwardTargetUserIds([]);
-    setSeenNoteIds((prev) => new Set([...prev, ...notes.map((n: any) => String(n.id))]));
-    setSeenTaskIds((prev) => new Set([...prev, ...tasks.map((t: any) => String(t.id))]));
-    setSeenResponsibilityIds((prev) => new Set([...prev, ...responsibilities.map((r: any) => String(r.id))]));
+    setNoteNewIncomingCount(0);
+    setBotNewIncomingCount(0);
+    if (variant === 'chat') {
+      setSeenNoteIds((prev) => new Set([...prev, ...notes.map((n: any) => String(n.id))]));
+    } else {
+      setSeenTaskIds((prev) => new Set([...prev, ...tasks.map((t: any) => String(t.id))]));
+      setSeenResponsibilityIds((prev) => new Set([...prev, ...responsibilities.map((r: any) => String(r.id))]));
+    }
     setPreviewRecord(null);
     setTaskProcessModalTask(null);
     setOpen(false);
-  }, [notes, responsibilities, tasks]);
+  }, [notes, responsibilities, tasks, variant]);
 
   useEffect(() => {
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
     noteShouldStickToBottomRef.current = true;
     noteForceScrollToBottomRef.current = true;
+    setNoteNewIncomingCount(0);
+    noteConversationKeyRef.current = null;
+    noteConversationMessageIdsRef.current = new Set();
   }, [selectedNoteUserId]);
+
+  useEffect(() => {
+    botShouldStickToBottomRef.current = true;
+    botForceScrollToBottomRef.current = true;
+    setBotNewIncomingCount(0);
+    botConversationKeyRef.current = null;
+    botConversationMessageIdsRef.current = new Set();
+  }, [selectedBotGroupId]);
 
   useEffect(() => {
     if (!open || !profile.id || !selectedNoteUserId) {
@@ -2161,6 +2224,82 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
     scrollBotMessagesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     botForceScrollToBottomRef.current = false;
+  }, [activeDrawerSection, botMessages, open, selectedBotGroupId]);
+
+  useEffect(() => {
+    const currentUserId = String(profile.id || '').trim();
+    const conversationKey = selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
+      ? (selectedChatGroupId ? `group:${selectedChatGroupId}` : `direct:${selectedNoteUserId}`)
+      : null;
+    const messageIds = new Set(
+      displayedChatNotes
+        .map((note: any) => String(note?.id || '').trim())
+        .filter(Boolean)
+    );
+    const isActiveConversation = Boolean(open && activeDrawerSection === 'notes' && conversationKey);
+
+    if (!isActiveConversation || !conversationKey) {
+      noteConversationKeyRef.current = conversationKey;
+      noteConversationMessageIdsRef.current = messageIds;
+      setNoteNewIncomingCount(0);
+      return;
+    }
+
+    if (noteConversationKeyRef.current !== conversationKey) {
+      noteConversationKeyRef.current = conversationKey;
+      noteConversationMessageIdsRef.current = messageIds;
+      setNoteNewIncomingCount(0);
+      return;
+    }
+
+    const previousIds = noteConversationMessageIdsRef.current;
+    const incomingCount = displayedChatNotes.filter((note: any) => {
+      const noteId = String(note?.id || '').trim();
+      if (!noteId || previousIds.has(noteId)) return false;
+      const authorId = String(note?.author_id || '').trim();
+      return Boolean(authorId && authorId !== currentUserId);
+    }).length;
+
+    noteConversationMessageIdsRef.current = messageIds;
+    if (incomingCount > 0 && !noteShouldStickToBottomRef.current) {
+      setNoteNewIncomingCount((prev) => prev + incomingCount);
+    }
+  }, [activeDrawerSection, displayedChatNotes, open, profile.id, selectedChatGroupId, selectedNoteUserId]);
+
+  useEffect(() => {
+    const conversationKey = selectedBotGroupId ? `bot:${selectedBotGroupId}` : null;
+    const messageIds = new Set(
+      botMessages
+        .map((row) => String(row?.id || '').trim())
+        .filter(Boolean)
+    );
+    const isActiveConversation = Boolean(open && activeDrawerSection === 'bot_messages' && conversationKey);
+
+    if (!isActiveConversation || !conversationKey) {
+      botConversationKeyRef.current = conversationKey;
+      botConversationMessageIdsRef.current = messageIds;
+      setBotNewIncomingCount(0);
+      return;
+    }
+
+    if (botConversationKeyRef.current !== conversationKey) {
+      botConversationKeyRef.current = conversationKey;
+      botConversationMessageIdsRef.current = messageIds;
+      setBotNewIncomingCount(0);
+      return;
+    }
+
+    const previousIds = botConversationMessageIdsRef.current;
+    const incomingCount = botMessages.filter((row) => {
+      const rowId = String(row?.id || '').trim();
+      if (!rowId || previousIds.has(rowId)) return false;
+      return String(row?.direction || '').trim() === 'inbound';
+    }).length;
+
+    botConversationMessageIdsRef.current = messageIds;
+    if (incomingCount > 0 && !botShouldStickToBottomRef.current) {
+      setBotNewIncomingCount((prev) => prev + incomingCount);
+    }
   }, [activeDrawerSection, botMessages, open, selectedBotGroupId]);
 
   const playNotificationChime = useCallback(() => {
@@ -2591,6 +2730,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
       return;
     }
 
+    if (variant !== 'alerts') {
+      prevNotesRef.current = currentNoteIds;
+      prevTasksRef.current = currentTaskIds;
+      prevResponsibilitiesRef.current = currentResponsibilityIds;
+      prevBotMessageIdsRef.current = currentBotMessageIds;
+      setUiNotifications([]);
+      return;
+    }
+
     const newNotifications: UiNotificationItem[] = [
       ...notes
         .filter((note: any) => {
@@ -2718,6 +2866,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     seenResponsibilityIds,
     seenTaskIds,
     tasks,
+    variant,
   ]);
 
   useEffect(() => {
@@ -2793,13 +2942,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   }, [openPreviewRecord, recordTitleMap, resolveDirectConversationTargetUserId]);
 
   useEffect(() => {
-    if (open || uiNotifications.length === 0) {
+    if (variant !== 'alerts' || open || uiNotifications.length === 0) {
+      setUiNotificationOverlayItems([]);
+      return;
+    }
+    const overlayItems = uiNotifications.filter((item) => item.kind === 'task' || item.kind === 'responsibility');
+    if (overlayItems.length === 0) {
       setUiNotificationOverlayItems([]);
       return;
     }
 
     setUiNotificationOverlayItems(
-      uiNotifications.map((item) => ({
+      overlayItems.map((item) => ({
         id: item.id,
         kind: item.kind,
         title: item.title,
@@ -2810,7 +2964,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         onDismiss: () => handleDismissUiNotification(item.id),
       })),
     );
-  }, [handleDismissUiNotification, open, openUiNotification, uiNotifications]);
+  }, [handleDismissUiNotification, open, openUiNotification, uiNotifications, variant]);
 
   useEffect(() => () => {
     setUiNotificationOverlayItems([]);
@@ -2829,7 +2983,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     return (
       <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
         {withUserSidebar ? (
-          <div dir="rtl" className="w-[208px] border-r border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.14)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.14)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
             <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.22)]">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گفتگوها</div>
@@ -3128,6 +3282,22 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               })
             )}
           </div>
+          {selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID && noteNewIncomingCount > 0 ? (
+            <div className="pb-1 text-center">
+              <button
+                type="button"
+                className="inline-flex items-center rounded-full border border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-100-rgb),0.95)] px-3 py-1 text-xs font-semibold text-[rgb(var(--brand-700-rgb))] shadow-sm transition hover:bg-[rgba(var(--brand-100-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.3)] dark:bg-[rgba(var(--brand-700-rgb),0.35)] dark:text-[rgb(var(--brand-300-rgb))]"
+                onClick={() => {
+                  noteShouldStickToBottomRef.current = true;
+                  noteForceScrollToBottomRef.current = true;
+                  setNoteNewIncomingCount(0);
+                  scrollNotesToBottom('smooth');
+                }}
+              >
+                +{toPersianNumber(String(noteNewIncomingCount))} پیام جدید
+              </button>
+            </div>
+          ) : null}
 
           <SharedNoteComposer
             header={(
@@ -3552,6 +3722,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   };
 
   const renderBotMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
+    const withDesktopSidebar = layout === 'desktop';
+    const withMobileUserRail = layout === 'mobile';
     const selectedGroup = botGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null;
     const statusLabel = BOT_STATUS_LABELS_FA[String(selectedGroup?.status || '')] || String(selectedGroup?.status || 'نامشخص');
     const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
@@ -3626,48 +3798,69 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     };
 
     return (
-      <div className={`h-full min-h-0 ${layout === 'desktop' ? 'grid grid-cols-[260px_minmax(0,1fr)] gap-3' : 'flex flex-col gap-3'} overflow-hidden`}>
-        <div className="min-h-0 overflow-y-auto rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(255,255,255,0.98)] p-2.5 dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-          <div className="mb-2 px-1 text-xs font-bold text-gray-600 dark:text-gray-300">گروه‌های بات</div>
-          <Input
-            size="small"
-            allowClear
-            value={botGroupSearch}
-            onChange={(event) => setBotGroupSearch(event.target.value)}
-            placeholder="جستجو در گروه‌ها..."
-            className="mb-2"
-            prefix={<SearchOutlined className="text-gray-400" />}
-          />
-          <div className="space-y-1.5">
-            {filteredBotGroups.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گروه باتی ثبت نشده است." />
-            ) : filteredBotGroups.map((row) => {
-              const rowStatus = BOT_STATUS_LABELS_FA[String(row.status || '')] || String(row.status || '');
-              const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '')] || String(row.channel_type || '');
-              const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه بدون عنوان';
-              const active = String(selectedBotGroupId || '') === String(row.id);
-              return (
-                <button
-                  type="button"
-                  key={row.id}
-                  className={`w-full rounded-xl border px-2 py-2 text-right transition-colors ${active ? 'border-[rgb(var(--brand-500-rgb))] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.2)]' : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5'}`}
-                  onClick={() => setSelectedBotGroupId(String(row.id))}
-                >
-                  <div className="truncate text-xs font-bold text-gray-800 dark:text-gray-100">{rowTitle}</div>
-                  <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">{rowChannel} | {rowStatus}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="min-h-0 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(255,255,255,0.98)] dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgb(var(--app-dark-surface-rgb))] flex flex-col overflow-hidden">
-          <div className="border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.96)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="text-sm font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-              <RobotOutlined />
-              <span className="truncate">{groupTitle}</span>
+      <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+        {withDesktopSidebar ? (
+          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.14)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.22)]">
+              <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گروه‌های بات</div>
+              <Input
+                size="small"
+                allowClear
+                value={botGroupSearch}
+                onChange={(event) => setBotGroupSearch(event.target.value)}
+                placeholder="جستجوی گفتگو"
+                prefix={<SearchOutlined className="text-gray-400" />}
+                className="mt-2"
+              />
             </div>
-            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              وضعیت: {statusLabel} | پلتفرم: {channelLabel}
+            <div className="overflow-y-auto h-full px-2 py-2 space-y-1">
+              {filteredBotGroups.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گروه باتی ثبت نشده است." />
+              ) : filteredBotGroups.map((row) => {
+                const rowStatus = BOT_STATUS_LABELS_FA[String(row.status || '')] || String(row.status || '');
+                const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '')] || String(row.channel_type || '');
+                const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه بدون عنوان';
+                const active = String(selectedBotGroupId || '') === String(row.id);
+                return (
+                  <button
+                    type="button"
+                    key={row.id}
+                    className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
+                      active
+                        ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
+                        : 'hover:bg-white/80 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
+                    }`}
+                    onClick={() => {
+                      setMobileBotSearchOpen(false);
+                      setSelectedBotGroupId(String(row.id));
+                    }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Avatar size={36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
+                        <RobotOutlined />
+                      </Avatar>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">{rowTitle}</div>
+                        <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex flex-col flex-1 min-h-0 bg-[rgba(255,255,255,0.98)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+          <div className="border-b border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.96)] px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.14)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+            <div className="flex items-center gap-3">
+              <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
+                <RobotOutlined />
+              </Avatar>
+              <div className="min-w-0">
+                <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{groupTitle}</div>
+                <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">وضعیت: {statusLabel} | پلتفرم: {channelLabel}</div>
+              </div>
             </div>
             {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id) ? (
               <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -3686,7 +3879,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               allowClear
               value={botMessageSearch}
               onChange={(event) => setBotMessageSearch(event.target.value)}
-              placeholder="جستجو در پیام‌های گروه..."
+              placeholder="جستجو در پیام های این گفتگو"
               className="mt-2"
               prefix={<SearchOutlined className="text-gray-400" />}
             />
@@ -3696,13 +3889,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               </div>
             ) : null}
           </div>
+
           <div
             ref={botMessagesScrollContainerRef}
             onScroll={handleBotMessagesScroll}
-            className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-2"
+            className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-2.5 py-2.5' : 'px-2 py-2'} space-y-2.5`}
           >
             {loadingBotMessages ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
+                <Skeleton active paragraph={{ rows: 2 }} />
                 <Skeleton active paragraph={{ rows: 2 }} />
                 <Skeleton active paragraph={{ rows: 2 }} />
               </div>
@@ -3732,7 +3927,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
                   || String((payload as any)?.username || '').trim()
                   || 'کاربر گروه';
                 return (
-                  <div key={row.id} className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
+                  <div key={row.id}>
                     <SharedNoteCard
                       authorName={outgoing ? 'شما' : inboundAuthor}
                       createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
@@ -3790,6 +3985,23 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
               })
             )}
           </div>
+          {selectedGroup && botNewIncomingCount > 0 ? (
+            <div className="pb-1 text-center">
+              <button
+                type="button"
+                className="inline-flex items-center rounded-full border border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-100-rgb),0.95)] px-3 py-1 text-xs font-semibold text-[rgb(var(--brand-700-rgb))] shadow-sm transition hover:bg-[rgba(var(--brand-100-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.3)] dark:bg-[rgba(var(--brand-700-rgb),0.35)] dark:text-[rgb(var(--brand-300-rgb))]"
+                onClick={() => {
+                  botShouldStickToBottomRef.current = true;
+                  botForceScrollToBottomRef.current = true;
+                  setBotNewIncomingCount(0);
+                  scrollBotMessagesToBottom('smooth');
+                }}
+              >
+                +{toPersianNumber(String(botNewIncomingCount))} پیام جدید
+              </button>
+            </div>
+          ) : null}
+
           <SharedNoteComposer
             value={botMessageText}
             onChange={setBotMessageText}
@@ -3818,6 +4030,70 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
             submitDisabled={!selectedGroup || !canSend || botSending || (!String(botMessageText || '').trim() && botAttachments.length === 0)}
           />
         </div>
+
+        {withMobileUserRail ? (
+          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-100-rgb),0.96)] dark:border-[rgba(var(--brand-300-rgb),0.14)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+            <div className="flex h-full flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden px-1 py-2">
+              <div className="sticky top-0 z-10 flex w-full justify-center">
+                <Popover
+                  trigger="click"
+                  placement="leftTop"
+                  open={mobileBotSearchOpen}
+                  onOpenChange={setMobileBotSearchOpen}
+                  content={(
+                    <Input
+                      size="small"
+                      allowClear
+                      autoFocus
+                      value={botGroupSearch}
+                      onChange={(event) => setBotGroupSearch(event.target.value)}
+                      placeholder="جستجوی چت"
+                      prefix={<SearchOutlined className="text-gray-400" />}
+                      className="w-[170px]"
+                    />
+                  )}
+                >
+                  <Button
+                    type={botGroupSearch ? 'primary' : 'default'}
+                    shape="circle"
+                    size="small"
+                    icon={<SearchOutlined />}
+                    className="shadow-sm"
+                  />
+                </Popover>
+              </div>
+
+              {filteredBotGroups.map((row) => {
+                const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه';
+                const active = String(selectedBotGroupId || '') === String(row.id);
+                return (
+                  <button
+                    key={`mobile-${row.id}`}
+                    type="button"
+                    onClick={() => {
+                      setMobileBotSearchOpen(false);
+                      setSelectedBotGroupId(String(row.id));
+                    }}
+                    className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/80 dark:hover:bg-white/5"
+                    title={rowTitle}
+                  >
+                    <Avatar
+                      size={38}
+                      className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${
+                        active ? 'ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 ring-offset-white dark:ring-offset-[rgba(var(--app-dark-surface-rgb),1)]' : ''
+                      }`}
+                    >
+                      <RobotOutlined />
+                    </Avatar>
+                    <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
+                      {rowTitle}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   };
@@ -4406,68 +4682,96 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
     </div>
   );
 
+  const desktopModernItems = variant === 'chat'
+    ? [
+      {
+        key: 'notes',
+        label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌های داخلی</span></Badge>,
+        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderNotesPanel('desktop')}</div>,
+      },
+      {
+        key: 'bot_messages',
+        label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderBotMessagesPanel('desktop')}</div>,
+      },
+      {
+        key: 'assistant',
+        label: <span className="px-1">هوش مصنوعی</span>,
+        children: (
+          <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">
+            <AssistantPanel active={open && desktopActiveKey === 'assistant'} />
+          </div>
+        ),
+      },
+    ]
+    : [
+      {
+        key: 'tasks',
+        label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
+        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderTasksPanel('grid')}</div>,
+      },
+      {
+        key: 'responsibilities',
+        label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
+        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderResponsibilitiesPanel('grid')}</div>,
+      },
+    ];
+
   const contentDesktopModern = (
     <div className="w-[780px] max-w-[88vw] h-[90vh] p-3">
       <div className="h-full rounded-xl border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] overflow-hidden">
         <Tabs
           activeKey={desktopActiveKey}
-          onChange={(key) => setDesktopActiveKey(key as 'notes' | 'tasks' | 'responsibilities' | 'bot_messages')}
+          onChange={(key) => setDesktopActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
           className="h-full [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
-          items={[
-            {
-              key: 'notes',
-              label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌ها</span></Badge>,
-              children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderNotesPanel('desktop')}</div>,
-            },
-            {
-              key: 'tasks',
-              label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-              children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderTasksPanel('grid')}</div>,
-            },
-            {
-              key: 'responsibilities',
-              label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-              children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderResponsibilitiesPanel('grid')}</div>,
-            },
-            {
-              key: 'bot_messages',
-              label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
-              children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-2 pb-2">{renderBotMessagesPanel('desktop')}</div>,
-            },
-          ]}
+          items={desktopModernItems}
         />
       </div>
     </div>
   );
 
+  const mobileModernItems = variant === 'chat'
+    ? [
+      {
+        key: 'notes',
+        label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌های داخلی</span></Badge>,
+        children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderNotesPanel('mobile')}</div>,
+      },
+      {
+        key: 'bot_messages',
+        label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+        children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderBotMessagesPanel('mobile')}</div>,
+      },
+      {
+        key: 'assistant',
+        label: <span className="px-1">هوش مصنوعی</span>,
+        children: (
+          <div className="h-full min-h-0 flex flex-col overflow-hidden">
+            <AssistantPanel active={open && mobileActiveKey === 'assistant'} />
+          </div>
+        ),
+      },
+    ]
+    : [
+      {
+        key: 'tasks',
+        label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
+        children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderTasksPanel('grid')}</div>,
+      },
+      {
+        key: 'responsibilities',
+        label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
+        children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderResponsibilitiesPanel('grid')}</div>,
+      },
+    ];
+
   const contentMobileModern = (
     <div className="h-full min-h-0 flex flex-col bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
       <Tabs
         activeKey={mobileActiveKey}
-        onChange={(key) => setMobileActiveKey(key as 'notes' | 'tasks' | 'responsibilities' | 'bot_messages')}
+        onChange={(key) => setMobileActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
         className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
-        items={[
-          {
-            key: 'notes',
-            label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌ها</span></Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderNotesPanel('mobile')}</div>,
-          },
-          {
-            key: 'tasks',
-            label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderTasksPanel('grid')}</div>,
-          },
-          {
-            key: 'responsibilities',
-            label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderResponsibilitiesPanel('grid')}</div>,
-          },
-          {
-            key: 'bot_messages',
-            label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderBotMessagesPanel('mobile')}</div>,
-          },
-        ]}
+        items={mobileModernItems}
       />
     </div>
   );
@@ -4475,6 +4779,11 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
   void contentMobile;
 
   const drawerContainer = typeof document === 'undefined' ? undefined : () => document.body;
+  const triggerIcon = variant === 'chat'
+    ? <MessageOutlined className="text-gray-500 dark:text-gray-400" />
+    : <BellOutlined className="text-gray-500 dark:text-gray-400" />;
+  const mobileDrawerTitle = variant === 'chat' ? 'چت‌ها' : 'اعلانات';
+  const desktopDrawerTitle = variant === 'chat' ? 'چت‌ها' : 'نوتیفیکیشن‌ها';
 
   return (
     <>
@@ -4482,7 +4791,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         <Button
           type="text"
           shape="circle"
-          icon={<BellOutlined className="text-gray-500 dark:text-gray-400" />}
+          icon={triggerIcon}
           onClick={() => setOpen(true)}
         />
       </Badge>
@@ -4491,7 +4800,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         <Drawer
           title={(
             <div className="flex items-center justify-between w-full pr-2">
-              <span className="text-white">اعلانات</span>
+              <span className="text-white">{mobileDrawerTitle}</span>
               <Button
                 type="text"
                 size="small"
@@ -4515,7 +4824,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile })
         <Drawer
           title={(
             <div className="flex items-center justify-between w-full pr-2">
-              <span className="text-white">نوتیفیکیشن‌ها</span>
+              <span className="text-white">{desktopDrawerTitle}</span>
               <Button
                 type="text"
                 size="small"

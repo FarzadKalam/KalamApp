@@ -45,6 +45,7 @@ import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   intervalUnitOptions,
   triggerTypeOptions,
+  type WorkflowActionType,
   type WorkflowCondition,
   type WorkflowExecutionMode,
   workflowExecutionModeOptions,
@@ -171,6 +172,7 @@ const createProcessAutomationTaskVariableFields = (): ModuleField[] => ([
   { key: 'status_label', labels: { fa: 'عنوان وضعیت فعالیت', en: 'Task Status Label' }, type: FieldType.TEXT, nature: 'standard' as any },
   { key: 'task_status_label', labels: { fa: 'عنوان وضعیت فعالیت (کلید اختصاصی)', en: 'Task Status Label Key' }, type: FieldType.TEXT, nature: 'standard' as any },
   { key: 'task_due_date', labels: { fa: 'موعد فعالیت', en: 'Task Due Date' }, type: FieldType.DATETIME, nature: 'standard' as any },
+  { key: 'task_image_url', labels: { fa: 'تصویر اصلی همین فعالیت', en: 'Current Task Main Image' }, type: FieldType.IMAGE, nature: 'standard' as any },
 ]);
 
 const processTaskCustomFieldTypeLabels: Partial<Record<FieldType, string>> = {
@@ -813,7 +815,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return candidates[0] || null;
   }, [draftLocal, editingDraft, getStageProcessGroupMeta, watchedDraftStageSortOrder]);
   const previousStageVariableFields = useMemo(
-    () => buildPreviousStageTaskCustomAutomationFields(getProcessTaskCustomFieldsFromStage(previousDraftStage)),
+    () => [
+      {
+        key: `${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}image_url`,
+        labels: { fa: 'تصویر اصلی فعالیت قبلی', en: 'Previous Stage Main Image' },
+        type: FieldType.IMAGE,
+        nature: 'standard' as any,
+      },
+      ...buildPreviousStageTaskCustomAutomationFields(getProcessTaskCustomFieldsFromStage(previousDraftStage)),
+    ],
     [previousDraftStage]
   );
   const automationActionVariableFields = useMemo(
@@ -5365,9 +5375,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   actions: [
                     {
                       id: String(rule?.actions?.[0]?.id || `proc_action_${ruleId}`),
-                      type: 'send_note',
+                      type: (
+                        (rule?.actions || []).find((action) => {
+                          const actionType = String(action?.type || '').trim();
+                          return actionType === 'send_note' || actionType === 'send_note_sms';
+                        })?.type || 'send_note'
+                      ) as WorkflowActionType,
                       config: {
-                        ...((rule?.actions || []).find((action) => String(action?.type || '') === 'send_note')?.config || {}),
+                        ...(
+                          (rule?.actions || []).find((action) => {
+                            const actionType = String(action?.type || '').trim();
+                            return actionType === 'send_note' || actionType === 'send_note_sms';
+                          })?.config || {}
+                        ),
                         note_text: String(patch.note_text || ''),
                       },
                     },
@@ -7309,7 +7329,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   onChange={(next) => updateDraftAutomationRule(rule.id, {
                                     actions: next,
                                     note_text: String(
-                                      next?.find((action) => String(action?.type || '') === 'send_note')?.config?.note_text
+                                      next?.find((action) => {
+                                        const actionType = String(action?.type || '').trim();
+                                        return actionType === 'send_note' || actionType === 'send_note_sms';
+                                      })?.config?.note_text
                                       || ''
                                     ) || null,
                                   })}

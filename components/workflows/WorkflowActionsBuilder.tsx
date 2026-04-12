@@ -15,10 +15,13 @@ import {
   WorkflowActionType,
   WorkflowModuleOption,
   actionTypeOptions,
+  createWorkflowRelatedFieldKey,
   createWorkflowId,
+  parseWorkflowRelatedFieldKey,
 } from '../../utils/workflowTypes';
 import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
+import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 
 interface WorkflowActionsBuilderProps {
   value: WorkflowAction[];
@@ -47,7 +50,13 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
   switch (type) {
     case 'send_note':
     case 'send_note_sms':
-      return { recipient_fields: [], note_text: '', variable_field: '', variable_target: 'note_text' };
+      return {
+        recipient_fields: [],
+        note_text: '',
+        attachment_fields: [],
+        variable_field: '',
+        variable_target: 'note_text',
+      };
     case 'send_sms':
       return {
         recipient_fields: [],
@@ -66,6 +75,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_target: 'body',
       };
     case 'send_bale_bot':
+    case 'send_rubika_bot':
       return {
         recipient_fields: [],
         manual_chat_ids: [],
@@ -157,6 +167,19 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     () => (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields),
     [currentModuleFields, variableFields]
   );
+  const attachmentFieldSource = useMemo(
+    () => Array.from(
+      new Map(
+        [
+          ...(Array.isArray(variableFields) ? variableFields : []),
+          ...currentModuleFields,
+        ]
+          .filter((field) => !!String(field?.key || '').trim())
+          .map((field) => [String(field.key), field] as const)
+      ).values()
+    ),
+    [currentModuleFields, variableFields]
+  );
   const relatedVariableFieldOptions = useMemo(
     () => variableFieldOptions.filter((item) => {
       const value = String(item.value || '');
@@ -191,6 +214,71 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ]).values()),
     [additionalRecipientFieldOptions, assigneeRecipientFieldOptions]
   );
+  const noteAttachmentFieldOptions = useMemo(() => {
+    const optionsByValue = new Map<string, { label: string; value: string }>();
+    const addOption = (value: string, label: string) => {
+      const normalizedValue = String(value || '').trim();
+      const normalizedLabel = String(label || '').trim();
+      if (!normalizedValue || !normalizedLabel || optionsByValue.has(normalizedValue)) return;
+      optionsByValue.set(normalizedValue, {
+        label: normalizedLabel,
+        value: normalizedValue,
+      });
+    };
+
+    attachmentFieldSource
+      .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
+      .forEach((field) => addOption(String(field.key), getFieldLabel(field)));
+
+    const relatedRefs = new Map<string, { relationFieldKey: string; targetModuleId: string }>();
+    attachmentFieldSource.forEach((field) => {
+      const parsed = parseWorkflowRelatedFieldKey(String(field?.key || ''));
+      if (!parsed) return;
+      const relationFieldKey = String(parsed.relationFieldKey || '').trim();
+      const targetModuleId = String(parsed.targetModuleId || '').trim();
+      if (!relationFieldKey || !targetModuleId) return;
+      relatedRefs.set(`${relationFieldKey}::${targetModuleId}`, { relationFieldKey, targetModuleId });
+    });
+
+    relatedRefs.forEach(({ relationFieldKey, targetModuleId }) => {
+      const targetModule = MODULES[targetModuleId];
+      if (!targetModule) return;
+      const targetTitle = String(targetModule?.titles?.fa || targetModuleId).trim() || targetModuleId;
+      (targetModule.fields || [])
+        .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
+        .forEach((field) => {
+          const fieldLabel = String(field?.labels?.fa || field?.key || '').trim() || String(field.key);
+          addOption(
+            createWorkflowRelatedFieldKey(relationFieldKey, targetModuleId, String(field.key)),
+            `${fieldLabel} (${targetTitle})`
+          );
+        });
+    });
+
+    const linkedModuleIds = new Set<string>();
+    attachmentFieldSource.forEach((field) => {
+      const parsed = parseProcessLinkedFieldKey(String(field?.key || ''));
+      if (!parsed?.moduleId) return;
+      linkedModuleIds.add(String(parsed.moduleId).trim());
+    });
+
+    linkedModuleIds.forEach((linkedModuleId) => {
+      const targetModule = MODULES[linkedModuleId];
+      if (!targetModule) return;
+      const targetTitle = String(targetModule?.titles?.fa || linkedModuleId).trim() || linkedModuleId;
+      (targetModule.fields || [])
+        .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
+        .forEach((field) => {
+          const fieldLabel = String(field?.labels?.fa || field?.key || '').trim() || String(field.key);
+          addOption(
+            createProcessLinkedFieldKey(linkedModuleId, String(field.key)),
+            `${fieldLabel} (${targetTitle})`
+          );
+        });
+    });
+
+    return Array.from(optionsByValue.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+  }, [attachmentFieldSource]);
 
   const relatedTargetModuleOptions = useMemo(() => {
     const allowedSourceModuleIds = new Set(
@@ -633,6 +721,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             className="w-full"
             maxTagCount="responsive"
           />
+          <div className="text-xs text-gray-500">فایل/تصویر از فیلد</div>
+          <Select
+            {...commonSelectProps}
+            mode="multiple"
+            value={Array.isArray(config.attachment_fields) ? config.attachment_fields : []}
+            disabled={disabled || noteAttachmentFieldOptions.length === 0}
+            options={noteAttachmentFieldOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
+            placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلد(های) تصویر/فایل' : 'فیلد تصویری مرتبط پیدا نشد'}
+            className="w-full"
+            maxTagCount="responsive"
+          />
           <Input.TextArea
             rows={4}
             value={config.note_text}
@@ -740,14 +840,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
 
-    if (actionType === 'send_bale_bot') {
+    if (actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
+      const isRubika = actionType === 'send_rubika_bot';
+      const chatFieldRegex = isRubika
+        ? /rubika.*chat|chat.*rubika|rubika_chat_id/i
+        : /bale.*chat|chat.*bale|bale_chat_id/i;
+      const counterpartyFieldRegex = /(^|_)(customer|supplier)(_id)?$|(^|_)related_(customer|supplier)$|__workflow_related__.*::(customers|suppliers)::/i;
       const chatIdFields = communicationFieldSource
-        .filter((f) => /bale.*chat|chat.*bale|bale_chat_id/i.test(f.key))
+        .filter((f) => chatFieldRegex.test(String(f.key || '')) || (isRubika && counterpartyFieldRegex.test(String(f.key || ''))))
         .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const baleRecipientOptions = Array.from(new Map([
+      const botRecipientOptions = Array.from(new Map([
         ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...chatIdFields.map((item) => [String(item.value), item] as const),
       ]).values());
+      const providerLabel = isRubika ? 'روبیکا' : 'بله';
 
       return (
         <div className="space-y-2">
@@ -757,9 +863,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={baleRecipientOptions}
+              options={botRecipientOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder="فیلد(های) شناسه چت بله"
+              placeholder={`فیلد(های) گیرنده ${providerLabel}`}
             />
             <Select
               {...commonSelectProps}
@@ -775,18 +881,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             value={config.title}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
-            placeholder="عنوان پیام بله"
+            placeholder={`عنوان پیام ${providerLabel}`}
           />
           <Input.TextArea
             rows={4}
             value={config.message}
             disabled={disabled}
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
-            placeholder="متن پیام بله"
+            placeholder={`متن پیام ${providerLabel}`}
           />
           {renderVariableTools(action, [
-            { key: 'title', label: 'عنوان پیام بله' },
-            { key: 'message', label: 'متن پیام بله' },
+            { key: 'title', label: `عنوان پیام ${providerLabel}` },
+            { key: 'message', label: `متن پیام ${providerLabel}` },
           ])}
         </div>
       );

@@ -15,6 +15,7 @@ import {
 } from './workflowTypes';
 import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
+import { NoteAttachment, serializeNoteContent } from './noteContent';
 
 type WorkflowEvent = 'create' | 'upsert';
 
@@ -187,6 +188,96 @@ const renderTemplateWithBoldMarkers = (template: string, record: Record<string, 
     const resolved = formatWorkflowTemplateValue(val).trim();
     return resolved ? `**${resolved}**` : '';
   });
+};
+
+const ATTACHMENT_FILE_NAME_REGEX = /[^0-9a-zA-Z._\-\u0600-\u06FF]+/g;
+
+const sanitizeAttachmentName = (value: string, fallback = 'file') => {
+  const normalized = String(value || '').trim().replace(ATTACHMENT_FILE_NAME_REGEX, '_');
+  return normalized || fallback;
+};
+
+const decodeAttachmentUrlName = (url: string) => {
+  const cleanUrl = String(url || '').trim().split('?')[0].split('#')[0];
+  const rawName = cleanUrl.split('/').pop() || '';
+  if (!rawName) return '';
+  try {
+    return decodeURIComponent(rawName);
+  } catch {
+    return rawName;
+  }
+};
+
+const looksLikeAttachmentUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (/^(https?:\/\/|data:|blob:|\/)/i.test(raw)) return true;
+  if (/^record_files\//i.test(raw)) return true;
+  if (/^[\w\-./]+\.(png|jpe?g|gif|webp|bmp|svg|pdf|zip|rar|7z|docx?|xlsx?|pptx?)$/i.test(raw)) return true;
+  return false;
+};
+
+const inferAttachmentMimeType = (source: string) => {
+  const raw = String(source || '').trim().toLowerCase();
+  if (!raw) return null;
+  if (raw.startsWith('data:image/')) {
+    const match = raw.match(/^data:(image\/[^;,]+)/i);
+    return match?.[1] || 'image/*';
+  }
+  const normalized = raw.split('?')[0].split('#')[0];
+  if (normalized.endsWith('.png')) return 'image/png';
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
+  if (normalized.endsWith('.gif')) return 'image/gif';
+  if (normalized.endsWith('.webp')) return 'image/webp';
+  if (normalized.endsWith('.svg')) return 'image/svg+xml';
+  if (normalized.endsWith('.pdf')) return 'application/pdf';
+  return null;
+};
+
+const normalizeAttachmentObject = (
+  value: any,
+  fallbackName: string
+): NoteAttachment[] => {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeAttachmentObject(item, fallbackName));
+  }
+
+  if (typeof value === 'object') {
+    const nestedAttachments = Array.isArray((value as any).attachments)
+      ? (value as any).attachments.flatMap((item: any) => normalizeAttachmentObject(item, fallbackName))
+      : [];
+    if (nestedAttachments.length > 0) return nestedAttachments;
+
+    const url = String((value as any).url || (value as any).file_url || (value as any).src || '').trim();
+    if (!url || !looksLikeAttachmentUrl(url)) return [];
+    const sourceName = String((value as any).name || (value as any).file_name || decodeAttachmentUrlName(url) || '').trim();
+    const name = sanitizeAttachmentName(sourceName || fallbackName, fallbackName);
+    const mimeType = String((value as any).mimeType || (value as any).mime_type || '').trim()
+      || inferAttachmentMimeType(url)
+      || null;
+    return [{ name, url, mimeType }];
+  }
+
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('{') && raw.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(raw);
+      return normalizeAttachmentObject(parsed, fallbackName);
+    } catch {
+      // treat as plain string
+    }
+  }
+  if (!looksLikeAttachmentUrl(raw)) return [];
+
+  const sourceName = decodeAttachmentUrlName(raw);
+  const name = sanitizeAttachmentName(sourceName || fallbackName, fallbackName);
+  return [{
+    name,
+    url: raw,
+    mimeType: inferAttachmentMimeType(raw),
+  }];
 };
 
 const fetchRecordTags = async (
@@ -786,12 +877,13 @@ const sendSms = async ({
   }
 };
 
-type CommunicationChannel = 'sms' | 'email' | 'bale';
+type CommunicationChannel = 'sms' | 'email' | 'bale' | 'rubika';
 
 const getProfileCommunicationSelect = (channel: CommunicationChannel) => {
   if (channel === 'sms') return 'id, mobile_1';
   if (channel === 'email') return 'id, email';
-  return 'id, bale_chat_id';
+  if (channel === 'bale') return 'id, bale_chat_id';
+  return 'id, rubika_chat_id';
 };
 
 const parseCommunicationRecipientToken = (value: any) => {
@@ -802,6 +894,45 @@ const parseCommunicationRecipientToken = (value: any) => {
   const id = String(match[2] || '').trim();
   if (!id || (kind !== 'user' && kind !== 'role')) return null;
   return { kind: kind as 'user' | 'role', id };
+};
+
+const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const resolveRubikaCounterpartyGroupChatIds = async (candidateValues: string[]) => {
+  const customerIds = Array.from(
+    new Set(
+      candidateValues
+        .map((value) => String(value || '').trim())
+        .filter((value) => UUID_LIKE_REGEX.test(value))
+    )
+  );
+  if (customerIds.length === 0) return [] as string[];
+
+  const { data, error } = await supabase
+    .from('counterparty_bot_groups')
+    .select('customer_id,supplier_id,bot_chat_id,channel_type,status')
+    .eq('channel_type', 'rubika')
+    .eq('status', 'active')
+    .in('customer_id', customerIds);
+  if (error) throw error;
+
+  const customerChatIds = ((data || []) as Array<Record<string, any>>)
+    .map((row) => String(row?.bot_chat_id || '').trim())
+    .filter(Boolean);
+
+  const { data: supplierData, error: supplierError } = await supabase
+    .from('counterparty_bot_groups')
+    .select('customer_id,supplier_id,bot_chat_id,channel_type,status')
+    .eq('channel_type', 'rubika')
+    .eq('status', 'active')
+    .in('supplier_id', customerIds);
+  if (supplierError) throw supplierError;
+
+  const supplierChatIds = ((supplierData || []) as Array<Record<string, any>>)
+    .map((row) => String(row?.bot_chat_id || '').trim())
+    .filter(Boolean);
+
+  return Array.from(new Set([...customerChatIds, ...supplierChatIds]));
 };
 
 const resolveCommunicationValuesFromFields = async ({
@@ -878,13 +1009,23 @@ const resolveCommunicationValuesFromFields = async ({
         ...profileRows.map((row) => String(row?.email || '').trim()).filter(Boolean),
       ];
     }
+    if (channel === 'rubika') {
+      return [
+        ...directValues.map((value) => String(value || '').trim()).filter(Boolean),
+        ...profileRows.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean),
+      ];
+    }
     return [
       ...directValues.map((value) => String(value || '').trim()).filter(Boolean),
       ...profileRows.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean),
     ];
   })();
+  const uniqueValues = Array.from(new Set(resolvedValues));
+  if (channel !== 'rubika') return uniqueValues;
 
-  return Array.from(new Set(resolvedValues));
+  const groupChatIds = await resolveRubikaCounterpartyGroupChatIds(uniqueValues);
+  const uuidOnlyValues = uniqueValues.filter((value) => !UUID_LIKE_REGEX.test(value));
+  return Array.from(new Set([...uuidOnlyValues, ...groupChatIds]));
 };
 
 const resolveNoteRecipientsFromFields = async ({
@@ -927,6 +1068,50 @@ const resolveNoteRecipientsFromFields = async ({
     mentionUserIds: Array.from(userIds),
     mentionRoleIds: Array.from(roleIds),
   };
+};
+
+export const resolveNoteAttachmentsFromFields = async ({
+  currentRecord,
+  moduleId,
+  attachmentFields,
+}: {
+  currentRecord: Record<string, any>;
+  moduleId: string;
+  attachmentFields: any[];
+}) => {
+  const context: WorkflowEvaluationContext = {
+    moduleId,
+    relatedRecordCache: new Map(),
+    tagsCache: new Map(),
+  };
+  const attachments: NoteAttachment[] = [];
+
+  for (const fieldKey of asArray(attachmentFields)) {
+    const normalizedFieldKey = String(fieldKey || '').trim();
+    if (!normalizedFieldKey) continue;
+    const rawValue = await resolveConditionFieldValue(
+      normalizedFieldKey,
+      currentRecord,
+      moduleId,
+      context
+    );
+    const fallbackName = sanitizeAttachmentName(normalizedFieldKey.replace(/[^\w\u0600-\u06FF.-]+/g, '_') || 'file');
+    attachments.push(...normalizeAttachmentObject(rawValue, fallbackName));
+  }
+
+  const deduped = new Map<string, NoteAttachment>();
+  attachments.forEach((item, index) => {
+    const url = String(item?.url || '').trim();
+    if (!url) return;
+    const name = sanitizeAttachmentName(String(item?.name || '').trim() || `file_${index + 1}`);
+    deduped.set(url, {
+      name,
+      url,
+      mimeType: String(item?.mimeType || '').trim() || null,
+    });
+  });
+
+  return Array.from(deduped.values());
 };
 
 const resolveConfiguredActionValue = async (
@@ -1040,7 +1225,12 @@ export const executeWorkflowAction = async (
 
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
     const noteText = renderTemplateWithBoldMarkers(String(config.note_text || ''), currentRecord).trim();
-    if (!noteText) return;
+    const attachments = await resolveNoteAttachmentsFromFields({
+      currentRecord,
+      moduleId,
+      attachmentFields: asArray(config.attachment_fields),
+    });
+    if (!noteText && attachments.length === 0) return;
     const recordId = currentRecord?.id;
     const scope = normalizeNoteScope(moduleId, recordId ? String(recordId) : null);
     if (!scope.hasLinkedRecord) return;
@@ -1052,7 +1242,7 @@ export const executeWorkflowAction = async (
     await insertNotesWithFallback([{
       module_id: scope.module_id,
       record_id: scope.record_id,
-      content: noteText,
+      content: serializeNoteContent(noteText, attachments),
       mention_user_ids: recipients.mentionUserIds,
       mention_role_ids: recipients.mentionRoleIds,
       source_type: 'system',
@@ -1076,7 +1266,9 @@ export const executeWorkflowAction = async (
     return;
   }
 
-  if (action.type === 'send_bale_bot') {
+  if (action.type === 'send_bale_bot' || action.type === 'send_rubika_bot') {
+    const isRubika = action.type === 'send_rubika_bot';
+    const channel: 'bale' | 'rubika' = isRubika ? 'rubika' : 'bale';
     const messageText = renderTemplate(String(config.message || ''), currentRecord).trim();
     if (!messageText) return;
     const titleText = renderTemplate(String(config.title || ''), currentRecord).trim();
@@ -1084,15 +1276,18 @@ export const executeWorkflowAction = async (
       currentRecord,
       moduleId,
       recipientFields: asArray(config.recipient_fields),
-      channel: 'bale',
+      channel,
     });
     const recipientsManual = asArray(config.manual_chat_ids)
       .map((chatId) => String(chatId || '').trim())
       .filter(Boolean);
+    const directFallbackChatId = isRubika
+      ? String(currentRecord?.rubika_chat_id || '').trim()
+      : String(currentRecord?.bale_chat_id || '').trim();
     const fallbackRecipients =
       recipientsFromFields.length > 0 || recipientsManual.length > 0
         ? []
-        : [String(currentRecord?.bale_chat_id || '').trim()].filter(Boolean);
+        : [directFallbackChatId].filter(Boolean);
     const recipients = Array.from(
       new Set([...recipientsFromFields, ...recipientsManual, ...fallbackRecipients])
     ).filter(Boolean);
@@ -1100,7 +1295,7 @@ export const executeWorkflowAction = async (
 
     for (const chatId of recipients) {
       await sendBotMessageViaGateway({
-        channel: 'bale',
+        channel,
         chatId,
         text: messageText,
         title: titleText || undefined,

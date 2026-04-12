@@ -37,7 +37,20 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true
   },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
   "exclude": [
+    "node_modules",
+    "dist",
+    "public",
+    "test",
+    "tmp",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
     "supabase/functions/**/*"
   ]
 }

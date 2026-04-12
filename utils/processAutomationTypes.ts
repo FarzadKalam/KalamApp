@@ -23,7 +23,13 @@ export type ProcessAutomationTargetType =
   | 'specific_user'
   | 'specific_role';
 
-export type ProcessAutomationActionType = 'send_note';
+export type ProcessAutomationActionType =
+  | 'send_note'
+  | 'send_note_sms'
+  | 'send_sms'
+  | 'send_email'
+  | 'send_bale_bot'
+  | 'send_rubika_bot';
 
 export type ProcessAutomationRule = {
   id: string;
@@ -69,6 +75,10 @@ const PROCESS_AUTOMATION_TRIGGER_LABELS: Record<ProcessAutomationTriggerType, st
 
 const DEFAULT_NOTE_TEMPLATE = '{{task_name}} وارد وضعیت {{status_label}} شد.';
 const DEFAULT_STATUS_FIELD_KEY = '__task__status';
+const isNoteActionType = (value: any) => {
+  const actionType = String(value || '').trim();
+  return actionType === 'send_note' || actionType === 'send_note_sms';
+};
 
 const isWorkflowTriggerType = (value: string): value is WorkflowTriggerType =>
   ['on_create', 'on_upsert', 'interval'].includes(value);
@@ -185,6 +195,7 @@ export const createDefaultProcessAutomationRule = (): ProcessAutomationRule => (
       type: 'send_note',
       config: {
         recipient_fields: [],
+        attachment_fields: [],
         note_text: DEFAULT_NOTE_TEMPLATE,
       },
     },
@@ -235,18 +246,23 @@ export const normalizeProcessAutomationRule = (value: any): ProcessAutomationRul
     target_role_id: String(value?.target_role_id || '').trim() || null,
     note_text: String(
       value?.note_text
-      || value?.actions?.[0]?.config?.note_text
+      || (Array.isArray(value?.actions)
+        ? value.actions.find((action: any) => isNoteActionType(action?.type))?.config?.note_text
+        : null)
       || ''
     ).trim() || null,
     actions: Array.isArray(value?.actions)
       ? value.actions.map((action: any) => (
-          String(action?.type || '') === 'send_note'
+          isNoteActionType(action?.type)
             ? {
                 ...action,
                 config: {
                   ...(action?.config || {}),
                   recipient_fields: Array.isArray(action?.config?.recipient_fields)
                     ? action.config.recipient_fields
+                    : [],
+                  attachment_fields: Array.isArray(action?.config?.attachment_fields)
+                    ? action.config.attachment_fields
                     : [],
                 },
               }
@@ -258,9 +274,12 @@ export const normalizeProcessAutomationRule = (value: any): ProcessAutomationRul
             type: 'send_note',
             config: {
               recipient_fields: [],
+              attachment_fields: [],
               note_text: String(
                 value?.note_text
-                || value?.actions?.[0]?.config?.note_text
+                || (Array.isArray(value?.actions)
+                  ? value.actions.find((action: any) => isNoteActionType(action?.type))?.config?.note_text
+                  : null)
                 || ''
               ).trim() || DEFAULT_NOTE_TEMPLATE,
             },
@@ -277,7 +296,7 @@ export const normalizeProcessAutomationRules = (value: any): ProcessAutomationRu
 export const getProcessAutomationRuleSummary = (rule: ProcessAutomationRule) => {
   const triggerLabel = PROCESS_AUTOMATION_TRIGGER_LABELS[rule?.trigger_type || 'on_upsert'] || 'اجرای نامشخص';
   const actionRecipientFields = (rule?.actions || []).flatMap((action: any) =>
-    String(action?.type || '') === 'send_note' && Array.isArray(action?.config?.recipient_fields)
+    isNoteActionType(action?.type) && Array.isArray(action?.config?.recipient_fields)
       ? action.config.recipient_fields
       : []
   );
