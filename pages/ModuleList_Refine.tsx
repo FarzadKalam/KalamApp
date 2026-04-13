@@ -95,6 +95,32 @@ const getDefaultSorters = (moduleConfig?: ModuleDefinition | null): CrudSort[] =
   return [{ field: hasUpdatedAt ? "updated_at" : "created_at", order: "desc" }];
 };
 
+const sanitizeSorters = (
+  rawSorters: CrudSort[] | null | undefined,
+  moduleConfig?: ModuleDefinition | null
+): CrudSort[] => {
+  const sorters = Array.isArray(rawSorters) ? rawSorters : [];
+  if (!moduleConfig) {
+    return sorters.length ? sorters : getDefaultSorters(moduleConfig);
+  }
+
+  const sortableFields = new Set<string>([
+    ...moduleConfig.fields.map((field) => String(field?.key || "").trim()).filter(Boolean),
+    "id",
+    "created_at",
+    "updated_at",
+  ]);
+
+  const sanitized = sorters.filter((sorter) => {
+    const field = String(sorter?.field || "").trim();
+    const order = String(sorter?.order || "").trim().toLowerCase();
+    if (!field || !sortableFields.has(field)) return false;
+    return order === "asc" || order === "desc";
+  });
+
+  return sanitized.length > 0 ? sanitized : getDefaultSorters(moduleConfig);
+};
+
 const toHeaderOnlyModule = (module: ModuleDefinition, hiddenBlockId: string): ModuleDefinition => ({
   ...module,
   blocks: (module.blocks || []).filter((block) => block.id !== hiddenBlockId),
@@ -246,7 +272,7 @@ export const ModuleListRefine: React.FC<{
     [initialViewFiltersOverride, persistedState?.viewFilters]
   );
   const defaultSorters = useMemo(
-    () => (persistedState?.sorters?.length ? persistedState.sorters : getDefaultSorters(moduleConfig)),
+    () => sanitizeSorters(persistedState?.sorters || [], moduleConfig),
     [moduleConfig, persistedState?.sorters]
   );
 
@@ -338,7 +364,7 @@ export const ModuleListRefine: React.FC<{
     }
 
     const restoredState = readPersistedModuleListState(resolvedModuleId, storageKeySuffix);
-    const restoredSorters = restoredState?.sorters?.length ? restoredState.sorters : getDefaultSorters(moduleConfig);
+    const restoredSorters = sanitizeSorters(restoredState?.sorters || [], moduleConfig);
     const restoredViewFilters =
       Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
         ? initialViewFiltersOverride
