@@ -10,6 +10,7 @@ import { toPersianNumber, formatPersianPrice, safeJalaliFormat } from '../../uti
 import { supabase } from '../../supabaseClient';
 import { BlockType } from '../../types';
 import { getAssigneeLabel } from '../assigneeLabel';
+import { getFieldLabelFa } from '../fieldLabel';
 import { getResolvedAssigneeId } from '../assigneeValue';
 import {
   calculateSalesPackageDiscountTotal,
@@ -883,7 +884,7 @@ export const usePrintManager = ({
         if (isLongTextType(field?.type)) {
           longTextRows.push(`
           <div style="margin-top:8px;">
-            <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${field.labels?.fa || field.key}</div>
+            <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</div>
             <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${displayValue}</div>
           </div>
         `);
@@ -891,7 +892,7 @@ export const usePrintManager = ({
         }
         regularRows.push(`
           <tr>
-            <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${field.labels?.fa || field.key}</td>
+            <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px;">${displayValue}</td>
           </tr>
         `);

@@ -6,7 +6,7 @@ import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue }
 import { getRecordTitle } from "../../utils/recordTitle";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { getResolvedAssigneeId } from "../../utils/assigneeValue";
-import { formatRecordDisplayValue } from "../../utils/recordDisplayFormatter";
+import { formatRecordDisplayValue, formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
 import { getModuleCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
 import ProductionStagesField from "../ProductionStagesField";
@@ -369,7 +369,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         return <span className="min-w-0 break-all text-left text-gray-700 dark:text-gray-200 dir-ltr">{formatRecordDisplayValue(value, field)}</span>;
       }
 
-      return <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{formatRecordDisplayValue(value, field)}</span>;
+      return <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{formatRecordFieldValue(cardItem, field)}</span>;
     };
 
     return (

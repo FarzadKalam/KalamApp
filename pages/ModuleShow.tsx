@@ -48,6 +48,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
+import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { getCachedAuthUser } from '../utils/sessionCache';
 import { supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
@@ -3326,7 +3327,7 @@ const ModuleShow: React.FC = () => {
 
 
   const getFieldLabel = useCallback(
-    (fieldKey: string) => moduleConfig?.fields?.find(f => f.key === fieldKey)?.labels?.fa || fieldKey,
+    (fieldKey: string) => getFieldLabelFa(moduleConfig?.fields?.find(f => f.key === fieldKey), { moduleId, fallback: fieldKey }),
     [moduleConfig]
   );
 

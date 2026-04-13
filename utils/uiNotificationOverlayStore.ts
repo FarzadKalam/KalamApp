@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot';
+export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant';
 
 export interface UiNotificationOverlayItem {
   id: string;

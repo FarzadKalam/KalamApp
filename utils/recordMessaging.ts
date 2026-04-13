@@ -96,7 +96,7 @@ export const getMessageTemplateVariables = (
   (moduleConfig?.fields || []).forEach((field: any) => {
     const key = String(field?.key || '').trim();
     if (!key) return;
-    labelMap.set(key, String(field?.labels?.fa || field?.label || key).trim() || key);
+    labelMap.set(key, getFieldLabelFa(field, { moduleId, fallback: field?.label || key }));
   });
 
   (moduleConfig?.blocks || []).forEach((block: any) => {
@@ -130,7 +130,7 @@ export const getMessageTemplateVariables = (
   };
 
   (moduleConfig?.fields || []).forEach((field: any) => {
-    pushVariable(String(field?.key || ''), String(field?.labels?.fa || field?.key || ''));
+    pushVariable(String(field?.key || ''), getFieldLabelFa(field, { moduleId, fallback: field?.key || '' }));
   });
 
   Object.keys(record || {}).forEach((key) => {
@@ -139,3 +139,4 @@ export const getMessageTemplateVariables = (
 
   return items;
 };
+import { getFieldLabelFa } from './fieldLabel';

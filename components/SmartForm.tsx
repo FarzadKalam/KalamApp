@@ -21,6 +21,7 @@ import { mergeSelectOptions } from '../utils/selectOptions';
 import { ACTIVE_NOTIFICATION_BOTS_CATEGORY, listActiveNotificationBotOptions } from '../utils/channelSettings';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
+import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchCurrentUserRoleContext } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
@@ -1635,7 +1636,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
             const beforeStr = JSON.stringify(before ?? null);
             const afterStr = JSON.stringify(after ?? null);
             if (beforeStr !== afterStr) {
-              const fieldLabel = module.fields.find(f => f.key === key)?.labels?.fa || key;
+              const matchedField = module.fields.find(f => f.key === key);
+              const fieldLabel = getFieldLabelFa(matchedField, { moduleId: module.id, fallback: key });
               changes.push({
                 module_id: module.id,
                 record_id: recordId,
@@ -2139,7 +2141,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     <div className="w-full lg:flex-1 lg:max-w-[320px]">
                       <div className="smartform-inline-status h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
                         <span className="text-xs text-gray-400 shrink-0">
-                          {renderInlineFieldLabel(autoNameToggleField.labels?.fa || 'نامگذاری خودکار', isFieldRequired(autoNameToggleField))}
+                          {renderInlineFieldLabel(getFieldLabelFa(autoNameToggleField, { moduleId: module.id, fallback: 'نامگذاری خودکار' }), isFieldRequired(autoNameToggleField))}
                         </span>
                         <Switch
                           checked={getAutoNameToggleValue(

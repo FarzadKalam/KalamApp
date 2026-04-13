@@ -120,7 +120,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 
   const resolveActorLabel = (rawName: any, userId: any) => {
     const normalizedRaw = String(rawName || '').trim();
-    const placeholderValues = new Set(['Ø³ÛŒØ³ØªÙ…/Ù†Ø§Ù…Ø´Ø®Øµ', 'Ù†Ø§Ù…Ø´Ø®Øµ', '-', 'system/unknown']);
+    const placeholderValues = new Set(['سیستم/نامشخص', 'نامشخص', '-', 'system/unknown']);
     if (normalizedRaw && !placeholderValues.has(normalizedRaw.toLowerCase()) && !placeholderValues.has(normalizedRaw)) {
       return normalizedRaw;
     }
@@ -171,7 +171,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                     variant="borderless"
                     value={buildResolvedAssigneeCombo(data)}
                     onChange={handleAssigneeChange}
-                    placeholder="Ø¬Ø³ØªØ¬Ùˆ ÛŒØ§ Ø§Ù†ØªØ®Ø§Ø¨ Ù…Ø³Ø¦ÙˆÙ„ / Ù†Ù‚Ø´"
+                    placeholder="جستجو یا انتخاب مسئول / نقش"
                     className="min-w-[140px] font-bold text-gray-700 dark:text-gray-300"
                     styles={{ popup: { root: { minWidth: 200 } } }}
                     options={getAssigneeOptions()}

@@ -365,6 +365,29 @@ const parseProcessTaskFieldOptions = (value: string): Array<{ label: string; val
 
 const TASK_MODAL_CUSTOM_FIELD_DRAFT_ID = '__task_modal_custom_fields__';
 
+const DRAFT_AUTOMATION_HEADER_PALETTE = [
+  {
+    background: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(14,165,233,0.1))',
+    borderColor: 'rgba(59,130,246,0.32)',
+    accentColor: 'rgb(29,78,216)',
+  },
+  {
+    background: 'linear-gradient(135deg, rgba(16,185,129,0.18), rgba(45,212,191,0.1))',
+    borderColor: 'rgba(16,185,129,0.3)',
+    accentColor: 'rgb(4,120,87)',
+  },
+  {
+    background: 'linear-gradient(135deg, rgba(245,158,11,0.18), rgba(251,191,36,0.1))',
+    borderColor: 'rgba(245,158,11,0.3)',
+    accentColor: 'rgb(180,83,9)',
+  },
+  {
+    background: 'linear-gradient(135deg, rgba(236,72,153,0.18), rgba(244,114,182,0.1))',
+    borderColor: 'rgba(236,72,153,0.3)',
+    accentColor: 'rgb(190,24,93)',
+  },
+];
+
 const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -381,6 +404,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [draftToCreate, setDraftToCreate] = useState<any | null>(null);
   const [editingDraft, setEditingDraft] = useState<any | null>(null);
   const [draftAutomationRules, setDraftAutomationRules] = useState<ProcessAutomationRule[]>([]);
+  const [expandedDraftAutomationRuleIds, setExpandedDraftAutomationRuleIds] = useState<string[]>([]);
   const [isSavingDraftStage, setIsSavingDraftStage] = useState(false);
   const [isReadyToLoad, setIsReadyToLoad] = useState(!lazyLoad);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -5479,6 +5503,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     draftEditorStageIdRef.current = null;
     setDraftModalTabKey('stage');
     setDraftAutomationRules([]);
+    setExpandedDraftAutomationRuleIds([]);
     setDraftCustomFields([]);
     setDraftStageStatusOptions([]);
     setDraftStageTaskTypeValue('');
@@ -5670,10 +5695,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }), []);
 
   const addDraftAutomationRule = useCallback(() => {
+    const nextRule = normalizeAutomationRuleForEditor(createDefaultProcessAutomationRule());
     setDraftAutomationRules((prev) => [
       ...prev,
-      normalizeAutomationRuleForEditor(createDefaultProcessAutomationRule()),
+      nextRule,
     ]);
+    setExpandedDraftAutomationRuleIds((prev) => (
+      prev.includes(String(nextRule.id)) ? prev : [...prev, String(nextRule.id)]
+    ));
   }, [normalizeAutomationRuleForEditor]);
 
   const updateDraftAutomationRule = useCallback((ruleId: string, patch: Partial<ProcessAutomationRule>) => {
@@ -5723,6 +5752,34 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const removeDraftAutomationRule = useCallback((ruleId: string) => {
     setDraftAutomationRules((prev) => prev.filter((rule) => String(rule.id) !== String(ruleId)));
+    setExpandedDraftAutomationRuleIds((prev) => prev.filter((id) => String(id) !== String(ruleId)));
+  }, []);
+
+  const toggleDraftAutomationRuleExpanded = useCallback((ruleId: string) => {
+    const normalizedRuleId = String(ruleId || '').trim();
+    if (!normalizedRuleId) return;
+    setExpandedDraftAutomationRuleIds((prev) => (
+      prev.includes(normalizedRuleId)
+        ? prev.filter((id) => id !== normalizedRuleId)
+        : [...prev, normalizedRuleId]
+    ));
+  }, []);
+
+  const moveDraftAutomationRule = useCallback((ruleId: string, direction: 'up' | 'down') => {
+    const normalizedRuleId = String(ruleId || '').trim();
+    if (!normalizedRuleId) return;
+
+    setDraftAutomationRules((prev) => {
+      const currentIndex = prev.findIndex((rule) => String(rule?.id || '').trim() === normalizedRuleId);
+      if (currentIndex < 0) return prev;
+      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+
+      const reordered = [...prev];
+      const [moved] = reordered.splice(currentIndex, 1);
+      reordered.splice(targetIndex, 0, moved);
+      return reordered;
+    });
   }, []);
 
   const openDraftCustomFieldModal = useCallback((field?: ModuleField | null) => {
@@ -5873,10 +5930,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         })),
       });
       setDraftStageTaskTypeValue(String(draftForEditor?.task_type || '').trim());
-      setDraftAutomationRules(
-        normalizeProcessAutomationRules(draftForEditor?.automation_rules).map((rule) =>
-          normalizeAutomationRuleForEditor(rule)
-        )
+      const nextAutomationRules = normalizeProcessAutomationRules(draftForEditor?.automation_rules).map((rule) =>
+        normalizeAutomationRuleForEditor(rule)
+      );
+      setDraftAutomationRules(nextAutomationRules);
+      setExpandedDraftAutomationRuleIds(
+        nextAutomationRules.length > 0 ? [String(nextAutomationRules[0]?.id || '')].filter(Boolean) : []
       );
       setDraftCustomFields(getProcessTaskCustomFieldsFromStage(draftForEditor));
       setDraftStageStatusOptions(getProcessTaskStatusOptionsFromStage(draftForEditor));
@@ -5893,6 +5952,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         stage_status_options_editor: [],
       });
       setDraftAutomationRules([]);
+      setExpandedDraftAutomationRuleIds([]);
       setDraftCustomFields([]);
       setDraftStageStatusOptions([]);
       setDraftStageTaskTypeValue('');
@@ -7592,18 +7652,65 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       const editableAnyConditions = (Array.isArray(rule.conditions_any) ? rule.conditions_any : []).filter(
                         (condition) => String(condition?.field || '').trim() !== '__task__task_type'
                       );
+                      const ruleId = String(rule?.id || '');
+                      const isExpanded = expandedDraftAutomationRuleIds.includes(ruleId);
+                      const isFirstRule = index === 0;
+                      const isLastRule = index === draftAutomationRules.length - 1;
+                      const ruleName = String(rule?.name || '').trim() || 'اتوماسیون بدون نام';
+                      const headerPalette = DRAFT_AUTOMATION_HEADER_PALETTE[index % DRAFT_AUTOMATION_HEADER_PALETTE.length];
                       return (
                       <div
                         key={rule.id}
                         className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/95 p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]"
                       >
-                        <div className="mb-4 flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">اتوماسیون {toPersianNumber(index + 1)}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400">{getProcessAutomationRuleSummary(rule)}</div>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className="mb-4 flex cursor-pointer items-start justify-between gap-3 rounded-2xl border px-4 py-3 transition hover:shadow-sm"
+                          style={{
+                            background: headerPalette.background,
+                            borderColor: headerPalette.borderColor,
+                          }}
+                          onClick={() => toggleDraftAutomationRuleExpanded(ruleId)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              toggleDraftAutomationRuleExpanded(ruleId);
+                            }
+                          }}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-2.5 w-2.5 rounded-full"
+                                style={{ backgroundColor: headerPalette.accentColor }}
+                              />
+                              <div className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{ruleName}</div>
+                              <Tag color={rule.is_active !== false ? 'green' : 'default'} className="m-0">
+                                {rule.is_active !== false ? 'فعال' : 'غیرفعال'}
+                              </Tag>
+                            </div>
+                            <div className="mt-1 text-xs text-gray-600 dark:text-gray-300">{getProcessAutomationRuleSummary(rule)}</div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500">فعال</span>
+                          <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+                            <Tooltip title="انتقال به بالا">
+                              <Button
+                                type="text"
+                                htmlType="button"
+                                icon={<UpOutlined />}
+                                disabled={isFirstRule}
+                                onClick={() => moveDraftAutomationRule(ruleId, 'up')}
+                              />
+                            </Tooltip>
+                            <Tooltip title="انتقال به پایین">
+                              <Button
+                                type="text"
+                                htmlType="button"
+                                icon={<DownOutlined />}
+                                disabled={isLastRule}
+                                onClick={() => moveDraftAutomationRule(ruleId, 'down')}
+                              />
+                            </Tooltip>
                             <Switch
                               size="small"
                               checked={rule.is_active !== false}
@@ -7616,9 +7723,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               icon={<DeleteOutlined />}
                               onClick={() => removeDraftAutomationRule(rule.id)}
                             />
+                            <Button
+                              type="text"
+                              htmlType="button"
+                              icon={isExpanded ? <UpOutlined /> : <DownOutlined />}
+                              onClick={() => toggleDraftAutomationRuleExpanded(ruleId)}
+                            />
                           </div>
                         </div>
 
+                        {isExpanded ? (
                         <div className="space-y-4">
                           <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.42)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
                             <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">نام و توضیحات</div>
@@ -7824,6 +7938,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             </div>
                           </div>
                         </div>
+                        ) : null}
                       </div>
                     )})}
 

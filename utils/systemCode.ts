@@ -1,3 +1,5 @@
+import { fetchSessionBootstrap } from './sessionCache';
+
 const MODULES_WITH_SYSTEM_CODE = new Set([
   'barters',
   'billboards',
@@ -28,6 +30,7 @@ const DEFAULT_SYSTEM_CODE_START_NUMBER = 100;
 const DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER = 234;
 const MAX_SYSTEM_CODE_SEQUENCE_NUMBER = 2147483647;
 const MAX_SYSTEM_CODE_NUMBER_WIDTH = 20;
+const SYSTEM_CODE_SCAN_BATCH_SIZE = 1000;
 
 type ResolvedSystemCodeConfig = {
   prefix: string;
@@ -37,6 +40,7 @@ type ResolvedSystemCodeConfig = {
 
 let moduleSettingsCache: Record<string, any> | null = null;
 let moduleSettingsPromise: Promise<Record<string, any> | null> | null = null;
+const generatedSystemCodeLastNumbers = new Map<string, number>();
 
 const getDefaultSystemCodePrefix = (moduleName?: string | null) => {
   const normalized = String(moduleName || '').trim();
@@ -79,6 +83,107 @@ const formatSystemCodeValue = (prefix: string, numericValue: number, numberWidth
   const normalizedNumber = Math.max(0, Math.trunc(numericValue));
   const suffix = numberWidth ? String(normalizedNumber).padStart(numberWidth, '0') : String(normalizedNumber);
   return `${prefix}${suffix}`;
+};
+
+const parseSystemCodeNumber = (systemCode: unknown, prefix: string): number | null => {
+  const code = String(systemCode || '').trim().toUpperCase();
+  const suffixPattern = new RegExp(`^${escapeRegExp(prefix)}(\\d+)$`);
+  const match = code.match(suffixPattern);
+  if (!match) return null;
+  const numeric = Number(match[1]);
+  if (!Number.isFinite(numeric) || numeric > MAX_SYSTEM_CODE_SEQUENCE_NUMBER) return null;
+  return Math.trunc(numeric);
+};
+
+const getCurrentOrgId = async (supabaseClient: any, explicitOrgId?: string | null) => {
+  const normalizedExplicit = String(explicitOrgId || '').trim();
+  if (normalizedExplicit) return normalizedExplicit;
+  const session = await fetchSessionBootstrap(supabaseClient);
+  return String(session?.orgId || '').trim() || null;
+};
+
+const getCounterLastNumber = async (
+  supabaseClient: any,
+  tableName: string,
+  orgId: string | null,
+  prefix: string
+): Promise<number | null> => {
+  try {
+    const { data, error } = await supabaseClient
+      .from('system_code_counters')
+      .select('last_number')
+      .eq('table_name', tableName)
+      .eq('org_scope', orgId || '__global__')
+      .eq('prefix', prefix)
+      .maybeSingle();
+    if (error || data?.last_number === undefined || data?.last_number === null) return null;
+    const numeric = Number(data.last_number);
+    return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
+  } catch {
+    return null;
+  }
+};
+
+const getRpcLastNumber = async (
+  supabaseClient: any,
+  tableName: string,
+  orgId: string | null,
+  prefix: string
+): Promise<number | null> => {
+  try {
+    const { data, error } = await supabaseClient.rpc('find_system_code_last_number', {
+      p_table_name: tableName,
+      p_org_id: orgId,
+      p_prefix: prefix,
+      p_max_sequence: MAX_SYSTEM_CODE_SEQUENCE_NUMBER,
+    });
+    if (error) return null;
+    const numeric = Number(data);
+    return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
+  } catch {
+    return null;
+  }
+};
+
+const scanLastSystemCodeNumber = async (
+  supabaseClient: any,
+  tableName: string,
+  orgId: string | null,
+  prefix: string
+): Promise<number> => {
+  let maxExistingNumber = 0;
+  let from = 0;
+
+  for (;;) {
+    let query = supabaseClient
+      .from(tableName)
+      .select('system_code')
+      .ilike('system_code', `${prefix}%`)
+      .range(from, from + SYSTEM_CODE_SCAN_BATCH_SIZE - 1);
+
+    if (orgId) query = query.eq('org_id', orgId);
+
+    let { data, error } = await query;
+    if (error && orgId) {
+      ({ data, error } = await supabaseClient
+        .from(tableName)
+        .select('system_code')
+        .ilike('system_code', `${prefix}%`)
+        .range(from, from + SYSTEM_CODE_SCAN_BATCH_SIZE - 1));
+    }
+    if (error) break;
+
+    const rows = (data || []) as Array<{ system_code?: string | null }>;
+    rows.forEach((row) => {
+      const numeric = parseSystemCodeNumber(row?.system_code, prefix);
+      if (numeric !== null) maxExistingNumber = Math.max(maxExistingNumber, numeric);
+    });
+
+    if (rows.length < SYSTEM_CODE_SCAN_BATCH_SIZE) break;
+    from += SYSTEM_CODE_SCAN_BATCH_SIZE;
+  }
+
+  return maxExistingNumber;
 };
 
 const normalizeLegacyCustomerDefaults = (config: ResolvedSystemCodeConfig, namingSettings: any, moduleName?: string | null) => {
@@ -138,6 +243,7 @@ const loadModuleSettings = async (supabaseClient: any) => {
 export const clearSystemCodeSettingsCache = () => {
   moduleSettingsCache = null;
   moduleSettingsPromise = null;
+  generatedSystemCodeLastNumbers.clear();
 };
 
 export const resolveSystemCodeConfig = async (
@@ -197,7 +303,8 @@ export const resolveSystemCodePrefix = async (
 export const buildClientFallbackSystemCode = async (
   supabaseClient: any,
   moduleName?: string | null,
-  tableName?: string | null
+  tableName?: string | null,
+  options?: { orgId?: string | null }
 ) => {
   const { prefix, startNumber, numberWidth } = await resolveSystemCodeConfig(supabaseClient, moduleName);
   const sourceTable = String(tableName || moduleName || '').trim();
@@ -206,29 +313,20 @@ export const buildClientFallbackSystemCode = async (
   }
 
   try {
-    const { data } = await supabaseClient
-      .from(sourceTable)
-      .select('system_code')
-      .ilike('system_code', `${prefix}%`)
-      .limit(5000);
+    const orgId = await getCurrentOrgId(supabaseClient, options?.orgId);
+    const cacheKey = `${sourceTable}:${orgId || '__global__'}:${prefix}`;
+    const cachedLastNumber = generatedSystemCodeLastNumbers.get(cacheKey);
 
-    const suffixPattern = new RegExp(`^${escapeRegExp(prefix)}(\\d+)$`);
-    const rows = ((data || []) as Array<{ system_code?: string | null }>);
-    const matchingNumbers = rows.reduce<number[]>((acc, row) => {
-      const code = String(row?.system_code || '').trim().toUpperCase();
-      const match = code.match(suffixPattern);
-      if (!match) return acc;
-      const numeric = Number(match[1]);
-      if (!Number.isFinite(numeric) || numeric > MAX_SYSTEM_CODE_SEQUENCE_NUMBER) return acc;
-      acc.push(numeric);
-      return acc;
-    }, []);
+    let maxExistingNumber =
+      cachedLastNumber ??
+      (await getCounterLastNumber(supabaseClient, sourceTable, orgId, prefix)) ??
+      (await getRpcLastNumber(supabaseClient, sourceTable, orgId, prefix)) ??
+      (await scanLastSystemCodeNumber(supabaseClient, sourceTable, orgId, prefix));
 
-    const maxExistingNumber = matchingNumbers.reduce((maxValue: number, currentValue: number) => (
-      Math.max(maxValue, currentValue)
-    ), startNumber - 1);
-
-    return formatSystemCodeValue(prefix, Math.max(startNumber, maxExistingNumber + 1), numberWidth);
+    maxExistingNumber = Math.max(Number(maxExistingNumber) || 0, startNumber - 1);
+    const nextNumber = Math.min(maxExistingNumber + 1, MAX_SYSTEM_CODE_SEQUENCE_NUMBER);
+    generatedSystemCodeLastNumbers.set(cacheKey, nextNumber);
+    return formatSystemCodeValue(prefix, nextNumber, numberWidth);
   } catch {
     return formatSystemCodeValue(prefix, startNumber, numberWidth);
   }

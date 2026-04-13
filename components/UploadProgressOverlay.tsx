@@ -10,6 +10,7 @@ import {
   MinusOutlined,
   ReloadOutlined,
   RobotOutlined,
+  OpenAIOutlined,
   StopFilled,
   TeamOutlined,
   UpOutlined,
@@ -77,7 +78,10 @@ const UploadProgressOverlay: React.FC = () => {
 
   if (minimized) {
     return (
-      <div className="pointer-events-none fixed inset-x-3 bottom-3 z-[1800] md:left-auto md:right-4 md:w-[320px]">
+      <div
+        className="pointer-events-none fixed inset-x-3 bottom-3 md:left-auto md:right-4 md:w-[320px]"
+        style={{ zIndex: 2147483000 }}
+      >
         <button
           type="button"
           onClick={() => setMinimized(false)}
@@ -103,7 +107,10 @@ const UploadProgressOverlay: React.FC = () => {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-3 bottom-3 z-[1800] md:left-auto md:right-4 md:w-[420px]">
+    <div
+      className="pointer-events-none fixed inset-x-3 bottom-3 md:left-auto md:right-4 md:w-[420px]"
+      style={{ zIndex: 2147483000 }}
+    >
       <div
         className="pointer-events-auto overflow-hidden rounded-[24px] border shadow-2xl backdrop-blur"
         style={{
@@ -147,14 +154,18 @@ const UploadProgressOverlay: React.FC = () => {
                   ? <CheckOutlined />
                   : item.kind === 'bot'
                     ? <RobotOutlined />
-                  : <TeamOutlined />;
+                    : item.kind === 'assistant'
+                      ? <OpenAIOutlined />
+                      : <TeamOutlined />;
               const accentColor = item.kind === 'note'
                 ? '#2563eb'
                 : item.kind === 'task'
                   ? token.colorSuccess
                   : item.kind === 'bot'
                     ? '#2563eb'
-                  : '#d97706';
+                    : item.kind === 'assistant'
+                      ? '#be185d'
+                      : '#d97706';
 
               return (
                 <div
@@ -181,7 +192,7 @@ const UploadProgressOverlay: React.FC = () => {
                       className="min-w-0 flex-1 text-right"
                     >
                       <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
-                        <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : 'مسئولیت')}</span>
+                        <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : 'مسئولیت')}</span>
                         <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
                       </div>
                       <div className="mt-1 truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>

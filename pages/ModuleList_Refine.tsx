@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { useTable } from "@refinedev/antd";
+import { mapAntdSorterToCrudSorting, useTable } from "@refinedev/antd";
 import { CrudFilter, CrudFilters, CrudSort, useDeleteMany } from "@refinedev/core";
 import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase";
 import { useNavigate, useParams } from "react-router-dom";
@@ -32,6 +32,7 @@ import { useListPrintManager } from "../utils/printTemplates/useListPrintManager
 import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
 import { readCurrencyConfig } from "../utils/currency";
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagsMap } from "../utils/referenceData";
+import { getFieldLabelFa } from "../utils/fieldLabel";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
@@ -102,9 +103,16 @@ const readPersistedModuleListState = (moduleId?: string | null, suffix?: string 
   }
 };
 
+const MODULE_LIST_CREATED_AT_DEFAULT_SORT_MODULES = new Set(["automation_execution_reports"]);
+
 const getDefaultSorters = (moduleConfig?: ModuleDefinition | null): CrudSort[] => {
-  const hasUpdatedAt = moduleConfig?.fields?.some((field) => field.key === "updated_at");
-  return [{ field: hasUpdatedAt ? "updated_at" : "created_at", order: "desc" }];
+  if (!moduleConfig) return [{ field: "created_at", order: "desc" }];
+  const moduleId = String(moduleConfig.id || "");
+  const hasCreatedAt = moduleConfig.fields?.some((field) => field.key === "created_at");
+  const field = MODULE_LIST_CREATED_AT_DEFAULT_SORT_MODULES.has(moduleId)
+    ? (hasCreatedAt ? "created_at" : "id")
+    : "updated_at";
+  return [{ field, order: "desc" }];
 };
 
 const normalizeCrudSorters = (sorters?: CrudSort[] | null): CrudSort[] =>
@@ -299,6 +307,17 @@ export const ModuleListRefine: React.FC<{
   );
   
   const moduleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
+  const searchTargetField = useMemo(() => {
+    if (!moduleConfig) return null;
+    const keyField = moduleConfig.fields.find(f => f.isKey);
+    if (keyField) return keyField.key;
+    const priorityKeys = ['name', 'title', 'business_name', 'full_name', 'subject', 'description'];
+    const priorityField = moduleConfig.fields.find(f => priorityKeys.includes(f.key));
+    if (priorityField) return priorityField.key;
+    const textField = moduleConfig.fields.find(f => f.type === FieldType.TEXT);
+    if (textField) return textField.key;
+    return null;
+  }, [moduleConfig]);
   const persistedState = useMemo(
     () => readPersistedModuleListState(resolvedModuleId, storageKeySuffix),
     [resolvedModuleId, storageKeySuffix]
@@ -327,6 +346,14 @@ export const ModuleListRefine: React.FC<{
   const defaultSorters = useMemo(
     () => resolveCrudSortersWithDefault(persistedState?.sorters, moduleConfig),
     [moduleConfig, persistedState?.sorters]
+  );
+  const effectiveInitialFilters = useMemo(
+    () => buildMergedFilters(
+      effectiveInitialViewFilters,
+      persistedState?.searchTerm || "",
+      persistedState?.columnFilters || {}
+    ),
+    [effectiveInitialViewFilters, moduleConfig, persistedState?.columnFilters, persistedState?.searchTerm, searchTargetField]
   );
 
   // ✅ Use default view mode from module config, fallback to LIST
@@ -402,7 +429,7 @@ export const ModuleListRefine: React.FC<{
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
-    filters: { initial: effectiveInitialViewFilters },
+    filters: { initial: effectiveInitialFilters },
     syncWithLocation: false,
   });
 
@@ -1036,18 +1063,6 @@ export const ModuleListRefine: React.FC<{
     };
   }, [accessibleRecordIdsSignature, resolvedModuleId, shouldLoadTags, tagsField]);
 
-  const searchTargetField = useMemo(() => {
-    if (!moduleConfig) return null;
-    const keyField = moduleConfig.fields.find(f => f.isKey);
-    if (keyField) return keyField.key;
-    const priorityKeys = ['name', 'title', 'business_name', 'full_name', 'subject', 'description'];
-    const priorityField = moduleConfig.fields.find(f => priorityKeys.includes(f.key));
-    if (priorityField) return priorityField.key;
-    const textField = moduleConfig.fields.find(f => f.type === FieldType.TEXT);
-    if (textField) return textField.key;
-    return null;
-  }, [moduleConfig]);
-
   const availableGroupFields = useMemo(() => {
     return moduleConfig?.fields.filter(f => 
         (f.type === FieldType.STATUS || f.type === FieldType.SELECT) && f.options && f.options.length > 0
@@ -1103,7 +1118,7 @@ export const ModuleListRefine: React.FC<{
         const fieldKey = String(simpleFilter?._displayField || simpleFilter?.field || "");
         if (!fieldKey) return null;
         const field = moduleConfig.fields.find((item) => item.key === fieldKey);
-        const fieldLabel = field?.labels?.fa || fieldKey;
+        const fieldLabel = getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: fieldKey });
         const rawValue = simpleFilter?._displayValue ?? simpleFilter?.value;
         const valueLabel = field
           ? field.type === FieldType.TAGS
@@ -1181,7 +1196,7 @@ export const ModuleListRefine: React.FC<{
 
         const field = moduleConfig.fields.find((item) => item.key === fieldKey);
         if (!field) return [];
-        const fieldLabel = field?.labels?.fa || fieldKey;
+        const fieldLabel = getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: fieldKey });
         const tagLabelById = new Map<string, string>();
 
         if (field.type === FieldType.TAGS) {
@@ -1676,22 +1691,32 @@ export const ModuleListRefine: React.FC<{
     return () => window.clearTimeout(handle);
   }, [columnFilters, searchTerm, viewFiltersState]);
 
-  const handleTableChange = useCallback((pagination: any, tableFilters: any, sorter: any, extra: any) => {
+  const handleTableChange = useCallback((pagination: any, _tableFilters: any, sorter: any, extra: any) => {
     if (extra?.action === "filter") {
       return;
     }
 
-    if (extra?.action === "sort") {
-      const sorterList = Array.isArray(sorter) ? sorter : [sorter];
-      const hasActiveSorter = sorterList.some((item: any) => item?.order === "ascend" || item?.order === "descend");
-      if (!hasActiveSorter) {
-        setSorters(ensureStableCrudSorters(getDefaultSorters(moduleConfig)));
-        return;
-      }
+    const nextCurrent = Number(pagination?.current || 1);
+    const nextPageSize = Number(pagination?.pageSize || DEFAULT_LIST_PAGE_SIZE);
+    if (nextPageSize && nextPageSize !== Number(pageSize || 0)) {
+      setPageSize(nextPageSize);
+    }
+    if (nextCurrent && nextCurrent !== Number(current || 1)) {
+      setCurrent(nextCurrent);
     }
 
-    tableProps.onChange?.(pagination, tableFilters, sorter, extra);
-  }, [moduleConfig, setSorters, tableProps]);
+    if (extra?.action === "sort") {
+      const nextSorters = normalizeCrudSorters(mapAntdSorterToCrudSorting(sorter));
+      setSorters(ensureStableCrudSorters(nextSorters.length > 0 ? nextSorters : getDefaultSorters(moduleConfig)));
+      return;
+    }
+
+    if (extra?.action === "paginate") {
+      return;
+    }
+
+    tableProps.onChange?.(pagination, {}, sorter, extra);
+  }, [current, moduleConfig, pageSize, setCurrent, setPageSize, setSorters, tableProps]);
 
   const handleSelectAllAcrossPages = useCallback(async () => {
     if (!resolvedModuleId || selectAllPagesLoading) return;
@@ -2570,7 +2595,7 @@ export const ModuleListRefine: React.FC<{
           kanbanGroupOptions={availableGroupFields.map((f) => ({ label: f.labels.fa, value: f.key }))}
           onKanbanGroupChange={setKanbanGroupBy}
           calendarDateField={calendarDateField}
-          calendarDateFieldOptions={availableCalendarFields.map((field) => ({ label: field.labels.fa, value: field.key }))}
+          calendarDateFieldOptions={availableCalendarFields.map((field) => ({ label: getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: field.key }), value: field.key }))}
           onCalendarDateFieldChange={setCalendarDateField}
         />
 

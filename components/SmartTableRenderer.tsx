@@ -15,6 +15,7 @@ import type { FilterConfirmProps, FilterValue } from 'antd/es/table/interface';
 import ProductionStagesField from './ProductionStagesField';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
+import { getFieldLabelFa } from '../utils/fieldLabel';
 import PhoneActionsPopover from './PhoneActionsPopover';
 import PersianDatePicker from './PersianDatePicker';
 import { useCurrencyConfig } from '../utils/currency';
@@ -175,6 +176,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const [isTagFilterPopoverOpen, setIsTagFilterPopoverOpen] = useState(false);
   const [internalColumnFilters, setInternalColumnFilters] = useState<Record<string, FilterValue | null>>({});
   const assigneeLabel = getAssigneeLabel(moduleConfig?.id);
+  const getFieldLabel = useCallback(
+    (field: any, fallback?: string) => getFieldLabelFa(field, { moduleId: moduleConfig?.id, fallback }),
+    [moduleConfig?.id]
+  );
   const { label: currencyLabel } = useCurrencyConfig();
   const activeColumnFilters = controlledColumnFilters ?? internalColumnFilters;
   const isColumnFiltersControlled = controlledColumnFilters !== undefined;
@@ -749,7 +754,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         field.type === FieldType.RELATION ||
         field.type === FieldType.USER);
     const choiceOptions = hasChoiceFilter ? resolveFieldFilterOptions(field) : undefined;
-    const tagFilterProps = isTagField ? getTagFilterProps(field.key, field.labels.fa) : {};
+    const fieldLabel = getFieldLabel(field, field.key);
+    const tagFilterProps = isTagField ? getTagFilterProps(field.key, fieldLabel) : {};
 
     const formatPersianDate = (val: any, kind: 'DATE' | 'TIME' | 'DATETIME') => {
       if (!val) return null;
@@ -810,7 +816,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     return {
       title: isKeyLikeField && keyFieldTagFilterContent ? (
         <span className="inline-flex items-center gap-1">
-          <span className="text-[10px] md:text-[11px] text-gray-500">{field.labels.fa}</span>
+          <span className="text-[10px] md:text-[11px] text-gray-500">{fieldLabel}</span>
           <Popover
             content={keyFieldTagFilterContent}
             placement="bottomRight"
@@ -841,7 +847,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           </Popover>
         </span>
       ) : (
-        <span className="text-[10px] md:text-[11px] text-gray-500">{field.labels.fa}</span>
+        <span className="text-[10px] md:text-[11px] text-gray-500">{fieldLabel}</span>
       ),
       dataIndex: field.key,
       key: field.key,
@@ -882,12 +888,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         ) : null,
       filterDropdownProps: sharedFilterDropdownProps,
       
-      ...(isSearchable ? getColumnSearchProps(field.key, field.labels.fa) : {}),
+      ...(isSearchable ? getColumnSearchProps(field.key, fieldLabel) : {}),
       ...tagFilterProps,
-      ...(field.type === FieldType.PRICE ? getRangeFilterProps(field.key, field.labels.fa, 'PRICE') : {}),
-      ...(field.type === FieldType.DATE ? getRangeFilterProps(field.key, field.labels.fa, 'DATE') : {}),
-      ...(field.type === FieldType.TIME ? getRangeFilterProps(field.key, field.labels.fa, 'TIME') : {}),
-      ...(field.type === FieldType.DATETIME ? getRangeFilterProps(field.key, field.labels.fa, 'DATETIME') : {}),
+      ...(field.type === FieldType.PRICE ? getRangeFilterProps(field.key, fieldLabel, 'PRICE') : {}),
+      ...(field.type === FieldType.DATE ? getRangeFilterProps(field.key, fieldLabel, 'DATE') : {}),
+      ...(field.type === FieldType.TIME ? getRangeFilterProps(field.key, fieldLabel, 'TIME') : {}),
+      ...(field.type === FieldType.DATETIME ? getRangeFilterProps(field.key, fieldLabel, 'DATETIME') : {}),
 
       filters: (tagFilterProps as any)?.filters ?? (hasChoiceFilter ? choiceOptions : undefined),
       onFilter: (tagFilterProps as any)?.onFilter ?? (hasChoiceFilter
@@ -1266,7 +1272,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     Object.entries(activeColumnFilters).forEach(([fieldKey, values]) => {
       if (!Array.isArray(values) || values.length === 0) return;
       const field: any = fieldsMap.get(fieldKey);
-      const fieldLabel = field?.labels?.fa || fieldKey;
+      const fieldLabel = getFieldLabel(field, fieldKey);
       const options =
         field?.type === FieldType.TAGS
           ? ((resolvedTagFilterProps?.filters as Array<{ text: string; value: string }> | undefined) || [])

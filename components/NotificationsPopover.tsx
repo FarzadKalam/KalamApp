@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs } from 'antd';
-import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined, SnippetsOutlined, DownloadOutlined } from '@ant-design/icons';
+import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined, SnippetsOutlined, EyeOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -14,7 +14,7 @@ import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import { uploadNoteAttachments } from '../utils/noteAttachments';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { FieldType } from '../types';
-import { resolveTaskSourceLink } from '../utils/taskMeta';
+import { getTaskRelationFieldKey, resolveTaskSourceLink } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import TaskSummaryCard from './tasks/TaskSummaryCard';
 import SharedNoteCard from './notes/SharedNoteCard';
@@ -23,7 +23,6 @@ import RenderCardItem from './moduleList/RenderCardItem';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import ProductionStagesField from './ProductionStagesField';
 import { NOTES_UPDATED_EVENT } from '../utils/aiAssistantEvents';
-import { getRecordTitle } from '../utils/recordTitle';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
@@ -32,6 +31,8 @@ import AssistantPanel from './ai/AssistantPanel';
 import { renderRecordTemplate } from '../utils/recordMessaging';
 import MessageComposerModal from './MessageComposerModal';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
+import { getRecordDisplayLabel } from '../utils/recordLabel';
+import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -142,7 +143,8 @@ type ConversationListItem = {
 
 type UiNotificationItem = {
   id: string;
-  kind: 'note' | 'task' | 'responsibility' | 'bot';
+  kind: 'note' | 'task' | 'responsibility' | 'bot' | 'assistant';
+  kindLabel?: string;
   title: string;
   body: string;
   createdAt: string | null;
@@ -152,6 +154,12 @@ type UiNotificationItem = {
   responsibility?: any;
   botMessage?: CounterpartyBotMessageRow | null;
   botGroupId?: string | null;
+};
+
+type ReadReceiptEntry = {
+  userId: string;
+  userName: string;
+  readAt: string | null;
 };
 
 const loadSeenSet = (key: string) => {
@@ -185,6 +193,7 @@ const resolveOptionLabel = (value: any, options?: { label: string; value: any }[
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const formatBadgeCount = (count: number) => (count ? toPersianNumber(count) : 0);
 const ENTRY_ANIMATION_WINDOW_MS = 12_000;
+const READ_RECEIPTS_KEY = 'read_receipts';
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
@@ -209,6 +218,58 @@ const resolveStatusLabelFallback = (value: unknown) => {
   return STATUS_LABEL_FALLBACKS[normalized] || String(value || '').trim();
 };
 
+const isPlainRecord = (value: unknown): value is Record<string, any> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const getReadReceiptsSource = (box: any) => {
+  if (!isPlainRecord(box)) return null;
+  return (
+    box.read_receipts
+    || box.readReceipts
+    || box.seen_by
+    || box.seenBy
+    || box.read_by
+    || box.readBy
+    || null
+  );
+};
+
+const getReadReceiptUserId = (value: any, fallback?: string) =>
+  String(value?.user_id || value?.userId || value?.id || fallback || '').trim();
+
+const getReadReceiptReadAt = (value: any) =>
+  String(value?.read_at || value?.readAt || value?.seen_at || value?.seenAt || value?.at || '').trim() || null;
+
+const getReadReceiptUserName = (value: any) =>
+  String(value?.user_name || value?.userName || value?.name || value?.display_name || value?.displayName || '').trim();
+
+const readReceiptMapFromBox = (box: any): Record<string, any> => {
+  const source = getReadReceiptsSource(box);
+  const map: Record<string, any> = {};
+  if (Array.isArray(source)) {
+    source.forEach((item) => {
+      const userId = getReadReceiptUserId(item);
+      if (!userId) return;
+      map[userId] = item;
+    });
+    return map;
+  }
+  if (isPlainRecord(source)) {
+    Object.entries(source).forEach(([key, value]) => {
+      const userId = getReadReceiptUserId(value, key);
+      if (!userId) return;
+      map[userId] = isPlainRecord(value) ? value : { read_at: String(value || '').trim() || null };
+    });
+  }
+  return map;
+};
+
+const hasReadReceiptForUser = (box: any, userId?: string | null) => {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) return false;
+  return Boolean(readReceiptMapFromBox(box)[normalizedUserId]);
+};
+
 const RESPONSIBILITY_REALTIME_TABLES = Array.from(
   new Set(
     Object.values(MODULES)
@@ -223,15 +284,18 @@ type TaskViewPresetKey = typeof TASK_VIEW_PRESETS[number]['key'];
 
 const formatRecordLabel = (row: any, moduleId?: string | null) => {
   if (!row) return '';
-  const moduleConfig = moduleId ? MODULES[String(moduleId)] : row?.module_id ? MODULES[String(row.module_id)] : undefined;
-  const resolvedTitle = getRecordTitle(row, moduleConfig, { fallback: '' });
-  const primary = resolvedTitle || row.full_name || row.name || row.title || row.system_code || row.id;
+  const normalizedModuleId = String(moduleId || row?.module_id || '').trim() || null;
+  const primary = getRecordDisplayLabel(row, normalizedModuleId, { fallback: '' }) || row.full_name || row.name || row.title || row.system_code;
   const code = row.system_code && primary !== row.system_code ? ` - ${row.system_code}` : '';
-  const label = `${primary || row.id}`;
-  if ((label === row.id || !primary) && UUID_REGEX.test(String(row.id || label))) {
+  const label = `${primary || ''}`.trim();
+  if (!label) {
+    const fallbackId = String(row.id || '').trim();
+    if (fallbackId && !UUID_REGEX.test(fallbackId)) {
+      return fallbackId;
+    }
     return row.system_code || 'رکورد';
   }
-  return `${label}${code}`;
+  return `${label}${code}`.trim();
 };
 
 const isChatGroupSelection = (value: string | null | undefined) =>
@@ -269,6 +333,10 @@ const isSystemNote = (note: any) =>
   String(note?.source_type || '').trim() === 'system'
   || String(note?.metadata?.source_type || '').trim() === 'system'
   || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id);
+
+const isAiNote = (note: any) =>
+  String(note?.source_type || '').trim() === 'ai'
+  || String(note?.metadata?.source_type || '').trim() === 'ai';
 
 const isDirectConversationNote = (
   note: any,
@@ -370,9 +438,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(null);
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
-  const [importingRubikaMessageId, setImportingRubikaMessageId] = useState<string | null>(null);
   const [botGroupSearch, setBotGroupSearch] = useState('');
   const [botMessageSearch, setBotMessageSearch] = useState('');
+  const [botNotificationMessages, setBotNotificationMessages] = useState<CounterpartyBotMessageRow[]>([]);
   const [botReplyToId, setBotReplyToId] = useState<string | null>(null);
   const [botAttachments, setBotAttachments] = useState<File[]>([]);
   const [editingBotMessageId, setEditingBotMessageId] = useState<string | null>(null);
@@ -761,30 +829,8 @@ useEffect(() => {
   }, [noteModuleId]);
 
   const buildRecordTitleMap = async (items: { module_id: string; record_id: string }[]) => {
-    const grouped: Record<string, string[]> = {};
-    items.forEach((item) => {
-      if (!item.module_id || !item.record_id) return;
-      grouped[item.module_id] = grouped[item.module_id] || [];
-      if (!grouped[item.module_id].includes(item.record_id)) grouped[item.module_id].push(item.record_id);
-    });
-
-    if (Object.keys(grouped).length === 0) return;
-
-    const map: Record<string, string> = {};
-    await Promise.all(
-      Object.entries(grouped).map(async ([moduleId, ids]) => {
-        const config = MODULES[moduleId];
-        const table = config?.table || moduleId;
-        if (!table) return;
-        const { data } = await supabase
-          .from(table)
-          .select('*')
-          .in('id', ids);
-        (data || []).forEach((row: any) => {
-          map[`${moduleId}:${row.id}`] = getRecordTitle(row, config, { fallback: formatRecordLabel(row, moduleId) });
-        });
-      })
-    );
+    const map = await fetchRecordReferenceLabels(supabase, items);
+    if (!Object.keys(map).length) return;
     setRecordTitleMap((prev) => ({ ...prev, ...map }));
   };
 
@@ -1040,8 +1086,7 @@ useEffect(() => {
       })
     ), [] as any[]);
 
-    const merged = [...(mentionedUser || []), ...(mentionedRole || []), ...replyNotes, ...(myNotes || []), ...assignedNotes]
-      .filter((note: any) => String(note?.source_type || '').trim() !== 'ai' && String(note?.metadata?.source_type || '').trim() !== 'ai');
+    const merged = [...(mentionedUser || []), ...(mentionedRole || []), ...replyNotes, ...(myNotes || []), ...assignedNotes];
     const uniq = new Map<string, any>();
     merged.forEach((note) => {
       uniq.set(note.id, note);
@@ -1263,6 +1308,7 @@ useEffect(() => {
       if (showSkeleton) setLoadingBotMessages(true);
       const groups = await safeSectionFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]);
       const resolvedGroupId = String(selectedBotGroupId || groups[0]?.id || '').trim();
+      await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       if (resolvedGroupId) {
         await safeSectionFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       } else {
@@ -1345,6 +1391,7 @@ useEffect(() => {
       bot_messages: loadedAt,
     };
     const resolvedGroupId = String(selectedBotGroupId || botGroupsData[0]?.id || '').trim();
+    await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
     if (resolvedGroupId) {
       await safeFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
     } else {
@@ -1459,6 +1506,30 @@ useEffect(() => {
     if (error) throw error;
     const rows = ((data || []) as CounterpartyBotMessageRow[]).reverse();
     setBotMessages(rows);
+    return rows;
+  };
+
+  const fetchBotNotificationMessages = async (groups: CounterpartyBotGroupRow[] = botGroups) => {
+    const groupIds = Array.from(new Set(
+      (groups || [])
+        .map((group) => String(group?.id || '').trim())
+        .filter(Boolean)
+    ));
+    if (!groupIds.length) {
+      setBotNotificationMessages([]);
+      return [] as CounterpartyBotMessageRow[];
+    }
+
+    const { data, error } = await supabase
+      .from('counterparty_bot_messages')
+      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_at')
+      .in('bot_group_id', groupIds)
+      .eq('direction', 'inbound')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    const rows = ((data || []) as CounterpartyBotMessageRow[]).reverse();
+    setBotNotificationMessages(rows);
     return rows;
   };
 
@@ -1592,7 +1663,9 @@ useEffect(() => {
     botShouldStickToBottomRef.current = true;
     botForceScrollToBottomRef.current = true;
     const timer = window.setInterval(() => {
-      void fetchBotGroups();
+      void fetchBotGroups()
+        .then((groups) => fetchBotNotificationMessages(groups))
+        .catch((error) => console.warn('Could not refresh bot notification messages', error));
       if (selectedBotGroupId) {
         void fetchBotMessages(selectedBotGroupId);
       }
@@ -1741,10 +1814,13 @@ useEffect(() => {
     };
   }, [profile.id, profile.role_id]);
 
-  const notesCount = notes.filter((n: any) => !seenNoteIds.has(String(n.id))).length;
+  const notesCount = notes.filter((n: any) => {
+    const authorId = String(n?.author_id || '').trim();
+    return (!authorId || authorId !== String(profile.id || '')) && !seenNoteIds.has(String(n.id));
+  }).length;
   const tasksCount = tasks.filter((t: any) => !seenTaskIds.has(String(t.id))).length;
   const responsibilitiesCount = responsibilities.filter((r: any) => !seenResponsibilityIds.has(String(r.id))).length;
-  const botMessagesCount = botMessages.filter((row) => (
+  const botMessagesCount = botNotificationMessages.filter((row) => (
     String(row?.direction || '').trim() === 'inbound'
     && !seenBotMessageIds.has(String(row?.id || '').trim())
   )).length;
@@ -2090,6 +2166,80 @@ useEffect(() => {
     if (!selectedNoteUser?.role_id) return 'بدون نقش';
     return roleLookup[String(selectedNoteUser.role_id)] || 'بدون نقش';
   }, [resolveGroupMemberUserIds, roleLookup, selectedChatGroup, selectedNoteUser, selectedNoteUserId]);
+  const currentUserDisplayName = useMemo(() => (
+    directoryUserMap[String(profile.id || '')]?.display_name
+    || 'شما'
+  ), [directoryUserMap, profile.id]);
+
+  const normalizeReadReceipts = useCallback((box: any): ReadReceiptEntry[] => {
+    const map = readReceiptMapFromBox(box);
+    return Object.entries(map)
+      .map(([fallbackUserId, value]) => {
+        const userId = getReadReceiptUserId(value, fallbackUserId);
+        if (!userId) return null;
+        const directoryUser = directoryUserMap[userId];
+        return {
+          userId,
+          userName: directoryUser?.display_name || getReadReceiptUserName(value) || (userId === String(profile.id || '') ? currentUserDisplayName : userId),
+          readAt: getReadReceiptReadAt(value),
+        } as ReadReceiptEntry;
+      })
+      .filter(Boolean)
+      .sort((left, right) => new Date(right!.readAt || 0).getTime() - new Date(left!.readAt || 0).getTime()) as ReadReceiptEntry[];
+  }, [currentUserDisplayName, directoryUserMap, profile.id]);
+
+  const buildReadReceiptBox = useCallback((box: any, readAt: string) => {
+    const currentUserId = String(profile.id || '').trim();
+    const base = isPlainRecord(box) ? { ...box } : {};
+    if (!currentUserId) return base;
+    const receiptMap = readReceiptMapFromBox(base);
+    receiptMap[currentUserId] = {
+      user_id: currentUserId,
+      user_name: currentUserDisplayName,
+      read_at: readAt,
+    };
+    base[READ_RECEIPTS_KEY] = receiptMap;
+    return base;
+  }, [currentUserDisplayName, profile.id]);
+
+  const renderReadReceiptStatus = useCallback((receipts: ReadReceiptEntry[], isUnread: boolean) => {
+    const content = (
+      <div className="w-[230px] max-w-[70vw]">
+        {receipts.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="هنوز خوانده نشده" />
+        ) : (
+          <div className="max-h-[240px] overflow-y-auto space-y-2 py-1">
+            {receipts.map((receipt) => (
+              <div key={`${receipt.userId}-${receipt.readAt || 'read'}`} className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/5">
+                <span className="min-w-0 truncate font-medium">{receipt.userName}</span>
+                <span className="shrink-0 text-[11px] text-gray-500">{receipt.readAt ? safeJalaliFormat(receipt.readAt, 'YYYY/MM/DD HH:mm') : '-'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+
+    return (
+      <span className="inline-flex items-center gap-1">
+        {isUnread ? (
+          <span className="inline-flex h-4 items-center rounded-full bg-red-500 px-1.5 text-[9px] font-bold leading-none text-white">
+            جدید
+          </span>
+        ) : null}
+        <Popover trigger="click" placement="top" content={content}>
+          <button
+            type="button"
+            className="inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-400 transition hover:bg-black/5 hover:text-[rgb(var(--brand-600-rgb))] dark:hover:bg-white/10"
+            aria-label="وضعیت خوانده شدن"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <EyeOutlined className="text-[11px]" />
+          </button>
+        </Popover>
+      </span>
+    );
+  }, []);
   const forwardTargetOptions = useMemo(
     () => [
       ...botGroups.map((group) => ({
@@ -2222,6 +2372,7 @@ useEffect(() => {
     };
   }, [taskProcessModalTask]);
   const badgeColor = 'rgb(var(--brand-500-rgb))';
+  const overlaySource = useMemo(() => `notifications:${variant}`, [variant]);
   const drawerHeaderStyle: React.CSSProperties = {
     background: 'linear-gradient(135deg, rgb(var(--brand-700-rgb)) 0%, rgb(var(--brand-500-rgb)) 100%)',
     borderBottom: '1px solid rgba(var(--brand-300-rgb), 0.35)',
@@ -2272,16 +2423,59 @@ useEffect(() => {
       currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
     });
   }
-  const markBotMessagesAsSeen = useCallback((rows: CounterpartyBotMessageRow[]) => {
-    const inboundIds = rows
-      .filter((row) => String(row?.direction || '').trim() === 'inbound')
-      .map((row) => String(row?.id || '').trim())
-      .filter(Boolean);
-    if (inboundIds.length === 0) return;
-    setSeenBotMessageIds((prev) => {
+  const persistNoteReadReceipts = useCallback(async (rows: any[], readAt: string) => {
+    const currentUserId = String(profile.id || '').trim();
+    if (!currentUserId) return;
+    const targets = rows
+      .filter((note: any) => {
+        const id = String(note?.id || '').trim();
+        const authorId = String(note?.author_id || '').trim();
+        return id && authorId !== currentUserId && !hasReadReceiptForUser(note?.metadata, currentUserId);
+      })
+      .slice(0, 30);
+    if (targets.length === 0) return;
+
+    await Promise.all(targets.map(async (note: any) => {
+      const noteId = String(note?.id || '').trim();
+      try {
+        const { data, error: selectError } = await supabase
+          .from('notes')
+          .select('metadata')
+          .eq('id', noteId)
+          .maybeSingle();
+        if (selectError) throw selectError;
+        const metadata = buildReadReceiptBox((data as any)?.metadata || note?.metadata || {}, readAt);
+        const { error: updateError } = await supabase
+          .from('notes')
+          .update({ metadata })
+          .eq('id', noteId);
+        if (updateError) throw updateError;
+      } catch (error) {
+        console.warn('Could not persist note read receipt', error);
+      }
+    }));
+  }, [buildReadReceiptBox, profile.id]);
+
+  const markNotesAsSeen = useCallback((rows: any[]) => {
+    const currentUserId = String(profile.id || '').trim();
+    if (!currentUserId || !Array.isArray(rows) || rows.length === 0) return;
+    const readAt = new Date().toISOString();
+    const readableRows = rows.filter((note: any) => {
+      const id = String(note?.id || '').trim();
+      const authorId = String(note?.author_id || '').trim();
+      return (
+        id
+        && authorId !== currentUserId
+        && (!seenNoteIds.has(id) || !hasReadReceiptForUser(note?.metadata, currentUserId))
+      );
+    });
+    if (readableRows.length === 0) return;
+
+    const readableIds = new Set(readableRows.map((note: any) => String(note.id)));
+    setSeenNoteIds((prev) => {
       let changed = false;
       const next = new Set(prev);
-      inboundIds.forEach((id) => {
+      readableIds.forEach((id) => {
         if (!next.has(id)) {
           next.add(id);
           changed = true;
@@ -2289,7 +2483,89 @@ useEffect(() => {
       });
       return changed ? next : prev;
     });
-  }, []);
+
+    const applyReceipt = (note: any) => (
+      readableIds.has(String(note?.id || ''))
+        ? { ...note, metadata: buildReadReceiptBox(note?.metadata || {}, readAt) }
+        : note
+    );
+    setNotes((prev) => prev.map(applyReceipt));
+    setSelectedConversationNotes((prev) => (prev ? prev.map(applyReceipt) : prev));
+
+    void persistNoteReadReceipts(readableRows, readAt);
+  }, [buildReadReceiptBox, persistNoteReadReceipts, profile.id, seenNoteIds]);
+
+  const persistBotReadReceipts = useCallback(async (rows: CounterpartyBotMessageRow[], readAt: string) => {
+    const currentUserId = String(profile.id || '').trim();
+    if (!currentUserId) return;
+    const targets = rows
+      .filter((row) => {
+        const id = String(row?.id || '').trim();
+        return id && !hasReadReceiptForUser(row?.payload, currentUserId);
+      })
+      .slice(0, 30);
+    if (targets.length === 0) return;
+
+    await Promise.all(targets.map(async (row) => {
+      const rowId = String(row?.id || '').trim();
+      try {
+        const { data, error: selectError } = await supabase
+          .from('counterparty_bot_messages')
+          .select('payload')
+          .eq('id', rowId)
+          .maybeSingle();
+        if (selectError) throw selectError;
+        const payload = buildReadReceiptBox((data as any)?.payload || row?.payload || {}, readAt);
+        const { error: updateError } = await supabase
+          .from('counterparty_bot_messages')
+          .update({ payload })
+          .eq('id', rowId);
+        if (updateError) throw updateError;
+      } catch (error) {
+        console.warn('Could not persist bot read receipt', error);
+      }
+    }));
+  }, [buildReadReceiptBox, profile.id]);
+
+  const markBotMessagesAsSeen = useCallback((rows: CounterpartyBotMessageRow[]) => {
+    const readAt = new Date().toISOString();
+    const unreadInboundIds = rows
+      .filter((row) => String(row?.direction || '').trim() === 'inbound')
+      .map((row) => String(row?.id || '').trim())
+      .filter((id) => id && !seenBotMessageIds.has(id));
+    const receiptRows = rows.filter((row) => {
+      const id = String(row?.id || '').trim();
+      return id && !hasReadReceiptForUser(row?.payload, String(profile.id || '').trim());
+    });
+    const messageIds = new Set(
+      receiptRows
+        .map((row) => String(row?.id || '').trim())
+        .filter(Boolean)
+    );
+    if (unreadInboundIds.length > 0) {
+      setSeenBotMessageIds((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        unreadInboundIds.forEach((id) => {
+          if (!next.has(id)) {
+            next.add(id);
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }
+    if (messageIds.size === 0) return;
+
+    const applyReceipt = (row: CounterpartyBotMessageRow) => (
+      messageIds.has(String(row?.id || '').trim())
+        ? { ...row, payload: buildReadReceiptBox(row?.payload || {}, readAt) }
+        : row
+    );
+    setBotMessages((prev) => prev.map(applyReceipt));
+    setBotNotificationMessages((prev) => prev.map(applyReceipt));
+    void persistBotReadReceipts(receiptRows, readAt);
+  }, [buildReadReceiptBox, persistBotReadReceipts, profile.id, seenBotMessageIds]);
   const handleNotesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const node = event.currentTarget;
     const distanceToBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -2319,14 +2595,12 @@ useEffect(() => {
     setNoteNewIncomingCount(0);
     setBotNewIncomingCount(0);
     if (variant === 'chat') {
-      setSeenNoteIds((prev) => new Set([...prev, ...notes.map((n: any) => String(n.id))]));
-      setSeenBotMessageIds((prev) => new Set([
-        ...prev,
-        ...botMessages
-          .filter((row) => String(row?.direction || '').trim() === 'inbound')
-          .map((row) => String(row?.id || '').trim())
-          .filter(Boolean),
-      ]));
+      if (activeDrawerSection === 'notes' && selectedNoteUserId) {
+        markNotesAsSeen(displayedChatNotes);
+      }
+      if (activeDrawerSection === 'bot_messages' && selectedBotGroupId) {
+        markBotMessagesAsSeen(botMessages);
+      }
     } else {
       setSeenTaskIds((prev) => new Set([...prev, ...tasks.map((t: any) => String(t.id))]));
       setSeenResponsibilityIds((prev) => new Set([...prev, ...responsibilities.map((r: any) => String(r.id))]));
@@ -2334,7 +2608,7 @@ useEffect(() => {
     setPreviewRecord(null);
     setTaskProcessModalTask(null);
     setOpen(false);
-  }, [botMessages, notes, responsibilities, tasks, variant]);
+  }, [activeDrawerSection, botMessages, displayedChatNotes, markBotMessagesAsSeen, markNotesAsSeen, responsibilities, selectedBotGroupId, selectedNoteUserId, tasks, variant]);
 
   useEffect(() => {
     setNoteMessageSearch('');
@@ -2462,6 +2736,13 @@ useEffect(() => {
     scrollNotesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     noteForceScrollToBottomRef.current = false;
   }, [activeDrawerSection, displayedChatNotes, open]);
+
+  useEffect(() => {
+    if (!open || activeDrawerSection !== 'notes') return;
+    if (!selectedNoteUserId) return;
+    if (!noteShouldStickToBottomRef.current) return;
+    markNotesAsSeen(displayedChatNotes);
+  }, [activeDrawerSection, displayedChatNotes, markNotesAsSeen, open, selectedNoteUserId]);
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
@@ -2968,7 +3249,7 @@ useEffect(() => {
     const currentTaskIds = new Set(tasks.map((task: any) => String(task?.id || '')).filter(Boolean));
     const currentResponsibilityIds = new Set(responsibilities.map((item: any) => String(item?.id || '')).filter(Boolean));
     const currentBotMessageIds = new Set(
-      botMessages
+      botNotificationMessages
         .filter((row) => String(row?.direction || '') === 'inbound')
         .map((row) => String(row?.id || '').trim())
         .filter(Boolean)
@@ -2985,15 +3266,6 @@ useEffect(() => {
       return;
     }
 
-    if (variant !== 'alerts') {
-      prevNotesRef.current = currentNoteIds;
-      prevTasksRef.current = currentTaskIds;
-      prevResponsibilitiesRef.current = currentResponsibilityIds;
-      prevBotMessageIdsRef.current = currentBotMessageIds;
-      setUiNotifications([]);
-      return;
-    }
-
     const newNotifications: UiNotificationItem[] = [
       ...notes
         .filter((note: any) => {
@@ -3002,6 +3274,7 @@ useEffect(() => {
             noteId
             && !prevNotesRef.current.has(noteId)
             && !seenNoteIds.has(noteId)
+            && String(note?.author_id || '').trim() !== String(profile.id || '')
             && !dismissedUiNotificationIds.has(`note:${noteId}`)
           );
         })
@@ -3011,14 +3284,16 @@ useEffect(() => {
           const group = groupId ? chatGroupMap[groupId] : null;
           const directUserId = resolveDirectConversationTargetUserId(note);
           const directUser = directUserId ? directoryUserMap[directUserId] : null;
+          const aiNote = isAiNote(note);
           return {
             id: `note:${String(note.id)}`,
-            kind: 'note' as const,
+            kind: aiNote ? 'assistant' as const : 'note' as const,
             title: group?.name || directUser?.display_name || note.author_name || 'پیام جدید',
             body: parsed.text || (parsed.attachments.length > 0 ? 'فایل جدید ارسال شد' : 'پیام جدید'),
             createdAt: note.created_at || null,
             hasAttachments: parsed.attachments.length > 0,
             note,
+            kindLabel: aiNote ? 'هوش مصنوعی' : undefined,
           };
         }),
       ...tasks
@@ -3060,7 +3335,7 @@ useEffect(() => {
           createdAt: item.created_at || null,
           responsibility: item,
         })),
-      ...botMessages
+      ...botNotificationMessages
         .filter((row) => {
           const id = String(row?.id || '').trim();
           if (!id) return false;
@@ -3090,9 +3365,15 @@ useEffect(() => {
     ]
       .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
-    if (!open && newNotifications.length > 0) {
+    const relevantNewNotifications = newNotifications.filter((item) => (
+      variant === 'chat'
+        ? item.kind === 'note' || item.kind === 'bot' || item.kind === 'assistant'
+        : item.kind === 'task' || item.kind === 'responsibility'
+    ));
+
+    if (!open && relevantNewNotifications.length > 0) {
       setUiNotifications((prev) => {
-        const merged = [...newNotifications, ...prev];
+        const merged = [...relevantNewNotifications, ...prev];
         const unique = new Map<string, UiNotificationItem>();
         merged.forEach((item) => {
           if (!unique.has(item.id)) unique.set(item.id, item);
@@ -3109,6 +3390,7 @@ useEffect(() => {
   }, [
     botGroups,
     botMessages,
+    botNotificationMessages,
     chatGroupMap,
     directoryUserMap,
     dismissedUiNotificationIds,
@@ -3130,7 +3412,7 @@ useEffect(() => {
       const [kind, entityId] = rawId.split(':');
       if (!kind || !entityId) return false;
       if (dismissedUiNotificationIds.has(rawId)) return false;
-      if (kind === 'note') return !seenNoteIds.has(entityId);
+      if (kind === 'note' || kind === 'assistant') return !seenNoteIds.has(entityId);
       if (kind === 'task') return !seenTaskIds.has(entityId);
       if (kind === 'responsibility') return !seenResponsibilityIds.has(entityId);
       if (kind === 'bot') return !seenBotMessageIds.has(entityId);
@@ -3144,7 +3426,7 @@ useEffect(() => {
   }, []);
 
   const openUiNotification = useCallback((item: UiNotificationItem) => {
-    if (item.kind === 'note' && item.note) {
+    if ((item.kind === 'note' || item.kind === 'assistant') && item.note) {
       const note = item.note;
       const groupId = String(note?.metadata?.chat_group_id || '').trim();
       if (groupId) {
@@ -3196,13 +3478,13 @@ useEffect(() => {
   }, [openPreviewRecord, recordTitleMap, resolveDirectConversationTargetUserId]);
 
   useEffect(() => {
-    if (variant !== 'alerts' || open || uiNotifications.length === 0) {
-      setUiNotificationOverlayItems([]);
+    if (open || uiNotifications.length === 0) {
+      setUiNotificationOverlayItems([], overlaySource);
       return;
     }
-    const overlayItems = uiNotifications.filter((item) => item.kind === 'task' || item.kind === 'responsibility');
+    const overlayItems = uiNotifications;
     if (overlayItems.length === 0) {
-      setUiNotificationOverlayItems([]);
+      setUiNotificationOverlayItems([], overlaySource);
       return;
     }
 
@@ -3210,6 +3492,7 @@ useEffect(() => {
       overlayItems.map((item) => ({
         id: item.id,
         kind: item.kind,
+        kindLabel: item.kindLabel,
         title: item.title,
         body: item.body,
         createdAt: item.createdAt,
@@ -3217,12 +3500,13 @@ useEffect(() => {
         onOpen: () => openUiNotification(item),
         onDismiss: () => handleDismissUiNotification(item.id),
       })),
+      overlaySource,
     );
-  }, [handleDismissUiNotification, open, openUiNotification, uiNotifications, variant]);
+  }, [handleDismissUiNotification, open, openUiNotification, overlaySource, uiNotifications]);
 
   useEffect(() => () => {
-    setUiNotificationOverlayItems([]);
-  }, []);
+    setUiNotificationOverlayItems([], overlaySource);
+  }, [overlaySource]);
 
   const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
     const withUserSidebar = layout === 'desktop';
@@ -3475,6 +3759,8 @@ useEffect(() => {
                 const parsedContent = parseNoteContent(note.content);
                 const mentionUsers = (note.mention_user_ids || []).map((id: string) => directoryUserMap[String(id)]?.display_name || id);
                 const mentionRoles = (note.mention_role_ids || []).map((id: string) => roleLookup[String(id)] || id);
+                const noteReadReceipts = normalizeReadReceipts(note.metadata);
+                const isUnreadNote = !isMine && !seenNoteIds.has(String(note.id || ''));
 
                 return (
                   <div key={note.id}>
@@ -3493,6 +3779,7 @@ useEffect(() => {
                       animateOnMount={shouldAnimateChatEntry(note.created_at)}
                       variant="default"
                       renderTemplateBold={isSystem}
+                      statusNode={renderReadReceiptStatus(noteReadReceipts, isUnreadNote)}
                       isEdited={Boolean(note.is_edited)}
                       isEditing={editingNoteId === note.id}
                       editingValue={editingNoteValue}
@@ -4052,7 +4339,8 @@ useEffect(() => {
         setBotReplyToId(null);
         setBotAttachments([]);
         setBotMentionPickerOpen(false);
-        await fetchBotGroups();
+        const groups = await fetchBotGroups();
+        await fetchBotNotificationMessages(groups);
         await fetchBotMessages(selectedGroup.id);
         message.success('پیام بات ارسال شد.');
       } catch (error: any) {
@@ -4192,6 +4480,8 @@ useEffect(() => {
                   || String((payload as any)?.sender_id || '').trim()
                   || String((payload as any)?.username || '').trim()
                   || 'کاربر گروه';
+                const botReadReceipts = normalizeReadReceipts(payload);
+                const isUnreadBotMessage = !outgoing && !seenBotMessageIds.has(String(row.id || '').trim());
                 return (
                   <div key={row.id}>
                     <SharedNoteCard
@@ -4207,6 +4497,7 @@ useEffect(() => {
                       replyAuthorName={replyAuthorName}
                       isMine={outgoing}
                       animateOnMount={shouldAnimateChatEntry(row.created_at)}
+                      statusNode={renderReadReceiptStatus(botReadReceipts, isUnreadBotMessage)}
                       isEdited={Boolean(payload?.is_edited)}
                       isEditing={isEditing}
                       editingValue={editingBotMessageValue}
@@ -4399,27 +4690,22 @@ useEffect(() => {
   const renderTasksPanel = (mode: 'list' | 'grid' = 'list') => {
     const data = showMore.tasks ? filteredTasks : filteredTasks.slice(0, MAX_ITEMS);
     const relationOptionsByField = tasks.reduce<Record<string, Array<{ label: string; value: string }>>>((acc, task: any) => {
-      const entries: Array<[string, string | null | undefined]> = [
-        ['related_product', task?.related_product],
-        ['related_customer', task?.related_customer],
-        ['related_supplier', task?.related_supplier],
-        ['related_production_order', task?.related_production_order],
-        ['related_invoice', task?.related_invoice],
-        ['purchase_invoice_id', task?.purchase_invoice_id],
-        ['project_id', task?.project_id],
-        ['marketing_lead_id', task?.marketing_lead_id],
-      ];
+      const sourceLink = resolveTaskSourceLink(task);
+      const relatedModuleId = String(sourceLink.moduleId || task?.related_to_module || '').trim();
+      const relatedRecordId = String(sourceLink.recordId || '').trim();
+      const fieldKey = getTaskRelationFieldKey(relatedModuleId);
+      if (!fieldKey || !relatedModuleId || !relatedRecordId) return acc;
 
-      entries.forEach(([fieldKey, recordId]) => {
-        if (!recordId || !task?.related_to_module) return;
-        const recordKey = `${task.related_to_module}:${recordId}`;
-        const label = recordTitleMap[recordKey] || formatRecordLabel({ id: recordId, module_id: task.related_to_module }, task.related_to_module);
-        const current = acc[fieldKey] || [];
-        if (!current.some((item) => String(item.value) === String(recordId))) {
-          current.push({ label, value: String(recordId) });
-        }
-        acc[fieldKey] = current;
-      });
+      const recordKey = buildRecordReferenceKey(relatedModuleId, relatedRecordId);
+      const label = recordTitleMap[recordKey]
+        || formatRecordLabel({ id: relatedRecordId, module_id: relatedModuleId }, relatedModuleId);
+      if (!label) return acc;
+
+      const current = acc[fieldKey] || [];
+      if (!current.some((item) => String(item.value) === relatedRecordId)) {
+        current.push({ label, value: relatedRecordId });
+      }
+      acc[fieldKey] = current;
 
       return acc;
     }, {});
@@ -5121,12 +5407,14 @@ useEffect(() => {
             </div>
           )}
           placement="top"
-          height="100dvh"
+          height="var(--app-viewport-height, 100dvh)"
           open={open}
           onClose={requestDrawerClose}
           forceRender
           destroyOnHidden={false}
           getContainer={drawerContainer}
+          rootStyle={{ position: 'fixed', inset: 0 }}
+          zIndex={1500}
           rootClassName="notifications-drawer"
           styles={{ body: mobileDrawerBodyStyle, header: drawerHeaderStyle, content: drawerContentStyle }}
           closeIcon={<CloseOutlined className="text-white" />}
@@ -5153,6 +5441,8 @@ useEffect(() => {
           forceRender
           destroyOnHidden={false}
           getContainer={drawerContainer}
+          rootStyle={{ position: 'fixed', inset: 0 }}
+          zIndex={1500}
           rootClassName="notifications-drawer"
           styles={{ body: desktopDrawerBodyStyle, header: drawerHeaderStyle, content: drawerContentStyle }}
           closeIcon={<CloseOutlined className="text-white" />}

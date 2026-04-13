@@ -64,6 +64,13 @@ const BLOCKS = {
         readonly: true,
       },
       {
+        key: 'taxpayer_measure_unit_code',
+        title: 'کد واحد مودیان',
+        type: FieldType.NUMBER,
+        width: 130,
+        readonly: true,
+      },
+      {
         key: 'sub_quantity',
         title: 'مقدار واحد فرعی',
         type: FieldType.NUMBER,
@@ -362,5 +369,15 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
     BLOCKS.process,
     BLOCKS.summary,
   ],
-  relatedTabs: [],
+  relatedTabs: [
+    {
+      id: 'purchase_invoice_journal_entries',
+      title: 'اسناد حسابداری',
+      icon: 'FileTextOutlined',
+      targetModule: 'journal_entries',
+      foreignKey: 'source_record_id',
+      filters: [{ field: 'source_table', value: 'purchase_invoices' }],
+      disableCreate: true,
+    },
+  ],
 };

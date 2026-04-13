@@ -5,16 +5,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import RelatedRecordCard from './RelatedRecordCard';
-import { FieldType, RelatedTabConfig } from '../../types';
+import { FieldType, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
 import { getRecordTitle } from '../../utils/recordTitle';
 import {
   buildRelationValueMap,
   formatRecordDisplayValue,
+  formatRecordFieldValue,
   RelationValueMap,
   resolveOptionLabel,
 } from '../../utils/recordDisplayFormatter';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getTaskStatusOption } from '../../utils/processTaskStatusOptions';
+import { getModuleCardSummaryFields } from '../../utils/recordCardHelpers';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
@@ -43,6 +45,33 @@ const PAYMENT_VISIBLE_KEYS = [
 const toNumber = (value: any) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const applyTabFilters = (query: any, filters?: RelatedTabFilterConfig[]) => {
+  let nextQuery = query;
+  (filters || []).forEach((filter) => {
+    const field = String(filter?.field || '').trim();
+    if (!field) return;
+    const operator = String(filter?.operator || 'eq').trim();
+    if (operator === 'neq') {
+      nextQuery = nextQuery.neq(field, filter?.value);
+      return;
+    }
+    if (operator === 'in') {
+      const values = Array.isArray(filter?.value) ? filter.value : [filter?.value];
+      const safeValues = values.filter((value) => value !== undefined);
+      if (safeValues.length > 0) {
+        nextQuery = nextQuery.in(field, safeValues);
+      }
+      return;
+    }
+    if (operator === 'is') {
+      nextQuery = nextQuery.is(field, filter?.value ?? null);
+      return;
+    }
+    nextQuery = nextQuery.eq(field, filter?.value);
+  });
+  return nextQuery;
 };
 
 const buildPaymentRows = (invoices: any[], relationLabel: string) => (
@@ -346,10 +375,13 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         if (tab.relationType === 'jsonb_contains' && tab.targetModule && tab.jsonbColumn) {
           const matchKey = tab.jsonbMatchKey || 'product_id';
           const matchPayload = JSON.stringify([{ [matchKey]: currentRecordId }]);
-          const { data } = await supabase
-            .from(tab.targetModule)
-            .select('*')
-            .filter(tab.jsonbColumn, 'cs', matchPayload);
+          const { data } = await applyTabFilters(
+            supabase
+              .from(tab.targetModule)
+              .select('*')
+              .filter(tab.jsonbColumn, 'cs', matchPayload),
+            tab.filters,
+          );
           setItems(data || []);
           await fetchProfileNames(data || []);
           return;
@@ -360,10 +392,13 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
             setItems([]);
             return;
           }
-          let query = supabase
-            .from(tab.targetModule)
-            .select('*')
-            .eq(tab.foreignKey, sourceFieldValue);
+          let query = applyTabFilters(
+            supabase
+              .from(tab.targetModule)
+              .select('*')
+              .eq(tab.foreignKey, sourceFieldValue),
+            tab.filters,
+          );
           if (tab.targetModule === currentModuleId) {
             query = query.neq('id', currentRecordId);
           }
@@ -374,10 +409,13 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         }
 
         if (tab.targetModule && tab.foreignKey) {
-          const { data } = await supabase
-            .from(tab.targetModule)
-            .select('*')
-            .eq(tab.foreignKey, currentRecordId);
+          const { data } = await applyTabFilters(
+            supabase
+              .from(tab.targetModule)
+              .select('*')
+              .eq(tab.foreignKey, currentRecordId),
+            tab.filters,
+          );
           setItems(data || []);
           await fetchProfileNames(data || []);
           return;
@@ -417,7 +455,14 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         return;
       }
 
-      const fields = (targetConfig?.fields || []).filter((field: any) => field?.isTableColumn || field?.isKey);
+      const summaryFields = getModuleCardSummaryFields(targetConfig, ['status', 'full_name'], 4);
+      const fields = Array.from(
+        new Map(
+          [...(summaryFields || []), ...(targetConfig?.fields || []).filter((field: any) => field?.isKey)]
+            .filter((field: any) => field?.key)
+            .map((field: any) => [String(field.key), field])
+        ).values()
+      );
       if (!fields.length) {
         setRelationValueMap({});
         return;
@@ -492,7 +537,9 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     return {};
   };
 
-  const canCreate = Boolean(tab.targetModule) && !PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''));
+  const canCreate = Boolean(tab.targetModule)
+    && !PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''))
+    && tab.disableCreate !== true;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -554,7 +601,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
                       <div key={field.key} className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 last:border-b-0 last:pb-0 dark:border-gray-800">
                         <span className="text-gray-500 dark:text-gray-400">{field.title || field.key}</span>
                         <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
-                          {resolveOptionLabel(item?.[field.key], field) || formatRecordDisplayValue(item?.[field.key], field, paymentRelationValueMap)}
+                          {resolveOptionLabel(item?.[field.key], field) || formatRecordFieldValue(item, field, paymentRelationValueMap)}
                         </span>
                       </div>
                     ))}

@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
-import { ModuleDefinition, RelatedTabConfig } from '../../types';
+import { ModuleDefinition, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { applyTaskSourceRecordFilter } from '../../utils/taskMeta';
 
@@ -39,6 +39,33 @@ interface RelatedSidebarProps {
     mentionUsers?: any[];
     mentionRoles?: any[];
 }
+
+const applyTabFilters = (query: any, filters?: RelatedTabFilterConfig[]) => {
+  let nextQuery = query;
+  (filters || []).forEach((filter) => {
+    const field = String(filter?.field || '').trim();
+    if (!field) return;
+    const operator = String(filter?.operator || 'eq').trim();
+    if (operator === 'neq') {
+      nextQuery = nextQuery.neq(field, filter?.value);
+      return;
+    }
+    if (operator === 'in') {
+      const values = Array.isArray(filter?.value) ? filter.value : [filter?.value];
+      const safeValues = values.filter((value) => value !== undefined);
+      if (safeValues.length > 0) {
+        nextQuery = nextQuery.in(field, safeValues);
+      }
+      return;
+    }
+    if (operator === 'is') {
+      nextQuery = nextQuery.is(field, filter?.value ?? null);
+      return;
+    }
+    nextQuery = nextQuery.eq(field, filter?.value);
+  });
+  return nextQuery;
+};
 
 const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId, recordName = '', mentionUsers = [], mentionRoles = [] }) => {
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -211,10 +238,13 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 if ((tab as RelatedTabConfig).relationType === 'jsonb_contains' && tab.targetModule && tab.jsonbColumn) {
                     const matchKey = tab.jsonbMatchKey || 'product_id';
                     const matchPayload = JSON.stringify([{ [matchKey]: recordId }]);
-                    const { data } = await (supabase
-                        .from(tab.targetModule as string) as any)
-                        .select('created_at')
-                        .filter(tab.jsonbColumn as string, 'cs', matchPayload)
+                    const { data } = await applyTabFilters(
+                        (supabase
+                            .from(tab.targetModule as string) as any)
+                            .select('created_at')
+                            .filter(tab.jsonbColumn as string, 'cs', matchPayload),
+                        (tab as RelatedTabConfig).filters,
+                    )
                         .order('created_at', { ascending: false })
                         .limit(1);
                     return data?.[0]?.created_at || null;
@@ -240,10 +270,13 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 if ((tab as RelatedTabConfig).relationType === 'fk_from_field' && tab.targetModule && tab.foreignKey) {
                     const sourceValue = await getSourceFieldValue(tab as RelatedTabConfig);
                     if (!sourceValue) return null;
-                    let query = (supabase
-                        .from(tab.targetModule as string) as any)
-                        .select('created_at')
-                        .eq(tab.foreignKey as string, sourceValue);
+                    let query = applyTabFilters(
+                        (supabase
+                            .from(tab.targetModule as string) as any)
+                            .select('created_at')
+                            .eq(tab.foreignKey as string, sourceValue),
+                        (tab as RelatedTabConfig).filters,
+                    );
                     if (tab.targetModule === moduleConfig.id) {
                         query = query.neq('id', recordId);
                     }
@@ -254,10 +287,13 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 }
 
                 if (tab.targetModule && tab.foreignKey) {
-                    const { data } = await (supabase
-                        .from(tab.targetModule as string) as any)
-                        .select('created_at')
-                        .eq(tab.foreignKey as string, recordId)
+                    const { data } = await applyTabFilters(
+                        (supabase
+                            .from(tab.targetModule as string) as any)
+                            .select('created_at')
+                            .eq(tab.foreignKey as string, recordId),
+                        (tab as RelatedTabConfig).filters,
+                    )
                         .order('created_at', { ascending: false })
                         .limit(1);
                     return data?.[0]?.created_at || null;

@@ -1,7 +1,8 @@
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
-import { buildRelationDisplayLabel, getRelationDisplayFields } from './relationDisplay';
+import { getRelationDisplayFields } from './relationDisplay';
+import { getRecordDisplayLabel } from './recordLabel';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { supportsSystemCode } from './systemCode';
 
@@ -67,6 +68,18 @@ export const resolveOptionLabel = (value: any, field?: any) => {
   return matched?.label || null;
 };
 
+export const resolveRelationFieldFallbackLabel = (row: any, field?: any) => {
+  const fieldKey = String(field?.key || '').trim();
+  if (!fieldKey || !row || typeof row !== 'object') return null;
+  const candidates = [
+    row?.[`${fieldKey}_label`],
+    row?.[`${fieldKey}_name`],
+    row?.[`${fieldKey}_title`],
+  ];
+  const found = candidates.find((entry) => entry !== undefined && entry !== null && String(entry).trim() !== '');
+  return found ? String(found).trim() : null;
+};
+
 export const buildRelationValueMap = async (
   supabase: any,
   fields: any[],
@@ -120,14 +133,16 @@ export const buildRelationValueMap = async (
         }
         const fallbackMap: Record<string, string> = {};
         for (const row of (fallbackQuery.data || []) as any[]) {
-          fallbackMap[String(row.id)] = buildRelationDisplayLabel(targetModule, row, targetField);
+          const label = getRecordDisplayLabel(row, targetModule, { fallback: '' });
+          if (label) fallbackMap[String(row.id)] = label;
         }
         return [fieldKey, fallbackMap] as const;
       }
 
       const nextMap: Record<string, string> = {};
       for (const row of (relationRowsQuery.data || []) as any[]) {
-        nextMap[String(row.id)] = buildRelationDisplayLabel(targetModule, row, targetField);
+        const label = getRecordDisplayLabel(row, targetModule, { fallback: '' });
+        if (label) nextMap[String(row.id)] = label;
       }
 
       return [fieldKey, nextMap] as const;
@@ -200,4 +215,21 @@ export const formatRecordDisplayValue = (
   if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
 
   return toPersianNumber(rawString);
+};
+
+export const formatRecordFieldValue = (
+  row: any,
+  field?: any,
+  relationValueMap: RelationValueMap = {},
+  emptyLabel = '-',
+): string => {
+  const fieldKey = String(field?.key || '').trim();
+  const value = fieldKey ? row?.[fieldKey] : undefined;
+  const optionLabel = resolveOptionLabel(value, field);
+  if (optionLabel) return optionLabel;
+
+  const relationFallbackLabel = resolveRelationFieldFallbackLabel(row, field);
+  if (relationFallbackLabel) return relationFallbackLabel;
+
+  return formatRecordDisplayValue(value, field, relationValueMap, emptyLabel);
 };

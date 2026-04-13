@@ -260,6 +260,12 @@ export type RelatedTabRelationType =
   | 'supplier_payments'
   | 'supplier_products';
 
+export interface RelatedTabFilterConfig {
+  field: string;
+  value: any;
+  operator?: 'eq' | 'neq' | 'in' | 'is';
+}
+
 export interface RelatedTabConfig {
   id: string;
   title: string;
@@ -273,6 +279,8 @@ export interface RelatedTabConfig {
   joinTable?: string;
   joinSourceKey?: string;
   joinTargetKey?: string;
+  filters?: RelatedTabFilterConfig[];
+  disableCreate?: boolean;
 }
 
 export interface ModuleDefinition {

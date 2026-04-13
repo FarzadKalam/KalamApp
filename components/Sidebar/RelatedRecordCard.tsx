@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { ModuleDefinition, ModuleField } from '../../types';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getRecordTitle } from '../../utils/recordTitle';
-import { formatRecordDisplayValue, RelationValueMap } from '../../utils/recordDisplayFormatter';
+import { formatRecordFieldValue, RelationValueMap } from '../../utils/recordDisplayFormatter';
 import { getModuleCardSummaryFields, resolveCardStatusMeta } from '../../utils/recordCardHelpers';
 
 interface RelatedRecordCardProps {
@@ -17,18 +17,6 @@ interface RelatedRecordCardProps {
 
 const getPrimaryTitle = (item: any, moduleConfig?: ModuleDefinition) =>
   getRecordTitle(item, moduleConfig, { fallback: '-' });
-
-const resolveRelationFallback = (item: any, field?: ModuleField) => {
-  if (!field?.key) return null;
-  const key = String(field.key);
-  const candidates = [
-    item?.[`${key}_label`],
-    item?.[`${key}_name`],
-    item?.[`${key}_title`],
-  ];
-  const found = candidates.find((entry) => entry !== undefined && entry !== null && entry !== '');
-  return found ? String(found) : null;
-};
 
 const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
   moduleId,
@@ -76,7 +64,7 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
                 <div key={field.key} className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 last:border-b-0 last:pb-0 dark:border-gray-800">
                   <span className="text-gray-500 dark:text-gray-400">{field.labels?.fa || field.key}</span>
                   <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
-                    {resolveRelationFallback(item, field) || formatRecordDisplayValue(value, field, relationValueMap)}
+                    {formatRecordFieldValue(item, field as ModuleField, relationValueMap)}
                   </span>
                 </div>
               );

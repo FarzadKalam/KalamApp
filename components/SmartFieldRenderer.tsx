@@ -52,6 +52,7 @@ import { mergeSelectOptions } from '../utils/selectOptions';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
+import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
@@ -70,6 +71,12 @@ const isDuplicateSystemCodeError = (error: any) => {
   const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   return code === '23505' && text.includes('system_code');
+};
+
+const isStatementTimeoutError = (error: any) => {
+  const code = String(error?.code || '').trim();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return code === '57014' || text.includes('statement timeout');
 };
 
 const normalizeNumericString = (raw: any): string => {
@@ -400,7 +407,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     };
   }, [moduleId]);
 
-  const fieldLabel = field?.labels?.fa || label || 'بدون نام';
+  const fieldLabel = getFieldLabelFa(field, { moduleId, fallback: label || 'بدون نام' });
   const fieldType = field?.type || type || FieldType.TEXT;
   const fieldKey = field?.key || 'unknown';
   const isLongTextField = fieldType === FieldType.LONG_TEXT || fieldType === FieldType.SUPER_LONG_TEXT;
@@ -1452,6 +1459,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
       const targetTable = quickCreateTargetModule?.table || quickCreateTargetModuleId;
       const selectFields = Array.from(new Set(['id', quickCreateTargetField])).join(', ');
+      if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
+        payload.system_code = await buildClientFallbackSystemCode(
+          supabase,
+          quickCreateTargetModuleId,
+          targetTable
+        );
+      }
       let insertResult = await supabase
         .from(targetTable)
         .insert([payload])
@@ -1460,8 +1474,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       if (
         insertResult.error
         && supportsSystemCode(quickCreateTargetModuleId)
-        && !payload.system_code
-        && isDuplicateSystemCodeError(insertResult.error)
+        && (isDuplicateSystemCodeError(insertResult.error) || isStatementTimeoutError(insertResult.error))
       ) {
         payload.system_code = await buildClientFallbackSystemCode(
           supabase,
@@ -2833,7 +2846,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   };
   const renderQuickFieldLabel = (field: ModuleField) => (
     <span className="inline-flex items-center gap-1">
-      <span>{field.labels?.fa || field.key}</span>
+      <span>{getFieldLabelFa(field, { moduleId })}</span>
       {field.validation?.required ? <span className="text-red-500">*</span> : null}
     </span>
   );

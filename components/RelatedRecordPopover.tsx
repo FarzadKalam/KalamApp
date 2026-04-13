@@ -7,6 +7,7 @@ import SmartFieldRenderer from './SmartFieldRenderer';
 import PhoneActionsPopover from './PhoneActionsPopover';
 import RecordMessageActions from './RecordMessageActions';
 import { getRecordTitle } from '../utils/recordTitle';
+import { getFieldLabelFa } from '../utils/fieldLabel';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
 import { supportsSystemCode } from '../utils/systemCode';
@@ -421,7 +422,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           >
             {fields.map((field) => (
               <div key={field.key} className="grid grid-cols-[110px_1fr] gap-2 items-start border-b border-gray-100 dark:border-gray-800 pb-1.5">
-                <span className="text-gray-500 dark:text-gray-400">{field.labels?.fa || field.key}</span>
+                <span className="text-gray-500 dark:text-gray-400">{getFieldLabelFa(field, { moduleId, fallback: field.key })}</span>
                 <div className="text-right min-w-0 break-words">{renderFieldValue(field)}</div>
               </div>
             ))}

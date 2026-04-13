@@ -5,11 +5,13 @@ import {
   getRelationDisplayFields,
   getRelationSearchFields,
 } from './relationDisplay';
+import { getRecordDisplayLabel } from './recordLabel';
 import { supportsSystemCode } from './systemCode';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { MODULES } from '../moduleRegistry';
+import { FieldType } from '../types';
 
-const RELATION_RECENT_LIMIT = 10;
+const RELATION_RECENT_LIMIT = 50;
 const relationOptionsCache = new Map<string, any[]>();
 const relationOptionsPromiseCache = new Map<string, Promise<any[]>>();
 
@@ -69,7 +71,9 @@ const buildRelationOptionLabel = (targetModule: string, item: any, targetField: 
     return `${name} (مانده: ${formatPersianPrice(Number(item?.remaining_amount || 0))})`;
   }
 
-  const baseLabel = buildRelationDisplayLabel(targetModule, item, targetField);
+  const baseLabel = getRecordDisplayLabel(item, targetModule, {
+    fallback: buildRelationDisplayLabel(targetModule, item, targetField),
+  });
   const statusLabel = getRelationStatusLabel(targetModule, item);
   return statusLabel ? `${baseLabel} [${statusLabel}]` : baseLabel;
 };
@@ -134,6 +138,90 @@ const buildModuleExtraSelect = (targetModule: string, targetField: string) => {
 
 const escapeLikeValue = (value: string) => value.replace(/[%_,]/g, (match) => `\\${match}`);
 
+const normalizeRelationSearchValue = (value: string) =>
+  String(value || '')
+    .normalize('NFKC')
+    .replace(/\u200c/g, ' ')
+    .replace(/[يى]/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[ۀة]/g, 'ه')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+const toPersianDigits = (value: string) =>
+  String(value || '').replace(/[0-9]/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)] || digit);
+
+const toArabicKeyboardChars = (value: string) =>
+  String(value || '').replace(/ی/g, 'ي').replace(/ک/g, 'ك');
+
+const buildSearchTermVariants = (search: string) => {
+  const raw = String(search || '').trim();
+  if (!raw) return [];
+
+  const normalized = normalizeRelationSearchValue(raw);
+  const candidates = [
+    raw,
+    normalized,
+    toPersianDigits(normalized),
+    toArabicKeyboardChars(normalized),
+  ];
+
+  if (normalized.includes(' ')) {
+    candidates.push(normalized.replace(/\s+/g, '\u200c'));
+    candidates.push(normalized.replace(/\s+/g, ''));
+  }
+
+  return Array.from(
+    new Set(
+      candidates
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 6);
+};
+
+const normalizeNumericSearchValue = (search: string) => {
+  const normalized = normalizeRelationSearchValue(search)
+    .replace(/[٬،,]/g, '')
+    .replace(/\s+/g, '');
+  return /^-?\d+(\.\d+)?$/.test(normalized) ? normalized : '';
+};
+
+const getModuleFieldTypeMap = (targetModule: string) => {
+  const moduleConfig = MODULES[String(targetModule || '').trim()];
+  const map = new Map<string, FieldType>();
+  (moduleConfig?.fields || []).forEach((field: any) => {
+    const key = String(field?.key || '').trim();
+    if (key) map.set(key, field?.type as FieldType);
+  });
+  return map;
+};
+
+const getConfiguredSearchFields = (targetModule: string) => {
+  const displayConfig = MODULES[String(targetModule || '').trim()]?.relationDisplay;
+  return Array.isArray(displayConfig?.searchFields)
+    ? displayConfig.searchFields.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : [];
+};
+
+const getNumericSearchFields = (targetModule: string) => {
+  const numericFieldTypes = new Set([
+    FieldType.NUMBER,
+    FieldType.PRICE,
+    FieldType.STOCK,
+    FieldType.PERCENTAGE,
+    FieldType.PERCENTAGE_OR_AMOUNT,
+  ]);
+  const fieldTypeMap = getModuleFieldTypeMap(targetModule);
+  return getConfiguredSearchFields(targetModule).filter((fieldKey) =>
+    numericFieldTypes.has(fieldTypeMap.get(fieldKey) as FieldType)
+  );
+};
+
 const applyQueryFilters = (query: any, filter?: Record<string, any>) => {
   if (!filter || Object.keys(filter).length === 0) return query;
 
@@ -188,6 +276,7 @@ const runRelationQuery = async (
     filter,
     search,
     searchFields,
+    numericSearchFields,
     exactId,
     limit,
     targetField,
@@ -195,6 +284,7 @@ const runRelationQuery = async (
     filter?: Record<string, any>;
     search?: string;
     searchFields?: string[];
+    numericSearchFields?: string[];
     exactId?: string | number | null;
     limit: number;
     targetField: string;
@@ -227,15 +317,22 @@ const runRelationQuery = async (
                 .filter(Boolean)
             )
           );
-          const escapedSearch = escapeLikeValue(normalizedSearch);
-          if (activeSearchFields.length === 1) {
-            query = query.ilike(activeSearchFields[0], `%${escapedSearch}%`);
-          } else if (activeSearchFields.length > 1) {
-            query = query.or(
-              activeSearchFields
-                .map((fieldName) => `${fieldName}.ilike.%${escapedSearch}%`)
-                .join(',')
+          const searchTerms = buildSearchTermVariants(normalizedSearch);
+          const numericSearchValue = normalizeNumericSearchValue(normalizedSearch);
+          const predicates = activeSearchFields.flatMap((fieldName) =>
+            searchTerms.map((term) => `${fieldName}.ilike.%${escapeLikeValue(term)}%`)
+          );
+          if (numericSearchValue) {
+            predicates.push(
+              ...Array.from(new Set(numericSearchFields || []))
+                .map((fieldName) => String(fieldName || '').trim())
+                .filter(Boolean)
+                .map((fieldName) => `${fieldName}.eq.${numericSearchValue}`)
             );
+          }
+
+          if (predicates.length > 0) {
+            query = query.or(predicates.join(','));
           }
         }
         query = query.limit(limit);
@@ -290,12 +387,15 @@ export const fetchRelationOptionsForField = async (
     const includeSystemCode = sourceTargetModule !== 'cheques' && supportsSystemCode(sourceTargetModule);
     const configuredDisplayFields = getRelationDisplayFields(sourceTargetModule, sourceTargetField);
     const searchFields = getRelationSearchFields(sourceTargetModule, sourceTargetField);
+    const numericSearchFields = getNumericSearchFields(sourceTargetModule);
     const selectFields = Array.from(
       new Set(
         [
           sourceTargetField,
           ...(includeSystemCode ? ['system_code'] : []),
           ...configuredDisplayFields,
+          ...searchFields,
+          ...numericSearchFields,
         ].filter(Boolean)
       )
     );
@@ -305,6 +405,7 @@ export const fetchRelationOptionsForField = async (
       targetField: sourceTargetField,
       filter: source.filter,
       searchFields,
+      numericSearchFields,
       selectVariants: buildSelectVariants(selectFields, buildModuleExtraSelect(sourceTargetModule, sourceTargetField)),
       tagLabel: source.tagLabel,
       tagColor: source.tagColor,
@@ -342,6 +443,7 @@ export const fetchRelationOptionsForField = async (
             filter: source.filter,
             search,
             searchFields: source.searchFields,
+            numericSearchFields: source.numericSearchFields,
             exactId,
             limit,
             targetField: source.targetField,

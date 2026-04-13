@@ -1,9 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Modal, Space, Table, Tag, Typography } from 'antd';
 import { ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
-import { TAXPAYER_SETTLEMENT_METHOD_OPTIONS } from '../../utils/taxpayerSystem';
+import SmartFieldRenderer from '../SmartFieldRenderer';
+import {
+  TAXPAYER_INVOICE_PATTERN_OPTIONS,
+  TAXPAYER_INVOICE_SUBJECT_OPTIONS,
+  TAXPAYER_INVOICE_TYPE_OPTIONS,
+  TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
+} from '../../utils/taxpayerSystem';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { FieldNature, FieldType, ModuleField } from '../../types';
 
 type TaxpayerSubmission = {
   id: string;
@@ -15,6 +22,8 @@ type TaxpayerSubmission = {
   sent_at?: string | null;
   last_inquiry_at?: string | null;
   created_at?: string | null;
+  request_payload?: any;
+  response_payload?: any;
 };
 
 type Props = {
@@ -45,20 +54,102 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
+const getSubmissionDebug = (record: TaxpayerSubmission) => {
+  const requestDebug = record?.request_payload?._kalam_debug || {};
+  const responseDebug = record?.response_payload?._kalam_debug || {};
+  return {
+    stage: String(responseDebug?.stage || requestDebug?.stage || '').trim(),
+    requestTraceId: String(
+      responseDebug?.enqueue_debug?.request_trace_id
+      || requestDebug?.enqueue_debug?.request_trace_id
+      || ''
+    ).trim(),
+    packetUid: String(
+      responseDebug?.enqueue_debug?.packet_uid
+      || requestDebug?.packet_debug?.packet_uid
+      || requestDebug?.enqueue_debug?.packet_uid
+      || ''
+    ).trim(),
+  };
+};
+
+const TAXPAYER_FIELDS: ModuleField[] = [
+  {
+    key: 'taxpayer_invoice_type',
+    labels: { fa: 'نوع صورتحساب', en: 'Taxpayer Invoice Type' },
+    type: FieldType.SELECT,
+    nature: FieldNature.STANDARD,
+    options: TAXPAYER_INVOICE_TYPE_OPTIONS,
+  },
+  {
+    key: 'taxpayer_invoice_pattern',
+    labels: { fa: 'الگوی صورتحساب', en: 'Taxpayer Invoice Pattern' },
+    type: FieldType.SELECT,
+    nature: FieldNature.STANDARD,
+    options: TAXPAYER_INVOICE_PATTERN_OPTIONS,
+  },
+  {
+    key: 'taxpayer_invoice_subject',
+    labels: { fa: 'موضوع صورتحساب', en: 'Taxpayer Invoice Subject' },
+    type: FieldType.SELECT,
+    nature: FieldNature.STANDARD,
+    options: TAXPAYER_INVOICE_SUBJECT_OPTIONS,
+  },
+  {
+    key: 'taxpayer_settlement_method',
+    labels: { fa: 'روش تسویه', en: 'Taxpayer Settlement Method' },
+    type: FieldType.SELECT,
+    nature: FieldNature.STANDARD,
+    options: TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
+  },
+];
+
+const getInitialTaxpayerValues = (invoiceRecord: any) => ({
+  taxpayer_invoice_type: String(invoiceRecord?.taxpayer_invoice_type || '1'),
+  taxpayer_invoice_pattern: String(invoiceRecord?.taxpayer_invoice_pattern || '1'),
+  taxpayer_invoice_subject: String(invoiceRecord?.taxpayer_invoice_subject || '1'),
+  taxpayer_settlement_method: String(invoiceRecord?.taxpayer_settlement_method || ''),
+});
+
+const resolveInvokeErrorMessage = async (error: any, fallback: string) => {
+  const context = error?.context;
+  if (context) {
+    try {
+      const payload = typeof context.json === 'function'
+        ? await context.json()
+        : typeof context.text === 'function'
+          ? await context.text()
+          : null;
+      if (typeof payload === 'string' && payload.trim()) return payload.trim();
+      if (payload && typeof payload === 'object') {
+        const direct = String(payload.message || payload.error || '').trim();
+        if (direct) return direct;
+      }
+    } catch {
+      // Ignore context parse errors and fall back to the generic formatter below.
+    }
+  }
+  const raw = typeof error?.message === 'string' ? error.message.trim() : '';
+  return raw || toFaErrorMessage(error, fallback);
+};
+
 const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord, onClose, onRefresh }) => {
   const { message } = App.useApp();
   const [history, setHistory] = useState<TaxpayerSubmission[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [inquiringId, setInquiringId] = useState<string | null>(null);
-  const [settlementMethod, setSettlementMethod] = useState<string>('');
+  const [formValues, setFormValues] = useState<Record<string, string>>(() => getInitialTaxpayerValues(invoiceRecord));
+  const [lastError, setLastError] = useState<string>('');
   const invoiceStatus = String(invoiceRecord?.status || '').trim();
   const canSendInvoice = ['confirmed', 'final', 'settled', 'completed'].includes(invoiceStatus);
+  const settlementMethod = String(formValues.taxpayer_settlement_method || '').trim();
 
   useEffect(() => {
     if (!open) return;
-    setSettlementMethod(String(invoiceRecord?.taxpayer_settlement_method || ''));
-  }, [invoiceRecord?.taxpayer_settlement_method, open]);
+    setFormValues(getInitialTaxpayerValues(invoiceRecord));
+    setLastError('');
+  }, [invoiceId, open]);
 
   const fetchHistory = useCallback(async () => {
     if (!invoiceId || !open) return;
@@ -66,13 +157,15 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
     try {
       const { data, error } = await supabase
         .from('taxpayer_invoice_submissions')
-        .select('id,taxid,uid,reference_number,status,error_message,sent_at,last_inquiry_at,created_at')
+        .select('id,taxid,uid,reference_number,status,error_message,sent_at,last_inquiry_at,created_at,request_payload,response_payload')
         .eq('invoice_id', invoiceId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       setHistory((data || []) as TaxpayerSubmission[]);
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خطا در دریافت تاریخچه ارسال سامانه مودیان'));
+      const errorMessage = await resolveInvokeErrorMessage(err, 'خطا در دریافت تاریخچه ارسال سامانه مودیان');
+      setLastError(errorMessage);
+      message.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -93,15 +186,34 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
     }
     setSending(true);
     try {
-      if (String(invoiceRecord?.taxpayer_settlement_method || '') !== settlementMethod) {
+      setLastError('');
+      const nextInvoiceType = String(formValues.taxpayer_invoice_type || '1');
+      const nextInvoicePattern = String(formValues.taxpayer_invoice_pattern || '1');
+      const nextInvoiceSubject = String(formValues.taxpayer_invoice_subject || '1');
+      const nextSettlementMethod = String(settlementMethod || '').trim();
+      const updatePayload: Record<string, string> = {};
+      if (String(invoiceRecord?.taxpayer_invoice_type || '1') !== nextInvoiceType) {
+        updatePayload.taxpayer_invoice_type = nextInvoiceType;
+      }
+      if (String(invoiceRecord?.taxpayer_invoice_pattern || '1') !== nextInvoicePattern) {
+        updatePayload.taxpayer_invoice_pattern = nextInvoicePattern;
+      }
+      if (String(invoiceRecord?.taxpayer_invoice_subject || '1') !== nextInvoiceSubject) {
+        updatePayload.taxpayer_invoice_subject = nextInvoiceSubject;
+      }
+      if (String(invoiceRecord?.taxpayer_settlement_method || '') !== nextSettlementMethod) {
+        updatePayload.taxpayer_settlement_method = nextSettlementMethod;
+      }
+
+      if (Object.keys(updatePayload).length > 0) {
         const { error: updateError } = await supabase
           .from('invoices')
-          .update({ taxpayer_settlement_method: settlementMethod })
+          .update(updatePayload)
           .eq('id', invoiceId);
         if (updateError) throw updateError;
       }
       const { data, error } = await supabase.functions.invoke('taxpayer_system', {
-        body: { action: 'send_invoice', invoice_id: invoiceId, settlement_method: settlementMethod },
+        body: { action: 'send_invoice', invoice_id: invoiceId, settlement_method: nextSettlementMethod },
       });
       if (error) throw error;
       if (!data?.success) throw new Error(String(data?.message || 'ارسال به سامانه مودیان ناموفق بود.'));
@@ -109,7 +221,9 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
       await fetchHistory();
       await onRefresh?.();
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خطا در ارسال به سامانه مودیان'));
+      const errorMessage = await resolveInvokeErrorMessage(err, 'خطا در ارسال به سامانه مودیان');
+      setLastError(errorMessage);
+      message.error(errorMessage);
       await fetchHistory();
     } finally {
       setSending(false);
@@ -119,6 +233,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
   const handleInquiry = async (submissionId: string) => {
     setInquiringId(submissionId);
     try {
+      setLastError('');
       const { data, error } = await supabase.functions.invoke('taxpayer_system', {
         body: { action: 'inquire_submission', submission_id: submissionId },
       });
@@ -127,7 +242,9 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
       message.success(data.message || 'استعلام وضعیت انجام شد.');
       await fetchHistory();
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خطا در استعلام وضعیت سامانه مودیان'));
+      const errorMessage = await resolveInvokeErrorMessage(err, 'خطا در استعلام وضعیت سامانه مودیان');
+      setLastError(errorMessage);
+      message.error(errorMessage);
     } finally {
       setInquiringId(null);
     }
@@ -144,6 +261,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
           return <Tag color={meta.color}>{meta.label}</Tag>;
         },
       },
+      { title: 'مرحله', key: 'debug_stage', render: (_: unknown, record: TaxpayerSubmission) => getSubmissionDebug(record).stage || '-' },
       { title: 'شماره مالیاتی', dataIndex: 'taxid', key: 'taxid', render: (value: string) => value || '-' },
       { title: 'UID', dataIndex: 'uid', key: 'uid', render: (value: string) => value || '-' },
       { title: 'رسید', dataIndex: 'reference_number', key: 'reference_number', render: (value: string) => value || '-' },
@@ -192,17 +310,36 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
             description="ابتدا وضعیت فاکتور را به تاییدشده، فاکتور نهایی، تسویه‌شده یا تکمیل‌شده تغییر دهید."
           />
         ) : null}
-        <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-3 items-end">
-          <div>
-            <Typography.Text className="block mb-1">روش تسویه</Typography.Text>
-            <Select
-              className="w-full"
-              value={settlementMethod || undefined}
-              placeholder="انتخاب روش تسویه"
-              options={TAXPAYER_SETTLEMENT_METHOD_OPTIONS}
-              onChange={setSettlementMethod}
-            />
-          </div>
+        {lastError ? (
+          <Alert
+            type="error"
+            showIcon
+            message="خطای آخر"
+            description={lastError}
+          />
+        ) : null}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {TAXPAYER_FIELDS.map((field) => (
+            <div key={field.key}>
+              <Typography.Text className="block mb-1">{field.labels.fa}</Typography.Text>
+              <SmartFieldRenderer
+                field={field}
+                value={formValues[field.key]}
+                onChange={(value) => {
+                  setFormValues((prev) => ({
+                    ...prev,
+                    [field.key]: String(value || ''),
+                  }));
+                }}
+                forceEditMode
+                options={field.options}
+                moduleId="invoices"
+                allValues={formValues}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
           <Space wrap>
             <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void fetchHistory()}>
               بروزرسانی تاریخچه
@@ -220,12 +357,20 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
           dataSource={history}
           pagination={{ pageSize: 5 }}
           expandable={{
-            expandedRowRender: (record) => (
-              <Typography.Paragraph className="!mb-0 whitespace-pre-wrap text-xs">
-                {record.error_message || 'خطایی ثبت نشده است.'}
-              </Typography.Paragraph>
-            ),
-            rowExpandable: (record) => !!record.error_message,
+            expandedRowRender: (record) => {
+              const debug = getSubmissionDebug(record);
+              return (
+                <Space direction="vertical" size={4} className="w-full">
+                  <Typography.Paragraph className="!mb-0 whitespace-pre-wrap text-xs">
+                    {record.error_message || 'No error text was recorded.'}
+                  </Typography.Paragraph>
+                  {debug.stage ? <Typography.Text className="text-xs">Stage: {debug.stage}</Typography.Text> : null}
+                  {debug.requestTraceId ? <Typography.Text className="text-xs">Request Trace: {debug.requestTraceId}</Typography.Text> : null}
+                  {debug.packetUid ? <Typography.Text className="text-xs">Packet UID: {debug.packetUid}</Typography.Text> : null}
+                </Space>
+              );
+            },
+            rowExpandable: (record) => !!record.error_message || !!getSubmissionDebug(record).stage,
           }}
         />
       </Space>
@@ -234,3 +379,6 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
 };
 
 export default TaxpayerInvoiceModal;
+
+
+

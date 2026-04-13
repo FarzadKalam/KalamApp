@@ -485,6 +485,19 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   background: #ffffff !important;
 }
 
+.notifications-drawer.ant-drawer-top .ant-drawer-content-wrapper {
+  height: var(--app-viewport-height, 100dvh) !important;
+  backface-visibility: hidden;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.notifications-drawer .ant-drawer-mask,
+.notifications-drawer .ant-drawer-content-wrapper,
+.notifications-drawer .ant-drawer-content {
+  backface-visibility: hidden;
+}
+
 .dark .notifications-drawer .ant-drawer-content,
 .dark .notifications-drawer .ant-drawer-wrapper-body {
   background: rgb(var(--app-dark-surface-rgb)) !important;

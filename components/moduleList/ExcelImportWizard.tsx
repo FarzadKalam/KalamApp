@@ -30,7 +30,7 @@ import persian from "react-date-object/calendars/persian";
 import persian_fa from "react-date-object/locales/persian_fa";
 import gregorian from "react-date-object/calendars/gregorian";
 import gregorian_en from "react-date-object/locales/gregorian_en";
-import { FieldNature, FieldType, ModuleDefinition, ModuleField } from "../../types";
+import { FieldNature, FieldType, LogicOperator, ModuleDefinition, ModuleField, RowCalculationType } from "../../types";
 import { supabase } from "../../supabaseClient";
 import { attachTaskCompletionIfNeeded } from "../../utils/taskCompletion";
 import { normalizeIranMobile, normalizePhoneDigits, normalizePhoneForStorage } from "../../utils/phoneNumber";
@@ -38,7 +38,7 @@ import { toGregorianDateString } from "../../utils/persianNumberFormatter";
 import { syncCustomerLevelsByInvoiceCustomers } from "../../utils/customerLeveling";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from "../../utils/assigneeSupport";
-import { supportsSystemCode } from "../../utils/systemCode";
+import { buildClientFallbackSystemCode, supportsSystemCode } from "../../utils/systemCode";
 import { getPreferredRelationTargetField, getRelationLabelFallbackFields } from "../../utils/relationTargetField";
 import { toFaErrorMessage } from "../../utils/errorMessageFa";
 import DynamicSelectField from "../DynamicSelectField";
@@ -46,6 +46,9 @@ import PersianDatePicker from "../PersianDatePicker";
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from "../../utils/referenceData";
 import { fetchRelationOptionsForField } from "../../utils/relationOptions";
 import { MODULES } from "../../moduleRegistry";
+import { normalizeAutoNameEnabled } from "../../utils/autoName";
+import { calculateRow } from "../../utils/calculations";
+import { resolveConfiguredDefaultValue } from "../../utils/defaultValues";
 
 type DuplicateStrategy = "skip" | "overwrite" | "merge";
 type EncodingType = "utf-8" | "windows-1256";
@@ -103,8 +106,29 @@ type ImportFieldDescriptor = {
   validation?: ModuleField["validation"];
   readonly?: boolean;
   nature?: FieldNature;
+  logic?: ModuleField["logic"];
   scope: MappingTargetScope;
 };
+
+type ImportFeedback = {
+  level: "success" | "warning" | "error";
+  summary: string;
+  details: string[];
+};
+
+class ImportInsertError extends Error {
+  originalError: unknown;
+  retryError?: unknown;
+  retrySystemCode?: string;
+
+  constructor(message: string, originalError: unknown, retryError?: unknown, retrySystemCode?: string) {
+    super(message);
+    this.name = "ImportInsertError";
+    this.originalError = originalError;
+    this.retryError = retryError;
+    this.retrySystemCode = retrySystemCode;
+  }
+}
 
 type GroupedRecord = {
   key: string;
@@ -172,6 +196,27 @@ const CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS = new Set([
   "acquaintance_days",
   "cooperation_days",
 ]);
+const DUPLICATE_FIELD_CANDIDATES_BY_MODULE: Record<string, string[]> = {
+  customers: ["legacy_contact_code", "mobile_1", "national_code", "national_id", "accounting_code", "email", "phone", "full_name"],
+  suppliers: ["system_code", "accounting_code", "mobile_1", "email", "business_name"],
+  invoices: ["legacy_invoice_number", "system_code", "name"],
+  purchase_invoices: ["legacy_invoice_number", "system_code", "name"],
+  tasks: ["system_code", "name"],
+};
+const GENERIC_DUPLICATE_FIELD_CANDIDATES = [
+  "system_code",
+  "legacy_contact_code",
+  "legacy_invoice_number",
+  "accounting_code",
+  "email",
+  "mobile_1",
+  "phone",
+  "national_code",
+  "national_id",
+  "full_name",
+  "business_name",
+  "name",
+];
 const DYNAMIC_OPTION_IMPORT_TYPES = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.MULTI_SELECT,
@@ -221,8 +266,17 @@ const toEnglishDigits = (value: string): string =>
     .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
     .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
 
+const normalizePersianChars = (value: string): string =>
+  value
+    .replace(/[‌‍‎‏‪-‮]/g, " ")
+    .replace(/[ـ]+/g, "")
+    .replace(/ك/g, "ک")
+    .replace(/[يى]/g, "ی")
+    .replace(/ۀ/g, "ه")
+    .replace(/ة/g, "ه");
+
 const normalizeText = (value: unknown): string =>
-  toEnglishDigits(String(value ?? ""))
+  normalizePersianChars(toEnglishDigits(String(value ?? "")))
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ")
@@ -242,7 +296,7 @@ const isExplicitlyImportableReadonlyField = (moduleId: string, fieldKey: string)
   moduleId === "customers" && CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey);
 
 const buildAutoCustomerName = (values: Record<string, unknown>) => {
-  const normalize = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const normalize = (value: unknown) => sanitizeImportedTextValue(value);
   const businessName = normalize(values?.business_name);
   const personType = normalize(values?.person_type).toLowerCase();
 
@@ -265,6 +319,135 @@ const buildAutoCustomerName = (values: Record<string, unknown>) => {
 
 const stripLegacyReferencePrefix = (value: unknown): string =>
   String(value ?? "").trim().replace(LEGACY_PREFIX_REGEX, "").trim();
+
+const sanitizeImportedTextValue = (value: unknown): string =>
+  stripLegacyReferencePrefix(value).replace(/\s+/g, " ").trim();
+
+const resolveImportFieldDefaultValue = (field: Pick<ImportFieldDescriptor, "defaultValue">): unknown => {
+  try {
+    return resolveConfiguredDefaultValue(field.defaultValue);
+  } catch {
+    return undefined;
+  }
+};
+
+const isLogicVisibleForPayload = (logicOrRule: ModuleField["logic"], payload: Record<string, unknown>): boolean => {
+  if (!logicOrRule) return true;
+  const rule = (logicOrRule as { visibleIf?: any })?.visibleIf || logicOrRule;
+  if (!rule || !rule.field) return true;
+
+  const fieldValue = payload?.[rule.field];
+  if (fieldValue === undefined || fieldValue === null) {
+    if (rule.operator === LogicOperator.NOT_EQUALS) return false;
+  }
+
+  switch (rule.operator) {
+    case LogicOperator.EQUALS:
+      return fieldValue === rule.value;
+    case LogicOperator.NOT_EQUALS:
+      return fieldValue !== rule.value;
+    case LogicOperator.CONTAINS:
+      return Array.isArray(fieldValue) ? fieldValue.includes(rule.value) : false;
+    case LogicOperator.IS_TRUE:
+      return fieldValue === true;
+    case LogicOperator.IS_FALSE:
+      return fieldValue === false;
+    case LogicOperator.GREATER_THAN:
+      return Number(fieldValue) > Number(rule.value);
+    case LogicOperator.LESS_THAN:
+      return Number(fieldValue) < Number(rule.value);
+    default:
+      return true;
+  }
+};
+
+const isSystemicImportError = (error: unknown): boolean => {
+  if (error instanceof ImportInsertError) {
+    return isSystemicImportError(error.retryError || error.originalError);
+  }
+  const code = String((error as any)?.code || "").toUpperCase();
+  const status = Number((error as any)?.status ?? (error as any)?.statusCode ?? 0);
+  const message = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
+  if (code === "57014") return true;
+  if (status >= 500) return true;
+  if (isMissingColumnError(error)) return true;
+  return (
+    message.includes("statement timeout") ||
+    message.includes("canceling statement due to statement timeout") ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    message.includes("internal server error") ||
+    message.includes("timeout")
+  );
+};
+
+const isStatementTimeoutError = (error: unknown): boolean => {
+  if (error instanceof ImportInsertError) {
+    return isStatementTimeoutError(error.retryError || error.originalError);
+  }
+  const code = String((error as any)?.code || "").toUpperCase();
+  const message = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
+  return code === "57014" || message.includes("statement timeout") || message.includes("canceling statement due to statement timeout");
+};
+
+const getImportErrorParts = (error: unknown): string[] => {
+  if (error instanceof ImportInsertError) {
+    const parts = [`message=${error.message}`];
+    const originalParts = getImportErrorParts(error.originalError);
+    const retryParts = error.retryError ? getImportErrorParts(error.retryError) : [];
+    if (error.retrySystemCode) parts.push(`retry_system_code=${error.retrySystemCode}`);
+    if (originalParts.length > 0) parts.push(`first_attempt=(${originalParts.join(" | ")})`);
+    if (retryParts.length > 0) parts.push(`retry_attempt=(${retryParts.join(" | ")})`);
+    return parts;
+  }
+  const err = error as any;
+  const parts = [
+    err?.code ? `code=${String(err.code)}` : "",
+    err?.status || err?.statusCode ? `status=${String(err.status || err.statusCode)}` : "",
+    err?.message ? `message=${String(err.message)}` : "",
+    err?.details ? `details=${String(err.details)}` : "",
+    err?.hint ? `hint=${String(err.hint)}` : "",
+  ].filter(Boolean);
+  if (parts.length > 0) return parts;
+  if (typeof error === "string" && error.trim()) return [error.trim()];
+  return [];
+};
+
+const formatImportErrorMessage = (error: unknown, fallback = "خطای نامشخص"): string => {
+  if (error instanceof ImportInsertError) {
+    if (error.retryError) {
+      return `ثبت رکورد در تلاش اول و تلاش مجدد با کد سیستمی ${error.retrySystemCode || ""} ناموفق بود. ${formatImportErrorMessage(error.retryError, fallback)}`.trim();
+    }
+    return formatImportErrorMessage(error.originalError, fallback);
+  }
+  const err = error as any;
+  const rawMessage = String(err?.message || err?.error_description || "").trim();
+  const code = String(err?.code || "").trim();
+  const status = Number(err?.status ?? err?.statusCode ?? 0);
+  const normalized = rawMessage.toLowerCase();
+
+  if (code === "57014" || normalized.includes("statement timeout")) {
+    return "زمان اجرای عملیات در دیتابیس تمام شد. احتمالاً trigger یا تولید کد سیستمی سمت دیتابیس کند/قفل شده است.";
+  }
+  if (status >= 500 || normalized.includes("internal server error")) {
+    return "خطای داخلی سرور هنگام ثبت رکورد. جزئیات دقیق‌تر را از Network/Server logs بررسی کنید.";
+  }
+
+  const translated = toFaErrorMessage(error as any, "");
+  if (translated) return translated;
+  const parts = getImportErrorParts(error);
+  return parts.length > 0 ? parts.join(" | ") : fallback;
+};
+
+const getImportFieldDefaultValueForPayload = (
+  field: ImportFieldDescriptor,
+  payload: Record<string, unknown>
+): unknown => {
+  if (field.defaultValue === undefined) return undefined;
+  if (!isLogicVisibleForPayload(field.logic, payload)) return undefined;
+  const resolvedDefaultValue = resolveImportFieldDefaultValue(field);
+  return isValueEmpty(resolvedDefaultValue) ? undefined : resolvedDefaultValue;
+};
 
 const buildRelatedTargetKey = (linkId: string, fieldKey: string): string =>
   `${RELATED_TARGET_PREFIX}${String(linkId || "").trim()}::${String(fieldKey || "").trim()}`;
@@ -313,7 +496,7 @@ const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope;
 const splitByDelimiters = (value: string): string[] =>
   value
     .split(/[,،;|\n\r]+/g)
-    .map((item) => item.trim())
+    .map((item) => sanitizeImportedTextValue(item))
     .filter(Boolean);
 
 const splitDynamicOptionValues = (value: string): string[] => {
@@ -323,15 +506,75 @@ const splitDynamicOptionValues = (value: string): string[] => {
   return Array.from(new Set(splitByDelimiters(normalized)));
 };
 
-const parseCsvLine = (line: string): string[] => {
-  const result: string[] = [];
-  let current = "";
+const countDelimiterOutsideQuotes = (line: string, delimiter: string): number => {
+  let count = 0;
   let inQuotes = false;
-
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i];
     if (char === '"') {
       const next = line[i + 1];
+      if (inQuotes && next === '"') {
+        i += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && char === delimiter) {
+      count += 1;
+    }
+  }
+  return count;
+};
+
+const detectCsvDelimiter = (text: string): string => {
+  const sampleLines = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const candidates = [",", ";", "\t"];
+  let bestDelimiter = ",";
+  let bestScore = -1;
+
+  candidates.forEach((delimiter) => {
+    const counts = sampleLines.map((line) => countDelimiterOutsideQuotes(line, delimiter));
+    const positiveCounts = counts.filter((count) => count > 0);
+    if (!positiveCounts.length) return;
+    const firstPositiveCount = positiveCounts[0];
+    const consistency = positiveCounts.filter((count) => count === firstPositiveCount).length;
+    const score = consistency * 100 + firstPositiveCount;
+    if (score > bestScore) {
+      bestScore = score;
+      bestDelimiter = delimiter;
+    }
+  });
+
+  return bestDelimiter;
+};
+
+const parseCsvText = (text: string): string[][] => {
+  const delimiter = detectCsvDelimiter(text);
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  const pushRow = () => {
+    const cells = [...row, current].map((item) => item.trim());
+    if (cells.some((cell) => cell.trim() !== "")) {
+      rows.push(cells);
+    }
+    row = [];
+    current = "";
+  };
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '"') {
+      const next = text[i + 1];
       if (inQuotes && next === '"') {
         current += '"';
         i += 1;
@@ -340,23 +583,24 @@ const parseCsvLine = (line: string): string[] => {
       }
       continue;
     }
-    if (char === "," && !inQuotes) {
-      result.push(current);
+    if (!inQuotes && char === delimiter) {
+      row.push(current);
       current = "";
+      continue;
+    }
+    if (!inQuotes && (char === "\n" || char === "\r")) {
+      if (char === "\r" && text[i + 1] === "\n") {
+        i += 1;
+      }
+      pushRow();
       continue;
     }
     current += char;
   }
 
-  result.push(current);
-  return result.map((item) => item.trim());
-};
-
-const parseCsvText = (text: string): string[][] => {
-  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  const rows = lines
-    .map((line) => parseCsvLine(line))
-    .filter((cells) => cells.some((cell) => cell.trim() !== ""));
+  if (row.length > 0 || current.trim() !== "") {
+    pushRow();
+  }
 
   if (!rows.length) return [];
   const maxLength = Math.max(...rows.map((cells) => cells.length));
@@ -703,6 +947,12 @@ const isProbablyDuplicateInsertError = (error: unknown): boolean => {
   return code === "23505" || message.includes("duplicate key") || message.includes("unique constraint");
 };
 
+const isSystemCodeDuplicateError = (error: unknown): boolean => {
+  const code = String((error as any)?.code || "").toUpperCase();
+  const message = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
+  return code === "23505" && (message.includes("system_code") || message.includes("org_system_code"));
+};
+
 const isMissingColumnError = (error: unknown): boolean => {
   const code = String((error as any)?.code || "").toUpperCase();
   const text = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
@@ -817,6 +1067,7 @@ const toImportField = (field: ModuleField, scope: MappingTargetScope): ImportFie
   validation: field.validation,
   readonly: field.readonly,
   nature: field.nature,
+  logic: field.logic,
   scope,
 });
 
@@ -909,13 +1160,11 @@ const finalizeInvoiceHeaderPayload = (payload: Record<string, unknown>): Record<
 };
 
 const finalizeInvoiceItemPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
-  const quantity = Number(payload.quantity ?? 0);
-  const unitPrice = Number(payload.unit_price ?? 0);
-  const discount = Number(payload.discount ?? 0);
-  const vat = Number(payload.vat ?? 0);
-
-  if (isValueEmpty(payload.total_price) && (quantity > 0 || unitPrice > 0)) {
-    payload.total_price = quantity * unitPrice - discount + vat;
+  if (isValueEmpty(payload.total_price)) {
+    const calculatedTotal = calculateRow(payload, RowCalculationType.INVOICE_ROW);
+    if (Number.isFinite(calculatedTotal) && calculatedTotal > 0) {
+      payload.total_price = calculatedTotal;
+    }
   }
 
   return payload;
@@ -973,6 +1222,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const [relatedModuleLinks, setRelatedModuleLinks] = useState<RelatedModuleLinkConfig[]>([]);
   const [saveCustomMapping, setSaveCustomMapping] = useState<boolean>(false);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [importFeedback, setImportFeedback] = useState<ImportFeedback | null>(null);
   const [autoSyncCustomerStats, setAutoSyncCustomerStats] = useState<boolean>(moduleId === "invoices");
   const [defaultEditorRelationOptions, setDefaultEditorRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [defaultEditorDynamicOptions, setDefaultEditorDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -1077,13 +1327,31 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const mappedRequiredFieldKeys = useMemo(() => {
     const set = new Set(mappedHeaderFieldKeys);
     if (set.has("legacy_status")) set.add("status");
-    return requiredFields.filter((field) => set.has(field.key)).map((field) => field.key);
+    return requiredFields
+      .filter((field) => set.has(field.key) || !isValueEmpty(resolveImportFieldDefaultValue(field)))
+      .map((field) => field.key);
   }, [mappedHeaderFieldKeys, requiredFields]);
 
   const missingRequiredFields = useMemo(() => {
     const set = new Set(mappedRequiredFieldKeys);
     return requiredFields.filter((field) => !set.has(field.key));
   }, [mappedRequiredFieldKeys, requiredFields]);
+  const suggestedDuplicateFields = useMemo(() => {
+    const mappedFieldKeySet = new Set(mappedHeaderFieldKeys);
+    const orderedCandidates = [
+      ...(DUPLICATE_FIELD_CANDIDATES_BY_MODULE[moduleId] || []),
+      ...GENERIC_DUPLICATE_FIELD_CANDIDATES,
+    ];
+    return Array.from(
+      new Set(
+        orderedCandidates.filter((fieldKey) => mappedFieldKeySet.has(fieldKey) && headerFieldByKey.has(fieldKey))
+      )
+    );
+  }, [headerFieldByKey, mappedHeaderFieldKeys, moduleId]);
+  const effectiveDuplicateFields = useMemo(
+    () => (duplicateFields.length > 0 ? duplicateFields : suggestedDuplicateFields),
+    [duplicateFields, suggestedDuplicateFields]
+  );
 
   const resetWizard = useCallback(() => {
     setStep(0);
@@ -1101,6 +1369,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setDuplicateFields([]);
     setRelatedModuleLinks([]);
     setSaveCustomMapping(false);
+    setImportFeedback(null);
     setAutoSyncCustomerStats(moduleId === "invoices");
     setDefaultEditorRelationOptions({});
     setDefaultEditorDynamicOptions({});
@@ -1261,29 +1530,48 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     }),
     [selectPopupContainer]
   );
+  const formatFieldOptionLabel = useCallback((field: Pick<ImportFieldDescriptor, "labels" | "type" | "dynamicOptionsCategory">): string => {
+    const suffixes: string[] = [];
+    if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
+      suffixes.push("رابطه");
+    } else if (field.dynamicOptionsCategory) {
+      suffixes.push("لیست پویا");
+    } else if (
+      field.type === FieldType.SELECT ||
+      field.type === FieldType.STATUS ||
+      field.type === FieldType.MULTI_SELECT ||
+      field.type === FieldType.CHECKLIST
+    ) {
+      suffixes.push("انتخابی");
+    }
+    return suffixes.length > 0 ? `${field.labels.fa} [${suffixes.join(" | ")}]` : field.labels.fa;
+  }, []);
   const headerFieldSelectOptions = useMemo(
     () =>
       headerImportableFields.map((field) => ({
-        label: field.labels.fa,
+        label: formatFieldOptionLabel(field),
         value: field.key,
+        searchLabel: `${field.labels.fa} ${field.key}`,
       })),
-    [headerImportableFields]
+    [formatFieldOptionLabel, headerImportableFields]
   );
   const itemFieldSelectOptions = useMemo(
     () =>
       itemImportableFields.map((field) => ({
-        label: field.labels.fa,
+        label: formatFieldOptionLabel(field),
         value: field.key,
+        searchLabel: `${field.labels.fa} ${field.key}`,
       })),
-    [itemImportableFields]
+    [formatFieldOptionLabel, itemImportableFields]
   );
   const duplicateFieldSelectOptions = useMemo(
     () =>
       headerImportableFields.map((field) => ({
-        label: field.labels.fa,
+        label: formatFieldOptionLabel(field),
         value: field.key,
+        searchLabel: `${field.labels.fa} ${field.key}`,
       })),
-    [headerImportableFields]
+    [formatFieldOptionLabel, headerImportableFields]
   );
   const linkableRelationFieldOptions = useMemo(() => {
     return headerImportableFields
@@ -1338,7 +1626,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     return result;
   }, [relatedModuleLinks]);
   const relatedFieldSelectOptions = useMemo(() => {
-    const options: Array<{ value: string; label: string }> = [];
+    const options: Array<{ value: string; label: string; searchLabel: string }> = [];
     relatedModuleLinks.forEach((link) => {
       const moduleConfig = MODULES[String(link.targetModuleId || "").trim()];
       if (!moduleConfig) return;
@@ -1348,12 +1636,13 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       fieldMap.forEach((field) => {
         options.push({
           value: buildRelatedTargetKey(link.id, field.key),
-          label: `${field.labels.fa} (${moduleLabel})`,
+          label: `${formatFieldOptionLabel(field)} (${moduleLabel}) [فیلد مرتبط]`,
+          searchLabel: `${field.labels.fa} ${moduleLabel} ${field.key}`,
         });
       });
     });
     return options;
-  }, [relatedImportableFieldsByLinkId, relatedModuleLinks]);
+  }, [formatFieldOptionLabel, relatedImportableFieldsByLinkId, relatedModuleLinks]);
   const addRelatedModuleLink = useCallback(() => {
     const firstColumn = parsedSheet.headers[0] || "";
     const firstLinkable = linkableRelationFieldOptions[0];
@@ -1711,7 +2000,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     wizardSelectProps,
   ]);
   const mappingTargetFieldOptionsBySource = useMemo(() => {
-    const result: Record<string, Array<{ label: string; value: string; disabled?: boolean }>> = {};
+    const result: Record<string, Array<{ label: string; value: string; searchLabel?: string; disabled?: boolean }>> = {};
     const usedHeaderTargets = new Set(
       mappingRows
         .filter((item) => item.targetScope === "header")
@@ -1798,7 +2087,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             allowClear
             showSearch
             className="w-full"
-            optionFilterProp="label"
+            optionFilterProp="searchLabel"
             placeholder="انتخاب فیلد"
             onChange={(nextValue) =>
               updateMappingRow(row.sourceColumn, { targetFieldKey: nextValue || null })
@@ -1816,6 +2105,128 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       },
     ],
     [importMode, mappingTargetFieldOptionsBySource, renderDefaultValueEditor, updateMappingRow]
+  );
+
+  const insertMainRecord = useCallback(
+    async (
+      payload: Record<string, unknown>,
+      label: string
+    ): Promise<{ error: unknown | null; payload: Record<string, unknown>; retriedWithSystemCode: boolean }> => {
+      const insertOnce = (nextPayload: Record<string, unknown>, nextLabel: string) =>
+        withTimeout(
+          supabase.from(moduleConfig.table).insert(nextPayload),
+          20000,
+          nextLabel
+        );
+
+      let nextPayload = { ...payload };
+      let generatedSystemCode = false;
+      if (supportsSystemCode(moduleId) && isValueEmpty(nextPayload.system_code)) {
+        nextPayload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
+        generatedSystemCode = !isValueEmpty(nextPayload.system_code);
+      }
+
+      let firstError: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await insertOnce(nextPayload, attempt === 0 ? label : `${label} با کد سیستمی جدید`);
+        if (!result.error) {
+          return { error: null, payload: nextPayload, retriedWithSystemCode: generatedSystemCode && attempt > 0 };
+        }
+        if (!firstError) firstError = result.error;
+        if (!generatedSystemCode || !isSystemCodeDuplicateError(result.error)) {
+          return {
+            error:
+              attempt > 0
+                ? new ImportInsertError(
+                    "ثبت رکورد بعد از تولید کد سیستمی هم ناموفق بود.",
+                    firstError,
+                    result.error,
+                    String(nextPayload.system_code || "")
+                  )
+                : result.error,
+            payload: nextPayload,
+            retriedWithSystemCode: attempt > 0,
+          };
+        }
+        nextPayload = {
+          ...nextPayload,
+          system_code: await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table),
+        };
+      }
+
+      return {
+        error: new ImportInsertError(
+          "ثبت رکورد بعد از چند بار تولید کد سیستمی به خطای تکراری خورد.",
+          firstError,
+          firstError,
+          String(nextPayload.system_code || "")
+        ),
+        payload: nextPayload,
+        retriedWithSystemCode: true,
+      };
+    },
+    [moduleConfig.table, moduleId]
+  );
+
+  const insertRelatedRecord = useCallback(
+    async (
+      targetModule: string,
+      payload: Record<string, unknown>,
+      selectExpr: string,
+      label: string
+    ): Promise<QueryResult<Record<string, unknown>> & { retriedWithSystemCode?: boolean }> => {
+      const insertOnce = (nextPayload: Record<string, unknown>, nextLabel: string) =>
+        withTimeout(
+          supabase.from(targetModule).insert(nextPayload).select(selectExpr).single(),
+          20000,
+          nextLabel
+        ) as Promise<QueryResult<Record<string, unknown>>>;
+
+      let nextPayload = { ...payload };
+      let generatedSystemCode = false;
+      if (supportsSystemCode(targetModule) && isValueEmpty(nextPayload.system_code)) {
+        nextPayload.system_code = await buildClientFallbackSystemCode(supabase, targetModule, targetModule);
+        generatedSystemCode = !isValueEmpty(nextPayload.system_code);
+      }
+
+      let firstError: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await insertOnce(nextPayload, attempt === 0 ? label : `${label} با کد سیستمی جدید`);
+        if (!result.error) return { ...result, retriedWithSystemCode: generatedSystemCode && attempt > 0 };
+        if (!firstError) firstError = result.error;
+        if (!generatedSystemCode || !isSystemCodeDuplicateError(result.error)) {
+          return {
+            ...result,
+            error:
+              attempt > 0
+                ? new ImportInsertError(
+                    "ثبت رکورد مرتبط بعد از تولید کد سیستمی هم ناموفق بود.",
+                    firstError,
+                    result.error,
+                    String(nextPayload.system_code || "")
+                  )
+                : result.error,
+            retriedWithSystemCode: attempt > 0,
+          };
+        }
+        nextPayload = {
+          ...nextPayload,
+          system_code: await buildClientFallbackSystemCode(supabase, targetModule, targetModule),
+        };
+      }
+
+      return {
+        data: null,
+        error: new ImportInsertError(
+          "ثبت رکورد مرتبط بعد از چند بار تولید کد سیستمی به خطای تکراری خورد.",
+          firstError,
+          firstError,
+          String(nextPayload.system_code || "")
+        ),
+        retriedWithSystemCode: true,
+      };
+    },
+    []
   );
 
   const ensureDynamicOptionValue = useCallback(
@@ -1909,12 +2320,17 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             if (matchValues.length === 0) continue;
             const existingResult = (await withTimeout(
               (matchValues.length > 1
-                ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(1)
-                : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(1)),
+                ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(2)
+                : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(2)),
               20000,
               `جستجوی رابطه (${field.labels.fa})`
             )) as unknown as QueryResult<Record<string, unknown>[]>;
             if (existingResult.error) throw existingResult.error;
+            if ((existingResult.data || []).length > 1) {
+              throw new Error(
+                `برای فیلد «${field.labels.fa}» بیش از یک رکورد مرتبط با مقدار «${value}» پیدا شد. مقدار تطبیق را دقیق‌تر کنید.`
+              );
+            }
             existingRow = existingResult.data?.[0];
             if (existingRow?.id) break;
           } catch (error) {
@@ -1940,11 +2356,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       let lastInsertError: unknown = null;
       for (const selectExpr of selectVariants) {
         try {
-          const insertResult = (await withTimeout(
-            supabase.from(targetModule).insert(payload).select(selectExpr).single(),
-            20000,
+          const insertResult = await insertRelatedRecord(
+            targetModule,
+            payload,
+            selectExpr,
             `ایجاد رابطه (${field.labels.fa})`
-          )) as unknown as QueryResult<Record<string, unknown>>;
+          );
           if (insertResult.error) throw insertResult.error;
           inserted = insertResult.data;
           if (inserted?.id) break;
@@ -1971,7 +2388,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       );
       return insertedId;
     },
-    []
+    [insertRelatedRecord]
   );
 
   const convertValueByType = useCallback(
@@ -1980,7 +2397,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       rawValue: string,
       importContext: ImportRuntimeContext
     ): Promise<unknown> => {
-      const value = String(rawValue ?? "").trim();
+      const value = sanitizeImportedTextValue(rawValue);
       if (!value) return Promise.resolve(undefined);
 
       if ((field.type === FieldType.SELECT || field.type === FieldType.STATUS) && field.options?.length) {
@@ -2035,7 +2452,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         case FieldType.PHONE:
           return Promise.resolve(normalizePhoneForStorage(value));
         default:
-          return Promise.resolve(value);
+          return Promise.resolve(sanitizeImportedTextValue(value));
       }
     },
     [ensureDynamicOptionValue, ensureRelationValue]
@@ -2240,8 +2657,9 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       availableFields.forEach((field) => {
         if (Object.prototype.hasOwnProperty.call(payload, field.key)) return;
-        if (field.defaultValue === undefined || field.defaultValue === null) return;
-        payload[field.key] = field.defaultValue;
+        const resolvedDefaultValue = getImportFieldDefaultValueForPayload(field, payload);
+        if (resolvedDefaultValue === undefined) return;
+        payload[field.key] = resolvedDefaultValue;
       });
 
       return payload;
@@ -2277,6 +2695,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           if (!isValueEmpty(defaultConverted)) payload[field.key] = defaultConverted;
         }
       }
+      fieldMap.forEach((field) => {
+        if (Object.prototype.hasOwnProperty.call(payload, field.key)) return;
+        const resolvedDefaultValue = getImportFieldDefaultValueForPayload(field, payload);
+        if (resolvedDefaultValue === undefined) return;
+        payload[field.key] = resolvedDefaultValue;
+      });
       return payload;
     },
     [convertValueByType, mappingRows, relatedImportableFieldsByLinkId]
@@ -2316,12 +2740,17 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             if (matchValues.length === 0) continue;
             const existingResult = (await withTimeout(
               (matchValues.length > 1
-                ? supabase.from(targetModuleId).select(selectExpr).in(lookupField, matchValues).limit(1)
-                : supabase.from(targetModuleId).select(selectExpr).eq(lookupField, matchValues[0]).limit(1)),
+                ? supabase.from(targetModuleId).select(selectExpr).in(lookupField, matchValues).limit(2)
+                : supabase.from(targetModuleId).select(selectExpr).eq(lookupField, matchValues[0]).limit(2)),
               20000,
               `جستجوی رکورد مرتبط (${targetModuleId})`
             )) as unknown as QueryResult<Record<string, unknown>[]>;
             if (existingResult.error) throw existingResult.error;
+            if ((existingResult.data || []).length > 1) {
+              throw new Error(
+                `برای اتصال «${link.relationFieldKey}» بیش از یک رکورد در ماژول «${targetModuleId}» با مقدار «${sourceValue}» پیدا شد.`
+              );
+            }
             existingRow = existingResult.data?.[0];
             if (existingRow?.id) break;
           } catch (error) {
@@ -2357,9 +2786,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         createPayload[matchFieldKey] = sourceValue;
       }
 
-      const { data: inserted, error: insertError } = await withTimeout(
-        supabase.from(targetModuleId).insert(createPayload).select("id").single(),
-        20000,
+      const { data: inserted, error: insertError } = await insertRelatedRecord(
+        targetModuleId,
+        createPayload,
+        "id",
         `ایجاد رکورد مرتبط (${targetModuleId})`
       );
       if (insertError) throw insertError;
@@ -2368,7 +2798,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       setLookupValue(map, sourceValue, insertedId);
       return insertedId;
     },
-    [buildRelatedPayloadFromMappings]
+    [buildRelatedPayloadFromMappings, insertRelatedRecord]
   );
   const resolveRelatedLinksForRow = useCallback(
     async (
@@ -2386,10 +2816,99 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     },
     [relatedModuleLinks, resolveRelatedRecordId]
   );
+  const normalizeInvoiceItemForStorage = useCallback((rawItem: Record<string, unknown>): Record<string, unknown> => {
+    const nextItem = finalizeInvoiceItemPayload({ ...rawItem });
+    return Object.entries(nextItem).reduce<Record<string, unknown>>((acc, [key, value]) => {
+      if (!isValueEmpty(value)) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+  }, []);
+  const buildInvoiceItemSignature = useCallback((item: Record<string, unknown>): string => {
+    const signatureKeys = [
+      "product_id",
+      "package_id",
+      "price_list_id",
+      "source_shelf_id",
+      "description",
+      "quantity",
+      "unit_price",
+      "discount",
+      "discount_type",
+      "vat",
+      "vat_type",
+      "length",
+      "width",
+    ];
+    return signatureKeys
+      .map((key) => {
+        const value = item[key];
+        if (typeof value === "number") {
+          return `${key}:${Number.isFinite(value) ? value : ""}`;
+        }
+        return `${key}:${normalizeKey(value)}`;
+      })
+      .join("|");
+  }, []);
+  const mergeInvoiceItems = useCallback(
+    (existingItems: unknown[], importedItems: Record<string, unknown>[]): Record<string, unknown>[] => {
+      const mergedItems = (Array.isArray(existingItems) ? existingItems : [])
+        .map((item) => normalizeInvoiceItemForStorage({ ...(item as Record<string, unknown>) }));
+      importedItems.forEach((item) => {
+        const normalizedItem = normalizeInvoiceItemForStorage(item);
+        const nextSignature = buildInvoiceItemSignature(normalizedItem);
+        if (!nextSignature.replace(/[|:]/g, "")) {
+          mergedItems.push(normalizedItem);
+          return;
+        }
+        const existingIndex = mergedItems.findIndex(
+          (existingItem) => buildInvoiceItemSignature(existingItem) === nextSignature
+        );
+        if (existingIndex === -1) {
+          mergedItems.push(normalizedItem);
+          return;
+        }
+        mergedItems[existingIndex] = normalizeInvoiceItemForStorage({
+          ...mergedItems[existingIndex],
+          ...Object.entries(normalizedItem).reduce<Record<string, unknown>>((acc, [key, value]) => {
+            if (!isValueEmpty(value)) acc[key] = value;
+            return acc;
+          }, {}),
+        });
+      });
+      return mergedItems;
+    },
+    [buildInvoiceItemSignature, normalizeInvoiceItemForStorage]
+  );
+  const applyInvoiceSummaryValues = useCallback(
+    (rawPayload: Record<string, unknown>): Record<string, unknown> => {
+      if (!supportsGroupedInvoiceImport || !Array.isArray(rawPayload.invoiceItems)) {
+        return rawPayload;
+      }
+      const normalizedItems = rawPayload.invoiceItems
+        .map((item) => normalizeInvoiceItemForStorage(item as Record<string, unknown>))
+        .filter((item) => Object.keys(item).length > 0);
+      const totalAmount = normalizedItems.reduce((sum, item) => {
+        const nextTotal = Number(item.total_price ?? calculateRow(item, RowCalculationType.INVOICE_ROW));
+        return sum + (Number.isFinite(nextTotal) ? nextTotal : 0);
+      }, 0);
+      const payload: Record<string, unknown> = { ...rawPayload, invoiceItems: normalizedItems };
+      payload.total_invoice_amount = totalAmount;
+      const parsedReceivedAmount = parseNumber(String(payload.total_received_amount ?? ""));
+      const numericReceivedAmount = Number(payload.total_received_amount ?? 0);
+      const receivedAmount =
+        parsedReceivedAmount ?? (Number.isFinite(numericReceivedAmount) ? numericReceivedAmount : 0);
+      payload.total_received_amount = receivedAmount;
+      payload.remaining_balance = totalAmount - receivedAmount;
+      return payload;
+    },
+    [normalizeInvoiceItemForStorage, supportsGroupedInvoiceImport]
+  );
 
   const finalizeImportedPayload = useCallback(
     (rawPayload: Record<string, unknown>): Record<string, unknown> => {
-      const payload = { ...rawPayload };
+      const payload = applyInvoiceSummaryValues({ ...rawPayload });
       const rawAssignee = String(payload.assignee_id || "").trim();
       const assigneeMatch = rawAssignee.match(/^(user|role)_(.+)$/);
       if (assigneeMatch) {
@@ -2411,15 +2930,17 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       }
 
       if (moduleId === "customers") {
+        const autoNameEnabled = normalizeAutoNameEnabled(payload.auto_name_enabled, false);
+        payload.auto_name_enabled = autoNameEnabled;
         const nextFullName = buildAutoCustomerName(payload);
-        if (nextFullName) {
+        if (nextFullName && (autoNameEnabled || isValueEmpty(payload.full_name))) {
           payload.full_name = nextFullName;
         }
       }
 
       return payload;
     },
-    [moduleId]
+    [applyInvoiceSummaryValues, moduleId]
   );
 
   const validateBeforeImport = useCallback((): boolean => {
@@ -2449,8 +2970,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         return false;
       }
     }
-    if ((duplicateStrategy === "overwrite" || duplicateStrategy === "merge") && !duplicateFields.length) {
-      message.error("برای بازنویسی یا ادغام، حداقل یک فیلد تطبیق انتخاب کنید.");
+    if ((duplicateStrategy === "overwrite" || duplicateStrategy === "merge") && effectiveDuplicateFields.length === 0) {
+      message.error("برای بازنویسی یا ادغام، حداقل یک فیلد تطبیق لازم است.");
       return false;
     }
     for (const link of relatedModuleLinks) {
@@ -2483,8 +3004,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     }
     return true;
   }, [
-    duplicateFields.length,
     duplicateStrategy,
+    effectiveDuplicateFields.length,
     groupedData.missingGroupSourceLines,
     groupedData.records.length,
     groupingColumn,
@@ -2500,17 +3021,18 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
   const findExistingRecord = useCallback(
     async (payload: Record<string, unknown>, label: string) => {
-      if (!duplicateFields.length) return null;
+      if (!effectiveDuplicateFields.length) return null;
 
-      const duplicateFilter = duplicateFields.reduce<Record<string, unknown>>((acc, fieldKey) => {
+      const duplicateFilter = effectiveDuplicateFields.reduce<Record<string, unknown>>((acc, fieldKey) => {
         const value = payload[fieldKey];
         if (!isValueEmpty(value)) acc[fieldKey] = value;
         return acc;
       }, {});
 
-      if (Object.keys(duplicateFilter).length !== duplicateFields.length) return null;
+      if (Object.keys(duplicateFilter).length !== effectiveDuplicateFields.length) return null;
 
-      let query = supabase.from(moduleConfig.table).select("*").limit(1);
+      const selectExpr = supportsGroupedInvoiceImport && importMode === "grouped_invoice" ? "*" : "id";
+      let query: any = supabase.from(moduleConfig.table).select(selectExpr).limit(2);
       Object.entries(duplicateFilter).forEach(([key, value]) => {
         const field = headerFieldByKey.get(key);
         const matchValues = buildFieldMatchValues(key, value, field?.type);
@@ -2521,14 +3043,21 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         query = query.eq(key, (matchValues[0] ?? value) as never);
       });
       const { data } = await withTimeout(Promise.resolve(query), 20000, label);
+      if ((data || []).length > 1) {
+        const duplicateLabels = effectiveDuplicateFields
+          .map((fieldKey) => headerFieldByKey.get(fieldKey)?.labels.fa || fieldKey)
+          .join("، ");
+        throw new Error(`بیش از یک رکورد با فیلدهای تطبیق «${duplicateLabels}» پیدا شد. تطبیق مبهم است.`);
+      }
       return data && data[0] ? (data[0] as Record<string, unknown>) : null;
     },
-    [duplicateFields, headerFieldByKey, moduleConfig.table]
+    [effectiveDuplicateFields, headerFieldByKey, importMode, moduleConfig.table, supportsGroupedInvoiceImport]
   );
 
   const handleImport = useCallback(async () => {
     if (!validateBeforeImport()) return;
     setIsImporting(true);
+    setImportFeedback(null);
     setImportProgress({
       current: 0,
       total: importMode === "grouped_invoice" ? groupedData.records.length : parsedSheet.rows.length,
@@ -2545,6 +3074,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       let failed = 0;
       const errors: string[] = [];
       const touchedCustomerIds = new Set<string>();
+      let aborted = false;
 
       if (importMode === "grouped_invoice") {
         const headerMappings = mappingRows.filter((row) => row.targetScope === "header");
@@ -2601,13 +3131,21 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
                 continue;
               }
 
+              const nextInvoiceItems =
+                duplicateStrategy === "merge"
+                  ? mergeInvoiceItems(existingRecord.invoiceItems as unknown[], itemPayloads)
+                  : itemPayloads;
+              const nextPayload = finalizeImportedPayload({
+                ...payload,
+                invoiceItems: nextInvoiceItems,
+              });
               const updatePayload =
                 duplicateStrategy === "merge"
-                  ? Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+                  ? Object.entries(nextPayload).reduce<Record<string, unknown>>((acc, [key, value]) => {
                       if (!isValueEmpty(value)) acc[key] = value;
                       return acc;
                     }, {})
-                  : payload;
+                  : nextPayload;
 
               const { error } = await withTimeout(
                 supabase
@@ -2625,11 +3163,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               continue;
             }
 
-            const { error } = await withTimeout(
-              supabase.from(moduleConfig.table).insert(payload),
-              20000,
-              `ثبت فاکتور ${record.key}`
-            );
+            const { error } = await insertMainRecord(payload, `ثبت فاکتور ${record.key}`);
             if (error) throw error;
             inserted += 1;
             if (moduleId === "invoices" && payload.customer_id) {
@@ -2637,9 +3171,17 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             }
           } catch (rowError) {
             failed += 1;
-            errors.push(
-              `فاکتور ${record.key} در ردیف ${sourceLine}: ${toFaErrorMessage(rowError as any, "خطای نامشخص")}`
-            );
+            const rowErrorMessage = formatImportErrorMessage(rowError, "خطای نامشخص");
+            const rowErrorDetails = getImportErrorParts(rowError);
+            errors.push(`فاکتور ${record.key} در ردیف ${sourceLine}: ${rowErrorMessage}`);
+            if (rowErrorDetails.length > 0) {
+              errors.push(`جزئیات فنی: ${rowErrorDetails.join(" | ")}`);
+            }
+            if (isSystemicImportError(rowError)) {
+              aborted = true;
+              errors.push("واردسازی به دلیل خطای سیستمی/timeout متوقف شد تا درخواست‌های ناموفق پشت‌سرهم به سرور ارسال نشود.");
+              break;
+            }
           }
         }
       } else {
@@ -2706,11 +3248,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               continue;
             }
 
-            const { error } = await withTimeout(
-              supabase.from(moduleConfig.table).insert(payload),
-              20000,
-              `ثبت ردیف ${sourceLine}`
-            );
+            const { error } = await insertMainRecord(payload, `ثبت ردیف ${sourceLine}`);
             if (error) throw error;
             inserted += 1;
             if (moduleId === "invoices" && payload.customer_id) {
@@ -2718,14 +3256,22 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             }
           } catch (rowError) {
             failed += 1;
-            errors.push(
-              `ردیف ${sourceLine}: ${toFaErrorMessage(rowError as any, "خطای نامشخص")}`
-            );
+            const rowErrorMessage = formatImportErrorMessage(rowError, "خطای نامشخص");
+            const rowErrorDetails = getImportErrorParts(rowError);
+            errors.push(`ردیف ${sourceLine}: ${rowErrorMessage}`);
+            if (rowErrorDetails.length > 0) {
+              errors.push(`جزئیات فنی: ${rowErrorDetails.join(" | ")}`);
+            }
+            if (isSystemicImportError(rowError)) {
+              aborted = true;
+              errors.push("واردسازی به دلیل خطای سیستمی/timeout متوقف شد تا درخواست‌های ناموفق پشت‌سرهم به سرور ارسال نشود.");
+              break;
+            }
           }
         }
       }
 
-      if (moduleId === "invoices" && autoSyncCustomerStats && touchedCustomerIds.size > 0) {
+      if (!aborted && moduleId === "invoices" && autoSyncCustomerStats && touchedCustomerIds.size > 0) {
         await syncCustomerLevelsByInvoiceCustomers({
           supabase: supabase as any,
           customerIds: Array.from(touchedCustomerIds),
@@ -2733,15 +3279,28 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       }
 
       const baseMessage = `واردسازی انجام شد. جدید: ${inserted} | بروزرسانی: ${updated} | تکراری/ثبت‌نشده: ${skipped} | خطا: ${failed}`;
-      if (failed > 0) {
-        message.warning(baseMessage);
-        if (errors.length > 0) {
-          message.error(errors.slice(0, 3).join(" | "));
-        }
-      } else {
-        message.success(baseMessage);
+      if (aborted) {
+        const summary = `${baseMessage} | واردسازی متوقف شد.`;
+        const details = errors.slice(0, 8);
+        setImportFeedback({ level: "error", summary, details });
+        message.error(details[0] || summary);
+        if (inserted > 0 || updated > 0) onImported?.();
+        return;
       }
 
+      if (failed > 0) {
+        const details = errors.slice(0, 8);
+        setImportFeedback({ level: "warning", summary: baseMessage, details });
+        message.warning(baseMessage);
+        if (details.length > 0) {
+          message.error(details.slice(0, 3).join(" | "));
+        }
+        if (inserted > 0 || updated > 0) onImported?.();
+        return;
+      }
+
+      setImportFeedback(null);
+      message.success(baseMessage);
       onImported?.();
       onClose();
     } catch (error) {
@@ -2753,7 +3312,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   }, [
     autoSyncCustomerStats,
     buildPayloadFromMappings,
-    duplicateFields,
     duplicateStrategy,
     finalizeImportedPayload,
     findExistingRecord,
@@ -2762,11 +3320,13 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     headerFieldByKey,
     headerImportableFields,
     importMode,
+    insertMainRecord,
     itemFieldByKey,
     itemImportableFields,
     loadImportRuntimeContext,
     mappingRows,
     message,
+    mergeInvoiceItems,
     moduleConfig.table,
     moduleId,
     onClose,
@@ -2792,7 +3352,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       return;
     }
     if (step === 1) {
-      if ((duplicateStrategy === "overwrite" || duplicateStrategy === "merge") && !duplicateFields.length) {
+      if ((duplicateStrategy === "overwrite" || duplicateStrategy === "merge") && effectiveDuplicateFields.length === 0) {
         message.error("برای این روش، فیلد تطبیق را انتخاب کنید.");
         return;
       }
@@ -2801,8 +3361,8 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     }
     await handleImport();
   }, [
-    duplicateFields.length,
     duplicateStrategy,
+    effectiveDuplicateFields.length,
     handleImport,
     message,
     parsedSheet.rows.length,
@@ -2958,13 +3518,27 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               mode="multiple"
               showSearch
               allowClear
-              optionFilterProp="label"
+              optionFilterProp="searchLabel"
               value={duplicateFields}
               onChange={(values) => setDuplicateFields((values || []).map((value) => String(value)))}
               options={duplicateFieldSelectOptions}
               placeholder="یک یا چند فیلد را انتخاب کنید"
               className="w-full"
             />
+            {duplicateFields.length === 0 && suggestedDuplicateFields.length > 0 && (
+              <div className="mt-2 text-xs text-gray-500">
+                اگر چیزی انتخاب نکنید، به صورت خودکار از این فیلدها استفاده می‌شود:
+                {" "}
+                {suggestedDuplicateFields
+                  .map((fieldKey) => duplicateFieldSelectOptions.find((item) => item.value === fieldKey)?.label || fieldKey)
+                  .join("، ")}
+              </div>
+            )}
+            {effectiveDuplicateFields.length === 0 && (
+              <div className="mt-2 text-xs text-amber-600">
+                هنوز فیلد مطمئنی برای تشخیص رکورد تکراری پیدا نشده است.
+              </div>
+            )}
           </div>
 
           <div className="rounded-xl border border-gray-200 px-3 py-2 space-y-2">
@@ -3071,6 +3645,29 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
     return (
       <div className="space-y-3">
+        {importFeedback && (
+          <div
+            className={`rounded-xl border px-3 py-2 text-sm ${
+              importFeedback.level === "error"
+                ? "border-red-200 bg-red-50 text-red-700"
+                : importFeedback.level === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-green-200 bg-green-50 text-green-700"
+            }`}
+          >
+            <div className="font-bold">{importFeedback.summary}</div>
+            {importFeedback.details.length > 0 && (
+              <div className="mt-1 space-y-1">
+                {importFeedback.details.slice(0, 5).map((detail, index) => (
+                  <div key={`${index}-${detail}`} className="leading-6">
+                    {detail}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 flex items-center justify-between gap-3">
           <div className="text-gray-600">
             فیلدهای زیر اجباری هستند و ضروری است ستون های مرتبط به آن ها مشخص شود.
@@ -3125,6 +3722,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     handleRemoveFile,
     handleSelectFile,
     hasHeader,
+    importFeedback,
     importMode,
     isParsing,
     linkableRelationFieldOptions,
