@@ -9,7 +9,7 @@ import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMod
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
-import { AppstoreAddOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
+import { AppstoreAddOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
 import ViewManager from "../components/ViewManager";
 import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
@@ -307,6 +307,7 @@ export const ModuleListRefine: React.FC<{
   );
   
   const moduleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
+  const dataResource = moduleConfig?.table || resolvedModuleId;
   const searchTargetField = useMemo(() => {
     if (!moduleConfig) return null;
     const keyField = moduleConfig.fields.find(f => f.isKey);
@@ -399,6 +400,7 @@ export const ModuleListRefine: React.FC<{
   const [isGoalsModalOpen, setIsGoalsModalOpen] = useState(false);
   const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState(false);
   const [isBulkSmsComposerOpen, setIsBulkSmsComposerOpen] = useState(false);
+  const [voipCallSyncing, setVoipCallSyncing] = useState(false);
   const [bulkSmsRecipients, setBulkSmsRecipients] = useState<string[]>([]);
   const [bulkSmsSourceRecord, setBulkSmsSourceRecord] = useState<Record<string, any> | null>(null);
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
@@ -420,11 +422,11 @@ export const ModuleListRefine: React.FC<{
   const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
-    resource: resolvedModuleId,
+    resource: dataResource,
     sorters: { initial: ensureStableCrudSorters(defaultSorters) },
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
-      enabled: !!resolvedModuleId,
+      enabled: !!dataResource,
       staleTime: 30_000,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
@@ -1305,6 +1307,30 @@ export const ModuleListRefine: React.FC<{
     void tableQueryResult.refetch();
   }, [tableQueryResult]);
 
+  const handleSyncVoipCalls = useCallback(async () => {
+    if (resolvedModuleId !== "voip_call_reports" || voipCallSyncing) return;
+    setVoipCallSyncing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("telefonchy_smartcall", {
+        body: {
+          action: "sync_recent_calls",
+          days: 7,
+          perPage: 50,
+        },
+      });
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(String(data?.message || "همگام‌سازی تماس‌های VoIP ناموفق بود."));
+      }
+      showListMessage("success", String(data?.message || "تماس‌های اخیر VoIP همگام‌سازی شد."));
+      await tableQueryResult.refetch();
+    } catch (error: any) {
+      showListMessage("error", toFaErrorMessage(error, "خطا در همگام‌سازی تماس‌های VoIP"));
+    } finally {
+      setVoipCallSyncing(false);
+    }
+  }, [resolvedModuleId, showListMessage, tableQueryResult, voipCallSyncing]);
+
   const openRecordFromList = useCallback((record: any) => {
     const recordId = String(record?.id || "").trim();
     if (!resolvedModuleId || !recordId) return;
@@ -1733,7 +1759,7 @@ export const ModuleListRefine: React.FC<{
 
       while (currentPage <= totalPages) {
         const response = await refineProvider.getList({
-          resource: resolvedModuleId,
+          resource: dataResource || resolvedModuleId,
           pagination: { current: currentPage, pageSize },
           sorters: stableSorters,
           filters: mergedFilters,
@@ -1810,6 +1836,7 @@ export const ModuleListRefine: React.FC<{
     currentUserRoleId,
     recordScope,
     refineProvider,
+    dataResource,
     resolvedModuleId,
     searchTerm,
     selectAllPagesLoading,
@@ -1839,7 +1866,7 @@ export const ModuleListRefine: React.FC<{
             await new Promise<void>((resolve, reject) => {
               deleteMany(
                 {
-                  resource: resolvedModuleId,
+                  resource: dataResource || resolvedModuleId,
                   ids: selectedRowKeys as string[],
                   successNotification: false,
                   errorNotification: false,
@@ -2555,6 +2582,18 @@ export const ModuleListRefine: React.FC<{
 
             {selectedRowKeys.length === 0 && (
               <div className="flex items-center gap-2 shrink-0">
+                {resolvedModuleId === "voip_call_reports" && (
+                  <Button
+                    icon={<ReloadOutlined />}
+                    loading={voipCallSyncing}
+                    onClick={() => {
+                      void handleSyncVoipCalls();
+                    }}
+                    className="rounded-xl"
+                  >
+                    همگام‌سازی تماس‌ها
+                  </Button>
+                )}
                 {canCreateModule && (
                   <Button
                     type="primary"

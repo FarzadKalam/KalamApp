@@ -1,4 +1,5 @@
 import { BlockType, FieldType, ModuleDefinition } from '../types';
+import { MODULES } from '../moduleRegistry';
 import { buildCustomerRelationSearchText } from './customerRelation';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { supportsSystemCode } from './systemCode';
@@ -189,12 +190,13 @@ const fetchRelationRows = async (
   fields: string[],
   filter?: Record<string, any>
 ) => {
+  const targetTable = MODULES[targetModule]?.table || targetModule;
   const rows: any[] = [];
   for (let page = 0; page < RELATION_MAX_PAGES; page += 1) {
     const from = page * RELATION_BATCH_SIZE;
     const to = from + RELATION_BATCH_SIZE - 1;
     let query = supabaseClient
-      .from(targetModule)
+      .from(targetTable)
       .select(fields.join(', '))
       .range(from, to);
 

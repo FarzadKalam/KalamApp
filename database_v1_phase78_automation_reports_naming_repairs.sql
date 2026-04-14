@@ -48,4 +48,6 @@ where l.run_type in ('event', 'process_automation');
 
 grant select on public.automation_execution_reports to authenticated;
 
+notify pgrst, 'reload schema';
+
 commit;

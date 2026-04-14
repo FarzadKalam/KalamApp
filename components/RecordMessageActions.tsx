@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Tooltip } from 'antd';
+import { App, Button, Tooltip } from 'antd';
 import { MessageOutlined, PhoneOutlined, RobotOutlined } from '@ant-design/icons';
 import MessageComposerModal from './MessageComposerModal';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
 import { normalizePhoneForStorage } from '../utils/phoneNumber';
+import { buildVoipFallbackUrl, requestVoipSmartCall } from '../utils/voipGateway';
 
 type RecordMessageActionsProps = {
   moduleId?: string | null;
@@ -32,7 +33,9 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
   className = '',
   buttonVariant = 'default',
 }) => {
+  const { message } = App.useApp();
   const [composerMode, setComposerMode] = useState<'sms' | 'bot' | null>(null);
+  const [calling, setCalling] = useState(false);
 
   const primaryPhone = useMemo(
     () => getPrimaryRecordPhone(moduleId, record, phoneValue),
@@ -42,6 +45,34 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
   const hasPhone = Boolean(primaryPhone);
   const hasBot = useMemo(() => hasAnyRecordBotTarget(record), [record]);
   const buttonSize = compact ? 'small' : 'middle';
+
+  const handleCall = async (event?: React.MouseEvent<HTMLElement>) => {
+    stopEvent(event);
+    if (calling) return;
+
+    const fallbackUrl = buildVoipFallbackUrl(normalizedPhone || primaryPhone, 'tel_link');
+    try {
+      setCalling(true);
+      const result = await requestVoipSmartCall({
+        phone: normalizedPhone || primaryPhone,
+        moduleId,
+        recordId: record?.id ? String(record.id) : null,
+        title: record?.title || record?.name || record?.full_name || null,
+      });
+
+      if (result.started) {
+        message.success(result.message || 'تماس VoIP آغاز شد.');
+        return;
+      }
+
+      openExternalLink(result.fallbackUrl || fallbackUrl);
+    } catch (error: any) {
+      message.warning(String(error?.message || 'تماس VoIP در دسترس نیست؛ مسیر تماس معمولی باز شد.'));
+      openExternalLink(fallbackUrl);
+    } finally {
+      setCalling(false);
+    }
+  };
 
   if (!hasPhone && !hasBot) return null;
 
@@ -54,10 +85,8 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
               size={buttonSize}
               type={buttonVariant}
               icon={<PhoneOutlined />}
-              onClick={(event) => {
-                stopEvent(event);
-                openExternalLink(`tel:${normalizedPhone || primaryPhone}`);
-              }}
+              loading={calling}
+              onClick={handleCall}
             />
           </Tooltip>
         )}

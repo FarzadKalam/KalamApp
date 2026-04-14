@@ -313,7 +313,6 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
                 task={task}
                 currentUser={currentUser}
                 onTaskUpdated={onTaskUpdated}
-                buttonClassName="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
                 modalZIndex={13000}
               />
             ) : null}

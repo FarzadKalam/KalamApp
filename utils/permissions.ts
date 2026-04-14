@@ -34,6 +34,7 @@ export const FILES_PERMISSION_KEY = '__files_access';
 export const ACCOUNTING_PERMISSION_KEY = '__accounting';
 export const REPORTS_PERMISSION_KEY = '__reports';
 export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
+export const VOIP_PERMISSION_KEY = '__voip';
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
   { key: '__ready_texts_add', label: 'متن‌های آماده: افزودن' },
@@ -94,6 +95,10 @@ export const ACCOUNTING_PERMISSION_FIELDS = [
 export const REPORTS_PERMISSION_FIELDS = [
   { key: 'hub_page', label: 'صفحه گزارشات' },
   { key: 'builder_page', label: 'گزارش ساز' },
+];
+
+export const VOIP_PERMISSION_FIELDS = [
+  { key: 'all_call_notifications', label: 'مشاهده اعلان همه تماس‌ها' },
 ];
 
 export const MOBILE_FOOTER_DEFAULT_MODULES = ['products', 'production_orders', 'invoices', 'customers'] as const;
@@ -266,6 +271,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     delete: true,
     record_scope: 'all',
     fields: createFieldsMap(REPORTS_PERMISSION_FIELDS),
+  };
+
+  defaults[VOIP_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    record_scope: 'all',
+    fields: createFieldsMap(VOIP_PERMISSION_FIELDS),
   };
 
   defaults[MOBILE_FOOTER_PERMISSION_KEY] = {
@@ -574,6 +587,16 @@ export const resolveGoalsAccessPermissions = (permissions: PermissionMap | null 
     canViewDashboardWidget: canViewRoot && fields.dashboard_widget !== false,
     canEditGoals: canViewRoot && canEditRoot,
     canDeleteGoals: canViewRoot && canDeleteRoot,
+  };
+};
+
+export const resolveVoipAccessPermissions = (permissions: PermissionMap | null | undefined) => {
+  const perm = permissions?.[VOIP_PERMISSION_KEY] || {};
+  const fields = perm.fields || {};
+  const canViewRoot = perm.view !== false;
+
+  return {
+    canViewAllCallNotifications: canViewRoot && fields.all_call_notifications !== false,
   };
 };
 

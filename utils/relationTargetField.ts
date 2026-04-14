@@ -6,6 +6,14 @@ const DEFAULT_RELATION_TARGET_FIELDS: Record<string, string> = {
   employees: 'full_name',
   work_schedules: 'title',
   journal_entries: 'entry_no',
+  secretariat_documents: 'name',
+  delivery_forms: 'name',
+  stock_transfers: 'name',
+  expense_documents: 'name',
+  employee_advances: 'name',
+  payroll_slips: 'name',
+  employee_contracts: 'name',
+  recruitment_applicants: 'name',
 };
 
 export const getPreferredRelationTargetField = (
@@ -32,6 +40,14 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   invoices: ['name', 'system_code', 'status'],
   projects: ['name', 'system_code', 'status'],
   purchase_invoices: ['name', 'system_code', 'status'],
+  secretariat_documents: ['name', 'system_code', 'external_number', 'indicator_number', 'status'],
+  delivery_forms: ['name', 'system_code', 'location_text', 'status'],
+  stock_transfers: ['name', 'system_code', 'transfer_type', 'status'],
+  expense_documents: ['name', 'system_code', 'expense_type', 'status'],
+  employee_advances: ['name', 'system_code', 'status'],
+  payroll_slips: ['name', 'system_code', 'status'],
+  employee_contracts: ['name', 'system_code', 'status'],
+  recruitment_applicants: ['name', 'system_code', 'mobile', 'status'],
   marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'status'],
 };
 

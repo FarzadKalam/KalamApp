@@ -36,6 +36,7 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
+import { applyStockTransferInventory } from '../utils/stockTransferInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, type RecordScope } from '../utils/permissions';
@@ -69,6 +70,8 @@ import CounterpartyBotStatusModal from '../components/bot/CounterpartyBotStatusM
 import { serializeNoteContent } from '../utils/noteContent';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { getActiveChannelSettings } from '../utils/channelSettings';
+import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
+import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
 
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
@@ -201,6 +204,14 @@ type AccountingEntryChoice = {
 const moduleShowSnapshotCache = new Map<string, ModuleShowSnapshot>();
 let moduleShowBaseInfoCache: { users: any[]; roles: any[] } | null = null;
 let moduleShowBaseInfoPromise: Promise<{ users: any[]; roles: any[] }> | null = null;
+
+const resolveStablePopupContainer = (trigger?: HTMLElement | null) => {
+  if (typeof document === 'undefined') return (trigger || {}) as HTMLElement;
+  if (!trigger) return document.body;
+  return (
+    trigger.closest('.ant-modal-root, .ant-modal-wrap, .ant-modal, .ant-drawer-content-wrapper, .ant-drawer-content, .ant-drawer') as HTMLElement | null
+  ) || document.body;
+};
 
 type BotStatusModalContext = {
   moduleId: 'customers' | 'suppliers';
@@ -2920,7 +2931,21 @@ const ModuleShow: React.FC = () => {
     if (!id) return;
     setIssueAccountingLoading(true);
     try {
-      await createJournalFromInvoice(supabase, id, navigate, msg);
+      if (moduleId === 'invoices') {
+        await createJournalFromInvoice(supabase, id, navigate, msg);
+        return;
+      }
+      if (isOperationalAccountingModule(moduleId)) {
+        const result = await syncOperationalAccountingEntry(supabase as any, moduleId, id);
+        if (result.journalEntryId) {
+          if (result.created) msg.success('پیش‌نویس سند حسابداری ایجاد شد.');
+          else msg.info('سند حسابداری موجود باز شد.');
+          navigate(`/journal_entries/${result.journalEntryId}`);
+          return;
+        }
+      }
+    } catch (error: any) {
+      msg.error(error?.message || 'خطا در صدور سند حسابداری');
     } finally {
       setIssueAccountingLoading(false);
     }
@@ -3514,6 +3539,21 @@ const ModuleShow: React.FC = () => {
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
         }
       }
+      if (moduleId === 'stock_transfers' && key === 'status') {
+        const authUser = await getCachedAuthUser(supabase);
+        const userId = authUser?.id || null;
+        await applyStockTransferInventory({
+          supabase: supabase as any,
+          recordId: id || '',
+          previousStatus: data?.status ?? null,
+          nextStatus: newValue,
+          recordData: {
+            ...(data || {}),
+            [key]: newValue,
+          },
+          userId,
+        });
+      }
       if (moduleId === 'invoices' && (key === 'status' || key === 'customer_id')) {
         const nextCustomerId = key === 'customer_id'
           ? newValue
@@ -3665,6 +3705,7 @@ const ModuleShow: React.FC = () => {
         values = syncProcessTemplateTargetModules(values);
       }
       const previous = data || {};
+      values = normalizeOperationalDocumentTotals(moduleId, values);
       const authUser = await getCachedAuthUser(supabase);
       const authUserId = authUser?.id || null;
       const withUpdateAuditFields = (recordPayload: Record<string, any>) => {
@@ -3726,6 +3767,19 @@ const ModuleShow: React.FC = () => {
         await syncCustomerLevelsByInvoiceCustomers({
           supabase: supabase as any,
           customerIds: [previous?.customer_id, values?.customer_id],
+        });
+      }
+      if (moduleId === 'stock_transfers') {
+        await applyStockTransferInventory({
+          supabase: supabase as any,
+          recordId: id,
+          previousStatus: previous?.status || null,
+          nextStatus: values?.status ?? previous?.status ?? null,
+          recordData: {
+            ...previous,
+            ...persistedValues,
+          },
+          userId: authUserId,
         });
       }
 
@@ -5182,7 +5236,7 @@ const ModuleShow: React.FC = () => {
               optionFilterProp="label"
               options={quickProjectCustomerOptions}
               placeholder="انتخاب مشتری"
-              getPopupContainer={(node) => node?.parentElement || document.body}
+              getPopupContainer={resolveStablePopupContainer}
             />
           </Form.Item>
 
@@ -5193,7 +5247,7 @@ const ModuleShow: React.FC = () => {
               optionFilterProp="label"
               options={quickProjectTemplateOptions}
               placeholder="انتخاب الگو (اختیاری)"
-              getPopupContainer={(node) => node?.parentElement || document.body}
+              getPopupContainer={resolveStablePopupContainer}
             />
           </Form.Item>
 
@@ -5215,7 +5269,7 @@ const ModuleShow: React.FC = () => {
                         options={quickProjectRelationOptions[targetModuleId] || []}
                         loading={!!quickProjectRelationLoading[targetModuleId]}
                         placeholder={`انتخاب رکورد ${MODULES[targetModuleId]?.titles?.fa || targetModuleId}`}
-                        getPopupContainer={(node) => node?.parentElement || document.body}
+                        getPopupContainer={resolveStablePopupContainer}
                         onChange={(value) => setQuickProjectLinkedRecords((prev) => ({
                           ...prev,
                           [targetModuleId]: value ? String(value) : null,
@@ -5317,7 +5371,7 @@ const ModuleShow: React.FC = () => {
                     showSearch
                     optionFilterProp="label"
                     className="w-full"
-                    getPopupContainer={(node) => node?.parentElement || document.body}
+                    getPopupContainer={resolveStablePopupContainer}
                   />
                   <QrScanPopover
                     label=""
@@ -5344,7 +5398,7 @@ const ModuleShow: React.FC = () => {
                     { label: 'کالا', value: 'goods' },
                   ]}
                   className="w-full"
-                  getPopupContainer={(node) => node?.parentElement || document.body}
+                  getPopupContainer={resolveStablePopupContainer}
                 />
               </div>
 
@@ -5377,7 +5431,7 @@ const ModuleShow: React.FC = () => {
                         showSearch
                         optionFilterProp="label"
                         className="w-full"
-                        getPopupContainer={(node) => node?.parentElement || document.body}
+                        getPopupContainer={resolveStablePopupContainer}
                       />
                       <QrScanPopover
                         label=""

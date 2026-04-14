@@ -37,6 +37,11 @@ import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import PersianDatePicker from '../components/PersianDatePicker';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
+import { useCurrencyConfig } from '../utils/currency';
+import { buildClientFallbackSystemCode } from '../utils/systemCode';
+import GoalProgressSlider from '../components/goals/GoalProgressSlider';
+import GoalsManager from '../components/goals/GoalsManager';
+import { ensureDefaultHrTaskGoals } from '../utils/goals';
 
 type TaskRecord = {
   id: string;
@@ -610,6 +615,8 @@ const HRPage: React.FC = () => {
   const navigate = useNavigate();
   const { employeeId } = useParams();
   const { message } = App.useApp();
+  const currency = useCurrencyConfig();
+  const currencyLabel = currency.label || 'تومان';
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -632,6 +639,10 @@ const HRPage: React.FC = () => {
   const [attendanceRows, setAttendanceRows] = useState<AttendanceLogRecord[]>([]);
   const [scheduleRows, setScheduleRows] = useState<WorkScheduleDashboardRow[]>([]);
   const [requestRows, setRequestRows] = useState<HrRequestRecord[]>([]);
+  const [activeTab, setActiveTab] = useState('performance');
+  const [showKpiManager, setShowKpiManager] = useState(false);
+
+  const formatMoney = useCallback((value: number) => `${formatPersianPrice(value)} ${currencyLabel}`, [currencyLabel]);
 
   const monthStart = useMemo(() => selectedRange[0].startOf('day'), [selectedRange]);
   const monthEnd = useMemo(() => selectedRange[1].endOf('day'), [selectedRange]);
@@ -645,6 +656,10 @@ const HRPage: React.FC = () => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    void ensureDefaultHrTaskGoals();
   }, []);
 
   useEffect(() => {
@@ -1201,6 +1216,39 @@ const HRPage: React.FC = () => {
     );
   }, [visibleSummaries]);
 
+  const performanceTotals = useMemo(() => {
+    const totalsRow = visibleSummaries.reduce(
+      (acc, row) => ({
+        totalTasks: acc.totalTasks + row.totalTasks,
+        doneCount: acc.doneCount + row.doneCount,
+        overdueOpenCount: acc.overdueOpenCount + row.overdueOpenCount,
+        doneEarlyCount: acc.doneEarlyCount + row.doneEarlyCount,
+        doneOnTimeCount: acc.doneOnTimeCount + row.doneOnTimeCount,
+        doneLateCount: acc.doneLateCount + row.doneLateCount,
+        producedQty: acc.producedQty + row.producedQty,
+      }),
+      {
+        totalTasks: 0,
+        doneCount: 0,
+        overdueOpenCount: 0,
+        doneEarlyCount: 0,
+        doneOnTimeCount: 0,
+        doneLateCount: 0,
+        producedQty: 0,
+      },
+    );
+
+    const onTimeDoneCount = totalsRow.doneEarlyCount + totalsRow.doneOnTimeCount;
+    return {
+      ...totalsRow,
+      onTimeDoneCount,
+      completionRate: totalsRow.totalTasks > 0 ? (totalsRow.doneCount / totalsRow.totalTasks) * 100 : 0,
+      onTimeRate: totalsRow.doneCount > 0 ? (onTimeDoneCount / totalsRow.doneCount) * 100 : 0,
+      lateDoneRate: totalsRow.doneCount > 0 ? (totalsRow.doneLateCount / totalsRow.doneCount) * 100 : 0,
+      overdueOpenRate: totalsRow.totalTasks > 0 ? (totalsRow.overdueOpenCount / totalsRow.totalTasks) * 100 : 0,
+    };
+  }, [visibleSummaries]);
+
   const attendanceInsights = useMemo(() => {
     return attendanceComputedRows.reduce(
       (acc, row) => ({
@@ -1331,6 +1379,103 @@ const HRPage: React.FC = () => {
     }
   };
 
+  const handleCreatePayrollSlips = useCallback(async () => {
+    try {
+      const targetRows = visibleSummaries.filter((row) => row.profile?.source_table === 'employees' && row.profile?.source_id);
+      if (targetRows.length === 0) {
+        message.info('برای کارکنان انتخاب‌شده داده‌ای برای ایجاد فیش حقوقی وجود ندارد.');
+        return;
+      }
+
+      const employeeIds = targetRows.map((row) => String(row.profile.source_id || '')).filter(Boolean);
+      const periodStart = toGregorianDateString(monthStart, 'YYYY-MM-DD');
+      const periodEnd = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+      if (!periodStart || !periodEnd) {
+        message.error('بازه فیش حقوقی معتبر نیست.');
+        return;
+      }
+
+      const { data: existingRows, error: existingError } = await supabase
+        .from('payroll_slips')
+        .select('id, employee_id')
+        .eq('period_start', periodStart)
+        .eq('period_end', periodEnd)
+        .in('employee_id', employeeIds);
+      if (existingError) throw existingError;
+
+      const existingEmployeeIds = new Set((existingRows || []).map((row: any) => String(row?.employee_id || '')).filter(Boolean));
+      const rowsToCreate = targetRows.filter((row) => !existingEmployeeIds.has(String(row.profile.source_id || '')));
+      if (rowsToCreate.length === 0) {
+        message.info('برای این بازه، فیش حقوقی کارکنان انتخاب‌شده قبلا ایجاد شده است.');
+        navigate('/payroll_slips');
+        return;
+      }
+
+      const payloads = await Promise.all(rowsToCreate.map(async (row) => {
+        const employeeIdValue = String(row.profile.source_id || '');
+        const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
+        const lines = [
+          { line_type: 'earning', title: 'حقوق پایه', amount: row.baseSalary, description: `بازه ${periodStart} تا ${periodEnd}` },
+          { line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` },
+          ...(row.bonusTotal > 0 ? [{ line_type: 'bonus', title: 'مزایا و پاداش', amount: row.bonusTotal, description: 'محاسبه از عملکرد و ضرایب' }] : []),
+          ...(row.penaltyTotal > 0 ? [{ line_type: 'deduction', title: 'کسورات', amount: row.penaltyTotal, description: 'تاخیر و سایر کسورات' }] : []),
+          ...(row.profile?.insurance_subject !== false && (toNumber(row.profile?.employee_insurance_rate) > 0)
+            ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100, description: 'برآورد از تنظیمات پرسنل' }]
+            : []),
+        ];
+        const employeeInsuranceAmount = row.profile?.insurance_subject === false
+          ? 0
+          : (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100;
+        const employerInsuranceAmount = row.profile?.insurance_subject === false
+          ? 0
+          : (row.netPayable * toNumber(row.profile?.employer_insurance_rate)) / 100;
+
+        return {
+          name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
+          system_code: systemCode,
+          employee_id: employeeIdValue,
+          period_start: periodStart,
+          period_end: periodEnd,
+          status: 'draft',
+          assignee_id: row.profile.related_profile_id || null,
+          base_salary: row.baseSalary,
+          task_wage_total: row.taskWageTotal,
+          bonus_total: row.bonusTotal,
+          deduction_total: row.penaltyTotal + employeeInsuranceAmount,
+          insurance_employee_amount: employeeInsuranceAmount,
+          insurance_employer_amount: employerInsuranceAmount,
+          gross_amount: row.baseSalary + row.taskWageTotal + row.bonusTotal,
+          net_amount: row.netPayable - employeeInsuranceAmount,
+          lines,
+          payments: [],
+          performance_snapshot: {
+            total_tasks: row.totalTasks,
+            done_count: row.doneCount,
+            overdue_open_count: row.overdueOpenCount,
+            overtime_hours: row.overtimeHours,
+            late_hours: row.lateHours,
+            produced_qty: row.producedQty,
+          },
+          task_ids: row.detailRows.map((detail) => detail.taskId).filter(Boolean),
+          notes: `ایجاد شده از داشبورد منابع انسانی برای بازه ${periodStart} تا ${periodEnd}`,
+        };
+      }));
+
+      const { data: insertedRows, error: insertError } = await supabase
+        .from('payroll_slips')
+        .insert(payloads)
+        .select('id');
+      if (insertError) throw insertError;
+
+      message.success(`${toPersianNumber(rowsToCreate.length)} فیش حقوقی ایجاد شد.`);
+      const firstId = insertedRows?.[0]?.id ? String(insertedRows[0].id) : '';
+      if (firstId) navigate(`/payroll_slips/${firstId}`);
+      else navigate('/payroll_slips');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error));
+    }
+  }, [message, monthEnd, monthStart, navigate, visibleSummaries]);
+
   if (loading) {
     return (
       <div className="p-6 h-[calc(100vh-120px)] flex items-center justify-center">
@@ -1343,7 +1488,7 @@ const HRPage: React.FC = () => {
     navigate(`/hr/${profileId}?${selectedRangeQuery}`);
   };
 
-  const renderSummaryMobileCard = (row: EmployeeSummaryRow) => (
+  const renderPerformanceMobileCard = (row: EmployeeSummaryRow) => (
     <Card
       key={row.key}
       className="mb-3 cursor-pointer"
@@ -1366,12 +1511,14 @@ const HRPage: React.FC = () => {
       <div className="flex flex-wrap gap-1 mb-2">
         <Tag color="blue">کل {toPersianNumber(row.totalTasks)}</Tag>
         <Tag color="green">انجام‌شده {toPersianNumber(row.doneCount)}</Tag>
-        <Tag color="red">عقب‌افتاده {toPersianNumber(row.overdueOpenCount)}</Tag>
+        <Tag color="orange">به‌موقع/تعجیل {toPersianNumber(row.doneEarlyCount + row.doneOnTimeCount)}</Tag>
+        <Tag color="red">باز عقب‌افتاده {toPersianNumber(row.overdueOpenCount)}</Tag>
       </div>
       <div className="text-xs text-gray-600 leading-6">
-        <div>پایه: <span className="persian-number">{formatPersianPrice(row.baseSalary)} تومان</span></div>
-        <div>کارکرد: <span className="persian-number">{formatPersianPrice(row.taskWageTotal)} تومان</span></div>
-        <div className="font-bold text-gray-800">قابل پرداخت: <span className="persian-number">{formatPersianPrice(row.netPayable)} تومان</span></div>
+        <div>تکمیل با دیرکرد: <span className="persian-number text-red-700">{toPersianNumber(row.doneLateCount)}</span></div>
+        <div>خروجی ثبت‌شده: <span className="persian-number">{toPersianNumber(row.producedQty)}</span></div>
+        <div>اضافه‌کار: <span className="persian-number text-blue-700">{toPersianNumber(row.overtimeHours.toFixed(1))}</span> ساعت</div>
+        <div>دیرکرد: <span className="persian-number text-red-700">{toPersianNumber(row.lateHours.toFixed(1))}</span> ساعت</div>
       </div>
     </Card>
   );
@@ -1400,14 +1547,14 @@ const HRPage: React.FC = () => {
         <div>تکمیل: {row.completedAt ? toPersianNumber(safeJalaliFormat(row.completedAt, 'YYYY/MM/DD HH:mm')) : '-'}</div>
         <div>زودتر: <span className="persian-number text-green-700">{toPersianNumber(row.earlyHours.toFixed(1))}</span> ساعت</div>
         <div>دیرتر: <span className="persian-number text-red-700">{toPersianNumber(row.lateHours.toFixed(1))}</span> ساعت</div>
-        <div>دستمزد فعالیت: <span className="persian-number">{formatPersianPrice(row.wageBase)} تومان</span></div>
+          <div>دستمزد فعالیت: <span className="persian-number">{formatMoney(row.wageBase)}</span></div>
         <div>ضریب تولید: <span className="persian-number">{toPersianNumber(row.wageMultiplier)}</span></div>
-        <div className="font-bold text-gray-800">دستمزد نهایی: <span className="persian-number">{formatPersianPrice(row.wageFinal)} تومان</span></div>
+          <div className="font-bold text-gray-800">دستمزد نهایی: <span className="persian-number">{formatMoney(row.wageFinal)}</span></div>
       </div>
     </Card>
   );
 
-  const summaryColumns = [
+  const performanceColumns = [
     {
       title: 'نیرو',
       dataIndex: 'name',
@@ -1426,7 +1573,7 @@ const HRPage: React.FC = () => {
       ),
     },
     {
-      title: 'فعالیت ها',
+      title: 'حجم فعالیت',
       key: 'task_counts',
       render: (_: unknown, row: EmployeeSummaryRow) => (
         <Space size={4} wrap>
@@ -1438,24 +1585,24 @@ const HRPage: React.FC = () => {
       ),
     },
     {
-      title: 'زمان‌بندی',
+      title: 'کیفیت انجام',
       key: 'timing',
       render: (_: unknown, row: EmployeeSummaryRow) => (
         <Space size={4} wrap>
           <Tag color="green">تعجیل {toPersianNumber(row.doneEarlyCount)}</Tag>
           <Tag color="blue">به‌موقع {toPersianNumber(row.doneOnTimeCount)}</Tag>
-          <Tag color="red">دیر {toPersianNumber(row.doneLateCount)}</Tag>
+          <Tag color="red">با دیرکرد {toPersianNumber(row.doneLateCount)}</Tag>
         </Space>
       ),
     },
     {
-      title: 'حقوق ماه',
-      key: 'salary',
+      title: 'شاخص‌های عملیاتی',
+      key: 'operational_metrics',
       render: (_: unknown, row: EmployeeSummaryRow) => (
         <div className="text-sm space-y-1">
-          <div>پایه: <span className="persian-number">{formatPersianPrice(row.baseSalary)} تومان</span></div>
-          <div>کارکرد: <span className="persian-number">{formatPersianPrice(row.taskWageTotal)} تومان</span></div>
-          <div className="font-black">قابل پرداخت: <span className="persian-number">{formatPersianPrice(row.netPayable)} تومان</span></div>
+          <div>خروجی ثبت‌شده: <span className="persian-number">{toPersianNumber(row.producedQty)}</span></div>
+          <div>اضافه‌کار: <span className="persian-number text-blue-700">{toPersianNumber(row.overtimeHours.toFixed(1))}</span> ساعت</div>
+          <div>دیرکرد: <span className="persian-number text-red-700">{toPersianNumber(row.lateHours.toFixed(1))}</span> ساعت</div>
         </div>
       ),
     },
@@ -1546,7 +1693,7 @@ const HRPage: React.FC = () => {
       title: 'دستمزد فعالیت',
       dataIndex: 'wageBase',
       key: 'wageBase',
-      render: (val: number) => <span className="persian-number">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
     },
     {
       title: 'ضریب تولید',
@@ -1558,7 +1705,7 @@ const HRPage: React.FC = () => {
       title: 'دستمزد نهایی',
       dataIndex: 'wageFinal',
       key: 'wageFinal',
-      render: (val: number) => <span className="persian-number font-bold">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span>,
     },
   ];
 
@@ -1780,31 +1927,31 @@ const HRPage: React.FC = () => {
       title: 'حقوق پایه',
       dataIndex: 'baseSalary',
       key: 'baseSalary',
-      render: (val: number) => <span className="persian-number">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
     },
     {
       title: 'کارکرد',
       dataIndex: 'taskWageTotal',
       key: 'taskWageTotal',
-      render: (val: number) => <span className="persian-number">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
     },
     {
       title: 'مزایا',
       dataIndex: 'bonusTotal',
       key: 'bonusTotal',
-      render: (val: number) => <span className="persian-number text-green-700">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
     },
     {
       title: 'کسورات',
       dataIndex: 'penaltyTotal',
       key: 'penaltyTotal',
-      render: (val: number) => <span className="persian-number text-red-700">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number text-red-700">{formatMoney(val)}</span>,
     },
     {
       title: 'خالص',
       dataIndex: 'netPayable',
       key: 'netPayable',
-      render: (val: number) => <span className="persian-number font-bold">{formatPersianPrice(val)} تومان</span>,
+      render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span>,
     },
   ];
 
@@ -1866,31 +2013,43 @@ const HRPage: React.FC = () => {
     </div>
   ) : null;
 
-  const overviewTabContent = (
+  const performanceTabContent = (
     <>
       <Row gutter={[12, 12]} className="mb-4">
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">تعداد نیرو</div>
-            <div className="text-2xl font-black">{toPersianNumber(totals.employees)}</div>
+            <div className="text-xs text-gray-500 mb-1">کل فعالیت‌های ارزیابی‌شده</div>
+            <div className="text-2xl font-black">{toPersianNumber(performanceTotals.totalTasks)}</div>
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">کل فعالیت های ماه</div>
-            <div className="text-2xl font-black">{toPersianNumber(totals.totalTasks)}</div>
+            <div className="text-xs text-gray-500 mb-1">نرخ انجام</div>
+            <div className="text-2xl font-black text-green-700">{toPersianNumber(performanceTotals.completionRate.toFixed(1))}%</div>
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">فعالیت های انجام‌شده</div>
-            <div className="text-2xl font-black text-green-700">{toPersianNumber(totals.done)}</div>
+            <div className="text-xs text-gray-500 mb-1">تکمیل به‌موقع / تعجیل</div>
+            <div className="text-2xl font-black text-blue-700">{toPersianNumber(performanceTotals.onTimeRate.toFixed(1))}%</div>
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">جمع قابل پرداخت</div>
-            <div className="text-2xl font-black">{formatPersianPrice(totals.payable)} تومان</div>
+            <div className="text-xs text-gray-500 mb-1">فعالیت باز عقب‌افتاده</div>
+            <div className="text-2xl font-black text-red-700">{toPersianNumber(performanceTotals.overdueOpenCount)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">تکمیل با دیرکرد</div>
+            <div className="text-2xl font-black text-red-700">{toPersianNumber(performanceTotals.lateDoneRate.toFixed(1))}%</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">خروجی ثبت‌شده</div>
+            <div className="text-2xl font-black">{toPersianNumber(performanceTotals.producedQty)}</div>
           </Card>
         </Col>
       </Row>
@@ -1900,11 +2059,11 @@ const HRPage: React.FC = () => {
           <Empty description="برای این بازه داده‌ای یافت نشد." />
         ) : (
           isMobile ? (
-            <div>{visibleSummaries.map(renderSummaryMobileCard)}</div>
+            <div>{visibleSummaries.map(renderPerformanceMobileCard)}</div>
           ) : (
             <Table
               rowKey="key"
-              columns={summaryColumns}
+              columns={performanceColumns}
               dataSource={visibleSummaries}
               pagination={{ pageSize: 20, showSizeChanger: false }}
               onRow={(row: EmployeeSummaryRow) => ({
@@ -1916,6 +2075,40 @@ const HRPage: React.FC = () => {
           )
         )}
       </Card>
+
+      <Row gutter={[12, 12]} className="mt-4">
+        <Col xs={24} xl={10}>
+          <div className="h-full">
+            <GoalProgressSlider moduleId="tasks" placement="dashboard" />
+          </div>
+        </Col>
+        <Col xs={24} xl={14}>
+          <Card className="h-full">
+            <div className="flex h-full flex-col justify-between gap-4">
+              <div>
+                <div className="text-lg font-black text-gray-800 dark:text-gray-100">شاخص‌های عملکرد</div>
+                <div className="mt-2 text-sm leading-7 text-gray-600 dark:text-gray-300">
+                  KPIهای این بخش از روی فعالیت‌ها محاسبه می‌شوند و تعریف شرط‌های آن‌ها از همان موتور شرط‌های گردش‌کار استفاده می‌کند.
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="primary" onClick={() => setShowKpiManager((prev) => !prev)}>
+                  {showKpiManager ? 'بستن مدیریت KPI' : 'مدیریت KPIها'}
+                </Button>
+                <Button onClick={() => navigate('/tasks')}>
+                  مشاهده فعالیت‌ها
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </Col>
+      </Row>
+
+      {showKpiManager ? (
+        <Card className="mt-4">
+          <GoalsManager inline defaultModuleId="tasks" />
+        </Card>
+      ) : null}
     </>
   );
 
@@ -2057,26 +2250,26 @@ const HRPage: React.FC = () => {
         <Col xs={24} md={8}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">جمع قابل پرداخت</div>
-            <div className="text-2xl font-black">{formatPersianPrice(totals.payable)} تومان</div>
+            <div className="text-2xl font-black">{formatMoney(totals.payable)}</div>
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">برآورد سهم بیمه کارمند</div>
-            <div className="text-2xl font-black">{formatPersianPrice(insuranceTotals.employee)} تومان</div>
+            <div className="text-2xl font-black">{formatMoney(insuranceTotals.employee)}</div>
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">برآورد سهم بیمه کارفرما</div>
-            <div className="text-2xl font-black">{formatPersianPrice(insuranceTotals.employer)} تومان</div>
+            <div className="text-2xl font-black">{formatMoney(insuranceTotals.employer)}</div>
           </Card>
         </Col>
       </Row>
       <Card>
         <div className="flex flex-wrap gap-2 mb-4">
           <Button onClick={() => navigate('/employees')}>تنظیمات حقوقی کارکنان</Button>
-          <Button type="primary" onClick={() => message.info('مرحله بعدی: ساخت اسنپ‌شات و ایجاد فیش حقوقی')}>
+          <Button type="primary" onClick={handleCreatePayrollSlips}>
             ایجاد فیش حقوقی
           </Button>
         </div>
@@ -2125,13 +2318,13 @@ const HRPage: React.FC = () => {
                 <Col xs={24} md={6}>
                   <Card>
                     <div className="text-xs text-gray-500 mb-1">جمع دستمزد کارکرد</div>
-                    <div className="text-2xl font-black">{formatPersianPrice(selectedEmployeeSummary.taskWageTotal)} تومان</div>
+                    <div className="text-2xl font-black">{formatMoney(selectedEmployeeSummary.taskWageTotal)}</div>
                   </Card>
                 </Col>
                 <Col xs={24} md={6}>
                   <Card>
                     <div className="text-xs text-gray-500 mb-1">خالص قابل پرداخت</div>
-                    <div className="text-2xl font-black">{formatPersianPrice(selectedEmployeeSummary.netPayable)} تومان</div>
+                    <div className="text-2xl font-black">{formatMoney(selectedEmployeeSummary.netPayable)}</div>
                   </Card>
                 </Col>
               </Row>
@@ -2210,9 +2403,10 @@ const HRPage: React.FC = () => {
           </div>
 
           <Tabs
-            defaultActiveKey="overview"
+            activeKey={activeTab}
+            onChange={setActiveTab}
             items={[
-              { key: 'overview', label: 'کلی', children: overviewTabContent },
+              { key: 'performance', label: 'عملکرد', children: performanceTabContent },
               { key: 'attendance', label: 'تردد', children: attendanceTabContent },
               { key: 'schedules', label: 'برنامه حضور', children: schedulesTabContent },
               { key: 'requests', label: 'درخواست‌ها', children: requestsTabContent },
@@ -2372,6 +2566,21 @@ const HRPage: React.FC = () => {
         okText="ذخیره"
         cancelText="انصراف"
       >
+        <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-xs leading-7 text-gray-600 dark:border-gray-800 dark:bg-white/5 dark:text-gray-300">
+          شاخص‌های عملکرد شرط‌محور از تب عملکرد همین صفحه مدیریت می‌شوند.
+          <div className="mt-2">
+            <Button
+              size="small"
+              onClick={() => {
+                setConfigModalOpen(false);
+                setActiveTab('performance');
+                setShowKpiManager(true);
+              }}
+            >
+              رفتن به مدیریت KPIها
+            </Button>
+          </div>
+        </div>
         <Form form={configForm} layout="vertical">
           <Form.Item name="base_salary" label="حقوق پایه ماهانه">
             <InputNumber min={0} className="w-full" />

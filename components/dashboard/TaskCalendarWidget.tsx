@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { App, Button, Card, Empty, Modal, Segmented, Select, Spin } from 'antd';
+import { Button, Card, Empty, Segmented, Select, Spin } from 'antd';
 import { CalendarOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
@@ -7,11 +7,8 @@ import ModuleCalendarView from '../moduleList/CalendarView';
 import { FieldType } from '../../types';
 import { fetchCurrentUserRecordAccessContext, canAccessAssignedRecord } from '../../utils/permissions';
 import { supabase } from '../../supabaseClient';
-import { formatPersianPrice, parseDateValue, safeJalaliFormat } from '../../utils/persianNumberFormatter';
+import { parseDateValue } from '../../utils/persianNumberFormatter';
 import PersianDatePicker from '../PersianDatePicker';
-import TaskQuickPopoverContent from '../tasks/TaskQuickPopoverContent';
-import { fetchAssigneeDirectory } from '../../utils/referenceData';
-import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 
 type TaskCalendarRow = {
@@ -44,7 +41,6 @@ const taskDateFields = (tasksModule?.fields || []).filter((field) =>
 );
 
 const taskTypeField = (tasksModule?.fields || []).find((field) => String(field?.key || '') === 'task_type');
-const statusOptions = (tasksModule?.fields || []).find((field) => String(field?.key || '') === 'status')?.options || [];
 
 const createDateAtMidday = (date: Date) => {
   const next = new Date(date);
@@ -86,7 +82,6 @@ const createDefaultRange = () => {
 };
 
 const TaskCalendarWidget: React.FC = () => {
-  const { message } = App.useApp();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<TaskCalendarRow[]>([]);
@@ -99,13 +94,6 @@ const TaskCalendarWidget: React.FC = () => {
   const [dateFrom, setDateFrom] = useState<string>(formatIsoDate(createDefaultRange().from));
   const [dateTo, setDateTo] = useState<string>(formatIsoDate(createDefaultRange().to));
   const [recordAccess, setRecordAccess] = useState<Awaited<ReturnType<typeof fetchCurrentUserRecordAccessContext>> | null>(null);
-  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
-  const [quickTaskLoading, setQuickTaskLoading] = useState(false);
-  const [quickTask, setQuickTask] = useState<any | null>(null);
-  const [assigneeUserOptions, setAssigneeUserOptions] = useState<Array<{ value: string; label: string }>>([]);
-  const [assigneeRoleOptions, setAssigneeRoleOptions] = useState<Array<{ value: string; label: string }>>([]);
-  const [assigneeNameMap, setAssigneeNameMap] = useState<Record<string, string>>({});
-  const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
 
   const loadTasks = useCallback(async () => {
     if (!tasksModule) {
@@ -218,72 +206,6 @@ const TaskCalendarWidget: React.FC = () => {
     });
   }, [dateFrom, dateTo, recordAccess, rows, selectedDateField, taskTypeFilter, taskView]);
 
-  const resolveAssigneeDisplayLabel = useCallback(
-    (task: any) => {
-      const assigneeType = String(task?.assignee_type || '').trim().toLowerCase();
-      const resolvedAssigneeId = String(getResolvedAssigneeId(task) || '').trim();
-      if (!resolvedAssigneeId) return 'تعیین نشده';
-      if (assigneeType === 'role') return roleNameMap[resolvedAssigneeId] || resolvedAssigneeId;
-      return assigneeNameMap[resolvedAssigneeId] || resolvedAssigneeId;
-    },
-    [assigneeNameMap, roleNameMap]
-  );
-
-  const openQuickTaskModal = useCallback(
-    async (taskId: string) => {
-      const normalizedTaskId = String(taskId || '').trim();
-      if (!normalizedTaskId) return;
-      setQuickTaskOpen(true);
-      setQuickTaskLoading(true);
-      try {
-        const [{ data: taskRow }, directory] = await Promise.all([
-          supabase.from('tasks').select('*').eq('id', normalizedTaskId).maybeSingle(),
-          fetchAssigneeDirectory(supabase),
-        ]);
-        setQuickTask(taskRow || null);
-        setAssigneeUserOptions(
-          (directory.users || [])
-            .map((user) => ({
-              value: String(user?.id || ''),
-              label: String(user?.display_name || user?.full_name || user?.id || '').trim(),
-            }))
-            .filter((item) => item.value)
-        );
-        setAssigneeRoleOptions(
-          (directory.roles || [])
-            .map((role) => ({
-              value: String(role?.id || ''),
-              label: String(role?.title || role?.id || '').trim(),
-            }))
-            .filter((item) => item.value)
-        );
-        setAssigneeNameMap(
-          (directory.users || []).reduce<Record<string, string>>((acc, user) => {
-            const id = String(user?.id || '').trim();
-            if (!id) return acc;
-            acc[id] = String(user?.display_name || user?.full_name || user?.id || '').trim();
-            return acc;
-          }, {})
-        );
-        setRoleNameMap(
-          (directory.roles || []).reduce<Record<string, string>>((acc, role) => {
-            const id = String(role?.id || '').trim();
-            if (!id) return acc;
-            acc[id] = String(role?.title || role?.id || '').trim();
-            return acc;
-          }, {})
-        );
-      } catch {
-        message.error('خواندن اطلاعات فعالیت ناموفق بود.');
-        setQuickTask(null);
-      } finally {
-        setQuickTaskLoading(false);
-      }
-    },
-    [message]
-  );
-  void openQuickTaskModal;
-
   const handleCalendarNavigate = useCallback(
     (path: string) => {
       const match = String(path || '').match(/^\/tasks\/([^/]+)$/);
@@ -394,55 +316,6 @@ const TaskCalendarWidget: React.FC = () => {
         </div>
       )}
 
-      <Modal
-        open={quickTaskOpen}
-        onCancel={() => {
-          setQuickTaskOpen(false);
-          setQuickTask(null);
-        }}
-        footer={null}
-        width={420}
-        destroyOnHidden
-        title="مشاهده سریع فعالیت"
-      >
-        {quickTaskLoading ? (
-          <div className="flex h-[220px] items-center justify-center"><Spin /></div>
-        ) : quickTask ? (
-          <TaskQuickPopoverContent
-            task={quickTask}
-            readOnly
-            allowReportEditInReadOnly={false}
-            currentAssigneeCombo={(() => {
-              const assigneeType = String(quickTask?.assignee_type || (quickTask?.assignee_role_id ? 'role' : 'user')).trim().toLowerCase();
-              const resolvedAssigneeId = String(getResolvedAssigneeId(quickTask) || '').trim();
-              if (!resolvedAssigneeId) return undefined;
-              return assigneeType === 'role' ? `role:${resolvedAssigneeId}` : `user:${resolvedAssigneeId}`;
-            })()}
-            assigneeUserOptions={assigneeUserOptions}
-            assigneeRoleOptions={assigneeRoleOptions}
-            statusOptions={statusOptions}
-            statusValue={String(quickTask?.status || '')}
-            canEditTaskStatus={false}
-            taskTypeValue={String(quickTask?.task_type || '')}
-            isProductionOrder={String(quickTask?.related_to_module || '') === 'production_orders'}
-            producedQty={Number(quickTask?.produced_qty || 0)}
-            producedQtyDisabled
-            description={String(quickTask?.description || '')}
-            sortOrder={quickTask?.sort_order ?? null}
-            assigneeType={String(quickTask?.assignee_type || (quickTask?.assignee_role_id ? 'role' : 'user') || '')}
-            assigneeDisplayLabel={resolveAssigneeDisplayLabel(quickTask)}
-            hasWage={quickTask?.wage !== null && quickTask?.wage !== undefined && quickTask?.wage !== ''}
-            wageLabel={quickTask?.wage ? formatPersianPrice(Number(quickTask.wage || 0), true) : null}
-            hasWeight={quickTask?.weight !== null && quickTask?.weight !== undefined && quickTask?.weight !== ''}
-            weightLabel={quickTask?.weight ? String(quickTask.weight) : null}
-            dueDateLabel={quickTask?.due_date ? safeJalaliFormat(quickTask.due_date, 'YYYY/MM/DD HH:mm') : null}
-            reportDraft={String(quickTask?.task_report || '')}
-            supportsHandover={false}
-          />
-        ) : (
-          <Empty description="فعالیتی برای نمایش پیدا نشد" />
-        )}
-      </Modal>
     </Card>
   );
 };

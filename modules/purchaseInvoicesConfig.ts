@@ -280,6 +280,15 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
+      key: 'estimated_invoice_amount',
+      labels: { fa: 'مبلغ تقریبی فاکتور', en: 'Estimated Invoice Amount' },
+      type: FieldType.PRICE,
+      location: FieldLocation.HEADER,
+      order: 6.5,
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
+    {
       key: 'description',
       labels: { fa: '\u062A\u0648\u0636\u06CC\u062D\u0627\u062A \u0641\u0627\u06A9\u062A\u0648\u0631 \u062E\u0631\u06CC\u062F', en: 'Purchase Invoice Description' },
       type: FieldType.SUPER_LONG_TEXT,

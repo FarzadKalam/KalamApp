@@ -78,6 +78,57 @@ export const profilesModule: ModuleDefinition = {
         color: SOFTWARE_ROLE_OPTION_COLORS[option.value] || 'default',
       })),
     },
+    {
+      key: 'employee_id',
+      labels: { fa: 'کارمند مرتبط' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'details',
+      relationConfig: {
+        targetModule: 'employees',
+        targetField: 'full_name'
+      }
+    },
+    {
+      key: 'voip_enabled',
+      labels: { fa: 'فعال در VoIP' },
+      type: FieldType.CHECKBOX,
+      location: FieldLocation.BLOCK,
+      blockId: 'voip_info',
+    },
+    {
+      key: 'voip_operator_code',
+      labels: { fa: 'کد اپراتور تلفنچی' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'voip_info',
+    },
+    {
+      key: 'voip_extension',
+      labels: { fa: 'داخلی VoIP' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'voip_info',
+    },
+    {
+      key: 'voip_service_id',
+      labels: { fa: 'شناسه سرویس VoIP' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'voip_info',
+    },
+    {
+      key: 'voip_dial_mode',
+      labels: { fa: 'حالت شماره‌گیری VoIP' },
+      type: FieldType.SELECT,
+      location: FieldLocation.BLOCK,
+      blockId: 'voip_info',
+      options: [
+        { label: 'Smart Call تلفنچی', value: 'telefonchy_smartcall' },
+        { label: 'لینک SIP', value: 'sip_link' },
+        { label: 'لینک تلفن', value: 'tel_link' },
+      ],
+    },
 
     // --- اطلاعات تکمیلی ---
     { 
@@ -101,6 +152,12 @@ export const profilesModule: ModuleDefinition = {
       titles: { fa: 'جزئیات' },
       type: BlockType.FIELD_GROUP,
       order: 1,
+    },
+    {
+      id: 'voip_info',
+      titles: { fa: 'تنظیمات VoIP' },
+      type: BlockType.FIELD_GROUP,
+      order: 2,
     },
   ],
   relatedTabs: [

@@ -7,6 +7,7 @@ import PersianDatePicker from './PersianDatePicker';
 import DynamicSelectField from './DynamicSelectField';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
+import TaskActionButtons from './tasks/TaskActionButtons';
 import TaskHandoverModal, { type StageHandoverConfirm, type StageHandoverGroup, type StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import TaskHandoverFormsModal, {
   type StageHandoverFormListRow,
@@ -625,21 +626,31 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     ),
     [automationContextModuleId, automationContextModuleIds, moduleId]
   );
-  const automationScopeModuleId = automationScopeModuleIds[0] || '';
+  const stageAutomationScopeModuleIds = useMemo(() => {
+    const stageModuleIds = normalizeProcessTargetModuleIds(
+      [
+        ...(Array.isArray(editingDraft?.process_target_module_ids) ? editingDraft.process_target_module_ids : []),
+        ...(Array.isArray(editingDraft?.metadata?.process_target_module_ids) ? editingDraft.metadata.process_target_module_ids : []),
+      ],
+      ''
+    );
+    return stageModuleIds.length > 0 ? stageModuleIds : automationScopeModuleIds;
+  }, [automationScopeModuleIds, editingDraft]);
+  const automationScopeModuleId = stageAutomationScopeModuleIds[0] || '';
   const draftCustomAutomationFields = useMemo(
     () => buildProcessTaskCustomAutomationFields(draftCustomFields),
     [draftCustomFields]
   );
   const automationConditionFields = useMemo(
     () => [
-      ...getProcessAutomationConditionFieldsForModules(automationScopeModuleIds).map((field) => (
+      ...getProcessAutomationConditionFieldsForModules(stageAutomationScopeModuleIds).map((field) => (
         String(field?.key || '').trim() === '__task__status'
           ? { ...field, options: getTaskStatusOptions({ recurrence_info: { [PROCESS_TASK_STATUS_OPTIONS_KEY]: draftStageStatusOptions } }, field.options || []) }
           : field
       )),
       ...draftCustomAutomationFields,
     ],
-    [automationScopeModuleIds, draftCustomAutomationFields, draftStageStatusOptions]
+    [draftCustomAutomationFields, draftStageStatusOptions, stageAutomationScopeModuleIds]
   );
   const automationConditionFieldsWithoutTaskType = useMemo(
     () => automationConditionFields.filter((field) => String(field?.key || '').trim() !== '__task__task_type'),
@@ -651,7 +662,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         [
           ...draftCustomAutomationFields,
           ...getProcessTargetModuleFields(
-            automationScopeModuleIds,
+            stageAutomationScopeModuleIds,
             getVisibleWorkflowModuleFields,
             getSyntheticWorkflowAssigneeField
           ),
@@ -660,7 +671,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           .map((field) => [String(field.key), field] as const)
       ).values()
     ),
-    [automationScopeModuleIds, draftCustomAutomationFields]
+    [draftCustomAutomationFields, stageAutomationScopeModuleIds]
   );
   const workflowModuleOptions = useMemo(
     () => getProjectModuleOptions(),
@@ -1110,7 +1121,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (targetKey === 'name' || targetKey === 'description') {
       const currentValue = String(draftForm.getFieldValue(targetKey) || '');
       const { nextValue, caret } = insertTextAtSelection(currentValue, token, selection);
-      draftForm.setFieldValue(targetKey, nextValue);
+      draftForm.setFieldsValue({ [targetKey]: nextValue });
+      draftTemplateSelectionRef.current[targetKey] = { start: caret, end: caret };
       focusDraftTemplateTarget(targetKey, caret);
       return;
     }
@@ -1122,6 +1134,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const currentValue = stringifyTemplateValue(field?.defaultValue);
         const inserted = insertTextAtSelection(currentValue, token, selection);
         nextCaret = inserted.caret;
+        draftTemplateSelectionRef.current[targetKey] = { start: nextCaret, end: nextCaret };
         return {
           ...field,
           defaultValue: inserted.nextValue,
@@ -4042,8 +4055,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     <Popover
       trigger={[]}
       placement="bottomRight"
-      getPopupContainer={(node) => node?.parentElement || document.body}
-      overlayStyle={{ zIndex: 10020, maxWidth: 'calc(100vw - 1rem)' }}
+      getPopupContainer={() => document.body}
+      zIndex={13050}
+      overlayStyle={{ zIndex: 13050, maxWidth: 'calc(100vw - 1rem)' }}
+      styles={{ root: { zIndex: 13050 } }}
       open={draftTemplatePickerOpenKey === targetKey}
       onOpenChange={(open) => {
         setDraftTemplatePickerOpenKey(open ? targetKey : null);
@@ -4072,11 +4087,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <div
               key={`${targetKey}-${item.key}`}
               className="w-full rounded-lg border border-transparent px-2 py-2 text-right transition-colors hover:border-[rgba(var(--brand-200-rgb),0.75)] hover:bg-[rgba(var(--brand-50-rgb),0.55)] select-text"
+              role="button"
+              tabIndex={0}
+              onClick={() => handleDraftTemplateTokenPick(targetKey, item.token)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                handleDraftTemplateTokenPick(targetKey, item.token);
+              }}
             >
               <div className="flex items-start justify-between gap-2">
                 <div
                   className="min-w-0 flex-1 cursor-pointer"
-                  onClick={() => handleDraftTemplateTokenPick(targetKey, item.token)}
                 >
                   <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.label}</div>
                   <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 break-all" dir="ltr">{item.token}</div>
@@ -4139,7 +4161,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         <CopyOutlined />
       </span>
     </Popover>
-  ), [draftTemplatePickerOpenKey, draftTemplatePickerSearch, filteredStageTemplateVariableOptions, handleDraftTemplateTokenPick]);
+  ), [copyDraftTemplateTokenToClipboard, draftTemplatePickerOpenKey, draftTemplatePickerSearch, filteredStageTemplateVariableOptions, handleDraftTemplateTokenPick]);
 
   const renderPopupContent = (task: any) => {
     const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
@@ -4217,53 +4239,76 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             onImageUpdate={(file) => handleTaskImageUpload(task, file)}
             onMainImageChange={(url) => { void handleTaskMainImageChange(task, url); }}
           />
+          {canEditTaskStatus ? (
+            <div className="mt-2 flex justify-center">
+              <TaskActionButtons
+                task={task}
+                currentUser={{
+                  id: currentUser.id,
+                  fullName: currentUser.fullName,
+                }}
+                onTaskUpdated={handleHandoverTaskUpdated}
+                size="middle"
+                showReview
+                modalZIndex={12050}
+              />
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-3 mb-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-xs text-gray-500">مسئول:</span>
-            <Select
-              size="small"
-              value={currentAssigneeCombo}
-              onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
-              className="w-full sm:w-44"
-              disabled={!canEditTaskAssignee}
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              getPopupContainer={(node) => node?.parentElement || document.body}
-            >
-              <Select.OptGroup label="کاربران">
-                {assignees.users.map((u) => (
-                  <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
-                    <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
-                  </Select.Option>
-                ))}
-              </Select.OptGroup>
-              <Select.OptGroup label="تیم‌ها">
-                {assignees.roles.map((r) => (
-                  <Select.Option key={`popup-role-${r.id}`} value={`role:${r.id}`} label={r.title}>
-                    <Space><TeamOutlined /> {r.title}</Space>
-                  </Select.Option>
-                ))}
-              </Select.OptGroup>
-            </Select>
-          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="min-w-0">
+              <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
+                <span className="text-xs text-gray-400 shrink-0">نام مسئول:</span>
+                <Select
+                  variant="borderless"
+                  value={currentAssigneeCombo}
+                  onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
+                  className="w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300"
+                  disabled={!canEditTaskAssignee}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  getPopupContainer={(node) => node?.parentElement || document.body}
+                  styles={{ popup: { root: { minWidth: 220, zIndex: 12050 } } }}
+                >
+                  <Select.OptGroup label="کاربران">
+                    {assignees.users.map((u) => (
+                      <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
+                        <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
+                      </Select.Option>
+                    ))}
+                  </Select.OptGroup>
+                  <Select.OptGroup label="تیم‌ها">
+                    {assignees.roles.map((r) => (
+                      <Select.Option key={`popup-role-${r.id}`} value={`role:${r.id}`} label={r.title}>
+                        <Space><TeamOutlined /> {r.title}</Space>
+                      </Select.Option>
+                    ))}
+                  </Select.OptGroup>
+                </Select>
+              </div>
+            </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-xs text-gray-500">وضعیت:</span>
-            <Select
-              size="small"
-              value={task.status}
-              onChange={(val) => { void handleStatusChange(task.id, val); }}
-              className="w-full sm:w-44"
-              disabled={!canEditTaskStatus}
-              getPopupContainer={(node) => node?.parentElement || document.body}
-              options={taskStatusOptions.map((option) => ({
-                value: option.value,
-                label: option.label,
-              }))}
-            />
+            <div className="min-w-0">
+              <div className="smartform-inline-status h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
+                <span className="text-xs text-gray-400 shrink-0">وضعیت:</span>
+                <Select
+                  variant="borderless"
+                  value={task.status}
+                  onChange={(val) => { void handleStatusChange(task.id, val); }}
+                  className="w-full max-w-full font-semibold text-gray-700 dark:text-gray-300"
+                  disabled={!canEditTaskStatus}
+                  getPopupContainer={(node) => node?.parentElement || document.body}
+                  styles={{ popup: { root: { minWidth: 180, zIndex: 12050 } } }}
+                  options={taskStatusOptions.map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  }))}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="space-y-1">
@@ -5207,9 +5252,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const stageCustomFields = getProcessTaskCustomFieldsFromStage(stage);
         const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
         const dueDate = dueByStageKey.get(buildProcessStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null;
-        const processLinkMap = recurrenceBase?.process_links && typeof recurrenceBase.process_links === 'object'
-          ? recurrenceBase.process_links
-          : {};
+        const processLinkMap = mergeProcessLinkMaps(
+          stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
+          recurrenceBase?.process_links && typeof recurrenceBase.process_links === 'object' ? recurrenceBase.process_links : {},
+        );
+        const stageTargetModuleIds = normalizeProcessTargetModuleIds(
+          stage?.process_target_module_ids || recurrenceBase?.process_target_module_ids,
+          moduleId
+        );
         const templateContext = await buildTaskTemplateContextRecord({
           taskName: stageName,
           taskType: stageTaskType,
@@ -5258,6 +5308,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             ...recurrenceBase,
             ...(stageTaskType ? { task_type: stageTaskType } : {}),
             process_automation_rules: stageAutomationRules,
+            process_target_module_ids: stageTargetModuleIds,
+            process_links: processLinkMap,
             [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
             [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
             [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,

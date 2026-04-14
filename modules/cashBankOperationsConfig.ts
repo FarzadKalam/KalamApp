@@ -128,7 +128,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
     },
     {
       key: 'employee_id',
-      labels: { fa: 'کارکن مرتبط', en: 'Employee' },
+      labels: { fa: 'مسئول عملیات', en: 'Assignee' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'relations',

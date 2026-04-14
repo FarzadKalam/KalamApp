@@ -37,8 +37,28 @@ create table if not exists public.counterparty_bot_groups (
     check (
       (target_type = 'customers' and customer_id is not null and supplier_id is null)
       or (target_type = 'suppliers' and supplier_id is not null and customer_id is null)
-    )
+  )
 );
+
+alter table public.counterparty_bot_groups
+  add column if not exists org_id uuid references public.organizations(id) on delete set null,
+  add column if not exists target_type text not null default 'customers',
+  add column if not exists customer_id uuid references public.customers(id) on delete cascade,
+  add column if not exists supplier_id uuid references public.suppliers(id) on delete cascade,
+  add column if not exists channel_type text not null default 'rubika',
+  add column if not exists status text not null default 'pending_join_link',
+  add column if not exists group_join_link text,
+  add column if not exists group_platform_id text,
+  add column if not exists bot_chat_id text,
+  add column if not exists group_title text,
+  add column if not exists last_inbound_at timestamptz,
+  add column if not exists last_outbound_at timestamptz,
+  add column if not exists last_error text,
+  add column if not exists metadata jsonb not null default '{}'::jsonb,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists updated_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
 
 create index if not exists idx_counterparty_bot_groups_org_channel
   on public.counterparty_bot_groups(org_id, channel_type, created_at desc);
@@ -121,6 +141,24 @@ create table if not exists public.counterparty_bot_messages (
     check (message_type in ('text', 'image', 'file', 'invoice', 'other'))
 );
 
+alter table public.counterparty_bot_messages
+  add column if not exists org_id uuid references public.organizations(id) on delete set null,
+  add column if not exists bot_group_id uuid references public.counterparty_bot_groups(id) on delete set null,
+  add column if not exists customer_id uuid references public.customers(id) on delete set null,
+  add column if not exists supplier_id uuid references public.suppliers(id) on delete set null,
+  add column if not exists channel_type text not null default 'rubika',
+  add column if not exists direction text not null default 'inbound',
+  add column if not exists message_type text not null default 'text',
+  add column if not exists chat_id text,
+  add column if not exists provider_message_id text,
+  add column if not exists content_text text,
+  add column if not exists file_url text,
+  add column if not exists file_name text,
+  add column if not exists mime_type text,
+  add column if not exists payload jsonb not null default '{}'::jsonb,
+  add column if not exists created_by uuid references auth.users(id) on delete set null,
+  add column if not exists created_at timestamptz not null default now();
+
 create index if not exists idx_counterparty_bot_messages_org_time
   on public.counterparty_bot_messages(org_id, created_at desc);
 
@@ -162,5 +200,6 @@ create policy p_counterparty_bot_messages_org_all on public.counterparty_bot_mes
     or org_id = public.current_org_id()
   );
 
-commit;
+notify pgrst, 'reload schema';
 
+commit;

@@ -11,6 +11,8 @@ import { purchaseInvoicesConfig } from './modules/purchaseInvoicesConfig';
 import { warehousesConfig } from './modules/warehousesConfig';
 import { shelvesConfig } from './modules/shelvesConfig';
 import { stockTransfersConfig } from './modules/stockTransfersConfig';
+import { secretariatDocumentsConfig } from './modules/secretariatDocumentsConfig';
+import { deliveryFormsConfig } from './modules/deliveryFormsConfig';
 import { calculationFormulasModule } from './modules/calculationFormulasConfig';
 import { productionGroupOrdersModule } from './modules/productionGroupOrdersConfig';
 import { projectsModule } from './modules/projectsConfig';
@@ -37,7 +39,13 @@ import { priceListsConfig } from './modules/priceListsConfig';
 import { webFormsConfig } from './modules/webFormsConfig';
 import { automationExecutionReportsConfig } from './modules/automationExecutionReportsConfig';
 import { smsDeliveryReportsConfig } from './modules/smsDeliveryReportsConfig';
+import { voipCallReportsConfig } from './modules/voipCallReportsConfig';
 import { counterpartyBotGroupsConfig } from './modules/counterpartyBotGroupsConfig';
+import { expenseDocumentsConfig } from './modules/expenseDocumentsConfig';
+import { employeeAdvancesConfig } from './modules/employeeAdvancesConfig';
+import { payrollSlipsConfig } from './modules/payrollSlipsConfig';
+import { employeeContractsConfig } from './modules/employeeContractsConfig';
+import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
 
 export const MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -46,6 +54,8 @@ export const MODULES: Record<string, ModuleDefinition> = {
   warehouses: warehousesConfig,
   shelves: shelvesConfig,
   stock_transfers: stockTransfersConfig,
+  secretariat_documents: secretariatDocumentsConfig,
+  delivery_forms: deliveryFormsConfig,
   production_boms: productionBomModule,
   production_orders: productionOrderModule,
   production_group_orders: productionGroupOrdersModule,
@@ -79,5 +89,11 @@ export const MODULES: Record<string, ModuleDefinition> = {
   web_forms: webFormsConfig,
   automation_execution_reports: automationExecutionReportsConfig,
   sms_delivery_reports: smsDeliveryReportsConfig,
+  voip_call_reports: voipCallReportsConfig,
   counterparty_bot_groups: counterpartyBotGroupsConfig,
+  expense_documents: expenseDocumentsConfig,
+  employee_advances: employeeAdvancesConfig,
+  payroll_slips: payrollSlipsConfig,
+  employee_contracts: employeeContractsConfig,
+  recruitment_applicants: recruitmentApplicantsConfig,
 };

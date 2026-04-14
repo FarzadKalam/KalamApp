@@ -353,8 +353,100 @@ const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
 
 const DEFAULT_SALES_INVOICE_GOAL_SEED_KEY = 'sales_invoices_monthly_paid_total_v1';
 const DEFAULT_SALES_INVOICE_GOAL_CHECK_TTL_MS = 5 * 60_000;
+const DEFAULT_HR_TASK_GOAL_CHECK_TTL_MS = 5 * 60_000;
+const DEFAULT_HR_TASK_GOAL_SEEDS = [
+  {
+    seedKey: 'hr_tasks_completed_monthly',
+    name: 'تعداد فعالیت‌های تکمیل‌شده',
+    description: 'تعداد فعالیت‌های تکمیل‌شده در بازه جاری',
+    goal_scope: 'team',
+    period_unit: 'month',
+    subperiod_unit: 'week',
+    metric_type: 'count',
+    metric_field_key: null,
+    date_field_key: 'completed_at',
+    target_value: null,
+    levels_enabled: true,
+    bronze_value: 30,
+    silver_value: 60,
+    gold_value: 120,
+    conditions_all: [
+      {
+        id: 'seed_hr_goal_completed_status',
+        field: 'status',
+        operator: 'in',
+        value: ['done', 'completed'],
+      },
+    ],
+    conditions_any: [],
+  },
+  {
+    seedKey: 'hr_tasks_on_time_monthly',
+    name: 'تکمیل به‌موقع فعالیت‌ها',
+    description: 'تعداد فعالیت‌هایی که بدون دیرکرد یا با تعجیل تکمیل شده‌اند',
+    goal_scope: 'team',
+    period_unit: 'month',
+    subperiod_unit: 'week',
+    metric_type: 'count',
+    metric_field_key: null,
+    date_field_key: 'completed_at',
+    target_value: null,
+    levels_enabled: true,
+    bronze_value: 20,
+    silver_value: 45,
+    gold_value: 90,
+    conditions_all: [
+      {
+        id: 'seed_hr_goal_on_time_status',
+        field: 'status',
+        operator: 'in',
+        value: ['done', 'completed'],
+      },
+      {
+        id: 'seed_hr_goal_on_time_variance',
+        field: 'schedule_variance_hours',
+        operator: 'gte',
+        value: 0,
+      },
+    ],
+    conditions_any: [],
+  },
+  {
+    seedKey: 'hr_tasks_produced_qty_monthly',
+    name: 'خروجی تولید ثبت‌شده',
+    description: 'جمع مقدار تولید ثبت‌شده روی فعالیت‌های تکمیل‌شده',
+    goal_scope: 'team',
+    period_unit: 'month',
+    subperiod_unit: 'week',
+    metric_type: 'sum',
+    metric_field_key: 'produced_qty',
+    date_field_key: 'completed_at',
+    target_value: null,
+    levels_enabled: true,
+    bronze_value: 100,
+    silver_value: 250,
+    gold_value: 500,
+    conditions_all: [
+      {
+        id: 'seed_hr_goal_production_status',
+        field: 'status',
+        operator: 'in',
+        value: ['done', 'completed'],
+      },
+    ],
+    conditions_any: [],
+  },
+] as const;
 
 let defaultSalesInvoiceGoalCheckCache: {
+  checkedAt: number;
+  promise: Promise<void> | null;
+} = {
+  checkedAt: 0,
+  promise: null,
+};
+
+let defaultHrTaskGoalsCheckCache: {
   checkedAt: number;
   promise: Promise<void> | null;
 } = {
@@ -439,6 +531,83 @@ export const ensureDefaultSalesInvoiceGoal = async (options?: { userId?: string 
   } finally {
     if (defaultSalesInvoiceGoalCheckCache.promise === pending) {
       defaultSalesInvoiceGoalCheckCache.promise = null;
+    }
+  }
+};
+
+export const ensureDefaultHrTaskGoals = async (options?: { userId?: string | null }) => {
+  const now = Date.now();
+  if (defaultHrTaskGoalsCheckCache.checkedAt > 0 && (now - defaultHrTaskGoalsCheckCache.checkedAt) < DEFAULT_HR_TASK_GOAL_CHECK_TTL_MS) {
+    return;
+  }
+  if (defaultHrTaskGoalsCheckCache.promise) {
+    return defaultHrTaskGoalsCheckCache.promise;
+  }
+
+  const pending = (async () => {
+    try {
+      const { data: existingRows, error: existingError } = await supabase
+        .from('goals')
+        .select('id, module_id, config')
+        .eq('module_id', 'tasks')
+        .limit(100);
+
+      if (existingError) throw existingError;
+
+      const existingSeedKeys = new Set(
+        (existingRows || [])
+          .map((row: any) => String(row?.config?.seed_key || '').trim())
+          .filter(Boolean)
+      );
+
+      const missingSeeds = DEFAULT_HR_TASK_GOAL_SEEDS.filter((seed) => !existingSeedKeys.has(seed.seedKey));
+      if (missingSeeds.length === 0) return;
+
+      const userId = options?.userId || (await supabase.auth.getUser()).data?.user?.id || null;
+      const payloads = missingSeeds.map((seed) => ({
+        module_id: 'tasks',
+        name: seed.name,
+        description: seed.description,
+        goal_scope: seed.goal_scope,
+        period_unit: seed.period_unit,
+        subperiod_unit: seed.subperiod_unit,
+        metric_type: seed.metric_type,
+        metric_field_key: seed.metric_field_key,
+        date_field_key: seed.date_field_key,
+        target_value: seed.target_value,
+        levels_enabled: seed.levels_enabled,
+        bronze_value: seed.bronze_value,
+        silver_value: seed.silver_value,
+        gold_value: seed.gold_value,
+        assignee_user_ids: [],
+        assignee_role_ids: [],
+        conditions_all: seed.conditions_all,
+        conditions_any: seed.conditions_any,
+        config: {
+          seed_key: seed.seedKey,
+          assignment_users_mode: 'all',
+          is_seeded_default: true,
+          kpi_scope: 'hr',
+        },
+        is_active: true,
+        created_by: userId,
+        updated_by: userId,
+      }));
+
+      const { error } = await supabase.from('goals').insert(payloads);
+      if (error) throw error;
+    } catch {
+      return;
+    }
+  })();
+
+  defaultHrTaskGoalsCheckCache.promise = pending;
+  try {
+    await pending;
+    defaultHrTaskGoalsCheckCache.checkedAt = Date.now();
+  } finally {
+    if (defaultHrTaskGoalsCheckCache.promise === pending) {
+      defaultHrTaskGoalsCheckCache.promise = null;
     }
   }
 };

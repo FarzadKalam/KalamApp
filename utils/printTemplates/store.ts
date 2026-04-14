@@ -261,6 +261,46 @@ export const getModuleTitle = (moduleId: string, mode: 'plural' | 'singular' = '
   return String(module.titles?.fa || '').trim();
 };
 
+const buildPrintSignatureCell = (label: string, companySide = false) => `
+<td style="width:50%; border:none; ${companySide ? 'border-left:1px solid rgba(148,163,184,0.28);' : ''} padding:8px 10px; vertical-align:top; background:${companySide ? 'rgba(var(--brand-50-rgb),0.24)' : 'rgba(var(--brand-50-rgb),0.14)'};">
+  <div style="display:flex; flex-direction:column; min-height:80px; justify-content:space-between; gap:6px;">
+    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); text-align:center;">${label}</div>
+    <div style="display:flex; align-items:flex-end; justify-content:center; gap:10px; min-height:54px;">
+      ${companySide ? '<div style="display:flex; align-items:center; justify-content:center; min-width:48px; min-height:48px;">{{system.company_stamp_image}}</div>' : ''}
+      ${companySide ? '<div style="display:flex; align-items:center; justify-content:center; min-width:72px; min-height:40px;">{{system.company_signature_image}}</div>' : '<div style="width:110px; border-bottom:1px dashed rgba(100,116,139,0.65);"></div>'}
+    </div>
+    <div style="text-align:center; line-height:1.9;">
+      ${companySide ? '<div style="font-weight:700;">{{system.company_signatory_name}}</div>' : '<div style="font-weight:700;">&nbsp;</div>'}
+      ${companySide ? '<div style="font-size:10px; color:#64748b;">{{system.company_signatory_title}}</div>' : '<div style="font-size:10px; color:#64748b;">&nbsp;</div>'}
+    </div>
+  </div>
+</td>
+`.trim();
+
+const buildOfficialLetterHeaderTemplate = (title: string) => `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:24%; vertical-align:top; text-align:center; border:none; padding:12px 10px; background:rgba(var(--brand-50-rgb),0.42);">
+        <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto 6px auto; width:54px; height:54px; max-width:54px; max-height:54px; object-fit:contain;" />
+        <div style="font-size:10px; color:#64748b;">{{company.trade_name}}</div>
+      </td>
+      <td style="width:46%; vertical-align:middle; text-align:center; border:none; padding:12px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-weight:900; font-size:15px; line-height:1.9; color:#111827;">{{company.company_full_name}}</div>
+        <div style="font-weight:800; font-size:18px; line-height:1.8; color:rgb(var(--brand-500-rgb)); margin-top:2px;">${title}</div>
+      </td>
+      <td style="width:30%; vertical-align:top; text-align:right; border:none; padding:10px 12px; background:rgba(var(--brand-50-rgb),0.42);">
+        <div style="display:flex; flex-direction:column; gap:4px; font-size:11px; line-height:1.9;">
+          <div><span style="font-weight:700;">تاریخ:</span> {{record.document_date}}</div>
+          <div><span style="font-weight:700;">شماره:</span> {{record.system_code}}</div>
+          <div><span style="font-weight:700;">پیوست:</span> {{record.attachment_count}}</div>
+        </div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim();
+
 export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
   const singularTitle = getModuleTitle(moduleId, 'singular') || 'سند';
 
@@ -296,8 +336,8 @@ export const buildDefaultFooterTemplateForModule = () => `
 <table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
   <tbody>
     <tr>
-      <td style="width:50%; border:none; border-left:1px solid rgba(148,163,184,0.28); height:44px; text-align:center; vertical-align:bottom; padding:6px; background:rgba(var(--brand-50-rgb),0.28);">مهر و امضا فروشنده</td>
-      <td style="width:50%; border:none; height:44px; text-align:center; vertical-align:bottom; padding:6px; background:rgba(var(--brand-50-rgb),0.16);">مهر و امضا خریدار</td>
+      ${buildPrintSignatureCell('مهر و امضا سازمان', true)}
+      ${buildPrintSignatureCell('امضا / تایید طرف مقابل', false)}
     </tr>
   </tbody>
 </table>
@@ -653,12 +693,17 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'عنوان جمع ماژول', value: 'module.title_plural', kind: 'field', group: 'سیستم' },
     { label: 'عنوان رکورد', value: 'record.name', kind: 'field', group: 'فیلدهای رکورد' },
     { label: 'کد سیستمی', value: 'record.system_code', kind: 'field', group: 'فیلدهای رکورد' },
+    { label: 'تعداد پیوست‌های رکورد', value: 'record.attachment_count', kind: 'field', group: 'فیلدهای رکورد' },
     { label: 'تاریخ ایجاد', value: 'record.created_at', kind: 'field', group: 'فیلدهای رکورد' },
     { label: 'تاریخ آخرین ویرایش', value: 'record.updated_at', kind: 'field', group: 'فیلدهای رکورد' },
     { label: 'نام کامل سازمان', value: 'company.company_full_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام سازمان', value: 'company.company_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام تجاری سازمان', value: 'company.trade_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'لوگوی سازمان', value: 'company.logo_url', kind: 'field', group: 'اطلاعات سازمان' },
+    { label: 'نام امضاکننده رسمی', value: 'company.official_signatory_name', kind: 'field', group: 'اطلاعات سازمان' },
+    { label: 'سمت امضاکننده رسمی', value: 'company.official_signatory_title', kind: 'field', group: 'اطلاعات سازمان' },
+    { label: 'فایل امضای سازمان', value: 'company.signature_image_url', kind: 'field', group: 'اطلاعات سازمان' },
+    { label: 'فایل مهر سازمان', value: 'company.stamp_image_url', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'شناسه ملی سازمان', value: 'company.national_id', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'شماره ثبت سازمان', value: 'company.registration_number', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'کد اقتصادی سازمان', value: 'company.economic_code', kind: 'field', group: 'اطلاعات سازمان' },
@@ -669,6 +714,10 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'نام مسئول', value: 'responsible.name', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ امروز', value: 'system.today_date', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ و زمان امروز', value: 'system.today_datetime', kind: 'field', group: 'سیستم' },
+    { label: 'نام امضاکننده چاپ', value: 'system.company_signatory_name', kind: 'field', group: 'سیستم' },
+    { label: 'سمت امضاکننده چاپ', value: 'system.company_signatory_title', kind: 'field', group: 'سیستم' },
+    { label: 'تصویر امضای چاپ', value: 'system.company_signature_image', kind: 'field', group: 'سیستم' },
+    { label: 'تصویر مهر چاپ', value: 'system.company_stamp_image', kind: 'field', group: 'سیستم' },
     { label: 'جدول فیلدهای دارای مقدار', value: 'system.compact_fields_table', kind: 'field', group: 'سیستم' },
     { label: 'جدول‌های دارای مقدار', value: 'system.compact_tables_blocks', kind: 'field', group: 'سیستم' },
     { label: 'تصویر رکورد', value: 'system.record_image', kind: 'field', group: 'سیستم' },
@@ -1105,6 +1154,394 @@ const buildListCatalogA4PortraitDefaultTemplate = (
   };
 };
 
+const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => ({
+  id: 'default_secretariat_official_letter_a4',
+  moduleId: 'secretariat_documents',
+  scope: 'record',
+  title: 'نامه رسمی اداری A4',
+  description: 'سربرگ رسمی دبیرخانه با تاریخ، شماره، پیوست و امضای سازمانی',
+  paperSize: 'A4',
+  orientation: 'portrait',
+  isActive: true,
+  isSystem: true,
+  showHeader: true,
+  showFooter: true,
+  headerHeight: 96,
+  footerHeight: 84,
+  pageMarginTop: 12,
+  pageMarginRight: 12,
+  pageMarginBottom: 10,
+  pageMarginLeft: 12,
+  headerHtml: buildOfficialLetterHeaderTemplate('نامه اداری').trim(),
+  contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit; font-size:12px; line-height:2.1;">
+  <table style="width:100%; border-collapse:collapse; margin-bottom:10px; font-size:11px;">
+    <tbody>
+      <tr>
+        <td style="width:16%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">خطاب به</td>
+        <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.recipient_profile_id}}</td>
+        <td style="width:16%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">از طرف</td>
+        <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.sender_profile_id}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">موضوع</td>
+        <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">{{record.name}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">نوع سند</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.document_type}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">اولویت</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.priority}}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="min-height:420px; padding:8px 4px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
+  <div style="margin-top:14px; border-top:1px dashed rgba(148,163,184,0.4); padding-top:10px;">
+    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">خلاصه / نتیجه</div>
+    <div style="${getLongTextPrintStyle(11)}">{{record.summary}}</div>
+  </div>
+</div>
+`.trim(),
+  footerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('امضا و مهر سازمان', true)}
+      ${buildPrintSignatureCell('رونوشت / دریافت کننده', false)}
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  createdAt: now,
+  updatedAt: now,
+});
+
+const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
+  id: 'default_delivery_form_operational_a4',
+  moduleId: 'delivery_forms',
+  scope: 'record',
+  title: 'فرم تحویل عملیاتی A4',
+  description: 'قالب چاپ رسمی برای فرم‌های تحویل با امضا و اقلام',
+  paperSize: 'A4',
+  orientation: 'portrait',
+  isActive: true,
+  isSystem: true,
+  showHeader: true,
+  showFooter: true,
+  headerHeight: 84,
+  footerHeight: 84,
+  pageMarginTop: 10,
+  pageMarginRight: 10,
+  pageMarginBottom: 10,
+  pageMarginLeft: 10,
+  headerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:18%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:42px; max-height:42px; object-fit:contain;" />
+      </td>
+      <td style="width:50%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">فرم تحویل / رسید</div>
+        <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
+      </td>
+      <td style="width:32%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.24); line-height:1.9;">
+        <div>تاریخ: {{record.delivery_date}}</div>
+        <div>شماره: {{record.system_code}}</div>
+        <div>وضعیت: {{record.status}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.9;">
+  <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+    <tbody>
+      <tr>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">عنوان فرم</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.name}}</td>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">نوع فرم</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.form_type}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تحویل‌دهنده</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.delivered_by_id}} {{record.external_delivered_by}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تحویل‌گیرنده</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.received_by_id}} {{record.external_received_by}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">محل تحویل</td>
+        <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.location_text}}</td>
+      </tr>
+    </tbody>
+  </table>
+  ${buildBlockSnippetTemplate('delivery_forms', 'items')}
+  <div style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
+    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">یادداشت‌ها و شرایط تحویل</div>
+    <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
+  </div>
+</div>
+`.trim(),
+  footerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('مهر و امضا صادرکننده', true)}
+      ${buildPrintSignatureCell('امضا تحویل‌گیرنده', false)}
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  createdAt: now,
+  updatedAt: now,
+});
+
+const buildStockTransferVoucherPrintTemplate = (now: string): StoredPrintTemplate => ({
+  id: 'default_stock_transfer_voucher_a4',
+  moduleId: 'stock_transfers',
+  scope: 'record',
+  title: 'حواله انبار A4',
+  description: 'قالب چاپ عملیاتی حواله و تردد کالا با تمرکز روی ورود/خروج و مسئولیت تحویل',
+  paperSize: 'A4',
+  orientation: 'portrait',
+  isActive: true,
+  isSystem: true,
+  showHeader: true,
+  showFooter: true,
+  headerHeight: 82,
+  footerHeight: 84,
+  pageMarginTop: 10,
+  pageMarginRight: 10,
+  pageMarginBottom: 10,
+  pageMarginLeft: 10,
+  headerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:16%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:38px; max-height:38px; object-fit:contain;" />
+      </td>
+      <td style="width:52%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">حواله / تردد کالا</div>
+        <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
+      </td>
+      <td style="width:32%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.24); line-height:1.9;">
+        <div>تاریخ: {{record.transfer_date}}</div>
+        <div>شماره: {{record.system_code}}</div>
+        <div>نوع: {{record.transfer_type}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.9;">
+  <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+    <tbody>
+      <tr>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">عنوان حواله</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.name}}</td>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">وضعیت</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.status}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کالا</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.product_id}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">مقدار</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.delivered_qty}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">مبدا</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.source_warehouse_id}} / {{record.from_shelf_id}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">مقصد</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.target_warehouse_id}} / {{record.to_shelf_id}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تحویل‌دهنده</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.sender_id}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تحویل‌گیرنده</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.receiver_id}}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="border:1px solid var(--table-border-color, #d1d5db); padding:8px; background:rgba(var(--brand-50-rgb),0.12);">
+    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">یادداشت‌ها</div>
+    <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
+  </div>
+</div>
+`.trim(),
+  footerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('مهر و امضا انبار', true)}
+      ${buildPrintSignatureCell('امضا تحویل‌گیرنده', false)}
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  createdAt: now,
+  updatedAt: now,
+});
+
+const buildEmployeeContractPrintTemplate = (now: string): StoredPrintTemplate => ({
+  id: 'default_employee_contract_formal_a4',
+  moduleId: 'employee_contracts',
+  scope: 'record',
+  title: 'قرارداد کارمند A4',
+  description: 'قالب رسمی قرارداد کارکنان با مشخصات طرفین و امضای سازمان',
+  paperSize: 'A4',
+  orientation: 'portrait',
+  isActive: true,
+  isSystem: true,
+  showHeader: true,
+  showFooter: true,
+  headerHeight: 84,
+  footerHeight: 84,
+  pageMarginTop: 10,
+  pageMarginRight: 10,
+  pageMarginBottom: 10,
+  pageMarginLeft: 10,
+  headerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:18%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:40px; max-height:40px; object-fit:contain;" />
+      </td>
+      <td style="width:52%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">قرارداد کارمند</div>
+        <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
+      </td>
+      <td style="width:30%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.24); line-height:1.9;">
+        <div>شماره: {{record.system_code}}</div>
+        <div>شروع: {{record.start_date}}</div>
+        <div>پایان: {{record.end_date}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:2;">
+  <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+    <tbody>
+      <tr>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">عنوان قرارداد</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.name}}</td>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">نوع قرارداد</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.contract_type}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">کارمند</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_id}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">سمت</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.title}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">محل کار</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.work_location}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">مبلغ پایه</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.base_salary}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <div style="min-height:430px; padding:8px 4px; ${getLongTextPrintStyle(12)}">{{record.body}}</div>
+</div>
+`.trim(),
+  footerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('امضا و مهر کارفرما', true)}
+      ${buildPrintSignatureCell('امضای کارمند', false)}
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  createdAt: now,
+  updatedAt: now,
+});
+
+const buildPayrollSlipPrintTemplate = (now: string): StoredPrintTemplate => ({
+  id: 'default_payroll_slip_formal_a4',
+  moduleId: 'payroll_slips',
+  scope: 'record',
+  title: 'فیش حقوقی رسمی A4',
+  description: 'قالب رسمی فیش حقوقی با ردیف‌ها، پرداخت‌ها و امضای سازمان',
+  paperSize: 'A4',
+  orientation: 'portrait',
+  isActive: true,
+  isSystem: true,
+  showHeader: true,
+  showFooter: true,
+  headerHeight: 84,
+  footerHeight: 84,
+  pageMarginTop: 10,
+  pageMarginRight: 10,
+  pageMarginBottom: 10,
+  pageMarginLeft: 10,
+  headerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      <td style="width:18%; border:none; padding:8px; background:rgba(var(--brand-50-rgb),0.42); text-align:center; vertical-align:middle;">
+        <img src="{{company.logo_url}}" alt="لوگو" style="max-width:40px; max-height:40px; object-fit:contain;" />
+      </td>
+      <td style="width:52%; border:none; padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08);">
+        <div style="font-size:14px; font-weight:900; color:rgb(var(--brand-500-rgb));">فیش حقوقی</div>
+        <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
+      </td>
+      <td style="width:30%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.24); line-height:1.9;">
+        <div>شماره: {{record.system_code}}</div>
+        <div>از: {{record.period_start}}</div>
+        <div>تا: {{record.period_end}}</div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  contentHtml: `
+<div style="direction:rtl; color:#111827; font-family:inherit; font-size:11px; line-height:1.9;">
+  <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+    <tbody>
+      <tr>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">کارمند</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.employee_id}}</td>
+        <td style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">وضعیت</td>
+        <td style="width:32%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.status}}</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">ناخالص</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.gross_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">خالص پرداختی</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.net_amount}} <span style="font-size:9px; color:#64748b;">{{company.currency_label}}</span></td>
+      </tr>
+    </tbody>
+  </table>
+  ${buildBlockSnippetTemplate('payroll_slips', 'lines')}
+  <div style="margin-top:8px;">${buildBlockSnippetTemplate('payroll_slips', 'payments')}</div>
+  <div style="margin-top:8px; border:1px solid var(--table-border-color, #d1d5db); background:rgba(var(--brand-50-rgb),0.12); padding:8px;">
+    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">توضیحات</div>
+    <div style="${getLongTextPrintStyle(11)}">{{record.notes}}</div>
+  </div>
+</div>
+`.trim(),
+  footerHtml: `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('تایید و امضای سازمان', true)}
+      ${buildPrintSignatureCell('امضای دریافت کننده', false)}
+    </tr>
+  </tbody>
+</table>
+`.trim(),
+  createdAt: now,
+  updatedAt: now,
+});
+
 export const buildDefaultTemplatesForModule = (
   moduleId: string,
   scope: 'all' | 'record' | 'list' = 'all'
@@ -1116,9 +1553,22 @@ export const buildDefaultTemplatesForModule = (
   const listPortraitTemplate = buildListA4DefaultTemplate(moduleId, now, 'portrait');
   const listLandscapeTemplate = buildListA4DefaultTemplate(moduleId, now, 'landscape');
   const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(moduleId, now);
+  const domainSpecificDefaults: StoredPrintTemplate[] = (
+    moduleId === 'secretariat_documents'
+      ? [buildSecretariatOfficialTemplate(now)]
+      : moduleId === 'delivery_forms'
+        ? [buildDeliveryFormPrintTemplate(now)]
+        : moduleId === 'stock_transfers'
+          ? [buildStockTransferVoucherPrintTemplate(now)]
+          : moduleId === 'employee_contracts'
+            ? [buildEmployeeContractPrintTemplate(now)]
+            : moduleId === 'payroll_slips'
+              ? [buildPayrollSlipPrintTemplate(now)]
+              : []
+  );
 
   if (!isInvoiceModule(moduleId)) {
-    const defaults: StoredPrintTemplate[] = [compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
+    const defaults: StoredPrintTemplate[] = [...domainSpecificDefaults, compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
     return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
   }
 

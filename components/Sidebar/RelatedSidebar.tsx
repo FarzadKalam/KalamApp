@@ -5,13 +5,14 @@ import {
     RightOutlined, SkinOutlined, AppstoreOutlined,
     BgColorsOutlined, ScissorOutlined, ToolOutlined, ExperimentOutlined,
     DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined, NodeIndexOutlined,
-    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined
+    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined, PhoneOutlined, MessageOutlined
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
 import { ModuleDefinition, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { applyTaskSourceRecordFilter } from '../../utils/taskMeta';
+import { MODULES } from '../../moduleRegistry';
 
 // نقشه آیکون‌ها: نام متنی را به کامپوننت واقعی وصل می‌کند
 const iconMap: Record<string, React.ReactNode> = {
@@ -22,6 +23,8 @@ const iconMap: Record<string, React.ReactNode> = {
   'ShoppingOutlined': <ShoppingOutlined />,
   'ShoppingCartOutlined': <ShoppingCartOutlined />,
   'ProjectOutlined': <ProjectOutlined />,
+  'PhoneOutlined': <PhoneOutlined />,
+  'MessageOutlined': <MessageOutlined />,
   'BgColorsOutlined': <BgColorsOutlined />,
   'ScissorOutlined': <ScissorOutlined />,
   'ToolOutlined': <ToolOutlined />,
@@ -67,7 +70,13 @@ const applyTabFilters = (query: any, filters?: RelatedTabFilterConfig[]) => {
   return nextQuery;
 };
 
+const getModuleTableName = (moduleId?: string | null) => {
+  const normalized = String(moduleId || '').trim();
+  return MODULES[normalized]?.table || normalized;
+};
+
 const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId, recordName = '', mentionUsers = [], mentionRoles = [] }) => {
+  const DESKTOP_TAB_RAIL_WIDTH = 56;
   const [activeKey, setActiveKey] = useState<string | null>(null);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [unreadMap, setUnreadMap] = useState<Record<string, boolean>>({});
@@ -240,7 +249,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     const matchPayload = JSON.stringify([{ [matchKey]: recordId }]);
                     const { data } = await applyTabFilters(
                         (supabase
-                            .from(tab.targetModule as string) as any)
+                            .from(getModuleTableName(tab.targetModule as string)) as any)
                             .select('created_at')
                             .filter(tab.jsonbColumn as string, 'cs', matchPayload),
                         (tab as RelatedTabConfig).filters,
@@ -259,7 +268,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     const ids = Array.from(new Set((links || []).map((row: any) => row[tab.joinTargetKey]).filter(Boolean)));
                     if (!ids.length) return null;
                     const { data } = await supabase
-                        .from(tab.targetModule)
+                        .from(getModuleTableName(tab.targetModule))
                         .select('created_at')
                         .in('id', ids)
                         .order('created_at', { ascending: false })
@@ -272,7 +281,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     if (!sourceValue) return null;
                     let query = applyTabFilters(
                         (supabase
-                            .from(tab.targetModule as string) as any)
+                            .from(getModuleTableName(tab.targetModule as string)) as any)
                             .select('created_at')
                             .eq(tab.foreignKey as string, sourceValue),
                         (tab as RelatedTabConfig).filters,
@@ -286,10 +295,24 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     return data?.[0]?.created_at || null;
                 }
 
+                if ((tab as RelatedTabConfig).relationType === 'record_context' && tab.targetModule) {
+                    const { data } = await applyTabFilters(
+                        (supabase
+                            .from(getModuleTableName(tab.targetModule as string)) as any)
+                            .select('created_at')
+                            .eq('module_id', moduleConfig.id)
+                            .eq('record_id', recordId),
+                        (tab as RelatedTabConfig).filters,
+                    )
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.created_at || null;
+                }
+
                 if (tab.targetModule && tab.foreignKey) {
                     const { data } = await applyTabFilters(
                         (supabase
-                            .from(tab.targetModule as string) as any)
+                            .from(getModuleTableName(tab.targetModule as string)) as any)
                             .select('created_at')
                             .eq(tab.foreignKey as string, recordId),
                         (tab as RelatedTabConfig).filters,
@@ -435,7 +458,8 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             getContainer={typeof document === 'undefined' ? undefined : () => document.body}
             mask={false}
             styles={{ body: { padding: 0 }, header: { padding: '16px 24px' } }}
-            className="shadow-2xl md:ml-14"
+            className="shadow-2xl"
+            style={typeof window !== 'undefined' && window.innerWidth >= 768 ? { left: DESKTOP_TAB_RAIL_WIDTH } : undefined}
             rootStyle={{ zIndex: 2000 }}
         >
             <div className="h-full p-4 bg-gray-50 dark:bg-[#121212]">

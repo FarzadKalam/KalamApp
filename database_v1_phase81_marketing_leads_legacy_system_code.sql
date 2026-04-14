@@ -10,4 +10,6 @@ begin;
 alter table public.marketing_leads
   add column if not exists legacy_system_code text;
 
+notify pgrst, 'reload schema';
+
 commit;

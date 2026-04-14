@@ -14,6 +14,8 @@
 5. `DEPLOYMENT.md` - استقرار
 6. `DATABASE_V1_FULL.md` - پایگاه داده کامل هماهنگ با کانفیگ ماژول‌ها
 7. `WORKFLOWS_PROCESS_AUTOMATION_FA.md` - مرجع طراحی workflow های عمومی و process automation
+8. `VOIP_TELEFONCHY_IMPLEMENTATION_GUIDE_FA.md` - راهنمای پیاده‌سازی VoIP با Telefonchy
+9. `telefonchy-api-reference-fa.md` - خلاصه مستندات API تلفنچی برای KalamApp
 
 ## 2) Needs Update (Not Fully Aligned With v1)
 

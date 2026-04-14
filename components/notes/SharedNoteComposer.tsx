@@ -13,18 +13,22 @@ interface SharedNoteComposerProps {
   onChange: (value: string) => void;
   onSubmit: () => void;
   placeholder?: string;
-  mentionOptions: Array<{ label: string; value: string }>;
-  mentionValues: string[];
-  onMentionChange: (values: string[]) => void;
+  submitText?: string;
+  mentionOptions?: Array<{ label: string; value: string }>;
+  mentionValues?: string[];
+  onMentionChange?: (values: string[]) => void;
   mentionsLoading?: boolean;
-  mentionPickerOpen: boolean;
-  onToggleMentionPicker: () => void;
-  attachments: File[];
-  onFilesSelected: (files: File[]) => void;
-  onRemoveAttachment: (fileName: string) => void;
+  mentionPickerOpen?: boolean;
+  onToggleMentionPicker?: () => void;
+  allowMentions?: boolean;
+  attachments?: File[];
+  onFilesSelected?: (files: File[]) => void;
+  onRemoveAttachment?: (fileName: string) => void;
+  allowAttachments?: boolean;
   replyActive?: boolean;
   onClearReply?: () => void;
   submitDisabled?: boolean;
+  submitLoading?: boolean;
   smsNotificationEnabled?: boolean;
   onSmsNotificationChange?: (value: boolean) => void;
   extraActions?: React.ReactNode;
@@ -73,18 +77,22 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   onChange,
   onSubmit,
   placeholder = 'یادداشت جدید...',
-  mentionOptions,
-  mentionValues,
-  onMentionChange,
+  submitText = 'ارسال',
+  mentionOptions = [],
+  mentionValues = [],
+  onMentionChange = () => undefined,
   mentionsLoading = false,
-  mentionPickerOpen,
-  onToggleMentionPicker,
-  attachments,
-  onFilesSelected,
-  onRemoveAttachment,
+  mentionPickerOpen = false,
+  onToggleMentionPicker = () => undefined,
+  allowMentions = true,
+  attachments = [],
+  onFilesSelected = () => undefined,
+  onRemoveAttachment = () => undefined,
+  allowAttachments = true,
   replyActive = false,
   onClearReply,
   submitDisabled = false,
+  submitLoading = false,
   smsNotificationEnabled = false,
   onSmsNotificationChange,
   extraActions,
@@ -159,7 +167,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             className="!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none"
           />
 
-          {mentionPickerOpen ? (
+          {allowMentions && mentionPickerOpen ? (
             <div className="mt-3">
               <Select
                 mode="multiple"
@@ -206,18 +214,22 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
           <div className="mt-3 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1">
-              <Button
-                type={mentionPickerOpen || mentionValues.length > 0 ? 'primary' : 'text'}
-                size="small"
-                icon={<span className="text-sm font-bold leading-none">@</span>}
-                onClick={onToggleMentionPicker}
-              />
-              <Button
-                type={attachments.length > 0 ? 'primary' : 'text'}
-                size="small"
-                icon={<PaperClipOutlined />}
-                onClick={() => fileInputRef.current?.click()}
-              />
+              {allowMentions ? (
+                <Button
+                  type={mentionPickerOpen || mentionValues.length > 0 ? 'primary' : 'text'}
+                  size="small"
+                  icon={<span className="text-sm font-bold leading-none">@</span>}
+                  onClick={onToggleMentionPicker}
+                />
+              ) : null}
+              {allowAttachments ? (
+                <Button
+                  type={attachments.length > 0 ? 'primary' : 'text'}
+                  size="small"
+                  icon={<PaperClipOutlined />}
+                  onClick={() => fileInputRef.current?.click()}
+                />
+              ) : null}
               {extraActions}
               {onSmsNotificationChange ? (
                 <Checkbox
@@ -245,10 +257,11 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               type="primary"
               icon={<SendOutlined />}
               onClick={onSubmit}
+              loading={submitLoading}
               disabled={submitDisabled}
               size="small"
             >
-              ارسال
+              {submitText}
             </Button>
           </div>
         </div>

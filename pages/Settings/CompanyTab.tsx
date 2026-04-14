@@ -13,6 +13,8 @@ const CompanyTab: React.FC = () => {
   const [recordId, setRecordId] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [iconUrl, setIconUrl] = useState<string | null>(null);
+  const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
+  const [stampUrl, setStampUrl] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -46,6 +48,8 @@ const CompanyTab: React.FC = () => {
       setRecordId(data.id);
       setLogoUrl(data.logo_url || null);
       setIconUrl(data.icon_url || null);
+      setSignatureUrl(data.signature_image_url || null);
+      setStampUrl(data.stamp_image_url || null);
       return;
     }
 
@@ -60,7 +64,7 @@ const CompanyTab: React.FC = () => {
     persistCurrencyConfig(DEFAULT_CURRENCY);
   };
 
-  const handleUpload = async (file: File, type: 'logo' | 'icon') => {
+  const handleUpload = async (file: File, type: 'logo' | 'icon' | 'signature' | 'stamp') => {
     try {
       const fileName = `company-${type}-${Date.now()}.${file.name.split('.').pop()}`;
       await uploadFileWithProgress({
@@ -70,16 +74,29 @@ const CompanyTab: React.FC = () => {
         file,
         upsert: true,
         label: file.name || `company-${type}`,
-        detail: type === 'logo' ? 'لوگوی شرکت' : 'آیکون سایت',
+        detail:
+          type === 'logo'
+            ? 'لوگوی شرکت'
+            : type === 'icon'
+              ? 'آیکون سایت'
+              : type === 'signature'
+                ? 'امضای سازمانی'
+                : 'مهر سازمانی',
       });
       const { data } = supabase.storage.from('images').getPublicUrl(fileName);
 
       if (type === 'logo') {
         setLogoUrl(data.publicUrl);
         form.setFieldValue('logo_url', data.publicUrl);
-      } else {
+      } else if (type === 'icon') {
         setIconUrl(data.publicUrl);
         form.setFieldValue('icon_url', data.publicUrl);
+      } else if (type === 'signature') {
+        setSignatureUrl(data.publicUrl);
+        form.setFieldValue('signature_image_url', data.publicUrl);
+      } else {
+        setStampUrl(data.publicUrl);
+        form.setFieldValue('stamp_image_url', data.publicUrl);
       }
       message.success('آپلود شد');
     } catch (error) {
@@ -117,6 +134,8 @@ const CompanyTab: React.FC = () => {
         currency_label: currency.label,
         logo_url: form.getFieldValue('logo_url') || logoUrl,
         icon_url: form.getFieldValue('icon_url') || iconUrl,
+        signature_image_url: form.getFieldValue('signature_image_url') || signatureUrl,
+        stamp_image_url: form.getFieldValue('stamp_image_url') || stampUrl,
       };
 
       if (recordId) {
@@ -151,7 +170,7 @@ const CompanyTab: React.FC = () => {
   return (
     <div className="max-w-5xl mx-auto py-6">
       <Form form={form} layout="vertical" onFinish={onFinish} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6 mb-2">
+        <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-2">
           <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
             <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
               {logoUrl ? <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
@@ -174,6 +193,32 @@ const CompanyTab: React.FC = () => {
               <div className="text-xs text-gray-400 mb-2">نمایش در تب مرورگر</div>
               <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'icon')}>
                 <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر آیکون</Button>
+              </Upload>
+            </div>
+          </div>
+
+          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
+            <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
+              {signatureUrl ? <img src={signatureUrl} alt="Signature" className="w-full h-full object-contain" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
+            </div>
+            <div className="flex-1">
+              <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">امضای سازمانی</div>
+              <div className="text-xs text-gray-400 mb-2">نمایش در نامه‌ها و امضاهای چاپی</div>
+              <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'signature')}>
+                <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر امضا</Button>
+              </Upload>
+            </div>
+          </div>
+
+          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
+            <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
+              {stampUrl ? <img src={stampUrl} alt="Stamp" className="w-full h-full object-contain" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
+            </div>
+            <div className="flex-1">
+              <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">مهر سازمانی</div>
+              <div className="text-xs text-gray-400 mb-2">نمایش در نامه‌ها، فاکتورها و فرم‌ها</div>
+              <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'stamp')}>
+                <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر مهر</Button>
               </Upload>
             </div>
           </div>
@@ -215,6 +260,12 @@ const CompanyTab: React.FC = () => {
 
         <Form.Item label={<span className="dark:text-gray-300">نام مدیرعامل</span>} name="ceo_name">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">نام امضاکننده رسمی</span>} name="official_signatory_name">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="اگر خالی باشد از نام مدیرعامل استفاده می‌شود" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">سمت امضاکننده رسمی</span>} name="official_signatory_title">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="مثل مدیرعامل، مدیر اداری، مدیر فروش" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">شناسه ملی / کد اقتصادی</span>} name="national_id">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
@@ -272,6 +323,12 @@ const CompanyTab: React.FC = () => {
           <Input />
         </Form.Item>
         <Form.Item name="icon_url" hidden>
+          <Input />
+        </Form.Item>
+        <Form.Item name="signature_image_url" hidden>
+          <Input />
+        </Form.Item>
+        <Form.Item name="stamp_image_url" hidden>
           <Input />
         </Form.Item>
 

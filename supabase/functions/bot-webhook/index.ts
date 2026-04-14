@@ -829,10 +829,15 @@ const findIntegrationBySecret = async (
   channel: BotChannel,
   secret: string
 ) => {
+  const connectionTypes = channel === 'telegram'
+    ? ['telegram_bot', 'telegram']
+    : channel === 'bale'
+      ? ['bale_bot', 'bale']
+      : ['rubika_bot', 'rubika'];
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
-  url.searchParams.set('connection_type', `eq.${channel}_bot`);
+  url.searchParams.set('connection_type', `in.(${connectionTypes.join(',')})`);
   url.searchParams.set('is_active', 'eq.true');
-  url.searchParams.set('select', 'id,org_id,provider,settings');
+  url.searchParams.set('select', 'id,org_id,provider,settings,connection_type,created_at,updated_at');
 
   const response = await fetch(url.toString(), {
     method: 'GET',
@@ -843,7 +848,17 @@ const findIntegrationBySecret = async (
 
   const rows = raw ? JSON.parse(raw) : [];
   const row = Array.isArray(rows)
-    ? rows.find((item) => String(item?.settings?.webhook_secret || '').trim() === secret)
+    ? [...rows]
+        .filter((item) => String(item?.settings?.webhook_secret || '').trim() === secret)
+        .sort((left, right) => {
+          const leftExact = String(left?.connection_type || '') === `${channel}_bot` ? 1 : 0;
+          const rightExact = String(right?.connection_type || '') === `${channel}_bot` ? 1 : 0;
+          if (leftExact !== rightExact) return rightExact - leftExact;
+
+          const leftUpdated = Date.parse(String(left?.updated_at || left?.created_at || '')) || 0;
+          const rightUpdated = Date.parse(String(right?.updated_at || right?.created_at || '')) || 0;
+          return rightUpdated - leftUpdated;
+        })[0]
     : null;
 
   if (!row) throw new Error('Webhook secret ????? ????.');

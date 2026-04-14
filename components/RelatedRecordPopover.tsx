@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Popover, Spin, Button, Modal, Tag } from 'antd';
+import { App, Popover, Spin, Button, Modal, Tag } from 'antd';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
@@ -13,6 +13,7 @@ import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMes
 import { supportsSystemCode } from '../utils/systemCode';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRecordTagsMap } from '../utils/referenceData';
+import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -61,6 +62,32 @@ const formatNumericText = (value: any) => {
   return formatPersianPrice(normalized, true);
 };
 
+const normalizeEditableField = (field: any) => (
+  field?.type === FieldType.USER
+    ? {
+        ...field,
+        type: FieldType.RELATION,
+        relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
+      }
+    : field
+);
+
+const resolveUpdateTable = (moduleId: string, moduleConfig: any) => {
+  if (moduleId === 'sms_delivery_reports') return 'outbound_messages';
+  return moduleConfig?.table || moduleId;
+};
+
+const isEqualFieldValue = (a: any, b: any) => {
+  if (a === b) return true;
+  if (a === undefined && (b === null || b === '')) return true;
+  if (b === undefined && (a === null || a === '')) return true;
+  if ((a === null && b === '') || (a === '' && b === null)) return true;
+  if (typeof a === 'object' || typeof b === 'object') {
+    return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  }
+  return String(a ?? '') === String(b ?? '');
+};
+
 const resolveStatusColor = (rawColor: any) => {
   const color = String(rawColor || '').trim().toLowerCase();
   if (!color) return '#475569';
@@ -80,11 +107,15 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   onNavigate,
   hideFullRecordAction = false,
 }) => {
+  const { message } = App.useApp();
   const [internalOpen, setInternalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [savingQuickPreview, setSavingQuickPreview] = useState(false);
   const [record, setRecord] = useState<any>(null);
+  const [draftRecord, setDraftRecord] = useState<any>(null);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, { label: string; value: string }[]>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, { label: string; value: string }[]>>({});
+  const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
   const isMobileViewport = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
 
   const moduleConfig = MODULES[moduleId];
@@ -106,10 +137,50 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     };
   }, [mode, moduleId, open, recordId]);
 
-  const fields = useMemo(
-    () => (moduleConfig?.fields || []).filter((f) => f.isTableColumn && f.type !== FieldType.IMAGE),
-    [moduleConfig]
+  const fields = useMemo(() => {
+    const allFields = (moduleConfig?.fields || []).filter((field: any) => field.type !== FieldType.IMAGE);
+    const quickPreviewKeys = (moduleConfig?.quickPreview?.fieldKeys || [])
+      .map((key: any) => String(key || '').trim())
+      .filter(Boolean);
+
+    if (quickPreviewKeys.length > 0) {
+      const byKey = new Map(allFields.map((field: any) => [String(field.key), field]));
+      return quickPreviewKeys
+        .map((key: string) => byKey.get(key))
+        .filter(Boolean) as any[];
+    }
+
+    return allFields.filter((field: any) => field.isTableColumn);
+  }, [moduleConfig]);
+
+  const editableFieldKeys = useMemo(() => new Set(
+    (moduleConfig?.quickPreview?.editableFields || [])
+      .map((key: any) => String(key || '').trim())
+      .filter(Boolean)
+  ), [moduleConfig]);
+
+  const editableFields = useMemo(
+    () => fields.filter((field: any) => editableFieldKeys.has(String(field.key || ''))),
+    [editableFieldKeys, fields]
   );
+
+  const canEditModule = moduleConfig ? rolePermissions?.[moduleId]?.edit !== false : false;
+  const canEditField = (field: any) => {
+    const fieldKey = String(field?.key || '').trim();
+    if (!fieldKey || !editableFieldKeys.has(fieldKey)) return false;
+    if (!canEditModule) return false;
+    return rolePermissions?.[moduleId]?.fields?.[fieldKey] !== false;
+  };
+
+  const audioFieldKey = String(moduleConfig?.quickPreview?.audioField || '').trim();
+  const audioUrl = audioFieldKey ? String(draftRecord?.[audioFieldKey] || record?.[audioFieldKey] || '').trim() : '';
+
+  const hasDirtyQuickPreview = useMemo(() => (
+    editableFields.some((field: any) => {
+      if (field.type === FieldType.TAGS) return false;
+      return !isEqualFieldValue(record?.[field.key], draftRecord?.[field.key]);
+    })
+  ), [draftRecord, editableFields, record]);
 
   const previewImageUrl = useMemo(() => {
     if (!record || !moduleConfig) return '';
@@ -149,6 +220,19 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   }, [moduleId, record]);
 
   useEffect(() => {
+    if (!open || !moduleConfig) return;
+    let cancelled = false;
+    const loadPermissions = async () => {
+      const permissions = await fetchCurrentUserRolePermissions(supabase).catch(() => null);
+      if (!cancelled) setRolePermissions(permissions);
+    };
+    void loadPermissions();
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleConfig, open]);
+
+  useEffect(() => {
     if (!open || !moduleConfig || !recordId) return;
     let cancelled = false;
 
@@ -173,6 +257,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         }
         if (cancelled) return;
         setRecord(nextRecord);
+        setDraftRecord(nextRecord);
 
         const categorySet = new Set<string>();
         fields.forEach((field: any) => {
@@ -261,7 +346,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
                 const finalLabel = systemCode && !baseLabel.includes(systemCode)
                   ? `${baseLabel} (${systemCode})`
                   : baseLabel;
-                byId.set(id, { label: finalLabel, value: id });
+                byId.set(id, { label: finalLabel, value: id, module: targetModule } as any);
               });
 
               const options = normalizedValues.map((id) => byId.get(id) || { label: id, value: id });
@@ -276,6 +361,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         console.error(err);
         if (!cancelled) {
           setRecord(null);
+          setDraftRecord(null);
           setDynamicOptions({});
           setRelationOptions({});
         }
@@ -300,19 +386,71 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     window.open(path, '_blank');
   };
 
-  const renderFieldValue = (field: any) => {
-    const value = record?.[field.key];
-    if (isEmptyValue(value)) {
-      return <span className="text-gray-400">-</span>;
+  const handleDraftChange = (field: any, nextValue: any) => {
+    const fieldKey = String(field?.key || '');
+    setDraftRecord((prev: any) => {
+      const next = { ...(prev || {}) };
+      next[fieldKey] = nextValue;
+      if (fieldKey === 'module_id') {
+        next.record_id = null;
+      }
+      return next;
+    });
+  };
+
+  const handleSaveQuickPreview = async () => {
+    if (!moduleConfig || !record || !draftRecord || !canEditModule) return;
+    const patch: Record<string, any> = {};
+    editableFields.forEach((field: any) => {
+      const fieldKey = String(field?.key || '').trim();
+      if (!fieldKey || !canEditField(field) || field.type === FieldType.TAGS) return;
+      if (!isEqualFieldValue(record?.[fieldKey], draftRecord?.[fieldKey])) {
+        patch[fieldKey] = draftRecord?.[fieldKey] ?? null;
+      }
+    });
+
+    if (Object.keys(patch).length === 0) {
+      message.info('تغییری برای ذخیره وجود ندارد.');
+      return;
     }
 
-    if (
+    setSavingQuickPreview(true);
+    try {
+      const { error } = await supabase
+        .from(resolveUpdateTable(moduleId, moduleConfig))
+        .update(patch)
+        .eq('id', recordId);
+      if (error) throw error;
+      const nextRecord = { ...(record || {}), ...patch };
+      setRecord(nextRecord);
+      setDraftRecord(nextRecord);
+      message.success('تغییرات ذخیره شد.');
+    } catch (err: any) {
+      console.error(err);
+      message.error(String(err?.message || 'خطا در ذخیره تغییرات.'));
+    } finally {
+      setSavingQuickPreview(false);
+    }
+  };
+
+  const renderFieldValue = (field: any) => {
+    const normalizedField = normalizeEditableField(field);
+    const isEditable = canEditField(field);
+    const sourceRecord = isEditable ? (draftRecord || record || {}) : (record || {});
+    const value = sourceRecord?.[field.key];
+    if (isEmptyValue(value)) {
+      if (!isEditable) {
+        return <span className="text-gray-400">-</span>;
+      }
+    }
+
+    if (!isEditable && (
       field.type === FieldType.NUMBER
       || field.type === FieldType.STOCK
       || field.type === FieldType.PRICE
       || field.type === FieldType.PERCENTAGE
       || field.type === FieldType.PERCENTAGE_OR_AMOUNT
-    ) {
+    )) {
       const formatted = formatNumericText(value);
       if (field.type === FieldType.PERCENTAGE) {
         return <span className="font-semibold persian-number">{formatted}%</span>;
@@ -320,15 +458,17 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       return <span className="font-semibold persian-number">{formatted}</span>;
     }
 
-    if (field.type === FieldType.PHONE) {
+    if (!isEditable && field.type === FieldType.PHONE) {
       return <PhoneActionsPopover value={value} moduleId={moduleId} record={record} className="font-medium break-words" />;
     }
 
-    if (field.type === FieldType.TEXT || field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
+    if (!isEditable && (field.type === FieldType.TEXT || field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT)) {
       return <span className="font-medium break-words">{toPersianNumber(String(value))}</span>;
     }
 
     if (
+      !isEditable
+      &&
       typeof value === 'object'
       && !Array.isArray(value)
       && field.type !== FieldType.DATE
@@ -337,14 +477,6 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     ) {
       return <span className="font-medium">{JSON.stringify(value)}</span>;
     }
-
-    const normalizedField = field.type === FieldType.USER
-      ? {
-          ...field,
-          type: FieldType.RELATION,
-          relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
-        }
-      : field;
 
     const fieldOptions = normalizedField.dynamicOptionsCategory
       ? (dynamicOptions[normalizedField.dynamicOptionsCategory] || [])
@@ -356,13 +488,15 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       <SmartFieldRenderer
         field={normalizedField}
         value={value}
-        onChange={() => undefined}
-        forceEditMode={false}
+        onChange={(nextValue: any) => handleDraftChange(field, nextValue)}
+        onOptionsUpdate={((nextValue: any) => handleDraftChange(field, nextValue)) as any}
+        forceEditMode={isEditable}
         compactMode
         options={fieldOptions}
-        allValues={record || {}}
+        allValues={sourceRecord}
         recordId={recordId}
         moduleId={moduleId}
+        overlayZIndexBase={overlayZIndex + 100}
       />
     );
   };
@@ -413,6 +547,13 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           </div>
         )}
 
+        {!loading && record && audioUrl && (
+          <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-white/5">
+            <div className="mb-1 text-[11px] font-semibold text-gray-600 dark:text-gray-300">فایل صوتی تماس</div>
+            <audio controls src={audioUrl} className="w-full" />
+          </div>
+        )}
+
         {loading ? (
           <div className="py-8 flex items-center justify-center"><Spin size="small" /></div>
         ) : (
@@ -426,6 +567,23 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
                 <div className="text-right min-w-0 break-words">{renderFieldValue(field)}</div>
               </div>
             ))}
+          </div>
+        )}
+
+        {!loading && record && editableFields.length > 0 && (
+          <div className="pt-2 mt-2 flex items-center justify-end gap-2 border-t border-gray-100 dark:border-gray-800">
+            {hasDirtyQuickPreview ? (
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">تغییرات ذخیره نشده</span>
+            ) : null}
+            <Button
+              size="small"
+              type="primary"
+              loading={savingQuickPreview}
+              disabled={!canEditModule || !hasDirtyQuickPreview}
+              onClick={handleSaveQuickPreview}
+            >
+              ذخیره
+            </Button>
           </div>
         )}
 

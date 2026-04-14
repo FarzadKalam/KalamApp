@@ -306,6 +306,22 @@ export const customerModule: ModuleDefinition = {
       relationType: 'fk',
       targetModule: 'counterparty_bot_groups',
       foreignKey: 'customer_id'
+    },
+    {
+      id: 'customer_sms_reports',
+      title: 'پیامک‌ها',
+      icon: 'MessageOutlined',
+      relationType: 'record_context',
+      targetModule: 'sms_delivery_reports',
+      disableCreate: true
+    },
+    {
+      id: 'customer_voip_calls',
+      title: 'تماس‌ها',
+      icon: 'PhoneOutlined',
+      relationType: 'record_context',
+      targetModule: 'voip_call_reports',
+      disableCreate: true
     }
   ],
   actionButtons: [

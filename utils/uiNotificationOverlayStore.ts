@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 
-export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant';
+export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'voip_call' | 'sms';
 
 export interface UiNotificationOverlayItem {
   id: string;
@@ -24,6 +24,16 @@ const emit = () => {
 
 const snapshot = () => notifications;
 
+const normalizeItems = (items: UiNotificationOverlayItem[]) => {
+  const unique = new Map<string, UiNotificationOverlayItem>();
+  (items || []).forEach((item) => {
+    const id = String(item?.id || '').trim();
+    if (!id) return;
+    unique.set(id, { ...item, id });
+  });
+  return Array.from(unique.values());
+};
+
 const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiNotificationOverlayItem[]) => {
   if (left === right) return true;
   if (left.length !== right.length) return false;
@@ -46,19 +56,29 @@ const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiN
 };
 
 const recompute = () => {
-  notifications = Object.values(notificationsBySource)
+  const unique = new Map<string, UiNotificationOverlayItem>();
+  Object.values(notificationsBySource)
     .flat()
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .forEach((item) => {
+      if (!unique.has(item.id)) unique.set(item.id, item);
+    });
+  notifications = Array.from(unique.values())
+    .sort((a, b) => {
+      const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      return timeDiff || String(a.id).localeCompare(String(b.id));
+    })
     .slice(0, 6);
 };
 
 export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[], source = 'default') => {
+  const normalizedItems = normalizeItems(items);
   const previous = notificationsBySource[source] || [];
-  if (areItemsPresentationEqual(previous, items)) {
-    notificationsBySource[source] = items;
+  if (areItemsPresentationEqual(previous, normalizedItems)) {
+    notificationsBySource[source] = normalizedItems;
     return;
   }
-  notificationsBySource[source] = items;
+  notificationsBySource[source] = normalizedItems;
   recompute();
   emit();
 };

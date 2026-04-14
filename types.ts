@@ -212,6 +212,8 @@ export interface BlockDefinition {
     type: FieldType;
     width?: number;
     showTotal?: boolean; // <--- این خط جدید است: برای نمایش جمع کل در پایین ستون
+    options?: SelectOption[];
+    readonly?: boolean;
     relationConfig?: {
       targetModule: string;
       targetField: string;
@@ -223,8 +225,8 @@ export interface BlockDefinition {
         tagColor?: string;
       }>;
     };
-  rowCalculationType?: RowCalculationType;
   }[];
+  rowCalculationType?: RowCalculationType;
   // ویژگی اتصال به دیتای خارجی
   externalDataConfig?: {
     relationFieldKey: string;
@@ -251,6 +253,7 @@ summaryConfig?: {
 export type RelatedTabRelationType =
   | 'fk'
   | 'fk_from_field'
+  | 'record_context'
   | 'jsonb_contains'
   | 'join_table'
   | 'customer_products'
@@ -293,6 +296,12 @@ export interface ModuleDefinition {
   disableDetailView?: boolean;
   hideFullRecordAction?: boolean;
   listPreviewMode?: 'modal';
+  quickPreview?: {
+    fieldKeys?: string[];
+    editableFields?: string[];
+    relatedModuleOptions?: string[];
+    audioField?: string;
+  };
   dashboard?: {
     quickCreateLabel?: string;
     recentListFields?: string[];

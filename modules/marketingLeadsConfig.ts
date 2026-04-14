@@ -330,5 +330,21 @@ export const marketingLeadsModule: ModuleDefinition = {
       targetModule: 'tasks',
       foreignKey: 'marketing_lead_id',
     },
+    {
+      id: 'lead_sms_reports',
+      title: 'پیامک‌ها',
+      icon: 'MessageOutlined',
+      relationType: 'record_context',
+      targetModule: 'sms_delivery_reports',
+      disableCreate: true,
+    },
+    {
+      id: 'lead_voip_calls',
+      title: 'تماس‌ها',
+      icon: 'PhoneOutlined',
+      relationType: 'record_context',
+      targetModule: 'voip_call_reports',
+      disableCreate: true,
+    },
   ],
 };

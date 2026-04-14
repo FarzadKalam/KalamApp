@@ -4,6 +4,7 @@ import { supabase } from '../../supabaseClient';
 import ProductionStagesField from '../ProductionStagesField';
 import { OPEN_TASK_PROCESS_MODAL_EVENT } from '../../utils/taskProcessModalEvents';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
+import { resolveTaskSourceLink } from '../../utils/taskMeta';
 
 type TaskProcessTarget = {
   moduleId: string;
@@ -13,15 +14,9 @@ type TaskProcessTarget = {
 
 const resolveTaskProcessTarget = (task: any): TaskProcessTarget | null => {
   if (!task || typeof task !== 'object') return null;
-  const relatedModuleId = String(task?.related_to_module || '').trim();
-  const relatedRecordId =
-    task?.related_production_order
-    || task?.project_id
-    || task?.marketing_lead_id
-    || task?.related_customer
-    || task?.related_supplier
-    || task?.related_invoice
-    || task?.purchase_invoice_id;
+  const sourceLink = resolveTaskSourceLink(task);
+  const relatedModuleId = String(sourceLink.moduleId || '').trim();
+  const relatedRecordId = String(sourceLink.recordId || '').trim();
   if (!relatedModuleId || !relatedRecordId) {
     const taskId = String(task?.id || '').trim();
     if (!taskId) return null;
@@ -33,7 +28,7 @@ const resolveTaskProcessTarget = (task: any): TaskProcessTarget | null => {
   }
   return {
     moduleId: relatedModuleId,
-    recordId: String(relatedRecordId),
+    recordId: relatedRecordId,
     lineId: task?.production_line_id ? String(task.production_line_id) : null,
   };
 };
@@ -44,6 +39,9 @@ const TASK_MODAL_SELECT_COLUMNS = [
   'title',
   'status',
   'related_to_module',
+  'source_module_id',
+  'source_record_id',
+  'related_product',
   'related_production_order',
   'project_id',
   'marketing_lead_id',

@@ -164,9 +164,32 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   useEffect(() => {
     let isMounted = true;
     const updateViewportVars = () => {
-      const viewportHeight = window.visualViewport?.height || window.innerHeight;
-      document.documentElement.style.setProperty('--app-viewport-height', `${viewportHeight}px`);
-      document.documentElement.style.setProperty('--app-mobile-footer-height', '64px');
+      const visualViewport = window.visualViewport;
+      const viewportHeight = visualViewport?.height || window.innerHeight;
+      const viewportOffsetTop = visualViewport?.offsetTop || 0;
+      const keyboardInset = Math.max(
+        0,
+        window.innerHeight - Math.round(viewportHeight + viewportOffsetTop)
+      );
+      const activeElement = document.activeElement as HTMLElement | null;
+      const isTextInputFocused = Boolean(
+        activeElement
+        && (
+          activeElement.tagName === 'INPUT'
+          || activeElement.tagName === 'TEXTAREA'
+          || activeElement.getAttribute('contenteditable') === 'true'
+        )
+      );
+      const mobileViewport = window.innerWidth < 768;
+      const keyboardVisible = mobileViewport && (
+        keyboardInset > 120
+        || (isTextInputFocused && window.innerHeight - viewportHeight > 100)
+      );
+
+      document.documentElement.style.setProperty('--app-viewport-height', `${Math.round(viewportHeight)}px`);
+      document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardInset}px`);
+      document.documentElement.style.setProperty('--app-mobile-footer-height', keyboardVisible ? '0px' : '64px');
+      setIsKeyboardVisible(keyboardVisible);
     };
 
     const getUser = async () => {
@@ -195,7 +218,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       updateViewportVars();
 
       setIsMobile(mobile);
-      setIsKeyboardVisible(window.innerHeight < 500);
       
       if (mobile) {
         setCollapsed(true);
@@ -206,11 +228,15 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     window.addEventListener('resize', handleResize);
     window.visualViewport?.addEventListener('resize', handleResize);
     window.visualViewport?.addEventListener('scroll', handleResize);
+    window.addEventListener('focusin', handleResize);
+    window.addEventListener('focusout', handleResize);
     return () => {
       isMounted = false;
       window.removeEventListener('resize', handleResize);
       window.visualViewport?.removeEventListener('resize', handleResize);
       window.visualViewport?.removeEventListener('scroll', handleResize);
+      window.removeEventListener('focusin', handleResize);
+      window.removeEventListener('focusout', handleResize);
     };
   }, []);
 
@@ -273,7 +299,17 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/suppliers', label: 'تامین کنندگان' },
           { key: '/warehouses', label: 'انبارها' },
           { key: '/shelves', label: 'قفسه‌ها' },
+          { key: '/stock_transfers', label: 'تردد کالاها و حواله‌ها', disabled: !canViewModule('stock_transfers') },
           { key: '/billboards', label: 'تبلیغات محیطی', disabled: false },
+        ]
+      },
+      {
+        key: 'secretariat',
+        icon: <FileTextOutlined />,
+        label: 'دبیرخانه',
+        children: [
+          { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
+          { key: '/delivery_forms', label: 'فرم‌های تحویل', disabled: !canViewModule('delivery_forms') },
         ]
       },
       {
@@ -303,6 +339,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
           { key: '/cash_bank', label: 'نقد و بانک' },
+          { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
+          { key: '/employee_advances', label: 'مساعده‌ها', disabled: !canViewModule('employee_advances') },
+          { key: '/payroll_slips', label: 'فیش‌های حقوقی', disabled: !canViewModule('payroll_slips') },
           { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
           {
             key: '/accounting/account-review',
@@ -322,6 +361,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/hr', label: 'داشبورد منابع انسانی' },
           { key: '/employees', label: 'کارکنان' },
+          { key: '/employee_contracts', label: 'قراردادهای کارکنان', disabled: !canViewModule('employee_contracts') },
+          { key: '/recruitment_applicants', label: 'متقاضیان استخدام', disabled: !canViewModule('recruitment_applicants') },
           { key: '/attendance_logs', label: 'تردد' },
           { key: '/work_schedules', label: 'برنامه حضور' },
           { key: '/leave_requests', label: 'مرخصی‌ها' },
@@ -338,6 +379,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/reports', label: 'گزارش‌ساز', disabled: !canViewReportsHub },
           { key: '/automation_execution_reports', label: 'گزارشات فرآیند و اتوماسیون', disabled: !canViewModule('automation_execution_reports') },
           { key: '/sms_delivery_reports', label: 'گزارشات ارسال پیامک', disabled: !canViewModule('sms_delivery_reports') },
+          { key: '/voip_call_reports', label: 'گزارش تماس‌های VoIP', disabled: !canViewModule('voip_call_reports') },
           { key: '/counterparty_bot_groups', label: 'گروه‌های بات', disabled: !canViewModule('counterparty_bot_groups') },
         ],
       },
@@ -544,6 +586,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       production_orders: 'تولید',
       invoices: 'فروش',
       purchase_invoices: 'خرید',
+      secretariat_documents: 'دبیرخانه',
+      delivery_forms: 'تحویل',
+      expense_documents: 'هزینه',
+      employee_advances: 'مساعده',
+      payroll_slips: 'حقوق',
+      employee_contracts: 'قرارداد',
+      recruitment_applicants: 'استخدام',
       product_bundles: 'پکیج',
       price_lists: 'قیمت',
       customers: 'مشتری',
@@ -552,6 +601,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       tasks: 'فعالیت ها',
       employees: 'پرسنل',
       warehouses: 'انبار',
+      stock_transfers: 'حواله',
       marketing_leads: 'لیدها',
       process_runs: 'فرآیند',
       process_templates: 'الگوها',
@@ -564,12 +614,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       production_orders: <CheckSquareOutlined />,
       invoices: <FileTextOutlined />,
       purchase_invoices: <FileTextOutlined />,
+      secretariat_documents: <FileTextOutlined />,
+      delivery_forms: <FileTextOutlined />,
+      expense_documents: <BankOutlined />,
+      employee_advances: <BankOutlined />,
+      payroll_slips: <FileTextOutlined />,
+      employee_contracts: <FileTextOutlined />,
+      recruitment_applicants: <TeamOutlined />,
       customers: <TeamOutlined />,
       suppliers: <TeamOutlined />,
       employees: <TeamOutlined />,
       tasks: <CheckSquareOutlined />,
       projects: <ProjectOutlined />,
       warehouses: <BankOutlined />,
+      stock_transfers: <BankOutlined />,
       marketing_leads: <FileTextOutlined />,
       attendance_logs: <CheckSquareOutlined />,
       process_runs: <NodeIndexOutlined />,

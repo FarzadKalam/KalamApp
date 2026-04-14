@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { App, Button, Modal, Tooltip } from 'antd';
-import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { App, Button, Modal } from 'antd';
+import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined, EyeOutlined } from '@ant-design/icons';
 import PersianDatePicker from '../PersianDatePicker';
 import { isTaskDoneStatus } from '../../utils/taskCompletion';
 import { updateTaskDueDateWithAutomation, updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
+import { getTaskStatusSwatchColor } from '../../utils/processTaskStatusOptions';
 
 type TaskActionButtonsProps = {
   task: any;
@@ -13,6 +14,7 @@ type TaskActionButtonsProps = {
   buttonClassName?: string;
   modalZIndex?: number;
   stopPropagation?: boolean;
+  showReview?: boolean;
 };
 
 const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
@@ -23,13 +25,20 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   buttonClassName = '',
   modalZIndex = 12000,
   stopPropagation = true,
+  showReview = false,
 }) => {
   const { message } = App.useApp();
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [draftDueDate, setDraftDueDate] = useState<string | null>(task?.due_date || null);
   const [savingReschedule, setSavingReschedule] = useState(false);
   const [savingStart, setSavingStart] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
   const [savingComplete, setSavingComplete] = useState(false);
+  const normalizedStatus = String(task?.status || '').toLowerCase();
+  const isDone = isTaskDoneStatus(task?.status);
+  const isInProgress = normalizedStatus === 'in_progress';
+  const isInReview = normalizedStatus === 'review';
+  const actionSizePx = size === 'large' ? 40 : size === 'middle' ? 36 : 30;
 
   useEffect(() => {
     if (!rescheduleOpen) {
@@ -46,9 +55,40 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     await onTaskUpdated?.(nextTask);
   };
 
+  const getStatusColor = (status: string) => getTaskStatusSwatchColor(status, task);
+
+  const getActionButtonStyle = (
+    targetStatus?: string,
+    options: { active?: boolean; disabled?: boolean; reschedule?: boolean } = {}
+  ): React.CSSProperties => {
+    const activeColor = targetStatus ? getStatusColor(targetStatus) : '#6b7280';
+    const isActive = options.active === true;
+    const isDisabled = options.disabled === true;
+    return {
+      width: actionSizePx,
+      minWidth: actionSizePx,
+      height: actionSizePx,
+      padding: 0,
+      borderRadius: 8,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flex: '0 0 auto',
+      lineHeight: 1,
+      color: isActive ? activeColor : (isDisabled ? '#cbd5e1' : '#4b5563'),
+      backgroundColor: isActive ? `${activeColor}1a` : 'transparent',
+      border: 'none',
+      boxShadow: isActive
+        ? `0 4px 12px ${activeColor}33`
+        : (isDisabled ? 'none' : '0 3px 10px rgba(15, 23, 42, 0.10)'),
+      opacity: isDisabled ? 0.42 : 1,
+      cursor: isActive ? 'default' : (isDisabled ? 'not-allowed' : 'pointer'),
+    };
+  };
+
   const handleComplete = async (event?: React.SyntheticEvent) => {
     stopEvent(event);
-    if (!task?.id || isTaskDoneStatus(task?.status)) return;
+    if (!task?.id || isDone) return;
     setSavingComplete(true);
     try {
       const optimisticTask = { ...(task || {}), status: 'done' };
@@ -71,7 +111,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   const handleStart = async (event?: React.SyntheticEvent) => {
     stopEvent(event);
-    if (!task?.id || String(task?.status || '').toLowerCase() === 'in_progress' || isTaskDoneStatus(task?.status)) return;
+    if (!task?.id || isInProgress || isDone) return;
     setSavingStart(true);
     try {
       const optimisticTask = { ...(task || {}), status: 'in_progress' };
@@ -89,6 +129,29 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
     } finally {
       setSavingStart(false);
+    }
+  };
+
+  const handleReview = async (event?: React.SyntheticEvent) => {
+    stopEvent(event);
+    if (!task?.id || isInReview || isDone) return;
+    setSavingReview(true);
+    try {
+      const optimisticTask = { ...(task || {}), status: 'review' };
+      await emitTaskUpdate(optimisticTask);
+      const updatedTask = await updateTaskStatusWithAutomation({
+        taskId: String(task.id),
+        nextStatus: 'review',
+        previousTask: task,
+        currentUser: currentUser || null,
+      });
+      await emitTaskUpdate(updatedTask);
+      message.success('فعالیت در وضعیت بازبینی قرار گرفت');
+    } catch (error: any) {
+      await emitTaskUpdate(task);
+      message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
+    } finally {
+      setSavingReview(false);
     }
   };
 
@@ -114,41 +177,60 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   return (
     <>
-      <div className="flex items-center gap-1">
-        <Tooltip title="برنامه‌ریزی مجدد فعالیت">
+      <div className="flex items-center justify-center gap-1.5">
+        <Button
+          type="text"
+          size={size}
+          icon={<ClockCircleOutlined />}
+          className={`task-action-button ${buttonClassName}`}
+          style={getActionButtonStyle(undefined, { reschedule: true, disabled: isDone })}
+          title="برنامه‌ریزی مجدد فعالیت"
+          aria-label="برنامه‌ریزی مجدد فعالیت"
+          aria-disabled={isDone}
+          onClick={(event) => {
+            stopEvent(event);
+            if (isDone) return;
+            setRescheduleOpen(true);
+          }}
+        />
+        <Button
+          type="text"
+          size={size}
+          icon={<CaretRightOutlined />}
+          className={`task-action-button ${buttonClassName}`}
+          style={getActionButtonStyle('in_progress', { active: isInProgress, disabled: isDone })}
+          title="در حال انجام"
+          aria-label="در حال انجام"
+          loading={savingStart}
+          aria-disabled={isInProgress || isDone}
+          onClick={handleStart}
+        />
+        {showReview ? (
           <Button
             type="text"
             size={size}
-            icon={<ClockCircleOutlined />}
-            className={buttonClassName}
-            onClick={(event) => {
-              stopEvent(event);
-              setRescheduleOpen(true);
-            }}
+            icon={<EyeOutlined />}
+            className={`task-action-button ${buttonClassName}`}
+            style={getActionButtonStyle('review', { active: isInReview, disabled: isDone })}
+            title="بازبینی"
+            aria-label="بازبینی"
+            loading={savingReview}
+            aria-disabled={isInReview || isDone}
+            onClick={handleReview}
           />
-        </Tooltip>
-        <Tooltip title="در حال انجام">
-          <Button
-            type="text"
-            size={size}
-            icon={<CaretRightOutlined />}
-            className={buttonClassName}
-            loading={savingStart}
-            disabled={String(task?.status || '').toLowerCase() === 'in_progress' || isTaskDoneStatus(task?.status)}
-            onClick={handleStart}
-          />
-        </Tooltip>
-        <Tooltip title="تکمیل فعالیت">
-          <Button
-            type="text"
-            size={size}
-            icon={<CheckOutlined />}
-            className={buttonClassName}
-            loading={savingComplete}
-            disabled={isTaskDoneStatus(task?.status)}
-            onClick={handleComplete}
-          />
-        </Tooltip>
+        ) : null}
+        <Button
+          type="text"
+          size={size}
+          icon={<CheckOutlined />}
+          className={`task-action-button ${buttonClassName}`}
+          style={getActionButtonStyle('done', { active: isDone })}
+          title="تکمیل فعالیت"
+          aria-label="تکمیل فعالیت"
+          loading={savingComplete}
+          aria-disabled={isDone}
+          onClick={handleComplete}
+        />
       </div>
 
       <Modal

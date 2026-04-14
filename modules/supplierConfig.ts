@@ -121,6 +121,22 @@ export const supplierModule: ModuleDefinition = {
       targetModule: 'counterparty_bot_groups',
       foreignKey: 'supplier_id'
     },
+    {
+      id: 'supplier_sms_reports',
+      title: 'پیامک‌ها',
+      icon: 'MessageOutlined',
+      relationType: 'record_context',
+      targetModule: 'sms_delivery_reports',
+      disableCreate: true
+    },
+    {
+      id: 'supplier_voip_calls',
+      title: 'تماس‌ها',
+      icon: 'PhoneOutlined',
+      relationType: 'record_context',
+      targetModule: 'voip_call_reports',
+      disableCreate: true
+    },
   ],
   table: 'suppliers'
 };

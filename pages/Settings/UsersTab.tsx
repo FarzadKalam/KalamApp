@@ -37,6 +37,11 @@ type UserRow = {
   mobile_1?: string | null;
   avatar_url?: string | null;
   is_active?: boolean;
+  voip_enabled?: boolean;
+  voip_operator_code?: string | null;
+  voip_extension?: string | null;
+  voip_service_id?: string | null;
+  voip_dial_mode?: 'telefonchy_smartcall' | 'sip_link' | 'tel_link' | null;
   created_at?: string | null;
   org_roles?: any;
   _rowType: 'profile' | 'invite';
@@ -50,6 +55,12 @@ const SYSTEM_ROLE_OPTIONS = [
   { label: 'مدیر', value: 'manager' },
   { label: 'ویرایشگر', value: 'editor' },
   { label: 'مشاهده‌گر', value: 'viewer' },
+];
+
+const VOIP_DIAL_MODE_OPTIONS = [
+  { label: 'Smart Call تلفنچی', value: 'telefonchy_smartcall' },
+  { label: 'لینک SIP', value: 'sip_link' },
+  { label: 'لینک تلفن', value: 'tel_link' },
 ];
 
 const normalizeRoleToken = (value?: string | null) =>
@@ -187,7 +198,7 @@ const UsersTab: React.FC = () => {
         await Promise.all([
           supabase
             .from('profiles')
-            .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, created_at, org_roles(title)')
+            .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, voip_enabled, voip_operator_code, voip_extension, voip_service_id, voip_dial_mode, created_at, org_roles(title)')
             .eq('org_id', currentOrgId)
             .order('created_at', { ascending: false }),
           supabase.from('org_roles').select('*').eq('org_id', currentOrgId).order('created_at', { ascending: true }),
@@ -368,6 +379,11 @@ const UsersTab: React.FC = () => {
     form.setFieldsValue({
       is_active: true,
       role: 'viewer',
+      voip_enabled: false,
+      voip_operator_code: '',
+      voip_extension: '',
+      voip_service_id: '',
+      voip_dial_mode: 'telefonchy_smartcall',
     });
     setIsDrawerOpen(true);
   };
@@ -386,6 +402,11 @@ const UsersTab: React.FC = () => {
       role_id: record.role_id || null,
       role: record.role || 'viewer',
       is_active: record.is_active !== false,
+      voip_enabled: record.voip_enabled === true,
+      voip_operator_code: record.voip_operator_code || '',
+      voip_extension: record.voip_extension || '',
+      voip_service_id: record.voip_service_id || '',
+      voip_dial_mode: record.voip_dial_mode || 'telefonchy_smartcall',
     });
     setIsDrawerOpen(true);
   };
@@ -413,6 +434,11 @@ const UsersTab: React.FC = () => {
       role_id: record.role_id || null,
       role: record.role || 'viewer',
       is_active: record.is_active !== false,
+      voip_enabled: record.voip_enabled === true,
+      voip_operator_code: record.voip_operator_code || '',
+      voip_extension: record.voip_extension || '',
+      voip_service_id: record.voip_service_id || '',
+      voip_dial_mode: record.voip_dial_mode || 'telefonchy_smartcall',
       password: '',
       password_confirm: '',
     });
@@ -429,6 +455,14 @@ const UsersTab: React.FC = () => {
     }
     return data;
   };
+
+  const buildVoipProfilePatch = (values: any) => ({
+    voip_enabled: values.voip_enabled === true,
+    voip_operator_code: String(values.voip_operator_code || '').trim() || null,
+    voip_extension: String(values.voip_extension || '').trim() || null,
+    voip_service_id: String(values.voip_service_id || '').trim() || null,
+    voip_dial_mode: values.voip_dial_mode || 'telefonchy_smartcall',
+  });
 
   const handleAddOrEditUser = async (values: any) => {
     if (!canManageUsers) {
@@ -470,6 +504,12 @@ const UsersTab: React.FC = () => {
           password: values.password || undefined,
         });
 
+        const { error: voipUpdateError } = await supabase
+          .from('profiles')
+          .update(buildVoipProfilePatch(values))
+          .eq('id', editingUser.id);
+        if (voipUpdateError) throw voipUpdateError;
+
         if (editingUser.id === currentUserId) {
           clearSessionBootstrapCache();
         }
@@ -502,8 +542,9 @@ const UsersTab: React.FC = () => {
         if (createdId) {
           const { data: createdProfile } = await supabase
             .from('profiles')
-            .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, created_at, org_roles(title)')
+            .update(buildVoipProfilePatch(values))
             .eq('id', createdId)
+            .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, voip_enabled, voip_operator_code, voip_extension, voip_service_id, voip_dial_mode, created_at, org_roles(title)')
             .maybeSingle();
           if (createdProfile) {
             setEditingUser({
@@ -518,6 +559,11 @@ const UsersTab: React.FC = () => {
               role_id: createdProfile.role_id || null,
               role: createdProfile.role || 'viewer',
               is_active: createdProfile.is_active !== false,
+              voip_enabled: createdProfile.voip_enabled === true,
+              voip_operator_code: createdProfile.voip_operator_code || '',
+              voip_extension: createdProfile.voip_extension || '',
+              voip_service_id: createdProfile.voip_service_id || '',
+              voip_dial_mode: createdProfile.voip_dial_mode || 'telefonchy_smartcall',
               password: '',
               password_confirm: '',
             });
@@ -805,6 +851,27 @@ const UsersTab: React.FC = () => {
           <Form.Item label="وضعیت" name="is_active" valuePropName="checked" initialValue>
             <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
           </Form.Item>
+
+          <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4">
+            <div className="mb-3 font-semibold">تنظیمات VoIP</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Form.Item label="فعال در VoIP" name="voip_enabled" valuePropName="checked" className="mb-0">
+                <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+              </Form.Item>
+              <Form.Item label="حالت شماره‌گیری" name="voip_dial_mode" className="mb-0">
+                <Select options={VOIP_DIAL_MODE_OPTIONS} getPopupContainer={(node) => node?.parentElement || document.body} />
+              </Form.Item>
+              <Form.Item label="کد اپراتور تلفنچی" name="voip_operator_code" className="mb-0">
+                <Input placeholder="کد اپراتور" />
+              </Form.Item>
+              <Form.Item label="داخلی VoIP" name="voip_extension" className="mb-0">
+                <Input placeholder="مثال: 101" />
+              </Form.Item>
+              <Form.Item label="شناسه سرویس VoIP" name="voip_service_id" className="mb-0 md:col-span-2">
+                <Input placeholder="در صورت تفاوت با اتصال پیش‌فرض" />
+              </Form.Item>
+            </div>
+          </div>
 
           <div className="mt-6 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 space-y-3">
             <div className="font-semibold">ورود پیامکی</div>

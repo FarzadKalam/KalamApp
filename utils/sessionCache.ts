@@ -138,7 +138,7 @@ export const fetchSessionBootstrap = async (
     const pending = (async () => {
       const { data: profile } = await supabaseClient
         .from('profiles')
-        .select('id, full_name, avatar_url, role, role_id, org_id, is_active')
+        .select('id, full_name, avatar_url, role, role_id, org_id, is_active, voip_enabled, voip_operator_code, voip_extension, voip_service_id, voip_dial_mode')
         .eq('id', user.id)
         .maybeSingle();
 

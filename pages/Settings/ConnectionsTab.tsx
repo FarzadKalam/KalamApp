@@ -21,11 +21,13 @@ import { formatIranMobileForInput } from '../../utils/phoneNumber';
 import PhoneActionsPopover from '../../components/PhoneActionsPopover';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import { TAXPAYER_DEFAULT_BASE_URL } from '../../utils/taxpayerSystem';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
 
 type ConnectionType =
   | 'sms'
   | 'email'
   | 'site'
+  | 'voip'
   | 'telegram_bot'
   | 'bale_bot'
   | 'rubika_bot'
@@ -33,10 +35,13 @@ type ConnectionType =
 
 type ConnectionRecord = {
   id?: string;
+  org_id?: string | null;
   connection_type: ConnectionType;
   provider?: string | null;
   settings?: Record<string, any> | null;
   is_active?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type BotInboundContact = {
@@ -58,6 +63,7 @@ type FormValues = {
     api_key?: string;
     sender_number?: string;
     body_id?: string;
+    webhook_secret?: string;
     otp_login_enabled?: boolean;
     otp_delivery_mode?: 'sms_only' | 'sms_and_bale';
     is_active?: boolean;
@@ -78,6 +84,17 @@ type FormValues = {
     base_url?: string;
     api_key?: string;
     webhook_secret?: string;
+    is_active?: boolean;
+  };
+  voip: {
+    provider?: string;
+    base_url?: string;
+    webservice_token?: string;
+    service_id?: string;
+    default_extension?: string;
+    webhook_secret?: string;
+    smartcall_enabled?: boolean;
+    default_dial_mode?: 'telefonchy_smartcall' | 'sip_link' | 'tel_link';
     is_active?: boolean;
   };
   telegram_bot: {
@@ -139,6 +156,7 @@ const CONNECTION_TYPES: ConnectionType[] = [
   'sms',
   'email',
   'site',
+  'voip',
   'telegram_bot',
   'bale_bot',
   'rubika_bot',
@@ -149,6 +167,7 @@ const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
   sms: 'پیامک ملی پیامک otp احراز پیام',
   email: 'ایمیل smtp mail',
   site: 'سایت api webhook',
+  voip: 'تلفن voip تلفنچی telefonchy تماس داخلی اپراتور smartcall',
   ai_provider: 'هوش مصنوعی ai openai avalai مدل',
   taxpayer_system: 'سامانه مودیان شناسه حافظه مالیاتی کلید خصوصی گواهی امضا سریال صورتحساب cer crt',
   telegram_bot: 'بات تلگرام telegram chat id',
@@ -174,6 +193,7 @@ const DEFAULT_VALUES: FormValues = {
     api_key: '',
     sender_number: '',
     body_id: '',
+    webhook_secret: '',
     otp_login_enabled: false,
     otp_delivery_mode: 'sms_only',
     is_active: true,
@@ -195,6 +215,17 @@ const DEFAULT_VALUES: FormValues = {
     api_key: '',
     webhook_secret: '',
     is_active: true,
+  },
+  voip: {
+    provider: 'telefonchy',
+    base_url: 'https://panel.telefonchy.com',
+    webservice_token: '',
+    service_id: '',
+    default_extension: '',
+    webhook_secret: '',
+    smartcall_enabled: true,
+    default_dial_mode: 'telefonchy_smartcall',
+    is_active: false,
   },
   telegram_bot: {
     provider: 'telegram_bot_api',
@@ -268,12 +299,35 @@ const BOT_FORM_KEYS: Record<BotChannel, 'telegram_bot' | 'bale_bot' | 'rubika_bo
   rubika: 'rubika_bot',
 };
 
-const createWebhookSecret = (channel: BotChannel) => {
+const createWebhookSecret = (channel: BotChannel | 'sms' | 'voip') => {
   const randomPart =
     typeof globalThis.crypto?.randomUUID === 'function'
       ? globalThis.crypto.randomUUID().replace(/-/g, '')
       : `${Date.now()}${Math.random().toString(16).slice(2)}`;
   return `kalam-${channel}-${randomPart}`;
+};
+
+const toTimeValue = (value: unknown) => {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const pickPreferredConnectionRow = (rows: ConnectionRecord[]) => {
+  if (!rows.length) return null;
+  return [...rows].sort((left, right) => {
+    const leftActive = left.is_active === true ? 1 : 0;
+    const rightActive = right.is_active === true ? 1 : 0;
+    if (leftActive !== rightActive) return rightActive - leftActive;
+
+    const leftHasToken = String(left.settings?.bot_token || '').trim() ? 1 : 0;
+    const rightHasToken = String(right.settings?.bot_token || '').trim() ? 1 : 0;
+    if (leftHasToken !== rightHasToken) return rightHasToken - leftHasToken;
+
+    const updatedDiff = toTimeValue(right.updated_at) - toTimeValue(left.updated_at);
+    if (updatedDiff !== 0) return updatedDiff;
+
+    return toTimeValue(right.created_at) - toTimeValue(left.created_at);
+  })[0] || null;
 };
 
 const ConnectionsTab: React.FC = () => {
@@ -284,6 +338,9 @@ const ConnectionsTab: React.FC = () => {
   const [smsTesting, setSmsTesting] = useState(false);
   const [smsBalanceLoading, setSmsBalanceLoading] = useState(false);
   const [smsBalance, setSmsBalance] = useState<string | null>(null);
+  const [voipTesting, setVoipTesting] = useState(false);
+  const [voipSyncing, setVoipSyncing] = useState(false);
+  const [voipSyncInfo, setVoipSyncInfo] = useState<Record<string, any> | null>(null);
   const [taxpayerTesting, setTaxpayerTesting] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiModelsLoading, setAiModelsLoading] = useState(false);
@@ -294,6 +351,9 @@ const ConnectionsTab: React.FC = () => {
   const [rowIds, setRowIds] = useState<Partial<Record<ConnectionType, string>>>({});
   const [connectionSearch, setConnectionSearch] = useState('');
   const [activePanelKeys, setActivePanelKeys] = useState<string[]>([]);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const smsWebhookSecret = Form.useWatch(['sms', 'webhook_secret'], form);
+  const voipWebhookSecret = Form.useWatch(['voip', 'webhook_secret'], form);
 
   const [testMobile, setTestMobile] = useState('');
   const [testText, setTestText] = useState('این یک پیامک تست از سامانه ERP است.');
@@ -340,6 +400,9 @@ const ConnectionsTab: React.FC = () => {
 
   useEffect(() => {
     void fetchData();
+    void fetchSessionBootstrap(supabase).then((snapshot) => {
+      setCurrentOrgId(snapshot.orgId || snapshot.profile?.org_id || null);
+    }).catch(() => setCurrentOrgId(null));
   }, []);
 
   const smsProviderOptions = useMemo(
@@ -354,6 +417,20 @@ const ConnectionsTab: React.FC = () => {
 
   const siteProviderOptions = useMemo(
     () => [{ label: 'REST API', value: 'rest_api' }],
+    []
+  );
+
+  const voipProviderOptions = useMemo(
+    () => [{ label: 'تلفنچی', value: 'telefonchy' }],
+    []
+  );
+
+  const voipDialModeOptions = useMemo(
+    () => [
+      { label: 'Smart Call تلفنچی', value: 'telefonchy_smartcall' },
+      { label: 'لینک SIP', value: 'sip_link' },
+      { label: 'لینک تلفن', value: 'tel_link' },
+    ],
     []
   );
 
@@ -394,13 +471,52 @@ const ConnectionsTab: React.FC = () => {
     api_key: String(smsValues?.api_key || '').trim(),
     sender_number: String(smsValues?.sender_number || '').trim(),
     body_id: String(smsValues?.body_id || '').trim(),
+    webhook_secret: String(smsValues?.webhook_secret || '').trim(),
+    inbound_webhook_secret: String(smsValues?.webhook_secret || '').trim(),
     otp_login_enabled: smsValues?.otp_login_enabled === true,
     otp_delivery_mode: smsValues?.otp_delivery_mode || 'sms_only',
     is_flash: false,
   });
 
+  const buildVoipRequestSettings = (voipValues: FormValues['voip']) => ({
+    provider: String(voipValues?.provider || 'telefonchy').trim(),
+    base_url: String(voipValues?.base_url || 'https://panel.telefonchy.com').trim(),
+    webservice_token: String(voipValues?.webservice_token || '').trim(),
+    service_id: String(voipValues?.service_id || '').trim(),
+    default_extension: String(voipValues?.default_extension || '').trim(),
+    webhook_secret: String(voipValues?.webhook_secret || '').trim(),
+    smartcall_enabled: voipValues?.smartcall_enabled === true,
+    default_dial_mode: voipValues?.default_dial_mode || 'telefonchy_smartcall',
+    is_active: voipValues?.is_active === true,
+  });
+
   const getTaxpayerSystemValues = (): FormValues['taxpayer_system'] =>
     form.getFieldValue('taxpayer_system') || DEFAULT_VALUES.taxpayer_system;
+
+  const smsInboundWebhookUrl = useMemo(() => {
+    const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+    const secret = String(smsWebhookSecret || '').trim();
+    if (!supabaseUrl || !currentOrgId || !secret) return '';
+    const params = new URLSearchParams({
+      org_id: currentOrgId,
+      secret,
+      to: '$TO$',
+      body: '$TEXT$',
+      from: '$FROM$',
+    });
+    return `${supabaseUrl}/functions/v1/melipayamak-inbound?${params.toString()}`;
+  }, [currentOrgId, smsWebhookSecret]);
+
+  const voipWebhookUrl = useMemo(() => {
+    const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '');
+    const secret = String(voipWebhookSecret || '').trim();
+    if (!supabaseUrl || !currentOrgId || !secret) return '';
+    const params = new URLSearchParams({
+      org_id: currentOrgId,
+      secret,
+    });
+    return `${supabaseUrl}/functions/v1/telefonchy_call_webhook?${params.toString()}`;
+  }, [currentOrgId, voipWebhookSecret]);
 
   const buildTaxpayerSystemRequestSettings = () => {
     const values = getTaxpayerSystemValues();
@@ -466,18 +582,24 @@ const ConnectionsTab: React.FC = () => {
         throw error;
       }
 
-      const byType: Partial<Record<ConnectionType, ConnectionRecord>> = {};
+      const groupedByType = new Map<ConnectionType, ConnectionRecord[]>();
       (data || []).forEach((row: any) => {
         const type = String(row?.connection_type || '') as ConnectionType;
-        if (CONNECTION_TYPES.includes(type)) {
-          byType[type] = row as ConnectionRecord;
-        }
+        if (!CONNECTION_TYPES.includes(type)) return;
+        groupedByType.set(type, [...(groupedByType.get(type) || []), row as ConnectionRecord]);
+      });
+
+      const byType: Partial<Record<ConnectionType, ConnectionRecord>> = {};
+      CONNECTION_TYPES.forEach((type) => {
+        const picked = pickPreferredConnectionRow(groupedByType.get(type) || []);
+        if (picked) byType[type] = picked;
       });
 
       setRowIds({
         sms: byType.sms?.id,
         email: byType.email?.id,
         site: byType.site?.id,
+        voip: byType.voip?.id,
         telegram_bot: byType.telegram_bot?.id,
         bale_bot: byType.bale_bot?.id,
         rubika_bot: byType.rubika_bot?.id,
@@ -502,6 +624,12 @@ const ConnectionsTab: React.FC = () => {
           provider: String(byType.site?.provider || DEFAULT_VALUES.site.provider),
           ...(byType.site?.settings || {}),
           is_active: byType.site?.is_active ?? true,
+        },
+        voip: {
+          ...DEFAULT_VALUES.voip,
+          provider: String(byType.voip?.provider || DEFAULT_VALUES.voip.provider),
+          ...(byType.voip?.settings || {}),
+          is_active: byType.voip?.is_active ?? DEFAULT_VALUES.voip.is_active,
         },
         telegram_bot: {
           ...DEFAULT_VALUES.telegram_bot,
@@ -607,6 +735,10 @@ const ConnectionsTab: React.FC = () => {
         ...(form.getFieldValue('portal') || {}),
         ...(values.portal || {}),
       };
+      const currentVoipValues = {
+        ...(form.getFieldValue('voip') || {}),
+        ...(values.voip || {}),
+      };
       const currentAiProviderValues = {
         ...(form.getFieldValue('ai_provider') || {}),
         ...(values.ai_provider || {}),
@@ -659,6 +791,21 @@ const ConnectionsTab: React.FC = () => {
             webhook_secret: values.site?.webhook_secret || '',
           },
           is_active: values.site?.is_active !== false,
+        },
+        {
+          id: rowIds.voip,
+          connection_type: 'voip',
+          provider: currentVoipValues.provider || 'telefonchy',
+          settings: {
+            base_url: currentVoipValues.base_url || 'https://panel.telefonchy.com',
+            webservice_token: currentVoipValues.webservice_token || '',
+            service_id: currentVoipValues.service_id || '',
+            default_extension: currentVoipValues.default_extension || '',
+            webhook_secret: currentVoipValues.webhook_secret || '',
+            smartcall_enabled: currentVoipValues.smartcall_enabled === true,
+            default_dial_mode: currentVoipValues.default_dial_mode || 'telefonchy_smartcall',
+          },
+          is_active: currentVoipValues.is_active === true,
         },
         {
           id: rowIds.telegram_bot,
@@ -787,6 +934,21 @@ const ConnectionsTab: React.FC = () => {
           });
         }
       }
+
+      const rubikaConnectionId = String(nextIds.rubika_bot || '').trim();
+      if (values.rubika_bot?.is_active === true && rubikaConnectionId) {
+        const { data: rubikaCaptureData, error: rubikaCaptureError } = await supabase.functions.invoke('bot-admin', {
+          body: {
+            action: 'start_capture',
+            channel: 'rubika',
+            connectionId: rubikaConnectionId,
+          },
+        });
+        if (rubikaCaptureError || !rubikaCaptureData?.success) {
+          message.warning('تنظیمات ذخیره شد، اما فعال‌سازی دوباره دریافت پیام‌های روبیکا کامل نشد. یک بار «شروع خواندن پیام‌های ورودی بات» را بزنید.');
+        }
+      }
+
       setTableMissing(false);
       message.success('تنظیمات اتصالات ذخیره شد.');
     } catch (err: any) {
@@ -1057,6 +1219,81 @@ const ConnectionsTab: React.FC = () => {
       message.error(toFaErrorMessage(err, 'خطا در دریافت اعتبار پیامک'));
     } finally {
       setSmsBalanceLoading(false);
+    }
+  };
+
+  const handleTestVoipConnection = async () => {
+    const voipValues = form.getFieldValue('voip') || {};
+    const settings = buildVoipRequestSettings(voipValues);
+    if (settings.provider !== 'telefonchy') {
+      message.error('در حال حاضر فقط تست اتصال تلفنچی پشتیبانی می‌شود.');
+      return;
+    }
+    if (!settings.base_url) {
+      message.error('Base URL تلفنچی را وارد کنید.');
+      return;
+    }
+    if (!settings.webservice_token) {
+      message.error('Webservice Token تلفنچی را وارد کنید.');
+      return;
+    }
+    if (!settings.service_id) {
+      message.error('Service ID تلفنچی را وارد کنید.');
+      return;
+    }
+
+    setVoipTesting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('telefonchy_smartcall', {
+        body: {
+          action: 'test_connection',
+          overrideSettings: settings,
+        },
+      });
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(String(data?.message || 'تست اتصال VoIP ناموفق بود.'));
+      }
+      message.success(String(data?.message || 'اتصال تلفنچی برقرار است.'));
+      if (Number(data?.sample_count || 0) === 0) {
+        message.info('اتصال برقرار است، اما در بازه تست نمونه تماسی از API برنگشت.');
+      }
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در تست اتصال VoIP'));
+    } finally {
+      setVoipTesting(false);
+    }
+  };
+
+  const handleSyncRecentVoipCalls = async () => {
+    const voipValues = form.getFieldValue('voip') || {};
+    const settings = buildVoipRequestSettings(voipValues);
+    if (!settings.webservice_token || !settings.service_id) {
+      message.error('برای همگام‌سازی، Webservice Token و Service ID تلفنچی لازم است.');
+      return;
+    }
+
+    setVoipSyncing(true);
+    setVoipSyncInfo(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('telefonchy_smartcall', {
+        body: {
+          action: 'sync_recent_calls',
+          overrideSettings: settings,
+          days: 7,
+          perPage: 50,
+        },
+      });
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(String(data?.message || 'همگام‌سازی تماس‌های VoIP ناموفق بود.'));
+      }
+      setVoipSyncInfo(data);
+      message.success(String(data?.message || 'تماس‌های اخیر VoIP همگام‌سازی شد.'));
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در همگام‌سازی تماس‌های VoIP'));
+    } finally {
+      setVoipSyncing(false);
     }
   };
 
@@ -1400,12 +1637,53 @@ const ConnectionsTab: React.FC = () => {
                   <Form.Item label="کد الگو (اختیاری)" name={['sms', 'body_id']}>
                     <Input placeholder="برای Pattern/Base Number در صورت نیاز" />
                   </Form.Item>
+                  <Form.Item label="رمز دریافت پیامک" name={['sms', 'webhook_secret']}>
+                    <Input.Password
+                      placeholder="برای URL دریافت پیامک ملی‌پیامک"
+                      addonAfter={(
+                        <Button
+                          type="link"
+                          size="small"
+                          onClick={() => form.setFieldValue(['sms', 'webhook_secret'], createWebhookSecret('sms'))}
+                        >
+                          ساخت
+                        </Button>
+                      )}
+                    />
+                  </Form.Item>
                 </div>
 
                   <div className="text-xs text-gray-500 mb-3">
                     مسیرهای فنی ملی‌پیامک داخل سیستم ثابت نگه داشته شده‌اند و از دید کاربر نمایش داده نمی‌شوند.
                     ورود با شماره از `Supabase Auth` استفاده می‌کند و برای فعال‌سازی واقعی آن باید تنظیمات
                     self-hosted را طبق فایل <code>SMS_AUTH_SETUP.md</code> انجام بدهی.
+                  </div>
+
+                  <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 p-3 mb-3 bg-gray-50/70 dark:bg-white/5">
+                    <div className="font-semibold mb-2">URL دریافت پیامک</div>
+                    <div className="text-xs text-gray-500 mb-2">
+                      در پنل ملی‌پیامک همین URL را برای دریافت پیامک ثبت کن. پارامترها با الگوی مستندات ملی‌پیامک پر شده‌اند و endpoint باید پاسخ <code>ok</code> برگرداند.
+                    </div>
+                    <Input
+                      dir="ltr"
+                      readOnly
+                      value={smsInboundWebhookUrl || 'برای ساخت URL، ابتدا تنظیمات را ذخیره کن و رمز دریافت پیامک داشته باش.'}
+                      addonAfter={(
+                        <Button
+                          type="link"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          disabled={!smsInboundWebhookUrl}
+                          onClick={async () => {
+                            if (!smsInboundWebhookUrl) return;
+                            await navigator.clipboard?.writeText(smsInboundWebhookUrl);
+                            message.success('URL دریافت پیامک کپی شد.');
+                          }}
+                        >
+                          کپی
+                        </Button>
+                      )}
+                    />
                   </div>
 
                   <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 p-3 mb-3 bg-gray-50/70 dark:bg-white/5">
@@ -1520,6 +1798,107 @@ const ConnectionsTab: React.FC = () => {
                     <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
                   </Form.Item>
                 </div>
+              ),
+            },
+            {
+              key: 'voip',
+              label: 'اتصال تلفن VoIP',
+              children: (
+                <>
+                  <Alert
+                    type="info"
+                    showIcon
+                    className="mb-3"
+                    message="اتصال فعلی برای کنترل و ثبت تماس است."
+                    description="در این فاز مکالمه داخل مرورگر پیاده‌سازی نشده و تماس از طریق تلفنچی و کلاینت‌های SIP مثل PortSIP انجام می‌شود. KalamApp گزارش، ارتباط با رکوردها، اعلان و Smart Call را مدیریت می‌کند."
+                  />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <Form.Item label="ارائه‌دهنده VoIP" name={['voip', 'provider']}>
+                      <Select options={voipProviderOptions} />
+                    </Form.Item>
+                    <Form.Item label="فعال" name={['voip', 'is_active']} valuePropName="checked">
+                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+                    </Form.Item>
+                    <Form.Item label="Smart Call" name={['voip', 'smartcall_enabled']} valuePropName="checked">
+                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+                    </Form.Item>
+
+                    <Form.Item label="Base URL" name={['voip', 'base_url']} className="md:col-span-2">
+                      <Input placeholder="https://panel.telefonchy.com" />
+                    </Form.Item>
+                    <Form.Item label="حالت پیش‌فرض شماره‌گیری" name={['voip', 'default_dial_mode']}>
+                      <Select options={voipDialModeOptions} />
+                    </Form.Item>
+
+                    <Form.Item label="Webservice Token" name={['voip', 'webservice_token']} className="md:col-span-2">
+                      <Input.Password placeholder="توکن وب‌سرویس تلفنچی" autoComplete="new-password" />
+                    </Form.Item>
+                    <Form.Item label="Service ID" name={['voip', 'service_id']}>
+                      <Input placeholder="شناسه سرویس تلفنچی" />
+                    </Form.Item>
+                    <Form.Item label="داخلی پیش‌فرض" name={['voip', 'default_extension']}>
+                      <Input placeholder="مثال: 101" />
+                    </Form.Item>
+                    <Form.Item label="Webhook Secret" name={['voip', 'webhook_secret']} className="md:col-span-2">
+                      <Input.Password placeholder="برای اعتبارسنجی webhook داخلی" autoComplete="new-password" />
+                    </Form.Item>
+                    <div className="md:col-span-3">
+                      <Space wrap>
+                        <Button
+                          icon={<SafetyCertificateOutlined />}
+                          loading={voipTesting}
+                          onClick={handleTestVoipConnection}
+                        >
+                          تست اتصال VoIP
+                        </Button>
+                        <Button
+                          icon={<ReloadOutlined />}
+                          loading={voipSyncing}
+                          onClick={handleSyncRecentVoipCalls}
+                        >
+                          همگام‌سازی تماس‌های اخیر
+                        </Button>
+                        <Button
+                          icon={<CopyOutlined />}
+                          disabled={!voipWebhookUrl}
+                          onClick={() => copyBotValue(voipWebhookUrl, 'آدرس Webhook تماس')}
+                        >
+                          کپی آدرس Webhook
+                        </Button>
+                      </Space>
+                      {voipWebhookUrl ? (
+                        <Alert
+                          type="info"
+                          showIcon
+                          className="mt-3"
+                          message="آدرس Webhook تماس‌های تلفنچی"
+                          description={
+                            <span dir="ltr" className="block break-all text-left">
+                              {voipWebhookUrl}
+                            </span>
+                          }
+                        />
+                      ) : (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          className="mt-3"
+                          message="برای دریافت خودکار تماس‌ها، Webhook Secret و سازمان کاربر باید مشخص باشد."
+                          description="اگر فقط با تلفن VoIP تماس بگیرید و Webhook تلفنچی روی این آدرس تنظیم نشده باشد، تماس به‌صورت خودکار وارد پروژه نمی‌شود. تا زمان تنظیم webhook از دکمه همگام‌سازی تماس‌ها استفاده کنید."
+                        />
+                      )}
+                      {voipSyncInfo ? (
+                        <Alert
+                          type="success"
+                          showIcon
+                          className="mt-3"
+                          message="نتیجه همگام‌سازی"
+                          description={`دریافت‌شده از تلفنچی: ${Number(voipSyncInfo.fetched || 0).toLocaleString('fa-IR')}، ذخیره/بروزرسانی‌شده: ${Number(voipSyncInfo.saved || 0).toLocaleString('fa-IR')}`}
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+                </>
               ),
             },
             {

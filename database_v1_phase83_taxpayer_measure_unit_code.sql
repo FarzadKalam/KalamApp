@@ -6,4 +6,6 @@ begin;
 alter table if exists public.products
   add column if not exists taxpayer_measure_unit_code integer;
 
+notify pgrst, 'reload schema';
+
 commit;

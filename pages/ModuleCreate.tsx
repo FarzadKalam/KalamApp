@@ -7,6 +7,7 @@ import { supabase } from "../supabaseClient";
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from "../utils/processTaskCustomFields";
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY } from "../utils/processTaskStatusOptions";
 import { applyInvoiceFinalizationInventory } from "../utils/invoiceInventoryWorkflow";
+import { applyStockTransferInventory } from "../utils/stockTransferInventoryWorkflow";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
@@ -16,6 +17,7 @@ import { getCachedAuthUser } from "../utils/sessionCache";
 import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
 import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
+import { normalizeOperationalDocumentTotals } from "../utils/operationalDocumentTotals";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -309,19 +311,22 @@ export const ModuleCreate = () => {
               const payload = moduleId === "tasks"
                 ? attachTaskCompletionIfNeeded(values)
                 : values;
-              if (moduleId && supportsSystemCode(moduleId) && !payload.system_code) {
-                payload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
+              const normalizedPayload = moduleId
+                ? normalizeOperationalDocumentTotals(moduleId, payload)
+                : payload;
+              if (moduleId && supportsSystemCode(moduleId) && !normalizedPayload.system_code) {
+                normalizedPayload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
               }
               let insertResult = await supabase
                 .from(moduleConfig.table)
-                .insert(withCreateAuditFields(payload))
+                .insert(withCreateAuditFields(normalizedPayload))
                 .select("id")
                 .single();
 
               if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
                 insertResult = await supabase
                   .from(moduleConfig.table)
-                  .insert(payload)
+                  .insert(normalizedPayload)
                   .select("id")
                   .single();
               }
@@ -329,11 +334,11 @@ export const ModuleCreate = () => {
                 insertResult.error
                 && moduleId
                 && supportsSystemCode(moduleId)
-                && !payload.system_code
+                && !normalizedPayload.system_code
                 && isStatementTimeoutError(insertResult.error)
               ) {
                 const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
-                const payloadWithSystemCode = { ...payload, system_code: fallbackSystemCode };
+                const payloadWithSystemCode = { ...normalizedPayload, system_code: fallbackSystemCode };
 
                 insertResult = await supabase
                   .from(moduleConfig.table)
@@ -356,12 +361,22 @@ export const ModuleCreate = () => {
                 await syncRecordTags(supabase, moduleId, insertedId, selectedTags);
               }
               await runPostCreateCopy(insertedId);
+              if (moduleId === "stock_transfers" && insertedId) {
+                await applyStockTransferInventory({
+                  supabase: supabase as any,
+                  recordId: insertedId,
+                  previousStatus: null,
+                  nextStatus: normalizedPayload?.status ?? null,
+                  recordData: { ...(normalizedPayload as Record<string, any>), id: insertedId },
+                  userId,
+                });
+              }
 
               if (moduleId) {
                 await runWorkflowsForEvent({
                   moduleId,
                   event: "create",
-                  currentRecord: { ...(payload as Record<string, any>), id: insertedId || undefined },
+                  currentRecord: { ...(normalizedPayload as Record<string, any>), id: insertedId || undefined },
                 });
               }
               if (insertedId) {

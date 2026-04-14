@@ -59,8 +59,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   dragHandleTitle = "جابجایی کارت",
   onDragHandlePointerDown,
 }) => {
-  const cardRef = React.useRef<HTMLDivElement | null>(null);
-  const [standaloneTaskPopoverOpen, setStandaloneTaskPopoverOpen] = React.useState(false);
   const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
   const isSelected = selectedRowKeys.includes(item.id);
   const isTasks = moduleId === 'tasks';
@@ -92,7 +90,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     && !!relatedProcessRecordId
     && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedProcessModuleId)
   );
-  const isStandaloneTask = isTasks && !isProductionTask && !isExecutionProcessTask;
 
   const statusFieldConfig = moduleConfig?.fields.find(
     (f: any) => f.type === FieldType.STATUS || f.key === statusField,
@@ -269,88 +266,8 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       openTaskProcessModal({ task: cardItem });
       return;
     }
-    if (isTasks && (isProductionTask || isExecutionProcessTask) && cardRef.current) {
-      const segment = cardRef.current.querySelector<HTMLElement>(`[data-task-segment-id="${String(item.id)}"]`);
-      if (segment) {
-        segment.click();
-        return;
-      }
-    }
-    if (isStandaloneTask) {
-      setStandaloneTaskPopoverOpen(true);
-      return;
-    }
     navigate(`/${moduleId}/${item.id}`);
   };
-  const standaloneAssigneeLabel = React.useMemo(() => {
-    if (!assigneeId) return 'نامشخص';
-    if (assigneeType === 'user') {
-      const user = allUsers.find((u: any) => String(u?.id || '') === String(assigneeId));
-      return user?.full_name || user?.display_name || user?.email || 'کاربر';
-    }
-    if (assigneeType === 'role') {
-      const role = allRoles.find((r: any) => String(r?.id || '') === String(assigneeId));
-      return role?.title || role?.name || 'نقش';
-    }
-    return 'نامشخص';
-  }, [allRoles, allUsers, assigneeId, assigneeType]);
-  const standaloneTaskPopoverContent = isStandaloneTask ? (
-    <div className="w-80 max-w-[80vw] p-1">
-      <div className="mb-3 border-b border-[rgba(var(--brand-200-rgb),0.55)] pb-2">
-        <div className="text-sm font-bold text-gray-800 dark:text-gray-100 break-words">
-          {title}
-        </div>
-        {recordCode ? (
-          <div className="mt-1 text-[10px] text-gray-400 font-mono">{recordCode}</div>
-        ) : null}
-      </div>
-      <div className="space-y-2 text-xs text-gray-600 dark:text-gray-300">
-        {cardStatusMeta ? (
-          <div className="flex items-center justify-between gap-3">
-            <span>وضعیت</span>
-            <Tag color={cardStatusMeta.color || "default"} className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold">
-              {cardStatusMeta.label}
-            </Tag>
-          </div>
-        ) : null}
-        {category && categoryAllowed ? (
-          <div className="flex items-center justify-between gap-3">
-            <span>نوع فعالیت</span>
-            <span>{categoryLabel}</span>
-          </div>
-        ) : null}
-        <div className="flex items-center justify-between gap-3">
-          <span>{assigneeLabel}</span>
-          <span className="truncate max-w-[180px]">{standaloneAssigneeLabel}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span>موعد انجام</span>
-          {renderDueDate()}
-        </div>
-        {String(cardItem?.description || '').trim() ? (
-          <div className="pt-1">
-            <div className="mb-1 text-gray-500">شرح فعالیت</div>
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-2 py-2 leading-6 text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 whitespace-pre-wrap break-words">
-              {String(cardItem.description).trim()}
-            </div>
-          </div>
-        ) : null}
-      </div>
-      <div className="mt-3 flex justify-end border-t border-[rgba(var(--brand-200-rgb),0.55)] pt-2">
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            setStandaloneTaskPopoverOpen(false);
-            openTaskProcessModal({ task: cardItem });
-          }}
-          className="text-xs font-medium text-[rgba(var(--brand-700-rgb),1)] hover:underline"
-        >
-          جزئیات کامل
-        </button>
-      </div>
-    </div>
-  ) : null;
 
   if (!isTasks) {
     const renderFieldValue = (field: any, value: any) => {
@@ -525,7 +442,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 
   const taskCardNode = (
     <div
-      ref={cardRef}
       onClick={handleCardClick}
       className={`
         bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] rounded-2xl border shadow-sm cursor-pointer transition-all flex flex-col group relative
@@ -614,7 +530,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               onTaskUpdated={async (updatedTask) => {
                 setTaskPatch((prev) => ({ ...prev, ...updatedTask }));
               }}
-              buttonClassName="!px-1 !text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
               modalZIndex={12100}
             />
           ) : null}
@@ -815,23 +730,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       )}
     </div>
   );
-
-  if (isStandaloneTask) {
-    return (
-      <Popover
-        trigger="click"
-        open={standaloneTaskPopoverOpen}
-        onOpenChange={setStandaloneTaskPopoverOpen}
-        content={standaloneTaskPopoverContent}
-        title={null}
-        getPopupContainer={() => document.body}
-        placement="bottomRight"
-        overlayStyle={{ zIndex: 12000, maxWidth: 'min(92vw, 360px)' }}
-      >
-        {taskCardNode}
-      </Popover>
-    );
-  }
 
   return taskCardNode;
 };

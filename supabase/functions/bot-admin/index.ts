@@ -9,6 +9,7 @@ type BotAdminBody = {
   cursor?: string | number | null;
   chatId?: string;
   text?: string;
+  fallbackText?: string;
   fileId?: string;
   fileName?: string;
   messageId?: string;
@@ -339,11 +340,16 @@ const getConnectionRecord = async (
   channel: BotChannel,
   connectionId: string
 ) => {
+  const connectionTypes = channel === 'telegram'
+    ? ['telegram_bot', 'telegram']
+    : channel === 'bale'
+      ? ['bale_bot', 'bale']
+      : ['rubika_bot', 'rubika'];
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
   url.searchParams.set('id', `eq.${connectionId}`);
-  url.searchParams.set('connection_type', `eq.${channel}_bot`);
-  url.searchParams.set('select', 'id,org_id,provider,settings,is_active');
-  url.searchParams.set('limit', '1');
+  url.searchParams.set('connection_type', `in.(${connectionTypes.join(',')})`);
+  url.searchParams.set('select', 'id,org_id,provider,settings,is_active,connection_type,created_at,updated_at');
+  url.searchParams.set('limit', '20');
 
   const response = await fetch(url.toString(), {
     method: 'GET',
@@ -354,7 +360,44 @@ const getConnectionRecord = async (
   if (!response.ok) throw new Error(raw || 'خطا در خواندن تنظیمات بات');
 
   const parsed = raw ? JSON.parse(raw) : [];
-  const row = Array.isArray(parsed) ? parsed[0] : null;
+  let row = Array.isArray(parsed)
+    ? [...parsed].sort((left, right) => {
+        const leftExact = String(left?.connection_type || '') === `${channel}_bot` ? 1 : 0;
+        const rightExact = String(right?.connection_type || '') === `${channel}_bot` ? 1 : 0;
+        if (leftExact !== rightExact) return rightExact - leftExact;
+
+        const leftUpdated = Date.parse(String(left?.updated_at || left?.created_at || '')) || 0;
+        const rightUpdated = Date.parse(String(right?.updated_at || right?.created_at || '')) || 0;
+        return rightUpdated - leftUpdated;
+      })[0]
+    : null;
+
+  if (!row) {
+    const fallbackUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
+    fallbackUrl.searchParams.set('connection_type', `in.(${connectionTypes.join(',')})`);
+    fallbackUrl.searchParams.set('is_active', 'eq.true');
+    fallbackUrl.searchParams.set('select', 'id,org_id,provider,settings,is_active,connection_type,created_at,updated_at');
+    fallbackUrl.searchParams.set('limit', '20');
+
+    const fallbackResponse = await fetch(fallbackUrl.toString(), {
+      method: 'GET',
+      headers: getServiceHeaders(serviceRoleKey),
+    });
+    const fallbackRaw = await fallbackResponse.text();
+    if (!fallbackResponse.ok) throw new Error(fallbackRaw || 'خطا در خواندن تنظیمات بات');
+    const fallbackParsed = fallbackRaw ? JSON.parse(fallbackRaw) : [];
+    row = Array.isArray(fallbackParsed)
+      ? [...fallbackParsed].sort((left, right) => {
+          const leftExact = String(left?.connection_type || '') === `${channel}_bot` ? 1 : 0;
+          const rightExact = String(right?.connection_type || '') === `${channel}_bot` ? 1 : 0;
+          if (leftExact !== rightExact) return rightExact - leftExact;
+
+          const leftUpdated = Date.parse(String(left?.updated_at || left?.created_at || '')) || 0;
+          const rightUpdated = Date.parse(String(right?.updated_at || right?.created_at || '')) || 0;
+          return rightUpdated - leftUpdated;
+        })[0]
+      : null;
+  }
   if (!row) throw new Error('تنظیمات بات برای این کانال پیدا نشد.');
   if (row.is_active !== true) throw new Error('این بات غیرفعال است.');
   return row;
@@ -920,7 +963,7 @@ const sendTestMessage = async (
   channel: BotChannel,
   chatId: string,
   text: string,
-  options?: { skipLog?: boolean; extraPayload?: Record<string, any> }
+  options?: { skipLog?: boolean; extraPayload?: Record<string, any>; fallbackText?: string }
 ) => {
   const shouldLog = options?.skipLog !== true;
   const logRow = shouldLog
@@ -939,29 +982,60 @@ const sendTestMessage = async (
     : null;
 
   try {
-    const payload = await sendProviderMessage(
-      channel,
-      integration?.settings || {},
-      chatId,
-      text,
-      options?.extraPayload
-    );
+    let payload: any;
+    let deliveredText = text;
+    let usedFallbackMode = false;
+    try {
+      payload = await sendProviderMessage(
+        channel,
+        integration?.settings || {},
+        chatId,
+        text,
+        options?.extraPayload
+      );
+    } catch (primaryError: any) {
+      const fallbackText = String(options?.fallbackText || '').trim();
+      if (
+        channel !== 'rubika'
+        || !options?.extraPayload
+        || !fallbackText
+        || fallbackText === String(text || '').trim()
+      ) {
+        throw primaryError;
+      }
+
+      payload = await sendProviderMessage(
+        channel,
+        integration?.settings || {},
+        chatId,
+        fallbackText,
+        undefined
+      );
+      deliveredText = fallbackText;
+      usedFallbackMode = true;
+    }
+
     if (logRow?.id) {
       await updateOutboundLog(supabaseUrl, serviceRoleKey, String(logRow.id), {
         status: 'sent',
         sent_at: new Date().toISOString(),
+        message_text: deliveredText,
         provider_message_id: String(payload?.result?.message_id || payload?.message_id || payload?.data?.message_id || ''),
         metadata: shouldLog
           ? {
             channel,
             source: 'settings_test_send',
             request_extra_payload: options?.extraPayload || null,
+            fallback_text: options?.fallbackText || null,
+            fallback_used: usedFallbackMode,
             response: payload,
           }
           : {
             channel,
             source: 'function_proxy',
             request_extra_payload: options?.extraPayload || null,
+            fallback_text: options?.fallbackText || null,
+            fallback_used: usedFallbackMode,
             response: payload,
           },
       });
@@ -1274,6 +1348,7 @@ Deno.serve(async (req) => {
       }
       const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text, {
         skipLog: body?.skipLog === true,
+        fallbackText: String(body?.fallbackText || '').trim() || undefined,
         extraPayload: body?.extraPayload && typeof body.extraPayload === 'object'
           ? body.extraPayload
           : undefined,

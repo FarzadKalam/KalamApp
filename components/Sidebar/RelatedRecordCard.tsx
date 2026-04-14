@@ -6,6 +6,7 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getRecordTitle } from '../../utils/recordTitle';
 import { formatRecordFieldValue, RelationValueMap } from '../../utils/recordDisplayFormatter';
 import { getModuleCardSummaryFields, resolveCardStatusMeta } from '../../utils/recordCardHelpers';
+import RelatedRecordPopover from '../RelatedRecordPopover';
 
 interface RelatedRecordCardProps {
   moduleId: string;
@@ -31,9 +32,9 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
   const summaryFields = useMemo(() => getModuleCardSummaryFields(moduleConfig, ['status', 'full_name'], 4), [moduleConfig]);
   const moduleLabel = moduleConfig?.titles?.fa || moduleId;
   const codeLabel = String(item?.system_code || item?.manual_code || '').trim();
+  const useQuickPreviewModal = moduleConfig?.listPreviewMode === 'modal' || moduleConfig?.disableDetailView === true;
 
-  return (
-    <Link to={`/${moduleId}/${item.id}`} className="block">
+  const card = (
       <div className="mb-3 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-gradient-to-b from-white to-gray-50 p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:from-[#1d1d1d] dark:to-[#171717]">
         <div className="mb-3 flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -78,6 +79,27 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
           </div>
         ) : null}
       </div>
+  );
+
+  if (useQuickPreviewModal && item?.id) {
+    return (
+      <RelatedRecordPopover
+        moduleId={moduleId}
+        recordId={String(item.id)}
+        label={title}
+        mode="modal"
+        hideFullRecordAction={moduleConfig?.hideFullRecordAction === true}
+      >
+        <button type="button" className="block w-full border-0 bg-transparent p-0 text-right">
+          {card}
+        </button>
+      </RelatedRecordPopover>
+    );
+  }
+
+  return (
+    <Link to={`/${moduleId}/${item.id}`} className="block">
+      {card}
     </Link>
   );
 };

@@ -113,7 +113,6 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
               task={task}
               currentUser={currentUser}
               onTaskUpdated={onTaskUpdated}
-              buttonClassName="!text-gray-500 hover:!text-[rgba(var(--brand-700-rgb),1)]"
             />
             {onStatusChange ? (
               <Select

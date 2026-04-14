@@ -29,6 +29,7 @@ import {
 import { buildPrintOutputName } from './outputName';
 import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
 import { printInIframe } from './printInIframe';
+import { detectRecordFilesTable } from '../recordFilesAvailability';
 
 interface UsePrintManagerProps {
   moduleId: string;
@@ -320,6 +321,7 @@ export const usePrintManager = ({
   const [sellerInfo, setSellerInfo] = useState<any>(null);
   const [customerInfo, setCustomerInfo] = useState<any>(null);
   const [supplierInfo, setSupplierInfo] = useState<any>(null);
+  const [linkedAttachmentCount, setLinkedAttachmentCount] = useState<number | null>(null);
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
   const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
   const [templatesStoreMeta, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
@@ -404,9 +406,13 @@ export const usePrintManager = ({
     const id = selectedTemplateId.replace('custom:', '');
     return availableTemplates.find((tpl) => tpl.id === id) || null;
   }, [availableTemplates, selectedTemplateId]);
-  const isCompactSummaryTemplate = useMemo(
-    () => Boolean(selectedStoredTemplate?.isSystem && /_compact_a(?:5|6)$/i.test(String(selectedStoredTemplate?.id || ''))),
-    [selectedStoredTemplate?.id, selectedStoredTemplate?.isSystem]
+  const isSystemRecordTemplate = useMemo(
+    () =>
+      Boolean(
+        selectedStoredTemplate?.isSystem &&
+        String(selectedStoredTemplate?.scope || 'record') === 'record'
+      ),
+    [selectedStoredTemplate?.isSystem, selectedStoredTemplate?.scope]
   );
   const isNonInvoiceSystemSummaryTemplate = useMemo(
     () =>
@@ -449,6 +455,79 @@ export const usePrintManager = ({
         kind: item.kind,
       }));
 
+    const commonSystemOptions = [
+      {
+        key: 'record.attachment_count',
+        labels: { fa: 'تعداد پیوست‌ها' },
+        value: true,
+        group: 'فیلدهای رکورد',
+        kind: 'record',
+      },
+      {
+        key: 'company.logo_url',
+        labels: { fa: 'لوگوی سازمان' },
+        value: true,
+        group: 'اطلاعات سازمان',
+        kind: 'record',
+      },
+      {
+        key: 'company.company_full_name',
+        labels: { fa: 'نام کامل سازمان' },
+        value: true,
+        group: 'اطلاعات سازمان',
+        kind: 'record',
+      },
+      {
+        key: 'company.trade_name',
+        labels: { fa: 'نام تجاری سازمان' },
+        value: true,
+        group: 'اطلاعات سازمان',
+        kind: 'record',
+      },
+      {
+        key: 'company.phone',
+        labels: { fa: 'تلفن سازمان' },
+        value: true,
+        group: 'اطلاعات سازمان',
+        kind: 'record',
+      },
+      {
+        key: 'company.address',
+        labels: { fa: 'آدرس سازمان' },
+        value: true,
+        group: 'اطلاعات سازمان',
+        kind: 'record',
+      },
+      {
+        key: 'system.company_signatory_name',
+        labels: { fa: 'نام امضاکننده' },
+        value: true,
+        group: 'سیستم',
+        kind: 'record',
+      },
+      {
+        key: 'system.company_signatory_title',
+        labels: { fa: 'سمت امضاکننده' },
+        value: true,
+        group: 'سیستم',
+        kind: 'record',
+      },
+      {
+        key: 'system.company_signature_image',
+        labels: { fa: 'تصویر امضا' },
+        value: true,
+        group: 'سیستم',
+        kind: 'record',
+      },
+      {
+        key: 'system.company_stamp_image',
+        labels: { fa: 'تصویر مهر' },
+        value: true,
+        group: 'سیستم',
+        kind: 'record',
+      },
+    ];
+
     const mediaOptions = [
       ...(recordImageField
         ? [
@@ -470,14 +549,14 @@ export const usePrintManager = ({
       },
     ];
 
-    return [...baseOptions, ...mediaOptions];
+    return [...baseOptions, ...commonSystemOptions, ...mediaOptions];
   }, [canViewField, moduleId, recordImageField]);
   const isSelectedTemplateSystem = Boolean(selectedStoredTemplate?.isSystem || selectedTemplateMeta?.isSystem);
   const printableFieldsForTemplate = useMemo(() => {
     if (!isSelectedTemplateSystem) return printableFields;
-    if (!isCompactSummaryTemplate) return printableFields;
+    if (!isSystemRecordTemplate) return printableFields;
     return systemTemplateFieldOptions;
-  }, [isCompactSummaryTemplate, isSelectedTemplateSystem, printableFields, systemTemplateFieldOptions]);
+  }, [isSelectedTemplateSystem, isSystemRecordTemplate, printableFields, systemTemplateFieldOptions]);
   const templateSelectedKeySet = useMemo(
     () => new Set<string>(selectedPrintFields[selectedTemplateId] || []),
     [selectedPrintFields, selectedTemplateId]
@@ -492,12 +571,12 @@ export const usePrintManager = ({
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string) => {
-      if (!isSelectedTemplateSystem || !isCompactSummaryTemplate) return true;
+      if (!isSelectedTemplateSystem || !isSystemRecordTemplate) return true;
       if (!hasTemplateSelectionState) return true;
       if (!knownSystemFieldKeys.has(fieldPath)) return true;
       return templateSelectedKeySet.has(fieldPath);
     },
-    [hasTemplateSelectionState, isCompactSummaryTemplate, isSelectedTemplateSystem, knownSystemFieldKeys, templateSelectedKeySet]
+    [hasTemplateSelectionState, isSelectedTemplateSystem, isSystemRecordTemplate, knownSystemFieldKeys, templateSelectedKeySet]
   );
   const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
   const printQrValue = pageUrl;
@@ -1385,6 +1464,26 @@ export const usePrintManager = ({
         if (!isSystemFieldVisible('system.record_qr') || !recordQrSvgMarkup) return '';
         return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;">${recordQrSvgMarkup}</div>`;
       }
+      if (path === 'system.company_signature_image') {
+        if (!isSystemFieldVisible('system.company_signature_image')) return '';
+        const src = String(sellerInfo?.signature_image_url || '').trim();
+        if (!src) return '';
+        return `<img src="${src}" alt="امضا" style="display:block; max-width:120px; max-height:56px; object-fit:contain;" />`;
+      }
+      if (path === 'system.company_stamp_image') {
+        if (!isSystemFieldVisible('system.company_stamp_image')) return '';
+        const src = String(sellerInfo?.stamp_image_url || '').trim();
+        if (!src) return '';
+        return `<img src="${src}" alt="مهر" style="display:block; max-width:92px; max-height:92px; object-fit:contain; opacity:0.88;" />`;
+      }
+      if (path === 'system.company_signatory_name') {
+        if (!isSystemFieldVisible('system.company_signatory_name')) return '';
+        return localizePlainText(sellerInfo?.official_signatory_name || sellerInfo?.ceo_name || '');
+      }
+      if (path === 'system.company_signatory_title') {
+        if (!isSystemFieldVisible('system.company_signatory_title')) return '';
+        return localizePlainText(sellerInfo?.official_signatory_title || 'مدیرعامل');
+      }
       if (path === 'invoice.items_table') return buildInvoiceItemsTable(data?.invoiceItems || []);
       if (path.startsWith('block.')) return buildBlockTableHtml(path.replace(/^block\./, ''));
       if (path === 'record.total_invoice_amount') {
@@ -1415,7 +1514,10 @@ export const usePrintManager = ({
       }
       if (path === 'module.title') return getModuleTitle(moduleId, 'singular') || moduleConfig?.titles?.fa || '';
       if (path === 'module.title_plural') return getModuleTitle(moduleId, 'plural') || moduleConfig?.titles?.fa || '';
-      if (path === 'record.attachment_count') return toPersianNumber(String(getAttachmentCount(data)));
+      if (path === 'record.attachment_count') {
+        const count = linkedAttachmentCount !== null ? linkedAttachmentCount : getAttachmentCount(data);
+        return toPersianNumber(String(count));
+      }
 
       const [root, ...rest] = path.split('.');
       const nestedPath = rest.join('.');
@@ -1514,6 +1616,7 @@ export const usePrintManager = ({
       recordImageUrl,
       recordQrSvgMarkup,
       sellerInfo,
+      linkedAttachmentCount,
       supplierInfo,
       isSystemFieldVisible,
     ]
@@ -1546,6 +1649,15 @@ export const usePrintManager = ({
     if (!root) return html;
 
     root.querySelectorAll('img').forEach((img) => {
+      const src = String(img.getAttribute('src') || '').trim();
+      if (!src) {
+        const parent = img.parentElement;
+        img.remove();
+        if (parent && !String(parent.textContent || '').trim() && parent.children.length === 0) {
+          parent.remove();
+        }
+        return;
+      }
       const widthAttr = String(img.getAttribute('width') || '').trim();
       const heightAttr = String(img.getAttribute('height') || '').trim();
       const style = img.getAttribute('style') || '';
@@ -1977,12 +2089,24 @@ export const usePrintManager = ({
 
   useEffect(() => {
     if (!isPrintModalOpen && !printMode) return;
-    const dependencyKey = `${moduleId}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}`;
+    const dependencyKey = `${moduleId}:${String(data?.id || '')}:${String(data?.customer_id || '')}:${String(data?.supplier_id || '')}`;
     if (dependenciesLoadedKeyRef.current === dependencyKey) return;
     let isMounted = true;
     const loadDependencies = async () => {
       try {
         const companyReq = supabase.from('company_settings').select('*').limit(1).maybeSingle();
+        const filesCountReq =
+          moduleId && data?.id
+            ? (async () => {
+                const tableExists = await detectRecordFilesTable(supabase).catch(() => true);
+                if (!tableExists) return { count: null, error: null };
+                return supabase
+                  .from('record_files')
+                  .select('id', { count: 'exact', head: true })
+                  .eq('module_id', moduleId)
+                  .eq('record_id', data.id);
+              })()
+            : Promise.resolve({ count: null, error: null });
         const customerReq =
           moduleId === 'invoices' && data?.customer_id
             ? supabase.from('customers').select('*').eq('id', data.customer_id).maybeSingle()
@@ -1994,15 +2118,18 @@ export const usePrintManager = ({
 
         const [
           { data: companyData, error: companyError },
+          { count: filesCount, error: filesCountError },
           { data: customerData, error: customerError },
           { data: supplierData, error: supplierError },
         ] = await Promise.all([
           companyReq as any,
+          filesCountReq as any,
           customerReq as any,
           supplierReq as any,
         ]);
         if (!isMounted) return;
         if (!companyError) setSellerInfo(companyData || null);
+        if (!filesCountError) setLinkedAttachmentCount(Number.isFinite(filesCount) ? Number(filesCount) : 0);
         if (!customerError) setCustomerInfo(customerData || null);
         if (!supplierError) setSupplierInfo(supplierData || null);
         if (!companyError && !customerError && !supplierError) {
@@ -2017,7 +2144,7 @@ export const usePrintManager = ({
     return () => {
       isMounted = false;
     };
-  }, [data?.customer_id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
+  }, [data?.customer_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
 
   return {
     isPrintModalOpen,
@@ -2042,7 +2169,7 @@ export const usePrintManager = ({
     printableFieldsForTemplate,
     isSelectedTemplateSystem,
     savingPrintFields,
-    allowFieldSelectionTab: isCompactSummaryTemplate,
+    allowFieldSelectionTab: isSystemRecordTemplate,
     renderPrintCard,
   };
 };

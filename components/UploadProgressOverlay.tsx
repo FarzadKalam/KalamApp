@@ -7,7 +7,9 @@ import {
   CloseCircleFilled,
   CloseOutlined,
   LoadingOutlined,
+  MessageOutlined,
   MinusOutlined,
+  PhoneOutlined,
   ReloadOutlined,
   RobotOutlined,
   OpenAIOutlined,
@@ -47,11 +49,84 @@ const statusMeta = {
   },
 } as const;
 
+type PresencePhase = 'enter' | 'visible' | 'exit';
+
+type PresenceEntry<T> = {
+  id: string;
+  item: T;
+  phase: PresencePhase;
+};
+
+const ENTER_FRAME_MS = 20;
+const EXIT_ANIMATION_MS = 180;
+
+const getNotificationId = (item: { id: string }) => item.id;
+const getTaskId = (item: { id: string }) => item.id;
+
+const usePresenceList = <T,>(items: T[], getId: (item: T) => string) => {
+  const [entries, setEntries] = useState<PresenceEntry<T>[]>([]);
+
+  React.useEffect(() => {
+    const nextIds = new Set(items.map((item) => String(getId(item) || '').trim()).filter(Boolean));
+
+    setEntries((prev) => {
+      const previousById = new Map(prev.map((entry) => [entry.id, entry]));
+      const nextEntries: PresenceEntry<T>[] = [];
+
+      items.forEach((item) => {
+        const id = String(getId(item) || '').trim();
+        if (!id) return;
+        const previous = previousById.get(id);
+        nextEntries.push({
+          id,
+          item,
+          phase: previous && previous.phase !== 'exit' ? previous.phase : 'enter',
+        });
+      });
+
+      prev.forEach((entry) => {
+        if (!nextIds.has(entry.id)) {
+          nextEntries.push({ ...entry, phase: 'exit' });
+        }
+      });
+
+      return nextEntries;
+    });
+
+    const enterTimer = window.setTimeout(() => {
+      setEntries((prev) => prev.map((entry) => (
+        entry.phase === 'enter' ? { ...entry, phase: 'visible' } : entry
+      )));
+    }, ENTER_FRAME_MS);
+
+    const exitTimer = window.setTimeout(() => {
+      setEntries((prev) => prev.filter((entry) => entry.phase !== 'exit'));
+    }, EXIT_ANIMATION_MS);
+
+    return () => {
+      window.clearTimeout(enterTimer);
+      window.clearTimeout(exitTimer);
+    };
+  }, [getId, items]);
+
+  return entries;
+};
+
+const getPresenceClassName = (phase: PresencePhase) => (
+  phase === 'exit'
+    ? 'max-h-0 translate-y-2 scale-[0.98] opacity-0'
+    : phase === 'enter'
+      ? 'max-h-64 translate-y-2 scale-[0.98] opacity-0'
+      : 'max-h-64 translate-y-0 scale-100 opacity-100'
+);
+
 const UploadProgressOverlay: React.FC = () => {
   const tasks = useUploadTasks();
   const notifications = useUiNotificationOverlayItems();
   const { token } = theme.useToken();
   const [minimized, setMinimized] = useState(false);
+  const renderedNotifications = usePresenceList(notifications, getNotificationId);
+  const renderedTasks = usePresenceList(tasks, getTaskId);
 
   const activeCount = useMemo(
     () => tasks.filter((task) => task.status === 'uploading').length,
@@ -61,20 +136,26 @@ const UploadProgressOverlay: React.FC = () => {
   const notificationCount = notifications.length;
   const hasUploads = tasks.length > 0;
   const hasNotifications = notificationCount > 0;
-  const overlayTitle = hasUploads && hasNotifications
+  const hasRenderedUploads = renderedTasks.length > 0;
+  const hasRenderedNotifications = renderedNotifications.length > 0;
+  const displayUploadCount = hasUploads ? tasks.length : renderedTasks.length;
+  const displayNotificationCount = hasNotifications ? notificationCount : renderedNotifications.length;
+  const hasDisplayedUploads = hasUploads || hasRenderedUploads;
+  const hasDisplayedNotifications = hasNotifications || hasRenderedNotifications;
+  const overlayTitle = hasDisplayedUploads && hasDisplayedNotifications
     ? 'آپلودها و اعلان‌ها'
-    : hasNotifications
+    : hasDisplayedNotifications
       ? 'اعلان‌های جدید'
       : 'آپلود فایل';
-  const overlaySubtitle = hasUploads && hasNotifications
-    ? `${toPersianNumber(String(notificationCount))} اعلان و ${toPersianNumber(String(tasks.length))} مورد آپلود`
-    : hasNotifications
-      ? `${toPersianNumber(String(notificationCount))} اعلان در انتظار بررسی`
+  const overlaySubtitle = hasDisplayedUploads && hasDisplayedNotifications
+    ? `${toPersianNumber(String(displayNotificationCount))} اعلان و ${toPersianNumber(String(displayUploadCount))} مورد آپلود`
+    : hasDisplayedNotifications
+      ? `${toPersianNumber(String(displayNotificationCount))} اعلان در انتظار بررسی`
       : activeCount > 0
         ? `${toPersianNumber(String(activeCount))} مورد در حال آپلود`
-        : `${toPersianNumber(String(tasks.length))} مورد در صف نمایش`;
+        : `${toPersianNumber(String(displayUploadCount))} مورد در صف نمایش`;
 
-  if (!hasUploads && !hasNotifications) return null;
+  if (!hasDisplayedUploads && !hasDisplayedNotifications) return null;
 
   if (minimized) {
     return (
@@ -147,7 +228,8 @@ const UploadProgressOverlay: React.FC = () => {
           style={{ scrollbarGutter: 'stable both-edges', overscrollBehavior: 'contain' }}
         >
           <div className="flex flex-col gap-2.5">
-            {notifications.map((item) => {
+            {renderedNotifications.map((entry) => {
+              const item = entry.item;
               const icon = item.kind === 'note'
                 ? <BellOutlined />
                 : item.kind === 'task'
@@ -156,7 +238,11 @@ const UploadProgressOverlay: React.FC = () => {
                     ? <RobotOutlined />
                     : item.kind === 'assistant'
                       ? <OpenAIOutlined />
-                      : <TeamOutlined />;
+                      : item.kind === 'sms'
+                        ? <MessageOutlined />
+                        : item.kind === 'voip_call'
+                          ? <PhoneOutlined />
+                          : <TeamOutlined />;
               const accentColor = item.kind === 'note'
                 ? '#2563eb'
                 : item.kind === 'task'
@@ -165,59 +251,68 @@ const UploadProgressOverlay: React.FC = () => {
                     ? '#2563eb'
                     : item.kind === 'assistant'
                       ? '#be185d'
-                      : '#d97706';
+                      : item.kind === 'sms'
+                        ? '#d97706'
+                        : item.kind === 'voip_call'
+                          ? '#0f766e'
+                          : '#d97706';
 
               return (
                 <div
-                  key={item.id}
-                  className="rounded-[18px] border px-3 py-3"
-                  style={{
-                    borderColor: token.colorBorderSecondary,
-                    background: token.colorFillTertiary,
-                  }}
+                  key={entry.id}
+                  className={`transform-gpu overflow-hidden transition-[max-height,opacity,transform,margin] duration-200 ease-out will-change-transform ${getPresenceClassName(entry.phase)}`}
                 >
-                  <div className="flex items-start gap-2">
-                    <div
-                      className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full text-sm"
-                      style={{
-                        color: accentColor,
-                        background: token.colorBgElevated,
-                      }}
-                    >
-                      {icon}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={item.onOpen}
-                      className="min-w-0 flex-1 text-right"
-                    >
-                      <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
-                        <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : 'مسئولیت')}</span>
-                        <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
+                  <div
+                    className="rounded-[18px] border px-3 py-3"
+                    style={{
+                      borderColor: token.colorBorderSecondary,
+                      background: token.colorFillTertiary,
+                    }}
+                  >
+                    <div className="flex items-start gap-2">
+                      <div
+                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm"
+                        style={{
+                          color: accentColor,
+                          background: token.colorBgElevated,
+                        }}
+                      >
+                        {icon}
                       </div>
-                      <div className="mt-1 truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
-                        {item.title}
-                      </div>
-                      <div className="mt-1 line-clamp-2 text-[12px] leading-5" style={{ color: token.colorTextSecondary }}>
-                        {item.body}
-                      </div>
-                      {item.hasAttachments ? (
-                        <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
-                          دارای پیوست
+                      <button
+                        type="button"
+                        onClick={item.onOpen}
+                        className="min-w-0 flex-1 text-right"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
+                          <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : item.kind === 'sms' ? 'پیامک' : item.kind === 'voip_call' ? 'تماس ورودی' : 'مسئولیت')}</span>
+                          <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
                         </div>
-                      ) : null}
-                    </button>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CloseOutlined />}
-                      onClick={() => dismissUiNotificationOverlayItem(item.id)}
-                    />
+                        <div className="mt-1 truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
+                          {item.title}
+                        </div>
+                        <div className="mt-1 line-clamp-2 text-[12px] leading-5" style={{ color: token.colorTextSecondary }}>
+                          {item.body}
+                        </div>
+                        {item.hasAttachments ? (
+                          <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
+                            دارای پیوست
+                          </div>
+                        ) : null}
+                      </button>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<CloseOutlined />}
+                        onClick={() => dismissUiNotificationOverlayItem(item.id)}
+                      />
+                    </div>
                   </div>
                 </div>
               );
             })}
-            {tasks.map((task) => {
+            {renderedTasks.map((entry) => {
+              const task = entry.item;
               const meta = statusMeta[task.status];
               const percentLabel = task.total > 0 ? `${task.progress}%` : '';
               const canCancel = task.status === 'uploading';
@@ -225,88 +320,92 @@ const UploadProgressOverlay: React.FC = () => {
 
               return (
                 <div
-                  key={task.id}
-                  className="rounded-[18px] border px-3 py-3"
-                  style={{
-                    borderColor: token.colorBorderSecondary,
-                    background: token.colorFillTertiary,
-                  }}
+                  key={entry.id}
+                  className={`transform-gpu overflow-hidden transition-[max-height,opacity,transform,margin] duration-200 ease-out will-change-transform ${getPresenceClassName(entry.phase)}`}
                 >
-                  <div className="mb-2 flex items-start gap-2">
-                    <div
-                      className="mt-0.5 text-sm"
-                      style={{
-                        color:
-                          task.status === 'error'
-                            ? token.colorError
-                            : task.status === 'success'
-                              ? token.colorSuccess
-                              : token.colorPrimary,
-                      }}
-                    >
-                      {meta.icon}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
-                        {task.name}
+                  <div
+                    className="rounded-[18px] border px-3 py-3"
+                    style={{
+                      borderColor: token.colorBorderSecondary,
+                      background: token.colorFillTertiary,
+                    }}
+                  >
+                    <div className="mb-2 flex items-start gap-2">
+                      <div
+                        className="mt-0.5 text-sm"
+                        style={{
+                          color:
+                            task.status === 'error'
+                              ? token.colorError
+                              : task.status === 'success'
+                                ? token.colorSuccess
+                                : token.colorPrimary,
+                        }}
+                      >
+                        {meta.icon}
                       </div>
-                      <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
-                        <span>{meta.label}</span>
-                        {task.detail ? <span className="truncate">{task.detail}</span> : null}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
+                          {task.name}
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
+                          <span>{meta.label}</span>
+                          {task.detail ? <span className="truncate">{task.detail}</span> : null}
+                        </div>
                       </div>
-                    </div>
-                    {canRetry ? (
+                      {canRetry ? (
+                        <button
+                          type="button"
+                          onClick={() => retryUploadTask(task.id)}
+                          className="mr-1 flex h-6 w-6 items-center justify-center rounded-full transition-opacity hover:opacity-80"
+                          style={{ color: token.colorPrimary }}
+                          aria-label="تلاش دوباره"
+                        >
+                          <ReloadOutlined style={{ fontSize: 12 }} />
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={() => retryUploadTask(task.id)}
-                        className="mr-1 flex h-6 w-6 items-center justify-center rounded-full transition-opacity hover:opacity-80"
-                        style={{ color: token.colorPrimary }}
-                        aria-label="تلاش دوباره"
+                        onClick={() => cancelUploadTask(task.id)}
+                        className="flex h-6 w-6 items-center justify-center rounded-full transition-opacity hover:opacity-80"
+                        style={{ color: token.colorTextTertiary }}
+                        aria-label={canCancel ? 'لغو آپلود' : 'بستن'}
                       >
-                        <ReloadOutlined style={{ fontSize: 12 }} />
+                        <CloseOutlined style={{ fontSize: 11 }} />
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => cancelUploadTask(task.id)}
-                      className="flex h-6 w-6 items-center justify-center rounded-full transition-opacity hover:opacity-80"
-                      style={{ color: token.colorTextTertiary }}
-                      aria-label={canCancel ? 'لغو آپلود' : 'بستن'}
-                    >
-                      <CloseOutlined style={{ fontSize: 11 }} />
-                    </button>
-                  </div>
-
-                  <Progress
-                    percent={task.progress}
-                    showInfo={false}
-                    strokeColor={
-                      task.status === 'error'
-                        ? token.colorError
-                        : task.status === 'success'
-                          ? token.colorSuccess
-                          : token.colorPrimary
-                    }
-                    trailColor={token.colorFillSecondary}
-                    size="small"
-                    status={task.status === 'error' ? 'exception' : task.status === 'success' ? 'success' : 'active'}
-                  />
-
-                  <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: token.colorTextSecondary }}>
-                    <span dir="ltr">
-                      {formatBytes(task.loaded)} / {formatBytes(task.total)}
-                    </span>
-                    <span>{percentLabel || meta.label}</span>
-                  </div>
-
-                  {task.errorMessage && task.status !== 'uploading' ? (
-                    <div
-                      className="mt-2 line-clamp-2 text-[11px]"
-                      style={{ color: task.status === 'error' ? token.colorError : token.colorTextTertiary }}
-                    >
-                      {task.errorMessage}
                     </div>
-                  ) : null}
+
+                    <Progress
+                      percent={task.progress}
+                      showInfo={false}
+                      strokeColor={
+                        task.status === 'error'
+                          ? token.colorError
+                          : task.status === 'success'
+                            ? token.colorSuccess
+                            : token.colorPrimary
+                      }
+                      trailColor={token.colorFillSecondary}
+                      size="small"
+                      status={task.status === 'error' ? 'exception' : task.status === 'success' ? 'success' : 'active'}
+                    />
+
+                    <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: token.colorTextSecondary }}>
+                      <span dir="ltr">
+                        {formatBytes(task.loaded)} / {formatBytes(task.total)}
+                      </span>
+                      <span>{percentLabel || meta.label}</span>
+                    </div>
+
+                    {task.errorMessage && task.status !== 'uploading' ? (
+                      <div
+                        className="mt-2 line-clamp-2 text-[11px]"
+                        style={{ color: task.status === 'error' ? token.colorError : token.colorTextTertiary }}
+                      >
+                        {task.errorMessage}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}

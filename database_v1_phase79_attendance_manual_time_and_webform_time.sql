@@ -56,4 +56,6 @@ alter table public.web_form_fields
     field_type in ('text', 'long_text', 'number', 'phone', 'date', 'time', 'datetime', 'checkbox', 'select')
   );
 
+notify pgrst, 'reload schema';
+
 commit;

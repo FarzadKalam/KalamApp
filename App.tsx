@@ -86,10 +86,20 @@ const getInitialBranding = (): BrandingConfig => {
 const resolvePopupContainer = (triggerNode?: HTMLElement) => {
   if (typeof document === "undefined") return triggerNode || ({} as HTMLElement);
   if (!triggerNode) return document.body;
-  const overlayHost = triggerNode.closest(
-    ".ant-modal-root, .ant-modal, .ant-drawer, .ant-drawer-content, .ant-popover"
+
+  const stableOverlayHost = triggerNode.closest(
+    [
+      ".ant-modal-root",
+      ".ant-modal-wrap",
+      ".ant-modal",
+      ".ant-drawer-content-wrapper",
+      ".ant-drawer-content",
+      ".ant-drawer",
+    ].join(", ")
   ) as HTMLElement | null;
-  return overlayHost || triggerNode.parentElement || document.body;
+
+  if (stableOverlayHost) return stableOverlayHost;
+  return document.body;
 };
 
 function App() {

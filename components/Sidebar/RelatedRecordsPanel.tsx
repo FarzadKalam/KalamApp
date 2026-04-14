@@ -42,6 +42,11 @@ const PAYMENT_VISIBLE_KEYS = [
   'description',
 ];
 
+const getModuleTableName = (moduleId?: string | null) => {
+  const normalized = String(moduleId || '').trim();
+  return MODULES[normalized]?.table || normalized;
+};
+
 const toNumber = (value: any) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -366,7 +371,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
             setItems([]);
             return;
           }
-          const { data } = await supabase.from(tab.targetModule).select('*').in('id', ids);
+          const { data } = await supabase.from(getModuleTableName(tab.targetModule)).select('*').in('id', ids);
           setItems(data || []);
           await fetchProfileNames(data || []);
           return;
@@ -377,7 +382,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           const matchPayload = JSON.stringify([{ [matchKey]: currentRecordId }]);
           const { data } = await applyTabFilters(
             supabase
-              .from(tab.targetModule)
+              .from(getModuleTableName(tab.targetModule))
               .select('*')
               .filter(tab.jsonbColumn, 'cs', matchPayload),
             tab.filters,
@@ -394,7 +399,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           }
           let query = applyTabFilters(
             supabase
-              .from(tab.targetModule)
+              .from(getModuleTableName(tab.targetModule))
               .select('*')
               .eq(tab.foreignKey, sourceFieldValue),
             tab.filters,
@@ -408,10 +413,24 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           return;
         }
 
+        if (tab.relationType === 'record_context' && tab.targetModule) {
+          const { data } = await applyTabFilters(
+            supabase
+              .from(getModuleTableName(tab.targetModule))
+              .select('*')
+              .eq('module_id', currentModuleId)
+              .eq('record_id', currentRecordId),
+            tab.filters,
+          ).order('created_at', { ascending: false });
+          setItems(data || []);
+          await fetchProfileNames(data || []);
+          return;
+        }
+
         if (tab.targetModule && tab.foreignKey) {
           const { data } = await applyTabFilters(
             supabase
-              .from(tab.targetModule)
+              .from(getModuleTableName(tab.targetModule))
               .select('*')
               .eq(tab.foreignKey, currentRecordId),
             tab.filters,
