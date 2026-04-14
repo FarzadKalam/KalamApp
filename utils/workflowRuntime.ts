@@ -14,11 +14,13 @@ import {
   WorkflowCondition,
   WorkflowRecord,
 } from './workflowTypes';
+import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './intervalSchedule';
 import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { NoteAttachment, serializeNoteContent } from './noteContent';
 
-type WorkflowEvent = 'create' | 'upsert';
+type WorkflowEvent = 'create' | 'upsert' | 'interval';
+type WorkflowRunType = 'event' | 'scheduled';
 
 type RunWorkflowArgs = {
   moduleId: string;
@@ -123,6 +125,40 @@ const isSameDate = (a: Date, b: Date) =>
 
 export const formatWorkflowTemplateValue = (value: unknown): string => {
   return formatTemplateValueByField({ value });
+};
+
+const WORKFLOW_OPERATORS_WITHOUT_VALUE = new Set([
+  'is_true',
+  'is_false',
+  'is_null',
+  'not_null',
+  'changed',
+  'is_today',
+  'is_yesterday',
+  'is_tomorrow',
+  'is_friday',
+  'is_official_holiday',
+]);
+
+const INTERVAL_UNSUPPORTED_OPERATORS = new Set([
+  'changed',
+  'changed_from',
+  'changed_to',
+]);
+
+const isBlankConditionValue = (value: unknown) =>
+  value === undefined
+  || value === null
+  || String(value).trim() === ''
+  || (Array.isArray(value) && value.length === 0);
+
+const isRunnableIntervalCondition = (condition: WorkflowCondition) => {
+  const field = String(condition?.field || '').trim();
+  if (!field) return false;
+  const operator = String(condition?.operator || 'eq').trim();
+  if (INTERVAL_UNSUPPORTED_OPERATORS.has(operator)) return false;
+  if (WORKFLOW_OPERATORS_WITHOUT_VALUE.has(operator)) return true;
+  return !isBlankConditionValue(condition?.value);
 };
 
 const renderTemplate = (template: string, record: Record<string, any>, moduleId?: string | null) =>
@@ -1496,12 +1532,14 @@ export const executeWorkflowAction = async (
 const hasWorkflowLogForRecord = async (
   workflowId: string,
   moduleId: string,
-  recordId: string
+  recordId: string,
+  runType: WorkflowRunType = 'event'
 ) => {
   const { data, error } = await supabase
     .from('workflow_logs')
     .select('id')
     .eq('workflow_id', workflowId)
+    .eq('run_type', runType)
     .eq('module_id', moduleId)
     .eq('record_id', recordId)
     .eq('status', 'success')
@@ -1516,6 +1554,7 @@ const logWorkflowRun = async ({
   currentRecord,
   event,
   status,
+  runType = 'event',
   errorMessage,
 }: {
   workflow: WorkflowRecord;
@@ -1523,6 +1562,7 @@ const logWorkflowRun = async ({
   currentRecord: Record<string, any>;
   event: WorkflowEvent;
   status: 'success' | 'failed';
+  runType?: WorkflowRunType;
   errorMessage?: string;
 }) => {
   const orgId = await resolveWorkflowOrgId(currentRecord);
@@ -1530,7 +1570,7 @@ const logWorkflowRun = async ({
   await supabase.from('workflow_logs').insert({
     workflow_id: workflow.id,
     org_id: orgId,
-    run_type: 'event',
+    run_type: runType,
     status,
     module_id: moduleId,
     record_id: recordId,
@@ -1539,8 +1579,79 @@ const logWorkflowRun = async ({
       event,
       execution_mode: workflow.execution_mode || 'first_match',
       action_count: Array.isArray(workflow.actions) ? workflow.actions.length : 0,
+      trigger_type: workflow.trigger_type || null,
     },
   });
+};
+
+const executeWorkflowForRecord = async ({
+  workflow,
+  moduleId,
+  currentRecord,
+  previousRecord = null,
+  event,
+  runType,
+}: {
+  workflow: WorkflowRecord;
+  moduleId: string;
+  currentRecord: Record<string, any>;
+  previousRecord?: Record<string, any> | null | undefined;
+  event: WorkflowEvent;
+  runType: WorkflowRunType;
+}) => {
+  const matched = await evaluateWorkflow(workflow, currentRecord, previousRecord, moduleId);
+  if (!matched) {
+    return { matched: false, success: false };
+  }
+
+  const executionMode = String(workflow.execution_mode || 'first_match');
+  const recordId = String(currentRecord?.id || '').trim();
+  if (executionMode === 'first_match' && recordId) {
+    const alreadyExecuted = await hasWorkflowLogForRecord(workflow.id, moduleId, recordId, runType);
+    if (alreadyExecuted) {
+      return { matched: true, success: false, skippedByExecutionMode: true };
+    }
+  }
+
+  const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+  const actionErrors: string[] = [];
+  for (const action of actions) {
+    try {
+      await executeWorkflowAction(action as WorkflowAction, moduleId, currentRecord);
+    } catch (actionErr) {
+      actionErrors.push(
+        String((actionErr as any)?.message || (action as any)?.type || 'workflow action failed')
+      );
+      console.error(
+        `Workflow action failed (${workflow?.name || workflow?.id} / ${String((action as any)?.type || '-')})`,
+        actionErr
+      );
+    }
+  }
+
+  if (actionErrors.length > 0) {
+    const errorMessage = actionErrors.join(' | ');
+    await logWorkflowRun({
+      workflow,
+      moduleId,
+      currentRecord,
+      event,
+      runType,
+      status: 'failed',
+      errorMessage,
+    });
+    return { matched: true, success: false, errorMessage };
+  }
+
+  await logWorkflowRun({
+    workflow,
+    moduleId,
+    currentRecord,
+    event,
+    runType,
+    status: 'success',
+  });
+  return { matched: true, success: true };
 };
 
 export const runWorkflowsForEvent = async ({
@@ -1567,48 +1678,20 @@ export const runWorkflowsForEvent = async ({
   const workflows = (data || []) as WorkflowRecord[];
   for (const workflow of workflows) {
     try {
-      const matched = await evaluateWorkflow(workflow, currentRecord, previousRecord, moduleId);
-      if (!matched) continue;
-
-      const executionMode = String(workflow.execution_mode || 'first_match');
-      const recordId = String(currentRecord?.id || '').trim();
-      if (executionMode === 'first_match' && recordId) {
-        const alreadyExecuted = await hasWorkflowLogForRecord(workflow.id, moduleId, recordId);
-        if (alreadyExecuted) continue;
-      }
-
-      const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
-      const actionErrors: string[] = [];
-      for (const action of actions) {
-        try {
-          await executeWorkflowAction(action as WorkflowAction, moduleId, currentRecord);
-        } catch (actionErr) {
-          actionErrors.push(
-            String((actionErr as any)?.message || (action as any)?.type || 'workflow action failed')
-          );
-          console.error(
-            `Workflow action failed (${workflow?.name || workflow?.id} / ${String((action as any)?.type || '-')})`,
-            actionErr
-          );
-        }
-      }
-
-      if (actionErrors.length > 0) {
-        throw new Error(actionErrors.join(' | '));
-      }
-
-      await logWorkflowRun({
+      const result = await executeWorkflowForRecord({
         workflow,
         moduleId,
         currentRecord,
+        previousRecord,
         event,
-        status: 'success',
+        runType: 'event',
       });
-
-      await supabase
-        .from('workflows')
-        .update({ last_run_at: new Date().toISOString() })
-        .eq('id', workflow.id);
+      if (result.success) {
+        await supabase
+          .from('workflows')
+          .update({ last_run_at: new Date().toISOString() })
+          .eq('id', workflow.id);
+      }
     } catch (err: any) {
       console.error(`Workflow execution failed (${workflow?.name || workflow?.id}):`, err);
       try {
@@ -1617,6 +1700,7 @@ export const runWorkflowsForEvent = async ({
           moduleId,
           currentRecord,
           event,
+          runType: 'event',
           status: 'failed',
           errorMessage: String(err?.message || err || 'workflow execution failed'),
         });
@@ -1625,4 +1709,151 @@ export const runWorkflowsForEvent = async ({
       }
     }
   }
+};
+
+const sanitizeIntervalWorkflow = (workflow: WorkflowRecord): WorkflowRecord => ({
+  ...workflow,
+  conditions_all: (Array.isArray(workflow?.conditions_all) ? workflow.conditions_all : [])
+    .filter((condition) => isRunnableIntervalCondition(condition as WorkflowCondition)),
+  conditions_any: (Array.isArray(workflow?.conditions_any) ? workflow.conditions_any : [])
+    .filter((condition) => isRunnableIntervalCondition(condition as WorkflowCondition)),
+});
+
+const claimIntervalWorkflowRun = async (
+  workflowId: string,
+  expectedLastRunAt: string | null,
+  claimedAtIso: string
+) => {
+  try {
+    const { data, error } = await supabase.rpc('claim_workflow_interval_run', {
+      p_workflow_id: workflowId,
+      p_expected_last_run_at: expectedLastRunAt,
+      p_claimed_at: claimedAtIso,
+    });
+    if (error) throw error;
+    return data === true;
+  } catch {
+    let query = supabase
+      .from('workflows')
+      .update({ last_run_at: claimedAtIso })
+      .eq('id', workflowId)
+      .eq('is_active', true)
+      .eq('trigger_type', 'interval')
+      .select('id')
+      .limit(1);
+
+    if (expectedLastRunAt) {
+      query = query.eq('last_run_at', expectedLastRunAt);
+    } else {
+      query = query.is('last_run_at', null);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
+  }
+};
+
+export const runWorkflowsIntervalTick = async ({
+  moduleId,
+  workflowId,
+  maxWorkflows = 20,
+  defaultBatchSize = 200,
+}: {
+  moduleId?: string | null;
+  workflowId?: string | null;
+  maxWorkflows?: number;
+  defaultBatchSize?: number;
+} = {}) => {
+  const now = new Date();
+  const normalizedWorkflowLimit = Math.max(1, Math.min(100, Number(maxWorkflows || 20)));
+  const normalizedDefaultBatch = Math.max(10, Math.min(1000, Number(defaultBatchSize || 200)));
+
+  let query = supabase
+    .from('workflows')
+    .select('*')
+    .eq('is_active', true)
+    .eq('trigger_type', 'interval')
+    .order('updated_at', { ascending: true })
+    .limit(normalizedWorkflowLimit);
+
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (normalizedModuleId) query = query.eq('module_id', normalizedModuleId);
+  const normalizedWorkflowId = String(workflowId || '').trim();
+  if (normalizedWorkflowId) query = query.eq('id', normalizedWorkflowId);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const workflows = (data || []) as WorkflowRecord[];
+  const stats = {
+    checkedWorkflows: workflows.length,
+    claimedWorkflows: 0,
+    processedRecords: 0,
+    executedWorkflows: 0,
+    failedRuns: 0,
+  };
+
+  for (const rawWorkflow of workflows) {
+    const workflow = sanitizeIntervalWorkflow(rawWorkflow);
+    const due = isIntervalDue({
+      lastRunAt: workflow.last_run_at || null,
+      intervalValue: clampIntervalValue(workflow.interval_value, 1),
+      intervalUnit: normalizeIntervalUnit(workflow.interval_unit || 'day'),
+      intervalAt: workflow.interval_at || null,
+      now,
+    });
+    if (!due) continue;
+
+    const claimedAtIso = now.toISOString();
+    const claimed = await claimIntervalWorkflowRun(
+      String(workflow.id || '').trim(),
+      String(workflow.last_run_at || '').trim() || null,
+      claimedAtIso
+    );
+    if (!claimed) continue;
+    stats.claimedWorkflows += 1;
+
+    const targetModuleId = String(workflow.module_id || '').trim();
+    if (!targetModuleId) continue;
+    const moduleTable = getModuleTable(targetModuleId);
+    const perWorkflowBatchSize = Math.max(
+      1,
+      Math.min(5000, Number(workflow.batch_size || normalizedDefaultBatch))
+    );
+
+    const { data: records, error: recordsError } = await supabase
+      .from(moduleTable)
+      .select('*')
+      .limit(perWorkflowBatchSize);
+    if (recordsError) {
+      console.error('Workflow interval record fetch failed:', recordsError);
+      continue;
+    }
+
+    const rows = Array.isArray(records) ? records : [];
+    for (const row of rows) {
+      stats.processedRecords += 1;
+      try {
+        const result = await executeWorkflowForRecord({
+          workflow,
+          moduleId: targetModuleId,
+          currentRecord: row || {},
+          previousRecord: null,
+          event: 'interval',
+          runType: 'scheduled',
+        });
+        if (result.success) {
+          stats.executedWorkflows += 1;
+        } else if (result.errorMessage) {
+          stats.failedRuns += 1;
+        }
+      } catch (runErr) {
+        stats.failedRuns += 1;
+        console.error(`Scheduled workflow execution failed (${workflow?.name || workflow?.id}):`, runErr);
+      }
+    }
+  }
+
+  return stats;
 };

@@ -146,6 +146,27 @@ const pickPublicApiBaseUrl = (
   headers?: Headers,
   settings?: Record<string, any>
 ) => {
+  const isPublicHost = (value: string) => {
+    try {
+      const host = String(new URL(value).hostname || '').trim().toLowerCase();
+      if (!host) return false;
+      if (
+        host === 'localhost'
+        || host === '127.0.0.1'
+        || host === '0.0.0.0'
+        || host === '::1'
+        || host === 'kong'
+        || host.endsWith('.local')
+        || host.endsWith('.internal')
+      ) return false;
+      if (/^10\./.test(host)) return false;
+      if (/^192\.168\./.test(host)) return false;
+      if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const candidates = [
     settings?.public_api_base_url,
     settings?.public_supabase_url,
@@ -155,23 +176,25 @@ const pickPublicApiBaseUrl = (
   ];
   for (const candidate of candidates) {
     const normalized = normalizeBaseUrl(String(candidate || '').trim(), 'rubika');
-    if (normalized) return normalized;
+    if (normalized && isPublicHost(normalized)) return normalized;
   }
 
   const forwardedProto = pick(headers?.get('x-forwarded-proto'), headers?.get('x-forwarded-protocol'));
   const forwardedHost = pick(headers?.get('x-forwarded-host')).split(',')[0]?.trim();
   if (forwardedProto && forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+    const normalized = `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+    if (isPublicHost(normalized)) return normalized;
   }
 
   const host = pick(headers?.get('host')).split(',')[0]?.trim();
   if (host) {
-    return `https://${host}`.replace(/\/+$/, '');
+    const normalized = `https://${host}`.replace(/\/+$/, '');
+    if (isPublicHost(normalized)) return normalized;
   }
 
   try {
     const origin = new URL(String(requestUrl || '')).origin.replace(/\/+$/, '');
-    if (origin) return origin;
+    if (origin && isPublicHost(origin)) return origin;
   } catch {
     // ignore invalid request url
   }

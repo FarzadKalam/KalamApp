@@ -35,4 +35,10 @@ const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 const initialDarkMode = savedTheme === "dark" || (savedTheme !== "light" && resolveSmartThemeMode() === "dark");
 document.documentElement.classList.toggle("dark", initialDarkMode);
 
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => undefined);
+  });
+}
+
 void bootstrapAndRender();

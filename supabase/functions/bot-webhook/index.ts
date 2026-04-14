@@ -16,7 +16,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-04-11-02';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-04-15-03';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -81,6 +81,27 @@ const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: strin
 };
 
 const pickPublicApiBaseUrl = (requestUrl: string, headers?: Headers, settings?: Record<string, any>) => {
+  const isPublicHost = (value: string) => {
+    try {
+      const host = String(new URL(value).hostname || '').trim().toLowerCase();
+      if (!host) return false;
+      if (
+        host === 'localhost'
+        || host === '127.0.0.1'
+        || host === '0.0.0.0'
+        || host === '::1'
+        || host === 'kong'
+        || host.endsWith('.local')
+        || host.endsWith('.internal')
+      ) return false;
+      if (/^10\./.test(host)) return false;
+      if (/^192\.168\./.test(host)) return false;
+      if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const candidates = [
     settings?.public_api_base_url,
     settings?.public_supabase_url,
@@ -90,23 +111,49 @@ const pickPublicApiBaseUrl = (requestUrl: string, headers?: Headers, settings?: 
   ];
   for (const candidate of candidates) {
     const normalized = normalizeBaseUrl(String(candidate || '').trim());
-    if (normalized) return normalized;
+    if (normalized && isPublicHost(normalized)) {
+      try {
+        const parsed = new URL(normalized);
+        if (parsed.protocol === 'http:') parsed.protocol = 'https:';
+        return parsed.toString().replace(/\/+$/, '');
+      } catch {
+        return normalized;
+      }
+    }
   }
 
   const forwardedProto = pick(headers?.get('x-forwarded-proto'), headers?.get('x-forwarded-protocol'));
   const forwardedHost = pick(headers?.get('x-forwarded-host')).split(',')[0]?.trim();
   if (forwardedProto && forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+    const normalized = `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+    if (isPublicHost(normalized)) {
+      try {
+        const parsed = new URL(normalized);
+        if (parsed.protocol === 'http:') parsed.protocol = 'https:';
+        return parsed.toString().replace(/\/+$/, '');
+      } catch {
+        return normalized;
+      }
+    }
   }
 
   const host = pick(headers?.get('host')).split(',')[0]?.trim();
   if (host) {
-    return `https://${host}`.replace(/\/+$/, '');
+    const normalized = `https://${host}`.replace(/\/+$/, '');
+    if (isPublicHost(normalized)) return normalized;
   }
 
   try {
     const origin = new URL(String(requestUrl || '')).origin.replace(/\/+$/, '');
-    if (origin) return origin;
+    if (origin && isPublicHost(origin)) {
+      try {
+        const parsed = new URL(origin);
+        if (parsed.protocol === 'http:') parsed.protocol = 'https:';
+        return parsed.toString().replace(/\/+$/, '');
+      } catch {
+        return origin;
+      }
+    }
   } catch {
     // ignore invalid request url
   }
@@ -322,6 +369,7 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   const rubikaUpdate = payload?.update || null;
   const rubikaRootMessage = payload?.new_message || null;
   const rubikaNewMessage = rubikaUpdate?.new_message || null;
+  const rubikaUpdatedMessage = rubikaUpdate?.updated_message || null;
   const rubikaInlineMessage = payload?.inline_message || null;
   const message =
     payload?.message ||
@@ -330,6 +378,7 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     payload?.event?.message ||
     payload?.update?.message ||
     rubikaNewMessage ||
+    rubikaUpdatedMessage ||
     rubikaRootMessage ||
     rubikaInlineMessage ||
     null;
@@ -357,10 +406,17 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     rubikaRootMessage?.media_url,
     rubikaUpdate?.new_message?.media?.url,
     rubikaUpdate?.new_message?.media_url,
+    rubikaUpdate?.updated_message?.file?.url,
+    rubikaUpdate?.updated_message?.media?.url,
+    rubikaUpdate?.updated_message?.media_url,
     rubikaNewMessage?.file?.url,
     rubikaNewMessage?.file_url,
     rubikaNewMessage?.media?.url,
     rubikaNewMessage?.media_url,
+    rubikaUpdatedMessage?.file?.url,
+    rubikaUpdatedMessage?.file_url,
+    rubikaUpdatedMessage?.media?.url,
+    rubikaUpdatedMessage?.media_url,
     rubikaInlineMessage?.file?.url,
     rubikaInlineMessage?.media?.url,
     payload?.file_url,
@@ -376,6 +432,8 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.media?.download_url,
     rubikaNewMessage?.file?.download_url,
     rubikaNewMessage?.media?.download_url,
+    rubikaUpdatedMessage?.file?.download_url,
+    rubikaUpdatedMessage?.media?.download_url,
     rubikaRootMessage?.file?.download_url,
     rubikaRootMessage?.media?.download_url,
     payload?.file?.download_url,
@@ -412,19 +470,51 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   const fileId = pick(
     message?.file_id,
     message?.file?.file_id,
+    message?.file?.fileId,
     message?.file?.id,
     message?.fileId,
+    message?.media?.file_id,
+    message?.media?.fileId,
     message?.photo?.file_id,
     message?.document?.file_id,
     message?.video?.file_id,
     message?.audio?.file_id,
     rubikaNewMessage?.file_id,
     rubikaNewMessage?.file?.file_id,
+    rubikaNewMessage?.file?.fileId,
+    rubikaUpdatedMessage?.file_id,
+    rubikaUpdatedMessage?.file?.file_id,
+    rubikaUpdatedMessage?.file?.fileId,
     rubikaRootMessage?.file_id,
     rubikaRootMessage?.file?.file_id,
+    rubikaRootMessage?.file?.fileId,
     payload?.file_id,
     payload?.fileId
   );
+  const findDeepFileId = (node: any): string => {
+    const seen = new Set<any>();
+    const stack = [node];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current || typeof current !== 'object' || seen.has(current)) continue;
+      seen.add(current);
+      if (Array.isArray(current)) {
+        current.forEach((item) => stack.push(item));
+        continue;
+      }
+      for (const [key, value] of Object.entries(current)) {
+        const normalizedKey = String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if ((normalizedKey === 'fileid' || normalizedKey === 'file_id') && typeof value === 'string') {
+          const text = String(value || '').trim();
+          if (text) return text;
+        }
+        if (value && typeof value === 'object') {
+          stack.push(value);
+        }
+      }
+    }
+    return '';
+  };
   const fileName = pick(
     message?.file_name,
     message?.file?.file_name,
@@ -495,7 +585,7 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     fileUrl: directUrl || findDeepUrl(message) || findDeepUrl(payload) || null,
     fileName: fileName || null,
     mimeType: mimeType || null,
-    fileId: fileId || null,
+    fileId: fileId || findDeepFileId(message) || findDeepFileId(payload) || null,
   };
 };
 
@@ -650,15 +740,83 @@ const uploadBinaryToStorage = async ({
   return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
 };
 
-const downloadBinaryFromUrl = async (url: string) => {
+const shouldTreatAsBinaryFile = (fileName?: string | null, messageType?: string | null) => {
+  const ext = String(fileName || '').trim().toLowerCase().split('.').pop() || '';
+  if (messageType === 'image') return true;
+  return [
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
+    'mp4', 'mkv', 'mov', 'avi', 'webm', '3gp',
+    'mp3', 'wav', 'ogg', 'aac', 'flac',
+    'pdf', 'zip', 'rar', '7z', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  ].includes(ext);
+};
+
+const looksLikeImageBytes = (bytes: Uint8Array) => {
+  if (bytes.length < 12) return false;
+  const isJpg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38;
+  const isWebp = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+  const isBmp = bytes[0] === 0x42 && bytes[1] === 0x4d;
+  return isJpg || isPng || isGif || isWebp || isBmp;
+};
+
+const downloadBinaryFromUrl = async (
+  url: string,
+  options?: { fileName?: string | null; messageType?: string | null }
+) => {
   const target = String(url || '').trim();
   if (!target) return null;
-  const response = await fetch(target, { method: 'GET' });
-  if (!response.ok) return null;
-  const contentType = String(response.headers.get('content-type') || '').trim() || 'application/octet-stream';
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!bytes.length) return null;
-  return { bytes, contentType };
+  const expectedBinary = shouldTreatAsBinaryFile(options?.fileName || null, options?.messageType || null);
+  const looksRubika = isRubikaHostedUrl(target);
+  const headerAttempts: Array<Record<string, string>> = looksRubika
+    ? [
+      {},
+      {
+        Accept: '*/*',
+        Referer: 'https://rubika.ir/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      },
+    ]
+    : [{}];
+  for (const headers of headerAttempts) {
+    try {
+      const response = await fetch(target, {
+        method: 'GET',
+        headers,
+      });
+      if (!response.ok) continue;
+      const contentType = String(response.headers.get('content-type') || '').trim() || 'application/octet-stream';
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.length) continue;
+
+      const lowerType = contentType.toLowerCase();
+      const sample = new TextDecoder().decode(bytes.slice(0, 1024)).trim().toLowerCase();
+      const looksVersionText = /^(\d+\.)+\d+$/.test(sample);
+      const looksHtml = sample.startsWith('<!doctype') || sample.startsWith('<html') || sample.includes('<html');
+      const looksJsonError = sample.startsWith('{') && sample.includes('invalid_input');
+      if (
+        lowerType.includes('text/html')
+        || lowerType.includes('application/json')
+        || (expectedBinary && lowerType.includes('text/plain'))
+        || looksHtml
+        || looksJsonError
+        || (expectedBinary && looksVersionText)
+      ) {
+        continue;
+      }
+
+      if (options?.messageType === 'image' && !lowerType.startsWith('image/') && !looksLikeImageBytes(bytes)) {
+        continue;
+      }
+
+      return { bytes, contentType };
+    } catch {
+      // try next header profile
+    }
+  }
+  return null;
 };
 
 const tryRubikaGetFile = async ({
@@ -673,13 +831,7 @@ const tryRubikaGetFile = async ({
   const baseUrl = normalizeBaseUrl(settings?.api_base_url || DEFAULT_API_BASE_URL.rubika);
   if (!baseUrl) return null;
   const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/getFile`;
-  const bodies: Array<Record<string, any>> = [
-    { file_id: fileId },
-    { fileId },
-    { id: fileId },
-    { file: fileId },
-    { file_id: fileId, download_type: 'file' },
-  ];
+  const bodies: Array<Record<string, any>> = [{ file_id: fileId }];
 
   for (const body of bodies) {
     try {
@@ -690,25 +842,16 @@ const tryRubikaGetFile = async ({
       });
       if (!response.ok) continue;
 
-      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-      const mayBeJson = contentType.includes('application/json') || contentType.includes('text/json') || !contentType;
-      if (mayBeJson) {
-        const parsed = await response.clone().json().catch(() => null);
-        if (parsed && typeof parsed === 'object') {
-          const url = findDeepDownloadUrl(parsed);
-          if (url) {
-            return { fileUrl: url, bytes: null as Uint8Array | null, contentType: null as string | null };
-          }
+      const contentType = String(response.headers.get('content-type') || '').trim().toLowerCase();
+      const parsed = await response.clone().json().catch(() => null);
+      if (parsed && typeof parsed === 'object') {
+        const url = findDeepDownloadUrl(parsed);
+        if (url) {
+          return { fileUrl: url, bytes: null as Uint8Array | null, contentType: null as string | null };
         }
+        // JSON response without download url is not file bytes.
+        continue;
       }
-
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (!bytes.length) continue;
-      return {
-        fileUrl: null as string | null,
-        bytes,
-        contentType: contentType || 'application/octet-stream',
-      };
     } catch {
       // continue fallback bodies
     }
@@ -756,8 +899,7 @@ const resolveAndStoreInboundMedia = async ({
 
   const shouldPreferRubikaFileApi =
     channel === 'rubika'
-    && String(mediaInfo.fileId || '').trim().length > 0
-    && (!resolvedUrl || isRubikaHostedUrl(resolvedUrl));
+    && String(mediaInfo.fileId || '').trim().length > 0;
 
   if (shouldPreferRubikaFileApi) {
     const byFileId = await tryRubikaGetFile({
@@ -772,16 +914,44 @@ const resolveAndStoreInboundMedia = async ({
   }
 
   if (!bytes && resolvedUrl) {
-    const downloaded = await downloadBinaryFromUrl(resolvedUrl);
+    const downloaded = await downloadBinaryFromUrl(resolvedUrl, {
+      fileName: mediaInfo.fileName,
+      messageType: mediaInfo.messageType,
+    });
     if (downloaded?.bytes?.length) {
       bytes = downloaded.bytes;
       resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
     }
   }
 
+  // Rubika links can be short-lived or region-sensitive. Retry with fresh getFile URLs.
+  if (!bytes && shouldPreferRubikaFileApi) {
+    for (let retry = 0; retry < 2; retry += 1) {
+      const refreshed = await tryRubikaGetFile({
+        settings: integrationSettings,
+        fileId: String(mediaInfo.fileId || '').trim(),
+      });
+      const refreshedUrl = String(refreshed?.fileUrl || '').trim();
+      if (!refreshedUrl) continue;
+      resolvedUrl = refreshedUrl;
+      const downloaded = await downloadBinaryFromUrl(refreshedUrl, {
+        fileName: mediaInfo.fileName,
+        messageType: mediaInfo.messageType,
+      });
+      if (downloaded?.bytes?.length) {
+        bytes = downloaded.bytes;
+        resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
+        break;
+      }
+    }
+  }
+
   if (!bytes || !bytes.length) {
+    const safeFallbackUrl = channel === 'rubika' && isRubikaHostedUrl(resolvedUrl)
+      ? null
+      : (resolvedUrl || null);
     return {
-      fileUrl: channel === 'rubika' && isRubikaHostedUrl(resolvedUrl) ? null : resolvedUrl || null,
+      fileUrl: safeFallbackUrl,
       fileName: mediaInfo.fileName,
       mimeType: resolvedMime || mediaInfo.mimeType || null,
       stored: false,
@@ -1325,6 +1495,7 @@ Deno.serve(async (req) => {
         mime_type: mediaStored?.mimeType || mediaInfo.mimeType,
         payload: {
           ...(payload && typeof payload === 'object' ? payload : {}),
+          media_pipeline_build: BOT_WEBHOOK_BUILD,
           sender_id: String(contact.senderId || '').trim() || null,
           sender_display_name: String(contact.displayName || '').trim() || null,
           username: String(contact.username || '').trim() || null,

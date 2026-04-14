@@ -1,4 +1,4 @@
-# KalamApp ERP Platform
+# TazeSystem ERP Platform
 
 یک پلتفرم ERP ماژولار برای اتوماسیون کسب‌وکار، با تمرکز فعلی روی استفاده داخلی پایدار و آماده‌سازی برای عرضه SaaS (اشتراکی).
 
@@ -43,7 +43,7 @@
 1. **کلون کردن مخزن:**
    ```bash
    git clone <repository-url>
-   cd kalamapp
+   cd tazesystem
    ```
 
 2. **نصب وابستگی‌ها:**

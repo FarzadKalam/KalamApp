@@ -14,6 +14,7 @@ import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
 import Layout from "./components/Layout";
 import UploadProgressOverlay from "./components/UploadProgressOverlay";
+import PwaInstallPrompt from "./components/PwaInstallPrompt";
 import { ModuleListRefine } from "./pages/ModuleList_Refine";
 import ModuleShow from "./pages/ModuleShow";
 import "./App.css";
@@ -43,6 +44,7 @@ import ReportViewerPage from "./pages/ReportViewerPage";
 import WorkSchedulesPage from "./pages/WorkSchedulesPage";
 import HrQuickRequestPage from "./pages/HrQuickRequestPage";
 import RecycleBinPage from "./pages/RecycleBinPage";
+import ShareTargetPage from "./pages/ShareTargetPage";
 import {
   BRANDING_APPLIED_EVENT,
   BRANDING_UPDATED_EVENT,
@@ -302,6 +304,7 @@ function App() {
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
+    if (pathname.startsWith("/share-target")) return "اشتراک‌گذاری";
     if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
     if (pathname.startsWith("/recycle-bin")) return "سطل بازیافت";
     if (pathname === "/reports") return "گزارشات";
@@ -450,6 +453,7 @@ function App() {
             <Route path="/hr/:employeeId" element={<HRPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
+            <Route path="/share-target" element={<ShareTargetPage />} />
             <Route path="/web_forms" element={<WebFormsHubPage />} />
             <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
             <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
@@ -514,6 +518,7 @@ function App() {
       >
         <JalaliLocaleListener />
         <AntdApp>
+          <PwaInstallPrompt />
           <RefineAppContent />
           <UploadProgressOverlay />
         </AntdApp>

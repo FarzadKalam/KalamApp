@@ -25,13 +25,14 @@ import {
 import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { serializeNoteContent } from './noteContent';
+import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './intervalSchedule';
 
 type AutomationActor = {
   id?: string | null;
   fullName?: string | null;
 };
 
-type ProcessAutomationEvent = 'create' | 'update';
+type ProcessAutomationEvent = 'create' | 'update' | 'interval';
 
 type ProcessAutomationRunArgs = {
   task: Record<string, any>;
@@ -667,7 +668,12 @@ export const runProcessAutomationsForTaskEvent = async ({
     if (rule?.is_active === false) return false;
 
     const triggerType = String(rule?.trigger_type || '').trim();
-    if (triggerType === 'interval' || triggerType === 'previous_stage_completed') return false;
+    const isIntervalEvent = event === 'interval';
+    if (isIntervalEvent) {
+      if (triggerType !== 'interval') return false;
+    } else {
+      if (triggerType === 'interval' || triggerType === 'previous_stage_completed') return false;
+    }
     if (triggerType === 'on_create' && event !== 'create') return false;
     if (triggerType === 'on_upsert' && !['create', 'update'].includes(event)) return false;
 
@@ -676,6 +682,17 @@ export const runProcessAutomationsForTaskEvent = async ({
     if (executionMode === 'first_match' && taskId) {
       const alreadyExecuted = await hasProcessAutomationLogForTask(String(rule?.id || ''), taskId);
       if (alreadyExecuted) return false;
+    }
+    if (isIntervalEvent && taskId && executionMode !== 'first_match') {
+      const lastSuccessAt = await getLastProcessAutomationSuccessAt(String(rule?.id || ''), taskId);
+      const due = isIntervalDue({
+        lastRunAt: lastSuccessAt,
+        intervalValue: clampIntervalValue(rule?.interval_value, 1),
+        intervalUnit: normalizeIntervalUnit(rule?.interval_unit || 'day'),
+        intervalAt: String(rule?.interval_at || '').trim() || null,
+        now: new Date(),
+      });
+      if (!due) return false;
     }
 
     const sourceContext = await getSourceRecordContext();
@@ -866,7 +883,9 @@ export const runProcessAutomationsForTaskEvent = async ({
   }
   await runRulesForTask(task, currentTaskRules, event, previousTask);
 
-  const didBecomeCompleted = isTaskCompleted(task?.status) && !isTaskCompleted(previousTask?.status);
+  const didBecomeCompleted = event !== 'interval'
+    && isTaskCompleted(task?.status)
+    && !isTaskCompleted(previousTask?.status);
   if (didBecomeCompleted) {
     const siblings = await getSiblingTasks();
     const currentSort = Number(task?.sort_order || 0);
@@ -902,6 +921,27 @@ const hasProcessAutomationLogForTask = async (ruleId: string, taskId: string) =>
   return Array.isArray(data) && data.length > 0;
 };
 
+const getLastProcessAutomationSuccessAt = async (ruleId: string, taskId: string) => {
+  const normalizedRuleId = String(ruleId || '').trim();
+  const normalizedTaskId = String(taskId || '').trim();
+  if (!normalizedRuleId || !normalizedTaskId) return null;
+
+  const { data, error } = await supabase
+    .from('workflow_logs')
+    .select('created_at')
+    .eq('run_type', PROCESS_AUTOMATION_LOG_RUN_TYPE)
+    .eq('status', 'success')
+    .eq('module_id', 'tasks')
+    .eq('record_id', normalizedTaskId)
+    .contains('details', { process_automation_rule_id: normalizedRuleId })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return String((data as any)?.created_at || '').trim() || null;
+};
+
 const logProcessAutomationRun = async ({
   rule,
   task,
@@ -933,6 +973,67 @@ const logProcessAutomationRun = async ({
       actor_id: String(currentUser?.id || '').trim() || null,
     },
   });
+};
+
+export const runProcessAutomationsIntervalTick = async ({
+  batchSize = 80,
+  maxTasks = 800,
+}: {
+  batchSize?: number;
+  maxTasks?: number;
+} = {}) => {
+  const normalizedBatchSize = Math.max(10, Math.min(300, Number(batchSize || 80)));
+  const normalizedMaxTasks = Math.max(normalizedBatchSize, Math.min(3000, Number(maxTasks || 800)));
+
+  const stats = {
+    scannedTasks: 0,
+    intervalCandidateTasks: 0,
+    triggeredTasks: 0,
+    failedTasks: 0,
+  };
+
+  let offset = 0;
+  while (offset < normalizedMaxTasks) {
+    const limit = Math.min(normalizedBatchSize, normalizedMaxTasks - offset);
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .not('recurrence_info', 'is', null)
+      .not('status', 'in', '(done,completed)')
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw error;
+
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length === 0) break;
+
+    for (const task of rows) {
+      stats.scannedTasks += 1;
+      const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+      const rules = normalizeProcessAutomationRules(recurrence?.process_automation_rules)
+        .filter((rule) => rule?.is_active !== false && String(rule?.trigger_type || '').trim() === 'interval');
+      if (rules.length === 0) continue;
+
+      stats.intervalCandidateTasks += 1;
+      try {
+        await runProcessAutomationsForTaskEvent({
+          task,
+          event: 'interval',
+          previousTask: null,
+          currentUser: null,
+        });
+        stats.triggeredTasks += 1;
+      } catch (error) {
+        stats.failedTasks += 1;
+        console.warn('Process automation interval tick failed for task', task?.id, error);
+      }
+    }
+
+    if (rows.length < limit) break;
+    offset += rows.length;
+  }
+
+  return stats;
 };
 
 export const runProcessAutomationsForTaskStatusChange = async ({

@@ -25,6 +25,7 @@ import {
   DeleteOutlined,
   DollarOutlined,
   ToolOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -42,8 +43,11 @@ import {
 } from '../utils/permissions';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
+import { runWorkflowsIntervalTick } from '../utils/workflowRuntime';
+import { runProcessAutomationsIntervalTick } from '../utils/processAutomationRuntime';
 
 const { Header, Sider, Content } = AntLayout;
+const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -63,11 +67,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<Array<{ moduleId: string; moduleTitle: string; items: any[] }>>([]);
+  const [refreshingPage, setRefreshingPage] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
+  const intervalRunnerBusyRef = useRef(false);
+  const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -255,6 +262,48 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.view !== false &&
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.fields?.hub_page !== false;
   const filesAccess = resolveFilesAccessPermissions(rolePermissions);
+  const canRunIntervalAutomation = Boolean(rolePermissionsReady
+    && currentUser?.id
+    && (
+      canViewModule('tasks')
+      || canViewModule('workflows')
+      || canViewModule('automation_execution_reports')
+    ));
+
+  const acquireIntervalRunnerLock = useCallback((ttlMs = 140000) => {
+    try {
+      const now = Date.now();
+      const owner = intervalRunnerOwnerRef.current;
+      const raw = localStorage.getItem(INTERVAL_RUNNER_LOCK_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const lockedAt = Number(parsed?.lockedAt || 0);
+      const lockOwner = String(parsed?.owner || '').trim();
+      const lockExpired = !lockedAt || (now - lockedAt) > ttlMs;
+      if (!lockExpired && lockOwner && lockOwner !== owner) {
+        return false;
+      }
+      localStorage.setItem(
+        INTERVAL_RUNNER_LOCK_KEY,
+        JSON.stringify({ owner, lockedAt: now })
+      );
+      return true;
+    } catch {
+      return true;
+    }
+  }, []);
+
+  const releaseIntervalRunnerLock = useCallback(() => {
+    try {
+      const owner = intervalRunnerOwnerRef.current;
+      const raw = localStorage.getItem(INTERVAL_RUNNER_LOCK_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (String(parsed?.owner || '').trim() === owner) {
+        localStorage.removeItem(INTERVAL_RUNNER_LOCK_KEY);
+      }
+    } catch {
+      // ignore localStorage errors
+    }
+  }, []);
 
   // Collapse sidebar on route change
   useEffect(() => {
@@ -468,6 +517,51 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rolePermissions,
   ]);
 
+  useEffect(() => {
+    if (!canRunIntervalAutomation) return;
+
+    let disposed = false;
+    const tick = async () => {
+      if (disposed) return;
+      if (document.visibilityState !== 'visible') return;
+      if (intervalRunnerBusyRef.current) return;
+      if (!acquireIntervalRunnerLock()) return;
+
+      intervalRunnerBusyRef.current = true;
+      try {
+        await runWorkflowsIntervalTick();
+        await runProcessAutomationsIntervalTick();
+      } catch (error) {
+        console.warn('Interval automation tick failed', error);
+      } finally {
+        intervalRunnerBusyRef.current = false;
+        releaseIntervalRunnerLock();
+      }
+    };
+
+    const initialTimer = window.setTimeout(() => {
+      void tick();
+    }, 15000);
+    const timer = window.setInterval(() => {
+      void tick();
+    }, 90000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void tick();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      releaseIntervalRunnerLock();
+    };
+  }, [acquireIntervalRunnerLock, canRunIntervalAutomation, releaseIntervalRunnerLock]);
+
   const menuItems = useMemo<MenuProps['items']>(() => {
     return mapSidebarMenuItems(visibleRawMenuItems);
   }, [visibleRawMenuItems]);
@@ -653,6 +747,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     setCollapsed((prev) => !prev);
   };
 
+  const handlePageRefresh = () => {
+    if (refreshingPage) return;
+    setRefreshingPage(true);
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 120);
+  };
+
   return (
     <AntLayout
       className="overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
@@ -795,6 +897,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             )}
           </div>
           <div className="flex items-center gap-2 md:gap-4">
+            <Button
+              type="text"
+              shape="circle"
+              icon={<ReloadOutlined spin={refreshingPage} />}
+              onClick={handlePageRefresh}
+              className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
+              title="رفرش صفحه"
+            />
             <Button
               type="text"
               shape="circle"

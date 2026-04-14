@@ -47,6 +47,7 @@ export type WorkflowRecord = {
   conditions_any?: WorkflowCondition[] | null;
   actions?: WorkflowAction[] | null;
   is_active?: boolean;
+  last_run_at?: string | null;
   created_at?: string;
   updated_at?: string;
 };
