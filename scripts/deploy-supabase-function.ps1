@@ -200,7 +200,8 @@ try {
   }
 
   Write-Step "Packing functions: $($selectedFunctions -join ', ')"
-  & tar -czf $localArchive -C $functionsRoot @selectedFunctions
+  $tarArgs = @('-czf', $localArchive, '-C', $functionsRoot, '--') + $selectedFunctions
+  & tar @tarArgs
   if ($LASTEXITCODE -ne 0) {
     throw 'Could not create function deploy archive.'
   }

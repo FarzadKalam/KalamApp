@@ -150,6 +150,31 @@ const getErrorMessage = (value: any, fallback: string) => {
   return String(value.message || value.error || fallback);
 };
 
+const getInvokeErrorMessage = async (value: any, fallback: string) => {
+  const baseMessage = getErrorMessage(value, fallback);
+  const response = value?.context;
+
+  if (response && typeof response === 'object' && typeof response.clone === 'function') {
+    try {
+      const raw = await response.clone().text();
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          const parsedMessage = String(parsed?.message || parsed?.error || '').trim();
+          if (parsedMessage) return parsedMessage;
+        } catch {
+          const text = String(raw || '').trim();
+          if (text) return text;
+        }
+      }
+    } catch {
+      // Keep the original Supabase error if the response body is not readable.
+    }
+  }
+
+  return baseMessage;
+};
+
 const decodeSoapScalar = (raw: string) => {
   const text = String(raw || '').trim();
   if (!text) return '';
@@ -280,7 +305,7 @@ const invokeSmsFunction = async (
   }
 
   const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
-  if (error) throw new Error(getErrorMessage(error, 'خطا در فراخوانی سرویس پیامک.'));
+  if (error) throw new Error(await getInvokeErrorMessage(error, 'خطا در فراخوانی سرویس پیامک.'));
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'ارسال پیامک ناموفق بود.'));
   }
@@ -294,7 +319,7 @@ export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) =>
   }
 
   const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
-  if (error) throw new Error(getErrorMessage(error, 'خطا در دریافت اعتبار پیامک.'));
+  if (error) throw new Error(await getInvokeErrorMessage(error, 'خطا در دریافت اعتبار پیامک.'));
   if (data && data.success === false) {
     throw new Error(getErrorMessage(data, 'دریافت اعتبار پیامک ناموفق بود.'));
   }

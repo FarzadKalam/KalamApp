@@ -179,8 +179,12 @@ const BLOCKS = {
         key: 'source_account',
         title: 'حساب مبدا',
         type: FieldType.RELATION,
-        width: 170,
-        relationConfig: { targetModule: 'bank_accounts', targetField: 'bank_name' },
+        width: 220,
+        relationConfig: {
+          targetModule: 'chart_of_accounts',
+          targetField: 'name',
+          filter: { account_type: 'asset', is_leaf: true, is_active: true, code__like: '110%' },
+        },
       },
       { key: 'use_existing_received_cheque', title: 'خرج چک', type: FieldType.CHECKBOX, width: 90 },
       {

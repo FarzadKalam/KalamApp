@@ -211,12 +211,14 @@ export interface BlockDefinition {
     title: string;
     type: FieldType;
     width?: number;
+    defaultValue?: any;
     showTotal?: boolean; // <--- این خط جدید است: برای نمایش جمع کل در پایین ستون
     options?: SelectOption[];
     readonly?: boolean;
     relationConfig?: {
       targetModule: string;
       targetField: string;
+      filter?: Record<string, any>;
       sourceModules?: Array<{
         targetModule: string;
         targetField?: string;

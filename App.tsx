@@ -508,6 +508,7 @@ function App() {
           token: {
             colorPrimary: branding.palette.primary,
             fontFamily: "Vazirmatn, sans-serif",
+            zIndexPopupBase: 13000,
           },
         }}
       >

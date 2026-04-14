@@ -468,6 +468,18 @@ begin
     v_record_payload := v_record_payload || jsonb_build_object(v_field.target_field_key, v_field_value);
   end loop;
 
+  if exists (
+    select 1
+    from information_schema.columns c
+    where c.table_schema = 'public'
+      and c.table_name = v_form.target_module_id
+      and c.column_name = 'id'
+      and c.data_type = 'uuid'
+      and c.is_nullable = 'NO'
+  ) and nullif(coalesce(v_record_payload->>'id', ''), '') is null then
+    v_record_payload := jsonb_build_object('id', gen_random_uuid()) || v_record_payload;
+  end if;
+
   execute format(
     'insert into public.%I as t select * from jsonb_populate_record(null::public.%I, $1) returning to_jsonb(t)',
     v_form.target_module_id,

@@ -123,6 +123,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isAnyInvoiceItems = isInvoiceItems || isPurchaseInvoiceItems;
   const isInvoicePayments = moduleId === 'invoices' && block?.id === 'payments';
   const isPurchaseInvoicePayments = moduleId === 'purchase_invoices' && block?.id === 'payments';
+  const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
+  const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
   const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
@@ -1624,24 +1626,58 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
   const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'cleared']);
   const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
-  const calculateInvoiceFinancialFields = (invoiceItemsRows: any[], paymentRows: any[]) => {
-    const totalInvoiceAmount = (Array.isArray(invoiceItemsRows) ? invoiceItemsRows : []).reduce((sum: number, row: any) => {
+  const calculateFinancialFields = (
+    itemRows: any[],
+    paymentRows: any[],
+    config: {
+      rowCalculationType: RowCalculationType;
+      totalField: string;
+      paidField: string;
+      remainingField: string;
+    }
+  ) => {
+    const totalAmount = (Array.isArray(itemRows) ? itemRows : []).reduce((sum: number, row: any) => {
       const rowTotal = parseFloat(row?.total_price);
       if (Number.isFinite(rowTotal)) return sum + rowTotal;
-      return sum + calculateRow(row || {}, RowCalculationType.INVOICE_ROW);
+      return sum + calculateRow(row || {}, config.rowCalculationType);
     }, 0);
 
-    const totalReceivedAmount = (Array.isArray(paymentRows) ? paymentRows : []).reduce((sum: number, row: any) => {
-      if (!PAYMENT_INCLUDED_STATUSES.has(normalizePaymentStatus(row?.status))) return sum;
+    const hasStatusColumn = (Array.isArray(paymentRows) ? paymentRows : [])
+      .some((row: any) => row && Object.prototype.hasOwnProperty.call(row, 'status'));
+    const totalPaidAmount = (Array.isArray(paymentRows) ? paymentRows : []).reduce((sum: number, row: any) => {
+      const normalizedStatus = normalizePaymentStatus(row?.status);
+      if (hasStatusColumn && normalizedStatus && !PAYMENT_INCLUDED_STATUSES.has(normalizedStatus)) return sum;
       return sum + Math.abs(toSafeNumber(row?.amount));
     }, 0);
 
     return {
-      total_invoice_amount: totalInvoiceAmount,
-      total_received_amount: totalReceivedAmount,
-      remaining_balance: totalInvoiceAmount - totalReceivedAmount,
+      [config.totalField]: totalAmount,
+      [config.paidField]: totalPaidAmount,
+      [config.remainingField]: totalAmount - totalPaidAmount,
     };
   };
+
+  const calculateInvoiceFinancialFields = (invoiceItemsRows: any[], paymentRows: any[]) => calculateFinancialFields(
+    invoiceItemsRows,
+    paymentRows,
+    {
+      rowCalculationType: RowCalculationType.INVOICE_ROW,
+      totalField: 'total_invoice_amount',
+      paidField: 'total_received_amount',
+      remainingField: 'remaining_balance',
+    }
+  );
+
+  const calculateExpenseFinancialFields = (expenseRows: any[], paymentRows: any[]) => calculateFinancialFields(
+    expenseRows,
+    paymentRows,
+    {
+      rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
+      totalField: 'total_amount',
+      paidField: 'paid_amount',
+      remainingField: 'remaining_amount',
+    }
+  );
 
   const syncPaymentRowsWithCheques = async (rows: any[]) => {
     if (!isAnyInvoicePayments || !moduleId || !recordId) return rows;
@@ -2768,6 +2804,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
         const nextInvoiceItems = block?.id === 'invoiceItems' ? dataToSave : currentInvoiceItems;
         const nextPayments = block?.id === 'payments' ? dataToSave : currentPayments;
         Object.assign(updatePayload, calculateInvoiceFinancialFields(nextInvoiceItems, nextPayments));
+      }
+      if ((isExpenseItems || isExpensePayments) && recordId) {
+        const { data: fetchedExpenseRow, error: summarySourceError } = await supabase
+          .from('expense_documents')
+          .select('items, payments')
+          .eq('id', recordId)
+          .maybeSingle();
+        if (summarySourceError) throw summarySourceError;
+        const currentExpenseItems = Array.isArray(fetchedExpenseRow?.items) ? fetchedExpenseRow.items : [];
+        const currentExpensePayments = Array.isArray(fetchedExpenseRow?.payments) ? fetchedExpenseRow.payments : [];
+        const nextExpenseItems = isExpenseItems ? dataToSave : currentExpenseItems;
+        const nextExpensePayments = isExpensePayments ? dataToSave : currentExpensePayments;
+        Object.assign(updatePayload, calculateExpenseFinancialFields(nextExpenseItems, nextExpensePayments));
       }
       const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
       if (error) throw error;

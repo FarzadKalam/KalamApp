@@ -79,6 +79,14 @@ const applyTabFilters = (query: any, filters?: RelatedTabFilterConfig[]) => {
   return nextQuery;
 };
 
+const isMissingColumnError = (error: any) => {
+  if (!error) return false;
+  const code = String(error?.code || '').trim();
+  if (code === '42703') return true;
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('does not exist') && message.includes('column');
+};
+
 const buildPaymentRows = (invoices: any[], relationLabel: string) => (
   (invoices || []).flatMap((invoice: any) =>
     (invoice.payments || []).map((payment: any, index: number) => ({
@@ -440,6 +448,18 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           return;
         }
 
+        setItems([]);
+      } catch (error: any) {
+        if (isMissingColumnError(error)) {
+          console.warn('Related tab query skipped because a configured column does not exist', {
+            tabKey: tab?.id || tab?.title || tab?.targetModule,
+            relationType: tab?.relationType,
+            targetModule: tab?.targetModule,
+            error,
+          });
+        } else {
+          console.warn('Could not load related records', error);
+        }
         setItems([]);
       } finally {
         setLoading(false);

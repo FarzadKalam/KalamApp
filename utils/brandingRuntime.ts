@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseClient";
+import tazeSystemLogo from "../src/tazesystem_logo.png";
 import {
   BRANDING_INTEGRATION_CONNECTION_TYPE,
   BRANDING_INTEGRATION_PROVIDER,
@@ -115,7 +116,7 @@ const upsertFaviconLink = () => {
   return next;
 };
 
-const DEFAULT_FAVICON_PATH = "./favicon.svg";
+const DEFAULT_FAVICON_PATH = tazeSystemLogo;
 
 const resolveSafeFaviconHref = (iconUrl?: string | null) => {
   const rawValue = String(iconUrl || "").trim();
@@ -124,7 +125,8 @@ const resolveSafeFaviconHref = (iconUrl?: string | null) => {
 
   try {
     const resolved = new URL(rawValue, window.location.origin);
-    if (resolved.origin !== window.location.origin) {
+    const protocol = resolved.protocol.toLowerCase();
+    if (protocol !== "http:" && protocol !== "https:") {
       return DEFAULT_FAVICON_PATH;
     }
     return resolved.href;

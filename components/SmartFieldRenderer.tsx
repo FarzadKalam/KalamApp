@@ -59,6 +59,7 @@ import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { normalizeProcessTargetModuleIds } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions } from '../utils/taskMeta';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { buildImagePreviewUrl } from '../utils/imagePreview';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -2083,7 +2084,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           return (
             <div className="flex flex-col gap-2">
               {value ? (
-                <img src={String(value)} alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
+                <img src={buildImagePreviewUrl(String(value), 'thumb')} alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
               ) : (
                 <div className="h-16 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[11px] text-gray-400">
                   تصویری انتخاب نشده است
@@ -2126,7 +2127,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   {uploading ? (
                     <div><LoadingOutlined /><div style={{ marginTop: 8 }}>...</div></div>
                   ) : value ? (
-                    <img src={value} alt="avatar" style={{ width: '100%', borderRadius: 8 }} />
+                    <img src={buildImagePreviewUrl(String(value), 'thumb')} alt="avatar" style={{ width: '100%', borderRadius: 8 }} />
                   ) : (
                     <div><UploadOutlined /><div style={{ marginTop: 8 }}>آپلود</div></div>
                   )}
@@ -2212,7 +2213,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 setIsGlobalImageGalleryOpen(false);
               }}
             >
-              <img src={item.url} alt={item.label || 'image'} className="w-full h-28 object-cover" />
+              <img src={buildImagePreviewUrl(item.url, 'thumb')} alt={item.label || 'image'} className="w-full h-28 object-cover" />
               <div className="px-2 py-1 text-[11px] text-gray-600 truncate">{item.label || 'تصویر'}</div>
             </button>
           ))}

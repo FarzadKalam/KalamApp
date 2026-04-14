@@ -9,6 +9,7 @@ import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import TaskActionButtons from './TaskActionButtons';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
+import { buildImagePreviewUrl } from '../../utils/imagePreview';
 
 interface TaskSummaryCardProps {
   task: any;
@@ -88,6 +89,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
 
   const canEditProducedQty = !['todo', 'pending'].includes(String(task?.status || '').toLowerCase());
   const taskMainFileUrl = String(task?.image_url || '').trim();
+  const taskMainPreviewUrl = buildImagePreviewUrl(taskMainFileUrl, 'card');
   const taskMainFileName = taskMainFileUrl.split('?')[0].split('/').pop() || 'file';
   const assigneeId = String(getResolvedAssigneeId(task) || '');
   const assigneeLabel = task.assignee_type === 'role'
@@ -152,7 +154,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
               />
             ) : isImageUrl(taskMainFileUrl) ? (
               <img
-                src={taskMainFileUrl}
+                src={taskMainPreviewUrl || taskMainFileUrl}
                 alt={String(task?.name || 'task-image')}
                 className="h-full w-full object-cover"
                 loading="lazy"

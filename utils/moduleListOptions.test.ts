@@ -6,7 +6,7 @@ describe('buildModuleListOptionPlan', () => {
   it('keeps initial list preload limited to visible list fields', () => {
     const plan = buildModuleListOptionPlan(customerModule);
 
-    expect(plan.immediateDynamicCategories).toEqual(['customer_industry']);
+    expect(plan.immediateDynamicCategories).toEqual(['customer_industry', 'customer_interests']);
     expect(plan.immediateRelationFields).toEqual([]);
     expect(plan.allRelationFields.map((field) => field.key)).toEqual(
       expect.arrayContaining([

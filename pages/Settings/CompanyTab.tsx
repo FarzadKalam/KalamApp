@@ -5,6 +5,7 @@ import { supabase } from '../../supabaseClient';
 import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../../theme/brandTheme';
 import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCurrencyConfig } from '../../utils/currency';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 
 const CompanyTab: React.FC = () => {
   const { message } = App.useApp();
@@ -68,8 +69,8 @@ const CompanyTab: React.FC = () => {
     try {
       const fileName = `company-${type}-${Date.now()}.${file.name.split('.').pop()}`;
       await uploadFileWithProgress({
-        client: supabase,
-        bucket: 'images',
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
         path: fileName,
         file,
         upsert: true,
@@ -83,7 +84,7 @@ const CompanyTab: React.FC = () => {
                 ? 'امضای سازمانی'
                 : 'مهر سازمانی',
       });
-      const { data } = supabase.storage.from('images').getPublicUrl(fileName);
+      const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(fileName);
 
       if (type === 'logo') {
         setLogoUrl(data.publicUrl);

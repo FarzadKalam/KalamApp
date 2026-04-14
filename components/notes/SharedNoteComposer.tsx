@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Checkbox, Input, Modal, Select, Tag } from 'antd';
 import {
   CloseOutlined,
@@ -32,6 +32,7 @@ interface SharedNoteComposerProps {
   smsNotificationEnabled?: boolean;
   onSmsNotificationChange?: (value: boolean) => void;
   extraActions?: React.ReactNode;
+  enableImagePasteAndDrop?: boolean;
 }
 
 type PendingFilePrompt = {
@@ -96,11 +97,20 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   smsNotificationEnabled = false,
   onSmsNotificationChange,
   extraActions,
+  enableImagePasteAndDrop = false,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastExternalValueRef = useRef(value);
   const [pendingPrompts, setPendingPrompts] = useState<PendingFilePrompt[]>([]);
   const [preparedFiles, setPreparedFiles] = useState<File[]>([]);
   const [pendingFileName, setPendingFileName] = useState('');
+  const [draftValue, setDraftValue] = useState(value);
+
+  useEffect(() => {
+    if (value === lastExternalValueRef.current) return;
+    lastExternalValueRef.current = value;
+    setDraftValue(value);
+  }, [value]);
 
   const attachmentLabel = useMemo(() => attachments.map((file) => ({
     name: file.name,
@@ -119,6 +129,12 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
     }));
     setPendingPrompts(prompts);
     setPendingFileName(prompts[0]?.suggestedName || '');
+  };
+
+  const collectImageFilesFromDataTransfer = (dataTransfer: DataTransfer | null | undefined) => {
+    if (!dataTransfer) return [] as File[];
+    const files = Array.from(dataTransfer.files || []);
+    return files.filter((file) => String(file.type || '').toLowerCase().startsWith('image/'));
   };
 
   const closePrompt = () => {
@@ -161,8 +177,32 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
         <div className="rounded-[1.05rem] border border-[rgba(var(--brand-200-rgb),0.62)] bg-white/95 p-2.5 shadow-[0_4px_14px_rgba(15,23,42,0.06)] dark:border-[rgba(var(--brand-300-rgb),0.24)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.8)] dark:shadow-[0_4px_14px_rgba(0,0,0,0.22)]">
           <Input.TextArea
             placeholder={placeholder}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
+            value={draftValue}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setDraftValue(nextValue);
+              onChange(nextValue);
+            }}
+            onPaste={(event) => {
+              if (!enableImagePasteAndDrop || !allowAttachments) return;
+              const imageFiles = collectImageFilesFromDataTransfer(event.clipboardData);
+              if (!imageFiles.length) return;
+              event.preventDefault();
+              handleFilesPicked(imageFiles);
+            }}
+            onDragOver={(event) => {
+              if (!enableImagePasteAndDrop || !allowAttachments) return;
+              const imageFiles = collectImageFilesFromDataTransfer(event.dataTransfer);
+              if (!imageFiles.length) return;
+              event.preventDefault();
+            }}
+            onDrop={(event) => {
+              if (!enableImagePasteAndDrop || !allowAttachments) return;
+              const imageFiles = collectImageFilesFromDataTransfer(event.dataTransfer);
+              if (!imageFiles.length) return;
+              event.preventDefault();
+              handleFilesPicked(imageFiles);
+            }}
             autoSize={{ minRows: 2, maxRows: 5 }}
             className="!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none"
           />

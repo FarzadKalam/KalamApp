@@ -128,9 +128,9 @@ const toRgbChannels = (hex: string) => {
 };
 
 export const DEFAULT_BRANDING: BrandingConfig = {
-  brandName: 'هلدینگ رسانه ای کلام تازه',
-  shortName: 'کلام تازه',
-  appTitle: 'هلدینگ رسانه ای کلام تازه',
+  brandName: 'اتوماسیون هوشمند تازه سیستم',
+  shortName: 'تازه سیستم',
+  appTitle: 'TazeSystem',
   logoUrl: null,
   iconUrl: null,
   paletteKey: DEFAULT_PALETTE_KEY,

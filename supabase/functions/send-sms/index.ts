@@ -90,6 +90,11 @@ const getServiceHeaders = (serviceRoleKey: string) => ({
   'Content-Type': 'application/json',
 });
 
+const normalizeDigitsToEnglish = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+
 const decodeSoapScalar = (raw: string) => {
   const text = String(raw || '').trim();
   if (!text) return '';
@@ -304,8 +309,50 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
   return user;
 };
 
+type HookLeafEntry = { path: string; value: string };
+
+const collectHookLeafEntries = (
+  value: unknown,
+  path: string[] = [],
+  depth = 0,
+  acc: HookLeafEntry[] = [],
+): HookLeafEntry[] => {
+  if (depth > 6 || value === null || value === undefined) return acc;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    acc.push({ path: path.join('.'), value: normalizeDigitsToEnglish(value).trim() });
+    return acc;
+  }
+  if (Array.isArray(value)) {
+    value.slice(0, 30).forEach((item, index) => {
+      collectHookLeafEntries(item, [...path, String(index)], depth + 1, acc);
+    });
+    return acc;
+  }
+  if (typeof value === 'object') {
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 60)
+      .forEach(([key, item]) => {
+        collectHookLeafEntries(item, [...path, key], depth + 1, acc);
+      });
+  }
+  return acc;
+};
+
+const normalizeIranMobileFromAny = (value: string): string => {
+  const raw = normalizeDigitsToEnglish(value).trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  if (/^00989\d{9}$/.test(digits)) return `+${digits.slice(2)}`;
+  if (/^989\d{9}$/.test(digits)) return `+${digits}`;
+  if (/^09\d{9}$/.test(digits)) return `+98${digits.slice(1)}`;
+  if (/^9\d{9}$/.test(digits)) return `+98${digits}`;
+  const embedded = raw.match(/(?:\+?98|0098|0)?9\d{9}/);
+  if (embedded?.[0]) return normalizeIranMobileFromAny(embedded[0]);
+  return '';
+};
+
 const extractHookOtp = (body: AuthHookPayload & Record<string, any>) => {
-  const candidates = [
+  const strictCandidates = [
     body?.sms?.otp,
     body?.sms?.code,
     body?.sms?.token,
@@ -316,27 +363,53 @@ const extractHookOtp = (body: AuthHookPayload & Record<string, any>) => {
     body?.token,
     body?.otp_code,
     body?.message?.otp,
-    body?.message,
-    body?.text,
     body?.template_data?.otp,
     body?.template_data?.code,
+    body?.data?.otp,
     body?.data?.code,
     body?.data?.token,
-    body?.data?.otp,
+    body?.sms_code,
+    body?.verification_code,
   ];
-  for (const candidate of candidates) {
-    const value = String(candidate ?? '').trim();
+  for (const candidate of strictCandidates) {
+    const value = normalizeDigitsToEnglish(candidate).trim();
     if (!value) continue;
     if (/^\d{4,8}$/.test(value)) return value;
-    const codeMatch = value.match(/\b(\d{4,8})\b/);
-    if (codeMatch?.[1]) return codeMatch[1];
   }
+
+  const textCandidates = [
+    body?.sms?.message,
+    body?.sms?.text,
+    body?.message,
+    body?.text,
+    typeof body?.sms === 'string' ? body.sms : '',
+  ];
+  for (const candidate of textCandidates) {
+    const value = normalizeDigitsToEnglish(candidate).trim();
+    if (!value) continue;
+    const matches = value.match(/\b(\d{4,8})\b/g);
+    if (matches?.length) {
+      const lastMatch = String(matches[matches.length - 1] || '').replace(/\D/g, '');
+      if (/^\d{4,8}$/.test(lastMatch)) return lastMatch;
+    }
+  }
+
+  const leafEntries = collectHookLeafEntries(body);
+  const prioritizedLeafEntries = leafEntries.filter((entry) => /otp|verification|code|sms/i.test(entry.path));
+  for (const entry of prioritizedLeafEntries) {
+    if (/^\d{4,8}$/.test(entry.value)) return entry.value;
+    const codeMatches = entry.value.match(/\b(\d{4,8})\b/g);
+    if (codeMatches?.length) {
+      const last = String(codeMatches[codeMatches.length - 1] || '').replace(/\D/g, '');
+      if (/^\d{4,8}$/.test(last)) return last;
+    }
+  }
+
   return '';
 };
 
 const extractHookPhone = (body: AuthHookPayload & Record<string, any>) => {
   const candidates = [
-    body?.user?.phone,
     body?.phone,
     body?.to,
     body?.sms?.to,
@@ -346,12 +419,41 @@ const extractHookPhone = (body: AuthHookPayload & Record<string, any>) => {
     body?.user?.phone_change,
     body?.user?.new_phone,
     body?.user?.phone_confirm,
+    body?.user?.phone,
   ];
   for (const candidate of candidates) {
+    const value = normalizeDigitsToEnglish(candidate).trim();
+    const normalized = normalizeIranMobileFromAny(value);
+    if (normalized) return normalized;
+  }
+
+  const leafEntries = collectHookLeafEntries(body);
+  const prioritizedLeafEntries = leafEntries.filter((entry) => /phone|mobile|recipient|to|sms/i.test(entry.path));
+  for (const entry of prioritizedLeafEntries) {
+    const normalized = normalizeIranMobileFromAny(entry.value);
+    if (normalized) return normalized;
+  }
+  return '';
+};
+
+const extractHookMessageText = (body: AuthHookPayload & Record<string, any>): string => {
+  const directCandidates = [
+    body?.sms?.message,
+    body?.sms?.text,
+    body?.message?.text,
+    body?.message?.body,
+    body?.message,
+    body?.text,
+  ];
+  for (const candidate of directCandidates) {
     const value = String(candidate ?? '').trim();
     if (value) return value;
   }
-  return '';
+
+  const leafEntries = collectHookLeafEntries(body);
+  const prioritizedLeafEntries = leafEntries.filter((entry) => /message|text|sms/i.test(entry.path));
+  const best = prioritizedLeafEntries.find((entry) => String(entry.value || '').trim().length >= 4);
+  return String(best?.value || '').trim();
 };
 
 const sendSmsWithProvider = async (to: string[], text: string, settings: SmsSettings) => {
@@ -926,16 +1028,13 @@ Deno.serve(async (req) => {
     const hasHookSecret = !!hookSecret && requestHookSecret === hookSecret;
     const hasBearerToken = authHeader.startsWith('Bearer ');
     const isLikelyHookPayload =
-      !!hookPhone &&
-      (
-        !!hookOtp ||
-        !!body?.user ||
-        !!body?.sms ||
-        !!body?.message ||
-        !!body?.text ||
-        !!body?.template_data ||
-        !hasBearerToken
-      );
+      !!hookOtp ||
+      !!body?.user ||
+      !!body?.sms ||
+      !!body?.message ||
+      !!body?.text ||
+      !!body?.template_data ||
+      !hasBearerToken;
     const isAuthHookRequest = (hasHookSecret || !hasBearerToken) && isLikelyHookPayload;
     const payloadShape = {
       topKeys: Object.keys(body || {}).slice(0, 12),
@@ -950,16 +1049,25 @@ Deno.serve(async (req) => {
     );
 
     if (isAuthHookRequest) {
-      if (!hookOtp) {
-        return json(400, { success: false, message: 'SMS hook payload did not include OTP code' });
-      }
       if (!hookPhone) {
+        console.warn('[send-sms] hook payload missing phone', JSON.stringify(payloadShape));
         return json(400, { success: false, message: 'SMS hook payload did not include phone number' });
       }
 
       const settings = getHookSmsSettings(body?.overrideSettings);
-      const result = await sendOtpWithProvider(hookPhone, hookOtp, settings);
-      return json(200, { success: true, ...result });
+      if (hookOtp) {
+        const result = await sendOtpWithProvider(hookPhone, hookOtp, settings);
+        return json(200, { success: true, ...result });
+      }
+
+      const hookText = extractHookMessageText(body as any);
+      if (hookText) {
+        const sentResult = await sendSmsWithProviderFallback([hookPhone], hookText, settings);
+        return json(200, { success: true, mode: 'hook_text_fallback', ...sentResult });
+      }
+
+      console.warn('[send-sms] hook payload missing otp', JSON.stringify(payloadShape));
+      return json(400, { success: false, message: 'SMS hook payload did not include OTP code' });
     }
     if (!authHeader.startsWith('Bearer ')) {
       return json(401, { success: false, message: 'Missing bearer token' });

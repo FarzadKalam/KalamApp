@@ -29,6 +29,7 @@ import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { getRecordTitle } from '../utils/recordTitle';
 import { parseProcessLinkMap } from '../utils/processTargets';
+import { buildImagePreviewUrl } from '../utils/imagePreview';
 
 export type RecordFileType = 'image' | 'video' | 'file';
 
@@ -716,6 +717,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const isNoteAttachment = isSyntheticNoteAttachmentId(item.id);
     const isSharedFromReference = Boolean(item.source_module_id && item.source_record_id);
     const fileLabel = getDisplayFileName(item);
+    const imagePreviewUrl = buildImagePreviewUrl(item.file_url, 'gallery');
     return (
       <div key={item.id} className={`relative group border rounded-lg p-1 ${isHighlighted ? 'border-leather-500 ring-2 ring-leather-200' : (isSharedFromReference ? 'border-sky-300 bg-sky-50/30' : 'border-gray-100')}`}>
         <div className="h-40 overflow-hidden rounded">
@@ -723,10 +725,10 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             <video src={item.file_url} controls className="w-full h-full object-cover rounded" preload="metadata" />
           ) : (
             <Image
-              src={item.file_url}
+              src={imagePreviewUrl}
               className="w-full h-full object-cover rounded"
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              preview={{ src: item.file_url }}
+              preview={{ src: imagePreviewUrl }}
             />
           )}
         </div>

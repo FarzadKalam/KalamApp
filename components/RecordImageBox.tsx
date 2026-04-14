@@ -3,6 +3,7 @@ import { Button, Image, Upload } from 'antd';
 import { FileOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import RecordFilesManager from './RecordFilesManager';
+import { buildImagePreviewUrl } from '../utils/imagePreview';
 
 interface RecordImageBoxProps {
   moduleId: string;
@@ -192,6 +193,7 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
     const key = String(preview.extension || 'FILE').toUpperCase();
     return FILE_EXTENSION_STYLE_MAP[key] || 'bg-gray-100 text-gray-700 border-gray-200';
   }, [preview.extension]);
+  const previewImageUrl = useMemo(() => buildImagePreviewUrl(preview.url, 'hero'), [preview.url]);
 
   const handleCloseManager = () => {
     setGalleryOpen(false);
@@ -237,7 +239,7 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
       >
         {preview.kind === 'image' ? (
           <Image
-            src={preview.url}
+            src={previewImageUrl}
             className="h-full w-full object-cover"
             wrapperStyle={{ width: '100%', height: '100%' }}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}

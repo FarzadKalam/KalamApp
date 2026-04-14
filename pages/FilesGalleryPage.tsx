@@ -12,6 +12,7 @@ import {
 } from '../utils/recordFilesAvailability';
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRolePermissions, resolveFilesAccessPermissions } from '../utils/permissions';
+import { buildImagePreviewUrl } from '../utils/imagePreview';
 
 type GalleryFileType = 'image' | 'video' | 'file';
 type GalleryViewMode = 'list' | 'grid';
@@ -257,7 +258,7 @@ const FilesGalleryPage: React.FC = () => {
       : 'w-full h-44 object-cover rounded-xl border border-gray-100';
 
     if (item.file_type === 'image') {
-      return <img src={item.file_url} alt={item.file_name || 'image'} className={mediaClass} />;
+      return <img src={buildImagePreviewUrl(item.file_url, compact ? 'thumb' : 'gallery')} alt={item.file_name || 'image'} className={mediaClass} />;
     }
 
     if (item.file_type === 'video') {
@@ -410,4 +411,3 @@ const FilesGalleryPage: React.FC = () => {
 };
 
 export default FilesGalleryPage;
-

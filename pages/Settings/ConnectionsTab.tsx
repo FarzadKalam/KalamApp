@@ -500,11 +500,8 @@ const ConnectionsTab: React.FC = () => {
     const params = new URLSearchParams({
       org_id: currentOrgId,
       secret,
-      to: '$TO$',
-      body: '$TEXT$',
-      from: '$FROM$',
     });
-    return `${supabaseUrl}/functions/v1/melipayamak-inbound?${params.toString()}`;
+    return `${supabaseUrl}/functions/v1/melipayamak-inbound?${params.toString()}&to=$TO$&body=$TEXT$&from=$FROM$`;
   }, [currentOrgId, smsWebhookSecret]);
 
   const voipWebhookUrl = useMemo(() => {

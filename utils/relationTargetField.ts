@@ -20,10 +20,22 @@ export const getPreferredRelationTargetField = (
   targetModule?: string | null,
   explicitTargetField?: string | null
 ): string => {
-  const explicit = String(explicitTargetField || '').trim();
-  if (explicit) return explicit;
   const moduleName = String(targetModule || '').trim();
-  return DEFAULT_RELATION_TARGET_FIELDS[moduleName] || 'name';
+  const explicit = String(explicitTargetField || '').trim();
+  const defaultField = DEFAULT_RELATION_TARGET_FIELDS[moduleName] || 'name';
+
+  if (!explicit) return defaultField;
+
+  const safeSelectableFields = MODULE_RELATION_SELECTABLE_FIELDS[moduleName];
+  if (Array.isArray(safeSelectableFields) && safeSelectableFields.length > 0) {
+    if (safeSelectableFields.includes(explicit)) return explicit;
+    if (moduleName === 'profiles' && (explicit === 'name' || explicit === 'title')) {
+      return 'full_name';
+    }
+    return defaultField;
+  }
+
+  return explicit;
 };
 
 const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {

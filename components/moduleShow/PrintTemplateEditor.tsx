@@ -41,6 +41,7 @@ interface PrintTemplateEditorProps {
   placeholder?: string;
   minHeight?: number;
   fixedHeight?: number;
+  fillHeight?: boolean;
   contentPadding?: string;
   onEditorReady?: (editor: any | null) => void;
   onFocusSection?: () => void;
@@ -592,6 +593,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   placeholder = 'قالب چاپ را اینجا طراحی کنید...',
   minHeight = 240,
   fixedHeight,
+  fillHeight = false,
   contentPadding = '14px 16px',
   onEditorReady,
   onFocusSection,
@@ -609,6 +611,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   const cellDragSelectionRef = useRef<null | {
     table: HTMLTableElement;
     startCell: HTMLElement;
+    startX: number;
+    startY: number;
+    active: boolean;
   }>(null);
   const rowResizeStateRef = useRef<null | {
     table: HTMLTableElement;
@@ -650,6 +655,19 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       const headPos = resolveCellPos(view, headCell || anchorCell);
       if (anchorPos === null || headPos === null) return null;
       return CellSelection.create(view.state.doc, anchorPos, headPos);
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const createAxisSelection = (view: any, cell: HTMLElement, axis: 'row' | 'column') => {
+    try {
+      const anchorPos = resolveCellPos(view, cell);
+      if (anchorPos === null) return null;
+      const $anchorCell = view.state.doc.resolve(anchorPos);
+      return axis === 'row'
+        ? CellSelection.rowSelection($anchorCell)
+        : CellSelection.colSelection($anchorCell);
     } catch (_error) {
       return null;
     }
@@ -829,10 +847,30 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           if (resizeIntent === 'column') {
             cellDragSelectionRef.current = null;
             rowResizeStateRef.current = null;
-            setEditorResizeCursor(view, 'column');
-            return false;
+            if (mouseEvent.detail < 2) {
+              setEditorResizeCursor(view, 'column');
+              return false;
+            }
+            const selection = createAxisSelection(view, cell, 'column');
+            if (!selection) return false;
+            view.dispatch(view.state.tr.setSelection(selection));
+            view.focus();
+            return true;
           }
           if (resizeIntent === 'row') {
+            if (!mouseEvent.altKey) {
+              cellDragSelectionRef.current = null;
+              rowResizeStateRef.current = null;
+              if (mouseEvent.detail < 2) {
+                setEditorResizeCursor(view, 'row');
+                return false;
+              }
+              const selection = createAxisSelection(view, cell, 'row');
+              if (!selection) return false;
+              view.dispatch(view.state.tr.setSelection(selection));
+              view.focus();
+              return true;
+            }
             const row = cell.closest('tr') as HTMLTableRowElement | null;
             if (!row) return false;
             const startHeight = Math.max(24, Math.round(row.getBoundingClientRect().height || 0));
@@ -859,27 +897,43 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             window.addEventListener('mouseup', handleUp, { once: true });
             return true;
           }
-          cellDragSelectionRef.current = { table, startCell: cell };
-          const selection = createCellRangeSelection(view, cell, cell);
-          if (!selection) return false;
+          const clickedCellSurface = target === cell;
+          if (!clickedCellSurface || !mouseEvent.shiftKey) {
+            cellDragSelectionRef.current = null;
+            setEditorResizeCursor(view, null);
+            return false;
+          }
+          cellDragSelectionRef.current = {
+            table,
+            startCell: cell,
+            startX: mouseEvent.clientX,
+            startY: mouseEvent.clientY,
+            active: false,
+          };
           setEditorResizeCursor(view, null);
-          view.dispatch(view.state.tr.setSelection(selection));
-          view.focus();
-          return true;
+          return false;
         },
         mousemove: (view: any, event: Event) => {
-          const target = (event as MouseEvent).target as HTMLElement | null;
+          const mouseEvent = event as MouseEvent;
+          const target = mouseEvent.target as HTMLElement | null;
           const hoverCell = target?.closest?.('td,th') as HTMLElement | null;
-          const hoverIntent = getCellResizeIntent(hoverCell, event as MouseEvent);
+          const hoverIntent = getCellResizeIntent(hoverCell, mouseEvent);
           setEditorResizeCursor(view, hoverIntent);
-          if (hoverIntent) return false;
+          if (hoverIntent && !cellDragSelectionRef.current) return false;
           const dragState = cellDragSelectionRef.current;
           if (!dragState) return false;
+          if ((mouseEvent.buttons & 1) !== 1) {
+            cellDragSelectionRef.current = null;
+            return false;
+          }
           const cell = target?.closest?.('td,th') as HTMLElement | null;
           const table = target?.closest?.('table') as HTMLTableElement | null;
           if (!cell || !table || table !== dragState.table) return false;
+          const distance = Math.hypot(mouseEvent.clientX - dragState.startX, mouseEvent.clientY - dragState.startY);
+          if (!dragState.active && distance < 6) return false;
           const selection = createCellRangeSelection(view, dragState.startCell, cell);
           if (!selection) return false;
+          dragState.active = true;
           view.dispatch(view.state.tr.setSelection(selection));
           view.focus();
           return true;
@@ -1023,7 +1077,11 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   ) : null;
 
   return (
-    <div className="print-template-editor-root">
+    <div
+      className="print-template-editor-root"
+      data-fill-height={fillHeight ? 'true' : 'false'}
+      data-fixed-height={resolvedEditorHeight ? 'true' : 'false'}
+    >
       {tableTools}
       {imageTools}
       <EditorContent editor={editor} />
@@ -1034,6 +1092,10 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           background: transparent;
           overflow: visible;
           ${resolvedEditorHeight ? `height: ${resolvedEditorHeight}px;` : ''}
+        }
+        .print-template-editor-root[data-fill-height='true'] {
+          height: 100%;
+          min-height: 0;
         }
         .print-template-editor-content {
           min-height: ${resolvedEditorHeight ?? Math.max(minHeight, 120)}px;
@@ -1052,9 +1114,20 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           overflow: ${resolvedEditorHeight ? 'auto' : 'visible'};
           overscroll-behavior: contain;
         }
+        .print-template-editor-root[data-fill-height='true'] .print-template-editor-content {
+          min-height: 0;
+          height: 100%;
+          overflow: auto;
+        }
         .print-template-editor-content * {
           user-select: text;
           -webkit-user-select: text;
+        }
+        .print-template-editor-content > :first-child {
+          margin-top: 0 !important;
+        }
+        .print-template-editor-content > :last-child {
+          margin-bottom: 0 !important;
         }
         .print-template-editor-content p {
           margin: 0 0 8px 0;
@@ -1202,6 +1275,10 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           table-layout: fixed;
           margin: 10px 0;
           --table-border-color: #d1d5db;
+        }
+        .print-template-editor-root[data-fixed-height='true'] .print-template-editor-content table {
+          margin-top: 0;
+          margin-bottom: 0;
         }
         .print-template-editor-content th,
         .print-template-editor-content td {

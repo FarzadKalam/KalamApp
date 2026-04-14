@@ -22,6 +22,7 @@ import { useCurrencyConfig } from '../utils/currency';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { getTaskStatusOption } from '../utils/processTaskStatusOptions';
+import { buildImagePreviewUrl } from '../utils/imagePreview';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -917,7 +918,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[10px] md:text-[11px]">-</span>;
         
         if (field.type === FieldType.IMAGE) {
-            return <Avatar src={value} icon={<AppstoreOutlined />} shape="square" size="default" className="bg-gray-100 border border-gray-200" />;
+            return <Avatar src={buildImagePreviewUrl(String(value || ''), 'avatar') || undefined} icon={<AppstoreOutlined />} shape="square" size="default" className="bg-gray-100 border border-gray-200" />;
         }
         if (shouldDeferFieldValue) {
           if (field.type === FieldType.TAGS || field.type === FieldType.MULTI_SELECT) {

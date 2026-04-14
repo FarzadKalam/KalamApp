@@ -23,6 +23,8 @@ import {
   NodeIndexOutlined,
   SunOutlined,
   DeleteOutlined,
+  DollarOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -304,15 +306,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         ]
       },
       {
-        key: 'secretariat',
-        icon: <FileTextOutlined />,
-        label: 'دبیرخانه',
-        children: [
-          { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
-          { key: '/delivery_forms', label: 'فرم‌های تحویل', disabled: !canViewModule('delivery_forms') },
-        ]
-      },
-      {
         key: 'projects',
         icon: <ProjectOutlined />,
         label: 'پروژه‌ها',
@@ -322,12 +315,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       },
       {
         key: 'sales_and_purchase',
-        icon: <FileTextOutlined />,
+        icon: <DollarOutlined />,
         label: 'خرید و فروش',
         children: [
           { key: '/marketing_leads', label: 'بازاریابی' },
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
+          { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
           { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
           { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
         ]
@@ -339,7 +333,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
           { key: '/cash_bank', label: 'نقد و بانک' },
-          { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
           { key: '/employee_advances', label: 'مساعده‌ها', disabled: !canViewModule('employee_advances') },
           { key: '/payroll_slips', label: 'فیش‌های حقوقی', disabled: !canViewModule('payroll_slips') },
           { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
@@ -360,6 +353,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'منابع انسانی',
         children: [
           { key: '/hr', label: 'داشبورد منابع انسانی' },
+          { key: '/tasks', label: 'فعالیت ها' },
           { key: '/employees', label: 'کارکنان' },
           { key: '/employee_contracts', label: 'قراردادهای کارکنان', disabled: !canViewModule('employee_contracts') },
           { key: '/recruitment_applicants', label: 'متقاضیان استخدام', disabled: !canViewModule('recruitment_applicants') },
@@ -368,7 +362,15 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/leave_requests', label: 'مرخصی‌ها' },
           { key: '/overtime_requests', label: 'اضافه‌کاری‌ها' },
           { key: '/mission_requests', label: 'ماموریت‌ها' },
-          { key: '/tasks', label: 'فعالیت ها' },
+        ]
+      },
+      {
+        key: 'secretariat',
+        icon: <FileTextOutlined />,
+        label: 'دبیرخانه',
+        children: [
+          { key: '/secretariat_documents', label: 'نامه‌ها و مکاتبات', disabled: !canViewModule('secretariat_documents') },
+          { key: '/delivery_forms', label: 'فرم‌های تحویل', disabled: !canViewModule('delivery_forms') },
         ]
       },
       {
@@ -394,7 +396,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       },
       {
         key: 'tools',
-        icon: <AppstoreOutlined />,
+        icon: <ToolOutlined />,
         label: 'ابزارها',
         children: [
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
@@ -659,7 +661,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       
       {isMobile && !collapsed && (
         <div 
-          className="fixed inset-0 z-[1050] bg-black/50 backdrop-blur-sm transition-opacity duration-300"
+          className="fixed inset-0 z-[1180] bg-black/50 backdrop-blur-sm transition-opacity duration-300"
           onClick={() => setCollapsed(true)}
         />
       )}
@@ -670,14 +672,16 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         collapsed={collapsed}
         collapsedWidth={isMobile ? 0 : 80}
         zeroWidthTriggerStyle={{ display: 'none' }}
-        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1100] overflow-visible ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
+        className={`app-main-sider border-l border-gray-200 dark:border-dark-border shadow-2xl transition-all duration-300 z-[1200] overflow-visible ${isMobile && collapsed ? 'mobile-collapsed !hidden w-0 !min-w-0 !max-w-0 overflow-hidden' : ''}`}
         style={{ 
           height: 'var(--app-viewport-height, 100dvh)',
           position: 'fixed', 
           right: 0, 
           top: 0,
           bottom: 0,
-          zIndex: 1100,
+          zIndex: 1200,
+          pointerEvents: 'auto',
+          touchAction: 'manipulation',
           display: (isMobile && collapsed) ? 'none' : 'block' 
         }}
         theme={isDarkMode ? 'dark' : 'light'}

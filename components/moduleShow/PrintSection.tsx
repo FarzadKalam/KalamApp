@@ -229,7 +229,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             <CancelBtn />
             {onSendInternalPdf ? (
               <Button onClick={() => { void handleSendInternalPdf(); }} loading={sendingInternal}>
-                ارسال داخلی
+                ارسال مستقیم
               </Button>
             ) : null}
             {onSavePdfToRecord ? (

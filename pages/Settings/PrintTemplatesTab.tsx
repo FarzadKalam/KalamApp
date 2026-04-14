@@ -48,11 +48,11 @@ import { buildListPrintableFields } from '../../utils/listPrintExport';
 const createTemplateId = () => `tpl_${Math.random().toString(36).slice(2, 10)}`;
 const nowIso = () => new Date().toISOString();
 const DEFAULT_PAGE_MARGINS = { top: 12, right: 10, bottom: 12, left: 10 } as const;
-const HEADER_HEIGHT_FALLBACK = 84;
-const FOOTER_HEIGHT_FALLBACK = 62;
-const HEADER_HEIGHT_MIN = 42;
+const HEADER_HEIGHT_FALLBACK = 96;
+const FOOTER_HEIGHT_FALLBACK = 76;
+const HEADER_HEIGHT_MIN = 52;
 const HEADER_HEIGHT_MAX = 220;
-const FOOTER_HEIGHT_MIN = 28;
+const FOOTER_HEIGHT_MIN = 36;
 const FOOTER_HEIGHT_MAX = 160;
 
 const getPageFrame = (paperSize: 'A4' | 'A5' | 'A6' = 'A4', orientation: 'portrait' | 'landscape' = 'portrait') => {
@@ -745,7 +745,7 @@ const PrintTemplatesTab: React.FC = () => {
                       placeholder="سربرگ هر برگه را اینجا تنظیم کنید..."
                       minHeight={HEADER_HEIGHT_MIN}
                       fixedHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
-                      contentPadding="8px 10px"
+                      contentPadding="2px 10px"
                       onEditorReady={setHeaderEditor}
                       onFocusSection={() => setActiveSection('header')}
                     />
@@ -762,7 +762,7 @@ const PrintTemplatesTab: React.FC = () => {
                 ) : null}
 
                 <section
-                  className={`relative flex-1 ${activeSection === 'body' ? 'ring-1 ring-inset ring-[rgba(var(--brand-500-rgb),0.24)]' : ''}`}
+                  className={`relative flex-1 min-h-0 ${activeSection === 'body' ? 'ring-1 ring-inset ring-[rgba(var(--brand-500-rgb),0.24)]' : ''}`}
                   onClick={() => setActiveSection('body')}
                 >
                   <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
@@ -774,6 +774,8 @@ const PrintTemplatesTab: React.FC = () => {
                     onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, contentHtml: html } : prev))}
                     placeholder="متن و جدول‌های اصلی سند را اینجا طراحی کنید..."
                     minHeight={editingTemplate.showHeader !== false || editingTemplate.showFooter !== false ? 460 : 640}
+                    fillHeight
+                    contentPadding="2px 10px"
                     onEditorReady={setBodyEditor}
                     onFocusSection={() => setActiveSection('body')}
                   />
@@ -804,7 +806,7 @@ const PrintTemplatesTab: React.FC = () => {
                       placeholder="پاورقی هر برگه را اینجا تنظیم کنید..."
                       minHeight={FOOTER_HEIGHT_MIN}
                       fixedHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
-                      contentPadding="8px 10px"
+                      contentPadding="2px 10px"
                       onEditorReady={setFooterEditor}
                       onFocusSection={() => setActiveSection('footer')}
                     />

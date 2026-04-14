@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button, App, Avatar, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
-import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined } from '@ant-design/icons';
+import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, BlockType, LogicOperator } from '../types';
@@ -67,9 +67,12 @@ import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, get
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
 import CounterpartyBotStatusModal from '../components/bot/CounterpartyBotStatusModal';
+import MessageComposerModal from '../components/MessageComposerModal';
 import { serializeNoteContent } from '../utils/noteContent';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { getActiveChannelSettings } from '../utils/channelSettings';
+import { insertNotesWithFallback } from '../utils/noteDispatch';
+import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
 import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
 
@@ -108,6 +111,55 @@ const CUSTOMER_BOT_CHANNEL_LABELS: Record<string, string> = {
   telegram: 'تلگرام',
   bale: 'بله',
   none: 'بدون پلتفرم',
+};
+
+const buildRubikaLinkedAttachmentMessage = (
+  baseText: string,
+  attachments: Array<{ name?: string; url?: string }>
+) => {
+  const normalizedBaseText = String(baseText || '').trim();
+  const lines: Array<{ text: string; linkUrl?: string }> = [];
+  if (normalizedBaseText) {
+    lines.push({ text: normalizedBaseText });
+  }
+  (attachments || []).forEach((item, index) => {
+    const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
+    const url = String(item?.url || '').trim();
+    lines.push({ text: `🔗 ${name}`, linkUrl: url || undefined });
+  });
+
+  if (lines.length === 0) {
+    return { text: '', metadata: undefined as Record<string, any> | undefined };
+  }
+
+  let text = '';
+  let cursor = 0;
+  const metaDataParts: Array<Record<string, any>> = [];
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      text += '\n';
+      cursor += 1;
+    }
+    const segment = String(line.text || '');
+    const startIndex = cursor;
+    text += segment;
+    cursor += segment.length;
+    if (line.linkUrl) {
+      metaDataParts.push({
+        type: 'Link',
+        from_index: startIndex,
+        length: segment.length,
+        link_url: line.linkUrl,
+      });
+    }
+  });
+
+  return {
+    text,
+    metadata: metaDataParts.length > 0
+      ? { meta_data_parts: metaDataParts }
+      : undefined,
+  };
 };
 
 const buildEnglishActivationBase = (value: any) => {
@@ -305,6 +357,30 @@ const ModuleShow: React.FC = () => {
       && !['projects', 'tasks', 'process_templates', 'process_runs'].includes(targetModuleId)
     ),
     [moduleId, quickProjectCustomerId, quickProjectTargetModuleIds]
+  );
+  const quickProjectLinkedFields = useMemo(
+    () => quickProjectDisplayModuleIds.map((targetModuleId) => {
+      const moduleTitle = MODULES[targetModuleId]?.titles?.faSingular || MODULES[targetModuleId]?.titles?.fa || targetModuleId;
+      const fieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
+      return {
+        moduleId: targetModuleId,
+        field: {
+          key: fieldKey,
+          labels: {
+            fa: `رکورد مرتبط ${moduleTitle}`,
+            en: `Linked ${targetModuleId}`,
+          },
+          type: FieldType.RELATION,
+          relationConfig: { targetModule: targetModuleId },
+          nature: 'standard',
+        } as any,
+      };
+    }),
+    [quickProjectDisplayModuleIds]
+  );
+  const quickProjectRelationsLoading = useMemo(
+    () => Object.values(quickProjectRelationLoading).some(Boolean),
+    [quickProjectRelationLoading]
   );
   const startDraftStorageKey = useMemo(() => (id ? `production-start-draft:${id}` : null), [id]);
   const [canIssueAccountingEntry, setCanIssueAccountingEntry] = useState(true);
@@ -888,6 +964,7 @@ const ModuleShow: React.FC = () => {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
   const [printShareModalOpen, setPrintShareModalOpen] = useState(false);
+  const [printShareTemplateModalOpen, setPrintShareTemplateModalOpen] = useState(false);
   const [printShareTargetIds, setPrintShareTargetIds] = useState<string[]>([]);
   const [printShareSubmitting, setPrintShareSubmitting] = useState(false);
   const [printShareGroups, setPrintShareGroups] = useState<Array<{
@@ -896,7 +973,16 @@ const ModuleShow: React.FC = () => {
     user_ids: string[];
     role_ids: string[];
   }>>([]);
+  const [printShareBotGroups, setPrintShareBotGroups] = useState<Array<{
+    id: string;
+    title: string;
+    channel_type: 'telegram' | 'bale' | 'rubika';
+    bot_chat_id: string;
+    customer_id: string | null;
+    supplier_id: string | null;
+  }>>([]);
   const [pendingPrintShareFile, setPendingPrintShareFile] = useState<{ url: string; name: string } | null>(null);
+  const [printShareMessageText, setPrintShareMessageText] = useState('');
 
   const mergeUsersById = (rows: any[]) =>
     rows.reduce((acc: any[], row: any) => {
@@ -2670,7 +2756,7 @@ const ModuleShow: React.FC = () => {
       const [{ data: customers }, { data: templates, error: templatesError }] = await Promise.all([
         supabase
           .from('customers')
-          .select('id,first_name,last_name,business_name,system_code')
+          .select('id,first_name,last_name,full_name,name,business_name,system_code,mobile_1,email')
           .order('last_name', { ascending: true })
           .limit(200),
         supabase
@@ -2681,12 +2767,20 @@ const ModuleShow: React.FC = () => {
       if (templatesError) throw templatesError;
       const customerOptions = (customers || []).map((row: any) => ({
         value: String(row.id),
-        label: `${String(row?.system_code || '').trim() ? `${row.system_code} - ` : ''}${String(
-          row?.business_name
-          || `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim()
-          || row?.id
-          || '-'
-        )}`,
+        label: (() => {
+          const title = String(
+            row?.business_name
+            || row?.full_name
+            || row?.name
+            || `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim()
+            || row?.mobile_1
+            || row?.email
+            || ''
+          ).trim();
+          const prefix = String(row?.system_code || '').trim();
+          if (title) return `${prefix ? `${prefix} - ` : ''}${title}`;
+          return `${prefix ? `${prefix} - ` : ''}مشتری بدون نام`;
+        })(),
       }));
       const scopedTemplates = (templates || []).filter((row: any) =>
         row?.is_active !== false && doesProcessTemplateSupportModule(row, 'projects')
@@ -3180,11 +3274,27 @@ const ModuleShow: React.FC = () => {
 
   const sanitizePrintFileName = useCallback((rawName: string) => {
     const baseName = String(rawName || 'print')
+      .normalize('NFKD')
+      .replace(/[^\x00-\x7F]/g, ' ')
       .trim()
-      .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '_')
-      .replace(/\s+/g, '_')
+      .replace(/[^a-zA-Z0-9._-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^[_\-.]+|[_\-.]+$/g, '')
       .slice(0, 120) || 'print';
     return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
+  }, []);
+
+  const normalizeSmsPhone = useCallback((value: unknown) => {
+    let digits = String(value ?? '')
+      .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+      .replace(/[^\d]/g, '')
+      .trim();
+    if (!digits) return '';
+    if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
+    else if (digits.startsWith('98')) digits = `0${digits.slice(2)}`;
+    else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
+    return /^09\d{9}$/.test(digits) ? digits : '';
   }, []);
 
   const uploadGeneratedPdf = useCallback(async (blob: Blob, rawFileName: string) => {
@@ -3210,17 +3320,27 @@ const ModuleShow: React.FC = () => {
   }, [id, moduleId, sanitizePrintFileName]);
 
   const printShareTargetOptions = useMemo(() => [
+    ...printShareBotGroups.map((group) => ({
+      label: `بات ${CUSTOMER_BOT_CHANNEL_LABELS[group.channel_type]}: ${group.title}`,
+      value: `bot_group:${group.id}`,
+    })),
     ...printShareGroups.map((group) => ({
-      label: `گروه: ${group.name}`,
-      value: `group:${group.id}`,
+      label: `گروه داخلی: ${group.name}`,
+      value: `chat_group:${group.id}`,
     })),
     ...allUsers
       .filter((user) => String(user?.id || '') !== String(currentUserId || ''))
       .map((user) => ({
-        label: `گفتگو با ${user.full_name || user.email || user.mobile_1 || user.id}`,
+        label: `داخلی: ${user.full_name || user.email || user.mobile_1 || user.id}`,
         value: `user:${user.id}`,
       })),
-  ], [allUsers, currentUserId, printShareGroups]);
+    ...allUsers
+      .filter((user) => String(user?.id || '') !== String(currentUserId || '') && String(user?.mobile_1 || '').trim())
+      .map((user) => ({
+        label: `پیامک: ${user.full_name || user.email || user.mobile_1 || user.id}`,
+        value: `sms_user:${user.id}`,
+      })),
+  ], [allUsers, currentUserId, printShareBotGroups, printShareGroups]);
 
   useEffect(() => {
     if (!printShareModalOpen || !currentOrgId) return;
@@ -3243,6 +3363,40 @@ const ModuleShow: React.FC = () => {
           user_ids: Array.isArray(group?.user_ids) ? group.user_ids.map((value: any) => String(value)) : [],
           role_ids: Array.isArray(group?.role_ids) ? group.role_ids.map((value: any) => String(value)) : [],
         })));
+      }
+
+      const { data: botGroupsData, error: botGroupsError } = await supabase
+        .from('counterparty_bot_groups')
+        .select('id, group_title, group_join_link, channel_type, bot_chat_id, customer_id, supplier_id')
+        .in('channel_type', ['telegram', 'bale', 'rubika'])
+        .order('updated_at', { ascending: false })
+        .limit(200);
+      if (botGroupsError) {
+        if (!cancelled) setPrintShareBotGroups([]);
+        return;
+      }
+      if (!cancelled) {
+        setPrintShareBotGroups((botGroupsData || [])
+          .map((row: any) => {
+            const channelType = String(row?.channel_type || '').trim() as 'telegram' | 'bale' | 'rubika';
+            if (!['telegram', 'bale', 'rubika'].includes(channelType)) return null;
+            return {
+              id: String(row?.id || ''),
+              title: String(row?.group_title || row?.group_join_link || row?.id || 'گروه بات').trim(),
+              channel_type: channelType,
+              bot_chat_id: String(row?.bot_chat_id || '').trim(),
+              customer_id: row?.customer_id ? String(row.customer_id) : null,
+              supplier_id: row?.supplier_id ? String(row.supplier_id) : null,
+            };
+          })
+          .filter(Boolean) as Array<{
+            id: string;
+            title: string;
+            channel_type: 'telegram' | 'bale' | 'rubika';
+            bot_chat_id: string;
+            customer_id: string | null;
+            supplier_id: string | null;
+          }>);
       }
     };
     void loadPrintShareGroups();
@@ -3282,20 +3436,38 @@ const ModuleShow: React.FC = () => {
     const uploaded = await uploadGeneratedPdf(blob, filename);
     setPendingPrintShareFile(uploaded);
     setPrintShareTargetIds([]);
+    setPrintShareMessageText('');
+    setPrintShareTemplateModalOpen(false);
     setPrintShareModalOpen(true);
   };
 
   const handleSubmitPrintShare = async () => {
     if (!pendingPrintShareFile || !id) return;
+    const normalizedTargets = Array.from(new Set(printShareTargetIds.map((value) => String(value || '').trim()).filter(Boolean)));
+    if (normalizedTargets.length === 0) {
+      msg.warning('حداقل یک مقصد معتبر انتخاب کنید');
+      return;
+    }
     const scope = normalizeNoteScope(moduleId, id);
     const authorName = allUsers.find((user) => String(user?.id || '') === String(currentUserId || ''))?.full_name || null;
+    const noteText = String(printShareMessageText || '').trim();
     const attachment = [{ url: pendingPrintShareFile.url, name: pendingPrintShareFile.name, mimeType: 'application/pdf' }];
+    const externalText = [noteText, `فایل: ${pendingPrintShareFile.url}`].filter(Boolean).join('\n');
+    const attachmentNameText = `پیوست‌ها:\n🔗 ${String(pendingPrintShareFile.name || 'فایل PDF').trim() || 'فایل PDF'}`;
     const payloads: Array<Record<string, any>> = [];
-    printShareTargetIds.forEach((targetId) => {
+    const smsRecipients = new Set<string>();
+    const botTargets: Array<{
+      id: string;
+      channel_type: 'telegram' | 'bale' | 'rubika';
+      bot_chat_id: string;
+      customer_id: string | null;
+      supplier_id: string | null;
+    }> = [];
+    normalizedTargets.forEach((targetId) => {
       const normalizedTarget = String(targetId || '').trim();
       if (!normalizedTarget) return;
-      if (normalizedTarget.startsWith('group:')) {
-        const groupId = normalizedTarget.replace('group:', '');
+      if (normalizedTarget.startsWith('chat_group:')) {
+        const groupId = normalizedTarget.replace('chat_group:', '');
         const group = printShareGroups.find((item) => item.id === groupId);
         if (!group) return;
         const roleDrivenUserIds = allUsers
@@ -3305,7 +3477,7 @@ const ModuleShow: React.FC = () => {
         payloads.push({
           module_id: scope.module_id,
           record_id: scope.record_id,
-          content: serializeNoteContent('', attachment as any),
+          content: serializeNoteContent(noteText, attachment as any),
           reply_to: null,
           mention_user_ids: mentionUserIds,
           mention_role_ids: group.role_ids,
@@ -3315,13 +3487,28 @@ const ModuleShow: React.FC = () => {
         });
         return;
       }
+      if (normalizedTarget.startsWith('bot_group:')) {
+        const groupId = normalizedTarget.replace('bot_group:', '');
+        const group = printShareBotGroups.find((item) => item.id === groupId);
+        if (!group) return;
+        botTargets.push(group);
+        return;
+      }
+      if (normalizedTarget.startsWith('sms_user:')) {
+        const userId = normalizedTarget.replace('sms_user:', '');
+        const user = allUsers.find((item) => String(item?.id || '') === userId);
+        const mobile = normalizeSmsPhone(user?.mobile_1);
+        if (!mobile) return;
+        smsRecipients.add(mobile);
+        return;
+      }
       if (normalizedTarget.startsWith('user:')) {
         const userId = normalizedTarget.replace('user:', '');
         if (!userId || userId === String(currentUserId || '')) return;
         payloads.push({
           module_id: scope.module_id,
           record_id: scope.record_id,
-          content: serializeNoteContent('', attachment as any),
+          content: serializeNoteContent(noteText, attachment as any),
           reply_to: null,
           mention_user_ids: [userId],
           mention_role_ids: [],
@@ -3332,19 +3519,99 @@ const ModuleShow: React.FC = () => {
       }
     });
 
-    if (payloads.length === 0) {
+    if (payloads.length === 0 && botTargets.length === 0 && smsRecipients.size === 0) {
       msg.warning('حداقل یک مقصد معتبر انتخاب کنید');
       return;
     }
 
     setPrintShareSubmitting(true);
     try {
-      const { error } = await supabase.from('notes').insert(payloads);
-      if (error) throw error;
+      if (payloads.length > 0) {
+        await insertNotesWithFallback(payloads);
+      }
+      for (const target of botTargets) {
+        if (!target.bot_chat_id) {
+          throw new Error(`chat id برای گروه بات "${target.id}" تنظیم نشده است.`);
+        }
+        const activeConnection = await getActiveChannelSettings(target.channel_type);
+        const connectionId = String(activeConnection?.id || '').trim();
+        if (!connectionId) {
+          throw new Error(`تنظیمات فعال بات ${CUSTOMER_BOT_CHANNEL_LABELS[target.channel_type]} پیدا نشد.`);
+        }
+        const isRubikaTarget = String(target.channel_type || '').trim() === 'rubika';
+        const rubikaLinkedMessage = isRubikaTarget
+          ? buildRubikaLinkedAttachmentMessage(noteText, attachment)
+          : null;
+        const botMessageText = isRubikaTarget
+          ? (String(rubikaLinkedMessage?.text || '').trim() || 'PDF ارسال شد.')
+          : (externalText || 'PDF ارسال شد.');
+        const extraPayload = isRubikaTarget
+          ? (rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined)
+          : undefined;
+        const fallbackText = isRubikaTarget
+          ? [noteText, attachmentNameText].filter(Boolean).join('\n')
+          : undefined;
+        const { data: proxyData, error: proxyError } = await supabase.functions.invoke('bot-admin', {
+          body: {
+            action: 'send_test_message',
+            channel: target.channel_type,
+            connectionId,
+            chatId: target.bot_chat_id,
+            text: botMessageText,
+            skipLog: false,
+            extraPayload,
+            fallbackText,
+          },
+        });
+        if (proxyError) throw proxyError;
+        if (!proxyData?.success) {
+          throw new Error(String(proxyData?.message || 'ارسال پیام بات ناموفق بود.'));
+        }
+
+        const providerResponse = proxyData?.provider_result || {};
+        const { error: insertError } = await supabase
+          .from('counterparty_bot_messages')
+          .insert([{
+            bot_group_id: target.id,
+            customer_id: target.customer_id,
+            supplier_id: target.supplier_id,
+            channel_type: target.channel_type,
+            direction: 'outbound',
+            message_type: 'file',
+            chat_id: target.bot_chat_id,
+            provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || '') || null,
+            content_text: String(botMessageText || '').trim(),
+            file_url: pendingPrintShareFile.url,
+            file_name: pendingPrintShareFile.name,
+            mime_type: 'application/pdf',
+            payload: {
+              attachments: attachment,
+              provider_response: providerResponse || {},
+            },
+          }]);
+        if (insertError) throw insertError;
+      }
+      if (smsRecipients.size > 0) {
+        await sendSmsViaGateway({
+          to: Array.from(smsRecipients),
+          text: externalText || 'PDF ارسال شد.',
+          allowDirectFallback: true,
+          moduleId,
+          recordId: id,
+          title: 'ارسال مستقیم PDF',
+          metadata: {
+            source_type: 'print_share',
+            file_url: pendingPrintShareFile.url,
+          },
+        });
+      }
       setPrintShareModalOpen(false);
       setPendingPrintShareFile(null);
       setPrintShareTargetIds([]);
-      msg.success('PDF ارسال شد.');
+      setPrintShareMessageText('');
+      msg.success('ارسال مستقیم انجام شد.');
+    } catch (error: any) {
+      msg.error(String(error?.message || 'ارسال مستقیم ناموفق بود.'));
     } finally {
       setPrintShareSubmitting(false);
     }
@@ -4950,7 +5217,11 @@ const ModuleShow: React.FC = () => {
       variant: b.variant,
       onClick: () => handleHeaderAction(b.id)
     }));
-  if (canEditModule) {
+  if (
+    canEditModule
+    && !!processDraftFieldKey
+    && !['invoices', 'purchase_invoices'].includes(String(moduleId))
+  ) {
     headerActions.push({
       id: 'create_process',
       label: 'ایجاد فرآیند',
@@ -5068,7 +5339,7 @@ const ModuleShow: React.FC = () => {
   };
 
   return (
-    <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-x-visible pl-0 md:pl-16 scrollbar-wide">
+    <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-x-hidden pl-0 md:pl-16 scrollbar-wide">
       <div className="mb-4 md:mb-0">
         <RelatedSidebar
           moduleConfig={moduleConfig}
@@ -5209,6 +5480,9 @@ const ModuleShow: React.FC = () => {
       <Modal
         title="ایجاد سریع پروژه"
         open={isQuickProjectModalOpen}
+        width={920}
+        zIndex={12500}
+        style={{ maxWidth: 'calc(100vw - 1rem)' }}
         onCancel={() => {
           setIsQuickProjectModalOpen(false);
           setQuickProjectTargetModuleIds([]);
@@ -5237,6 +5511,7 @@ const ModuleShow: React.FC = () => {
               options={quickProjectCustomerOptions}
               placeholder="انتخاب مشتری"
               getPopupContainer={resolveStablePopupContainer}
+              styles={{ popup: { root: { zIndex: 12560 } } }}
             />
           </Form.Item>
 
@@ -5248,35 +5523,38 @@ const ModuleShow: React.FC = () => {
               options={quickProjectTemplateOptions}
               placeholder="انتخاب الگو (اختیاری)"
               getPopupContainer={resolveStablePopupContainer}
+              styles={{ popup: { root: { zIndex: 12560 } } }}
             />
           </Form.Item>
 
-          {String(quickProjectTemplateId || '').trim() && quickProjectDisplayModuleIds.length > 0 ? (
+          {String(quickProjectTemplateId || '').trim() && quickProjectLinkedFields.length > 0 ? (
             <div className="mb-4 rounded-xl border border-leather-200 bg-leather-50 px-3 py-3">
               <div className="text-sm font-semibold text-leather-800">رکوردهای مرتبط فرآیند</div>
               <div className="mt-1 text-xs text-leather-700">
                 رکوردهای شناخته‌شده به‌صورت خودکار پر شده‌اند. برای ماژول‌های دیگر در صورت نیاز رکورد انتخاب کنید.
               </div>
+              {quickProjectRelationsLoading ? (
+                <div className="mt-1 text-xs text-leather-600">در حال بارگذاری گزینه‌های رکوردهای مرتبط...</div>
+              ) : null}
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                {quickProjectDisplayModuleIds.map((targetModuleId) => (
-                    <div key={targetModuleId}>
-                      <div className="mb-1 text-xs text-gray-500">{MODULES[targetModuleId]?.titles?.fa || targetModuleId}</div>
-                      <Select
-                        allowClear
-                        showSearch
-                        optionFilterProp="label"
-                        value={quickProjectLinkedRecords[targetModuleId] || undefined}
-                        options={quickProjectRelationOptions[targetModuleId] || []}
-                        loading={!!quickProjectRelationLoading[targetModuleId]}
-                        placeholder={`انتخاب رکورد ${MODULES[targetModuleId]?.titles?.fa || targetModuleId}`}
-                        getPopupContainer={resolveStablePopupContainer}
-                        onChange={(value) => setQuickProjectLinkedRecords((prev) => ({
-                          ...prev,
-                          [targetModuleId]: value ? String(value) : null,
-                        }))}
-                      />
-                    </div>
-                  ))}
+                {quickProjectLinkedFields.map(({ moduleId: targetModuleId, field }) => (
+                  <div key={field.key}>
+                    <SmartFieldRenderer
+                      field={field}
+                      value={quickProjectLinkedRecords[targetModuleId] || undefined}
+                      onChange={(value) => setQuickProjectLinkedRecords((prev) => ({
+                        ...prev,
+                        [targetModuleId]: value ? String(value) : null,
+                      }))}
+                      forceEditMode={true}
+                      options={quickProjectRelationOptions[targetModuleId] || []}
+                      onOptionsUpdate={() => { void loadQuickProjectRelationOptions(targetModuleId, quickProjectLinkedRecords[targetModuleId] || null); }}
+                      moduleId={moduleId}
+                      allValues={quickProjectLinkedRecords}
+                      overlayZIndexBase={12600}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           ) : null}
@@ -5577,23 +5855,39 @@ const ModuleShow: React.FC = () => {
         previewMeta={printManager.previewMeta}
       />
       <Modal
-        title="ارسال داخلی PDF"
+        title="ارسال مستقیم PDF"
         open={printShareModalOpen}
         onCancel={() => {
           setPrintShareModalOpen(false);
+          setPrintShareTemplateModalOpen(false);
           setPrintShareTargetIds([]);
           setPendingPrintShareFile(null);
+          setPrintShareMessageText('');
         }}
         onOk={() => { void handleSubmitPrintShare(); }}
         confirmLoading={printShareSubmitting}
-        okText="ارسال"
+        okText="ارسال مستقیم"
         cancelText="انصراف"
         okButtonProps={{ disabled: printShareTargetIds.length === 0 }}
+        zIndex={1700}
       >
         <div className="space-y-3">
           <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] px-3 py-2 text-sm text-gray-700">
             {pendingPrintShareFile?.name || 'فایل PDF آماده ارسال است.'}
           </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-gray-500">متن پیام</div>
+            <Button size="small" icon={<CopyOutlined />} onClick={() => setPrintShareTemplateModalOpen(true)}>
+              پیام‌های آماده
+            </Button>
+          </div>
+          <Input.TextArea
+            value={printShareMessageText}
+            onChange={(event) => setPrintShareMessageText(event.target.value)}
+            rows={4}
+            placeholder="متن پیام (اختیاری)"
+            className="w-full"
+          />
           <Select
             mode="multiple"
             showSearch
@@ -5602,12 +5896,36 @@ const ModuleShow: React.FC = () => {
             onChange={(values) => setPrintShareTargetIds((values || []).map((value) => String(value)))}
             options={printShareTargetOptions}
             optionFilterProp="label"
-            placeholder="انتخاب گفتگو یا گروه"
+            placeholder="انتخاب مقصد (داخلی، بات، پیامک)"
             className="w-full"
             maxTagCount="responsive"
+            getPopupContainer={(trigger) => trigger.parentElement || document.body}
+            styles={{ popup: { root: { zIndex: 1710 } } }}
           />
         </div>
       </Modal>
+      {printShareTemplateModalOpen ? (
+        <MessageComposerModal
+          open
+          mode="template"
+          moduleId={moduleId}
+          record={(data || null) as Record<string, any> | null}
+          templateOnlyTitle="پیام‌های آماده ارسال مستقیم PDF"
+          onApplyTemplate={(content) => {
+            const normalizedContent = String(content || '').trim();
+            if (!normalizedContent) return;
+            setPrintShareMessageText((prev) => (String(prev || '').trim()
+              ? `${String(prev || '').trim()}\n${normalizedContent}`
+              : normalizedContent));
+          }}
+          onInsertVariable={(token) => {
+            const normalizedToken = String(token || '').trim();
+            if (!normalizedToken) return;
+            setPrintShareMessageText((prev) => `${String(prev || '')}${normalizedToken}`);
+          }}
+          onCancel={() => setPrintShareTemplateModalOpen(false)}
+        />
+      ) : null}
 
       <style>{`
         .animate-fadeIn { animation: fadeIn 0.5s ease-out; }

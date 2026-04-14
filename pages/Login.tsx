@@ -5,6 +5,7 @@ import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { normalizeIranMobile } from '../utils/phoneNumber';
+import { normalizeDigitsToEnglish } from '../utils/persianNumericInput';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
@@ -15,6 +16,9 @@ const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
 const OTP_REQUESTED_FOR_STORAGE_KEY = 'kalam_login_otp_requested_for';
 const OTP_CODE_STORAGE_KEY = 'kalam_login_otp_code';
 const OTP_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_login_otp_cooldown_until';
+
+const normalizeOtpToken = (value: unknown): string =>
+  normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
 
 const readRuntimeBrandSnapshot = () => {
   const branding = readRuntimeBranding();
@@ -103,7 +107,7 @@ const Login = () => {
   }, [location.search]);
 
   const normalizedPhone = useMemo(() => normalizeIranMobile(phone), [phone]);
-  const canVerifyOtp = !!otpRequestedFor && otpCode.trim().length >= 4;
+  const canVerifyOtp = !!otpRequestedFor && normalizeOtpToken(otpCode).length >= 4;
 
   const clearOtpSessionState = () => {
     if (typeof window === 'undefined') return;
@@ -555,11 +559,12 @@ const Login = () => {
   };
 
   const handleVerifyOtp = async () => {
+    const normalizedOtpToken = normalizeOtpToken(otpCode);
     if (!otpRequestedFor) {
       message.error('ابتدا درخواست کد بدهید.');
       return;
     }
-    if (!otpCode.trim()) {
+    if (!normalizedOtpToken) {
       message.error('کد تایید را وارد کنید.');
       return;
     }
@@ -568,7 +573,7 @@ const Login = () => {
     try {
       const { error } = await supabase.auth.verifyOtp({
         phone: otpRequestedFor,
-        token: otpCode.trim(),
+        token: normalizedOtpToken,
         type: 'sms',
       });
       if (error) throw error;

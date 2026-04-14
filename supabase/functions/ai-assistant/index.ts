@@ -6,6 +6,7 @@ type AssistantAction =
   | 'delete_thread'
   | 'propose_note'
   | 'confirm_action'
+  | 'suggest_reply'
   | 'get_provider_settings'
   | 'save_provider_settings'
   | 'test_provider'
@@ -79,6 +80,8 @@ const MODULE_ALIASES: Record<string, string[]> = {
   suppliers: ['تامین کننده', 'تامین‌کننده', 'تامین کنندگان', 'supplier', 'suppliers', 'فروشنده'],
   invoices: ['فاکتور فروش', 'فاکتور', 'صورتحساب', 'invoice', 'invoices', 'دریافت', 'دریافتی'],
   purchase_invoices: ['فاکتور خرید', 'خرید', 'purchase invoice', 'purchase'],
+  price_lists: ['لیست قیمت', 'لیست قیمت‌ها', 'قیمت', 'price list', 'price lists', 'pricing'],
+  product_bundles: ['پکیج', 'پکیج‌ها', 'باندل', 'bundle', 'bundles', 'package', 'packages'],
   cash_bank_operations: ['پرداخت', 'پرداختی', 'دریافت', 'دریافتی', 'نقد', 'بانک', 'cash', 'bank', 'payment', 'receipt'],
   products: ['محصول', 'محصولات', 'کالا', 'product', 'products', 'اقلام'],
   projects: ['پروژه', 'پروژه‌ها', 'project', 'projects'],
@@ -105,6 +108,8 @@ const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
   cheques: ['name', 'description', 'system_code', 'cheque_number'],
   barters: ['name', 'description', 'system_code'],
   employees: ['full_name', 'name', 'mobile_1', 'mobile', 'employee_code'],
+  price_lists: ['name', 'title', 'description', 'system_code'],
+  product_bundles: ['name', 'title', 'description', 'system_code'],
 };
 
 const QUERY_STOP_WORDS = new Set([
@@ -1434,6 +1439,504 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   });
 };
 
+const normalizeReplyDraftMessages = (items: any[]) =>
+  (Array.isArray(items) ? items : [])
+    .map((item: any, index: number) => {
+      const text = String(item?.text || item?.content || '').trim();
+      if (!text) return null;
+      const direction = String(item?.direction || '').trim().toLowerCase();
+      const role = direction === 'outbound' || direction === 'assistant' || direction === 'agent'
+        ? 'agent'
+        : direction === 'inbound' || direction === 'user' || direction === 'customer'
+        ? 'customer'
+        : 'unknown';
+      return {
+        index: index + 1,
+        role,
+        direction: direction || null,
+        author_name: String(item?.authorName || item?.author_name || '').trim() || null,
+        created_at: String(item?.createdAt || item?.created_at || '').trim() || null,
+        text: text.slice(0, 2400),
+      };
+    })
+    .filter(Boolean)
+    .slice(-18);
+
+const getNumericTotal = (rows: any[], keys: string[]) =>
+  (rows || []).reduce((sum: number, row: any) => {
+    const next = keys.reduce((acc, key) => {
+      if (acc !== null) return acc;
+      const raw = row?.[key];
+      const parsed = typeof raw === 'string' ? Number(raw) : Number(raw ?? NaN);
+      return Number.isFinite(parsed) ? parsed : null;
+    }, null as number | null);
+    return sum + (next || 0);
+  }, 0);
+
+const fetchPermittedSingleRecord = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  moduleId: string,
+  recordId: string,
+) => {
+  if (!moduleId || !recordId || !ALLOWED_MODULES.has(moduleId) || !isUuid(recordId)) return null;
+  const perm = getModulePermission(authContext.permissions, moduleId);
+  if (!canViewModule(perm)) return null;
+  const recordScope = getRecordScope(perm);
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, moduleId, {
+    id: `eq.${recordId}`,
+    select: '*',
+    limit: 1,
+  });
+  const row = rows[0] || null;
+  if (!row || !canAccessAssignedRecord(row, authContext, recordScope)) return null;
+  return sanitizeRecord(row, perm);
+};
+
+const fetchPermittedRowsByAnyFilter = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  moduleId: string,
+  filters: Array<Record<string, string | number>>,
+  limit = 8,
+) => {
+  for (const params of filters) {
+    const rows = await fetchPermittedRows(supabaseUrl, serviceRoleKey, authContext, moduleId, params, limit);
+    if (rows.length > 0) return rows;
+  }
+  return [];
+};
+
+const fetchCounterpartyBusinessContext = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  counterparty: { moduleId: 'customers' | 'suppliers'; recordId: string } | null,
+) => {
+  if (!counterparty?.moduleId || !counterparty?.recordId) {
+    return {
+      counterparty: null,
+      invoices: [],
+      projects: [],
+      payments: [],
+      financial_summary: null,
+    };
+  }
+
+  const counterpartyRecord = await fetchPermittedSingleRecord(
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    counterparty.moduleId,
+    counterparty.recordId,
+  );
+
+  if (!counterpartyRecord) {
+    return {
+      counterparty: null,
+      invoices: [],
+      projects: [],
+      payments: [],
+      financial_summary: null,
+    };
+  }
+
+  if (counterparty.moduleId === 'customers') {
+    const [invoices, projects, payments] = await Promise.all([
+      fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'invoices', [
+        { customer_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+      ], 10),
+      fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'projects', [
+        { customer_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+      ], 10),
+      fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'cash_bank_operations', [
+        { customer_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+        { related_customer: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+        { counterparty_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+      ], 12),
+    ]);
+    const financialSummary = {
+      invoice_count: invoices.length,
+      project_count: projects.length,
+      payment_count: payments.length,
+      invoice_total_estimate: getNumericTotal(invoices, ['grand_total', 'total_amount', 'payable_total', 'amount_total']),
+      payment_total_estimate: getNumericTotal(payments, ['amount', 'amount_total', 'value', 'debit', 'credit']),
+      open_invoice_count: invoices.filter((row: any) => {
+        const status = String(row?.status || '').trim().toLowerCase();
+        return status && !['paid', 'settled', 'completed', 'closed', 'done'].includes(status);
+      }).length,
+    };
+    return {
+      counterparty: counterpartyRecord,
+      invoices,
+      projects,
+      payments,
+      financial_summary: financialSummary,
+    };
+  }
+
+  const [purchaseInvoices, projects, payments] = await Promise.all([
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'purchase_invoices', [
+      { supplier_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+    ], 10),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'projects', [
+      { supplier_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+      { contractor_supplier_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+    ], 10),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'cash_bank_operations', [
+      { supplier_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+      { related_supplier: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+      { counterparty_id: `eq.${counterparty.recordId}`, order: 'updated_at.desc' },
+    ], 12),
+  ]);
+  const financialSummary = {
+    invoice_count: purchaseInvoices.length,
+    project_count: projects.length,
+    payment_count: payments.length,
+    invoice_total_estimate: getNumericTotal(purchaseInvoices, ['grand_total', 'total_amount', 'payable_total', 'amount_total']),
+    payment_total_estimate: getNumericTotal(payments, ['amount', 'amount_total', 'value', 'debit', 'credit']),
+    open_invoice_count: purchaseInvoices.filter((row: any) => {
+      const status = String(row?.status || '').trim().toLowerCase();
+      return status && !['paid', 'settled', 'completed', 'closed', 'done'].includes(status);
+    }).length,
+  };
+  return {
+    counterparty: counterpartyRecord,
+    invoices: purchaseInvoices,
+    projects,
+    payments,
+    financial_summary: financialSummary,
+  };
+};
+
+const fetchReplyCrossModuleContext = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+) => {
+  const [products, productBundles, priceLists, purchaseInvoices, recentCustomers, recentSuppliers] = await Promise.all([
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'products', [
+      { order: 'updated_at.desc' },
+    ], 10),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'product_bundles', [
+      { order: 'updated_at.desc' },
+    ], 10),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'price_lists', [
+      { order: 'updated_at.desc' },
+    ], 8),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'purchase_invoices', [
+      { order: 'updated_at.desc' },
+    ], 8),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'customers', [
+      { order: 'updated_at.desc' },
+    ], 8),
+    fetchPermittedRowsByAnyFilter(supabaseUrl, serviceRoleKey, authContext, 'suppliers', [
+      { order: 'updated_at.desc' },
+    ], 8),
+  ]);
+
+  const users = authContext?.orgId
+    ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'id,full_name,email,mobile_1,mobile,role_id,job_title,position,team,updated_at',
+      order: 'updated_at.desc',
+      limit: 20,
+    })
+    : [];
+
+  return {
+    products,
+    product_bundles: productBundles,
+    price_lists: priceLists,
+    purchase_invoices: purchaseInvoices,
+    recent_customers: recentCustomers,
+    recent_suppliers: recentSuppliers,
+    users: (users || []).map((row: any) => ({
+      id: row?.id || null,
+      full_name: row?.full_name || null,
+      email: row?.email || null,
+      mobile: row?.mobile_1 || row?.mobile || null,
+      role_id: row?.role_id || null,
+      job_title: row?.job_title || null,
+      position: row?.position || null,
+      team: row?.team || null,
+    })),
+  };
+};
+
+const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const channel = String(body?.channel || '').trim().toLowerCase();
+  if (channel !== 'sms' && channel !== 'bot') {
+    return json(400, { success: false, message: 'کانال پیشنهاد پاسخ معتبر نیست.' });
+  }
+
+  const rawContext = normalizeContext(body?.context || {});
+  const contextForReply: RequestContext = rawContext.moduleId
+    ? rawContext
+    : {
+      route: '/notifications',
+      mode: 'page',
+      moduleId: null,
+      recordId: null,
+      visibleRecordIds: [],
+      selectedRecordIds: [],
+    };
+
+  const contextKey = buildContextKey(contextForReply);
+  const [providerConfig, companyContext] = await Promise.all([
+    resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext),
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: body?.threadId || null,
+    title: channel === 'sms' ? 'پیشنهاد پاسخ پیامک' : 'پیشنهاد پاسخ بات',
+    pageContext: { context: contextForReply, moduleId: contextForReply.moduleId || null, recordId: contextForReply.recordId || null, summary: 'reply_suggestion' },
+    contextKey: `reply:${channel}:${contextKey}`,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+  });
+
+  let counterpartyModuleId = String(body?.counterparty?.moduleId || body?.counterpartyModuleId || contextForReply.moduleId || '').trim();
+  let counterpartyRecordId = String(body?.counterparty?.recordId || body?.counterpartyRecordId || contextForReply.recordId || '').trim();
+
+  if ((!counterpartyModuleId || !counterpartyRecordId) && channel === 'bot') {
+    const botGroupId = normalizeId(body?.botGroupId);
+    if (isUuid(botGroupId)) {
+      const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'counterparty_bot_groups', {
+        id: `eq.${botGroupId}`,
+        org_id: `eq.${authContext.orgId}`,
+        select: 'id,target_type,customer_id,supplier_id,channel_type,group_title,bot_chat_id,status',
+        limit: 1,
+      });
+      const group = rows[0] || null;
+      if (group) {
+        const type = String(group?.target_type || '').trim();
+        if (type === 'customers' && group?.customer_id) {
+          counterpartyModuleId = 'customers';
+          counterpartyRecordId = String(group.customer_id);
+        } else if (type === 'suppliers' && group?.supplier_id) {
+          counterpartyModuleId = 'suppliers';
+          counterpartyRecordId = String(group.supplier_id);
+        }
+      }
+    }
+  }
+
+  const counterparty =
+    (counterpartyModuleId === 'customers' || counterpartyModuleId === 'suppliers') && isUuid(counterpartyRecordId)
+      ? { moduleId: counterpartyModuleId as 'customers' | 'suppliers', recordId: counterpartyRecordId }
+      : null;
+
+  const incomingDraftMessages = normalizeReplyDraftMessages(body?.recentMessages || []);
+  const fallbackQuery = incomingDraftMessages.map((item: any) => item.text).join(' ');
+  const phoneHint = String(body?.phone || body?.phoneNumber || '').trim();
+  let recentMessages = incomingDraftMessages;
+
+  if (recentMessages.length === 0 && channel === 'bot') {
+    const botGroupId = normalizeId(body?.botGroupId);
+    if (isUuid(botGroupId)) {
+      const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'counterparty_bot_messages', {
+        bot_group_id: `eq.${botGroupId}`,
+        org_id: `eq.${authContext.orgId}`,
+        select: 'id,direction,content_text,payload,created_at',
+        order: 'created_at.desc',
+        limit: 18,
+      });
+      recentMessages = (rows || [])
+        .slice()
+        .reverse()
+        .map((row: any, index: number) => ({
+          index: index + 1,
+          role: String(row?.direction || '').trim() === 'outbound' ? 'agent' : 'customer',
+          direction: String(row?.direction || '').trim() || null,
+          author_name: String((row?.payload as any)?.sender_display_name || '').trim() || null,
+          created_at: String(row?.created_at || '').trim() || null,
+          text: String(row?.content_text || '').trim().slice(0, 2400),
+        }))
+        .filter((item: any) => item.text);
+    }
+  }
+
+  if (recentMessages.length === 0 && channel === 'sms' && phoneHint) {
+    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'sms_delivery_reports', {
+      org_id: `eq.${authContext.orgId}`,
+      phone_number: `eq.${phoneHint}`,
+      select: 'id,direction,message_text,message_at,created_at,sender,recipient',
+      order: 'message_at.desc',
+      limit: 18,
+    });
+    recentMessages = (rows || [])
+      .slice()
+      .reverse()
+      .map((row: any, index: number) => ({
+        index: index + 1,
+        role: String(row?.direction || '').trim() === 'outbound' ? 'agent' : 'customer',
+        direction: String(row?.direction || '').trim() || null,
+        author_name: String(row?.direction || '').trim() === 'outbound' ? 'کاربر سازمان' : String(row?.sender || '').trim() || null,
+        created_at: String(row?.message_at || row?.created_at || '').trim() || null,
+        text: String(row?.message_text || '').trim().slice(0, 2400),
+      }))
+      .filter((item: any) => item.text);
+  }
+
+  const businessContext = await fetchCounterpartyBusinessContext(supabaseUrl, serviceRoleKey, authContext, counterparty);
+  const knowledgeQuery = [
+    fallbackQuery,
+    String(body?.instruction || '').trim(),
+    channel === 'sms' ? 'پیشنهاد پاسخ پیامک مشتری' : 'پیشنهاد پاسخ گفتگوی بات مشتری',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const [knowledgeChunks, crossModuleContext] = await Promise.all([
+    fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, knowledgeQuery),
+    fetchReplyCrossModuleContext(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  const retrievedContexts = await fetchRelevantModuleContexts(
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    [knowledgeQuery, recentMessages.map((item: any) => item.text).join('\n')].filter(Boolean).join('\n'),
+    { moduleId: counterparty?.moduleId || contextForReply.moduleId || null },
+  );
+  const userContext = buildUserPromptContext(authContext);
+
+  const payload = {
+    request: {
+      channel,
+      tone: String(body?.tone || '').trim() || 'professional',
+      instruction: String(body?.instruction || '').trim() || null,
+    },
+    company: companyContext,
+    requester: userContext,
+    active_context: {
+      module_id: contextForReply.moduleId || null,
+      record_id: contextForReply.recordId || null,
+      phone: phoneHint || null,
+    },
+    counterparty: {
+      module_id: counterparty?.moduleId || null,
+      record_id: counterparty?.recordId || null,
+      profile: businessContext.counterparty,
+      financial_summary: businessContext.financial_summary,
+      recent_invoices: businessContext.invoices.slice(0, 6),
+      recent_projects: businessContext.projects.slice(0, 6),
+      recent_payments: businessContext.payments.slice(0, 8),
+    },
+    cross_module_context: crossModuleContext,
+    conversation: recentMessages.slice(-16),
+    retrieved_contexts: retrievedContexts.slice(0, 4),
+    organization_knowledge: knowledgeChunks.map((chunk, index) => ({
+      index: index + 1,
+      id: chunk.id,
+      title: chunk?.metadata?.document_title || null,
+      content: String(chunk?.content || '').slice(0, 1100),
+    })),
+  };
+
+  const aiResult = await callChatCompletions(providerConfig, [
+    {
+      role: 'system',
+      content:
+        'شما دستیار پاسخ‌دهی سازمانی KalamApp هستید. فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز و اسناد/قوانین سازمان استفاده کنید. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.',
+    },
+    {
+      role: 'user',
+      content: JSON.stringify(payload),
+    },
+  ], { temperature: 0.22, maxTokens: 460 });
+
+  const suggestedReply = String(aiResult.content || '').replace(/^["'`]+|["'`]+$/g, '').trim();
+  if (!suggestedReply) {
+    throw new Error('پاسخ پیشنهادی معتبر از AI دریافت نشد.');
+  }
+
+  const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: thread.id,
+    role: 'user',
+    content: `reply_suggestion:${channel}`,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    metadata: {
+      context_key: `reply:${channel}:${contextKey}`,
+      source: 'notifications_chat_reply_suggest',
+      channel,
+      counterparty_module_id: counterparty?.moduleId || null,
+      counterparty_record_id: counterparty?.recordId || null,
+      conversation_size: recentMessages.length,
+      knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
+    },
+  });
+
+  const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: thread.id,
+    role: 'assistant',
+    content: suggestedReply,
+    provider: aiResult.provider,
+    model: aiResult.model,
+    metadata: {
+      source: 'reply_suggestion',
+      channel,
+      usage: aiResult.usageMetadata,
+      context_key: `reply:${channel}:${contextKey}`,
+      counterparty_module_id: counterparty?.moduleId || null,
+      counterparty_record_id: counterparty?.recordId || null,
+      financial_summary: businessContext.financial_summary,
+      related_modules: counterparty?.moduleId === 'customers'
+        ? ['invoices', 'projects', 'cash_bank_operations']
+        : counterparty?.moduleId === 'suppliers'
+        ? ['purchase_invoices', 'projects', 'cash_bank_operations']
+        : [],
+      cross_module_context_sizes: {
+        products: crossModuleContext.products.length,
+        product_bundles: crossModuleContext.product_bundles.length,
+        price_lists: crossModuleContext.price_lists.length,
+        purchase_invoices: crossModuleContext.purchase_invoices.length,
+        recent_customers: crossModuleContext.recent_customers.length,
+        recent_suppliers: crossModuleContext.recent_suppliers.length,
+        users: crossModuleContext.users.length,
+      },
+      retrieved_context_modules: retrievedContexts.map((ctx: any) => ctx.moduleId),
+    },
+  });
+
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    updated_at: new Date().toISOString(),
+    provider: aiResult.provider,
+    model: aiResult.model,
+    metadata: {
+      ...(thread?.metadata || {}),
+      last_reply_suggestion_at: new Date().toISOString(),
+      reply_channel: channel,
+    },
+  });
+
+  return json(200, {
+    success: true,
+    threadId: thread.id,
+    userMessageId: userMessage?.id || null,
+    messageId: assistantMessage?.id || null,
+    suggestedReply,
+    provider: aiResult.provider,
+    model: aiResult.model,
+    usage: aiResult.usageMetadata,
+    context: {
+      channel,
+      counterpartyModuleId: counterparty?.moduleId || null,
+      counterpartyRecordId: counterparty?.recordId || null,
+      conversationMessages: recentMessages.length,
+      retrievedContextModules: retrievedContexts.map((ctx: any) => ctx.moduleId),
+      knowledgeSources: knowledgeChunks.map((chunk) => ({
+        id: chunk.id,
+        documentId: chunk.document_id,
+        title: chunk?.metadata?.document_title || null,
+        chunkIndex: chunk.chunk_index,
+      })),
+    },
+  });
+};
+
 const parseModelsResponse = (parsed: any) => {
   const list = Array.isArray(parsed?.data)
     ? parsed.data
@@ -1776,6 +2279,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'chat') return await handleChat(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'suggest_reply') return await handleSuggestReply(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'propose_note') return await handleProposeNote(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'confirm_action') return await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, body);
 

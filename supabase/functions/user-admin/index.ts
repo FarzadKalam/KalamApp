@@ -46,8 +46,13 @@ const getServiceHeaders = (serviceRoleKey: string, userToken?: string) => ({
   Prefer: 'return=representation',
 });
 
+const normalizeDigitsToEnglish = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+
 const normalizeIranMobileE164 = (value?: string | null) => {
-  const raw = String(value || '').trim();
+  const raw = normalizeDigitsToEnglish(value).trim();
   if (!raw) return null;
   const digits = raw.replace(/\D+/g, '');
   if (digits.length === 10 && digits.startsWith('9')) return `+98${digits}`;
@@ -541,12 +546,16 @@ const verifyPhoneOtp = async (
   token: string,
   type: 'sms' | 'phone_change',
 ) => {
+  const normalizedToken = normalizeDigitsToEnglish(token).replace(/\D+/g, '');
+  if (!normalizedToken) {
+    throw new Error('کد تایید نامعتبر است.');
+  }
   const response = await fetch(authUrl(supabaseUrl, '/verify'), {
     method: 'POST',
     headers: getServiceHeaders(serviceRoleKey),
     body: JSON.stringify({
       phone,
-      token,
+      token: normalizedToken,
       type,
     }),
   });
@@ -992,7 +1001,7 @@ Deno.serve(async (request) => {
     if (action === 'verify_phone_otp') {
       const targetUserId = String(body?.userId || '').trim();
       const normalizedPhone = normalizeIranMobileE164(body?.phone);
-      const token = String(body?.token || '').trim();
+      const token = normalizeDigitsToEnglish(body?.token).replace(/\D+/g, '');
       if (!targetUserId || !normalizedPhone || !token) {
         return json(400, { success: false, message: 'شناسه کاربر، شماره موبایل و کد تایید الزامی است.' });
       }

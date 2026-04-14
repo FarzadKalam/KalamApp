@@ -245,6 +245,16 @@ const applyQueryFilters = (query: any, filter?: Record<string, any>) => {
       return column ? nextQuery.is(column, rawValue) : nextQuery;
     }
 
+    if (key.endsWith('__like')) {
+      const column = key.slice(0, -6);
+      return column ? nextQuery.like(column, rawValue) : nextQuery;
+    }
+
+    if (key.endsWith('__ilike')) {
+      const column = key.slice(0, -7);
+      return column ? nextQuery.ilike(column, rawValue) : nextQuery;
+    }
+
     return nextQuery.eq(key, rawValue);
   }, query);
 };

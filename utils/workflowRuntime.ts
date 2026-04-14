@@ -1317,11 +1317,17 @@ export const executeWorkflowAction = async (
     const messageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
     if (!messageText) return;
     const titleText = renderTemplate(String(config.title || ''), currentRecord, moduleId).trim();
+    const configuredRecipientFields = asArray(config.recipient_fields)
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    const configuredRecipientAssignees = asArray(config.recipient_assignees)
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
     const recipientsFromFields = await resolveCommunicationValuesFromFields({
       currentRecord,
       moduleId,
-      recipientFields: asArray(config.recipient_fields),
-      recipientAssignees: asArray(config.recipient_assignees),
+      recipientFields: configuredRecipientFields,
+      recipientAssignees: configuredRecipientAssignees,
       channel,
     });
     const recipientsManual = asArray(config.manual_chat_ids)
@@ -1330,8 +1336,9 @@ export const executeWorkflowAction = async (
     const directFallbackChatId = isRubika
       ? String(currentRecord?.rubika_chat_id || '').trim()
       : String(currentRecord?.bale_chat_id || '').trim();
+    const hasExplicitRecipients = configuredRecipientFields.length > 0 || configuredRecipientAssignees.length > 0;
     const fallbackRecipients =
-      recipientsFromFields.length > 0 || recipientsManual.length > 0
+      recipientsFromFields.length > 0 || recipientsManual.length > 0 || hasExplicitRecipients
         ? []
         : [
             ...[directFallbackChatId].filter(Boolean),

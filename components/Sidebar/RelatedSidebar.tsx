@@ -70,6 +70,14 @@ const applyTabFilters = (query: any, filters?: RelatedTabFilterConfig[]) => {
   return nextQuery;
 };
 
+const isMissingColumnError = (error: any) => {
+  if (!error) return false;
+  const code = String(error?.code || '').trim();
+  if (code === '42703') return true;
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('does not exist') && message.includes('column');
+};
+
 const getModuleTableName = (moduleId?: string | null) => {
   const normalized = String(moduleId || '').trim();
   return MODULES[normalized]?.table || normalized;
@@ -130,6 +138,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             };
 
             const computeLatest = async (tab: any) => {
+                try {
                 if (tab.key === 'notes') {
                     const { data } = await supabase
                         .from('notes')
@@ -323,6 +332,18 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 }
 
                 return null;
+                } catch (error) {
+                    if (isMissingColumnError(error)) {
+                        console.warn('Sidebar unread query skipped because a configured column does not exist', {
+                            tabKey: tab?.key,
+                            relationType: (tab as RelatedTabConfig)?.relationType,
+                            targetModule: (tab as RelatedTabConfig)?.targetModule,
+                            error,
+                        });
+                        return null;
+                    }
+                    throw error;
+                }
             };
 
             const entries = await Promise.all(

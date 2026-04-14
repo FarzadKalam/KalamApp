@@ -31,6 +31,15 @@ export const expenseDocumentsConfig: ModuleDefinition = {
       ],
     },
     { key: 'expense_type', labels: { fa: 'نوع هزینه', en: 'Expense Type' }, type: FieldType.SELECT, dynamicOptionsCategory: 'expense_type', location: FieldLocation.HEADER, order: 5, defaultValue: 'general', nature: FieldNature.STANDARD, isTableColumn: true },
+    {
+      key: 'estimated_expense_amount',
+      labels: { fa: 'هزینه تقریبی', en: 'Estimated Expense Amount' },
+      type: FieldType.PRICE,
+      location: FieldLocation.HEADER,
+      order: 5.5,
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
     { key: 'assignee_id', labels: { fa: 'مسئول هزینه', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'counterparty_type',
@@ -50,7 +59,6 @@ export const expenseDocumentsConfig: ModuleDefinition = {
     { key: 'supplier_id', labels: { fa: 'تامین‌کننده', en: 'Supplier' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'relations', order: 2, relationConfig: { targetModule: 'suppliers', targetField: 'business_name' }, nature: FieldNature.STANDARD },
     { key: 'customer_id', labels: { fa: 'مشتری', en: 'Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'relations', order: 3, relationConfig: { targetModule: 'customers', targetField: 'full_name' }, nature: FieldNature.STANDARD },
     { key: 'employee_id', labels: { fa: 'کارمند مرتبط', en: 'Employee' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'relations', order: 4, relationConfig: { targetModule: 'employees', targetField: 'full_name' }, nature: FieldNature.STANDARD },
-    { key: 'cost_center_id', labels: { fa: 'مرکز هزینه', en: 'Cost Center' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'relations', order: 5, relationConfig: { targetModule: 'cost_centers', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'total_amount', labels: { fa: 'مبلغ کل', en: 'Total Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'paid_amount', labels: { fa: 'پرداخت شده', en: 'Paid Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'remaining_amount', labels: { fa: 'مانده', en: 'Remaining' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
@@ -60,7 +68,7 @@ export const expenseDocumentsConfig: ModuleDefinition = {
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
   ],
   blocks: [
-    { id: 'relations', titles: { fa: 'طرف حساب و مرکز هزینه', en: 'Relations' }, type: BlockType.FIELD_GROUP, order: 1, icon: 'LinkOutlined' },
+    { id: 'relations', titles: { fa: 'طرف حساب', en: 'Relations' }, type: BlockType.FIELD_GROUP, order: 1, icon: 'LinkOutlined' },
     {
       id: 'items',
       titles: { fa: 'ردیف‌های هزینه', en: 'Expense Items' },
@@ -83,7 +91,29 @@ export const expenseDocumentsConfig: ModuleDefinition = {
       rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
       tableColumns: [
         { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [{ label: 'نقد', value: 'cash' }, { label: 'بانک', value: 'bank' }, { label: 'کارت', value: 'card' }, { label: 'چک', value: 'cheque' }] },
-        { key: 'source_account', title: 'حساب پرداخت', type: FieldType.RELATION, width: 180, relationConfig: { targetModule: 'bank_accounts', targetField: 'bank_name' } },
+        {
+          key: 'status',
+          title: 'وضعیت',
+          type: FieldType.SELECT,
+          width: 120,
+          defaultValue: 'received',
+          options: [
+            { label: 'در انتظار', value: 'pending', color: 'orange' },
+            { label: 'پرداخت شده', value: 'received', color: 'green' },
+            { label: 'برگشت خورده', value: 'returned', color: 'red' },
+          ],
+        },
+        {
+          key: 'source_account',
+          title: 'حساب پرداخت',
+          type: FieldType.RELATION,
+          width: 220,
+          relationConfig: {
+            targetModule: 'chart_of_accounts',
+            targetField: 'name',
+            filter: { account_type: 'asset', is_leaf: true, is_active: true, code__like: '110%' },
+          },
+        },
         { key: 'date', title: 'تاریخ', type: FieldType.DATE, width: 130 },
         { key: 'amount', title: 'مبلغ', type: FieldType.PRICE, width: 160, showTotal: true },
         { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },

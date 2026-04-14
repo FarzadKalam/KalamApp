@@ -25,6 +25,9 @@ export type ModuleListOptionPlan = {
 
 const RELATION_BATCH_SIZE = 500;
 const RELATION_MAX_PAGES = 40;
+const RELATION_OPTIONS_TTL_MS = 5 * 60_000;
+const relationTargetOptionsCache = new Map<string, { data: any[]; expiresAt: number }>();
+const relationTargetPromiseCache = new Map<string, Promise<any[]>>();
 
 const normalizeFilter = (value: Record<string, any> | undefined) => {
   if (!value || typeof value !== 'object') return {};
@@ -37,6 +40,15 @@ const normalizeFilter = (value: Record<string, any> | undefined) => {
 };
 
 const normalizeOptionValue = (value: unknown) => String(value ?? '').trim();
+const buildRelationTargetCacheKey = (
+  targetModule: string,
+  targetField: string | undefined,
+  filter?: Record<string, any>
+) => JSON.stringify({
+  targetModule: normalizeOptionValue(targetModule),
+  targetField: normalizeOptionValue(targetField || '') || null,
+  filter: normalizeFilter(filter),
+});
 
 const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const tableFields = (moduleConfig.fields || [])
@@ -223,6 +235,19 @@ const fetchRelationOptionsByTarget = async (
   targetField: string | undefined,
   filter?: Record<string, any>
 ) => {
+  const cacheKey = buildRelationTargetCacheKey(targetModule, targetField, filter);
+  const cached = relationTargetOptionsCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  const inFlight = relationTargetPromiseCache.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const pending = (async () => {
   const resolvedTargetField = getPreferredRelationTargetField(targetModule, targetField);
   const includeSystemCode = targetModule !== 'cheques' && supportsSystemCode(targetModule);
   const customerExtraFields =
@@ -282,7 +307,20 @@ const fetchRelationOptionsByTarget = async (
     relationRows = fallback.data;
   }
 
-  return buildRelationOptionsFromRows(targetModule, resolvedTargetField, relationRows || []);
+    const options = buildRelationOptionsFromRows(targetModule, resolvedTargetField, relationRows || []);
+    relationTargetOptionsCache.set(cacheKey, {
+      data: options,
+      expiresAt: Date.now() + RELATION_OPTIONS_TTL_MS,
+    });
+    relationTargetPromiseCache.delete(cacheKey);
+    return options;
+  })().catch((error) => {
+    relationTargetPromiseCache.delete(cacheKey);
+    throw error;
+  });
+
+  relationTargetPromiseCache.set(cacheKey, pending);
+  return pending;
 };
 
 export const fetchModuleListRelationOptions = async (

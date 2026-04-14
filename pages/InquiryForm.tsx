@@ -7,6 +7,7 @@ import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from "../theme/brandTheme";
 import { readRuntimeBranding } from "../utils/brandingRuntime";
 import { normalizeWebFormConfig, normalizeWebFormFieldRecord, type WebFormAccessScope, type WebFormFieldRecord } from "../utils/webForms";
+import PersianDatePicker from "../components/PersianDatePicker";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -390,6 +391,15 @@ const InquiryForm = () => {
 
     const rules = field.is_required ? [{ required: true, message: `${field.label} را وارد کنید.` }] : [];
     const placeholder = field.label;
+    const fieldPlaceholder =
+      String(field.config?.placeholder || "").trim()
+      || (field.field_type === "date"
+        ? "مثال: ۱۴۰۵/۰۱/۲۵"
+        : field.field_type === "time"
+          ? "مثال: ۱۸:۰۰"
+          : field.field_type === "datetime"
+            ? "مثال: ۱۴۰۵/۰۱/۲۵ ۱۸:۰۰"
+            : placeholder);
 
     if (field.field_type === "long_text") {
       return (
@@ -416,22 +426,28 @@ const InquiryForm = () => {
       );
     }
 
+    if (field.field_type === "date" || field.field_type === "time" || field.field_type === "datetime") {
+      return (
+        <Form.Item key={field.field_key} name={field.field_key} label={field.label} rules={rules}>
+          <PersianDatePicker
+            type={field.field_type === "date" ? "DATE" : field.field_type === "time" ? "TIME" : "DATETIME"}
+            placeholder={fieldPlaceholder}
+            className="w-full"
+          />
+        </Form.Item>
+      );
+    }
+
     const inputType =
       field.field_type === "number"
         ? "number"
-        : field.field_type === "date"
-          ? "date"
-          : field.field_type === "time"
-            ? "time"
-          : field.field_type === "datetime"
-            ? "datetime-local"
-            : field.field_type === "phone"
-              ? "tel"
-              : "text";
+        : field.field_type === "phone"
+          ? "tel"
+          : "text";
 
     return (
       <Form.Item key={field.field_key} name={field.field_key} label={field.label} rules={rules}>
-        <Input type={inputType} placeholder={placeholder} />
+        <Input type={inputType} placeholder={fieldPlaceholder} />
       </Form.Item>
     );
   };

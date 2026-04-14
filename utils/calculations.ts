@@ -1,5 +1,8 @@
 import { RowCalculationType, SummaryCalculationType, BlockType } from '../types';
 
+const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'cleared']);
+const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
+
 export const calculateRow = (row: any, type: RowCalculationType = RowCalculationType.SIMPLE_MULTIPLY) => {
     const lengthVal = parseFloat(row.length);
     const widthVal = parseFloat(row.width);
@@ -46,19 +49,26 @@ export const calculateSummary = (data: any, blocks: any[], summaryConfig: any) =
 
     // حالت فاکتور
     if (type === SummaryCalculationType.INVOICE_FINANCIALS) {
-        const invoiceBlock = blocks.find((b: any) => b.rowCalculationType === RowCalculationType.INVOICE_ROW) || blocks.find((b: any) => b.id === 'invoiceItems');
-        const items = data[invoiceBlock?.id || 'invoiceItems'] || [];
+        const invoiceBlock = blocks.find((b: any) => b.rowCalculationType === RowCalculationType.INVOICE_ROW)
+            || blocks.find((b: any) => b.id === 'invoiceItems')
+            || blocks.find((b: any) => b.id === 'items')
+            || blocks.find((b: any) => b.type === BlockType.TABLE && b.id !== 'payments');
+        const itemBlockId = invoiceBlock?.id || 'invoiceItems';
+        const items = data[itemBlockId] || [];
+        const itemRowCalculationType = invoiceBlock?.rowCalculationType || RowCalculationType.SIMPLE_MULTIPLY;
         
         const totalInvoice = items.reduce((sum: number, item: any) => {
-            return sum + (parseFloat(item.total_price) || calculateRow(item, RowCalculationType.INVOICE_ROW));
+            return sum + (parseFloat(item.total_price) || calculateRow(item, itemRowCalculationType));
         }, 0);
 
         const paymentBlock = blocks.find((b: any) => b.id === 'payments');
         const payments = data[paymentBlock?.id || 'payments'] || [];
+        const hasStatusColumn = payments.some((item: any) => item && Object.prototype.hasOwnProperty.call(item, 'status'));
         
         const totalReceived = payments.reduce((sum: number, item: any) => {
-            if (item?.status !== 'received') return sum;
-            return sum + (parseFloat(item.amount) || 0);
+            const normalizedStatus = normalizePaymentStatus(item?.status);
+            if (hasStatusColumn && normalizedStatus && !PAYMENT_INCLUDED_STATUSES.has(normalizedStatus)) return sum;
+            return sum + Math.abs(parseFloat(item?.amount) || 0);
         }, 0);
 
         return {

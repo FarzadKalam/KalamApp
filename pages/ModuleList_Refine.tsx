@@ -444,7 +444,8 @@ export const ModuleListRefine: React.FC<{
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
       enabled: !!dataResource,
-      staleTime: 30_000,
+      staleTime: 0,
+      refetchOnMount: "always",
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
@@ -896,7 +897,7 @@ export const ModuleListRefine: React.FC<{
   const showListSkeleton =
     viewMode === ViewMode.LIST &&
     !hasListInitialPaintCompleted &&
-    (queryPending || deferredListDataLoading);
+    queryPending;
   const gridLoadStep = getGridLoadStep();
 
   // ✅ Grid view - paginated data
@@ -918,9 +919,9 @@ export const ModuleListRefine: React.FC<{
 
   useEffect(() => {
     if (viewMode !== ViewMode.LIST) return;
-    if (queryPending || deferredListDataLoading) return;
+    if (queryPending) return;
     setHasListInitialPaintCompleted(true);
-  }, [deferredListDataLoading, queryPending, viewMode]);
+  }, [queryPending, viewMode]);
 
   useEffect(() => {
     if (!canShowGoalCards || selectedRowKeys.length > 0) return;

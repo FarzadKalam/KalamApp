@@ -20,12 +20,17 @@ import { FieldType, ModuleField } from '../types';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate, type PhoneLoginCandidateCheck } from '../utils/phoneAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
+import { normalizeDigitsToEnglish } from '../utils/persianNumericInput';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchCurrentUserRoleContext } from '../utils/permissions';
 import { fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
 import { SOFTWARE_ROLE_OPTIONS, canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../utils/softwareRoles';
 import PhoneActionsPopover from '../components/PhoneActionsPopover';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+
+const normalizeOtpToken = (value: unknown): string =>
+    normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
 
 const ProfilePage: React.FC = () => {
   const { id } = useParams();
@@ -341,14 +346,14 @@ const ProfilePage: React.FC = () => {
         try {
             const fileName = `avatar-${Date.now()}.${file.name.split('.').pop()}`;
             await uploadFileWithProgress({
-                client: supabase,
-                bucket: 'images',
+                client: fileStorageClient,
+                bucket: FILE_STORAGE_BUCKET,
                 path: fileName,
                 file,
                 label: file.name || 'آواتار',
                 detail: 'تصویر پروفایل',
             });
-            const { data } = supabase.storage.from('images').getPublicUrl(fileName);
+            const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(fileName);
             setAvatarUrl(data.publicUrl);
             return false;
         } catch (error) {
@@ -421,11 +426,12 @@ const ProfilePage: React.FC = () => {
 
     const handleConfirmPhoneVerification = async () => {
         const normalizedPhone = normalizeIranMobile(record?.mobile_1 || record?.mobile || '');
+        const normalizedOtpToken = normalizeOtpToken(phoneOtpCode);
         if (!normalizedPhone) {
             message.error('برای این کاربر شماره موبایل معتبر ثبت نشده است.');
             return;
         }
-        if (!phoneOtpCode.trim()) {
+        if (!normalizedOtpToken) {
             message.error('کد تایید شماره موبایل را وارد کنید.');
             return;
         }
@@ -434,7 +440,7 @@ const ProfilePage: React.FC = () => {
         try {
             const { error } = await supabase.auth.verifyOtp({
                 phone: normalizedPhone,
-                token: phoneOtpCode.trim(),
+                token: normalizedOtpToken,
                 type: 'phone_change',
             });
             if (error) throw error;

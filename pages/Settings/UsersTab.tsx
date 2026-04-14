@@ -21,9 +21,11 @@ import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
+import { normalizeDigitsToEnglish } from '../../utils/persianNumericInput';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
 
@@ -81,6 +83,9 @@ const toInviteDisplayPhone = (value?: string | null) => {
   if (!value) return '';
   return formatIranMobileForInput(value);
 };
+
+const normalizeOtpToken = (value: unknown): string =>
+  normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
 
 const UsersTab: React.FC = () => {
   const { message } = App.useApp();
@@ -340,14 +345,14 @@ const UsersTab: React.FC = () => {
     try {
       const fileName = `avatar-${Date.now()}.${file.name.split('.').pop()}`;
       await uploadFileWithProgress({
-        client: supabase,
-        bucket: 'images',
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
         path: fileName,
         file,
         label: file.name || 'آواتار',
         detail: 'تصویر کاربر',
       });
-      const { data } = supabase.storage.from('images').getPublicUrl(fileName);
+      const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(fileName);
       setAvatarUrl(data.publicUrl);
       return false;
     } catch (error) {
@@ -612,11 +617,12 @@ const UsersTab: React.FC = () => {
 
   const handleVerifyPhoneOtp = async () => {
     if (!editingUser || editingUser._rowType !== 'profile') return;
+    const normalizedOtpToken = normalizeOtpToken(phoneOtpCode);
     if (!normalizedFormPhone) {
       message.error('شماره موبایل معتبر نیست.');
       return;
     }
-    if (!phoneOtpCode.trim()) {
+    if (!normalizedOtpToken) {
       message.error('کد تایید را وارد کنید.');
       return;
     }
@@ -631,7 +637,7 @@ const UsersTab: React.FC = () => {
         action: 'verify_phone_otp',
         userId: editingUser.id,
         phone: normalizedFormPhone,
-        token: phoneOtpCode.trim(),
+        token: normalizedOtpToken,
       });
       setPhoneOtpRequested(false);
       setPhoneOtpCode('');

@@ -593,6 +593,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       popupMatchSelectWidth: false,
       listHeight: 260,
       virtual: false,
+      styles: { popup: { root: { zIndex: 13080, maxWidth: 'calc(100vw - 1rem)' } } },
     }),
     []
   );
@@ -4508,7 +4509,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 type="link"
                 icon={<ArrowRightOutlined />}
                 className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
-                onClick={() => openTaskProcessModal({ task })}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onTouchStart={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeTaskQuickModal();
+                  window.setTimeout(() => openTaskProcessModal({ task }), 0);
+                }}
               >
                 جزئیات کامل
               </Button>
@@ -4595,10 +4608,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!isProcessRecordModule || readOnly) return;
     const normalizedTemplateId = String(group?.templateId || '').trim() || null;
     const stageSeed = Array.isArray(group?.stages) ? group?.stages : [];
-    const seededTargetModuleIds = normalizeProcessTargetModuleIds(
-      stageSeed.flatMap((stage: any) => Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
-      moduleId
-    );
     const seededLinks = stageSeed.reduce<Record<string, string | null>>((acc, stage: any) => {
       const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
         ? stage.process_link_map
@@ -4612,6 +4621,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
       return acc;
     }, {});
+    const seededTargetModuleIds = normalizeProcessTargetModuleIds(
+      [
+        ...stageSeed.flatMap((stage: any) => Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
+        ...Object.keys(seededLinks),
+      ],
+      moduleId
+    );
     setAppendProcessModalMode(mode);
     setAppendProcessModalGroupId(mode === 'links' ? (String(group?.id || '').trim() || null) : null);
     setAppendProcessTemplateId(null);
@@ -4700,13 +4716,35 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   };
 
   useEffect(() => {
-    if ((!appendProcessTemplateId && appendProcessModalMode === 'append') || !appendProcessModalOpen) {
+    if (!appendProcessModalOpen) {
       setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
-      if (appendProcessModalMode !== 'links') {
-        setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
-      }
+      setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
       setAppendProcessRelationOptions((prev) => (hasObjectKeys(prev) ? {} : prev));
       setAppendProcessRelationLoading((prev) => (hasObjectKeys(prev) ? {} : prev));
+      return;
+    }
+    if (!appendProcessTemplateId && appendProcessModalMode === 'append') {
+      setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
+      setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
+      setAppendProcessRelationOptions((prev) => (hasObjectKeys(prev) ? {} : prev));
+      setAppendProcessRelationLoading((prev) => (hasObjectKeys(prev) ? {} : prev));
+      return;
+    }
+    if (!appendProcessTemplateId && appendProcessModalMode === 'links') {
+      const inferredTargetModuleIds = normalizeProcessTargetModuleIds(
+        [
+          ...appendProcessTargetModuleIds,
+          ...Object.keys(appendProcessLinkedRecords || {}),
+        ],
+        moduleId
+      );
+      if (inferredTargetModuleIds.length > 0) {
+        void Promise.all(
+          inferredTargetModuleIds.map((targetModuleId) =>
+            loadAppendProcessRelationOptions(targetModuleId, appendProcessLinkedRecords[targetModuleId] || null)
+          )
+        );
+      }
       return;
     }
 
@@ -4759,6 +4797,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       cancelled = true;
     };
   }, [
+    appendProcessTargetModuleIds,
     appendProcessLinkedRecords,
     appendProcessModalMode,
     appendProcessModalOpen,
@@ -6978,6 +7017,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         destroyOnHidden
         width={560}
         zIndex={12000}
+        maskClosable={false}
         style={{ maxWidth: 'calc(100vw - 1rem)' }}
         styles={{
           body: { padding: 0, overflow: 'hidden' },
@@ -8150,6 +8190,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       <Modal
         title={appendProcessModalMode === 'links' ? 'رکوردهای مرتبط با این فرآیند' : 'افزودن فرآیند جدید'}
         open={appendProcessModalOpen}
+        width={appendProcessModalMode === 'links' ? 1120 : 760}
+        style={{ maxWidth: 'calc(100vw - 1rem)' }}
         onCancel={() => {
           setAppendProcessModalOpen(false);
           setAppendProcessModalGroupId(null);
@@ -8236,14 +8278,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {appendProcessTargetModuleIds.map((targetModuleId) => (
                   <div key={targetModuleId} className="min-w-0">
-                    <div className="mb-1 text-xs text-gray-500">
-                      {MODULES[targetModuleId]?.titles?.fa || targetModuleId}
-                    </div>
                     <SmartFieldRenderer
                       field={{
-                        key: `process_link_record_${targetModuleId}`,
+                        key: createProcessLinkedFieldKey(targetModuleId, 'id'),
                         type: FieldType.RELATION,
-                        labels: { fa: MODULES[targetModuleId]?.titles?.fa || targetModuleId, en: targetModuleId },
+                        labels: {
+                          fa: `رکورد مرتبط ${MODULES[targetModuleId]?.titles?.faSingular || MODULES[targetModuleId]?.titles?.fa || targetModuleId}`,
+                          en: `Linked ${targetModuleId}`,
+                        },
                         relationConfig: { targetModule: targetModuleId },
                       } as ModuleField}
                       value={appendProcessLinkedRecords[targetModuleId] || undefined}

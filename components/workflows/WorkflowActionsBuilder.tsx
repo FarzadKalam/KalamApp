@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
+import { Alert, Button, Checkbox, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -48,6 +48,28 @@ type CreateRelatedFieldMapping = {
   value?: any;
   source_field?: string;
 };
+
+const RUBIKA_RELATED_RECIPIENT_CHECKBOXES: Array<{
+  key: 'customer_related' | 'supplier_related' | 'employee_related';
+  label: string;
+  fieldKeys: string[];
+}> = [
+  {
+    key: 'customer_related',
+    label: 'مشتری مرتبط',
+    fieldKeys: ['customer_id', 'related_customer'],
+  },
+  {
+    key: 'supplier_related',
+    label: 'تامین‌کننده مرتبط',
+    fieldKeys: ['supplier_id', 'related_supplier'],
+  },
+  {
+    key: 'employee_related',
+    label: 'کارمند مرتبط',
+    fieldKeys: [WORKFLOW_ASSIGNEE_FIELD_KEY],
+  },
+];
 
 const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
   switch (type) {
@@ -254,26 +276,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         }),
     [currentModuleFields, variableFields]
   );
-  const botRecipientFieldOptions = useMemo(() => {
-    const optionsByValue = new Map<string, { label: string; value: string }>();
-    recipientFieldOptions.forEach((item) => optionsByValue.set(String(item.value), item));
-    communicationFieldSource.forEach((field) => {
-      const fieldKey = String(field?.key || '').trim();
-      if (!fieldKey) return;
-      const relationTarget = String(field?.relationConfig?.targetModule || '').trim();
-      const isCounterpartyField =
-        relationTarget === 'customers'
-        || relationTarget === 'suppliers'
-        || fieldKey === 'customer_id'
-        || fieldKey === 'supplier_id'
-        || fieldKey === 'related_customer'
-        || fieldKey === 'related_supplier'
-        || /customer|supplier/i.test(fieldKey);
-      if (!isCounterpartyField || optionsByValue.has(fieldKey)) return;
-      optionsByValue.set(fieldKey, { label: getFieldLabel(field), value: fieldKey });
-    });
-    return Array.from(optionsByValue.values());
-  }, [communicationFieldSource, recipientFieldOptions]);
   const noteAttachmentFieldOptions = useMemo(() => {
     const optionsByValue = new Map<string, { label: string; value: string }>();
     const addOption = (value: string, label: string) => {
@@ -959,6 +961,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
       const isRubika = actionType === 'send_rubika_bot';
       const providerLabel = isRubika ? 'روبیکا' : 'بله';
+      const selectedRecipientFields = Array.isArray(config.recipient_fields)
+        ? config.recipient_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
+        : [];
+      const selectedRubikaCheckboxKeys = new Set(
+        RUBIKA_RELATED_RECIPIENT_CHECKBOXES
+          .filter((item) => item.fieldKeys.some((fieldKey) => selectedRecipientFields.includes(fieldKey)))
+          .map((item) => item.key)
+      );
+      if ((Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []).length > 0) {
+        selectedRubikaCheckboxKeys.add('employee_related');
+      }
 
       return (
         <div className="space-y-2">
@@ -966,27 +979,53 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             اگر مقصدی انتخاب نکنید، گیرنده از اتصال بات مشتری/تامین‌کننده رکورد جاری تشخیص داده می‌شود.
           </div>
           {isRubika ? (
+            <div className="rounded-lg border border-gray-200 dark:border-white/10 px-3 py-2">
+              <div className="mb-2 text-xs text-gray-500">گیرنده‌های مرتبط (روبیکا)</div>
+              <Space size={[12, 8]} wrap>
+                {RUBIKA_RELATED_RECIPIENT_CHECKBOXES.map((item) => {
+                  const checked = selectedRubikaCheckboxKeys.has(item.key);
+                  return (
+                    <Checkbox
+                      key={item.key}
+                      checked={checked}
+                      disabled={disabled}
+                      onChange={(e) => {
+                        const nextChecked = !!e.target.checked;
+                        const nextSelectedKeys = new Set(selectedRubikaCheckboxKeys);
+                        if (nextChecked) nextSelectedKeys.add(item.key);
+                        else nextSelectedKeys.delete(item.key);
+                        const nextRecipientFields = Array.from(
+                          new Set(
+                            RUBIKA_RELATED_RECIPIENT_CHECKBOXES
+                              .filter((entry) => nextSelectedKeys.has(entry.key))
+                              .flatMap((entry) => entry.fieldKeys)
+                          )
+                        );
+                        updateActionConfig(action.id, {
+                          recipient_fields: nextRecipientFields,
+                          recipient_assignees: [],
+                        });
+                      }}
+                    >
+                      {item.label}
+                    </Checkbox>
+                  );
+                })}
+              </Space>
+            </div>
+          ) : null}
+          {!isRubika ? (
             <Select
               {...commonSelectProps}
               mode="multiple"
-              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+              value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
               disabled={disabled}
-              options={botRecipientFieldOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder="مشتری/تامین‌کننده/گیرنده‌های مرتبط (اختیاری)"
+              options={assigneeDirectoryOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
+              placeholder="کاربر/نقش تکمیلی (اختیاری)"
               maxTagCount="responsive"
             />
           ) : null}
-          <Select
-            {...commonSelectProps}
-            mode="multiple"
-            value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
-            disabled={disabled}
-            options={assigneeDirectoryOptions}
-            onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-            placeholder="کاربر/نقش تکمیلی (اختیاری)"
-            maxTagCount="responsive"
-          />
           <Input
             value={config.title}
             disabled={disabled}
