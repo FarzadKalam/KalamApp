@@ -217,6 +217,9 @@ const GENERIC_DUPLICATE_FIELD_CANDIDATES = [
   "business_name",
   "name",
 ];
+const NON_PERSISTED_IMPORT_FIELD_KEYS: Record<string, Set<string>> = {
+  customers: new Set(["auto_name_enabled"]),
+};
 const DYNAMIC_OPTION_IMPORT_TYPES = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.MULTI_SELECT,
@@ -294,6 +297,8 @@ const supportsAssigneeField = (moduleId: string): boolean => supportsGlobalAssig
 const supportsAssigneeTypeField = (moduleId: string): boolean => supportsGlobalAssigneeType(moduleId);
 const isExplicitlyImportableReadonlyField = (moduleId: string, fieldKey: string): boolean =>
   moduleId === "customers" && CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey);
+const isPersistableImportField = (moduleId: string, fieldKey: string): boolean =>
+  !NON_PERSISTED_IMPORT_FIELD_KEYS[moduleId]?.has(fieldKey);
 
 const buildAutoCustomerName = (values: Record<string, unknown>) => {
   const normalize = (value: unknown) => sanitizeImportedTextValue(value);
@@ -1233,6 +1238,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     const fields = [...moduleConfig.fields]
       .filter((field) => {
         if (!IMPORTABLE_TYPES.has(field.type)) return false;
+        if (!isPersistableImportField(moduleId, field.key)) return false;
         if (
           supportsGroupedInvoiceImport &&
           importMode === "grouped_invoice" &&
@@ -1285,6 +1291,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     headerImportableFields.forEach((field) => map.set(field.key, field));
     return map;
   }, [headerImportableFields]);
+  const supportsAssigneeRoleField = useMemo(
+    () => headerImportableFields.some((field) => field.key === "assignee_role_id"),
+    [headerImportableFields]
+  );
 
   const itemFieldByKey = useMemo(() => {
     const map = new Map<string, ImportFieldDescriptor>();
@@ -2661,7 +2671,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         if (resolvedDefaultValue === undefined) return;
         payload[field.key] = resolvedDefaultValue;
       });
-
       return payload;
     },
     [convertValueByType]
@@ -2909,29 +2918,92 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const finalizeImportedPayload = useCallback(
     (rawPayload: Record<string, unknown>): Record<string, unknown> => {
       const payload = applyInvoiceSummaryValues({ ...rawPayload });
+      const autoNameEnabled = normalizeAutoNameEnabled(payload.auto_name_enabled, false);
+      delete payload.auto_name_enabled;
+
+      const clearIfPresent = (key: string) => {
+        if (Object.prototype.hasOwnProperty.call(payload, key)) {
+          payload[key] = null;
+        }
+      };
       const rawAssignee = String(payload.assignee_id || "").trim();
       const assigneeMatch = rawAssignee.match(/^(user|role)_(.+)$/);
       if (assigneeMatch) {
         const assigneeType = assigneeMatch[1];
         const assigneeId = assigneeMatch[2];
         if (assigneeType === "role" && supportsGlobalRoleAssignee(moduleId)) {
-          payload.assignee_id = null;
-          payload.assignee_role_id = assigneeId;
+          if (supportsAssigneeRoleField) {
+            payload.assignee_id = null;
+            payload.assignee_role_id = assigneeId;
+          } else {
+            payload.assignee_id = assigneeId;
+            delete payload.assignee_role_id;
+          }
         } else {
           payload.assignee_id = assigneeId;
-          if ("assignee_role_id" in payload) payload.assignee_role_id = null;
+          delete payload.assignee_role_id;
         }
         if (supportsAssigneeTypeField(moduleId)) {
           payload.assignee_type = assigneeType;
         }
       } else if (payload.assignee_id && supportsAssigneeTypeField(moduleId) && !payload.assignee_type) {
         payload.assignee_type = "user";
-        if ("assignee_role_id" in payload) payload.assignee_role_id = null;
+        if (supportsAssigneeRoleField) {
+          clearIfPresent("assignee_role_id");
+        } else {
+          delete payload.assignee_role_id;
+        }
       }
 
       if (moduleId === "customers") {
-        const autoNameEnabled = normalizeAutoNameEnabled(payload.auto_name_enabled, false);
-        payload.auto_name_enabled = autoNameEnabled;
+        const personTypeRaw = String(payload.person_type || "").trim().toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(payload, "person_type")) {
+          payload.person_type = personTypeRaw === "legal" ? "legal" : "real";
+        }
+
+        const normalizedPersonType =
+          personTypeRaw === "legal" || personTypeRaw === "real" ? personTypeRaw : "real";
+        if (normalizedPersonType === "real") {
+          clearIfPresent("legal_name");
+          clearIfPresent("national_id");
+          clearIfPresent("registration_number");
+        } else {
+          clearIfPresent("prefix");
+          clearIfPresent("birth_date");
+          clearIfPresent("national_code");
+        }
+
+        if (!payload.is_employee) {
+          clearIfPresent("related_employee_id");
+        }
+
+        const referrerModule = String(payload.referrer_module || "").trim().toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(payload, "referrer_module")) {
+          payload.referrer_module = referrerModule || null;
+        }
+        if (referrerModule !== "customers") clearIfPresent("referrer_customer_id");
+        if (referrerModule !== "employees") clearIfPresent("referrer_employee_id");
+        if (referrerModule !== "suppliers") clearIfPresent("referrer_supplier_id");
+
+        const hasPortalPayload = [
+          "portal_enabled",
+          "portal_status",
+          "telegram_chat_id",
+          "bale_chat_id",
+          "rubika_chat_id",
+          "portal_permissions_override",
+        ].some((key) => Object.prototype.hasOwnProperty.call(payload, key));
+        if (hasPortalPayload && !payload.portal_enabled) {
+          if (Object.prototype.hasOwnProperty.call(payload, "portal_status")) {
+            payload.portal_status = String(payload.portal_status || "disabled").trim() || "disabled";
+          }
+          clearIfPresent("telegram_chat_id");
+          clearIfPresent("bale_chat_id");
+          clearIfPresent("rubika_chat_id");
+          if (payload.portal_permissions_override === "") {
+            delete payload.portal_permissions_override;
+          }
+        }
         const nextFullName = buildAutoCustomerName(payload);
         if (nextFullName && (autoNameEnabled || isValueEmpty(payload.full_name))) {
           payload.full_name = nextFullName;
@@ -2940,7 +3012,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       return payload;
     },
-    [applyInvoiceSummaryValues, moduleId]
+    [applyInvoiceSummaryValues, moduleId, supportsAssigneeRoleField]
   );
 
   const validateBeforeImport = useCallback((): boolean => {

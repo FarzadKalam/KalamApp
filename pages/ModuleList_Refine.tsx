@@ -140,21 +140,38 @@ const stripStableIdSorter = (sorters?: CrudSort[] | null): CrudSort[] => {
   return normalized;
 };
 
+const sanitizeSorters = (
+  rawSorters: CrudSort[] | null | undefined,
+  moduleConfig?: ModuleDefinition | null
+): CrudSort[] => {
+  const sorters = normalizeCrudSorters(rawSorters);
+  if (!moduleConfig) {
+    return sorters.length ? sorters : getDefaultSorters(moduleConfig);
+  }
+
+  const sortableFields = new Set<string>([
+    ...moduleConfig.fields.map((field) => String(field?.key || "").trim()).filter(Boolean),
+    "id",
+    "created_at",
+    "updated_at",
+  ]);
+
+  const sanitized = sorters.filter((sorter) => sortableFields.has(String(sorter.field || "").trim()));
+  return sanitized.length > 0 ? sanitized : getDefaultSorters(moduleConfig);
+};
+
 const sanitizePersistedSorters = (sorters?: CrudSort[] | null, moduleConfig?: ModuleDefinition | null): CrudSort[] => {
-  const normalized = normalizeCrudSorters(sorters);
-  if (!normalized.length) return [];
+  const normalized = sanitizeSorters(sorters, moduleConfig);
   const moduleDefault = normalizeCrudSorters(getDefaultSorters(moduleConfig));
   return areCrudSortersEqual(normalized, moduleDefault) ? [] : normalized;
 };
 
 const resolveCrudSortersWithDefault = (sorters?: CrudSort[] | null, moduleConfig?: ModuleDefinition | null): CrudSort[] => {
-  const normalized = normalizeCrudSorters(sorters);
-  return normalized.length > 0 ? normalized : getDefaultSorters(moduleConfig);
+  return sanitizeSorters(sorters, moduleConfig);
 };
 
 const areCrudSortersEqual = (left?: CrudSort[] | null, right?: CrudSort[] | null) =>
   JSON.stringify(normalizeCrudSorters(left)) === JSON.stringify(normalizeCrudSorters(right));
-
 const toHeaderOnlyModule = (module: ModuleDefinition, hiddenBlockId: string): ModuleDefinition => ({
   ...module,
   blocks: (module.blocks || []).filter((block) => block.id !== hiddenBlockId),
