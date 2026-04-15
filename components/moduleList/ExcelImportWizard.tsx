@@ -1125,6 +1125,138 @@ const mapLegacyInvoiceStatus = (value: unknown): string | null => {
   return null;
 };
 
+const mapLegacyMarketingLeadStatus = (value: unknown): string | null => {
+  const normalized = normalizeKey(value);
+  if (!normalized) return null;
+
+  if ([
+    "new",
+    normalizeKey("جدید"),
+  ].includes(normalized)) return "new";
+  if ([
+    "contacted",
+    "qualified",
+    normalizeKey("در حال پیگیری"),
+    normalizeKey("پیگیری"),
+    normalizeKey("تماس گرفته شده"),
+    normalizeKey("واجد شرایط"),
+  ].includes(normalized)) return "in_follow_up";
+  if ([
+    "overdue_follow_up",
+    normalizeKey("پیگیری معوق"),
+    normalizeKey("معوق"),
+  ].includes(normalized)) return "overdue_follow_up";
+  if ([
+    "proposal",
+    "future_follow_up",
+    normalizeKey("پیگیری در آینده"),
+    normalizeKey("آینده"),
+    normalizeKey("پیشنهاد"),
+  ].includes(normalized)) return "future_follow_up";
+  if ([
+    "won",
+    normalizeKey("برنده"),
+  ].includes(normalized)) return "won";
+  if ([
+    "lost",
+    "archived",
+    normalizeKey("از دست رفته"),
+    normalizeKey("بایگانی"),
+    normalizeKey("آرشیو"),
+  ].includes(normalized)) return "lost";
+
+  return null;
+};
+
+const MARKETING_LEAD_ALLOWED_STATUS_VALUES = new Set([
+  "new",
+  "in_follow_up",
+  "overdue_follow_up",
+  "future_follow_up",
+  "won",
+  "lost",
+]);
+const MARKETING_LEAD_ALLOWED_TYPE_VALUES = new Set([
+  "new_lead",
+  "existing_customer",
+]);
+
+const normalizeMarketingLeadStatusForImport = (value: unknown): string | null => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const mapped = mapLegacyMarketingLeadStatus(raw);
+  if (mapped) return mapped;
+
+  const normalizedValue = raw.toLowerCase();
+  if (MARKETING_LEAD_ALLOWED_STATUS_VALUES.has(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const normalizedText = normalizeText(raw);
+  if (!normalizedText) return "new";
+
+  if (normalizedText.includes("overdue") || normalizedText.includes("معوق")) {
+    return "overdue_follow_up";
+  }
+  if (normalizedText.includes("future") || normalizedText.includes("اینده") || normalizedText.includes("آینده")) {
+    return "future_follow_up";
+  }
+  if (normalizedText.includes("follow") || normalizedText.includes("پیگیری")) {
+    return "in_follow_up";
+  }
+  if (normalizedText.includes("won") || normalizedText.includes("برنده")) {
+    return "won";
+  }
+  if (
+    normalizedText.includes("lost")
+    || normalizedText.includes("archiv")
+    || normalizedText.includes("ازدست")
+    || normalizedText.includes("از دست")
+    || normalizedText.includes("بایگان")
+    || normalizedText.includes("آرشیو")
+  ) {
+    return "lost";
+  }
+
+  // Safety fallback: avoid DB check-constraint failure for unknown legacy statuses.
+  return "new";
+};
+
+const normalizeMarketingLeadTypeForImport = (value: unknown): string | null => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const normalizedValue = raw.toLowerCase();
+  if (MARKETING_LEAD_ALLOWED_TYPE_VALUES.has(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const normalizedKey = normalizeKey(raw);
+  if (
+    normalizedKey === "0"
+    || normalizedKey === normalizeKey("لید جدید")
+    || normalizedKey === normalizeKey("جدید")
+    || normalizedKey === "newlead"
+    || normalizedKey === "new_lead"
+  ) {
+    return "new_lead";
+  }
+  if (
+    normalizedKey === "1"
+    || normalizedKey === normalizeKey("مشتری قبلی")
+    || normalizedKey === normalizeKey("مشتری قدیمی")
+    || normalizedKey === "existingcustomer"
+    || normalizedKey === "existing_customer"
+  ) {
+    return "existing_customer";
+  }
+  if (normalizedKey.includes(normalizeKey("مشتری")) || normalizedKey.includes("existing") || normalizedKey.includes("customer")) {
+    return "existing_customer";
+  }
+  return "new_lead";
+};
+
 const getCustomerLookupCandidates = (row: Record<string, unknown>): string[] => {
   const values = [
     row.full_name,
@@ -2412,13 +2544,38 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       if ((field.type === FieldType.SELECT || field.type === FieldType.STATUS) && field.options?.length) {
         const byValue = field.options.find((option) => normalizeKey(option.value) === normalizeKey(value));
-        if (byValue) return Promise.resolve(byValue.value);
+        if (byValue) {
+          if (moduleId === "marketing_leads" && field.key === "status") {
+            return Promise.resolve(normalizeMarketingLeadStatusForImport(byValue.value));
+          }
+          if (moduleId === "marketing_leads" && field.key === "lead_type") {
+            return Promise.resolve(normalizeMarketingLeadTypeForImport(byValue.value));
+          }
+          return Promise.resolve(byValue.value);
+        }
         const byLabel = field.options.find((option) => normalizeKey(option.label) === normalizeKey(value));
-        if (byLabel) return Promise.resolve(byLabel.value);
+        if (byLabel) {
+          if (moduleId === "marketing_leads" && field.key === "status") {
+            return Promise.resolve(normalizeMarketingLeadStatusForImport(byLabel.value));
+          }
+          if (moduleId === "marketing_leads" && field.key === "lead_type") {
+            return Promise.resolve(normalizeMarketingLeadTypeForImport(byLabel.value));
+          }
+          return Promise.resolve(byLabel.value);
+        }
         if (field.type === FieldType.STATUS) {
+          if (moduleId === "marketing_leads" && field.key === "status") {
+            const mappedLeadStatus = normalizeMarketingLeadStatusForImport(value);
+            if (mappedLeadStatus) return Promise.resolve(mappedLeadStatus);
+          }
           const legacyStatus = mapLegacyInvoiceStatus(value);
           if (legacyStatus) return Promise.resolve(legacyStatus);
         }
+      }
+
+      if (moduleId === "marketing_leads" && field.key === "lead_type") {
+        const mappedLeadType = normalizeMarketingLeadTypeForImport(value);
+        if (mappedLeadType) return Promise.resolve(mappedLeadType);
       }
 
       if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
@@ -2465,7 +2622,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           return Promise.resolve(sanitizeImportedTextValue(value));
       }
     },
-    [ensureDynamicOptionValue, ensureRelationValue]
+    [ensureDynamicOptionValue, ensureRelationValue, moduleId]
   );
 
   const loadRelationLookups = useCallback(async (): Promise<RelationLookupMap> => {
@@ -3008,6 +3165,13 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         if (nextFullName && (autoNameEnabled || isValueEmpty(payload.full_name))) {
           payload.full_name = nextFullName;
         }
+      }
+
+      if (moduleId === "marketing_leads" && !isValueEmpty(payload.status)) {
+        payload.status = normalizeMarketingLeadStatusForImport(payload.status);
+      }
+      if (moduleId === "marketing_leads") {
+        payload.lead_type = normalizeMarketingLeadTypeForImport(payload.lead_type) || "new_lead";
       }
 
       return payload;
