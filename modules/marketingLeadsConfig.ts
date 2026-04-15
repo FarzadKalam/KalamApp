@@ -99,21 +99,12 @@ export const marketingLeadsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
-<<<<<<< HEAD
-      key: 'legacy_system_code',
-      labels: { fa: 'کد سیستم قبلی', en: 'Legacy System Code' },
-      type: FieldType.TEXT,
-      location: FieldLocation.HEADER,
-      order: 6.1,
-      isTableColumn: false,
-=======
       key: 'tags',
       labels: { fa: '\u0628\u0631\u0686\u0633\u0628\u200c\u0647\u0627', en: 'Tags' },
       type: FieldType.TAGS,
       location: FieldLocation.HEADER,
       order: 7,
       isTableColumn: true,
->>>>>>> 6cdc742 (wip: local changes)
       nature: FieldNature.STANDARD,
     },
     //{

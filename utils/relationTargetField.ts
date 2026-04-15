@@ -32,21 +32,24 @@ export const getPreferredRelationTargetField = (
 ): string => {
   const moduleName = String(targetModule || '').trim();
   const explicit = String(explicitTargetField || '').trim();
-<<<<<<< HEAD
   const defaultField = DEFAULT_RELATION_TARGET_FIELDS[moduleName] || 'name';
 
   if (!explicit) return defaultField;
 
+  const aliasMap = LEGACY_TARGET_FIELD_ALIASES[moduleName];
+  const normalizedExplicit = explicit.toLowerCase();
+  const preferredField = aliasMap?.[normalizedExplicit] || explicit;
+
   const safeSelectableFields = MODULE_RELATION_SELECTABLE_FIELDS[moduleName];
   if (Array.isArray(safeSelectableFields) && safeSelectableFields.length > 0) {
-    if (safeSelectableFields.includes(explicit)) return explicit;
-    if (moduleName === 'profiles' && (explicit === 'name' || explicit === 'title')) {
+    if (safeSelectableFields.includes(preferredField)) return preferredField;
+    if (moduleName === 'profiles' && (preferredField === 'name' || preferredField === 'title')) {
       return 'full_name';
     }
     return defaultField;
   }
 
-  return explicit;
+  return preferredField;
 };
 
 const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
@@ -71,18 +74,7 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   payroll_slips: ['name', 'system_code', 'status'],
   employee_contracts: ['name', 'system_code', 'status'],
   recruitment_applicants: ['name', 'system_code', 'mobile', 'status'],
-  marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'status'],
-=======
-  if (explicit) {
-    const aliasMap = LEGACY_TARGET_FIELD_ALIASES[moduleName];
-    const normalizedExplicit = explicit.toLowerCase();
-    if (aliasMap?.[normalizedExplicit]) {
-      return aliasMap[normalizedExplicit];
-    }
-    return explicit;
-  }
-  return DEFAULT_RELATION_TARGET_FIELDS[moduleName] || 'name';
->>>>>>> 6cdc742 (wip: local changes)
+  marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'sarnakh_code', 'legacy_system_code', 'status'],
 };
 
 export const getRelationLabelFallbackFields = (targetModule?: string | null): string[] => {
