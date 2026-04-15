@@ -32,10 +32,16 @@ export const supportsSystemCode = (moduleName?: string | null) => {
   return MODULES_WITH_SYSTEM_CODE.has(normalized);
 };
 
+export const shouldUseClientFallbackSystemCode = (moduleName?: string | null) => {
+  const normalized = String(moduleName || '').trim();
+  if (!supportsSystemCode(normalized)) return false;
+  return normalized !== 'customers';
+};
+
 const SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE = 'module_settings';
 
 const DEFAULT_SYSTEM_CODE_START_NUMBER = 100;
-const DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER = 234;
+const DEFAULT_CUSTOMER_SYSTEM_CODE_START_NUMBER = 100;
 const MAX_SYSTEM_CODE_SEQUENCE_NUMBER = 2147483647;
 const MAX_SYSTEM_CODE_NUMBER_WIDTH = 20;
 const SYSTEM_CODE_SCAN_BATCH_SIZE = 1000;

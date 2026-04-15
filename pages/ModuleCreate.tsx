@@ -14,7 +14,7 @@ import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
 import { fetchCurrentUserRoleContext } from "../utils/permissions";
 import { getCachedAuthUser } from "../utils/sessionCache";
-import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
+import { buildClientFallbackSystemCode, shouldUseClientFallbackSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
 import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
 import { normalizeOperationalDocumentTotals } from "../utils/operationalDocumentTotals";
@@ -314,7 +314,7 @@ export const ModuleCreate = () => {
               const normalizedPayload = moduleId
                 ? normalizeOperationalDocumentTotals(moduleId, payload)
                 : payload;
-              if (moduleId && supportsSystemCode(moduleId) && !normalizedPayload.system_code) {
+              if (moduleId && shouldUseClientFallbackSystemCode(moduleId) && !normalizedPayload.system_code) {
                 normalizedPayload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
               }
               let insertResult = await supabase
@@ -333,7 +333,7 @@ export const ModuleCreate = () => {
               if (
                 insertResult.error
                 && moduleId
-                && supportsSystemCode(moduleId)
+                && shouldUseClientFallbackSystemCode(moduleId)
                 && !normalizedPayload.system_code
                 && isStatementTimeoutError(insertResult.error)
               ) {

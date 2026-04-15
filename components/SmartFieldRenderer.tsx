@@ -45,7 +45,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
-import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { buildClientFallbackSystemCode, shouldUseClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRelationOptionsForField, RELATION_DEFAULT_LIMIT } from '../utils/relationOptions';
 import { mergeSelectOptions } from '../utils/selectOptions';
@@ -1633,7 +1633,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
     if (
       insertResult.error
-      && supportsSystemCode(quickCreateTargetModuleId)
+      && shouldUseClientFallbackSystemCode(quickCreateTargetModuleId)
       && (isDuplicateSystemCodeError(insertResult.error) || isStatementTimeoutError(insertResult.error))
     ) {
       const fallbackSystemCode = await buildClientFallbackSystemCode(
@@ -1700,7 +1700,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       }
 
       const normalizedPayload = normalizeQuickCreatePayload(payload);
-      if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
+      if (shouldUseClientFallbackSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
         normalizedPayload.system_code = await buildClientFallbackSystemCode(
           supabase,
           quickCreateTargetModuleId,
