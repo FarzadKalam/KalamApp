@@ -1,7 +1,7 @@
 import { buildRecordReferenceKey } from './recordReference';
 
 export type NotificationReadChecker = (
-  section: string,
+  section: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls',
   sourceType: string,
   sourceId: string,
   fallbackRead?: boolean,
@@ -317,9 +317,9 @@ export const buildNoteConversations = ({
     const replyMentionUserIds = !replyGroupId ? getNoteMentionUserIds(replyTarget) : [];
 
     if (authorId === normalizedCurrentUserId) {
-      mentionUserIds.forEach((userId) => addDirectNoteCandidate(targetUserIds, availableUserIds, userId));
+      mentionUserIds.forEach((userId: string) => addDirectNoteCandidate(targetUserIds, availableUserIds, userId));
       addDirectNoteCandidate(targetUserIds, availableUserIds, replyAuthorId);
-      replyMentionUserIds.forEach((userId) => addDirectNoteCandidate(targetUserIds, availableUserIds, userId));
+      replyMentionUserIds.forEach((userId: string) => addDirectNoteCandidate(targetUserIds, availableUserIds, userId));
     } else {
       const isAddressedToCurrentUser =
         mentionUserIds.includes(normalizedCurrentUserId)

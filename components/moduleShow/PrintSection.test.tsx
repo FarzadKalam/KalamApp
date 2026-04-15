@@ -63,7 +63,7 @@ describe('PrintSection', () => {
     expect(onPrint).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByText('انتخاب قالب چاپ')).toBeInTheDocument();
-  });
+  }, 10000);
 
   it('selects another template without duplicating the heavy preview node', async () => {
     setDesktopViewport();

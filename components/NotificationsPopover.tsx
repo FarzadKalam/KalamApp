@@ -44,7 +44,6 @@ import {
   getVoipThreadKey,
   normalizePhoneThreadValue,
   resolveSmsCounterpartyPhone,
-  resolveVoipCounterpartyPhone,
 } from '../utils/notificationViewModels';
 
 interface NotificationsPopoverProps {

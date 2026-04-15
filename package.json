@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "test:critical-ui": "vitest run components/moduleShow/PrintSection.test.tsx components/SmartForm.test.tsx utils/notificationViewModels.test.ts utils/webForms.test.ts",
+    "test:critical-ui": "vitest run components/moduleShow/PrintSection.test.tsx components/SmartForm.test.tsx utils/notificationViewModels.test.ts utils/webForms.test.ts utils/printTemplates/printPerformance.test.ts",
     "test:module-show": "vitest run components/moduleShow/PrintSection.test.tsx",
     "test:notifications": "vitest run utils/notificationViewModels.test.ts",
     "test:smart-form": "vitest run components/SmartForm.test.tsx utils/webForms.test.ts",

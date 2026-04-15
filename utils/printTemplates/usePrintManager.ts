@@ -28,6 +28,7 @@ import {
 } from './store';
 import { buildPrintOutputName } from './outputName';
 import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 
@@ -721,11 +722,15 @@ export const usePrintManager = ({
     selectedTemplateId,
   ]);
 
-  const generateCurrentPdfBlob = useCallback(async () => {
+  const generateCurrentPdfBlob = useCallback(async (options?: {
+    tracker?: ReturnType<typeof createPrintPerformanceTracker>;
+    pageCountOverride?: number | null;
+  }) => {
     if (!selectedTemplateId) {
       throw new Error('print_template_missing');
     }
 
+    const tracker = options?.tracker;
     const printTitle = getPrintOutputName();
     const currentTpl = selectedTemplateId.startsWith('custom:')
       ? availableTemplates.find((tpl) => tpl.id === selectedTemplateId.replace('custom:', '')) || null
@@ -737,13 +742,35 @@ export const usePrintManager = ({
       : selectedTemplateId === 'product_label'
         ? 'A6 portrait'
         : 'A4 portrait';
-    const staticPrintHtml = renderToStaticMarkup(
-      React.createElement(
-        React.Fragment,
-        null,
-        buildPrintCardRef.current(selectedTemplateId.startsWith('custom:') ? Math.max(1, renderedPageCount) : null)
-      )
-    );
+    const resolvedPageCount = selectedTemplateId.startsWith('custom:')
+      ? Math.max(1, options?.pageCountOverride ?? renderedPageCount)
+      : null;
+    tracker?.addMetadata({
+      templateId: selectedTemplateId,
+      printTitle,
+      pageSize,
+      renderedPageCount: renderedPageCount || 1,
+      pageCountOverride: resolvedPageCount,
+    });
+    const staticPrintHtml = tracker
+      ? await tracker.step(
+          'render_static_print_html',
+          () => Promise.resolve(renderToStaticMarkup(
+            React.createElement(
+              React.Fragment,
+              null,
+              buildPrintCardRef.current(resolvedPageCount)
+            )
+          )),
+          (html) => ({ staticHtmlLength: String(html || '').length })
+        )
+      : renderToStaticMarkup(
+          React.createElement(
+            React.Fragment,
+            null,
+            buildPrintCardRef.current(resolvedPageCount)
+          )
+        );
 
     return {
       blob: await generatePdfBlob({
@@ -751,6 +778,7 @@ export const usePrintManager = ({
         sourceHtml: staticPrintHtml,
         title: printTitle,
         filename: printTitle,
+        tracker,
       }),
       filename: `${printTitle}.pdf`,
       title: printTitle,

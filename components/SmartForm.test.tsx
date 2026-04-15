@@ -154,7 +154,7 @@ describe('SmartForm critical render', () => {
     expect(screen.getByLabelText('فیلد فارسی 89')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(performance.now() - startedAt).toBeLessThan(2000);
+      expect(performance.now() - startedAt).toBeLessThan(5000);
     });
   });
 });

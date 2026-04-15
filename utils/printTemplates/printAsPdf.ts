@@ -1,5 +1,6 @@
 import { SUPABASE_URL } from '../../supabaseClient';
 import { buildPrintDocumentHtml } from './buildPrintDocumentHtml';
+import type { createPrintPerformanceTracker } from './printPerformance';
 
 interface PrintAsPdfOptions {
   pageSize?: string;
@@ -257,24 +258,54 @@ export const generatePdfBlob = async (options: {
   sourceNode?: HTMLElement | null;
   title?: string;
   filename?: string;
+  tracker?: ReturnType<typeof createPrintPerformanceTracker>;
 }) => {
   const sourceHtml = getSourceHtml(options).trim();
   if (!sourceHtml) {
     throw new Error('print_source_missing');
   }
 
-  const documentHtml = await buildPrintDocumentHtml({
-    pageSize: options.pageSize,
-    sourceHtml,
-    title: options.title,
+  options.tracker?.addMetadata({
+    pageSize: options.pageSize || 'A4 portrait',
+    sourceHtmlLength: sourceHtml.length,
   });
 
-  return requestPdfBlob({
-    documentHtml,
-    filename: options.filename,
-    pageSize: options.pageSize,
-    title: options.title,
-  });
+  const documentHtml = options.tracker
+    ? await options.tracker.step(
+        'build_print_document_html',
+        () => buildPrintDocumentHtml({
+          pageSize: options.pageSize,
+          sourceHtml,
+          title: options.title,
+        }),
+        (html) => ({ documentHtmlLength: String(html || '').length })
+      )
+    : await buildPrintDocumentHtml({
+        pageSize: options.pageSize,
+        sourceHtml,
+        title: options.title,
+      });
+
+  const blob = options.tracker
+    ? await options.tracker.step(
+        'request_render_pdf',
+        () => requestPdfBlob({
+          documentHtml,
+          filename: options.filename,
+          pageSize: options.pageSize,
+          title: options.title,
+        }),
+        (result) => ({ blobSize: result.size })
+      )
+    : await requestPdfBlob({
+        documentHtml,
+        filename: options.filename,
+        pageSize: options.pageSize,
+        title: options.title,
+      });
+
+  options.tracker?.addMetadata({ blobSize: blob.size });
+  return blob;
 };
 
 export const prepareGeneratedPdfWindow = (title?: string) => {

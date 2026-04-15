@@ -23,6 +23,7 @@ import AccountLedgerPanel from '../components/accounting/AccountLedgerPanel';
 import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece, type StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
+import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import { convertArea } from '../utils/unitConversions';
 import QrScanPopover from '../components/QrScanPopover';
@@ -3345,25 +3346,45 @@ const ModuleShow: React.FC = () => {
     return /^09\d{9}$/.test(digits) ? digits : '';
   }, []);
 
-  const uploadGeneratedPdf = useCallback(async (blob: Blob, rawFileName: string) => {
+  const uploadGeneratedPdf = useCallback(async (
+    blob: Blob,
+    rawFileName: string,
+    tracker?: ReturnType<typeof createPrintPerformanceTracker>
+  ) => {
     if (!id) {
       throw new Error('record_missing');
     }
     const fileName = sanitizePrintFileName(rawFileName);
     const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
     const filePath = `record_files/${moduleId}/${id}/prints/${Date.now()}_${fileName}`;
-    await uploadFileWithProgress({
-      client: fileStorageClient,
-      bucket: FILE_STORAGE_BUCKET,
-      path: filePath,
-      file: pdfFile,
-      label: fileName,
-      detail: 'PDF چاپ',
+    tracker?.addMetadata({
+      uploadFileName: fileName,
+      uploadFileSize: blob.size,
     });
-    const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+    const uploadTask = async () => {
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: filePath,
+        file: pdfFile,
+        label: fileName,
+        detail: 'PDF چاپ',
+      });
+      const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+      return {
+        url: urlData.publicUrl,
+        name: fileName,
+      };
+    };
+    const uploaded = tracker
+      ? await tracker.step('upload_generated_pdf', uploadTask, (result) => ({
+          uploadedName: result.name,
+          uploadedUrlLength: String(result.url || '').length,
+        }))
+      : await uploadTask();
     return {
-      url: urlData.publicUrl,
-      name: fileName,
+      url: uploaded.url,
+      name: uploaded.name,
     };
   }, [id, moduleId, sanitizePrintFileName]);
 
@@ -3458,21 +3479,36 @@ const ModuleShow: React.FC = () => {
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return;
     }
-    const { blob, filename } = await printManager.generateCurrentPdfBlob();
-    const uploaded = await uploadGeneratedPdf(blob, filename);
-    const { error } = await supabase
-      .from('record_files')
-      .insert([{
-        module_id: moduleId,
-        record_id: id,
-        file_url: uploaded.url,
-        file_type: 'file',
-        file_name: uploaded.name,
-        mime_type: 'application/pdf',
-        sort_order: 0,
-      }]);
-    if (error) throw error;
-    msg.success('PDF در فایل‌های رکورد ذخیره شد.');
+    const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_save_to_record');
+    try {
+      msg.open({ key: messageKey, type: 'loading', content: 'در حال ثبت PDF در فایل‌های رکورد...', duration: 0 });
+      const { error } = await tracker.step(
+        'insert_record_file_row',
+        async () => await (supabase
+          .from('record_files')
+          .insert([{
+            module_id: moduleId,
+            record_id: id,
+            file_url: uploaded.url,
+            file_type: 'file',
+            file_name: uploaded.name,
+            mime_type: 'application/pdf',
+            sort_order: 0,
+          }]) as any),
+        (result: any) => ({ insertError: result?.error ? String(result.error.message || result.error) : null })
+      );
+      if (error) throw error;
+      tracker.finalize({ status: 'saved_to_record', uploadedUrl: uploaded.url });
+      msg.success({ key: messageKey, content: 'PDF در فایل‌های رکورد ذخیره شد.' });
+    } catch (error) {
+      tracker.finalize({
+        status: 'failed_after_upload',
+        uploadedUrl: uploaded.url,
+        error: String((error as any)?.message || error || 'unknown_error'),
+      });
+      msg.error({ key: messageKey, content: String((error as any)?.message || 'ذخیره PDF در فایل‌های رکورد ناموفق بود.') });
+      throw error;
+    }
   };
 
   const handleOpenPrintShare = async () => {
@@ -3480,8 +3516,9 @@ const ModuleShow: React.FC = () => {
       msg.warning('ابتدا رکورد را ذخیره کنید');
       return;
     }
-    const { blob, filename } = await printManager.generateCurrentPdfBlob();
-    const uploaded = await uploadGeneratedPdf(blob, filename);
+    const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_share_prepare');
+    tracker.finalize({ status: 'ready_for_share', uploadedUrl: uploaded.url });
+    msg.destroy(messageKey);
     setPendingPrintShareFile(uploaded);
     setPrintShareTargetIds([]);
     setPrintShareMessageText('');
@@ -4429,6 +4466,48 @@ const ModuleShow: React.FC = () => {
     relationOptions,
     canViewField,
   });
+
+  const prepareDirectPdfAsset = useCallback(async (flow: 'print_share_prepare' | 'print_save_to_record') => {
+    if (!id) {
+      throw new Error('record_missing');
+    }
+
+    const tracker = createPrintPerformanceTracker(flow, {
+      moduleId,
+      recordId: id,
+      templateId: printManager.selectedTemplateId || null,
+      printModalOpen: printManager.isPrintModalOpen === true,
+    });
+    const messageKey = `${flow}:${Date.now()}`;
+
+    try {
+      msg.open({ key: messageKey, type: 'loading', content: 'در حال بستن پیش‌نمایش چاپ...', duration: 0 });
+      tracker.mark('close_print_modal_requested');
+      printManager.closePrintModal();
+
+      await tracker.step('wait_for_ui_paint', () => waitForNextPaint(2));
+      msg.open({ key: messageKey, type: 'loading', content: 'در حال ساخت PDF...', duration: 0 });
+
+      const pdfResult = await printManager.generateCurrentPdfBlob({ tracker });
+      msg.open({ key: messageKey, type: 'loading', content: 'در حال بارگذاری فایل PDF...', duration: 0 });
+
+      const uploaded = await uploadGeneratedPdf(pdfResult.blob, pdfResult.filename, tracker);
+      return { tracker, messageKey, uploaded, pdfResult };
+    } catch (error) {
+      tracker.finalize({
+        status: 'failed',
+        error: String((error as any)?.message || error || 'unknown_error'),
+      });
+      msg.destroy(messageKey);
+      throw error;
+    }
+  }, [
+    id,
+    moduleId,
+    msg,
+    printManager,
+    uploadGeneratedPdf,
+  ]);
 
   const getUserName = (uid: string) => {
       if (!String(uid || '').trim()) return 'سیستم';
