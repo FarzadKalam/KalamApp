@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Empty, Select, Skeleton, Tag } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import {
   buildGoalFallbackProgressSnapshot,
@@ -12,13 +13,14 @@ import {
   normalizeGoalRecord,
 } from '../../utils/goals';
 import { type FiscalYearSnapshot } from '../../utils/goalPeriods';
-import { fetchCurrentUserRecordAccessContext } from '../../utils/permissions';
+import { fetchCurrentUserRecordAccessContext, resolveModuleGoalAccessPermissions, type PermissionMap } from '../../utils/permissions';
 import {
   GOAL_PERIOD_UNIT_OPTIONS,
   type GoalPeriodUnit,
   type GoalProgressSnapshot,
 } from '../../utils/goalTypes';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import GoalEditorModal from './GoalEditorModal';
 
 type GoalProgressSliderProps = {
   moduleId?: string | null;
@@ -28,8 +30,16 @@ type GoalProgressSliderProps = {
 };
 
 const GOAL_PROGRESS_CACHE_TTL_MS = 60_000;
+const GOAL_PROGRESS_STALE_CACHE_TTL_MS = 15 * 60_000;
 const GOAL_PROGRESS_CACHE_STORAGE_KEY = 'goal-progress-cards-cache-v1';
 const GOAL_PROGRESS_COMPUTE_CONCURRENCY = 3;
+const GOAL_PROGRESS_REFRESH_EVENT = 'kalam:goal-progress-refresh';
+
+type GoalProgressCacheEntry = {
+  data: GoalProgressSnapshot[];
+  expiresAt: number;
+  staleExpiresAt?: number;
+};
 
 let goalProgressFiscalYearCache: {
   data: FiscalYearSnapshot | null;
@@ -41,8 +51,13 @@ let goalProgressFiscalYearCache: {
   promise: null,
 };
 
-const goalProgressCardsCache = new Map<string, { data: GoalProgressSnapshot[]; expiresAt: number }>();
+const goalProgressCardsCache = new Map<string, GoalProgressCacheEntry>();
 const goalProgressCardsPromiseCache = new Map<string, Promise<GoalProgressSnapshot[]>>();
+
+const dispatchGoalProgressRefresh = () => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(GOAL_PROGRESS_REFRESH_EVENT));
+};
 
 const readGoalProgressStorage = () => {
   try {
@@ -50,7 +65,7 @@ const readGoalProgressStorage = () => {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return {};
-    return parsed as Record<string, { data: GoalProgressSnapshot[]; expiresAt: number }>;
+    return parsed as Record<string, GoalProgressCacheEntry>;
   } catch {
     return {};
   }
@@ -67,7 +82,7 @@ const readGoalProgressCardsFromStorage = (cacheKey: string) => {
   }
 };
 
-const writeGoalProgressCardsToStorage = (cacheKey: string, entry: { data: GoalProgressSnapshot[]; expiresAt: number }) => {
+const writeGoalProgressCardsToStorage = (cacheKey: string, entry: GoalProgressCacheEntry) => {
   try {
     const store = readGoalProgressStorage();
     store[cacheKey] = entry;
@@ -99,13 +114,6 @@ const mapWithConcurrency = async <T, R>(
   );
 
   return results;
-};
-
-const canAccessGoalModule = (permissions: any, targetModuleId?: string | null) => {
-  if (!targetModuleId) return true;
-  const modulePerm = permissions?.[targetModuleId] || {};
-  const recordScope = modulePerm.record_scope ?? (modulePerm.view === false ? 'own' : 'all');
-  return modulePerm.view !== false || recordScope !== 'all';
 };
 
 const toneClassMap: Record<GoalProgressSnapshot['tone'], { shell: string; bar: string; subBar: string; tag: string }> = {
@@ -159,9 +167,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const [visibleIndex, setVisibleIndex] = useState(0);
   const [isSwitching, setIsSwitching] = useState(false);
   const [subperiodSelections, setSubperiodSelections] = useState<Record<string, GoalPeriodUnit>>({});
+  const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
+  const [editingGoal, setEditingGoal] = useState<GoalProgressSnapshot['goal'] | null>(null);
   const rowCacheRef = useRef<Map<string, any[]>>(new Map());
   const fiscalYearRef = useRef<FiscalYearSnapshot | null>(null);
   const switchTimerRef = useRef<number | null>(null);
+  const cardsRef = useRef<GoalProgressSnapshot[]>([]);
 
   const placementField = placement === 'dashboard' ? 'dashboard_widget' : 'module_list_cards';
 
@@ -221,9 +232,11 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }, []);
 
   const loadCards = useCallback(async (nextSelections?: Record<string, GoalPeriodUnit>) => {
-    setLoading(true);
+    const hadCards = cardsRef.current.length > 0;
+    setLoading(!hadCards);
     try {
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
+      setRolePermissions(roleContext.permissions);
       const resolvedSelections = nextSelections || subperiodSelections;
       const cacheKey = JSON.stringify({
         placementField,
@@ -244,7 +257,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         return;
       }
 
-      if (moduleId && !canAccessGoalModule(roleContext.permissions, moduleId)) {
+      if (moduleId && !resolveModuleGoalAccessPermissions(roleContext.permissions, moduleId).canViewModuleCards) {
         setCards([]);
         setLoading(false);
         return;
@@ -261,6 +274,11 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         setLoading(false);
         return;
       }
+      if (cached && (cached.staleExpiresAt || 0) > Date.now()) {
+        setCards(cached.data);
+        setActiveIndex((current) => (cached.data.length === 0 ? 0 : Math.min(current, cached.data.length - 1)));
+        setLoading(false);
+      }
 
       const storageCached = readGoalProgressCardsFromStorage(cacheKey);
       if (storageCached && storageCached.expiresAt > Date.now()) {
@@ -269,6 +287,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         setActiveIndex((current) => (storageCached.data.length === 0 ? 0 : Math.min(current, storageCached.data.length - 1)));
         setLoading(false);
         return;
+      }
+      if (storageCached && (storageCached.staleExpiresAt || storageCached.expiresAt) > Date.now()) {
+        goalProgressCardsCache.set(cacheKey, storageCached);
+        setCards(storageCached.data);
+        setActiveIndex((current) => (storageCached.data.length === 0 ? 0 : Math.min(current, storageCached.data.length - 1)));
+        setLoading(false);
       }
 
       const pendingCards = goalProgressCardsPromiseCache.get(cacheKey);
@@ -299,9 +323,23 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         const visibleGoals = dedupeGoalsForDisplay(
           (data || [])
             .map((item) => normalizeGoalRecord(item))
-            .filter((goal) => canAccessGoalModule(roleContext.permissions, goal.module_id))
+            .filter((goal) => resolveModuleGoalAccessPermissions(roleContext.permissions, goal.module_id).canViewGoal)
             .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId))
         );
+
+        if (visibleGoals.length > 0 && cardsRef.current.length === 0) {
+          const fallbackCards = visibleGoals
+            .map((goal) =>
+              buildGoalFallbackProgressSnapshot(goal, {
+                fiscalYear: fiscalYearRef.current,
+                selectedSubperiodUnit: nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit,
+              })
+            )
+            .filter(Boolean) as GoalProgressSnapshot[];
+          setCards(fallbackCards);
+          setActiveIndex((current) => (fallbackCards.length === 0 ? 0 : Math.min(current, fallbackCards.length - 1)));
+          setLoading(false);
+        }
 
         const prepared = await mapWithConcurrency(
           visibleGoals,
@@ -339,10 +377,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         goalProgressCardsCache.set(cacheKey, {
           data: prepared,
           expiresAt: Date.now() + GOAL_PROGRESS_CACHE_TTL_MS,
+          staleExpiresAt: Date.now() + GOAL_PROGRESS_STALE_CACHE_TTL_MS,
         });
         writeGoalProgressCardsToStorage(cacheKey, {
           data: prepared,
           expiresAt: Date.now() + GOAL_PROGRESS_CACHE_TTL_MS,
+          staleExpiresAt: Date.now() + GOAL_PROGRESS_STALE_CACHE_TTL_MS,
         });
         setCards(prepared);
         setActiveIndex((current) => (prepared.length === 0 ? 0 : Math.min(current, prepared.length - 1)));
@@ -352,16 +392,63 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         }
       }
     } catch {
-      setCards([]);
+      if (!hadCards) setCards([]);
     } finally {
       setLoading(false);
     }
   }, [loadFiscalYear, moduleId, placementField, subperiodSelections]);
 
   useEffect(() => {
+    cardsRef.current = cards;
+  }, [cards]);
+
+  const clearProgressCaches = useCallback(() => {
+    rowCacheRef.current = new Map();
+    goalProgressCardsCache.clear();
+    goalProgressCardsPromiseCache.clear();
+  }, []);
+
+  useEffect(() => {
     rowCacheRef.current = new Map();
     void loadCards();
   }, [loadCards]);
+
+  useEffect(() => {
+    const refresh = () => {
+      clearProgressCaches();
+      void loadCards();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === GOAL_PROGRESS_CACHE_STORAGE_KEY) refresh();
+    };
+
+    window.addEventListener(GOAL_PROGRESS_REFRESH_EVENT, refresh);
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('storage', handleStorage);
+    const pollHandle = window.setInterval(refresh, 90_000);
+
+    const channel = supabase
+      .channel(`goal-progress-live-${placement}-${moduleId || 'all'}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'goals' }, refresh);
+
+    const targetTable = moduleId ? MODULES[moduleId]?.table : null;
+    if (targetTable) {
+      channel.on('postgres_changes', { event: '*', schema: 'public', table: targetTable }, refresh);
+    }
+
+    channel.subscribe();
+
+    return () => {
+      window.removeEventListener(GOAL_PROGRESS_REFRESH_EVENT, refresh);
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('storage', handleStorage);
+      window.clearInterval(pollHandle);
+      supabase.removeChannel(channel);
+    };
+  }, [clearProgressCaches, loadCards, moduleId, placement]);
 
   useEffect(() => {
     setVisibleIndex((current) => {
@@ -405,6 +492,9 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }, [cards.length]);
 
   const activeCard = cards[visibleIndex] || null;
+  const canEditActiveGoal = activeCard
+    ? resolveModuleGoalAccessPermissions(rolePermissions, activeCard.goal.module_id).canEditGoal
+    : false;
 
   const handleSubperiodChange = async (goalId: string, unit: GoalPeriodUnit) => {
     const nextSelections = {
@@ -439,6 +529,23 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     );
   }, [activeCard, shellClasses.tag]);
 
+  const editorModal = editingGoal ? (
+    <GoalEditorModal
+      open={!!editingGoal}
+      onClose={() => setEditingGoal(null)}
+      onSaved={() => {
+        setEditingGoal(null);
+        clearProgressCaches();
+        dispatchGoalProgressRefresh();
+        void loadCards();
+      }}
+      initialModuleId={editingGoal.module_id}
+      record={editingGoal}
+      canEdit={resolveModuleGoalAccessPermissions(rolePermissions, editingGoal.module_id).canEditGoal}
+      permissions={rolePermissions}
+    />
+  ) : null;
+
   if (loading) {
     if (placement === 'module_list') {
       return null;
@@ -462,7 +569,22 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
 
   if (placement === 'module_list') {
     return (
-      <div className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gradient-to-br px-3.5 py-1.5 shadow-sm dark:border-gray-800 ${shellClasses.shell} ${className}`}>
+      <>
+      <div
+        role={canEditActiveGoal ? 'button' : undefined}
+        tabIndex={canEditActiveGoal ? 0 : undefined}
+        onClick={() => {
+          if (canEditActiveGoal && activeCard) setEditingGoal(activeCard.goal);
+        }}
+        onKeyDown={(event) => {
+          if (!canEditActiveGoal || !activeCard) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setEditingGoal(activeCard.goal);
+          }
+        }}
+        className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gradient-to-br px-3.5 py-1.5 shadow-sm dark:border-gray-800 ${canEditActiveGoal ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
+      >
         <div className={`flex items-center gap-2.5 transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
           <div className="min-w-0 w-[96px] shrink-0 md:w-[132px]">
             <div className="truncate text-[8px] leading-3.5 text-gray-500 dark:text-gray-400">
@@ -509,25 +631,48 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 size="small"
                 shape="circle"
                 icon={<RightOutlined />}
-                onClick={() => setActiveIndex((current) => (current - 1 + cards.length) % cards.length)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setActiveIndex((current) => (current - 1 + cards.length) % cards.length);
+                }}
                 className="!h-6 !w-6 !min-w-6"
               />
               <Button
                 size="small"
                 shape="circle"
                 icon={<LeftOutlined />}
-                onClick={() => setActiveIndex((current) => (current + 1) % cards.length)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setActiveIndex((current) => (current + 1) % cards.length);
+                }}
                 className="!h-6 !w-6 !min-w-6"
               />
             </div>
           ) : null}
         </div>
       </div>
+      {editorModal}
+      </>
     );
   }
 
   return (
-    <div className={`relative overflow-hidden rounded-[1.7rem] border border-gray-200 bg-gradient-to-br p-4 shadow-sm dark:border-gray-800 ${shellClasses.shell} ${className}`}>
+    <>
+    <div
+      role={canEditActiveGoal ? 'button' : undefined}
+      tabIndex={canEditActiveGoal ? 0 : undefined}
+      onClick={() => {
+        if (canEditActiveGoal && activeCard) setEditingGoal(activeCard.goal);
+      }}
+      onKeyDown={(event) => {
+        if (!canEditActiveGoal || !activeCard) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setEditingGoal(activeCard.goal);
+        }
+      }}
+      className={`relative overflow-hidden rounded-[1.7rem] border border-gray-200 bg-gradient-to-br p-4 shadow-sm dark:border-gray-800 ${canEditActiveGoal ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
+    >
       <div className={`transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -553,13 +698,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
               size="small"
               shape="circle"
               icon={<RightOutlined />}
-              onClick={() => setActiveIndex((current) => (current - 1 + cards.length) % cards.length)}
+              onClick={(event) => {
+                event.stopPropagation();
+                setActiveIndex((current) => (current - 1 + cards.length) % cards.length);
+              }}
             />
             <Button
               size="small"
               shape="circle"
               icon={<LeftOutlined />}
-              onClick={() => setActiveIndex((current) => (current + 1) % cards.length)}
+              onClick={(event) => {
+                event.stopPropagation();
+                setActiveIndex((current) => (current + 1) % cards.length);
+              }}
             />
           </div>
         ) : null}
@@ -592,6 +743,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
           className="min-w-[120px]"
           value={activeCard.selectedSubperiodUnit}
           options={GOAL_PERIOD_UNIT_OPTIONS.filter((item) => activeCard.availableSubperiodUnits.includes(item.value))}
+          onClick={(event) => event.stopPropagation()}
           onChange={(value) => void handleSubperiodChange(activeCard.goal.id, value as GoalPeriodUnit)}
         />
       </div>
@@ -620,7 +772,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
               key={item.goal.id}
               type="button"
               aria-label={item.goal.name}
-              onClick={() => setActiveIndex(index)}
+              onClick={(event) => {
+                event.stopPropagation();
+                setActiveIndex(index);
+              }}
               className={`h-1.5 rounded-full transition-all ${index === activeIndex ? 'w-6 bg-leather-600' : 'w-2.5 bg-gray-300 dark:bg-gray-700'}`}
             />
           ))}
@@ -628,6 +783,8 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       ) : null}
       </div>
     </div>
+    {editorModal}
+    </>
   );
 };
 

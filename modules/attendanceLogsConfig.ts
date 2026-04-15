@@ -84,7 +84,7 @@ export const attendanceLogsModule: ModuleDefinition = {
     {
       key: "manual_check_in_time",
       labels: { fa: "زمان ورود", en: "Manual Check In Time" },
-      type: FieldType.TIME,
+      type: FieldType.DATETIME,
       location: FieldLocation.BLOCK,
       blockId: "base",
       order: 3,
@@ -94,7 +94,7 @@ export const attendanceLogsModule: ModuleDefinition = {
     {
       key: "manual_check_out_time",
       labels: { fa: "زمان خروج", en: "Manual Check Out Time" },
-      type: FieldType.TIME,
+      type: FieldType.DATETIME,
       location: FieldLocation.BLOCK,
       blockId: "base",
       order: 4,

@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
-import { renderTemplateText, formatTemplateValueByField } from './messageTemplateRenderer';
+import { formatTemplateValueByField } from './messageTemplateRenderer';
 import { normalizeNoteScope } from './noteScope';
 import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
@@ -18,6 +18,8 @@ import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './inte
 import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { NoteAttachment, serializeNoteContent } from './noteContent';
+import { fetchAssigneeDirectory } from './referenceData';
+import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 
 type WorkflowEvent = 'create' | 'upsert' | 'interval';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -168,11 +170,71 @@ const isRunnableIntervalCondition = (condition: WorkflowCondition) => {
   return !isBlankConditionValue(condition?.value);
 };
 
-const renderTemplate = (template: string, record: Record<string, any>, moduleId?: string | null) =>
-  renderTemplateText(template, record, { moduleId });
+const getValueByPath = (record: Record<string, any> | null | undefined, path: string) => {
+  if (!path) return null;
+  const segments = String(path || '')
+    .split('.')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  let current: any = record || {};
+  for (const segment of segments) {
+    current = current?.[segment];
+    if (current === null || current === undefined) break;
+  }
+  return current;
+};
 
-const renderTemplateWithBoldMarkers = (template: string, record: Record<string, any>, moduleId?: string | null) =>
-  renderTemplateText(template, record, { moduleId, bold: true });
+const templateMayNeedAssigneeDirectory = (template: string) =>
+  /\{\{\s*[^}]*assignee[^}]*\s*\}\}/i.test(String(template || ''));
+
+const resolveWorkflowTemplateValue = async (
+  fieldKey: string,
+  record: Record<string, any>,
+  moduleId: string | null | undefined,
+  context: WorkflowEvaluationContext
+) => {
+  if (Object.prototype.hasOwnProperty.call(record || {}, fieldKey)) {
+    return record?.[fieldKey];
+  }
+  if (fieldKey.includes('.')) {
+    return getValueByPath(record, fieldKey);
+  }
+  return resolveConditionFieldValue(fieldKey, record, String(moduleId || ''), context);
+};
+
+const renderWorkflowTemplate = async (
+  template: string,
+  record: Record<string, any>,
+  moduleId?: string | null,
+  options: { bold?: boolean } = {}
+) => {
+  const rawTemplate = String(template || '');
+  if (!rawTemplate) return '';
+  const context = createWorkflowEvaluationContext(String(moduleId || ''));
+  const assigneeDirectory = templateMayNeedAssigneeDirectory(rawTemplate)
+    ? await fetchAssigneeDirectory(supabase).catch(() => null)
+    : null;
+  const matches = Array.from(rawTemplate.matchAll(/\{\{\s*([^}]+)\s*\}\}/g));
+  let rendered = rawTemplate;
+  for (const match of matches) {
+    const fullToken = match[0];
+    const fieldKey = String(match[1] || '').trim();
+    if (!fieldKey) {
+      rendered = rendered.split(fullToken).join('');
+      continue;
+    }
+    const value = await resolveWorkflowTemplateValue(fieldKey, record, moduleId, context);
+    const text = formatTemplateValueByField({
+      value,
+      moduleId,
+      fieldKey,
+      sourceRecord: record,
+      assigneeDirectory,
+    }).trim();
+    rendered = rendered.split(fullToken).join(options.bold && text ? `**${text}**` : text);
+  }
+  return rendered;
+};
 
 const ATTACHMENT_FILE_NAME_REGEX = /[^0-9a-zA-Z._\-\u0600-\u06FF]+/g;
 
@@ -1270,7 +1332,7 @@ const buildRubikaLinkedAttachmentMessage = (
   (attachments || []).forEach((item, index) => {
     const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
     const url = String(item?.url || '').trim();
-    lines.push({ text: `پیوست: ${name}`, linkUrl: url || undefined });
+    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
   });
 
   if (lines.length === 0) {
@@ -1379,7 +1441,7 @@ export const executeWorkflowAction = async (
   const config = action?.config || {};
 
   if (action.type === 'send_sms') {
-    const messageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
+    const messageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
     if (!messageText) return;
     const recipientsFromFields = await resolveCommunicationValuesFromFields({
       currentRecord,
@@ -1418,7 +1480,7 @@ export const executeWorkflowAction = async (
   }
 
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
-    const noteText = renderTemplateWithBoldMarkers(String(config.note_text || ''), currentRecord, moduleId).trim();
+    const noteText = (await renderWorkflowTemplate(String(config.note_text || ''), currentRecord, moduleId, { bold: true })).trim();
     const attachments = await resolveNoteAttachmentsFromFields({
       currentRecord,
       moduleId,
@@ -1464,7 +1526,7 @@ export const executeWorkflowAction = async (
   if (action.type === 'send_bale_bot' || action.type === 'send_rubika_bot') {
     const isRubika = action.type === 'send_rubika_bot';
     const channel: 'bale' | 'rubika' = isRubika ? 'rubika' : 'bale';
-    const rawMessageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
+    const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
     const attachments = isRubika
       ? await resolveNoteAttachmentsFromFields({
           currentRecord,
@@ -1482,7 +1544,7 @@ export const executeWorkflowAction = async (
     const fallbackText = isRubika && attachments.length > 0
       ? [rawMessageText, buildAttachmentNameText(attachments)].filter(Boolean).join('\n')
       : undefined;
-    const titleText = renderTemplate(String(config.title || ''), currentRecord, moduleId).trim();
+    const titleText = (await renderWorkflowTemplate(String(config.title || ''), currentRecord, moduleId)).trim();
     const configuredRecipientFields = asArray(config.recipient_fields)
       .map((item) => String(item || '').trim())
       .filter(Boolean);

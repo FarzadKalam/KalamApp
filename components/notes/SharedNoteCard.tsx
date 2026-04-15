@@ -47,6 +47,26 @@ const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
 const HTML_ANCHOR_REGEX = /<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
 const LINK_CLASS_NAME = 'underline decoration-dotted underline-offset-2 break-all [overflow-wrap:anywhere] text-current';
 
+const normalizeMentionLabel = (value: string, type: 'user' | 'role') => {
+  let label = String(value || '').trim().replace(/^@+/, '').trim();
+  const prefixPattern = type === 'role' ? /^(نقش|تیم)\s*[:：]\s*/ : /^عضو\s*[:：]\s*/;
+  while (prefixPattern.test(label)) {
+    label = label.replace(prefixPattern, '').trim();
+  }
+  return label;
+};
+
+const normalizeMentionLabels = (values: string[], type: 'user' | 'role') => {
+  const seen = new Set<string>();
+  return (values || [])
+    .map((value) => normalizeMentionLabel(value, type))
+    .filter((label) => {
+      if (!label || seen.has(label)) return false;
+      seen.add(label);
+      return true;
+    });
+};
+
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   authorName,
   createdAtLabel,
@@ -77,6 +97,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
 }) => {
   const [entered, setEntered] = useState<boolean>(!animateOnMount);
   const { token } = theme.useToken();
+  const normalizedMentionUsers = normalizeMentionLabels(mentionUsers, 'user');
+  const normalizedMentionRoles = normalizeMentionLabels(mentionRoles, 'role');
 
   useEffect(() => {
     if (!animateOnMount) {
@@ -313,14 +335,14 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
           </div>
         ) : null}
 
-        {(mentionUsers.length > 0 || mentionRoles.length > 0) ? (
+        {(normalizedMentionUsers.length > 0 || normalizedMentionRoles.length > 0) ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {mentionUsers.map((label) => (
+            {normalizedMentionUsers.map((label) => (
               <Tag key={`user-${label}`} className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[9px]" style={mentionUserStyle}>
                 @{label}
               </Tag>
             ))}
-            {mentionRoles.map((label) => (
+            {normalizedMentionRoles.map((label) => (
               <Tag key={`role-${label}`} className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[9px]" style={mentionRoleStyle}>
                 @{label}
               </Tag>

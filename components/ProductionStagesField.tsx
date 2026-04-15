@@ -22,6 +22,7 @@ import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/invent
 import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField, SelectOption } from '../types';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import {
   applyTaskSourceRecordFilter,
   buildTaskSourcePatch,
@@ -100,6 +101,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
+import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -455,6 +457,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [appendProcessModalMode, setAppendProcessModalMode] = useState<'append' | 'links'>('append');
   const [appendProcessModalGroupId, setAppendProcessModalGroupId] = useState<string | null>(null);
   const [appendProcessTemplateId, setAppendProcessTemplateId] = useState<string | null>(null);
+  const [appendProcessTemplateLabel, setAppendProcessTemplateLabel] = useState<string | null>(null);
   const [appendProcessTargetModuleIds, setAppendProcessTargetModuleIds] = useState<string[]>([]);
   const [appendProcessLinkedRecords, setAppendProcessLinkedRecords] = useState<Record<string, string | null>>({});
   const [appendProcessRelationOptions, setAppendProcessRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -601,7 +604,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       allowClear: true,
       showSearch: true,
       optionFilterProp: 'label' as const,
-      getPopupContainer: (node?: HTMLElement | null) => node?.parentElement || document.body,
+      getPopupContainer: () => document.body,
       placement: 'bottomRight' as const,
       popupMatchSelectWidth: false,
       listHeight: 260,
@@ -3733,11 +3736,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   ), []);
 
   const getAssigneeLabel = (task: any) => {
-    if (task.assignee_role_id && task.assigned_role) {
-      return `تیم ${task.assigned_role.title}`;
+    const roleId = task?.assignee_role_id ? String(task.assignee_role_id) : null;
+    const userId = task?.assignee_id ? String(task.assignee_id) : null;
+    if (roleId) {
+      const role = task?.assigned_role || assignees.roles.find((item: any) => String(item?.id) === roleId);
+      return role?.title ? `تیم ${role.title}` : 'در حال بارگذاری نام تیم...';
     }
-    if (task.assignee_id && task.assignee) {
-      return task.assignee.full_name || task.assignee.email || task.assignee.mobile_1 || 'تعیین نشده';
+    if (userId) {
+      const user = task?.assignee || assignees.users.find((item: any) => String(item?.id) === userId);
+      return user?.display_name || user?.full_name || user?.email || user?.mobile_1 || 'در حال بارگذاری نام مسئول...';
     }
     return 'تعیین نشده';
   };
@@ -4189,6 +4196,32 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const currentAssigneeCombo = task?.assignee_role_id
       ? `role:${String(task.assignee_role_id)}`
       : (task?.assignee_id ? `user:${String(task.assignee_id)}` : undefined);
+    const currentAssigneeRoleId = task?.assignee_role_id ? String(task.assignee_role_id) : null;
+    const currentAssigneeUserId = !currentAssigneeRoleId && task?.assignee_id ? String(task.assignee_id) : null;
+    const currentAssigneeRole = currentAssigneeRoleId
+      ? (task?.assigned_role || assignees.roles.find((item: any) => String(item?.id) === currentAssigneeRoleId))
+      : null;
+    const currentAssigneeUser = currentAssigneeUserId
+      ? (task?.assignee || assignees.users.find((item: any) => String(item?.id) === currentAssigneeUserId))
+      : null;
+    const currentAssigneeLabel = currentAssigneeRoleId
+      ? String(currentAssigneeRole?.title || currentAssigneeRole?.name || '').trim() || 'در حال بارگذاری نام تیم...'
+      : (
+          String(
+            currentAssigneeUser?.display_name
+            || currentAssigneeUser?.full_name
+            || currentAssigneeUser?.email
+            || currentAssigneeUser?.mobile_1
+            || ''
+          ).trim() || (currentAssigneeUserId ? 'در حال بارگذاری نام مسئول...' : '')
+        );
+    const shouldRenderCurrentAssigneeFallbackOption = Boolean(
+      currentAssigneeCombo
+      && (
+        (currentAssigneeRoleId && !assignees.roles.some((item: any) => String(item?.id) === currentAssigneeRoleId))
+        || (currentAssigneeUserId && !assignees.users.some((item: any) => String(item?.id) === currentAssigneeUserId))
+      )
+    );
     const fallback = getTaskOptionalFieldFallback(task);
     const customFields = getTaskCustomFields(task);
     const currentCustomFieldValues = getTaskCustomFieldValues(task);
@@ -4289,6 +4322,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   getPopupContainer={(node) => node?.parentElement || document.body}
                   styles={{ popup: { root: { minWidth: 220, zIndex: 12050 } } }}
                 >
+                  {shouldRenderCurrentAssigneeFallbackOption && currentAssigneeCombo ? (
+                    <Select.Option
+                      key={`popup-current-assignee-${currentAssigneeCombo}`}
+                      value={currentAssigneeCombo}
+                      label={currentAssigneeLabel}
+                    >
+                      <Space>
+                        {currentAssigneeRoleId ? <TeamOutlined /> : <UserOutlined />}
+                        {currentAssigneeLabel}
+                      </Space>
+                    </Select.Option>
+                  ) : null}
                   <Select.OptGroup label="کاربران">
                     {assignees.users.map((u) => (
                       <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
@@ -4616,6 +4661,36 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     void loadProcessTemplateOptions();
   }, [isProcessRecordModule, loadProcessTemplateOptions, readOnly]);
 
+  const appendProcessTemplateSelectValue = useMemo(() => {
+    const normalizedId = String(appendProcessTemplateId || '').trim();
+    if (!normalizedId) return undefined;
+
+    const selectedOption = processTemplateOptions.find((option) => String(option.value) === normalizedId);
+    return {
+      value: normalizedId,
+      label: selectedOption?.label || appendProcessTemplateLabel || normalizedId,
+    };
+  }, [appendProcessTemplateId, appendProcessTemplateLabel, processTemplateOptions]);
+
+  const handleAppendProcessTemplateSelectChange = useCallback((nextValue: any, option?: any) => {
+    const rawValue = typeof nextValue === 'object' && nextValue !== null
+      ? nextValue.value
+      : nextValue;
+    const normalizedValue = String(rawValue || '').trim();
+
+    if (!normalizedValue) {
+      setAppendProcessTemplateId(null);
+      setAppendProcessTemplateLabel(null);
+      return;
+    }
+
+    const rawLabel = typeof nextValue === 'object' && nextValue !== null
+      ? nextValue.label
+      : option?.label;
+    setAppendProcessTemplateId(normalizedValue);
+    setAppendProcessTemplateLabel(String(rawLabel || '').trim() || null);
+  }, []);
+
   const handleOpenAppendProcessModal = useCallback(async (
     mode: 'append' | 'links' = 'append',
     group?: { id?: string | null; templateId?: string | null; stages?: any[] }
@@ -4646,6 +4721,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setAppendProcessModalMode(mode);
     setAppendProcessModalGroupId(mode === 'links' ? (String(group?.id || '').trim() || null) : null);
     setAppendProcessTemplateId(null);
+    setAppendProcessTemplateLabel(null);
     setAppendProcessTargetModuleIds([]);
     setAppendProcessLinkedRecords({});
     setAppendProcessRelationOptions({});
@@ -4654,6 +4730,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     await loadProcessTemplateOptions();
     if (mode === 'links') {
       setAppendProcessTemplateId(normalizedTemplateId);
+      setAppendProcessTemplateLabel(null);
       setAppendProcessTargetModuleIds(seededTargetModuleIds);
       setAppendProcessLinkedRecords(seededLinks);
     }
@@ -4729,6 +4806,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (leftKeys.length !== rightKeys.length) return false;
     return leftKeys.every((key) => (left[key] ?? null) === (right[key] ?? null));
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleTaskRuntimeUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<TaskRuntimeUpdatedPayload>)?.detail;
+      const updatedTask = detail?.task;
+      if (!updatedTask?.id) return;
+      setTasks((prev) => applyTaskRuntimeUpdate(
+        prev,
+        updatedTask,
+        (task) => withProcessTaskCustomFieldValues(task)
+      ));
+    };
+
+    window.addEventListener(TASK_RUNTIME_UPDATED_EVENT, handleTaskRuntimeUpdated as EventListener);
+    return () => {
+      window.removeEventListener(TASK_RUNTIME_UPDATED_EVENT, handleTaskRuntimeUpdated as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (!appendProcessModalOpen) {
@@ -4916,6 +5012,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       await saveDraftStages(nextStages);
       setAppendProcessModalOpen(false);
       setAppendProcessTemplateId(null);
+      setAppendProcessTemplateLabel(null);
       message.success(`${toPersianNumber(appendedStages.length)} مرحله در نوار فرآیند جدید اضافه شد`);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'افزودن فرآیند دیگر ناموفق بود'));
@@ -5007,6 +5104,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setShowEmptyProcessDetails(true);
       setAppendProcessModalOpen(false);
       setAppendProcessTemplateId(null);
+      setAppendProcessTemplateLabel(null);
       message.success('فرآیند خام ایجاد شد');
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فرآیند خام ناموفق بود'));
@@ -7192,7 +7290,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   protectedValues={getTaskTypeProtectedValues()}
                   placeholder="انتخاب نوع فعالیت"
                   className="w-full"
-                  getPopupContainer={(node) => node?.parentElement || document.body}
+                  getPopupContainer={resolveOverlayPopupContainer}
                 />
               </Form.Item>
             </div>
@@ -7418,7 +7516,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               protectedValues={getTaskTypeProtectedValues()}
                               placeholder="انتخاب نوع فعالیت"
                               className="w-full"
-                              getPopupContainer={(node) => node?.parentElement || document.body}
+                              getPopupContainer={resolveOverlayPopupContainer}
                             />
                           </Form.Item>
                         </div>
@@ -8216,6 +8314,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           setAppendProcessModalGroupId(null);
           setAppendProcessModalMode('append');
           setAppendProcessTemplateId(null);
+          setAppendProcessTemplateLabel(null);
         }}
         footer={appendProcessModalMode === 'links'
           ? [
@@ -8226,6 +8325,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   setAppendProcessModalGroupId(null);
                   setAppendProcessModalMode('append');
                   setAppendProcessTemplateId(null);
+                  setAppendProcessTemplateLabel(null);
                 }}
               >
                 انصراف
@@ -8251,6 +8351,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   setAppendProcessModalGroupId(null);
                   setAppendProcessModalMode('append');
                   setAppendProcessTemplateId(null);
+                  setAppendProcessTemplateLabel(null);
                 }}
               >
                 انصراف
@@ -8278,8 +8379,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
             <Select
               {...modalSelectProps}
-              value={String(appendProcessTemplateId || '').trim() || undefined}
-              onChange={(val) => setAppendProcessTemplateId(val ? String(val) : null)}
+              labelInValue
+              value={appendProcessTemplateSelectValue}
+              onChange={handleAppendProcessTemplateSelectChange}
               options={processTemplateOptions}
               placeholder="انتخاب الگوی فرآیند"
               loading={processTemplateOptionsLoading}
@@ -8318,7 +8420,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       allValues={appendProcessLinkedRecords}
                       moduleId={moduleId}
                       recordId={recordId}
-                      overlayZIndexBase={2200}
+                      overlayZIndexBase={13080}
                     />
                   </div>
                 ))}

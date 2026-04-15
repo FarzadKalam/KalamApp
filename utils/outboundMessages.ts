@@ -1,7 +1,21 @@
 import { supabase } from '../supabaseClient';
 import type { OutboundChannelType } from './channelSettings';
 
-export type OutboundMessageStatus = 'pending' | 'sent' | 'failed' | 'skipped';
+export type OutboundMessageStatus =
+  | 'pending'
+  | 'provider_accepted'
+  | 'sent'
+  | 'delivered'
+  | 'not_delivered'
+  | 'operator_failed'
+  | 'filtered'
+  | 'blacklisted'
+  | 'unknown_delivery'
+  | 'failed'
+  | 'skipped'
+  | 'received'
+  | 'processed'
+  | 'ignored';
 
 export type OutboundMessagePayload = {
   channelType: OutboundChannelType;
@@ -66,7 +80,7 @@ export const updateOutboundMessageStatus = async (
   }
   if (patch?.sentAt !== undefined) {
     nextPatch.sent_at = patch.sentAt;
-  } else if (status === 'sent') {
+  } else if (status === 'sent' || status === 'provider_accepted' || status === 'delivered') {
     nextPatch.sent_at = new Date().toISOString();
   }
 

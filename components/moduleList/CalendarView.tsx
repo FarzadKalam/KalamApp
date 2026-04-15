@@ -13,6 +13,7 @@ import persian_fa from "react-date-object/locales/persian_fa";
 import { FieldType, ModuleDefinition, ModuleField } from "../../types";
 import { getHolidaySummaryForDate, type HolidayDaySummary } from "../../utils/holidayCalendar";
 import { formatRecordDisplayValue } from "../../utils/recordDisplayFormatter";
+import { resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getRecordTitle } from "../../utils/recordTitle";
 import { parseDateValue, toPersianNumber } from "../../utils/persianNumberFormatter";
 import { getTaskStatusLabel } from "../../utils/processTaskStatusOptions";
@@ -36,6 +37,7 @@ type CalendarEvent = {
   title: string;
   timeLabel: string | null;
   statusLabel: string | null;
+  statusColor: string | null;
 };
 
 type CalendarViewProps = {
@@ -133,6 +135,12 @@ const getFieldColor = (dateFields: ModuleField[], fieldKey: string) => {
   return DATE_FIELD_COLORS[index % DATE_FIELD_COLORS.length];
 };
 
+const normalizeEventStatusColor = (color?: string | null) => {
+  const value = String(color || "").trim();
+  if (!value || value === "default") return null;
+  return value;
+};
+
 const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   moduleId,
   moduleConfig,
@@ -188,6 +196,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
       const eventDate = parsed.toDate();
       const key = toDateKey(eventDate);
       const current = next.get(key) || [];
+      const statusMeta = resolveCardStatusMeta(item, moduleConfig, statusField?.key);
       const statusLabel = statusField && item?.[statusField.key] !== undefined && item?.[statusField.key] !== null
         ? (
             moduleId === "tasks" && String(statusField?.key || "") === "status"
@@ -202,6 +211,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         title: getRecordTitle(item, moduleConfig, { fallback: "-" }),
         timeLabel: selectedDateField.type === FieldType.DATETIME ? toPersianNumber(parsed.format("HH:mm")) : null,
         statusLabel,
+        statusColor: normalizeEventStatusColor(statusMeta?.color),
       });
       next.set(key, current);
     });
@@ -262,7 +272,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
       key={event.key}
       type="button"
       className="w-full min-w-0 rounded-lg border border-gray-200 bg-white/90 px-2 py-1 text-right text-[10px] leading-4 shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] hover:bg-[rgba(var(--brand-50-rgb),0.9)] dark:border-white/10 dark:bg-[#1d1d1d] dark:hover:bg-white/10 sm:text-[11px]"
-      style={{ borderRight: `3px solid ${selectedFieldColor}` }}
+      style={{ borderRight: `3px solid ${event.statusColor || selectedFieldColor}` }}
       onClick={() => navigate(`/${moduleId}/${event.item.id}`)}
       title={event.title}
     >
@@ -271,8 +281,14 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
           {event.timeLabel}
         </span>
       ) : null}
-      <span className="mt-0.5 block min-w-0 line-clamp-2 break-words text-[9px] font-bold leading-4 text-gray-700 dark:text-gray-100 sm:text-[10px]">
-        {event.title}
+      <span className="mt-0.5 flex min-w-0 items-start gap-1">
+        <span
+          className="mt-1 h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: event.statusColor || selectedFieldColor }}
+        />
+        <span className="block min-w-0 line-clamp-2 break-words text-[9px] font-bold leading-4 text-gray-700 dark:text-gray-100 sm:text-[10px]">
+          {event.title}
+        </span>
       </span>
       {!compact && event.statusLabel ? (
         <span className="mt-0.5 block min-w-0 truncate text-[10px] text-gray-500 dark:text-gray-400">

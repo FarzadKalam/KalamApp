@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Avatar, Button, Empty, Input, Popconfirm, Space, Spin, Tag, Tooltip } from 'antd';
-import { DeleteOutlined, ReloadOutlined, SendOutlined, UserOutlined } from '@ant-design/icons';
-import { useLocation } from 'react-router-dom';
+import { App, Avatar, Button, Empty, Input, Popconfirm, Popover, Space, Spin, Tag, Tooltip } from 'antd';
+import { DeleteOutlined, ReloadOutlined, SendOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { AI_CONTEXT_EVENT } from '../../utils/aiAssistantEvents';
 import AiSparkleIcon from './AiSparkleIcon';
+import { AI_INSTRUCTIONS_DOCUMENT_TYPE, isAiInstructionsConfigured } from '../../utils/aiKnowledge';
 
 type AssistantContext = {
   route?: string;
@@ -119,6 +120,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
   const [submitting, setSubmitting] = useState(false);
   const [loadingThread, setLoadingThread] = useState(false);
   const [deletingThread, setDeletingThread] = useState(false);
+  const [aiKnowledgeConfigured, setAiKnowledgeConfigured] = useState(true);
+  const [checkingAiKnowledge, setCheckingAiKnowledge] = useState(false);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -205,10 +208,35 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
     }
   }, [active, callAssistant, context, message]);
 
+  const loadAiKnowledgeStatus = useCallback(async () => {
+    setCheckingAiKnowledge(true);
+    try {
+      const { data, error } = await supabase
+        .from('org_documents')
+        .select('id, body, document_type, status, updated_at')
+        .eq('document_type', AI_INSTRUCTIONS_DOCUMENT_TYPE)
+        .eq('status', 'active')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : null;
+      setAiKnowledgeConfigured(isAiInstructionsConfigured(row?.body || ''));
+    } catch {
+      setAiKnowledgeConfigured(true);
+    } finally {
+      setCheckingAiKnowledge(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!active) return;
     void loadThread();
   }, [active, contextKey, loadThread]);
+
+  useEffect(() => {
+    if (!active) return;
+    void loadAiKnowledgeStatus();
+  }, [active, loadAiKnowledgeStatus]);
 
   useEffect(() => {
     if (!active) return;
@@ -320,6 +348,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
             <div className="truncate text-[10px] font-normal text-gray-500 dark:text-gray-400">{contextLabel}</div>
           </div>
           <Space size={4}>
+            {!checkingAiKnowledge && !aiKnowledgeConfigured ? (
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                getPopupContainer={() => document.body}
+                content={(
+                  <div style={{ width: 'min(88vw, 280px)' }} className="text-xs leading-6 text-gray-600 dark:text-gray-300">
+                    برای بازخورد موثرتر در استفاده هوش مصنوعی، ابتدا{' '}
+                    <Link to="/settings?tab=ai_knowledge" className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2">
+                      دانش سازمان
+                    </Link>{' '}
+                    را تکمیل کنید
+                  </div>
+                )}
+              >
+                <Button type="text" size="small" danger icon={<WarningOutlined />} aria-label="هشدار تکمیل دانش سازمان" />
+              </Popover>
+            ) : null}
             <Tooltip title="بارگذاری دوباره">
               <Button type="text" size="small" icon={<ReloadOutlined spin={loadingThread} />} onClick={() => void loadThread()} />
             </Tooltip>

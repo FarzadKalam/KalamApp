@@ -30,6 +30,7 @@ import {
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { resolveModuleGoalAccessPermissions } from '../../utils/permissions';
 import PersianDatePicker from '../PersianDatePicker';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 
@@ -219,6 +220,11 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       const values = await form.validateFields();
       if (!MODULES[values.module_id]) {
         message.error('ماژول هدف معتبر نیست.');
+        return;
+      }
+      const moduleGoalAccess = resolveModuleGoalAccessPermissions(permissions as any, values.module_id);
+      if (isEditMode ? !moduleGoalAccess.canEditGoal : !moduleGoalAccess.canCreateGoal) {
+        message.error(isEditMode ? 'دسترسی ویرایش هدف برای این ماژول را ندارید.' : 'دسترسی ایجاد هدف برای این ماژول را ندارید.');
         return;
       }
       if ((values.metric_type === 'sum' || values.metric_type === 'avg') && !values.metric_field_key) {

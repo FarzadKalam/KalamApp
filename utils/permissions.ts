@@ -74,6 +74,12 @@ export const GOALS_PERMISSION_FIELDS = [
   { key: 'dashboard_widget', label: 'نمایش کارت‌های هدف در داشبورد' },
 ];
 
+export const MODULE_GOAL_PERMISSION_FIELDS = [
+  { key: '__goals_view', label: 'هدف‌های این ماژول: مشاهده' },
+  { key: '__goals_create', label: 'هدف‌های این ماژول: ایجاد' },
+  { key: '__goals_edit', label: 'هدف‌های این ماژول: ویرایش' },
+] as const;
+
 export const FILES_PERMISSION_FIELDS = [
   { key: 'gallery_page', label: 'گالری فایل‌ها' },
   { key: 'recycle_bin_page', label: 'سطل بازیافت' },
@@ -174,6 +180,10 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
   if (!fieldMap.has('__module_settings')) {
     ensureField(fieldMap, '__module_settings', 'تنظیمات ماژول');
   }
+
+  MODULE_GOAL_PERMISSION_FIELDS.forEach((item) => {
+    ensureField(fieldMap, item.key, item.label);
+  });
 
   READY_TEXTS_PERMISSION_FIELDS.forEach((item) => {
     ensureField(fieldMap, item.key, item.label);
@@ -587,6 +597,29 @@ export const resolveGoalsAccessPermissions = (permissions: PermissionMap | null 
     canViewDashboardWidget: canViewRoot && fields.dashboard_widget !== false,
     canEditGoals: canViewRoot && canEditRoot,
     canDeleteGoals: canViewRoot && canDeleteRoot,
+  };
+};
+
+export const resolveModuleGoalAccessPermissions = (
+  permissions: PermissionMap | null | undefined,
+  moduleId?: string | null
+) => {
+  const rootPerm = permissions?.[GOALS_PERMISSION_KEY] || {};
+  const rootFields = rootPerm.fields || {};
+  const modulePerm = moduleId ? (permissions?.[moduleId] || {}) : {};
+  const moduleFields = modulePerm.fields || {};
+  const canViewRoot = rootPerm.view !== false;
+  const canEditRoot = canViewRoot && rootPerm.edit !== false;
+  const canViewModule = !moduleId || modulePerm.view !== false;
+  const canViewGoal = canViewRoot && canViewModule && moduleFields.__goals_view !== false;
+
+  return {
+    canViewGoal,
+    canViewModuleCards: canViewGoal && rootFields.module_list_cards !== false,
+    canViewDashboardWidget: canViewGoal && rootFields.dashboard_widget !== false,
+    canOpenManager: canViewRoot && rootFields.module_list_button !== false,
+    canCreateGoal: canViewGoal && canEditRoot && moduleFields.__goals_create !== false,
+    canEditGoal: canViewGoal && canEditRoot && moduleFields.__goals_edit !== false,
   };
 };
 

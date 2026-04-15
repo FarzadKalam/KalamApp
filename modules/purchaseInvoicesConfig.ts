@@ -64,13 +64,6 @@ const BLOCKS = {
         readonly: true,
       },
       {
-        key: 'taxpayer_measure_unit_code',
-        title: 'کد واحد مودیان',
-        type: FieldType.NUMBER,
-        width: 130,
-        readonly: true,
-      },
-      {
         key: 'sub_quantity',
         title: 'مقدار واحد فرعی',
         type: FieldType.NUMBER,

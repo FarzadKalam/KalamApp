@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Refine, Authenticated } from "@refinedev/core";
 import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
@@ -7,45 +7,13 @@ import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllN
 import { BrowserRouter, Route, Routes, Outlet, useParams } from "react-router-dom";
 import { ConfigProvider, App as AntdApp, theme as antdTheme } from "antd";
 import faIR from "antd/locale/fa_IR";
-import ProfilePage from "./pages/ProfilePage";
-import SettingsPage from "./pages/Settings/SettingsPage";
 import { JalaliLocaleListener } from "antd-jalali";
 import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
 import Layout from "./components/Layout";
 import UploadProgressOverlay from "./components/UploadProgressOverlay";
 import PwaInstallPrompt from "./components/PwaInstallPrompt";
-import { ModuleListRefine } from "./pages/ModuleList_Refine";
-import ModuleShow from "./pages/ModuleShow";
 import "./App.css";
-import { ModuleCreate } from "./pages/ModuleCreate";
-import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
-import AccountingPage from "./pages/AccountingPage";
-import AccountingAccountReviewPage from "./pages/AccountingAccountReviewPage";
-import AccountingReportsPage from "./pages/AccountingReportsPage";
-import AccountingReportViewerPage from "./pages/AccountingReportViewerPage";
-import AccountingSettingsPage from "./pages/AccountingSettingsPage";
-import ChartOfAccountsTreePage from "./pages/ChartOfAccountsTreePage";
-import AccountingRecordPage from "./pages/AccountingRecordPage";
-import CashBankPage from "./pages/CashBankPage";
-import JournalEntryCreatePage from "./pages/JournalEntryCreatePage";
-import JournalEntryShowPage from "./pages/JournalEntryShowPage";
-import InquiryForm from "./pages/InquiryForm";
-import ProductionGroupOrdersList from "./pages/ProductionGroupOrdersList";
-import ProductionGroupOrderWizard from "./pages/ProductionGroupOrderWizard";
-import HRPage from "./pages/HRPage";
-import FilesGalleryPage from "./pages/FilesGalleryPage";
-import WebFormsHubPage from "./pages/WebFormsHubPage";
-import WebFormBuilderPage from "./pages/WebFormBuilderPage";
-import ReportsHubPage from "./pages/ReportsHubPage";
-import ReportBuilderPage from "./pages/ReportBuilderPage";
-import ReportViewerPage from "./pages/ReportViewerPage";
-import PublicSite from "./pages/PublicSite";
-import WorkSchedulesPage from "./pages/WorkSchedulesPage";
-import HrQuickRequestPage from "./pages/HrQuickRequestPage";
-import RecycleBinPage from "./pages/RecycleBinPage";
-import ShareTargetPage from "./pages/ShareTargetPage";
 import {
   BRANDING_APPLIED_EVENT,
   BRANDING_UPDATED_EVENT,
@@ -70,8 +38,44 @@ import {
   loadAndApplyModuleSettings,
   MODULE_SETTINGS_UPDATED_EVENT,
 } from "./utils/moduleSettingsRuntime";
+import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 
 // تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
+
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
+const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
+const ModuleListRefine = lazy(() => import("./pages/ModuleList_Refine"));
+const ModuleShow = lazy(() => import("./pages/ModuleShow"));
+const ModuleCreate = lazy(() =>
+  import("./pages/ModuleCreate").then((module) => ({ default: module.ModuleCreate }))
+);
+const Login = lazy(() => import("./pages/Login"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const AccountingPage = lazy(() => import("./pages/AccountingPage"));
+const AccountingAccountReviewPage = lazy(() => import("./pages/AccountingAccountReviewPage"));
+const AccountingReportsPage = lazy(() => import("./pages/AccountingReportsPage"));
+const AccountingReportViewerPage = lazy(() => import("./pages/AccountingReportViewerPage"));
+const AccountingSettingsPage = lazy(() => import("./pages/AccountingSettingsPage"));
+const ChartOfAccountsTreePage = lazy(() => import("./pages/ChartOfAccountsTreePage"));
+const AccountingRecordPage = lazy(() => import("./pages/AccountingRecordPage"));
+const CashBankPage = lazy(() => import("./pages/CashBankPage"));
+const JournalEntryCreatePage = lazy(() => import("./pages/JournalEntryCreatePage"));
+const JournalEntryShowPage = lazy(() => import("./pages/JournalEntryShowPage"));
+const InquiryForm = lazy(() => import("./pages/InquiryForm"));
+const ProductionGroupOrdersList = lazy(() => import("./pages/ProductionGroupOrdersList"));
+const ProductionGroupOrderWizard = lazy(() => import("./pages/ProductionGroupOrderWizard"));
+const HRPage = lazy(() => import("./pages/HRPage"));
+const FilesGalleryPage = lazy(() => import("./pages/FilesGalleryPage"));
+const WebFormsHubPage = lazy(() => import("./pages/WebFormsHubPage"));
+const WebFormBuilderPage = lazy(() => import("./pages/WebFormBuilderPage"));
+const ReportsHubPage = lazy(() => import("./pages/ReportsHubPage"));
+const ReportBuilderPage = lazy(() => import("./pages/ReportBuilderPage"));
+const ReportViewerPage = lazy(() => import("./pages/ReportViewerPage"));
+const PublicSite = lazy(() => import("./pages/PublicSite"));
+const WorkSchedulesPage = lazy(() => import("./pages/WorkSchedulesPage"));
+const HrQuickRequestPage = lazy(() => import("./pages/HrQuickRequestPage"));
+const RecycleBinPage = lazy(() => import("./pages/RecycleBinPage"));
+const ShareTargetPage = lazy(() => import("./pages/ShareTargetPage"));
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
@@ -86,24 +90,11 @@ const getInitialBranding = (): BrandingConfig => {
   return readCachedBranding() || DEFAULT_BRANDING;
 };
 
-const resolvePopupContainer = (triggerNode?: HTMLElement) => {
-  if (typeof document === "undefined") return triggerNode || ({} as HTMLElement);
-  if (!triggerNode) return document.body;
-
-  const stableOverlayHost = triggerNode.closest(
-    [
-      ".ant-modal-root",
-      ".ant-modal-wrap",
-      ".ant-modal",
-      ".ant-drawer-content-wrapper",
-      ".ant-drawer-content",
-      ".ant-drawer",
-    ].join(", ")
-  ) as HTMLElement | null;
-
-  if (stableOverlayHost) return stableOverlayHost;
-  return document.body;
-};
+const RouteLoadingFallback = () => (
+  <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-500">
+    در حال بارگذاری...
+  </div>
+);
 
 function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
@@ -412,84 +403,86 @@ function App() {
     const notificationProvider = useNotificationProvider();
 
     return (
-      <Refine
-        dataProvider={dataProvider(supabase)}
-        authProvider={authProvider}
-        notificationProvider={notificationProvider}
-        routerProvider={routerBindings}
-        resources={resources}
-        options={{
-          syncWithLocation: true,
-          warnWhenUnsavedChanges: true,
-          disableTelemetry: true,
-        }}
-      >
-        <Routes>
-          <Route path="/tazesystem/*" element={<PublicSite />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/inquiry/*" element={<InquiryForm />} />
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <Refine
+          dataProvider={dataProvider(supabase)}
+          authProvider={authProvider}
+          notificationProvider={notificationProvider}
+          routerProvider={routerBindings}
+          resources={resources}
+          options={{
+            syncWithLocation: true,
+            warnWhenUnsavedChanges: true,
+            disableTelemetry: true,
+          }}
+        >
+          <Routes>
+            <Route path="/tazesystem/*" element={<PublicSite />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/inquiry/*" element={<InquiryForm />} />
 
-          <Route
-            element={
-              <Authenticated
-                key="authenticated-inner"
-                fallback={<CatchAllNavigate to="/login" />}
-              >
-                <Layout
-                  isDarkMode={isDarkMode}
-                  toggleTheme={handleToggleTheme}
-                  brandShortName={branding.shortName}
+            <Route
+              element={
+                <Authenticated
+                  key="authenticated-inner"
+                  fallback={<CatchAllNavigate to="/login" />}
                 >
-                  <Outlet />
-                </Layout>
-              </Authenticated>
-            }
-          >
-            <Route index element={<Dashboard />} />
-            <Route path="/profile" element={<ProfilePage />} />
-            <Route path="/profile/:id" element={<ProfilePage />} />
-            <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
-            <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
-            <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
-            <Route path="/hr" element={<HRPage />} />
-            <Route path="/hr/:employeeId" element={<HRPage />} />
-            <Route path="/gallery" element={<FilesGalleryPage />} />
-            <Route path="/recycle-bin" element={<RecycleBinPage />} />
-            <Route path="/share-target" element={<ShareTargetPage />} />
-            <Route path="/web_forms" element={<WebFormsHubPage />} />
-            <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
-            <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
-            <Route path="/web_forms/:id/edit" element={<WebFormBuilderPage />} />
-            <Route path="/reports" element={<ReportsHubPage />} />
-            <Route path="/reports/create" element={<ReportBuilderPage />} />
-            <Route path="/reports/:reportId" element={<ReportViewerPage />} />
-            <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
-            <Route path="/accounting" element={<AccountingPage />} />
-            <Route path="/accounting/reports" element={<AccountingReportsPage />} />
-            <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
-            <Route path="/cash_bank" element={<CashBankPage />} />
-            <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
-            <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
-            <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
-            <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
-            <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
-            <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
+                  <Layout
+                    isDarkMode={isDarkMode}
+                    toggleTheme={handleToggleTheme}
+                    brandShortName={branding.shortName}
+                  >
+                    <Outlet />
+                  </Layout>
+                </Authenticated>
+              }
+            >
+              <Route index element={<Dashboard />} />
+              <Route path="/profile" element={<ProfilePage />} />
+              <Route path="/profile/:id" element={<ProfilePage />} />
+              <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
+              <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
+              <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
+              <Route path="/hr" element={<HRPage />} />
+              <Route path="/hr/:employeeId" element={<HRPage />} />
+              <Route path="/gallery" element={<FilesGalleryPage />} />
+              <Route path="/recycle-bin" element={<RecycleBinPage />} />
+              <Route path="/share-target" element={<ShareTargetPage />} />
+              <Route path="/web_forms" element={<WebFormsHubPage />} />
+              <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
+              <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
+              <Route path="/web_forms/:id/edit" element={<WebFormBuilderPage />} />
+              <Route path="/reports" element={<ReportsHubPage />} />
+              <Route path="/reports/create" element={<ReportBuilderPage />} />
+              <Route path="/reports/:reportId" element={<ReportViewerPage />} />
+              <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
+              <Route path="/accounting" element={<AccountingPage />} />
+              <Route path="/accounting/reports" element={<AccountingReportsPage />} />
+              <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
+              <Route path="/cash_bank" element={<CashBankPage />} />
+              <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
+              <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
+              <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
+              <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
+              <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
+              <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
 
-            <Route path="/:moduleId">
-              <Route index element={<ModuleListRouteResolver />} />
-              <Route path="create" element={<ModuleCreateRouteResolver />} />
-              <Route path=":id" element={<ModuleShowRouteResolver />} />
-              <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
+              <Route path="/:moduleId">
+                <Route index element={<ModuleListRouteResolver />} />
+                <Route path="create" element={<ModuleCreateRouteResolver />} />
+                <Route path=":id" element={<ModuleShowRouteResolver />} />
+                <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
+              </Route>
+
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<ErrorComponent />} />
             </Route>
+          </Routes>
 
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<ErrorComponent />} />
-          </Route>
-        </Routes>
-
-        <UnsavedChangesNotifier />
-        <DocumentTitleHandler handler={titleHandler} />
-      </Refine>
+          <UnsavedChangesNotifier />
+          <DocumentTitleHandler handler={titleHandler} />
+        </Refine>
+      </Suspense>
     );
   };
 
@@ -508,7 +501,7 @@ function App() {
       <ConfigProvider
         direction="rtl"
         locale={faIR}
-        getPopupContainer={resolvePopupContainer}
+        getPopupContainer={resolveOverlayPopupContainer}
         theme={{
           algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: {

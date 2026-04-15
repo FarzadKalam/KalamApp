@@ -20,7 +20,7 @@ import GridView from "../components/moduleList/GridView";
 import MapView from "../components/moduleList/MapView";
 import ModuleCalendarView from "../components/moduleList/CalendarView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
-import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, GOALS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, type RecordScope } from "../utils/permissions";
+import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, GOALS_PERMISSION_KEY, resolveModuleGoalAccessPermissions, WORKFLOWS_PERMISSION_KEY, type RecordScope } from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
@@ -50,6 +50,8 @@ import RelatedRecordPopover from "../components/RelatedRecordPopover";
 import { getRecordPhoneCandidates } from "../utils/recordMessaging";
 import { formatIranMobileForInput } from "../utils/phoneNumber";
 import MessageComposerModal from "../components/MessageComposerModal";
+import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
+import { getAssigneeLabel } from "../utils/assigneeLabel";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const getDefaultGridPageSize = () => 15;
@@ -619,6 +621,7 @@ export const ModuleListRefine: React.FC<{
       const modulePerms = permissions?.[resolvedModuleId] || {};
       const workflowPerms = permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
       const goalPerms = permissions?.[GOALS_PERMISSION_KEY] || {};
+      const moduleGoalAccess = resolveModuleGoalAccessPermissions(permissions, resolvedModuleId);
       setModulePermissions({
         view: modulePerms.view,
         edit: modulePerms.edit,
@@ -630,10 +633,10 @@ export const ModuleListRefine: React.FC<{
         workflowPerms.view !== false && (workflowPerms?.fields?.module_list_button !== false)
       );
       setCanOpenGoals(
-        goalPerms.view !== false && (goalPerms?.fields?.module_list_button !== false)
+        goalPerms.view !== false && (goalPerms?.fields?.module_list_button !== false) && moduleGoalAccess.canViewGoal
       );
       setCanShowGoalCards(
-        goalPerms.view !== false && (goalPerms?.fields?.module_list_cards !== false)
+        goalPerms.view !== false && (goalPerms?.fields?.module_list_cards !== false) && moduleGoalAccess.canViewModuleCards
       );
     } catch (err: any) {
       if (String(err?.name || '') === 'AbortError') {
@@ -1138,21 +1141,46 @@ export const ModuleListRefine: React.FC<{
         const fieldKey = String(simpleFilter?._displayField || simpleFilter?.field || "");
         if (!fieldKey) return null;
         const field = moduleConfig.fields.find((item) => item.key === fieldKey);
-        const fieldLabel = getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: fieldKey });
+        const fieldLabel = fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
+          ? getAssigneeLabel(resolvedModuleId)
+          : getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: fieldKey });
         const rawValue = simpleFilter?._displayValue ?? simpleFilter?.value;
-        const valueLabel = field
-          ? field.type === FieldType.TAGS
-            ? (Array.isArray(rawValue)
-                ? rawValue
-                    .map((item) => {
-                      const normalized = String(item ?? "").trim();
-                      return tagLabelById.get(normalized) || getSingleOptionLabel(field, normalized, dynamicOptions, relationOptions);
-                    })
-                    .filter(Boolean)
-                    .join("، ")
-                : String(tagLabelById.get(String(rawValue ?? "").trim()) || getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)))
-            : getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)
-          : String(rawValue ?? "");
+        const valueLabel = fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
+          ? (Array.isArray(rawValue) ? rawValue : [rawValue])
+              .map((item) => {
+                const normalized = String(item ?? "").trim();
+                if (!normalized) return "";
+                if (normalized.startsWith("user_")) {
+                  const userId = normalized.slice(5);
+                  const user = allUsers.find((entry: any) => String(entry?.id || "").trim() === userId);
+                  return user?.display_name || user?.full_name || userId;
+                }
+                if (normalized.startsWith("role_")) {
+                  const roleId = normalized.slice(5);
+                  const role = allRoles.find((entry: any) => String(entry?.id || "").trim() === roleId);
+                  return role?.title ? `نقش: ${role.title}` : `نقش: ${roleId}`;
+                }
+                const user = allUsers.find((entry: any) => String(entry?.id || "").trim() === normalized);
+                if (user) return user?.display_name || user?.full_name || normalized;
+                const role = allRoles.find((entry: any) => String(entry?.id || "").trim() === normalized);
+                if (role) return `نقش: ${role.title || normalized}`;
+                return normalized;
+              })
+              .filter(Boolean)
+              .join("، ")
+          : field
+            ? field.type === FieldType.TAGS
+              ? (Array.isArray(rawValue)
+                  ? rawValue
+                      .map((item) => {
+                        const normalized = String(item ?? "").trim();
+                        return tagLabelById.get(normalized) || getSingleOptionLabel(field, normalized, dynamicOptions, relationOptions);
+                      })
+                      .filter(Boolean)
+                      .join("، ")
+                  : String(tagLabelById.get(String(rawValue ?? "").trim()) || getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)))
+              : getSingleOptionLabel(field, rawValue, dynamicOptions, relationOptions)
+            : String(rawValue ?? "");
         const operatorLabel =
           operatorLabels[String(simpleFilter?._displayOperator || simpleFilter?.operator || "eq")] ||
           String(simpleFilter?._displayOperator || simpleFilter?.operator || "eq");
@@ -1182,7 +1210,7 @@ export const ModuleListRefine: React.FC<{
     }
 
     return bubbles;
-  }, [columnFilters, currentView?.config?.filters, dynamicOptions, moduleConfig, relationOptions, searchTerm, tagsMap, viewFiltersState]);
+  }, [allRoles, allUsers, columnFilters, currentView?.config?.filters, dynamicOptions, moduleConfig, relationOptions, resolvedModuleId, searchTerm, tagsMap, viewFiltersState]);
 
   const columnFilterBubbles = useMemo(() => {
     if (!moduleConfig) return [];
@@ -1512,14 +1540,164 @@ export const ModuleListRefine: React.FC<{
       return normalized.toISOString();
     };
 
+    const resolveAssigneeTargets = async (rawValue: any) => {
+      const normalizedValues = (Array.isArray(rawValue) ? rawValue : rawValue !== undefined && rawValue !== null && rawValue !== "" ? [rawValue] : [])
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean);
+
+      if (normalizedValues.length === 0) {
+        return {
+          assigneeIds: [] as string[],
+          assigneeRoleIds: [] as string[],
+        };
+      }
+
+      const directory = await fetchAssigneeDirectory(supabase);
+      const users = Array.isArray(directory?.users) ? directory.users : [];
+      const roles = Array.isArray(directory?.roles) ? directory.roles : [];
+      const userIdSet = new Set(users.map((user) => String(user?.id || "").trim()).filter(Boolean));
+      const roleIdSet = new Set(roles.map((role) => String(role?.id || "").trim()).filter(Boolean));
+      const assigneeIds = new Set<string>();
+      const assigneeRoleIds = new Set<string>();
+
+      normalizedValues.forEach((entry) => {
+        if (entry.startsWith("user_")) {
+          const userId = String(entry.slice(5) || "").trim();
+          if (userId) assigneeIds.add(userId);
+          return;
+        }
+
+        if (entry.startsWith("role_")) {
+          const roleId = String(entry.slice(5) || "").trim();
+          if (!roleId) return;
+          assigneeRoleIds.add(roleId);
+          assigneeIds.add(roleId);
+          users.forEach((user) => {
+            if (String(user?.role_id || "").trim() === roleId) {
+              assigneeIds.add(String(user?.id || "").trim());
+            }
+          });
+          return;
+        }
+
+        if (userIdSet.has(entry)) {
+          assigneeIds.add(entry);
+        }
+
+        if (roleIdSet.has(entry)) {
+          assigneeRoleIds.add(entry);
+          assigneeIds.add(entry);
+          users.forEach((user) => {
+            if (String(user?.role_id || "").trim() === entry) {
+              assigneeIds.add(String(user?.id || "").trim());
+            }
+          });
+        }
+      });
+
+      return {
+        assigneeIds: Array.from(assigneeIds).filter(Boolean),
+        assigneeRoleIds: Array.from(assigneeRoleIds).filter(Boolean),
+      };
+    };
+
     const filters: CrudFilters = [];
 
     for (const rawFilter of nextViewFiltersConfig) {
       const fieldKey = String(rawFilter?.field || "").trim();
       const operator = String(rawFilter?.operator || "").trim();
       const value = rawFilter?.value;
+      if (!fieldKey || !operator) continue;
+
+      if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+        if (operator === "is_null") {
+          filters.push(
+            { field: "assignee_id", operator: "null", value: null, _displayField: fieldKey, _displayOperator: operator, _displayValue: value } as any,
+            { field: "assignee_role_id", operator: "null", value: null, _displayField: fieldKey, _displayOperator: operator, _displayValue: value } as any
+          );
+          continue;
+        }
+
+        if (operator === "not_null") {
+          filters.push({
+            operator: "or",
+            value: [
+              { field: "assignee_id", operator: "nnull", value: null },
+              { field: "assignee_role_id", operator: "nnull", value: null },
+            ],
+            _displayField: fieldKey,
+            _displayOperator: operator,
+            _displayValue: value,
+          } as any);
+          continue;
+        }
+
+        const { assigneeIds, assigneeRoleIds } = await resolveAssigneeTargets(value);
+
+        if (operator === "eq" || operator === "contains" || operator === "in") {
+          const nextOrFilters: CrudFilter[] = [];
+          if (assigneeIds.length > 0) {
+            nextOrFilters.push({
+              field: "assignee_id",
+              operator: assigneeIds.length > 1 ? "in" : "eq",
+              value: assigneeIds.length > 1 ? assigneeIds : assigneeIds[0],
+            } as any);
+          }
+          if (assigneeRoleIds.length > 0) {
+            nextOrFilters.push({
+              field: "assignee_role_id",
+              operator: assigneeRoleIds.length > 1 ? "in" : "eq",
+              value: assigneeRoleIds.length > 1 ? assigneeRoleIds : assigneeRoleIds[0],
+            } as any);
+          }
+          if (nextOrFilters.length > 0) {
+            filters.push((nextOrFilters.length === 1
+              ? {
+                  ...nextOrFilters[0],
+                  _displayField: fieldKey,
+                  _displayOperator: operator,
+                  _displayValue: value,
+                }
+              : {
+                  operator: "or",
+                  value: nextOrFilters,
+                  _displayField: fieldKey,
+                  _displayOperator: operator,
+                  _displayValue: value,
+                }) as any);
+          }
+          continue;
+        }
+
+        if (operator === "neq" || operator === "not_contains" || operator === "not_in") {
+          if (assigneeIds.length > 0) {
+            filters.push({
+              field: "assignee_id",
+              operator: assigneeIds.length > 1 ? "nin" : "ne",
+              value: assigneeIds.length > 1 ? assigneeIds : assigneeIds[0],
+              _displayField: fieldKey,
+              _displayOperator: operator,
+              _displayValue: value,
+            } as any);
+          }
+          if (assigneeRoleIds.length > 0) {
+            filters.push({
+              field: "assignee_role_id",
+              operator: assigneeRoleIds.length > 1 ? "nin" : "ne",
+              value: assigneeRoleIds.length > 1 ? assigneeRoleIds : assigneeRoleIds[0],
+              _displayField: fieldKey,
+              _displayOperator: operator,
+              _displayValue: value,
+            } as any);
+          }
+          continue;
+        }
+
+        continue;
+      }
+
       const field = moduleConfig.fields.find((item) => String(item?.key || "").trim() === fieldKey);
-      if (!fieldKey || !operator || !field) continue;
+      if (!field) continue;
 
       if (field.type === FieldType.TAGS) {
         const normalizedTagIds = (Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [])

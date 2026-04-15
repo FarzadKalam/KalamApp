@@ -794,12 +794,12 @@ const Dashboard: React.FC = () => {
       {(canShowWidget('activity_calendar') || canShowWidget('reports_slider')) && (
         <Row gutter={[16, 16]} className="mb-6">
           {canShowWidget('activity_calendar') && (
-            <Col xs={24} lg={canShowWidget('reports_slider') ? 12 : 24}>
+            <Col xs={24} lg={24}>
               <TaskCalendarWidget />
             </Col>
           )}
           {canShowWidget('reports_slider') && (
-            <Col xs={24} lg={canShowWidget('activity_calendar') ? 12 : 24}>
+            <Col xs={24} lg={24}>
               <ReportsSliderWidget />
             </Col>
           )}

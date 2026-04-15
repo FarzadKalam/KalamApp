@@ -84,7 +84,10 @@ const getModuleTableName = (moduleId?: string | null) => {
 };
 
 const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId, recordName = '', mentionUsers = [], mentionRoles = [] }) => {
+  const DESKTOP_TAB_RAIL_LEFT_OFFSET = 12;
   const DESKTOP_TAB_RAIL_WIDTH = 56;
+  const DESKTOP_TAB_RAIL_GAP = 12;
+  const DESKTOP_DRAWER_LEFT_OFFSET = DESKTOP_TAB_RAIL_LEFT_OFFSET + DESKTOP_TAB_RAIL_WIDTH + DESKTOP_TAB_RAIL_GAP;
   const [activeKey, setActiveKey] = useState<string | null>(null);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [unreadMap, setUnreadMap] = useState<Record<string, boolean>>({});
@@ -401,7 +404,10 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
 
   return (
     <>
-        <div className="hidden md:flex fixed top-24 left-0 bottom-6 w-14 bg-white dark:bg-[#1a1a1a] border-r border-gray-200 dark:border-gray-800 flex-col items-center py-5 gap-5 z-40 shadow-[4px_0_24px_rgba(0,0,0,0.02)] rounded-r-3xl transition-all">
+        <div
+            className="hidden md:flex fixed top-24 bottom-6 bg-white dark:bg-[#1a1a1a] border-r border-gray-200 dark:border-gray-800 flex-col items-center py-5 gap-5 z-40 shadow-[4px_0_24px_rgba(0,0,0,0.02)] rounded-r-3xl transition-all"
+            style={{ left: DESKTOP_TAB_RAIL_LEFT_OFFSET, width: DESKTOP_TAB_RAIL_WIDTH }}
+        >
             {allTabs.map(tab => {
                 const isActive = activeKey === tab.key;
                 return (
@@ -429,7 +435,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 {/* دکمه موبایل برای باز کردن سایدبار */}
                 <button
                     type="button"
-                    className="md:hidden fixed left-0 top-1/2 -translate-y-1/2 z-40 w-9 h-12 rounded-r-2xl bg-leather-500 text-white shadow-lg shadow-leather-500/40 flex items-center justify-center"
+                    className="md:hidden fixed left-2 top-1/2 -translate-y-1/2 z-40 w-9 h-12 rounded-r-2xl bg-leather-500 text-white shadow-lg shadow-leather-500/40 flex items-center justify-center"
                     onClick={() => setIsMobileMenuOpen(true)}
                 >
                     <RightOutlined className="text-sm" />
@@ -480,7 +486,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
             mask={false}
             styles={{ body: { padding: 0 }, header: { padding: '16px 24px' } }}
             className="shadow-2xl"
-            style={typeof window !== 'undefined' && window.innerWidth >= 768 ? { left: DESKTOP_TAB_RAIL_WIDTH } : undefined}
+            style={typeof window !== 'undefined' && window.innerWidth >= 768 ? { left: DESKTOP_DRAWER_LEFT_OFFSET } : undefined}
             rootStyle={{ zIndex: 2000 }}
         >
             <div className="h-full p-4 bg-gray-50 dark:bg-[#121212]">

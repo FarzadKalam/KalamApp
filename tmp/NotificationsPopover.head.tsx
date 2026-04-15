@@ -52,95 +52,6 @@ interface NotificationsPopoverProps {
   requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls' | 'assistant';
 }
 
-type AiSuggestionPopoverActionProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  loading: boolean;
-  disabled: boolean;
-  onSubmit: (instruction: string) => void | Promise<void>;
-};
-
-const AiSuggestionPopoverAction: React.FC<AiSuggestionPopoverActionProps> = ({
-  open,
-  onOpenChange,
-  loading,
-  disabled,
-  onSubmit,
-}) => {
-  const [draft, setDraft] = useState('');
-
-  useEffect(() => {
-    if (!open) {
-      setDraft('');
-    }
-  }, [open]);
-
-  return (
-    <Popover
-      trigger="click"
-      placement="topRight"
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (disabled && nextOpen) return;
-        onOpenChange(nextOpen);
-      }}
-      content={(
-        <div className="w-[280px] max-w-[80vw]">
-          <div className="text-[12px] font-semibold text-gray-700 dark:text-gray-100">
-            توضیحات بیشتر برای هوش مصنوعی
-          </div>
-          <div className="mt-1 text-[11px] leading-5 text-gray-500 dark:text-gray-400">
-            کاربر بتونه راجع به این موضوع و پیام های رد و بدل شده و چیزی که میخواد، توضیحی اضافه کنه
-          </div>
-          <Input.TextArea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            autoSize={{ minRows: 3, maxRows: 6 }}
-            className="mt-2"
-            placeholder="مثلا لحن پاسخ، نکته مهم، یا چیزی که باید در نظر گرفته شود..."
-          />
-          <div className="mt-2 flex items-center justify-end gap-2">
-            <Button size="small" onClick={() => onOpenChange(false)}>
-              بستن
-            </Button>
-            <Button
-              type="primary"
-              size="small"
-              loading={loading}
-              onClick={() => void onSubmit(draft)}
-            >
-              دریافت پیشنهاد
-            </Button>
-          </div>
-        </div>
-      )}
-    >
-      <button
-        type="button"
-        disabled={disabled}
-        className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] transition-colors ${
-          disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-black/5 dark:hover:bg-white/10'
-        }`}
-      >
-        <span
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md ${
-            loading
-              ? 'bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.16)] dark:text-[rgb(var(--brand-300-rgb))]'
-              : 'text-gray-600 dark:text-gray-300'
-          }`}
-        >
-          <AiSparkleIcon className="h-4 w-4" />
-        </span>
-        {loading ? (
-          <span className="whitespace-nowrap text-[11px] text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">
-            در حال فکر کردن...
-          </span>
-        ) : null}
-      </button>
-    </Popover>
-  );
-};
-
 const MAX_ITEMS = 10;
 const NOTIFICATIONS_CACHE_TTL_MS = 45_000;
 const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
@@ -693,7 +604,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
   const [botSuggesting, setBotSuggesting] = useState(false);
-  const [botAiPopoverOpen, setBotAiPopoverOpen] = useState(false);
   const [botGroupSearch, setBotGroupSearch] = useState('');
   const [botMessageSearch, setBotMessageSearch] = useState('');
   const [botNotificationMessages, setBotNotificationMessages] = useState<CounterpartyBotMessageRow[]>([]);
@@ -703,7 +613,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [smsText, setSmsText] = useState('');
   const [smsSending, setSmsSending] = useState(false);
   const [smsSuggesting, setSmsSuggesting] = useState(false);
-  const [smsAiPopoverOpen, setSmsAiPopoverOpen] = useState(false);
   const [voipCalls, setVoipCalls] = useState<any[]>([]);
   const [selectedVoipThreadKey, setSelectedVoipThreadKey] = useState<string | null>(null);
   const [botReplyToId, setBotReplyToId] = useState<string | null>(null);
@@ -5548,14 +5457,13 @@ useEffect(() => {
       }
     };
 
-    const suggestSmsReply = async (instruction = '') => {
+    const suggestSmsReply = async () => {
       if (!activeThread?.id && !smsRecipient.trim()) {
         message.warning('ابتدا یک گفتگو یا شماره پیامک را انتخاب کنید.');
         return;
       }
       if (smsSuggesting) return;
       setSmsSuggesting(true);
-      setSmsAiPopoverOpen(false);
       try {
         const recentMessages = (threadMessages || []).slice(-16).map((row: any) => {
           const direction = String(row?.direction || '').trim() || 'inbound';
@@ -5571,7 +5479,6 @@ useEffect(() => {
         const suggested = await requestReplySuggestion({
           channel: 'sms',
           phone: String(activeThread?.phone || smsRecipient || '').trim() || null,
-          instruction: String(instruction || '').trim() || null,
           context: {
             mode: activeThread?.moduleId && activeThread?.recordId ? 'record' : 'page',
             moduleId: activeThread?.moduleId || null,
@@ -5762,12 +5669,13 @@ useEffect(() => {
               submitLoading={smsSending}
               submitDisabled={smsSending || smsSuggesting || !smsRecipient.trim() || !smsText.trim()}
               extraActions={(
-                <AiSuggestionPopoverAction
-                  open={smsAiPopoverOpen}
-                  onOpenChange={setSmsAiPopoverOpen}
+                <Button
+                  type={smsSuggesting ? 'primary' : 'text'}
+                  size="small"
                   loading={smsSuggesting}
                   disabled={smsSending || smsSuggesting || (!activeThread?.id && !smsRecipient.trim())}
-                  onSubmit={(instruction) => suggestSmsReply(instruction)}
+                  icon={<AiSparkleIcon className="h-4 w-4" />}
+                  onClick={() => void suggestSmsReply()}
                 />
               )}
             />
@@ -6067,14 +5975,13 @@ useEffect(() => {
       }
     };
 
-    const suggestBotReply = async (instruction = '') => {
+    const suggestBotReply = async () => {
       if (!selectedGroup) {
         message.warning('ابتدا یک گروه بات انتخاب کنید.');
         return;
       }
       if (botSuggesting) return;
       setBotSuggesting(true);
-      setBotAiPopoverOpen(false);
       try {
         const recentMessages = (botMessages || []).slice(-18).map((row: any) => {
           const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
@@ -6098,7 +6005,6 @@ useEffect(() => {
         const suggested = await requestReplySuggestion({
           channel: 'bot',
           botGroupId: String(selectedGroup.id || ''),
-          instruction: String(instruction || '').trim() || null,
           context: {
             mode: selectedBotModuleId && selectedBotRecordId ? 'record' : 'page',
             moduleId: selectedBotModuleId || null,
@@ -6361,12 +6267,13 @@ useEffect(() => {
             submitDisabled={!selectedGroup || !canSend || botSending || botSuggesting || (!String(botMessageText || '').trim() && botAttachments.length === 0)}
             extraActions={(
               <>
-                <AiSuggestionPopoverAction
-                  open={botAiPopoverOpen}
-                  onOpenChange={setBotAiPopoverOpen}
+                <Button
+                  type={botSuggesting ? 'primary' : 'text'}
+                  size="small"
                   loading={botSuggesting}
                   disabled={!selectedGroup || botSending || botSuggesting}
-                  onSubmit={(instruction) => suggestBotReply(instruction)}
+                  icon={<AiSparkleIcon className="h-4 w-4" />}
+                  onClick={() => void suggestBotReply()}
                 />
                 <Button
                   type="text"

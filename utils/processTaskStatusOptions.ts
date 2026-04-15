@@ -38,6 +38,14 @@ const parseRecurrenceInfo = (value: any): Record<string, any> => {
   }
 };
 
+const getTaskStoredStatusLabel = (task?: any): string => {
+  const direct = String(task?.status_label || '').trim();
+  if (direct) return direct;
+  const scoped = String(task?.task_status_label || '').trim();
+  if (scoped) return scoped;
+  return '';
+};
+
 const normalizeTaskStatusOption = (value: any): SelectOption | null => {
   const optionValue = String(value?.value ?? value?.label ?? '').trim();
   const optionLabel = String(value?.label ?? value?.value ?? '').trim();
@@ -153,7 +161,18 @@ export const getTaskStatusOptions = (task?: any, baseOptions?: any[] | null): Se
     getProcessTaskStatusOptionsFromRecurrence(recurrence)
   );
   const currentStatus = String(task?.status || '').trim().toLowerCase();
-  const fallback = currentStatus ? LEGACY_TASK_STATUS_FALLBACKS[currentStatus] : null;
+  const storedLabel = getTaskStoredStatusLabel(task);
+  const fallback = currentStatus
+    ? (
+        storedLabel
+          ? {
+              value: currentStatus,
+              label: storedLabel,
+              color: LEGACY_TASK_STATUS_FALLBACKS[currentStatus]?.color,
+            }
+          : LEGACY_TASK_STATUS_FALLBACKS[currentStatus]
+      )
+    : null;
   if (fallback && !merged.some((option) => String(option?.value || '').trim().toLowerCase() === currentStatus)) {
     return [...merged, fallback];
   }
@@ -169,7 +188,16 @@ export const getTaskStatusOption = (status: unknown, task?: any, baseOptions?: a
 };
 
 export const getTaskStatusLabel = (status: unknown, task?: any, baseOptions?: any[] | null): string =>
-  String(getTaskStatusOption(status, task, baseOptions)?.label || status || '').trim();
+  String(
+    getTaskStatusOption(status, task, baseOptions)?.label
+    || (
+      String(status || '').trim() === String(task?.status || '').trim()
+        ? getTaskStoredStatusLabel(task)
+        : ''
+    )
+    || status
+    || ''
+  ).trim();
 
 export const getTaskStatusColor = (status: unknown, task?: any, baseOptions?: any[] | null): string => {
   const optionColor = String(getTaskStatusOption(status, task, baseOptions)?.color || '').trim();

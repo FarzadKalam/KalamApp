@@ -23,6 +23,16 @@ export type SmsProviderResult = {
   raw?: string;
   result?: string;
   method?: string;
+  provider_status?: string | null;
+  provider_status_text?: string | null;
+  delivery?: {
+    code?: string;
+    label?: string;
+    status?: string;
+    raw?: string;
+    method?: string;
+    error?: string;
+  } | null;
 };
 
 export type SmsGatewaySendResult = {
@@ -173,6 +183,24 @@ const getInvokeErrorMessage = async (value: any, fallback: string) => {
   }
 
   return baseMessage;
+};
+
+const SMS_DELIVERY_LOG_STATUSES = new Set([
+  'provider_accepted',
+  'sent',
+  'delivered',
+  'not_delivered',
+  'operator_failed',
+  'filtered',
+  'blacklisted',
+  'unknown_delivery',
+  'failed',
+]);
+
+const resolveSmsLogStatus = (providerResult?: SmsProviderResult | null) => {
+  const deliveryStatus = String(providerResult?.delivery?.status || '').trim();
+  if (SMS_DELIVERY_LOG_STATUSES.has(deliveryStatus)) return deliveryStatus as any;
+  return 'provider_accepted' as const;
 };
 
 const decodeSoapScalar = (raw: string) => {
@@ -402,7 +430,8 @@ export const sendSmsViaGateway = async ({
       for (const row of pendingLogRows) {
         const providerResult = providerResultMap.get(row.recipient);
         try {
-          await updateOutboundMessageStatus(row.id, 'sent', {
+          const nextStatus = resolveSmsLogStatus(providerResult);
+          await updateOutboundMessageStatus(row.id, nextStatus, {
             providerMessageId: String(providerResult?.result || '').trim() || null,
             sentAt: attemptedAt,
             metadata: {
@@ -410,8 +439,16 @@ export const sendSmsViaGateway = async ({
               channel: 'sms',
               provider_method: String(sendResult?.provider_method || providerResult?.method || '').trim() || null,
               provider_attempts: sendResult?.provider_attempts || [],
+              provider_status: String(providerResult?.provider_status || '').trim() || null,
+              provider_status_text: String(providerResult?.provider_status_text || '').trim() || null,
               provider_result: String(providerResult?.result || '').trim() || null,
               provider_raw: String(providerResult?.raw || '').trim() || null,
+              delivery_status: String(providerResult?.delivery?.status || '').trim() || null,
+              delivery_code: String(providerResult?.delivery?.code || '').trim() || null,
+              delivery_label: String(providerResult?.delivery?.label || '').trim() || null,
+              delivery_method: String(providerResult?.delivery?.method || '').trim() || null,
+              delivery_raw: String(providerResult?.delivery?.raw || '').trim() || null,
+              delivery_error: String(providerResult?.delivery?.error || '').trim() || null,
               build: String(sendResult?.build || '').trim() || null,
             },
           });

@@ -4,7 +4,6 @@ import { useEffect } from 'react';
 import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { replaceDynamicOptionValueAcrossModules } from '../utils/dynamicOptionReplacement';
-import * as XLSX from 'xlsx';
 
 interface DynamicSelectFieldProps {
   value?: string | string[];
@@ -53,6 +52,8 @@ const mergeDynamicOptions = (...groups: Array<Array<{ label: string; value: stri
   });
   return Array.from(map.values());
 };
+
+const loadXlsxModule = () => import('xlsx');
 
 const normalizeDynamicValueToLabel = (
   input: string | string[] | undefined,
@@ -125,6 +126,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   }, []);
 
   const mergedDropdownStyle: React.CSSProperties = {
+    zIndex: 13080,
     minWidth: isMobileViewport ? 180 : 280,
     maxWidth: isMobileViewport ? 'calc(100vw - 24px)' : 520,
     width: isMobileViewport ? 'min(92vw, 420px)' : undefined,
@@ -135,7 +137,15 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
 
   const resolvedPopupContainer = useMemo(
     () => (trigger: HTMLElement) => {
-      return getPopupContainer(trigger) || document.body;
+      const container = getPopupContainer(trigger) || document.body;
+      const isNestedInAntOverlay = container.closest?.(
+        '.ant-modal-root, .ant-modal-wrap, .ant-modal, .ant-drawer-root, .ant-drawer-content-wrapper, .ant-drawer-content, .ant-drawer'
+      );
+
+      // Dynamic selects render an interactive footer. Keeping that popup inside
+      // Ant overlay DOM can swallow option clicks, so modal/drawer callers are
+      // normalized back to the body portal while retaining z-index via styles.
+      return isNestedInAntOverlay ? document.body : container;
     },
     [getPopupContainer]
   );
@@ -427,6 +437,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
     setLoading(true);
     try {
       const buffer = await file.arrayBuffer();
+      const XLSX = await loadXlsxModule();
       const workbook = XLSX.read(buffer, { type: 'array' });
       const firstSheetName = workbook.SheetNames?.[0];
       if (!firstSheetName) {
@@ -676,8 +687,9 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
             showSearch
             optionFilterProp="label"
             placeholder="گزینه جایگزین را انتخاب کنید"
-            getPopupContainer={(node) => node?.parentElement || document.body}
+            getPopupContainer={() => document.body}
             placement="bottomRight"
+            styles={{ popup: { root: { zIndex: modalZIndex + 20 } } }}
           />
         </div>
       </Modal>

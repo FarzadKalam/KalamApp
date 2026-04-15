@@ -11,6 +11,7 @@ import {
 } from '../../utils/goals';
 import {
   fetchCurrentUserRoleContext,
+  resolveModuleGoalAccessPermissions,
   resolveGoalsAccessPermissions,
   type PermissionMap,
 } from '../../utils/permissions';
@@ -52,6 +53,17 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
   const popupContainer = useCallback((node?: HTMLElement | null) => node?.parentElement || document.body, []);
 
   const moduleOptions = useMemo(() => getGoalModuleOptions(permissions), [permissions]);
+  const canCreateForCurrentFilter = useMemo(() => {
+    if (!access.canEditGoals) return false;
+    if (moduleFilter !== 'all') {
+      return resolveModuleGoalAccessPermissions(permissions, moduleFilter).canCreateGoal;
+    }
+    return moduleOptions.some((option) => resolveModuleGoalAccessPermissions(permissions, option.value).canCreateGoal);
+  }, [access.canEditGoals, moduleFilter, moduleOptions, permissions]);
+  const canEditGoalRecord = useCallback(
+    (record: GoalRecord) => access.canEditGoals && resolveModuleGoalAccessPermissions(permissions, record.module_id).canEditGoal,
+    [access.canEditGoals, permissions]
+  );
 
   const fetchPermissions = useCallback(async () => {
     try {
@@ -101,7 +113,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
   }, [defaultModuleId, moduleFilter]);
 
   const toggleActive = async (record: GoalRecord, checked: boolean) => {
-    if (!access.canEditGoals) return;
+    if (!canEditGoalRecord(record)) return;
     try {
       const { error } = await supabase.from('goals').update({ is_active: checked }).eq('id', record.id);
       if (error) throw error;
@@ -190,7 +202,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          disabled={!access.canEditGoals}
+          disabled={!canCreateForCurrentFilter}
           className="bg-leather-600 hover:!bg-leather-500"
           onClick={() => {
             setEditingRecord(null);
@@ -234,12 +246,12 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
                     checked={record.is_active !== false}
                     checkedChildren="فعال"
                     unCheckedChildren="غیرفعال"
-                    disabled={!access.canEditGoals}
+                    disabled={!canEditGoalRecord(record)}
                     onChange={(checked) => void toggleActive(record, checked)}
                   />
                   <Button
                     size="small"
-                    disabled={!access.canEditGoals}
+                    disabled={!canEditGoalRecord(record)}
                     onClick={() => {
                       setEditingRecord(record);
                       setEditorOpen(true);

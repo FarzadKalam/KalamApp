@@ -219,7 +219,6 @@ const fieldsArray: any[] = [
   { key: 'accounting_code', labels: { fa: 'کد حسابداری', en: 'Accounting Code' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.5, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'crm_code', labels: { fa: 'کد CRM', en: 'CRM Code' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.6, nature: FieldNature.STANDARD },
   { key: 'product_identifier', labels: { fa: 'شناسه کالا', en: 'Product Identifier' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.7, nature: FieldNature.STANDARD, isTableColumn: true },
-  { key: 'taxpayer_measure_unit_code', labels: { fa: 'کد واحد مودیان', en: 'Taxpayer Measure Unit Code' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.75, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'commission_percentage', labels: { fa: 'پورسانت', en: 'Commission (%)' }, type: FieldType.PERCENTAGE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 7.8, nature: FieldNature.STANDARD },
   { key: 'auto_name_enabled', labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 8, nature: FieldNature.PREDEFINED, defaultValue: false },
 

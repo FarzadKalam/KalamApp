@@ -81,6 +81,46 @@ const isStatementTimeoutError = (error: any) => {
   return code === '57014' || text.includes('statement timeout');
 };
 
+const formatDisplayText = (rawValue: any, fallback = '-'): string => {
+  if (rawValue === null || rawValue === undefined || rawValue === '') return fallback;
+  if (Array.isArray(rawValue)) {
+    const parts = rawValue
+      .map((item) => formatDisplayText(item, ''))
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join('، ') : fallback;
+  }
+  if (typeof rawValue === 'object') {
+    const candidate = (
+      rawValue.title
+      ?? rawValue.label
+      ?? rawValue.name
+      ?? rawValue.full_name
+      ?? rawValue.business_name
+      ?? rawValue.legal_name
+      ?? rawValue.system_code
+      ?? rawValue.value
+      ?? rawValue.id
+    );
+    if (candidate !== rawValue && candidate !== null && candidate !== undefined && candidate !== '') {
+      return formatDisplayText(candidate, fallback);
+    }
+    try {
+      const serialized = JSON.stringify(rawValue);
+      return serialized && serialized !== '{}' ? serialized : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  const normalized = String(rawValue).trim();
+  return normalized || fallback;
+};
+
+const formatPersianDisplayText = (rawValue: any, fallback = '-') => {
+  const text = formatDisplayText(rawValue, fallback);
+  return text ? toPersianNumber(text) : fallback;
+};
+
 const isMissingAuditColumnError = (error: any) => {
   const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || '').toLowerCase();
@@ -369,6 +409,7 @@ interface SmartFieldRendererProps {
   canDeleteFilesManager?: boolean;
   disableRequired?: boolean;
   overlayZIndexBase?: number;
+  popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
 }
 
 type ReadyTextItem = {
@@ -379,7 +420,7 @@ type ReadyTextItem = {
 };
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1400
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1400, popupContainer
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -459,7 +500,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const scanModalZIndex = overlayZIndexBase + 15;
   const quickCreateModalZIndex = overlayZIndexBase + 20;
   const selectPlacement = 'bottomRight' as const;
-  const selectPopupContainer = () => document.body;
+  const selectPopupContainer = popupContainer || (() => document.body);
 
   useEffect(() => {
     let cancelled = false;
@@ -606,7 +647,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     const resolvedCandidate = rawCandidates
-      .map((item) => String(item ?? '').trim())
+      .map((item) => formatDisplayText(item, '').trim())
       .find(Boolean);
 
     return getSafeOptionFallback(resolvedCandidate || relationExactOption?.label || value);
@@ -703,14 +744,14 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     const resolveOptionLabel = (singleValue: any) => {
       if (singleValue === undefined || singleValue === null) return '';
       let matchedOption = (targetField.options || []).find((item: any) => item?.value === singleValue);
-      if (matchedOption) return matchedOption.label;
+      if (matchedOption) return formatDisplayText(matchedOption.label, '');
       if (targetField.dynamicOptionsCategory) {
         matchedOption = (quickCreateDynamicOptions[targetField.dynamicOptionsCategory] || []).find((item: any) => item?.value === singleValue);
-        if (matchedOption) return matchedOption.label;
+        if (matchedOption) return formatDisplayText(matchedOption.label, '');
       }
       if (targetField.type === FieldType.RELATION) {
         const matchedRelation = (quickCreateRelationOptions[fieldKey] || []).find((item: any) => item?.value === singleValue);
-        if (matchedRelation) return matchedRelation.label;
+        if (matchedRelation) return formatDisplayText(matchedRelation.label, '');
       }
       return String(singleValue);
     };
@@ -1855,13 +1896,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
         if (fieldType === FieldType.SELECT || fieldType === FieldType.RELATION || fieldType === FieldType.STATUS) {
              const selectedOpt = (fieldType === FieldType.RELATION ? relationResolvedOptions : fieldOptions).find((o: any) => String(o?.value) === String(value));
-             if (fieldType === FieldType.STATUS && selectedOpt) {
-                  return <Tag color={selectedOpt.color}>{selectedOpt.label}</Tag>;
-               }
-               const resolvedLabel = fieldType === FieldType.RELATION
-                 ? resolveRelationDisplayLabel()
-                 : (selectedOpt ? selectedOpt.label : getSafeOptionFallback(value));
-               if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
+              if (fieldType === FieldType.STATUS && selectedOpt) {
+                   return <Tag color={selectedOpt.color}>{formatDisplayText(selectedOpt.label, getSafeOptionFallback(value))}</Tag>;
+                }
+                const resolvedLabel = fieldType === FieldType.RELATION
+                  ? resolveRelationDisplayLabel()
+                  : (selectedOpt ? formatDisplayText(selectedOpt.label, '') : getSafeOptionFallback(value));
+                if (fieldType === FieldType.RELATION && resolvedRelationTargetModuleId && value) {
                    const targetModule = String(selectedOpt?.module || resolvedRelationTargetModuleId || '').trim();
                    return (
                       <RelatedRecordPopover
@@ -1871,12 +1912,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                         overlayZIndex={overlayZIndexBase + 40}
                       >
                         <span className="cursor-pointer break-words font-medium text-leather-600 transition-colors hover:text-leather-700 hover:underline">
-                          {resolvedLabel || getSafeOptionFallback(value)}
+                          {formatDisplayText(resolvedLabel, getSafeOptionFallback(value))}
                         </span>
                       </RelatedRecordPopover>
                     );
                }
-               return <span className="text-gray-800">{resolvedLabel}</span>;
+                return <span className="text-gray-800">{formatDisplayText(resolvedLabel, compactMode ? '' : '-')}</span>;
           }
         if (fieldType === FieldType.MULTI_SELECT) {
              const values = Array.isArray(value)
@@ -1887,16 +1928,16 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
              }
              const labels = values.map((item) => {
                const selectedOpt = fieldOptions.find((o: any) => String(o?.value) === String(item));
-               if (selectedOpt?.label) return String(selectedOpt.label);
-               return getSafeOptionFallback(item);
-             });
-             return <span className="text-gray-800 break-words">{labels.join('، ')}</span>;
+                if (selectedOpt?.label) return formatDisplayText(selectedOpt.label, '');
+                return getSafeOptionFallback(item);
+              });
+              return <span className="text-gray-800 break-words">{labels.join('، ')}</span>;
         }
         if (fieldType === FieldType.TAGS) {
              if (Array.isArray(value) && value.length > 0) {
-                 return <div className="flex gap-1">{value.map((t: string, i: number) => <Tag key={i}>{t}</Tag>)}</div>;
-             }
-             return <span>-</span>;
+                  return <div className="flex flex-wrap gap-1">{value.map((t: any, i: number) => <Tag key={String(t?.id || t?.value || i)} color={typeof t === 'object' ? t?.color : undefined}>{formatDisplayText(t, '')}</Tag>)}</div>;
+              }
+              return <span>-</span>;
         }
         if (isLongTextField) {
           const rendered = String(value || '').trim();
@@ -1943,7 +1984,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           );
         }
         
-        return <span className="text-gray-800 break-words">{toPersianNumber(value) || (compactMode ? '' : '-')}</span>;
+        return <span className="text-gray-800 break-words">{formatPersianDisplayText(value, compactMode ? '' : '-')}</span>;
     }
 
     const commonProps = {
@@ -2201,7 +2242,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 <RelatedRecordPopover
                   moduleId={String(filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.module || resolvedRelationTargetModuleId || '')}
                   recordId={String(value)}
-                  label={filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.label || getSafeOptionFallback(value)}
+                  label={formatDisplayText(filteredOptions.find((opt: any) => String(opt?.value) === String(value))?.label, getSafeOptionFallback(value))}
                   overlayZIndex={overlayZIndexBase + 40}
                 >
                   <span className="text-xs text-leather-600 cursor-pointer hover:underline">

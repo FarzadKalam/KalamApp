@@ -1,6 +1,6 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 
-const FUNCTION_BUILD = 'melipayamak-inbound-2026-04-14-02';
+const FUNCTION_BUILD = 'melipayamak-inbound-2026-04-15-01';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,15 +61,43 @@ const readBody = async (req: Request) => {
   if (contentType.includes('application/x-www-form-urlencoded')) {
     return Object.fromEntries(new URLSearchParams(raw).entries());
   }
+  if (raw.includes('=') && raw.includes('&')) {
+    return Object.fromEntries(new URLSearchParams(raw).entries());
+  }
   return { raw_body: raw };
 };
 
 const firstValue = (...values: any[]) => {
   for (const value of values) {
     const normalized = String(value ?? '').trim();
-    if (normalized) return normalized;
+    if (!normalized) continue;
+    if (/^\$[A-Z_]+\$$/.test(normalized)) continue;
+    if (/^\{[A-Z_]+\}$/i.test(normalized)) continue;
+    if (/^%[A-Z_]+%$/i.test(normalized)) continue;
+    return normalized;
   }
   return '';
+};
+
+const pickPayloadValue = (payload: Record<string, any>, keys: string[]) => {
+  for (const key of keys) {
+    const direct = firstValue(payload[key]);
+    if (direct) return direct;
+    const foundKey = Object.keys(payload).find((item) => item.toLowerCase() === key.toLowerCase());
+    if (foundKey) {
+      const value = firstValue(payload[foundKey]);
+      if (value) return value;
+    }
+  }
+  return '';
+};
+
+const compactPayloadText = (payload: Record<string, any>) => {
+  try {
+    return JSON.stringify(payload).slice(0, 1800);
+  } catch {
+    return String(payload || '').slice(0, 1800);
+  }
 };
 
 const fetchSmsSettings = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
@@ -141,13 +169,67 @@ Deno.serve(async (req) => {
       return text(401, 'unauthorized');
     }
 
-    const sender = normalizePhone(firstValue(payload.from, payload.FROM, payload.sender, payload.mobile, payload.source));
-    const recipient = normalizePhone(firstValue(payload.to, payload.TO, payload.recipient, payload.receiver, payload.destination));
-    const messageText = normalizeBodyText(firstValue(payload.body, payload.TEXT, payload.text, payload.message, payload.msg));
-    const providerMessageId = firstValue(payload.id, payload.message_id, payload.msgid, payload.recId, payload.rec_id);
+    const sender = normalizePhone(pickPayloadValue(payload, [
+      'from',
+      'sender',
+      'mobile',
+      'phone',
+      'source',
+      'src',
+      'number',
+      'senderNumber',
+      'SenderNumber',
+    ]));
+    const recipient = normalizePhone(pickPayloadValue(payload, [
+      'to',
+      'recipient',
+      'receiver',
+      'destination',
+      'dst',
+      'line',
+      'shortcode',
+      'receiverNumber',
+      'ReceiverNumber',
+    ]));
+    const messageText = normalizeBodyText(pickPayloadValue(payload, [
+      'body',
+      'text',
+      'message',
+      'msg',
+      'sms',
+      'content',
+      'messageText',
+      'MessageText',
+      'smsText',
+      'SmsText',
+      'TEXT',
+    ]));
+    const providerMessageId = pickPayloadValue(payload, ['id', 'message_id', 'msgid', 'recId', 'rec_id', 'MessageId', 'messageId']);
 
     if (!sender || !recipient || !messageText) {
       console.warn('[melipayamak-inbound] ignored incomplete payload', JSON.stringify({ hasSender: !!sender, hasRecipient: !!recipient, hasText: !!messageText }));
+      await insertInboundSms(supabaseUrl, serviceRoleKey, {
+        org_id: orgId,
+        channel_type: 'sms',
+        direction: 'inbound',
+        provider: 'meli_payamak',
+        provider_message_id: providerMessageId || null,
+        sender: sender || null,
+        recipient: recipient || null,
+        title: 'پیامک ورودی ناقص',
+        message_text: messageText || compactPayloadText(payload) || 'payload ناقص از ملی‌پیامک',
+        status: 'ignored',
+        error_message: 'payload ورودی کامل نبود: فرستنده، گیرنده یا متن پیامک پیدا نشد.',
+        metadata: {
+          provider: 'meli_payamak',
+          method: req.method,
+          query,
+          payload,
+          parse_result: { hasSender: !!sender, hasRecipient: !!recipient, hasText: !!messageText },
+          user_agent: req.headers.get('user-agent') || null,
+        },
+        received_at: new Date().toISOString(),
+      });
       return text(200, 'ok');
     }
 

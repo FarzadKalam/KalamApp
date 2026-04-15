@@ -54,6 +54,7 @@ const ProfilePage: React.FC = () => {
     const [phoneOtpRequested, setPhoneOtpRequested] = useState(false);
     const [profileFieldPermissions, setProfileFieldPermissions] = useState<Record<string, boolean>>({});
     const [activeToggleLoading, setActiveToggleLoading] = useState(false);
+    const [selfAvatarUploading, setSelfAvatarUploading] = useState(false);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityRows, setActivityRows] = useState<any[]>([]);
   const [lastLoginAt, setLastLoginAt] = useState<string | null>(null);
@@ -302,6 +303,7 @@ const ProfilePage: React.FC = () => {
     const effectiveCurrentRoleTitle = String(currentUserRoleTitle || fallbackCurrentRoleTitle || '').trim();
     const canManageUsers = canManageUsersByRoleContext(currentUserRole, effectiveCurrentRoleTitle);
     const canManageSuperAdmin = canManageSuperAdminByRoleContext(currentUserRole, effectiveCurrentRoleTitle);
+    const canEditOwnAvatar = Boolean(currentUserId && record?.id && String(currentUserId) === String(record.id));
 
     const canEditRecord = (currentRecord: any) => {
         if (!canManageUsers) return false;
@@ -361,6 +363,49 @@ const ProfilePage: React.FC = () => {
             message.error('خطا در آپلود عکس');
             return false;
         }
+    };
+
+    const handleSelfAvatarUpload = async (file: File) => {
+        if (!record?.id || !canEditOwnAvatar) {
+            message.error('فقط صاحب این پروفایل می‌تواند عکس خود را بروزرسانی کند.');
+            return false;
+        }
+
+        setSelfAvatarUploading(true);
+        try {
+            const fileExtension = String(file.name.split('.').pop() || 'jpg').trim() || 'jpg';
+            const filePath = `avatars/${record.id}/avatar-${Date.now()}.${fileExtension}`;
+            await uploadFileWithProgress({
+                client: fileStorageClient,
+                bucket: FILE_STORAGE_BUCKET,
+                path: filePath,
+                file,
+                label: file.name || 'آواتار',
+                detail: 'تصویر پروفایل',
+            });
+            const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+            const nextAvatarUrl = String(data?.publicUrl || '').trim();
+            if (!nextAvatarUrl) {
+                throw new Error('لینک تصویر پروفایل تولید نشد.');
+            }
+
+            const { error } = await supabase
+                .from('profiles')
+                .update({ avatar_url: nextAvatarUrl })
+                .eq('id', record.id);
+            if (error) throw error;
+
+            setRecord((prev: any) => ({ ...(prev || {}), avatar_url: nextAvatarUrl }));
+            setAvatarUrl(nextAvatarUrl);
+            message.success('عکس پروفایل بروزرسانی شد.');
+        } catch (error) {
+            if (isUploadCanceledError(error)) return false;
+            message.error('خطا در بروزرسانی عکس پروفایل');
+        } finally {
+            setSelfAvatarUploading(false);
+        }
+
+        return false;
     };
 
     const handleResetPassword = async (email?: string | null) => {
@@ -654,6 +699,24 @@ const ProfilePage: React.FC = () => {
                     >
                         {record.full_name?.[0]?.toUpperCase()}
                     </Avatar>
+                    {canEditOwnAvatar ? (
+                        <div className="mb-4">
+                            <Upload
+                                showUploadList={false}
+                                beforeUpload={handleSelfAvatarUpload}
+                                accept="image/*"
+                                disabled={selfAvatarUploading}
+                            >
+                                <Button
+                                    icon={<UploadOutlined />}
+                                    loading={selfAvatarUploading}
+                                    className="rounded-xl"
+                                >
+                                    بروزرسانی عکس پروفایل
+                                </Button>
+                            </Upload>
+                        </div>
+                    ) : null}
 
                     {/* نمایش فیلدهای اصلی (نام، شغل، وضعیت) */}
                     <h1 className="text-2xl font-black text-gray-800 dark:text-white mb-1">

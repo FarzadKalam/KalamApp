@@ -1004,9 +1004,14 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
     order: 'updated_at.desc',
     limit: 80,
   });
+  const instructionRows = rows.filter((row: any) =>
+    String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
+    || String(row?.metadata?.document_type || '').trim() === 'ai_instructions'
+  );
+  const otherRows = rows.filter((row: any) => !instructionRows.includes(row));
   const tokens = tokenize(query);
-  if (!tokens.length) return rows.slice(0, 4);
-  return rows
+  if (!tokens.length) return [...instructionRows.slice(0, 2), ...otherRows.slice(0, Math.max(0, 4 - instructionRows.slice(0, 2).length))];
+  const scoredRows = otherRows
     .map((row) => {
       const haystack = `${row?.content || ''} ${JSON.stringify(row?.metadata || {})}`.toLowerCase();
       const score = tokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
@@ -1014,7 +1019,8 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
     })
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
+    .slice(0, Math.max(0, 6 - instructionRows.slice(0, 2).length));
+  return [...instructionRows.slice(0, 2), ...scoredRows];
 };
 
 const loadCompanyContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
@@ -1084,6 +1090,16 @@ const buildPromptMessages = (
     title: chunk?.metadata?.document_title || null,
     content: String(chunk?.content || '').slice(0, 1200),
   }));
+  const aiInstructionIds = new Set(
+    knowledgeChunks
+      .filter((chunk: any) =>
+        String(chunk?.metadata?.system_key || '').trim() === 'ai_instructions'
+        || String(chunk?.metadata?.document_type || '').trim() === 'ai_instructions'
+      )
+      .map((chunk: any) => String(chunk?.id || ''))
+  );
+  const aiInstructions = knowledge.filter((chunk) => aiInstructionIds.has(String(chunk.id || '')));
+  const otherKnowledge = knowledge.filter((chunk) => !aiInstructionIds.has(String(chunk.id || '')));
   const contextPayload = {
     company: companyContext,
     current_user: buildUserPromptContext(authContext),
@@ -1095,7 +1111,8 @@ const buildPromptMessages = (
       related_contexts: pageContext.relatedContexts || [],
     },
     retrieved_permitted_contexts: retrievedContexts,
-    organization_knowledge: knowledge,
+    ai_instructions: aiInstructions,
+    organization_knowledge: otherKnowledge,
     user_question: message,
   };
 
@@ -1111,7 +1128,7 @@ const buildPromptMessages = (
     {
       role: 'system',
       content:
-        'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.',
+        'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.',
     },
     ...historyMessages,
     {
@@ -1827,12 +1844,29 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     cross_module_context: crossModuleContext,
     conversation: recentMessages.slice(-16),
     retrieved_contexts: retrievedContexts.slice(0, 4),
-    organization_knowledge: knowledgeChunks.map((chunk, index) => ({
-      index: index + 1,
-      id: chunk.id,
-      title: chunk?.metadata?.document_title || null,
-      content: String(chunk?.content || '').slice(0, 1100),
-    })),
+    ai_instructions: knowledgeChunks
+      .filter((chunk: any) =>
+        String(chunk?.metadata?.system_key || '').trim() === 'ai_instructions'
+        || String(chunk?.metadata?.document_type || '').trim() === 'ai_instructions'
+      )
+      .slice(0, 2)
+      .map((chunk, index) => ({
+        index: index + 1,
+        id: chunk.id,
+        title: chunk?.metadata?.document_title || null,
+        content: String(chunk?.content || '').slice(0, 1100),
+      })),
+    organization_knowledge: knowledgeChunks
+      .filter((chunk: any) =>
+        String(chunk?.metadata?.system_key || '').trim() !== 'ai_instructions'
+        && String(chunk?.metadata?.document_type || '').trim() !== 'ai_instructions'
+      )
+      .map((chunk, index) => ({
+        index: index + 1,
+        id: chunk.id,
+        title: chunk?.metadata?.document_title || null,
+        content: String(chunk?.content || '').slice(0, 1100),
+      })),
   };
 
   const aiResult = await callChatCompletions(providerConfig, [

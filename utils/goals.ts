@@ -4,6 +4,7 @@ import { FieldType } from '../types';
 import {
   canAccessAssignedRecord,
   GOALS_PERMISSION_KEY,
+  resolveModuleGoalAccessPermissions,
   type PermissionMap,
 } from './permissions';
 import {
@@ -109,7 +110,7 @@ export const getGoalUserSelectionValue = (goal?: GoalRecord | null) => {
 
 export const getGoalModuleOptions = (permissions?: PermissionMap | null) =>
   Object.values(MODULES)
-    .filter((module) => permissions?.[module.id]?.view !== false)
+    .filter((module) => resolveModuleGoalAccessPermissions(permissions, module.id).canViewGoal)
     .map((module) => ({
       label: module.titles.fa,
       value: module.id,
@@ -739,12 +740,18 @@ export const executeGoalProgress = async (
     loadScopedRows(goal, mainRange, {
       userId: options.userId,
       roleId: options.roleId,
+      orgId: options.orgId,
+      allowedRoleIds: options.allowedRoleIds,
+      allowedUserIds: options.allowedUserIds,
       permissions: options.permissions,
       cache,
     }),
     loadScopedRows(goal, subRange, {
       userId: options.userId,
       roleId: options.roleId,
+      orgId: options.orgId,
+      allowedRoleIds: options.allowedRoleIds,
+      allowedUserIds: options.allowedUserIds,
       permissions: options.permissions,
       cache,
     }),

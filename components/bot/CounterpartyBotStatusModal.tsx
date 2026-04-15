@@ -19,6 +19,14 @@ const CHANNEL_OPTIONS: Array<{ label: string; value: BotChannel }> = [
   { label: 'بله', value: 'bale' },
 ];
 
+const resolveModalPopupContainer = (trigger?: HTMLElement | null) => {
+  if (typeof document === 'undefined') return (trigger || {}) as HTMLElement;
+  if (!trigger) return document.body;
+  return (
+    trigger.closest('.ant-modal-root, .ant-modal-wrap, .ant-modal') as HTMLElement | null
+  ) || trigger.parentElement || document.body;
+};
+
 export type CounterpartyBotStatusModalProps = {
   open: boolean;
   loading: boolean;
@@ -100,8 +108,9 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
       ) : (
         <div className="space-y-3 text-gray-700 dark:text-gray-200">
           <div className="text-xs text-gray-500 dark:text-gray-400">
-            برای اتصال اولیه، روی «شروع bind» بزنید و کد فعال‌سازی را در همان گروه با `/` ارسال کنید (مثل: `/KALAM-...`).
-            اگر پیام‌ها دیده نمی‌شوند، در @BotFather روبیکا گزینه «دریافت همه پیام‌های کانال و گروه» را فعال کنید.
+            برای اتصال اولیه، روی «شروع bind» بزنید و کد فعال‌سازی را در همان گروه با `/` ارسال کنید
+            (مثل: `/KALAM-...`). اگر پیام‌ها دیده نمی‌شوند، در @BotFather روبیکا گزینه
+            «دریافت همه پیام‌های کانال و گروه» را فعال کنید.
           </div>
           <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-700/40 dark:bg-blue-900/20 dark:text-blue-300">
             وضعیت فعلی: {COUNTERPARTY_BOT_STATUS_LABELS[currentStatus] || currentStatus || 'نامشخص'}
@@ -130,6 +139,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               options={CHANNEL_OPTIONS}
               onChange={(value) => onChangeChannel(value as BotChannel)}
               className="w-full"
+              getPopupContainer={resolveModalPopupContainer}
             />
           </div>
           <div>
@@ -160,6 +170,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               className="w-full"
               optionFilterProp="label"
               placeholder="اگر خالی باشد، همه کاربران مجازند"
+              getPopupContainer={resolveModalPopupContainer}
             />
           </div>
           <div>
@@ -174,6 +185,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               className="w-full"
               optionFilterProp="label"
               placeholder="اگر خالی باشد، همه نقش‌ها مجازند"
+              getPopupContainer={resolveModalPopupContainer}
             />
           </div>
         </div>

@@ -35,9 +35,27 @@ const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
 const initialDarkMode = savedTheme === "dark" || (savedTheme !== "light" && resolveSmartThemeMode() === "dark");
 document.documentElement.classList.toggle("dark", initialDarkMode);
 
+const isStandalonePwa = () => {
+  const byMedia = window.matchMedia?.("(display-mode: standalone)")?.matches;
+  const byNavigator = Boolean((window.navigator as any)?.standalone);
+  return Boolean(byMedia || byNavigator);
+};
+
+const persistInstalledPwaStorage = () => {
+  if (!isStandalonePwa()) return;
+  if (!("storage" in navigator) || typeof navigator.storage?.persist !== "function") return;
+  void navigator.storage.persist().catch(() => undefined);
+};
+
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => undefined);
+    void navigator.serviceWorker
+      .register(`${import.meta.env.BASE_URL}sw.js`, { updateViaCache: "none" })
+      .then((registration) => {
+        registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+        persistInstalledPwaStorage();
+      })
+      .catch(() => undefined);
   });
 }
 

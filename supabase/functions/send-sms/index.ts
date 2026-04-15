@@ -41,7 +41,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'send-sms-2026-04-04-04';
+const FUNCTION_BUILD = 'send-sms-2026-04-15-01';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -166,6 +166,25 @@ const MELIPAYAMAK_STATUS_MESSAGES_FA: Record<string, string> = {
 const getMelipayamakStatusMessageFa = (code: string) =>
   MELIPAYAMAK_STATUS_MESSAGES_FA[String(code || '').trim()] || getMelipayamakMessage(code);
 
+const MELIPAYAMAK_DELIVERY_MESSAGES_FA: Record<string, { label: string; status: string }> = {
+  '0': { label: 'ارسال شده به مخابرات', status: 'sent' },
+  '1': { label: 'رسیده به گوشی', status: 'delivered' },
+  '2': { label: 'نرسیده به گوشی', status: 'not_delivered' },
+  '3': { label: 'خطای مخابراتی', status: 'operator_failed' },
+  '5': { label: 'خطای نامشخص تحویل', status: 'unknown_delivery' },
+  '8': { label: 'رسیده به مخابرات', status: 'sent' },
+  '16': { label: 'نرسیده به مخابرات', status: 'not_delivered' },
+  '35': { label: 'لیست سیاه', status: 'blacklisted' },
+  '100': { label: 'وضعیت تحویل نامشخص', status: 'unknown_delivery' },
+  '200': { label: 'ارسال شده', status: 'sent' },
+  '300': { label: 'فیلتر شده', status: 'filtered' },
+  '400': { label: 'در لیست ارسال', status: 'provider_accepted' },
+  '500': { label: 'عدم پذیرش', status: 'failed' },
+};
+
+const getMelipayamakDeliveryMessageFa = (code: string) =>
+  MELIPAYAMAK_DELIVERY_MESSAGES_FA[String(code || '').trim()] || null;
+
 const parseJsonSafe = (raw: string) => {
   try {
     return raw ? JSON.parse(raw) : null;
@@ -231,6 +250,16 @@ const normalizeSmsUrl = (url: string, mode: SmsMode) => {
     return parsed.toString();
   } catch {
     return url;
+  }
+};
+
+const getSoapMethodUrl = (url: string, method: string) => {
+  try {
+    const parsed = new URL(url || DEFAULT_SMS_SEND_URL);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '').replace(/\/[^/]+$/, `/${method}`);
+    return parsed.toString();
+  } catch {
+    return `https://api.payamak-panel.com/post/send.asmx/${method}`;
   }
 };
 
@@ -561,6 +590,62 @@ const sendSmsWithProvider = async (to: string[], text: string, settings: SmsSett
   };
 };
 
+const querySmsDeliveryStatus = async (
+  recId: string,
+  settings: SmsSettings,
+  baseUrl?: string,
+) => {
+  const normalizedRecId = String(recId || '').trim();
+  const username = String(settings.username || '').trim();
+  const password = String(settings.password || settings.api_key || '').trim();
+  if (!normalizedRecId || !username || !password) return null;
+
+  const configuredBaseUrl = String(baseUrl || settings.base_url || DEFAULT_SMS_SEND_URL);
+  let deliveryBaseUrl = DEFAULT_SMS_SEND_URL;
+  try {
+    const configuredHost = new URL(configuredBaseUrl).hostname;
+    if (/(^|\.)api\.payamak-panel\.com$/i.test(configuredHost)) {
+      deliveryBaseUrl = configuredBaseUrl;
+    }
+  } catch {
+    deliveryBaseUrl = DEFAULT_SMS_SEND_URL;
+  }
+  const deliveryUrl = getSoapMethodUrl(normalizeSmsUrl(deliveryBaseUrl, 'soap'), 'GetDelivery2');
+  const form = new URLSearchParams({
+    UserName: username,
+    PassWord: password,
+    RecId: normalizedRecId,
+  });
+
+  const timeout = createTimeoutSignal(7000);
+  let response: Response;
+  try {
+    response = await fetch(deliveryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: form.toString(),
+      signal: timeout.signal,
+    });
+  } finally {
+    timeout.cleanup();
+  }
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(raw || `HTTP ${response.status}`);
+  }
+
+  const code = decodeSoapScalar(raw);
+  const mapped = getMelipayamakDeliveryMessageFa(code);
+  return {
+    code,
+    label: mapped?.label || `کد وضعیت تحویل: ${code}`,
+    status: mapped?.status || 'unknown_delivery',
+    raw,
+    method: 'soap_get_delivery2',
+  };
+};
+
 const sendSmsWithProviderFallback = async (to: string[], text: string, settings: SmsSettings) => {
   const recipients = Array.from(new Set((to || []).map((value) => normalizeRecipientPhone(String(value || '').trim())).filter(Boolean)));
   const messageText = String(text || '').trim();
@@ -585,7 +670,7 @@ const sendSmsWithProviderFallback = async (to: string[], text: string, settings:
   }
 
   const sendViaRest = async (timeoutMs = 8000) => {
-    const providerResults: Array<{ recipient: string; raw: string; result: string; method: string }> = [];
+    const providerResults: Array<{ recipient: string; raw: string; result: string; method: string; provider_status?: string; provider_status_text?: string; delivery?: Record<string, any> | null }> = [];
 
     for (const recipient of recipients) {
       const payload: Record<string, any> = {
@@ -636,7 +721,30 @@ const sendSmsWithProviderFallback = async (to: string[], text: string, settings:
         throw new Error(`مسیر REST ناموفق بود. ${providerMessage} کد/نتیجه: ${result}`);
       }
 
-      providerResults.push({ recipient, raw, result: result || statusText || 'accepted', method: 'rest_send_sms' });
+      let delivery: Record<string, any> | null = null;
+      const recId = result || statusText || '';
+      if (recId && isNumericLike(recId)) {
+        try {
+          delivery = await querySmsDeliveryStatus(recId, settings);
+        } catch (deliveryError: any) {
+          delivery = {
+            status: 'provider_accepted',
+            label: 'استعلام تحویل ناموفق بود',
+            error: String(deliveryError?.message || deliveryError),
+            method: 'soap_get_delivery2',
+          };
+        }
+      }
+
+      providerResults.push({
+        recipient,
+        raw,
+        result: result || statusText || 'accepted',
+        method: 'rest_send_sms',
+        provider_status: String(retStatus || '').trim() || null,
+        provider_status_text: statusText || null,
+        delivery,
+      });
     }
 
     return {

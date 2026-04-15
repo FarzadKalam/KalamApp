@@ -3,6 +3,13 @@ import { App, Button, Empty, Form, Input, Modal, Popconfirm, Select, Space, Tabl
 import { DeleteOutlined, EditOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import {
+  AI_INSTRUCTIONS_DEFAULT_BODY,
+  AI_INSTRUCTIONS_DOCUMENT_TYPE,
+  AI_INSTRUCTIONS_SYSTEM_KEY,
+  AI_INSTRUCTIONS_TITLE,
+  isAiInstructionsConfigured,
+} from '../../utils/aiKnowledge';
 
 type OrgDocument = {
   id: string;
@@ -11,6 +18,7 @@ type OrgDocument = {
   document_type?: string | null;
   status: 'active' | 'draft' | 'archived';
   updated_at?: string | null;
+  metadata?: Record<string, any> | null;
 };
 
 type KnowledgeFormValues = {
@@ -28,6 +36,7 @@ const DEFAULT_FORM_VALUES: KnowledgeFormValues = {
 };
 
 const DOCUMENT_TYPE_OPTIONS = [
+  { label: 'دستورهای هوش مصنوعی', value: AI_INSTRUCTIONS_DOCUMENT_TYPE },
   { label: 'بیزنس پلن', value: 'business_plan' },
   { label: 'توضیحات کسب و کار', value: 'business_overview' },
   { label: 'SOP / فرایندها', value: 'sop' },
@@ -96,16 +105,57 @@ const AiKnowledgeTab: React.FC = () => {
   const [editingDocument, setEditingDocument] = useState<OrgDocument | null>(null);
 
   const sortedDocuments = useMemo(
-    () => [...documents].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''))),
+    () => [...documents].sort((a, b) => {
+      const aIsSystem = String(a.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE;
+      const bIsSystem = String(b.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE;
+      if (aIsSystem !== bIsSystem) return aIsSystem ? -1 : 1;
+      return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+    }),
     [documents]
   );
+
+  const ensureAiInstructionsDocument = async () => {
+    const { data, error } = await supabase
+      .from('org_documents')
+      .select('id, title, body, document_type, status, updated_at, metadata')
+      .eq('document_type', AI_INSTRUCTIONS_DOCUMENT_TYPE)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const existing = Array.isArray(data) ? (data[0] as OrgDocument | undefined) : undefined;
+    if (existing) return existing;
+
+    const { data: authData } = await supabase.auth.getUser();
+    const { data: inserted, error: insertError } = await supabase
+      .from('org_documents')
+      .insert([{
+        title: AI_INSTRUCTIONS_TITLE,
+        body: AI_INSTRUCTIONS_DEFAULT_BODY,
+        document_type: AI_INSTRUCTIONS_DOCUMENT_TYPE,
+        status: 'active',
+        metadata: {
+          system_key: AI_INSTRUCTIONS_SYSTEM_KEY,
+          is_system_default: true,
+          default_template: true,
+        },
+        created_by: authData?.user?.id || null,
+        updated_by: authData?.user?.id || null,
+      }])
+      .select('id, title, body, document_type, status, updated_at, metadata')
+      .maybeSingle();
+    if (insertError) throw insertError;
+    const insertedDocument = inserted as OrgDocument | null;
+    if (insertedDocument) await rebuildChunks(insertedDocument);
+    return insertedDocument;
+  };
 
   const fetchDocuments = async () => {
     setLoading(true);
     try {
+      await ensureAiInstructionsDocument();
       const { data, error } = await supabase
         .from('org_documents')
-        .select('id, title, body, document_type, status, updated_at')
+        .select('id, title, body, document_type, status, updated_at, metadata')
         .order('updated_at', { ascending: false });
       if (error) throw error;
       setDocuments((data || []) as OrgDocument[]);
@@ -141,6 +191,7 @@ const AiKnowledgeTab: React.FC = () => {
       metadata: {
         document_title: document.title,
         document_type: document.document_type || 'general',
+        system_key: document?.metadata?.system_key || null,
       },
     }));
 
@@ -155,11 +206,12 @@ const AiKnowledgeTab: React.FC = () => {
   };
 
   const openEditModal = (document: OrgDocument) => {
+    const isSystemDocument = String(document.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE;
     setEditingDocument(document);
     form.setFieldsValue({
-      title: document.title || '',
+      title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || ''),
       body: document.body || '',
-      document_type: document.document_type || 'general',
+      document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : (document.document_type || 'general'),
       status: document.status || 'active',
     });
     setModalOpen(true);
@@ -170,12 +222,21 @@ const AiKnowledgeTab: React.FC = () => {
       const values = await form.validateFields();
       setSaving(true);
       const { data: authData } = await supabase.auth.getUser();
+      const isSystemDocument = editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE;
       const payload = {
-        title: values.title.trim(),
+        title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : values.title.trim(),
         body: values.body.trim(),
-        document_type: values.document_type || 'general',
+        document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : (values.document_type || 'general'),
         status: values.status || 'active',
         updated_by: authData?.user?.id || null,
+        metadata: isSystemDocument
+          ? {
+              ...(editingDocument?.metadata || {}),
+              system_key: AI_INSTRUCTIONS_SYSTEM_KEY,
+              is_system_default: true,
+              default_template: !isAiInstructionsConfigured(values.body),
+            }
+          : (editingDocument?.metadata || {}),
       };
 
       let nextDocument: OrgDocument | null = null;
@@ -184,16 +245,16 @@ const AiKnowledgeTab: React.FC = () => {
           .from('org_documents')
           .update(payload)
           .eq('id', editingDocument.id)
-          .select('id, title, body, document_type, status, updated_at')
-          .maybeSingle();
+            .select('id, title, body, document_type, status, updated_at, metadata')
+            .maybeSingle();
         if (error) throw error;
         nextDocument = data as OrgDocument;
       } else {
         const { data, error } = await supabase
           .from('org_documents')
-          .insert([{ ...payload, created_by: authData?.user?.id || null }])
-          .select('id, title, body, document_type, status, updated_at')
-          .maybeSingle();
+            .insert([{ ...payload, created_by: authData?.user?.id || null }])
+            .select('id, title, body, document_type, status, updated_at, metadata')
+            .maybeSingle();
         if (error) throw error;
         nextDocument = data as OrgDocument;
       }
@@ -214,6 +275,11 @@ const AiKnowledgeTab: React.FC = () => {
   };
 
   const handleDelete = async (documentId: string) => {
+    const targetDocument = documents.find((item) => item.id === documentId);
+    if (targetDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE) {
+      message.warning('رکورد دستورهای هوش مصنوعی قابل حذف نیست.');
+      return;
+    }
     try {
       const { error } = await supabase.from('org_documents').delete().eq('id', documentId);
       if (error) throw error;
@@ -260,7 +326,14 @@ const AiKnowledgeTab: React.FC = () => {
             render: (value: string, row: OrgDocument) => (
               <div>
                 <div className="font-medium">{value || '-'}</div>
-                <div className="text-xs text-gray-400">{row.document_type || 'general'}</div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
+                  <span>{row.document_type || 'general'}</span>
+                  {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE ? (
+                    <Tag color={isAiInstructionsConfigured(row.body) ? 'magenta' : 'gold'} className="!m-0">
+                      {isAiInstructionsConfigured(row.body) ? 'تنظیم‌شده' : 'نیازمند تنظیم'}
+                    </Tag>
+                  ) : null}
+                </div>
               </div>
             ),
           },
@@ -291,9 +364,11 @@ const AiKnowledgeTab: React.FC = () => {
                 <Button size="small" icon={<ReloadOutlined />} onClick={() => handleRebuild(row)}>
                   بازسازی
                 </Button>
-                <Popconfirm title="این سند حذف شود؟" onConfirm={() => handleDelete(row.id)}>
-                  <Button size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
+                {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE ? null : (
+                  <Popconfirm title="این سند حذف شود؟" onConfirm={() => handleDelete(row.id)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                )}
               </Space>
             ),
           },
@@ -318,10 +393,10 @@ const AiKnowledgeTab: React.FC = () => {
               className="md:col-span-2"
               rules={[{ required: true, message: 'عنوان را وارد کنید.' }]}
             >
-              <Input />
+              <Input disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE} />
             </Form.Item>
             <Form.Item label="نوع سند" name="document_type">
-              <Select options={DOCUMENT_TYPE_OPTIONS} />
+              <Select options={DOCUMENT_TYPE_OPTIONS} disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE} />
             </Form.Item>
             <Form.Item label="وضعیت" name="status">
               <Select options={STATUS_OPTIONS} />

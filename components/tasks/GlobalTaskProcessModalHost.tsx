@@ -36,7 +36,6 @@ const resolveTaskProcessTarget = (task: any): TaskProcessTarget | null => {
 const TASK_MODAL_SELECT_COLUMNS = [
   'id',
   'name',
-  'title',
   'status',
   'related_to_module',
   'source_module_id',
@@ -69,6 +68,11 @@ const GlobalTaskProcessModalHost: React.FC = () => {
       const resolvedTaskId = String(detail?.taskId || providedTask?.id || '').trim();
       if (!resolvedTaskId) return;
       if (!mountedRef.current) return;
+      if (providedTask) {
+        setTask(providedTask);
+        setHostKey((prev) => prev + 1);
+        return;
+      }
       setLoading(true);
       try {
         const result = await runSelectWithCompatibleColumns<any>({
@@ -96,9 +100,6 @@ const GlobalTaskProcessModalHost: React.FC = () => {
           message.error('باز کردن جزئیات فعالیت ناموفق بود.');
           return;
         }
-        if (!mountedRef.current) return;
-        setTask(providedTask);
-        setHostKey((prev) => prev + 1);
       } finally {
         if (mountedRef.current) setLoading(false);
       }

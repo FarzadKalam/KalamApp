@@ -37,6 +37,9 @@ const getFieldOptions = (
   relationOptions: Record<string, Array<{ label: string; value: string }>>
 ) => {
   if (!field) return [];
+  if (relationOptions[field.key]?.length) {
+    return relationOptions[field.key] || [];
+  }
   if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) {
     return (field.options || []).map((opt) => ({
       label: String(opt?.label ?? opt?.value ?? ''),

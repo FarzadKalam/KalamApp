@@ -26,6 +26,7 @@ import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { serializeNoteContent } from './noteContent';
 import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './intervalSchedule';
+import { fetchAssigneeDirectory } from './referenceData';
 
 type AutomationActor = {
   id?: string | null;
@@ -169,8 +170,12 @@ const isRunnableProcessAutomationCondition = (condition: WorkflowCondition) => {
 const renderAutomationTemplateWithBoldMarkers = (
   template: string,
   record: Record<string, any>,
-  moduleId?: string | null
-) => renderTemplateText(template, record, { moduleId, bold: true });
+  moduleId?: string | null,
+  assigneeDirectory?: Awaited<ReturnType<typeof fetchAssigneeDirectory>> | null
+) => renderTemplateText(template, record, { moduleId, bold: true, assigneeDirectory });
+
+const templateMayNeedAssigneeDirectory = (template: string) =>
+  /\{\{\s*[^}]*assignee[^}]*\s*\}\}/i.test(String(template || ''));
 
 const buildMentionTargetFromTask = (task: Record<string, any> | null | undefined): MentionTarget => {
   if (!task) return { userIds: [], roleIds: [] };
@@ -605,10 +610,15 @@ const insertAutomationNote = async (
   });
   const sourceLink = resolveTaskSourceLink(task);
   const resolvedModuleId = sourceLink.moduleId || 'tasks';
+  const noteTemplate = getRuleNoteText(rule);
+  const assigneeDirectory = templateMayNeedAssigneeDirectory(noteTemplate)
+    ? await fetchAssigneeDirectory(supabase).catch(() => null)
+    : null;
   const noteText = renderAutomationTemplateWithBoldMarkers(
-    getRuleNoteText(rule),
+    noteTemplate,
     actionRecord,
-    resolvedModuleId
+    resolvedModuleId,
+    assigneeDirectory
   ).trim();
   const attachments = await resolveNoteAttachmentsFromFields({
     currentRecord: actionRecord,

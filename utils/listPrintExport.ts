@@ -91,6 +91,35 @@ const resolveAssigneeComboLabel = (
     : (resolveOptionLabel(userOptions, assigneeId) || resolveOptionLabel(Object.values(relationOptions).flat(), assigneeId));
 };
 
+const resolveAssigneeRecordLabel = (
+  row: Record<string, any>,
+  relationOptions: Record<string, any[]>,
+): string => {
+  const assigneeType = String(row?.assignee_type || '').trim().toLowerCase() === 'role' ? 'role' : 'user';
+  const resolvedAssigneeId = getResolvedAssigneeId(row);
+  if (!resolvedAssigneeId) {
+    return String(row?.assignee_name || row?.responsible_name || row?.created_by_name || '-');
+  }
+
+  const roleOptions = [
+    ...(relationOptions.org_roles || []),
+    ...(relationOptions.roles || []),
+    ...(relationOptions.assignee_role_id || []),
+  ];
+  const userOptions = [
+    ...(relationOptions.assignee_id || []),
+    ...(relationOptions.profiles || []),
+  ];
+  const comboLabel = resolveAssigneeComboLabel(`${assigneeType}_${resolvedAssigneeId}`, relationOptions);
+  const directLabel = assigneeType === 'role'
+    ? resolveOptionLabel(roleOptions, resolvedAssigneeId)
+    : resolveOptionLabel(userOptions, resolvedAssigneeId);
+
+  return directLabel
+    || comboLabel
+    || String(row?.assignee_name || row?.responsible_name || row?.created_by_name || resolvedAssigneeId);
+};
+
 const formatArrayItemLabel = (
   item: any,
   field: ListFieldDefinition,
@@ -171,28 +200,15 @@ export const formatListCellValue = (
 ): string => {
   const key = String(field?.key || '').trim();
   if (key === ASSIGNEE_DISPLAY_FIELD_KEY) {
-    const assigneeType = String(row?.assignee_type || '').trim().toLowerCase();
-    const resolvedAssigneeId = getResolvedAssigneeId(row);
-    if (!resolvedAssigneeId) {
-      return String(row?.assignee_name || row?.responsible_name || row?.created_by_name || '-');
-    }
-    const roleOptions = [
-      ...(relationOptions.org_roles || []),
-      ...(relationOptions.roles || []),
-    ];
-    const userOptions = [
-      ...(relationOptions.assignee_id || []),
-      ...(relationOptions.profiles || []),
-    ];
-    const label =
-      assigneeType === 'role'
-        ? resolveOptionLabel(roleOptions, resolvedAssigneeId)
-        : resolveOptionLabel(userOptions, resolvedAssigneeId);
-    return label || String(row?.assignee_name || row?.responsible_name || row?.created_by_name || resolvedAssigneeId);
+    return formatDigitsForLocale(resolveAssigneeRecordLabel(row, relationOptions), digitLocale);
   }
 
   const rawValue = row?.[key];
   const parsedArrayValue = parseArrayLikeValue(rawValue);
+
+  if (key === 'assignee_id' && (row?.assignee_type || row?.assignee_role_id)) {
+    return formatDigitsForLocale(resolveAssigneeRecordLabel(row, relationOptions), digitLocale);
+  }
 
   if (rawValue === null || rawValue === undefined || rawValue === '') return '-';
 

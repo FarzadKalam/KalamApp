@@ -5484,7 +5484,7 @@ const ModuleShow: React.FC = () => {
   };
 
   return (
-    <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-x-hidden pl-0 md:pl-16 scrollbar-wide">
+    <div className="p-4 pt-1 md:p-6 md:pt-1 max-w-[1600px] mx-auto pb-20 transition-all overflow-x-hidden pl-0 md:pl-[88px] scrollbar-wide">
       <div className="mb-4 md:mb-0">
         <RelatedSidebar
           moduleConfig={moduleConfig}

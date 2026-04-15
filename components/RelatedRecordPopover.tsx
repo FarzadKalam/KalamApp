@@ -95,6 +95,23 @@ const resolveStatusColor = (rawColor: any) => {
   return COLOR_MAP[color] || '#475569';
 };
 
+const getPlainObject = (value: any): Record<string, any> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, any>;
+};
+
+const SMS_PROVIDER_STATUS_LABELS: Record<string, string> = {
+  provider_accepted: 'پذیرفته‌شده توسط سرویس‌دهنده',
+  sent: 'ارسال شده',
+  delivered: 'رسیده به گوشی',
+  not_delivered: 'نرسیده به گوشی',
+  operator_failed: 'خطای مخابراتی',
+  filtered: 'فیلتر شده',
+  blacklisted: 'لیست سیاه',
+  unknown_delivery: 'وضعیت تحویل نامشخص',
+  failed: 'ناموفق',
+};
+
 const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   moduleId,
   recordId,
@@ -208,6 +225,57 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       color: resolveStatusColor(option?.color),
     };
   }, [moduleConfig, record]);
+
+  const smsProviderDetails = useMemo(() => {
+    if (moduleId !== 'sms_delivery_reports' || !record) return [];
+    const metadata = getPlainObject(record?.metadata);
+    const details = [
+      {
+        key: 'provider_message_id',
+        label: 'شناسه پیام ملی‌پیامک',
+        value: record?.provider_message_id || metadata.provider_result,
+      },
+      {
+        key: 'provider_status',
+        label: 'وضعیت پاسخ API',
+        value: metadata.provider_status_text || metadata.provider_status,
+      },
+      {
+        key: 'delivery_code',
+        label: 'کد تحویل ملی‌پیامک',
+        value: metadata.delivery_code,
+      },
+      {
+        key: 'delivery_label',
+        label: 'شرح تحویل',
+        value: metadata.delivery_label || SMS_PROVIDER_STATUS_LABELS[String(metadata.delivery_status || record?.status || '').trim()],
+      },
+      {
+        key: 'provider_method',
+        label: 'روش ارسال/استعلام',
+        value: [metadata.provider_method, metadata.delivery_method].filter(Boolean).join(' / '),
+      },
+      {
+        key: 'delivery_error',
+        label: 'خطای استعلام تحویل',
+        value: metadata.delivery_error,
+      },
+      {
+        key: 'provider_raw',
+        label: 'پاسخ خام ارسال',
+        value: metadata.provider_raw,
+      },
+      {
+        key: 'delivery_raw',
+        label: 'پاسخ خام تحویل',
+        value: metadata.delivery_raw,
+      },
+    ];
+
+    return details
+      .map((item) => ({ ...item, value: String(item.value ?? '').trim() }))
+      .filter((item) => item.value);
+  }, [moduleId, record]);
 
   const previewTitle = useMemo(() => {
     if (!moduleConfig) return label || recordId || '-';
@@ -567,6 +635,21 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
                 <div className="text-right min-w-0 break-words">{renderFieldValue(field)}</div>
               </div>
             ))}
+            {smsProviderDetails.length > 0 && (
+              <div className="mt-3 rounded-lg border border-cyan-100 bg-cyan-50/60 p-2 dark:border-cyan-900/50 dark:bg-cyan-950/20">
+                <div className="mb-2 text-[11px] font-bold text-cyan-800 dark:text-cyan-200">جزئیات ملی‌پیامک</div>
+                <div className="space-y-1.5">
+                  {smsProviderDetails.map((item) => (
+                    <div key={item.key} className="grid grid-cols-[120px_1fr] gap-2 items-start">
+                      <span className="text-gray-500 dark:text-gray-400">{item.label}</span>
+                      <span className="min-w-0 break-words font-medium persian-number text-gray-800 dark:text-gray-100">
+                        {toPersianNumber(item.value)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
