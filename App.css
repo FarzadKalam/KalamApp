@@ -486,6 +486,7 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
 }
 
 .notifications-drawer.ant-drawer-top .ant-drawer-content-wrapper {
+  top: var(--app-viewport-offset-top, 0px) !important;
   height: var(--app-viewport-height, 100dvh) !important;
   max-height: var(--app-viewport-height, 100dvh) !important;
   backface-visibility: hidden;

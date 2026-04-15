@@ -41,6 +41,7 @@ import WebFormBuilderPage from "./pages/WebFormBuilderPage";
 import ReportsHubPage from "./pages/ReportsHubPage";
 import ReportBuilderPage from "./pages/ReportBuilderPage";
 import ReportViewerPage from "./pages/ReportViewerPage";
+import PublicSite from "./pages/PublicSite";
 import WorkSchedulesPage from "./pages/WorkSchedulesPage";
 import HrQuickRequestPage from "./pages/HrQuickRequestPage";
 import RecycleBinPage from "./pages/RecycleBinPage";
@@ -215,7 +216,7 @@ function App() {
   }, [branding]);
 
   useEffect(() => {
-    const publicPaths = ["/inquiry", "/login"];
+    const publicPaths = ["/inquiry", "/login", "/tazesystem"];
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       const eventName = String(event);
@@ -424,6 +425,7 @@ function App() {
         }}
       >
         <Routes>
+          <Route path="/tazesystem/*" element={<PublicSite />} />
           <Route path="/login" element={<Login />} />
           <Route path="/inquiry/*" element={<InquiryForm />} />
 

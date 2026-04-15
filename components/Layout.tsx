@@ -196,6 +196,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       );
 
       document.documentElement.style.setProperty('--app-viewport-height', `${Math.round(viewportHeight)}px`);
+      document.documentElement.style.setProperty('--app-viewport-offset-top', `${Math.round(viewportOffsetTop)}px`);
       document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardInset}px`);
       document.documentElement.style.setProperty('--app-mobile-footer-height', keyboardVisible ? '0px' : '64px');
       setIsKeyboardVisible(keyboardVisible);
