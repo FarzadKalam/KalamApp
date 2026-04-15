@@ -45,7 +45,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
-import { buildClientFallbackSystemCode, shouldUseClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRelationOptionsForField, RELATION_DEFAULT_LIMIT } from '../utils/relationOptions';
 import { mergeSelectOptions } from '../utils/selectOptions';
@@ -1631,10 +1631,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
     let { insertResult, writablePayload } = await insertWithColumnFallback(initialPayload);
 
-    if (
+    for (
+      let attempt = 0;
       insertResult.error
-      && shouldUseClientFallbackSystemCode(quickCreateTargetModuleId)
+      && supportsSystemCode(quickCreateTargetModuleId)
       && (isDuplicateSystemCodeError(insertResult.error) || isStatementTimeoutError(insertResult.error))
+      && attempt < 3;
+      attempt += 1
     ) {
       const fallbackSystemCode = await buildClientFallbackSystemCode(
         supabase,
@@ -1700,7 +1703,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       }
 
       const normalizedPayload = normalizeQuickCreatePayload(payload);
-      if (shouldUseClientFallbackSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
+      if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
         normalizedPayload.system_code = await buildClientFallbackSystemCode(
           supabase,
           quickCreateTargetModuleId,

@@ -75,6 +75,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const intervalRunnerBusyRef = useRef(false);
   const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
+  const wasMobileViewportRef = useRef(window.innerWidth < 768);
   
   const navigate = useNavigate();
   const location = useLocation();
@@ -225,11 +226,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const handleResize = () => {
       const width = window.innerWidth;
       const mobile = width < 768;
+      const wasMobile = wasMobileViewportRef.current;
+      wasMobileViewportRef.current = mobile;
       updateViewportVars();
 
       setIsMobile(mobile);
       
-      if (mobile) {
+      if (mobile && !wasMobile) {
         setCollapsed(true);
       }
     };
@@ -764,7 +767,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       
       {isMobile && !collapsed && (
         <div 
-          className="fixed inset-0 z-[1180] bg-black/50 backdrop-blur-sm transition-opacity duration-300"
+          className="fixed inset-y-0 left-0 z-[1180] bg-black/50 backdrop-blur-sm transition-opacity duration-300"
+          style={{ right: 260 }}
           onClick={() => setCollapsed(true)}
         />
       )}

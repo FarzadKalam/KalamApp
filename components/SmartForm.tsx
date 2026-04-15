@@ -28,7 +28,7 @@ import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getCachedAuthUser } from '../utils/sessionCache';
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { buildClientFallbackSystemCode, shouldUseClientFallbackSystemCode } from '../utils/systemCode';
+import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { syncRecordTags } from '../utils/recordTags';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
@@ -1481,7 +1481,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             : { ...payload, updated_by: userId };
         };
         const persistWithAuditFallback = async (mode: 'create' | 'update', payload: Record<string, any>, targetRecordId?: string) => {
-          if (mode === 'create' && shouldUseClientFallbackSystemCode(module.id) && !payload.system_code) {
+          if (mode === 'create' && supportsSystemCode(module.id) && !payload.system_code) {
             payload.system_code = await buildClientFallbackSystemCode(supabase, module.id, module.table);
           }
           let writablePayload = { ...payload };
@@ -1536,10 +1536,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 .single();
             }
           }
-          if (
+          for (
+            let attempt = 0;
             insertResult.error
-            && shouldUseClientFallbackSystemCode(module.id)
+            && supportsSystemCode(module.id)
             && (isStatementTimeoutError(insertResult.error) || isDuplicateSystemCodeError(insertResult.error))
+            && attempt < 3;
+            attempt += 1
           ) {
             const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, module.id, module.table);
             const payloadWithSystemCode = { ...writablePayload, system_code: fallbackSystemCode };

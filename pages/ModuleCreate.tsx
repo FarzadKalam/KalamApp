@@ -14,7 +14,7 @@ import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
 import { fetchCurrentUserRoleContext } from "../utils/permissions";
 import { getCachedAuthUser } from "../utils/sessionCache";
-import { buildClientFallbackSystemCode, shouldUseClientFallbackSystemCode } from "../utils/systemCode";
+import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
 import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
 import { normalizeOperationalDocumentTotals } from "../utils/operationalDocumentTotals";
@@ -25,6 +25,12 @@ const isUuid = (value: any) =>
 const isStatementTimeoutError = (error: any) =>
   String(error?.code || "").trim() === "57014"
   || String(error?.message || "").toLowerCase().includes("statement timeout");
+
+const isDuplicateSystemCodeError = (error: any) => {
+  const code = String(error?.code || "").toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || "").toLowerCase();
+  return code === "23505" && (text.includes("system_code") || text.includes("org_system_code"));
+};
 
 const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) => {
   const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
@@ -314,7 +320,7 @@ export const ModuleCreate = () => {
               const normalizedPayload = moduleId
                 ? normalizeOperationalDocumentTotals(moduleId, payload)
                 : payload;
-              if (moduleId && shouldUseClientFallbackSystemCode(moduleId) && !normalizedPayload.system_code) {
+              if (moduleId && supportsSystemCode(moduleId) && !normalizedPayload.system_code) {
                 normalizedPayload.system_code = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
               }
               let insertResult = await supabase
@@ -330,12 +336,14 @@ export const ModuleCreate = () => {
                   .select("id")
                   .single();
               }
-              if (
+              for (
+                let attempt = 0;
                 insertResult.error
                 && moduleId
-                && shouldUseClientFallbackSystemCode(moduleId)
-                && !normalizedPayload.system_code
-                && isStatementTimeoutError(insertResult.error)
+                && supportsSystemCode(moduleId)
+                && (isStatementTimeoutError(insertResult.error) || isDuplicateSystemCodeError(insertResult.error))
+                && attempt < 3;
+                attempt += 1
               ) {
                 const fallbackSystemCode = await buildClientFallbackSystemCode(supabase, moduleId, moduleConfig.table);
                 const payloadWithSystemCode = { ...normalizedPayload, system_code: fallbackSystemCode };

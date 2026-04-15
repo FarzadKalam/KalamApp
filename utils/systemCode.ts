@@ -32,12 +32,6 @@ export const supportsSystemCode = (moduleName?: string | null) => {
   return MODULES_WITH_SYSTEM_CODE.has(normalized);
 };
 
-export const shouldUseClientFallbackSystemCode = (moduleName?: string | null) => {
-  const normalized = String(moduleName || '').trim();
-  if (!supportsSystemCode(normalized)) return false;
-  return normalized !== 'customers';
-};
-
 const SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE = 'module_settings';
 
 const DEFAULT_SYSTEM_CODE_START_NUMBER = 100;
@@ -331,11 +325,14 @@ export const buildClientFallbackSystemCode = async (
     const cacheKey = `${sourceTable}:${orgId || '__global__'}:${prefix}`;
     const cachedLastNumber = generatedSystemCodeLastNumbers.get(cacheKey);
 
-    let maxExistingNumber =
-      cachedLastNumber ??
-      (await getCounterLastNumber(supabaseClient, sourceTable, orgId, prefix)) ??
-      (await getRpcLastNumber(supabaseClient, sourceTable, orgId, prefix)) ??
-      (await scanLastSystemCodeNumber(supabaseClient, sourceTable, orgId, prefix));
+    const counterLastNumber = await getCounterLastNumber(supabaseClient, sourceTable, orgId, prefix);
+    const rpcLastNumber = await getRpcLastNumber(supabaseClient, sourceTable, orgId, prefix);
+    const knownLastNumbers = [cachedLastNumber, counterLastNumber, rpcLastNumber]
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    let maxExistingNumber = knownLastNumbers.length > 0
+      ? Math.max(...knownLastNumbers)
+      : await scanLastSystemCodeNumber(supabaseClient, sourceTable, orgId, prefix);
 
     maxExistingNumber = Math.max(Number(maxExistingNumber) || 0, startNumber - 1);
     const nextNumber = Math.min(maxExistingNumber + 1, MAX_SYSTEM_CODE_SEQUENCE_NUMBER);

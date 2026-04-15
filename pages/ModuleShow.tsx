@@ -76,6 +76,18 @@ import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
 import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
 
+const isStatementTimeoutError = (error: any) => {
+  const code = String(error?.code || '').trim();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return code === '57014' || text.includes('statement timeout');
+};
+
+const isDuplicateSystemCodeError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return code === '23505' && (text.includes('system_code') || text.includes('org_system_code'));
+};
+
 const toFaAccountingSyncError = (raw: unknown): string => {
   const text = String(raw || '').trim();
   if (!text) return 'خطا در صدور سند حسابداری.';
@@ -4954,12 +4966,30 @@ const ModuleShow: React.FC = () => {
         created_by: values?.created_by ?? authUserId ?? undefined,
         updated_by: values?.updated_by ?? authUserId ?? undefined,
       };
+      if (supportsSystemCode('customers') && !customerPayload.system_code) {
+        customerPayload.system_code = await buildClientFallbackSystemCode(supabase, 'customers', 'customers');
+      }
 
-      const { data: insertedCustomer, error: insertError } = await supabase
+      let { data: insertedCustomer, error: insertError } = await supabase
         .from('customers')
         .insert(customerPayload)
         .select('id')
         .single();
+      for (
+        let attempt = 0;
+        insertError
+        && supportsSystemCode('customers')
+        && (isDuplicateSystemCodeError(insertError) || isStatementTimeoutError(insertError))
+        && attempt < 3;
+        attempt += 1
+      ) {
+        customerPayload.system_code = await buildClientFallbackSystemCode(supabase, 'customers', 'customers');
+        ({ data: insertedCustomer, error: insertError } = await supabase
+          .from('customers')
+          .insert(customerPayload)
+          .select('id')
+          .single());
+      }
       if (insertError) throw insertError;
 
       const customerId = insertedCustomer?.id;

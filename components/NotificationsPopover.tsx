@@ -36,6 +36,16 @@ import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
 import AiSparkleIcon from './ai/AiSparkleIcon';
+import {
+  buildNoteConversations,
+  buildSmsThreads,
+  buildVoipThreads,
+  getSmsThreadKey,
+  getVoipThreadKey,
+  normalizePhoneThreadValue,
+  resolveSmsCounterpartyPhone,
+  resolveVoipCounterpartyPhone,
+} from '../utils/notificationViewModels';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -310,54 +320,6 @@ const buildNotificationStateKey = (
   sourceType: string,
   sourceId: string,
 ) => `${section}:${String(sourceType || '').trim()}:${String(sourceId || '').trim()}`;
-
-const normalizePhoneThreadValue = (value: any) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  let digits = raw.replace(/\D/g, '');
-  if (!digits) return raw;
-  if (digits.startsWith('0098')) {
-    digits = digits.slice(4);
-  } else if (digits.startsWith('98') && digits.length >= 12) {
-    digits = digits.slice(2);
-  }
-  if (digits.length > 10 && digits.startsWith('0')) {
-    digits = digits.slice(1);
-  }
-  return digits || raw;
-};
-
-const resolveSmsCounterpartyPhone = (row: any) => {
-  const direction = String(row?.direction || '').trim().toLowerCase();
-  if (direction === 'inbound') {
-    return String(row?.sender || row?.phone_number || '').trim();
-  }
-  return String(row?.recipient || row?.phone_number || '').trim();
-};
-
-const getSmsThreadKey = (row: any) => {
-  const phone = resolveSmsCounterpartyPhone(row);
-  const normalizedPhone = normalizePhoneThreadValue(phone);
-  if (normalizedPhone) return `sms:${normalizedPhone}`;
-  const fallbackId = String(row?.id || '').trim();
-  return fallbackId ? `sms:${fallbackId}` : 'sms:unknown';
-};
-
-const resolveVoipCounterpartyPhone = (row: any) => {
-  const direction = String(row?.direction || '').trim().toLowerCase();
-  if (direction === 'incoming') {
-    return String(row?.source_number || row?.title || '').trim();
-  }
-  return String(row?.destination_number || row?.title || '').trim();
-};
-
-const getVoipThreadKey = (row: any) => {
-  const phone = resolveVoipCounterpartyPhone(row);
-  const normalizedPhone = normalizePhoneThreadValue(phone);
-  if (normalizedPhone) return `voip:${normalizedPhone}`;
-  const fallbackId = String(row?.id || '').trim();
-  return fallbackId ? `voip:${fallbackId}` : 'voip:unknown';
-};
 
 const getResponsibilitySourceType = (item: any) =>
   String(MODULES[String(item?.module_id || '')]?.table || item?.module_id || 'responsibility').trim();
@@ -2605,118 +2567,29 @@ useEffect(() => {
   const chatTotalCount = notesCount + botMessagesCount + smsMessagesCount + voipCallsCount;
   const alertsTotalCount = tasksCount + responsibilitiesCount;
   const totalCount = variant === 'chat' ? chatTotalCount : alertsTotalCount;
-  const smsThreads = useMemo<SmsThreadItem[]>(() => {
-    const groups = new Map<string, SmsThreadItem>();
-    smsMessages.forEach((row: any) => {
-      const threadId = getSmsThreadKey(row);
-      const messageAt = new Date(row?.message_at || row?.created_at || 0).getTime();
-      const phone = resolveSmsCounterpartyPhone(row);
-      const moduleId = String(row?.module_id || '').trim();
-      const recordId = String(row?.record_id || '').trim();
-      const title = (
-        moduleId && recordId
-          ? recordTitleMap[buildRecordReferenceKey(moduleId, recordId)]
-          : ''
-      ) || String(row?.title || '').trim() || phone || 'شماره ناشناس';
-      const preview = String(row?.message_text || '').trim() || (String(row?.direction || '').trim() === 'inbound' ? 'پیامک ورودی' : 'پیامک');
-      const unreadCount = (
-        String(row?.direction || '').trim() === 'inbound'
-        && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), seenSmsMessageIds.has(String(row?.id || '').trim()))
-      ) ? 1 : 0;
-      const current = groups.get(threadId);
-      if (!current) {
-        groups.set(threadId, {
-          id: threadId,
-          phone,
-          title,
-          preview,
-          unreadCount,
-          latestMessageAt: Number.isFinite(messageAt) ? messageAt : 0,
-          messages: [row],
-          moduleId: moduleId || null,
-          recordId: recordId || null,
-        });
-        return;
-      }
-      current.messages.push(row);
-      current.unreadCount += unreadCount;
-      if (Number.isFinite(messageAt) && messageAt >= current.latestMessageAt) {
-        current.latestMessageAt = messageAt;
-        current.preview = preview;
-        current.title = title;
-        current.phone = phone;
-        current.moduleId = moduleId || current.moduleId;
-        current.recordId = recordId || current.recordId;
-      }
-    });
-    return Array.from(groups.values())
-      .map((thread) => ({
-        ...thread,
-        messages: [...thread.messages].sort((a: any, b: any) => new Date(a?.message_at || a?.created_at || 0).getTime() - new Date(b?.message_at || b?.created_at || 0).getTime()),
-      }))
-      .sort((a, b) => {
-        if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
-        if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
-        return String(a.title || '').localeCompare(String(b.title || ''), 'fa');
-      });
-  }, [isNotificationRead, recordTitleMap, seenSmsMessageIds, smsMessages]);
+  const smsThreads = useMemo<SmsThreadItem[]>(
+    () => buildSmsThreads({
+      messages: smsMessages,
+      recordTitleMap,
+      seenSmsMessageIds,
+      isNotificationRead,
+    }),
+    [isNotificationRead, recordTitleMap, seenSmsMessageIds, smsMessages]
+  );
   const selectedSmsThread = useMemo(
     () => smsThreads.find((thread) => thread.id === selectedSmsThreadKey) || smsThreads[0] || null,
     [selectedSmsThreadKey, smsThreads]
   );
   const displayedSmsMessages = selectedSmsThread?.messages || [];
-  const voipThreads = useMemo<VoipThreadItem[]>(() => {
-    const groups = new Map<string, VoipThreadItem>();
-    voipCalls.forEach((row: any) => {
-      const threadId = getVoipThreadKey(row);
-      const eventAt = new Date(row?.started_at || row?.created_at || 0).getTime();
-      const phone = resolveVoipCounterpartyPhone(row);
-      const moduleId = String(row?.module_id || '').trim();
-      const recordId = String(row?.record_id || '').trim();
-      const title = (
-        moduleId && recordId
-          ? recordTitleMap[buildRecordReferenceKey(moduleId, recordId)]
-          : ''
-      ) || String(row?.title || '').trim() || phone || 'تماس ورودی';
-      const unreadCount = (
-        String(row?.direction || '').trim() === 'incoming'
-        && !isNotificationRead('voip_calls', 'voip_call', String(row?.id || '').trim(), seenVoipCallIds.has(String(row?.id || '').trim()))
-      ) ? 1 : 0;
-      const current = groups.get(threadId);
-      if (!current) {
-        groups.set(threadId, {
-          id: threadId,
-          phone,
-          title,
-          unreadCount,
-          latestEventAt: Number.isFinite(eventAt) ? eventAt : 0,
-          calls: [row],
-          moduleId: moduleId || null,
-          recordId: recordId || null,
-        });
-        return;
-      }
-      current.calls.push(row);
-      current.unreadCount += unreadCount;
-      if (Number.isFinite(eventAt) && eventAt >= current.latestEventAt) {
-        current.latestEventAt = eventAt;
-        current.title = title;
-        current.phone = phone;
-        current.moduleId = moduleId || current.moduleId;
-        current.recordId = recordId || current.recordId;
-      }
-    });
-    return Array.from(groups.values())
-      .map((thread) => ({
-        ...thread,
-        calls: [...thread.calls].sort((a: any, b: any) => new Date(b?.started_at || b?.created_at || 0).getTime() - new Date(a?.started_at || a?.created_at || 0).getTime()),
-      }))
-      .sort((a, b) => {
-        if (b.latestEventAt !== a.latestEventAt) return b.latestEventAt - a.latestEventAt;
-        if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
-        return String(a.title || '').localeCompare(String(b.title || ''), 'fa');
-      });
-  }, [isNotificationRead, recordTitleMap, seenVoipCallIds, voipCalls]);
+  const voipThreads = useMemo<VoipThreadItem[]>(
+    () => buildVoipThreads({
+      calls: voipCalls,
+      recordTitleMap,
+      seenVoipCallIds,
+      isNotificationRead,
+    }),
+    [isNotificationRead, recordTitleMap, seenVoipCallIds, voipCalls]
+  );
   const selectedVoipThread = useMemo(
     () => voipThreads.find((thread) => thread.id === selectedVoipThreadKey) || voipThreads[0] || null,
     [selectedVoipThreadKey, voipThreads]
@@ -2955,64 +2828,6 @@ useEffect(() => {
     },
     [directoryUsers, inferredDirectUsers, profile.id]
   );
-  const noteUsersWithActivity = useMemo(() => (
-    availableDirectUsers
-      .map((user) => {
-        const conversationNotes = notes.filter((note: any) =>
-          isDirectConversationNote(note, String(profile.id || ''), String(user.id), noteLookup)
-        );
-        const latestMessageAt = conversationNotes.reduce<number>((latest, note: any) => {
-          const createdAt = new Date(note?.created_at || '').getTime();
-          return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
-        }, 0);
-        const unreadCount = conversationNotes.filter((note: any) => (
-          String(note?.author_id || '') !== String(profile.id || '')
-          && !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
-        )).length;
-
-        return {
-          ...user,
-          noteCount: conversationNotes.length,
-          latestMessageAt,
-          unreadCount,
-        };
-      })
-      .sort((a, b) => {
-        if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
-        if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
-        return String(a.display_name || '').localeCompare(String(b.display_name || ''), 'fa');
-      })
-  ), [availableDirectUsers, isNotificationRead, noteLookup, notes, profile.id, seenNoteIds]);
-  const noteGroupsWithActivity = useMemo(() => (
-    chatGroups
-      .map((group) => {
-        const conversationNotes = notes.filter((note: any) => String(note?.metadata?.chat_group_id || '').trim() === String(group.id));
-        const latestMessageAt = conversationNotes.reduce<number>((latest, note: any) => {
-          const createdAt = new Date(note?.created_at || '').getTime();
-          return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
-        }, 0);
-        const unreadCount = conversationNotes.filter((note: any) => (
-          String(note?.author_id || '') !== String(profile.id || '')
-          && !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
-        )).length;
-        return {
-          id: `${CHAT_GROUP_PREFIX}${group.id}`,
-          kind: 'group' as const,
-          displayName: group.name,
-          noteCount: conversationNotes.length,
-          latestMessageAt,
-          unreadCount,
-          groupId: String(group.id),
-          isGroup: true,
-        };
-      })
-      .filter((group) => group.noteCount > 0 || group.unreadCount > 0)
-      .sort((a, b) => {
-        if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
-        if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
-        return String(a.displayName || '').localeCompare(String(b.displayName || ''), 'fa');
-      })
-  ), [chatGroups, isNotificationRead, notes, profile.id, seenNoteIds]);
   const systemNoteStats = useMemo(() => {
     const systemNotes = notes.filter((note: any) => isSystemNote(note));
     const latestMessageAt = systemNotes.reduce<number>((latest, note: any) => {
@@ -3035,25 +2850,19 @@ useEffect(() => {
     }, 0);
     return { noteCount: myNotes.length, latestMessageAt };
   }, [notes, profile.id]);
-  const noteConversations = useMemo<ConversationListItem[]>(() => {
-    const directItems: ConversationListItem[] = noteUsersWithActivity.map((user) => ({
-      id: String(user.id),
-      kind: 'direct',
-      displayName: user.display_name,
-      avatarUrl: user.avatar_url || null,
-      noteCount: user.noteCount,
-      unreadCount: user.unreadCount,
-      latestMessageAt: user.latestMessageAt,
-      roleLabel: user.role_id ? roleLookup[String(user.role_id)] || null : null,
-      userId: String(user.id),
-      isGroup: false,
-    }));
-    return [...noteGroupsWithActivity, ...directItems].sort((a, b) => {
-      if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
-      if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
-      return String(a.displayName || '').localeCompare(String(b.displayName || ''), 'fa');
-    });
-  }, [noteGroupsWithActivity, noteUsersWithActivity, roleLookup]);
+  const noteConversations = useMemo<ConversationListItem[]>(
+    () => buildNoteConversations({
+      availableDirectUsers,
+      chatGroups,
+      notes,
+      noteLookup,
+      currentUserId: profile.id,
+      roleLookup,
+      seenNoteIds,
+      isNotificationRead,
+    }),
+    [availableDirectUsers, chatGroups, isNotificationRead, noteLookup, notes, profile.id, roleLookup, seenNoteIds]
+  );
   const visibleNoteConversations = useMemo(() => {
     const search = String(noteUserSearch || '').trim().toLowerCase();
     if (!search) return noteConversations;
