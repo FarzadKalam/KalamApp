@@ -16,6 +16,16 @@ const DEFAULT_RELATION_TARGET_FIELDS: Record<string, string> = {
   recruitment_applicants: 'name',
 };
 
+const LEGACY_TARGET_FIELD_ALIASES: Record<string, Record<string, string>> = {
+  customers: { name: 'full_name' },
+  suppliers: { name: 'business_name' },
+  profiles: { name: 'full_name' },
+  employees: { name: 'full_name' },
+  org_roles: { name: 'title' },
+  work_schedules: { name: 'title' },
+  journal_entries: { name: 'entry_no' },
+};
+
 export const getPreferredRelationTargetField = (
   targetModule?: string | null,
   explicitTargetField?: string | null
@@ -26,16 +36,20 @@ export const getPreferredRelationTargetField = (
 
   if (!explicit) return defaultField;
 
+  const aliasMap = LEGACY_TARGET_FIELD_ALIASES[moduleName];
+  const normalizedExplicit = explicit.toLowerCase();
+  const preferredField = aliasMap?.[normalizedExplicit] || explicit;
+
   const safeSelectableFields = MODULE_RELATION_SELECTABLE_FIELDS[moduleName];
   if (Array.isArray(safeSelectableFields) && safeSelectableFields.length > 0) {
-    if (safeSelectableFields.includes(explicit)) return explicit;
-    if (moduleName === 'profiles' && (explicit === 'name' || explicit === 'title')) {
+    if (safeSelectableFields.includes(preferredField)) return preferredField;
+    if (moduleName === 'profiles' && (preferredField === 'name' || preferredField === 'title')) {
       return 'full_name';
     }
     return defaultField;
   }
 
-  return explicit;
+  return preferredField;
 };
 
 const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
@@ -60,7 +74,7 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   payroll_slips: ['name', 'system_code', 'status'],
   employee_contracts: ['name', 'system_code', 'status'],
   recruitment_applicants: ['name', 'system_code', 'mobile', 'status'],
-  marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'status'],
+  marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'sarnakh_code', 'legacy_system_code', 'status'],
 };
 
 export const getRelationLabelFallbackFields = (targetModule?: string | null): string[] => {

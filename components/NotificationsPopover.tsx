@@ -63,7 +63,7 @@ const SEEN_BOT_MESSAGES_STORAGE_KEY = 'notif_seen_bot_messages_v1';
 const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
 const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
 const DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY = 'notif_dismissed_ui_v1';
-type AssigneeQueryMode = 'primary' | 'typed_legacy_role' | 'id_only' | 'none';
+type AssigneeQueryMode = 'primary' | 'typed_legacy_role' | 'id_only' | 'owner_only' | 'none';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, AssigneeQueryMode>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
 type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms' | 'voip_calls';
@@ -1300,8 +1300,21 @@ useEffect(() => {
       }
     };
 
+    const ownerFallbackQuery = async () => {
+      const { data, error } = await supabase
+        .from(normalizedTable)
+        .select('id')
+        .limit(200)
+        .eq('owner_id', userId);
+      if (error) return { data: [] as any[], error };
+      return { data: data || [], error: null };
+    };
+
     const queryByMode = async (mode: AssigneeQueryMode) => {
       if (mode === 'none') return { data: [] as any[], error: null };
+      if (mode === 'owner_only') {
+        return ownerFallbackQuery();
+      }
 
       if (mode === 'id_only') {
         const [userResult, roleResult] = await Promise.all([
@@ -1378,6 +1391,17 @@ useEffect(() => {
     };
 
     const mode = await resolveAssigneeQueryModeForTable(normalizedTable);
+    if (mode === 'none' && normalizedTable === 'projects') {
+      const ownerFallback = await ownerFallbackQuery();
+      if (!ownerFallback.error) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'owner_only');
+        return ownerFallback.data || [];
+      }
+      if (isMissingColumnError(ownerFallback.error, 'owner_id')) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'none');
+      }
+    }
+
     let result = await queryByMode(mode);
     if (!result.error) {
       return result.data || [];

@@ -1606,6 +1606,9 @@ alter table public.projects
   add column if not exists priority text not null default 'medium',
   add column if not exists customer_id uuid references public.customers(id) on delete set null,
   add column if not exists owner_id uuid references public.profiles(id) on delete set null,
+  add column if not exists assignee_id uuid references public.profiles(id) on delete set null,
+  add column if not exists assignee_role_id uuid references public.org_roles(id) on delete set null,
+  add column if not exists assignee_type text,
   add column if not exists process_template_id uuid references public.process_templates(id) on delete set null,
   add column if not exists process_run_id uuid references public.process_runs(id) on delete set null,
   add column if not exists start_date date,
@@ -1637,6 +1640,8 @@ create unique index if not exists idx_projects_org_system_code
   where system_code is not null and system_code <> '';
 
 create index if not exists idx_projects_org_status on public.projects(org_id, status, due_date);
+create index if not exists idx_projects_assignee_id on public.projects(assignee_id);
+create index if not exists idx_projects_assignee_role_id on public.projects(assignee_role_id);
 
 create table if not exists public.project_members (
   id uuid primary key default gen_random_uuid()
@@ -1665,6 +1670,7 @@ alter table public.marketing_leads
   add column if not exists org_id uuid references public.organizations(id) on delete cascade default public.current_org_id(),
   add column if not exists name text not null default '',
   add column if not exists business_name text,
+  add column if not exists sarnakh_code text,
   add column if not exists mobile text,
   add column if not exists email text,
   add column if not exists source text,

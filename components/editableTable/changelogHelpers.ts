@@ -88,8 +88,11 @@ const fetchRelationLabels = async (
   const map = new Map<string, string>();
   if (!uniqueIds.length || !targetModule) return map;
 
-  const field = getPreferredRelationTargetField(targetModule, targetField);
-  const includeSystemCode = supportsSystemCode(targetModule);
+  const normalizedTargetModule = String(targetModule || '').trim();
+  const field = normalizedTargetModule === 'profiles'
+    ? 'full_name'
+    : getPreferredRelationTargetField(normalizedTargetModule, targetField);
+  const includeSystemCode = normalizedTargetModule !== 'profiles' && supportsSystemCode(normalizedTargetModule);
   const selectWithCode = includeSystemCode ? `id, ${field}, system_code` : `id, ${field}`;
   const selectNoCode = `id, ${field}`;
 
@@ -103,7 +106,8 @@ const fetchRelationLabels = async (
   };
 
   try {
-    const { data } = await supabase.from(targetModule).select(selectWithCode).in('id', uniqueIds);
+    const { data, error } = await supabase.from(normalizedTargetModule).select(selectWithCode).in('id', uniqueIds);
+    if (error) throw error;
     (data || []).forEach((row: any) => map.set(String(row.id), buildLabel(row)));
     return map;
   } catch {
@@ -118,7 +122,8 @@ const fetchRelationLabels = async (
   }
 
   try {
-    const { data } = await supabase.from(targetModule).select(selectNoCode).in('id', uniqueIds);
+    const { data, error } = await supabase.from(normalizedTargetModule).select(selectNoCode).in('id', uniqueIds);
+    if (error) throw error;
     (data || []).forEach((row: any) => map.set(String(row.id), String(row?.[field] || row?.id)));
     return map;
   } catch {
