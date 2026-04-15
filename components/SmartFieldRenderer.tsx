@@ -57,9 +57,10 @@ import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { normalizeProcessTargetModuleIds } from '../utils/processTargets';
-import { fetchTaskSourceRecordOptions, getTaskModuleOptions } from '../utils/taskMeta';
+import { fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -78,6 +79,79 @@ const isStatementTimeoutError = (error: any) => {
   const code = String(error?.code || '').trim();
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   return code === '57014' || text.includes('statement timeout');
+};
+
+const isMissingAuditColumnError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || '').toLowerCase();
+  return (
+    code === '42703'
+    || code === 'PGRST204'
+    || text.includes('created_by')
+    || text.includes('updated_by')
+  );
+};
+
+const isMissingColumnLikeError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  if (code === '42703' || code === 'PGRST204' || code === 'PGRST200') return true;
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return text.includes('column') || text.includes('schema cache') || text.includes('does not exist');
+};
+
+const extractMissingColumnName = (error: any): string | null => {
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  if (!text) return null;
+  const patterns = [
+    /column\s+"([^"]+)"/i,
+    /column\s+'([^']+)'/i,
+    /could not find the\s+'([^']+)'\s+column/i,
+    /([a-z0-9_]+)\s+does not exist/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return null;
+};
+
+const omitColumnIfPresent = (payload: Record<string, any>, column: string | null) => {
+  if (!column) return payload;
+  if (!Object.prototype.hasOwnProperty.call(payload, column)) return payload;
+  const next = { ...payload };
+  delete next[column];
+  return next;
+};
+
+const createQuickCreateUserError = (message: string) =>
+  Object.assign(new Error(message), { userFacing: true });
+
+const buildMinimalSupplierPayload = (payload: Record<string, any>) => {
+  const allowedKeys = new Set([
+    'business_name',
+    'first_name',
+    'last_name',
+    'mobile_1',
+    'mobile_2',
+    'phone',
+    'prefix',
+    'province',
+    'city',
+    'address',
+    'location',
+    'website',
+    'supply_type',
+    'rank',
+    'image_url',
+    'created_by',
+    'updated_by',
+    'system_code',
+  ]);
+  return Object.keys(payload || {}).reduce<Record<string, any>>((acc, key) => {
+    if (!allowedKeys.has(key)) return acc;
+    acc[key] = payload[key];
+    return acc;
+  }, {});
 };
 
 const normalizeNumericString = (raw: any): string => {
@@ -477,6 +551,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const relationBaseKey = fieldKey.endsWith('_id') ? fieldKey.slice(0, -3) : fieldKey;
   const quickCreateTargetModuleId = resolvedRelationTargetModuleId;
   const quickCreateTargetModule = quickCreateTargetModuleId ? MODULES[quickCreateTargetModuleId] : undefined;
+  const canUseRelationQuickCreate = !!quickCreateTargetModuleId
+    && !!quickCreateTargetModule
+    && quickCreateTargetModule.disableCreate !== true
+    && quickCreateTargetModule.systemManaged !== true
+    && relationConfigAny?.disableQuickCreate !== true;
   const resolveRelationDisplayLabel = useCallback(() => {
     const matchedOption = relationResolvedOptions.find((item: any) => String(item?.value) === String(value))
       || (fieldOptions as any[]).find((item: any) => String(item?.value) === String(value));
@@ -550,15 +629,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   );
   const quickCreateTargetField = useMemo(() => {
     const configured = relationConfigAny?.targetField;
-    if (configured) return String(configured);
+    if (configured) {
+      return getPreferredRelationTargetField(quickCreateTargetModuleId, configured);
+    }
     const moduleFields = quickCreateTargetModule?.fields || [];
     const preferredKeys = ['name', 'title', 'full_name', 'business_name', 'shelf_number', 'system_code'];
-    const preferred = moduleFields.find((f: any) => preferredKeys.includes(String(f?.key || '')));
-    if (preferred?.key) return String(preferred.key);
+    const preferredField = moduleFields.find((f: any) => preferredKeys.includes(String(f?.key || '')));
+    if (preferredField?.key) return String(preferredField.key);
     const headerField = moduleFields.find((f: any) => f?.location === 'header');
     if (headerField?.key) return String(headerField.key);
-    return 'name';
-  }, [relationConfigAny?.targetField, quickCreateTargetModule]);
+    return getPreferredRelationTargetField(quickCreateTargetModuleId, null);
+  }, [quickCreateTargetModuleId, relationConfigAny?.targetField, quickCreateTargetModule]);
   const quickCreateAutoNameToggleField = useMemo(
     () => quickCreateTargetModule?.fields?.find((f: any) => String(f?.key || '') === 'auto_name_enabled') as ModuleField | undefined,
     [quickCreateTargetModule]
@@ -1423,6 +1504,161 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     };
   }, [quickCreateOpen, quickCreateFields]);
 
+  const normalizeQuickCreatePayload = (rawPayload: Record<string, any>) => {
+    const payload = { ...(rawPayload || {}) };
+
+    if (quickCreateTargetModuleId === 'customers') {
+      const personType = String(payload?.person_type || 'real').trim().toLowerCase();
+      const referrerModule = String(payload?.referrer_module || '').trim().toLowerCase();
+
+      if (personType === 'real') {
+        payload.legal_name = null;
+        payload.national_id = null;
+        payload.registration_number = null;
+      } else if (personType === 'legal') {
+        payload.prefix = null;
+        payload.birth_date = null;
+        payload.national_code = null;
+      }
+
+      if (!payload?.is_employee) {
+        payload.related_employee_id = null;
+      }
+      if (referrerModule !== 'customers') {
+        payload.referrer_customer_id = null;
+      }
+      if (referrerModule !== 'employees') {
+        payload.referrer_employee_id = null;
+      }
+      if (referrerModule !== 'suppliers') {
+        payload.referrer_supplier_id = null;
+      }
+      if (!payload?.portal_enabled) {
+        payload.portal_status = payload.portal_status || 'disabled';
+        payload.telegram_chat_id = null;
+        payload.bale_chat_id = null;
+        payload.rubika_chat_id = null;
+        if (payload.portal_permissions_override === '') {
+          delete payload.portal_permissions_override;
+        }
+      }
+    }
+
+    if (quickCreateTargetModuleId === 'suppliers' && Array.isArray(payload?.rank)) {
+      payload.rank = payload.rank.map((item: any) => String(item || '').trim()).filter(Boolean).join(',');
+    }
+
+    if (quickCreateTargetModuleId === 'products') {
+      delete payload.product_inventory;
+    }
+
+    if (quickCreateTargetModuleId === 'shelves') {
+      delete payload.shelf_inventory;
+      delete payload.shelf_stock_movements;
+      delete payload.task_shelf_inventory;
+      delete payload.task_shelf_stock_movements;
+    }
+
+    if (quickCreateTargetModuleId === 'tasks') {
+      return normalizeTaskSourceValues(payload);
+    }
+
+    return payload;
+  };
+
+  const insertQuickCreatePayload = async (initialPayload: Record<string, any>) => {
+    const targetTable = quickCreateTargetModule?.table || quickCreateTargetModuleId;
+    if (!targetTable) throw createQuickCreateUserError('ماژول مقصد برای افزودن سریع مشخص نیست.');
+
+    let userId: string | null = null;
+    try {
+      const snapshot = await fetchSessionBootstrap(supabase);
+      userId = snapshot?.user?.id || null;
+    } catch {
+      userId = null;
+    }
+
+    const withAuditFields = (payload: Record<string, any>) => {
+      if (!userId) return { ...payload };
+      return {
+        ...payload,
+        created_by: payload.created_by ?? userId,
+        updated_by: payload.updated_by ?? userId,
+      };
+    };
+
+    const insertWithColumnFallback = async (payload: Record<string, any>) => {
+      let writablePayload = { ...payload };
+      let auditedPayload = withAuditFields(writablePayload);
+      let insertResult = await supabase
+        .from(targetTable)
+        .insert(auditedPayload)
+        .select('id')
+        .single();
+
+      if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+        insertResult = await supabase
+          .from(targetTable)
+          .insert(writablePayload)
+          .select('id')
+          .single();
+      }
+
+      while (insertResult.error && isMissingColumnLikeError(insertResult.error)) {
+        const missingColumn = extractMissingColumnName(insertResult.error);
+        const nextPayload = omitColumnIfPresent(writablePayload, missingColumn);
+        if (nextPayload === writablePayload) break;
+
+        writablePayload = nextPayload;
+        auditedPayload = withAuditFields(writablePayload);
+        insertResult = await supabase
+          .from(targetTable)
+          .insert(auditedPayload)
+          .select('id')
+          .single();
+
+        if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+          insertResult = await supabase
+            .from(targetTable)
+            .insert(writablePayload)
+            .select('id')
+            .single();
+        }
+      }
+
+      return { insertResult, writablePayload };
+    };
+
+    let { insertResult, writablePayload } = await insertWithColumnFallback(initialPayload);
+
+    if (
+      insertResult.error
+      && supportsSystemCode(quickCreateTargetModuleId)
+      && (isDuplicateSystemCodeError(insertResult.error) || isStatementTimeoutError(insertResult.error))
+    ) {
+      const fallbackSystemCode = await buildClientFallbackSystemCode(
+        supabase,
+        quickCreateTargetModuleId,
+        targetTable
+      );
+      ({ insertResult, writablePayload } = await insertWithColumnFallback({
+        ...writablePayload,
+        system_code: fallbackSystemCode,
+      }));
+    }
+
+    if (insertResult.error && quickCreateTargetModuleId === 'suppliers') {
+      const minimalPayload = buildMinimalSupplierPayload(writablePayload);
+      const minimalResult = await insertWithColumnFallback(minimalPayload);
+      if (!minimalResult.insertResult.error) {
+        insertResult = minimalResult.insertResult;
+        writablePayload = minimalResult.writablePayload;
+      }
+    }
+
+    return insertResult;
+  };
+
   const handleQuickCreate = async () => {
     if (!quickCreateTargetModuleId) return;
     setQuickCreateLoading(true);
@@ -1454,40 +1690,24 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         );
       }
 
-      if (!payload[quickCreateTargetField]) {
-        throw new Error(`فیلد "${quickCreateTargetField}" الزامی است.`);
+      const quickCreateTargetValue = payload[quickCreateTargetField];
+      if (
+        quickCreateTargetValue === undefined
+        || quickCreateTargetValue === null
+        || (typeof quickCreateTargetValue === 'string' && quickCreateTargetValue.trim() === '')
+      ) {
+        throw createQuickCreateUserError(`فیلد "${quickCreateTargetField}" الزامی است.`);
       }
 
-      const targetTable = quickCreateTargetModule?.table || quickCreateTargetModuleId;
-      const selectFields = Array.from(new Set(['id', quickCreateTargetField])).join(', ');
+      const normalizedPayload = normalizeQuickCreatePayload(payload);
       if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
-        payload.system_code = await buildClientFallbackSystemCode(
+        normalizedPayload.system_code = await buildClientFallbackSystemCode(
           supabase,
           quickCreateTargetModuleId,
-          targetTable
+          quickCreateTargetModule?.table || quickCreateTargetModuleId
         );
       }
-      let insertResult = await supabase
-        .from(targetTable)
-        .insert([payload])
-        .select(selectFields)
-        .single();
-      if (
-        insertResult.error
-        && supportsSystemCode(quickCreateTargetModuleId)
-        && (isDuplicateSystemCodeError(insertResult.error) || isStatementTimeoutError(insertResult.error))
-      ) {
-        payload.system_code = await buildClientFallbackSystemCode(
-          supabase,
-          quickCreateTargetModuleId,
-          targetTable
-        );
-        insertResult = await supabase
-          .from(targetTable)
-          .insert([payload])
-          .select(selectFields)
-          .single();
-      }
+      const insertResult = await insertQuickCreatePayload(normalizedPayload);
       if (insertResult.error) throw insertResult.error;
 
       msg.success('رکورد جدید ایجاد شد');
@@ -1497,7 +1717,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       if (insertedRow?.id) onChange(insertedRow.id);
     } catch (err: any) {
       if (Array.isArray(err?.errorFields)) return;
-      msg.error('خطا در ایجاد رکورد: ' + (err?.message || 'نامشخص'));
+      const userMessage = err?.userFacing
+        ? String(err.message || 'افزودن سریع انجام نشد.')
+        : toFaErrorMessage(err, 'افزودن سریع انجام نشد. لطفاً فیلدهای ضروری را بررسی کنید و دوباره تلاش کنید.');
+      msg.error(userMessage);
+      if (!err?.userFacing) {
+        console.warn('Quick create failed:', {
+          moduleId: quickCreateTargetModuleId,
+          fieldKey,
+          error: err,
+        });
+      }
     } finally {
       setQuickCreateLoading(false);
     }
@@ -1863,7 +2093,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         );
 
       case FieldType.RELATION:
-        const canQuickCreate = !!resolvedRelationTargetModuleId;
+        const canQuickCreate = canUseRelationQuickCreate;
         const normalizedRelationSearchQuery = String(relationSearchQuery || '').trim();
         const isRelationSearching = normalizedRelationSearchQuery.length > 0;
         let filteredOptions = isRelationSearching ? relationLiveOptions : relationResolvedOptions;
@@ -2167,7 +2397,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   };
 
   const canRelationQuickCreate = fieldType === FieldType.RELATION
-    && !!resolvedRelationTargetModuleId;
+    && canUseRelationQuickCreate;
   const globalImageGalleryModalNode = (
     <Modal
       title="انتخاب تصویر از گالری"

@@ -85,7 +85,9 @@ export const secretariatDocumentsConfig: ModuleDefinition = {
     },
     { key: 'document_date', labels: { fa: 'تاریخ نامه', en: 'Document Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 6, defaultValue: getTodayLocalDateValue, validation: { required: true }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'sender_profile_id', labels: { fa: 'از طرف', en: 'From' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 7, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'sender_manual', labels: { fa: 'از طرف (دستی)', en: 'From (Manual)' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 7.1, nature: FieldNature.STANDARD },
     { key: 'recipient_profile_id', labels: { fa: 'خطاب به', en: 'To' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 8, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'recipient_manual', labels: { fa: 'خطاب به (دستی)', en: 'To (Manual)' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 8.1, nature: FieldNature.STANDARD },
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 9, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'priority',

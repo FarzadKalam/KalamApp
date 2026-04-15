@@ -346,6 +346,49 @@ const ModuleShow: React.FC = () => {
   const [quickProjectForm] = Form.useForm();
   const quickProjectTemplateId = Form.useWatch('process_template_id', quickProjectForm);
   const quickProjectCustomerId = Form.useWatch('customer_id', quickProjectForm);
+  const quickProjectCustomerField = useMemo(() => {
+    const projectCustomerField = (MODULES.projects?.fields || []).find((field: any) => String(field?.key || '') === 'customer_id');
+    return {
+      ...(projectCustomerField || {
+        key: 'customer_id',
+        labels: { fa: 'مشتری', en: 'Customer' },
+        type: FieldType.RELATION,
+      }),
+      relationConfig: {
+        ...((projectCustomerField as any)?.relationConfig || {}),
+        targetModule: 'customers',
+        targetField: 'full_name',
+        disableQuickCreate: true,
+      },
+    } as any;
+  }, []);
+  const quickProjectTemplateField = useMemo(() => {
+    const projectTemplateField = (MODULES.projects?.fields || []).find((field: any) => String(field?.key || '') === 'process_template_id');
+    return {
+      ...(projectTemplateField || {
+        key: 'process_template_id',
+        labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' },
+        type: FieldType.RELATION,
+      }),
+      relationConfig: {
+        targetModule: 'process_templates',
+        targetField: 'name',
+        sourceModules: [
+          {
+            targetModule: 'process_templates',
+            targetField: 'name',
+            filter: { module_ids__contains: ['projects'], is_active: true },
+          },
+          {
+            targetModule: 'process_templates',
+            targetField: 'name',
+            filter: { module_id: 'projects', is_active: true },
+          },
+        ],
+        disableQuickCreate: true,
+      },
+    } as any;
+  }, []);
   const quickProjectDisplayModuleIds = useMemo(
     () => Array.from(new Set([
       ...quickProjectTargetModuleIds,
@@ -2751,37 +2794,21 @@ const ModuleShow: React.FC = () => {
     };
   }, []);
 
-  const loadQuickProjectModalOptions = useCallback(async () => {
+  const loadQuickProjectModalOptions = useCallback(async (prefill?: { customerId?: string | null; templateId?: string | null }) => {
+    const prefillCustomerId = String(prefill?.customerId || '').trim();
     try {
-      const [{ data: customers }, { data: templates, error: templatesError }] = await Promise.all([
-        supabase
-          .from('customers')
-          .select('id,first_name,last_name,full_name,name,business_name,system_code,mobile_1,email')
-          .order('last_name', { ascending: true })
-          .limit(200),
+      const [recentCustomerOptions, exactCustomerOptions, { data: templates, error: templatesError }] = await Promise.all([
+        fetchRelationOptionsForField(supabase, quickProjectCustomerField, { limit: 200 }),
+        prefillCustomerId
+          ? fetchRelationOptionsForField(supabase, quickProjectCustomerField, { exactId: prefillCustomerId, limit: 1 }).catch(() => [])
+          : Promise.resolve([]),
         supabase
           .from('process_templates')
           .select('id,name,module_id,module_ids,is_active')
           .order('name', { ascending: true }),
       ]);
       if (templatesError) throw templatesError;
-      const customerOptions = (customers || []).map((row: any) => ({
-        value: String(row.id),
-        label: (() => {
-          const title = String(
-            row?.business_name
-            || row?.full_name
-            || row?.name
-            || `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim()
-            || row?.mobile_1
-            || row?.email
-            || ''
-          ).trim();
-          const prefix = String(row?.system_code || '').trim();
-          if (title) return `${prefix ? `${prefix} - ` : ''}${title}`;
-          return `${prefix ? `${prefix} - ` : ''}مشتری بدون نام`;
-        })(),
-      }));
+      const customerOptions = mergeOptionLists(recentCustomerOptions, exactCustomerOptions);
       const scopedTemplates = (templates || []).filter((row: any) =>
         row?.is_active !== false && doesProcessTemplateSupportModule(row, 'projects')
       );
@@ -2791,24 +2818,33 @@ const ModuleShow: React.FC = () => {
       }));
       setQuickProjectCustomerOptions(customerOptions);
       setQuickProjectTemplateOptions(templateOptions);
+      return { customerOptions, templateOptions };
     } catch (error) {
       console.warn('Could not load quick project modal options', error);
       setQuickProjectCustomerOptions([]);
       setQuickProjectTemplateOptions([]);
+      return { customerOptions: [], templateOptions: [] };
     }
-  }, []);
+  }, [quickProjectCustomerField]);
 
   const handleOpenQuickProjectModal = useCallback(async () => {
-    await loadQuickProjectModalOptions();
     const baseTitle = String(getRecordTitle(data, moduleConfig, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
     const suggestedName = `پروژه "${baseTitle || 'جدید'}"`;
     const suggestedCustomerId = moduleId === 'invoices'
       ? (data?.customer_id || null)
       : (moduleId === 'tasks' ? (data?.related_customer || null) : null);
+    const { templateOptions } = await loadQuickProjectModalOptions({
+      customerId: suggestedCustomerId,
+      templateId: data?.process_template_id || null,
+    });
+    const currentTemplateId = String(data?.process_template_id || '').trim();
+    const suggestedTemplateId = currentTemplateId && templateOptions.some((option: any) => String(option?.value || '') === currentTemplateId)
+      ? currentTemplateId
+      : undefined;
     quickProjectForm.setFieldsValue({
       name: suggestedName,
       customer_id: suggestedCustomerId,
-      process_template_id: data?.process_template_id || undefined,
+      process_template_id: suggestedTemplateId,
     });
     setQuickProjectTargetModuleIds([]);
     setQuickProjectLinkedRecords({});
@@ -5503,29 +5539,43 @@ const ModuleShow: React.FC = () => {
             <Input placeholder='مثال: پروژه "فاکتور فروش ۱۲۳"' />
           </Form.Item>
 
-          <Form.Item name="customer_id" label="مشتری مرتبط">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              options={quickProjectCustomerOptions}
-              placeholder="انتخاب مشتری"
-              getPopupContainer={resolveStablePopupContainer}
-              styles={{ popup: { root: { zIndex: 12560 } } }}
-            />
-          </Form.Item>
+          <SmartFieldRenderer
+            field={quickProjectCustomerField}
+            value={quickProjectCustomerId}
+            onChange={(value) => {
+              quickProjectForm.setFieldValue('customer_id', value || null);
+            }}
+            forceEditMode={true}
+            options={quickProjectCustomerOptions}
+            onOptionsUpdate={() => {
+              void loadQuickProjectModalOptions({
+                customerId: quickProjectForm.getFieldValue('customer_id'),
+                templateId: quickProjectForm.getFieldValue('process_template_id'),
+              });
+            }}
+            moduleId="projects"
+            allValues={quickProjectForm.getFieldsValue(true)}
+            overlayZIndexBase={12600}
+          />
 
-          <Form.Item name="process_template_id" label="الگوی فرآیند پروژه">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              options={quickProjectTemplateOptions}
-              placeholder="انتخاب الگو (اختیاری)"
-              getPopupContainer={resolveStablePopupContainer}
-              styles={{ popup: { root: { zIndex: 12560 } } }}
-            />
-          </Form.Item>
+          <SmartFieldRenderer
+            field={quickProjectTemplateField}
+            value={quickProjectTemplateId}
+            onChange={(value) => {
+              quickProjectForm.setFieldValue('process_template_id', value || null);
+            }}
+            forceEditMode={true}
+            options={quickProjectTemplateOptions}
+            onOptionsUpdate={() => {
+              void loadQuickProjectModalOptions({
+                customerId: quickProjectForm.getFieldValue('customer_id'),
+                templateId: quickProjectForm.getFieldValue('process_template_id'),
+              });
+            }}
+            moduleId="projects"
+            allValues={quickProjectForm.getFieldsValue(true)}
+            overlayZIndexBase={12600}
+          />
 
           {String(quickProjectTemplateId || '').trim() && quickProjectLinkedFields.length > 0 ? (
             <div className="mb-4 rounded-xl border border-leather-200 bg-leather-50 px-3 py-3">

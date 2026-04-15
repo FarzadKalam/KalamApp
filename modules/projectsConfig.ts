@@ -96,7 +96,7 @@ export const projectsModule: ModuleDefinition = {
       location: FieldLocation.BLOCK,
       blockId: 'base_info',
       order: 1,
-      relationConfig: { targetModule: 'customers', targetField: 'last_name' },
+      relationConfig: { targetModule: 'customers', targetField: 'full_name' },
       nature: FieldNature.STANDARD,
       isTableColumn: true,
     },

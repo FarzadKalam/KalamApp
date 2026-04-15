@@ -255,6 +255,16 @@ const applyQueryFilters = (query: any, filter?: Record<string, any>) => {
       return column ? nextQuery.ilike(column, rawValue) : nextQuery;
     }
 
+    if (key.endsWith('__contains')) {
+      const column = key.slice(0, -10);
+      return column ? nextQuery.contains(column, rawValue) : nextQuery;
+    }
+
+    if (key.endsWith('__overlaps')) {
+      const column = key.slice(0, -10);
+      return column ? nextQuery.overlaps(column, rawValue) : nextQuery;
+    }
+
     return nextQuery.eq(key, rawValue);
   }, query);
 };

@@ -13,7 +13,7 @@ import {
   normalizeProcessAutomationRules,
   ProcessAutomationRule,
 } from './processAutomationTypes';
-import { WorkflowCondition } from './workflowTypes';
+import { WORKFLOW_ASSIGNEE_FIELD_KEY, WorkflowCondition } from './workflowTypes';
 import {
   getProcessTaskCustomFieldValuesFromRecurrence,
   getProcessTaskCustomFieldsFromRecurrence,
@@ -132,6 +132,24 @@ const buildAutomationActionRecord = (
     merged.id = task?.id ?? '';
   }
   return merged;
+};
+
+const assignProcessLinkedRecordFields = (
+  target: Record<string, any>,
+  moduleId: string | null | undefined,
+  record: Record<string, any> | null | undefined,
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId || !record) return;
+  Object.entries(record).forEach(([fieldKey, value]) => {
+    target[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
+  });
+  const linkedAssignee = record
+    ? `${String(record?.assignee_role_id ? 'role' : 'user')}_${String(record?.assignee_role_id || record?.assignee_id || '').trim()}`
+    : '';
+  if (linkedAssignee && !linkedAssignee.endsWith('_')) {
+    target[createProcessLinkedFieldKey(normalizedModuleId, WORKFLOW_ASSIGNEE_FIELD_KEY)] = linkedAssignee;
+  }
 };
 
 const isBlankConditionValue = (value: unknown) =>
@@ -405,6 +423,9 @@ const buildAutomationActionRecordWithLinks = async (
   siblingTasks: Record<string, any>[] = []
 ) => {
   const actionRecord = buildAutomationActionRecord(task, sourceRecord, sourceModuleId);
+  if (sourceModuleId && sourceRecord) {
+    assignProcessLinkedRecordFields(actionRecord, sourceModuleId, sourceRecord);
+  }
   const processLinks = parseProcessLinkMap(actionRecord.process_links);
   const linkedRecordEntries = await Promise.all(
     Object.entries(processLinks).map(async ([linkedModuleId, linkedRecordId]) => {
@@ -427,13 +448,7 @@ const buildAutomationActionRecordWithLinks = async (
 
   linkedRecordEntries.forEach((entry) => {
     if (!entry?.record) return;
-    Object.entries(entry.record).forEach(([fieldKey, value]) => {
-      actionRecord[createProcessLinkedFieldKey(entry.moduleId, fieldKey)] = value;
-    });
-    const linkedAssignee = entry.record ? `${String(entry.record?.assignee_role_id ? 'role' : 'user')}_${String(entry.record?.assignee_role_id || entry.record?.assignee_id || '').trim()}` : '';
-    if (linkedAssignee && !linkedAssignee.endsWith('_')) {
-      actionRecord[createProcessLinkedFieldKey(entry.moduleId, '__workflow_assignee')] = linkedAssignee;
-    }
+    assignProcessLinkedRecordFields(actionRecord, entry.moduleId, entry.record);
   });
 
   const currentSort = Number(task?.sort_order || 0);

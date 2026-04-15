@@ -277,28 +277,23 @@ const buildPrintSignatureCell = (label: string, companySide = false) => `
 </td>
 `.trim();
 
-const buildOfficialLetterHeaderTemplate = (title: string) => `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      <td style="width:24%; vertical-align:top; text-align:center; border:none; padding:12px 10px; background:rgba(var(--brand-50-rgb),0.42);">
-        <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto 6px auto; width:54px; height:54px; max-width:54px; max-height:54px; object-fit:contain;" />
-        <div style="font-size:10px; color:#64748b;">{{company.trade_name}}</div>
-      </td>
-      <td style="width:46%; vertical-align:middle; text-align:center; border:none; padding:12px 10px; background:rgba(var(--brand-500-rgb),0.08);">
-        <div style="font-weight:900; font-size:15px; line-height:1.9; color:#111827;">{{company.company_full_name}}</div>
-        <div style="font-weight:800; font-size:18px; line-height:1.8; color:rgb(var(--brand-500-rgb)); margin-top:2px;">${title}</div>
-      </td>
-      <td style="width:30%; vertical-align:top; text-align:right; border:none; padding:10px 12px; background:rgba(var(--brand-50-rgb),0.42);">
-        <div style="display:flex; flex-direction:column; gap:4px; font-size:11px; line-height:1.9;">
-          <div><span style="font-weight:700;">تاریخ:</span> {{record.document_date}}</div>
-          <div><span style="font-weight:700;">شماره:</span> {{record.system_code}}</div>
-          <div><span style="font-weight:700;">پیوست:</span> {{record.attachment_count}}</div>
-        </div>
-      </td>
-    </tr>
-  </tbody>
-</table>
+const buildOfficialLetterHeaderTemplate = () => `
+<div style="width:100%; direction:rtl; color:#111827; font-size:12px; font-family:inherit;">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:2px 2px 10px 2px; border-bottom:1px solid rgba(17,24,39,0.28);">
+    <div style="width:32%; text-align:right; font-size:10.5px; line-height:1.9; color:#374151;">
+      <div><span style="font-weight:700;">شماره:</span> {{record.system_code}}</div>
+      <div><span style="font-weight:700;">تاریخ:</span> {{record.document_date}}</div>
+      <div><span style="font-weight:700;">پیوست:</span> {{record.attachment_count}}</div>
+    </div>
+    <div style="width:36%; text-align:center; line-height:1.9;">
+      <div style="font-weight:800; font-size:13px; margin-bottom:2px;">بسمه تعالی</div>
+      <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto 2px auto; width:48px; height:48px; max-width:48px; max-height:48px; object-fit:contain;" />
+      <div style="font-weight:900; font-size:14px; color:#111827; overflow-wrap:anywhere;">{{company.company_full_name}}</div>
+      <div style="font-size:10px; color:#6b7280; overflow-wrap:anywhere;">{{company.trade_name}}</div>
+    </div>
+    <div style="width:32%;"></div>
+  </div>
+</div>
 `.trim();
 
 export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
@@ -711,6 +706,7 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'کد پستی سازمان', value: 'company.postal_code', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'تلفن سازمان', value: 'company.phone', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'آدرس سازمان', value: 'company.address', kind: 'field', group: 'اطلاعات سازمان' },
+    { label: 'وب‌سایت سازمان', value: 'company.website', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام مسئول', value: 'responsible.name', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ امروز', value: 'system.today_date', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ و زمان امروز', value: 'system.today_datetime', kind: 'field', group: 'سیستم' },
@@ -1166,51 +1162,39 @@ const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => (
   isSystem: true,
   showHeader: true,
   showFooter: true,
-  headerHeight: 96,
-  footerHeight: 84,
-  pageMarginTop: 12,
-  pageMarginRight: 12,
+  headerHeight: 112,
+  footerHeight: 30,
+  pageMarginTop: 14,
+  pageMarginRight: 16,
   pageMarginBottom: 10,
-  pageMarginLeft: 12,
-  headerHtml: buildOfficialLetterHeaderTemplate('نامه اداری').trim(),
+  pageMarginLeft: 16,
+  headerHtml: buildOfficialLetterHeaderTemplate().trim(),
   contentHtml: `
-<div style="direction:rtl; color:#111827; font-family:inherit; font-size:12px; line-height:2.1;">
-  <table style="width:100%; border-collapse:collapse; margin-bottom:10px; font-size:11px;">
-    <tbody>
-      <tr>
-        <td style="width:16%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">خطاب به</td>
-        <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.recipient_profile_id}}</td>
-        <td style="width:16%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.32);">از طرف</td>
-        <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.sender_profile_id}}</td>
-      </tr>
-      <tr>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">موضوع</td>
-        <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">{{record.name}}</td>
-      </tr>
-      <tr>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">نوع سند</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.document_type}}</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">اولویت</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.priority}}</td>
-      </tr>
-    </tbody>
-  </table>
-  <div style="min-height:420px; padding:8px 4px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
-  <div style="margin-top:14px; border-top:1px dashed rgba(148,163,184,0.4); padding-top:10px;">
-    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); margin-bottom:4px;">خلاصه / نتیجه</div>
-    <div style="${getLongTextPrintStyle(11)}">{{record.summary}}</div>
+<div style="direction:rtl; color:#111827; font-family:inherit; font-size:12.5px; line-height:2.25; padding:4px 4px 0 4px;">
+  <div style="text-align:right; margin-bottom:16px;">
+    <div><span style="font-weight:800;">موضوع:</span> <span style="font-weight:700;">{{record.name}}</span></div>
+    <div><span style="font-weight:800;">از:</span> {{system.letter_sender_display}}</div>
+    <div><span style="font-weight:800;">به:</span> {{system.letter_recipient_display}}</div>
+    <div style="margin-top:8px; font-weight:800;">متن نامه</div>
+  </div>
+  <div style="min-height:470px; text-align:right; padding:0 2px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
+  <div style="margin-top:26px; margin-right:auto; width:230px; min-height:92px; text-align:center; line-height:1.9;">
+    <div style="display:flex; align-items:flex-end; justify-content:center; gap:6px; min-height:62px;">
+      <span style="display:inline-flex; align-items:flex-end; justify-content:center;">{{system.company_stamp_image}}</span>
+      <span style="display:inline-flex; align-items:flex-end; justify-content:center;">{{system.company_signature_image}}</span>
+    </div>
+    <div style="font-weight:800; font-size:12px; color:#111827; overflow-wrap:anywhere;">{{system.company_signatory_name}}</div>
   </div>
 </div>
 `.trim(),
   footerHtml: `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('امضا و مهر سازمان', true)}
-      ${buildPrintSignatureCell('رونوشت / دریافت کننده', false)}
-    </tr>
-  </tbody>
-</table>
+<div style="direction:rtl; width:100%; border-top:1px solid rgba(17,24,39,0.22); padding-top:5px; color:#4b5563; font-size:9px; line-height:1.7; text-align:center; overflow-wrap:anywhere;">
+  <span>آدرس: {{company.address}}</span>
+  <span style="margin:0 8px;">|</span>
+  <span>تلفن: {{company.phone}}</span>
+  <span style="margin:0 8px;">|</span>
+  <span>سایت: {{company.website}}</span>
+</div>
 `.trim(),
   createdAt: now,
   updatedAt: now,

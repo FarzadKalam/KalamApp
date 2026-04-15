@@ -1,5 +1,6 @@
 import { getActiveChannelSettings } from './channelSettings';
 import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
+import { supabase } from '../supabaseClient';
 
 export type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -21,6 +22,23 @@ type SendBotMessageArgs = {
   moduleId?: string;
   recordId?: string;
   customerId?: string;
+};
+
+type CounterpartyBotGroupTarget = {
+  id?: string | null;
+  customer_id?: string | null;
+  supplier_id?: string | null;
+  channel_type?: BotChannel | string | null;
+  bot_chat_id?: string | null;
+};
+
+type SendCounterpartyBotGroupMessageArgs = {
+  group: CounterpartyBotGroupTarget;
+  text: string;
+  payload?: Record<string, any>;
+  messageType?: string;
+  extraPayload?: Record<string, any>;
+  fallbackText?: string;
 };
 
 type SendCustomerBotMessageArgs = {
@@ -170,6 +188,82 @@ export const sendBotMessageViaGateway = async ({
     }
     throw err;
   }
+};
+
+export const sendCounterpartyBotGroupMessage = async ({
+  group,
+  text,
+  payload,
+  messageType,
+  extraPayload,
+  fallbackText,
+}: SendCounterpartyBotGroupMessageArgs) => {
+  const channel = String(group?.channel_type || '').trim() as BotChannel;
+  if (!['rubika', 'telegram', 'bale'].includes(channel)) {
+    throw new Error('کانال بات معتبر نیست.');
+  }
+
+  const chatId = String(group?.bot_chat_id || '').trim();
+  if (!chatId) {
+    throw new Error('برای این گروه chat id بات ثبت نشده است.');
+  }
+
+  const messageText = String(text || '').trim();
+  if (!messageText) {
+    throw new Error('متن پیام بات خالی است.');
+  }
+
+  const activeConnection = await getActiveChannelSettings(channel);
+  const connectionId = String(activeConnection?.id || '').trim();
+  if (!connectionId) {
+    throw new Error('تنظیمات فعال بات پیدا نشد.');
+  }
+
+  const { data: proxyData, error: proxyError } = await supabase.functions.invoke('bot-admin', {
+    body: {
+      action: 'send_test_message',
+      channel,
+      connectionId,
+      chatId,
+      text: messageText,
+      skipLog: false,
+      extraPayload,
+      fallbackText,
+    },
+  });
+  if (proxyError) throw proxyError;
+  if (!proxyData?.success) {
+    throw new Error(String(proxyData?.message || 'ارسال پیام بات ناموفق بود.'));
+  }
+
+  const providerResponse = proxyData?.provider_result || {};
+  const providerMessageId = String(
+    providerResponse?.result?.message_id
+    || providerResponse?.message_id
+    || providerResponse?.data?.message_id
+    || ''
+  ).trim() || null;
+
+  const { error: insertError } = await supabase
+    .from('counterparty_bot_messages')
+    .insert([{
+      bot_group_id: group.id || null,
+      customer_id: group.customer_id || null,
+      supplier_id: group.supplier_id || null,
+      channel_type: channel,
+      direction: 'outbound',
+      message_type: String(messageType || 'text').trim() || 'text',
+      chat_id: chatId,
+      provider_message_id: providerMessageId,
+      content_text: messageText,
+      payload: {
+        ...(payload || {}),
+        provider_response: providerResponse || {},
+      },
+    }]);
+  if (insertError) throw insertError;
+
+  return proxyData;
 };
 
 export const sendCustomerBotMessage = async ({

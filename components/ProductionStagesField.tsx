@@ -255,6 +255,19 @@ const stringifyTemplateValue = (value: any): string => {
   return String(value);
 };
 
+const assignProcessLinkedRecordFields = (
+  target: Record<string, any>,
+  moduleId: string | null | undefined,
+  record: Record<string, any> | null | undefined,
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId || !record) return;
+  Object.entries(record).forEach(([fieldKey, value]) => {
+    target[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
+  });
+  target[createProcessLinkedFieldKey(normalizedModuleId, WORKFLOW_ASSIGNEE_FIELD_KEY)] = buildResolvedAssigneeCombo(record);
+};
+
 const getInputLikeElement = (target: any): HTMLInputElement | HTMLTextAreaElement | null =>
   target?.input
   || target?.resizableTextArea?.textArea
@@ -1216,6 +1229,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         Object.assign(record, sourceRecordSnapshot || {});
         if (sourceRecordSnapshot) {
           record[WORKFLOW_ASSIGNEE_FIELD_KEY] = buildResolvedAssigneeCombo(sourceRecordSnapshot);
+          assignProcessLinkedRecordFields(record, moduleId, sourceRecordSnapshot);
         }
       } catch (error) {
         console.warn('Could not load source record for task template rendering', error);
@@ -1242,10 +1256,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           if (error) throw error;
           if (!data) return;
           const linkedRecord = data as Record<string, any>;
-          Object.entries(data).forEach(([fieldKey, value]) => {
-            record[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
-          });
-          record[createProcessLinkedFieldKey(normalizedModuleId, WORKFLOW_ASSIGNEE_FIELD_KEY)] = buildResolvedAssigneeCombo(linkedRecord);
+          assignProcessLinkedRecordFields(record, normalizedModuleId, linkedRecord);
         } catch (error) {
           console.warn('Could not load linked process record for task template rendering', error);
         }
@@ -3229,6 +3240,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const stageProcessLinkMap = draftToCreate?.process_link_map && typeof draftToCreate.process_link_map === 'object'
         ? draftToCreate.process_link_map
         : {};
+      const effectiveStageProcessLinkMap = mergeProcessLinkMaps(
+        recordId && moduleId ? { [isProductionOrder ? 'production_orders' : moduleId]: String(recordId) } : {},
+        stageProcessLinkMap,
+      );
       const stageTargetModuleIds = normalizeProcessTargetModuleIds(
         draftToCreate?.process_target_module_ids,
         moduleId
@@ -3273,7 +3288,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         taskName: values?.name,
         taskType,
         dueDate,
-        processLinkMap: stageProcessLinkMap,
+        processLinkMap: effectiveStageProcessLinkMap,
         previousTask: previousTaskForTemplate,
       });
       const resolvedTaskName = String(
@@ -3348,7 +3363,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ...(taskType ? { task_type: taskType } : {}),
           process_automation_rules: stageAutomationRules,
           process_target_module_ids: stageTargetModuleIds,
-          process_links: stageProcessLinkMap,
+          process_links: effectiveStageProcessLinkMap,
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
@@ -5295,6 +5310,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
           recurrenceBase?.process_links && typeof recurrenceBase.process_links === 'object' ? recurrenceBase.process_links : {},
         );
+        const effectiveProcessLinkMap = mergeProcessLinkMaps(
+          recordId && moduleId ? { [moduleId]: String(recordId) } : {},
+          processLinkMap,
+        );
         const stageTargetModuleIds = normalizeProcessTargetModuleIds(
           stage?.process_target_module_ids || recurrenceBase?.process_target_module_ids,
           moduleId
@@ -5303,7 +5322,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           taskName: stageName,
           taskType: stageTaskType,
           dueDate,
-          processLinkMap,
+          processLinkMap: effectiveProcessLinkMap,
           previousTask: previousResolvedTask,
         });
         const resolvedStageName = String(
@@ -5348,7 +5367,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             ...(stageTaskType ? { task_type: stageTaskType } : {}),
             process_automation_rules: stageAutomationRules,
             process_target_module_ids: stageTargetModuleIds,
-            process_links: processLinkMap,
+            process_links: effectiveProcessLinkMap,
             [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
             [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
             [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,

@@ -1450,9 +1450,37 @@ export const usePrintManager = ({
 
   const resolveVariableValue = useCallback(
     (path: string): string => {
+      const normalizeOptionalDisplay = (value: any) => {
+        const text = String(value ?? '').trim();
+        return text && text !== '-' ? text : '';
+      };
+
+      const resolveRecordFieldDisplay = (fieldKey: string) => {
+        const raw = data?.[fieldKey];
+        if (raw === null || raw === undefined || raw === '') return '';
+        const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === fieldKey) : null;
+        if (field) {
+          const option = Array.isArray(field.options) ? field.options.find((item: any) => String(item.value) === String(raw)) : null;
+          if (option?.label) return normalizeOptionalDisplay(option.label);
+          try {
+            const rendered = formatPrintValue(field, raw);
+            if (rendered) return normalizeOptionalDisplay(localizePlainText(rendered));
+          } catch {
+            // noop
+          }
+        }
+        return normalizeOptionalDisplay(localizePlainText(raw));
+      };
+
       const now = new Date();
       if (path === 'system.today_date') return toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'));
       if (path === 'system.today_datetime') return `${toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'))} ${now.toLocaleTimeString('fa-IR')}`;
+      if (path === 'system.letter_sender_display') {
+        return resolveRecordFieldDisplay('sender_manual') || resolveRecordFieldDisplay('sender_profile_id');
+      }
+      if (path === 'system.letter_recipient_display') {
+        return resolveRecordFieldDisplay('recipient_manual') || resolveRecordFieldDisplay('recipient_profile_id');
+      }
       if (path === 'system.compact_fields_table') return buildCompactFieldsTableHtml();
       if (path === 'system.compact_tables_blocks') return buildCompactTablesBlocksHtml();
       if (path === 'system.package_summary_table') return buildPackageSummaryTableHtml();

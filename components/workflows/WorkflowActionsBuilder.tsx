@@ -109,6 +109,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         manual_chat_ids: [],
         title: '',
         message: '',
+        attachment_fields: [],
         variable_field: '',
         variable_target: 'message',
       };
@@ -1042,6 +1043,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
             placeholder={`متن پیام (${providerLabel})`}
           />
+          {isRubika ? (
+            <>
+              <div className="text-xs text-gray-500">فیلدهای تصویر/فایل برای ارسال در روبیکا</div>
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(config.attachment_fields) ? config.attachment_fields : []}
+                disabled={disabled || noteAttachmentFieldOptions.length === 0}
+                options={noteAttachmentFieldOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
+                placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
+                className="w-full"
+                maxTagCount="responsive"
+              />
+            </>
+          ) : null}
           {renderVariableTools(action, [
             { key: 'title', label: `عنوان پیام (${providerLabel})` },
             { key: 'message', label: `متن پیام (${providerLabel})` },

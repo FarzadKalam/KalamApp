@@ -1,7 +1,7 @@
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
-import { sendBotMessageViaGateway } from './botGateway';
+import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
 import { renderTemplateText, formatTemplateValueByField } from './messageTemplateRenderer';
 import { normalizeNoteScope } from './noteScope';
@@ -21,6 +21,13 @@ import { NoteAttachment, serializeNoteContent } from './noteContent';
 
 type WorkflowEvent = 'create' | 'upsert' | 'interval';
 type WorkflowRunType = 'event' | 'scheduled';
+type CounterpartyBotGroupRow = {
+  id?: string | null;
+  customer_id?: string | null;
+  supplier_id?: string | null;
+  channel_type?: 'rubika' | 'bale' | 'telegram' | string | null;
+  bot_chat_id?: string | null;
+};
 
 type RunWorkflowArgs = {
   moduleId: string;
@@ -1012,6 +1019,25 @@ const resolveCounterpartyBotGroupChatIds = async (
   return Array.from(new Set(chatIds));
 };
 
+const resolveCounterpartyBotGroupsByChatIds = async (
+  channel: 'rubika' | 'bale',
+  chatIds: string[]
+) => {
+  const normalizedChatIds = Array.from(new Set(
+    chatIds.map((value) => String(value || '').trim()).filter(Boolean)
+  ));
+  if (normalizedChatIds.length === 0) return [] as CounterpartyBotGroupRow[];
+
+  const { data, error } = await supabase
+    .from('counterparty_bot_groups')
+    .select('id,customer_id,supplier_id,channel_type,bot_chat_id,status')
+    .eq('channel_type', channel)
+    .eq('status', 'active')
+    .in('bot_chat_id', normalizedChatIds);
+  if (error) throw error;
+  return (data || []) as CounterpartyBotGroupRow[];
+};
+
 const resolveCounterpartyBotChatIdsForRecord = async (
   channel: 'rubika' | 'bale',
   moduleId: string,
@@ -1036,6 +1062,32 @@ const resolveCounterpartyBotChatIdsForRecord = async (
   }
 
   return resolveCounterpartyBotGroupChatIds(channel, Array.from(customerIds), Array.from(supplierIds));
+};
+
+const COUNTERPARTY_RELATED_RECIPIENT_FIELDS = new Set([
+  'customer_id',
+  'related_customer',
+  'supplier_id',
+  'related_supplier',
+]);
+
+const isCounterpartyRelatedRecipientField = (fieldKey: string) => {
+  const raw = String(fieldKey || '').trim();
+  if (COUNTERPARTY_RELATED_RECIPIENT_FIELDS.has(raw)) return true;
+  const processLinked = parseProcessLinkedFieldKey(raw);
+  if (
+    processLinked
+    && ['customers', 'suppliers'].includes(String(processLinked.moduleId || '').trim())
+    && ['id', 'customer_id', 'supplier_id', 'related_customer', 'related_supplier'].includes(String(processLinked.targetFieldKey || '').trim())
+  ) {
+    return true;
+  }
+  const workflowRelated = parseWorkflowRelatedFieldKey(raw);
+  return !!(
+    workflowRelated
+    && ['customers', 'suppliers'].includes(String(workflowRelated.targetModuleId || '').trim())
+    && ['id', 'customer_id', 'supplier_id', 'related_customer', 'related_supplier'].includes(String(workflowRelated.targetFieldKey || '').trim())
+  );
 };
 
 const resolveCommunicationValuesFromFields = async ({
@@ -1191,6 +1243,68 @@ export const resolveNoteAttachmentsFromFields = async ({
   });
 
   return Array.from(deduped.values());
+};
+
+const buildAttachmentNameText = (attachments: Array<{ name?: string; url?: string }>) => {
+  const lines = (attachments || [])
+    .map((item, index) => {
+      const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
+      const url = String(item?.url || '').trim();
+      if (!url) return name;
+      return `${name}: ${url}`;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) return '';
+  return `پیوست‌ها:\n${lines.join('\n')}`;
+};
+
+const buildRubikaLinkedAttachmentMessage = (
+  baseText: string,
+  attachments: Array<{ name?: string; url?: string }>
+) => {
+  const normalizedBaseText = String(baseText || '').trim();
+  const lines: Array<{ text: string; linkUrl?: string }> = [];
+  if (normalizedBaseText) {
+    lines.push({ text: normalizedBaseText });
+  }
+  (attachments || []).forEach((item, index) => {
+    const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
+    const url = String(item?.url || '').trim();
+    lines.push({ text: `پیوست: ${name}`, linkUrl: url || undefined });
+  });
+
+  if (lines.length === 0) {
+    return { text: '', metadata: undefined as Record<string, any> | undefined };
+  }
+
+  let text = '';
+  let cursor = 0;
+  const metaDataParts: Array<Record<string, any>> = [];
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      text += '\n';
+      cursor += 1;
+    }
+    const segment = String(line.text || '');
+    const startIndex = cursor;
+    text += segment;
+    cursor += segment.length;
+    if (line.linkUrl) {
+      metaDataParts.push({
+        type: 'Link',
+        from_index: startIndex,
+        length: segment.length,
+        link_url: line.linkUrl,
+      });
+    }
+  });
+
+  return {
+    text,
+    metadata: metaDataParts.length > 0
+      ? { meta_data_parts: metaDataParts }
+      : undefined,
+  };
 };
 
 const resolveConfiguredActionValue = async (
@@ -1350,8 +1464,24 @@ export const executeWorkflowAction = async (
   if (action.type === 'send_bale_bot' || action.type === 'send_rubika_bot') {
     const isRubika = action.type === 'send_rubika_bot';
     const channel: 'bale' | 'rubika' = isRubika ? 'rubika' : 'bale';
-    const messageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
-    if (!messageText) return;
+    const rawMessageText = renderTemplate(String(config.message || ''), currentRecord, moduleId).trim();
+    const attachments = isRubika
+      ? await resolveNoteAttachmentsFromFields({
+          currentRecord,
+          moduleId,
+          attachmentFields: asArray(config.attachment_fields),
+        })
+      : [];
+    if (!rawMessageText && attachments.length === 0) return;
+    const rubikaLinkedMessage = isRubika && attachments.length > 0
+      ? buildRubikaLinkedAttachmentMessage(rawMessageText, attachments)
+      : null;
+    const messageText = isRubika && attachments.length > 0
+      ? (String(rubikaLinkedMessage?.text || '').trim() || 'پیوست ارسال شد')
+      : rawMessageText;
+    const fallbackText = isRubika && attachments.length > 0
+      ? [rawMessageText, buildAttachmentNameText(attachments)].filter(Boolean).join('\n')
+      : undefined;
     const titleText = renderTemplate(String(config.title || ''), currentRecord, moduleId).trim();
     const configuredRecipientFields = asArray(config.recipient_fields)
       .map((item) => String(item || '').trim())
@@ -1373,8 +1503,13 @@ export const executeWorkflowAction = async (
       ? String(currentRecord?.rubika_chat_id || '').trim()
       : String(currentRecord?.bale_chat_id || '').trim();
     const hasExplicitRecipients = configuredRecipientFields.length > 0 || configuredRecipientAssignees.length > 0;
+    const canUseCounterpartyFallbackForExplicitRecipients = isRubika
+      && configuredRecipientFields.some((fieldKey) => isCounterpartyRelatedRecipientField(fieldKey))
+      && recipientsFromFields.length === 0;
     const fallbackRecipients =
-      recipientsFromFields.length > 0 || recipientsManual.length > 0 || hasExplicitRecipients
+      recipientsFromFields.length > 0
+      || recipientsManual.length > 0
+      || (hasExplicitRecipients && !canUseCounterpartyFallbackForExplicitRecipients)
         ? []
         : [
             ...[directFallbackChatId].filter(Boolean),
@@ -1385,7 +1520,29 @@ export const executeWorkflowAction = async (
     ).filter(Boolean);
     if (recipients.length === 0) return;
 
-    for (const chatId of recipients) {
+    const handledChatIds = new Set<string>();
+    if (isRubika) {
+      const groupRows = await resolveCounterpartyBotGroupsByChatIds('rubika', recipients);
+      for (const group of groupRows) {
+        const groupChatId = String(group?.bot_chat_id || '').trim();
+        if (!groupChatId || handledChatIds.has(groupChatId)) continue;
+        handledChatIds.add(groupChatId);
+        await sendCounterpartyBotGroupMessage({
+          group,
+          text: messageText,
+          extraPayload: rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined,
+          fallbackText,
+          payload: {
+            attachments,
+            workflow_action_type: action.type,
+            workflow_action_id: (action as any)?.id || null,
+          },
+          messageType: attachments.length > 0 ? 'file' : 'text',
+        });
+      }
+    }
+
+    for (const chatId of recipients.filter((recipient) => !handledChatIds.has(String(recipient || '').trim()))) {
       await sendBotMessageViaGateway({
         channel,
         chatId,
