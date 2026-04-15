@@ -16,12 +16,23 @@ const DEFAULT_RELATION_TARGET_FIELDS: Record<string, string> = {
   recruitment_applicants: 'name',
 };
 
+const LEGACY_TARGET_FIELD_ALIASES: Record<string, Record<string, string>> = {
+  customers: { name: 'full_name' },
+  suppliers: { name: 'business_name' },
+  profiles: { name: 'full_name' },
+  employees: { name: 'full_name' },
+  org_roles: { name: 'title' },
+  work_schedules: { name: 'title' },
+  journal_entries: { name: 'entry_no' },
+};
+
 export const getPreferredRelationTargetField = (
   targetModule?: string | null,
   explicitTargetField?: string | null
 ): string => {
   const moduleName = String(targetModule || '').trim();
   const explicit = String(explicitTargetField || '').trim();
+<<<<<<< HEAD
   const defaultField = DEFAULT_RELATION_TARGET_FIELDS[moduleName] || 'name';
 
   if (!explicit) return defaultField;
@@ -61,6 +72,17 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   employee_contracts: ['name', 'system_code', 'status'],
   recruitment_applicants: ['name', 'system_code', 'mobile', 'status'],
   marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'status'],
+=======
+  if (explicit) {
+    const aliasMap = LEGACY_TARGET_FIELD_ALIASES[moduleName];
+    const normalizedExplicit = explicit.toLowerCase();
+    if (aliasMap?.[normalizedExplicit]) {
+      return aliasMap[normalizedExplicit];
+    }
+    return explicit;
+  }
+  return DEFAULT_RELATION_TARGET_FIELDS[moduleName] || 'name';
+>>>>>>> 6cdc742 (wip: local changes)
 };
 
 export const getRelationLabelFallbackFields = (targetModule?: string | null): string[] => {

@@ -44,6 +44,17 @@ const normalizeBlocks = (blocks: BlockDefinition[]) =>
     .sort((a, b) => (a.order || 0) - (b.order || 0))
     .map((block, index) => ({ ...block, order: index + 1 }));
 
+const mergeRequiredTagsField = (
+  baseFields: ModuleField[],
+  incomingFields: ModuleField[]
+): ModuleField[] => {
+  const baseTagsField = (baseFields || []).find((field) => String(field?.key || '').trim() === 'tags');
+  if (!baseTagsField) return incomingFields;
+  const hasIncomingTags = (incomingFields || []).some((field) => String(field?.key || '').trim() === 'tags');
+  if (hasIncomingTags) return incomingFields;
+  return [...incomingFields, cloneDeep(baseTagsField)];
+};
+
 const getIncomingModuleSettings = (
   store: ModuleSettingsStore | null | undefined,
   moduleId: string
@@ -60,9 +71,12 @@ export const applyModuleSettingsStoreToRegistry = (
     const base = baseModuleRegistrySnapshot[moduleId];
     const incoming = getIncomingModuleSettings(store, moduleId);
     const incomingSchema = incoming?.schema;
+    const baseFields = cloneDeep((base?.fields || []) as ModuleField[]);
+    const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
+    const resolvedFields = mergeRequiredTagsField(baseFields, incomingFields);
 
     moduleDef.fields = normalizeFields(
-      cloneDeep((incomingSchema?.fields || base?.fields || []) as ModuleField[])
+      resolvedFields
     );
     moduleDef.blocks = normalizeBlocks(
       cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[])

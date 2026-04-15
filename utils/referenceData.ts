@@ -38,6 +38,7 @@ const dynamicOptionsCache = new Map<string, { data: DynamicOptionRow[]; expiresA
 const dynamicOptionsPromiseCache = new Map<string, Promise<DynamicOptionRow[]>>();
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
+const RECORD_TAGS_FETCH_CHUNK_SIZE = 25;
 
 const formulaOptionsCache: {
   data: DynamicOptionRow[] | null;
@@ -151,13 +152,21 @@ export const fetchRecordTagsMap = async (
   }
 
   const pending = (async () => {
-    const { data } = await supabaseClient
-      .from('record_tags')
-      .select('record_id, tags(id, title, color)')
-      .in('record_id', uniqueRecordIds);
+    const rows: any[] = [];
+    for (let i = 0; i < uniqueRecordIds.length; i += RECORD_TAGS_FETCH_CHUNK_SIZE) {
+      const chunk = uniqueRecordIds.slice(i, i + RECORD_TAGS_FETCH_CHUNK_SIZE);
+      const { data, error } = await supabaseClient
+        .from('record_tags')
+        .select('record_id, tags(id, title, color)')
+        .in('record_id', chunk);
+      if (error) throw error;
+      if (Array.isArray(data) && data.length > 0) {
+        rows.push(...data);
+      }
+    }
 
     const normalized: Record<string, any[]> = {};
-    (data || []).forEach((item: any) => {
+    rows.forEach((item: any) => {
       const recordId = String(item?.record_id || '').trim();
       if (!recordId) return;
       if (!normalized[recordId]) {

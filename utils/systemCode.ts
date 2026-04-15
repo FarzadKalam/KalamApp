@@ -29,6 +29,7 @@ const MODULES_WITH_SYSTEM_CODE = new Set([
 export const supportsSystemCode = (moduleName?: string | null) => {
   const normalized = String(moduleName || '').trim();
   if (!normalized) return false;
+  if (normalized === 'profiles') return false;
   return MODULES_WITH_SYSTEM_CODE.has(normalized);
 };
 

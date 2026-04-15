@@ -49,6 +49,7 @@ const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
 const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
 const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
+<<<<<<< HEAD
 const SEEN_BOT_MESSAGES_STORAGE_KEY = 'notif_seen_bot_messages_v1';
 const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
 const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
@@ -243,6 +244,10 @@ type VoipThreadItem = {
   moduleId: string | null;
   recordId: string | null;
 };
+=======
+const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, 'primary' | 'id_only' | 'owner_only' | 'none'>();
+type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities';
+>>>>>>> 6cdc742 (wip: local changes)
 
 const loadSeenSet = (key: string) => {
   if (typeof window === 'undefined') return new Set<string>();
@@ -1263,6 +1268,7 @@ useEffect(() => {
     setRecordTitleMap((prev) => ({ ...prev, ...map }));
   };
 
+<<<<<<< HEAD
   const collectRecordReferences = (items: any[]) => (
     (items || [])
       .map((item: any) => ({
@@ -1271,6 +1277,25 @@ useEffect(() => {
       }))
       .filter((item) => item.module_id && item.record_id)
   );
+=======
+  const fetchAssignedIdsForModule = async (table: string, userId: string, roleId: string | null) => {
+    const filtersPrimary = roleId
+      ? `and(assignee_type.eq.user,assignee_id.eq.${userId}),and(assignee_type.eq.role,assignee_role_id.eq.${roleId}),and(assignee_type.eq.role,assignee_id.eq.${roleId})`
+      : `and(assignee_type.eq.user,assignee_id.eq.${userId}),assignee_id.eq.${userId}`;
+    const filtersLegacy = roleId
+      ? `and(assignee_type.eq.user,assignee_id.eq.${userId}),and(assignee_type.eq.role,assignee_id.eq.${roleId})`
+      : `and(assignee_type.eq.user,assignee_id.eq.${userId}),assignee_id.eq.${userId}`;
+    const filtersNoType = `assignee_id.eq.${userId}`;
+    const ownerFallbackQuery = async () => {
+      const { data, error } = await supabase
+        .from(table)
+        .select('id')
+        .limit(200)
+        .eq('owner_id', userId);
+      if (error) return { data: [] as any[], error };
+      return { data: data || [], error: null };
+    };
+>>>>>>> 6cdc742 (wip: local changes)
 
   const getCentralRecordLabel = (moduleId?: string | null, recordId?: string | null, fallback?: string | null) => {
     const normalizedModuleId = String(moduleId || '').trim();
@@ -1338,6 +1363,7 @@ useEffect(() => {
       }
     };
 
+<<<<<<< HEAD
     const queryByMode = async (mode: AssigneeQueryMode) => {
       if (mode === 'none') return { data: [] as any[], error: null };
 
@@ -1417,6 +1443,31 @@ useEffect(() => {
 
     const mode = await resolveAssigneeQueryModeForTable(normalizedTable);
     let result = await queryByMode(mode);
+=======
+    if (cachedMode === 'owner_only') {
+      const fallback = await ownerFallbackQuery();
+      if (!fallback.error) return fallback.data || [];
+      if (isMissingColumnError(fallback.error, 'owner_id')) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(table, 'none');
+      }
+      return [];
+    }
+
+    // Compatibility for DBs where projects still rely on owner_id and do not expose assignee_* columns.
+    if (table === 'projects') {
+      const fallback = await ownerFallbackQuery();
+      if (!fallback.error) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(table, 'owner_only');
+        return fallback.data || [];
+      }
+      if (isMissingColumnError(fallback.error, 'owner_id')) {
+        ASSIGNEE_QUERY_MODE_CACHE.set(table, 'none');
+      }
+      return [];
+    }
+
+    let result = await tryQuery(filtersPrimary);
+>>>>>>> 6cdc742 (wip: local changes)
     if (!result.error) {
       return result.data || [];
     }
