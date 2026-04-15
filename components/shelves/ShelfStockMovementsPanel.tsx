@@ -9,6 +9,7 @@ import { applyInventoryDeltas, syncMultipleProductsStock } from '../../utils/inv
 import { convertArea } from '../../utils/unitConversions';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { insertChangelog } from '../editableTable/changelogHelpers';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 interface ShelfStockMovementsPanelProps {
   block: any;
@@ -636,7 +637,7 @@ const ShelfStockMovementsPanel: React.FC<ShelfStockMovementsPanelProps> = ({
       msg.success(editingRow ? 'حواله بروزرسانی شد' : 'حواله با موفقیت ثبت شد');
     } catch (err: any) {
       if (!Array.isArray(err?.errorFields)) {
-        msg.error(err?.message || 'خطا در ثبت حواله');
+        msg.error(toFaErrorMessage(err, 'ثبت حواله ناموفق بود.'));
       }
     } finally {
       setQuickCreateLoading(false);
@@ -691,7 +692,7 @@ const ShelfStockMovementsPanel: React.FC<ShelfStockMovementsPanelProps> = ({
           await loadRows();
           msg.success('حواله حذف شد');
         } catch (err: any) {
-          msg.error(err?.message || 'خطا در حذف حواله');
+          msg.error(toFaErrorMessage(err, 'حذف حواله ناموفق بود.'));
         } finally {
           setActionRowLoadingId(null);
         }

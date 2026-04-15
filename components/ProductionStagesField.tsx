@@ -3167,7 +3167,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       if (error) throw error;
       setLines(prev => prev.map(line => (line.id === lineId ? { ...line, quantity } : line)));
     } catch (err: any) {
-      message.error(`خطا: ${err.message}`);
+      message.error(toFaErrorMessage(err, 'خطا در بروزرسانی تعداد خط تولید'));
     }
   };
 

@@ -266,16 +266,40 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   margin-top: 88px;
 }
 
-.kalam-list-message .ant-message-notice-content,
-.kalam-list-message.ant-message-notice-content {
-  border-radius: 16px;
-  border: 1px solid rgba(148, 96, 20, 0.18);
-  box-shadow: 0 18px 38px rgba(120, 74, 23, 0.22);
-  color: #fff !important;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #7c4a17 0%, #a16207 100%) !important;
+.ant-message {
+  z-index: 14000;
 }
 
+.ant-message .ant-message-notice {
+  padding: 6px 12px;
+}
+
+.ant-message .ant-message-notice-content,
+.kalam-list-message .ant-message-notice-content,
+.kalam-list-message.ant-message-notice-content {
+  min-width: min(420px, calc(100vw - 32px));
+  max-width: min(560px, calc(100vw - 32px));
+  border-radius: 8px;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.18);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.14);
+  color: rgba(15, 23, 42, 0.92) !important;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.96) !important;
+  backdrop-filter: blur(14px);
+}
+
+html.dark .ant-message .ant-message-notice-content,
+html.dark .kalam-list-message .ant-message-notice-content,
+html.dark .kalam-list-message.ant-message-notice-content {
+  border-color: rgba(var(--brand-300-rgb), 0.2);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+  color: rgba(255, 255, 255, 0.9) !important;
+  background: rgba(var(--app-dark-surface-rgb), 0.96) !important;
+}
+
+.ant-message .ant-message-custom-content,
+.ant-message .ant-message-custom-content > span:last-child,
+.ant-message .anticon,
 .kalam-list-message .ant-message-custom-content,
 .kalam-list-message .ant-message-custom-content > span:last-child,
 .kalam-list-message .anticon,
@@ -285,29 +309,67 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   color: inherit;
 }
 
+.ant-message .anticon {
+  color: rgb(var(--brand-500-rgb));
+}
+
+html.dark .ant-message .anticon {
+  color: rgb(var(--brand-300-rgb));
+}
+
+.ant-message .ant-message-success .anticon {
+  color: #059669;
+}
+
+.ant-message .ant-message-warning .anticon {
+  color: #ca8a04;
+}
+
+.ant-message .ant-message-error .anticon {
+  color: #dc2626;
+}
+
 .kalam-list-message--success .ant-message-notice-content,
 .kalam-list-message--success.ant-message-notice-content {
-  background: linear-gradient(135deg, #7c4a17 0%, #a16207 100%) !important;
-  border-color: rgba(251, 191, 36, 0.28);
+  border-color: rgba(5, 150, 105, 0.22);
 }
 
 .kalam-list-message--warning .ant-message-notice-content,
 .kalam-list-message--warning.ant-message-notice-content {
-  background: linear-gradient(135deg, #9a3412 0%, #c2410c 100%) !important;
-  border-color: rgba(251, 191, 36, 0.28);
+  border-color: rgba(202, 138, 4, 0.24);
 }
 
 .kalam-list-message--loading .ant-message-notice-content,
 .kalam-list-message--loading.ant-message-notice-content {
-  background: linear-gradient(135deg, #7c4a17 0%, #92400e 100%) !important;
-  border-color: rgba(251, 191, 36, 0.24);
+  border-color: rgba(var(--brand-500-rgb), 0.24);
 }
 
 .kalam-list-message--error .ant-message-notice-content,
 .kalam-list-message--error.ant-message-notice-content {
-  background: linear-gradient(135deg, #7f1d1d 0%, #b91c1c 100%) !important;
-  border-color: rgba(252, 165, 165, 0.26);
-  box-shadow: 0 18px 38px rgba(127, 29, 29, 0.24);
+  border-color: rgba(220, 38, 38, 0.24);
+}
+
+.ant-notification-notice {
+  border-radius: 8px !important;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.16) !important;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.14) !important;
+}
+
+html.dark .ant-notification-notice {
+  border-color: rgba(var(--brand-300-rgb), 0.2) !important;
+  background: rgb(var(--app-dark-surface-rgb)) !important;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38) !important;
+}
+
+.ant-modal-confirm .ant-modal-content {
+  border-radius: 8px !important;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.14);
+  box-shadow: 0 22px 52px rgba(15, 23, 42, 0.18);
+}
+
+html.dark .ant-modal-confirm .ant-modal-content {
+  border-color: rgba(var(--brand-300-rgb), 0.18);
+  background: rgb(var(--app-dark-surface-rgb));
 }
 
 /* SmartForm header inline controls (assignee/status) */

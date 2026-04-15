@@ -45,6 +45,7 @@ import {
   normalizePhoneThreadValue,
   resolveSmsCounterpartyPhone,
 } from '../utils/notificationViewModels';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -322,6 +323,8 @@ type NotificationStateEntryInput = {
 type SmsThreadItem = {
   id: string;
   phone: string;
+  phoneNumberId: string | null;
+  phoneMatchStatus: string | null;
   title: string;
   preview: string;
   unreadCount: number;
@@ -334,6 +337,8 @@ type SmsThreadItem = {
 type VoipThreadItem = {
   id: string;
   phone: string;
+  phoneNumberId: string | null;
+  phoneMatchStatus: string | null;
   title: string;
   unreadCount: number;
   latestEventAt: number;
@@ -418,6 +423,15 @@ const getModuleFieldOptionLabel = (moduleId: string, fieldKey: string, value: an
   const field = (MODULES[moduleId]?.fields || []).find((item: any) => String(item?.key || '') === fieldKey);
   const option = (field?.options || []).find((item: any) => String(item?.value ?? '').trim() === rawValue);
   return String(option?.label || rawValue).trim();
+};
+
+const getPhoneMatchLabel = (value: any) => {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue || rawValue === 'matched') return '';
+  if (rawValue === 'ambiguous') return 'چند مخاطب احتمالی';
+  if (rawValue === 'unknown') return 'شماره ناشناس';
+  if (rawValue === 'manual') return 'تطبیق دستی';
+  return rawValue;
 };
 
 const isPlainRecord = (value: unknown): value is Record<string, any> =>
@@ -2140,7 +2154,7 @@ useEffect(() => {
   const fetchSmsMessages = async () => {
     const { data, error } = await supabase
       .from('sms_delivery_reports')
-      .select('id, title, module_id, record_id, assignee_id, direction, provider, provider_message_id, sender, recipient, phone_number, message_text, status, error_message, metadata, sent_at, received_at, message_at, created_at, updated_at')
+      .select('id, title, module_id, record_id, assignee_id, direction, provider, provider_message_id, sender, recipient, phone_number, phone_number_id, phone_match_status, message_text, status, error_message, metadata, sent_at, received_at, message_at, created_at, updated_at')
       .order('message_at', { ascending: false })
       .limit(80);
     if (error) {
@@ -2161,7 +2175,7 @@ useEffect(() => {
 
     let query = supabase
       .from('voip_call_logs')
-      .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, assignee_id, started_at, created_at')
+      .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, phone_number_id, phone_match_status, assignee_id, started_at, created_at')
       .eq('direction', 'incoming')
       .order('created_at', { ascending: false })
       .limit(80);
@@ -4064,7 +4078,7 @@ useEffect(() => {
           prev ? prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId) : prev
         ));
       }
-      message.error(String(error?.message || 'ثبت یادداشت ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'ثبت یادداشت ناموفق بود.'));
     } finally {
       setNoteSending(false);
     }
@@ -4204,7 +4218,7 @@ useEffect(() => {
       await refreshSection('notes', { force: true });
       await refreshSection('bot_messages', { force: true });
     } catch (error: any) {
-      message.error(String(error?.message || 'فوروارد پیام ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'فوروارد پیام ناموفق بود.'));
     } finally {
       setForwardSubmitting(false);
     }
@@ -4303,7 +4317,7 @@ useEffect(() => {
       setGroupMemberDrafts([]);
       message.success(editingGroup ? 'گروه ویرایش شد.' : 'گروه ایجاد شد.');
     } catch (error: any) {
-      message.error(String(error?.message || 'ذخیره گروه ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'ذخیره گروه ناموفق بود.'));
     } finally {
       setGroupSubmitting(false);
     }
@@ -4476,7 +4490,7 @@ useEffect(() => {
           kind: 'sms' as const,
           kindLabel: 'پیامک',
           title: String(row?.sender || row?.phone_number || '').trim() || 'پیامک ورودی',
-          body: String(row?.message_text || '').trim() || 'پیامک جدید',
+          body: [getPhoneMatchLabel(row?.phone_match_status), String(row?.message_text || '').trim() || 'پیامک جدید'].filter(Boolean).join(' - '),
           createdAt: row.message_at || row.created_at || null,
           smsMessage: row,
         })),
@@ -4501,9 +4515,12 @@ useEffect(() => {
             kind: 'voip_call' as const,
             kindLabel: 'تماس VoIP',
             title: caller,
-            body: relatedLabel
-              ? `تماس ورودی مرتبط با ${relatedLabel}`
-              : (extension ? `تماس ورودی به داخلی ${toPersianNumber(extension)}` : 'تماس ورودی'),
+            body: [
+              getPhoneMatchLabel(row?.phone_match_status),
+              relatedLabel
+                ? `تماس ورودی مرتبط با ${relatedLabel}`
+                : (extension ? `تماس ورودی به داخلی ${toPersianNumber(extension)}` : 'تماس ورودی'),
+            ].filter(Boolean).join(' - '),
             createdAt: row.created_at || row.started_at || null,
             voipCall: row,
           };
@@ -5542,7 +5559,7 @@ useEffect(() => {
         await refreshSection('sms_messages', { force: true });
       } catch (error: any) {
         setSmsMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticId));
-        message.error(String(error?.message || 'ارسال پیامک ناموفق بود.'));
+        message.error(toFaErrorMessage(error, 'ارسال پیامک ناموفق بود.'));
       } finally {
         setSmsSending(false);
       }
@@ -5586,7 +5603,7 @@ useEffect(() => {
         });
         setSmsText(suggested);
       } catch (error: any) {
-        message.error(String(error?.message || 'پیشنهاد پاسخ پیامک ناموفق بود.'));
+        message.error(toFaErrorMessage(error, 'پیشنهاد پاسخ پیامک ناموفق بود.'));
       } finally {
         setSmsSuggesting(false);
       }
@@ -5633,6 +5650,9 @@ useEffect(() => {
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
                         <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</div>
+                        {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
+                          <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                        ) : null}
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         {thread.unreadCount > 0 ? (
@@ -5672,6 +5692,9 @@ useEffect(() => {
                         </span>
                       ) : null}
                     </div>
+                    {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
+                      <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                    ) : null}
                   </button>
                 ))}
               </div>
@@ -5687,6 +5710,9 @@ useEffect(() => {
                   <div className="mt-1 truncate text-[11px] text-gray-500" dir="ltr">
                     {activeThread?.phone || 'شماره انتخاب نشده'}
                   </div>
+                  {getPhoneMatchLabel(activeThread?.phoneMatchStatus) ? (
+                    <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(activeThread?.phoneMatchStatus)}</div>
+                  ) : null}
                 </div>
                 {activeThread?.moduleId && activeThread?.recordId ? (
                   <Button size="small" icon={<EyeOutlined />} onClick={openRelatedSmsRecord}>
@@ -5716,6 +5742,7 @@ useEffect(() => {
                     const isMine = direction !== 'inbound';
                     const phone = resolveSmsCounterpartyPhone(row);
                     const statusLabel = getModuleFieldOptionLabel('sms_delivery_reports', 'status', row?.status);
+                    const phoneMatchLabel = getPhoneMatchLabel(row?.phone_match_status);
                     const relatedTitle = row.module_id && row.record_id
                       ? getCentralRecordLabel(row.module_id, row.record_id, row.title || phone)
                       : '';
@@ -5732,6 +5759,7 @@ useEffect(() => {
                           <div className="flex items-center gap-2 text-[11px] text-gray-400">
                             <span dir="ltr">{phone}</span>
                             {statusLabel ? <span>{statusLabel}</span> : null}
+                            {phoneMatchLabel ? <span className="text-amber-600 dark:text-amber-300">{phoneMatchLabel}</span> : null}
                             {row.module_id && row.record_id ? (
                               <Button
                                 type="link"
@@ -5807,6 +5835,9 @@ useEffect(() => {
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
                         <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'شماره ثبت نشده'}</div>
+                        {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
+                          <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                        ) : null}
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         {thread.unreadCount > 0 ? (
@@ -5842,6 +5873,9 @@ useEffect(() => {
                         </span>
                       ) : null}
                     </div>
+                    {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
+                      <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                    ) : null}
                   </button>
                 ))}
               </div>
@@ -5857,6 +5891,9 @@ useEffect(() => {
                   <div className="mt-1 truncate text-[11px] text-gray-500" dir="ltr">
                     {activeThread?.phone || 'تماسی انتخاب نشده'}
                   </div>
+                  {getPhoneMatchLabel(activeThread?.phoneMatchStatus) ? (
+                    <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(activeThread?.phoneMatchStatus)}</div>
+                  ) : null}
                 </div>
                 {activeThread?.moduleId && activeThread?.recordId ? (
                   <Button
@@ -5881,6 +5918,7 @@ useEffect(() => {
                   {calls.map((row: any) => {
                     const startedAt = row?.started_at || row?.created_at;
                     const statusLabel = getModuleFieldOptionLabel('voip_call_reports', 'status', row?.status);
+                    const phoneMatchLabel = getPhoneMatchLabel(row?.phone_match_status);
                     const relatedLabel = row?.module_id && row?.record_id
                       ? getCentralRecordLabel(row.module_id, row.record_id, row.title || row.source_number)
                       : '';
@@ -5908,6 +5946,11 @@ useEffect(() => {
                           {statusLabel ? (
                             <span className="rounded-full bg-[rgba(var(--brand-50-rgb),0.9)] px-2 py-0.5 text-gray-600 dark:bg-[rgba(var(--brand-700-rgb),0.22)] dark:text-gray-200">
                               {statusLabel}
+                            </span>
+                          ) : null}
+                          {phoneMatchLabel ? (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
+                              {phoneMatchLabel}
                             </span>
                           ) : null}
                           {relatedLabel ? (
@@ -6061,7 +6104,7 @@ useEffect(() => {
           setBotMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticBotMessageId));
         }
         console.warn('Could not send bot group message', error);
-        message.error(String(error?.message || 'ارسال پیام بات ناموفق بود.'));
+        message.error(toFaErrorMessage(error, 'ارسال پیام بات ناموفق بود.'));
       } finally {
         setBotSending(false);
       }
@@ -6113,7 +6156,7 @@ useEffect(() => {
         });
         setBotMessageText(suggested);
       } catch (error: any) {
-        message.error(String(error?.message || 'پیشنهاد پاسخ بات ناموفق بود.'));
+        message.error(toFaErrorMessage(error, 'پیشنهاد پاسخ بات ناموفق بود.'));
       } finally {
         setBotSuggesting(false);
       }

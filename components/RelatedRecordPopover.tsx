@@ -14,6 +14,7 @@ import { supportsSystemCode } from '../utils/systemCode';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRecordTagsMap } from '../utils/referenceData';
 import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -495,7 +496,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       message.success('تغییرات ذخیره شد.');
     } catch (err: any) {
       console.error(err);
-      message.error(String(err?.message || 'خطا در ذخیره تغییرات.'));
+      message.error(toFaErrorMessage(err, 'ذخیره تغییرات ناموفق بود.'));
     } finally {
       setSavingQuickPreview(false);
     }

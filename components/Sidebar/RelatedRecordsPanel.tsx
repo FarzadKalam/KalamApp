@@ -87,6 +87,16 @@ const isMissingColumnError = (error: any) => {
   return message.includes('does not exist') && message.includes('column');
 };
 
+const fetchRecordPhoneNumberIds = async (entityType: string, entityId: string) => {
+  const { data, error } = await supabase
+    .from('phone_number_links')
+    .select('phone_number_id')
+    .eq('entity_type', entityType)
+    .eq('entity_id', entityId);
+  if (error) throw error;
+  return Array.from(new Set((data || []).map((row: any) => String(row?.phone_number_id || '').trim()).filter(Boolean)));
+};
+
 const buildPaymentRows = (invoices: any[], relationLabel: string) => (
   (invoices || []).flatMap((invoice: any) =>
     (invoice.payments || []).map((payment: any, index: number) => ({
@@ -430,6 +440,26 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
               .eq('record_id', currentRecordId),
             tab.filters,
           ).order('created_at', { ascending: false });
+          setItems(data || []);
+          await fetchProfileNames(data || []);
+          return;
+        }
+
+        if (tab.relationType === 'phone_directory' && tab.targetModule) {
+          const phoneNumberIds = await fetchRecordPhoneNumberIds(currentModuleId, currentRecordId);
+          if (!phoneNumberIds.length) {
+            setItems([]);
+            return;
+          }
+
+          const orderField = tab.targetModule === 'sms_delivery_reports' ? 'message_at' : 'created_at';
+          const { data } = await applyTabFilters(
+            supabase
+              .from(getModuleTableName(tab.targetModule))
+              .select('*')
+              .in('phone_number_id', phoneNumberIds),
+            tab.filters,
+          ).order(orderField, { ascending: false });
           setItems(data || []);
           await fetchProfileNames(data || []);
           return;

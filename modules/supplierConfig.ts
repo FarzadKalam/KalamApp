@@ -125,7 +125,7 @@ export const supplierModule: ModuleDefinition = {
       id: 'supplier_sms_reports',
       title: 'پیامک‌ها',
       icon: 'MessageOutlined',
-      relationType: 'record_context',
+      relationType: 'phone_directory',
       targetModule: 'sms_delivery_reports',
       disableCreate: true
     },
@@ -133,7 +133,7 @@ export const supplierModule: ModuleDefinition = {
       id: 'supplier_voip_calls',
       title: 'تماس‌ها',
       icon: 'PhoneOutlined',
-      relationType: 'record_context',
+      relationType: 'phone_directory',
       targetModule: 'voip_call_reports',
       disableCreate: true
     },

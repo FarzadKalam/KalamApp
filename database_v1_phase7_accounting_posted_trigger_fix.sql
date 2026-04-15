@@ -56,4 +56,3 @@ grant execute on function public.trg_validate_posted_journal_entry() to authenti
 -- 1) This migration only patches trigger behavior.
 -- 2) Existing data/schema stay unchanged.
 -- -----------------------------------------------------
-

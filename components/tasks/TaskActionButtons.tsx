@@ -5,6 +5,7 @@ import PersianDatePicker from '../PersianDatePicker';
 import { isTaskDoneStatus } from '../../utils/taskCompletion';
 import { updateTaskDueDateWithAutomation, updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { getTaskStatusSwatchColor } from '../../utils/processTaskStatusOptions';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 type TaskActionButtonsProps = {
   task: any;
@@ -103,7 +104,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       message.success('فعالیت تکمیل شد');
     } catch (error: any) {
       await emitTaskUpdate(task);
-      message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
+      message.error(toFaErrorMessage(error, 'تغییر وضعیت فعالیت ناموفق بود'));
     } finally {
       setSavingComplete(false);
     }
@@ -126,7 +127,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       message.success('فعالیت در حال انجام شد');
     } catch (error: any) {
       await emitTaskUpdate(task);
-      message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
+      message.error(toFaErrorMessage(error, 'تغییر وضعیت فعالیت ناموفق بود'));
     } finally {
       setSavingStart(false);
     }
@@ -149,7 +150,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       message.success('فعالیت در وضعیت بازبینی قرار گرفت');
     } catch (error: any) {
       await emitTaskUpdate(task);
-      message.error(error?.message || 'تغییر وضعیت فعالیت ناموفق بود');
+      message.error(toFaErrorMessage(error, 'تغییر وضعیت فعالیت ناموفق بود'));
     } finally {
       setSavingReview(false);
     }
@@ -169,7 +170,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       setRescheduleOpen(false);
       message.success('موعد انجام بروزرسانی شد');
     } catch (error: any) {
-      message.error(error?.message || 'بروزرسانی موعد انجام ناموفق بود');
+      message.error(toFaErrorMessage(error, 'بروزرسانی موعد انجام ناموفق بود'));
     } finally {
       setSavingReschedule(false);
     }

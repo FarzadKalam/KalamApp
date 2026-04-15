@@ -492,7 +492,7 @@ const Login = () => {
       if (raw.includes('__otp_user_inactive__')) {
         message.error('حساب کاربری شما غیرفعال است و امکان ورود وجود ندارد.');
       } else {
-        message.error(`خطا در ورود: ${error.message}`);
+        message.error(toFaErrorMessage(error, 'ورود ناموفق بود.'));
       }
     } finally {
       setLoading(false);
@@ -610,7 +610,7 @@ const Login = () => {
     });
 
     if (error) {
-      message.error(`خطا در ارسال ایمیل: ${error.message}`);
+      message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.'));
     } else {
       message.success('لینک بازیابی رمز عبور ارسال شد');
     }
@@ -638,7 +638,7 @@ const Login = () => {
       window.history.replaceState({}, document.title, '/login');
         navigate(postLoginRedirect, { replace: true });
     } catch (error: any) {
-      message.error(`خطا در تغییر رمز: ${error.message}`);
+      message.error(toFaErrorMessage(error, 'تغییر رمز عبور ناموفق بود.'));
     } finally {
       setLoading(false);
     }

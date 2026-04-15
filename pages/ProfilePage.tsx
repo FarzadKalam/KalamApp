@@ -28,6 +28,7 @@ import { SOFTWARE_ROLE_OPTIONS, canManageSuperAdminByRoleContext, canManageUsers
 import PhoneActionsPopover from '../components/PhoneActionsPopover';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 const normalizeOtpToken = (value: unknown): string =>
     normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
@@ -417,7 +418,7 @@ const ProfilePage: React.FC = () => {
             redirectTo: `${window.location.origin}/login`,
         });
         if (error) {
-            message.error('خطا در ارسال ایمیل: ' + error.message);
+            message.error(toFaErrorMessage(error, 'ارسال ایمیل ناموفق بود.'));
         } else {
             message.success('لینک بازیابی رمز به ایمیل ارسال شد');
         }
@@ -439,7 +440,7 @@ const ProfilePage: React.FC = () => {
             setRecord((prev: any) => ({ ...(prev || {}), is_active: checked }));
             message.success('وضعیت کاربر بروزرسانی شد');
         } catch (error: any) {
-            message.error('خطا در بروزرسانی وضعیت: ' + String(error?.message || error));
+            message.error(toFaErrorMessage(error, 'بروزرسانی وضعیت ناموفق بود.'));
         } finally {
             setActiveToggleLoading(false);
         }
@@ -463,7 +464,7 @@ const ProfilePage: React.FC = () => {
             setPhoneOtpRequested(true);
             message.success('کد تایید شماره موبایل ارسال شد.');
         } catch (err: any) {
-            message.error('خطا در ارسال کد تایید شماره: ' + String(err?.message || err));
+            message.error(toFaErrorMessage(err, 'ارسال کد تایید شماره ناموفق بود.'));
         } finally {
             setPhoneOtpLoading(false);
         }
@@ -494,7 +495,7 @@ const ProfilePage: React.FC = () => {
             message.success('شماره موبایل برای ورود پیامکی تایید شد.');
             await fetchProfile();
         } catch (err: any) {
-            message.error('خطا در تایید شماره موبایل: ' + String(err?.message || err));
+            message.error(toFaErrorMessage(err, 'تایید شماره موبایل ناموفق بود.'));
         } finally {
             setPhoneOtpLoading(false);
         }
@@ -581,7 +582,7 @@ const ProfilePage: React.FC = () => {
             form.resetFields();
             setAvatarUrl(null);
         } catch (err: any) {
-            message.error('خطا: ' + err.message);
+            message.error(toFaErrorMessage(err, 'ذخیره پروفایل ناموفق بود.'));
         } finally {
             setSubmitting(false);
         }

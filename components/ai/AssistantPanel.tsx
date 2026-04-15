@@ -7,6 +7,7 @@ import { MODULES } from '../../moduleRegistry';
 import { AI_CONTEXT_EVENT } from '../../utils/aiAssistantEvents';
 import AiSparkleIcon from './AiSparkleIcon';
 import { AI_INSTRUCTIONS_DOCUMENT_TYPE, isAiInstructionsConfigured } from '../../utils/aiKnowledge';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 type AssistantContext = {
   route?: string;
@@ -202,7 +203,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
         }));
       setMessages(nextMessages);
     } catch (error: any) {
-      message.error(String(error?.message || 'خواندن تاریخچه چت ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'خواندن تاریخچه چت ناموفق بود.'));
     } finally {
       setLoadingThread(false);
     }
@@ -274,7 +275,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
         },
       ]);
     } catch (error: any) {
-      message.error(String(error?.message || 'ارتباط با دستیار ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'ارتباط با دستیار ناموفق بود.'));
       setMessages((prev) => [
         ...prev,
         {
@@ -303,7 +304,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
       setMessages([]);
       message.success('تاریخچه چت این صفحه پاک شد.');
     } catch (error: any) {
-      message.error(String(error?.message || 'پاک کردن چت ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'پاک کردن چت ناموفق بود.'));
     } finally {
       setDeletingThread(false);
     }

@@ -328,11 +328,11 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
   });
 
   if (!response.ok) {
-    throw new Error('Unauthorized');
+    throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   }
 
   const user = await response.json();
-  if (!user?.id) throw new Error('Unauthorized');
+  if (!user?.id) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   return user;
 };
 
@@ -2286,19 +2286,19 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders });
   }
   if (req.method !== 'POST') {
-    return json(405, { success: false, message: 'Method not allowed' });
+    return json(405, { success: false, message: 'روش ارسال درخواست معتبر نیست.' });
   }
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!supabaseUrl || !serviceRoleKey) {
-      return json(500, { success: false, message: 'Supabase function secrets are not configured.' });
+      return json(500, { success: false, message: 'تنظیمات سرور کامل نیست. متغیرهای Supabase Function را بررسی کنید.' });
     }
 
     const authHeader = req.headers.get('authorization') || '';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (!token) return json(401, { success: false, message: 'Unauthorized' });
+    if (!token) return json(401, { success: false, message: 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.' });
 
     const user = await verifyUserToken(supabaseUrl, serviceRoleKey, token);
     const authContext = await loadUserContext(supabaseUrl, serviceRoleKey, user);

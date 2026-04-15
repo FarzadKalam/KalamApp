@@ -31,6 +31,7 @@ import { getDefaultWorkflowOperator, getWorkflowOperatorOptions, workflowOperato
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../utils/workflowHelpers';
 import { createWorkflowId } from '../utils/workflowTypes';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 interface ViewManagerProps {
   moduleId: string;
@@ -288,7 +289,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
         onViewChange(savedData, savedData.config);
       }
     } catch (err: any) {
-      message.error(`خطا: ${err.message}`);
+      message.error(toFaErrorMessage(err, 'ذخیره نما ناموفق بود.'));
     }
   };
 

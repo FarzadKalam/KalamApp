@@ -42,40 +42,106 @@ import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 
 // تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
 
-const ProfilePage = lazy(() => import("./pages/ProfilePage"));
-const SettingsPage = lazy(() => import("./pages/Settings/SettingsPage"));
-const ModuleListRefine = lazy(() => import("./pages/ModuleList_Refine"));
-const ModuleShow = lazy(() => import("./pages/ModuleShow"));
-const ModuleCreate = lazy(() =>
-  import("./pages/ModuleCreate").then((module) => ({ default: module.ModuleCreate }))
-);
-const Login = lazy(() => import("./pages/Login"));
-const Dashboard = lazy(() => import("./pages/Dashboard"));
-const AccountingPage = lazy(() => import("./pages/AccountingPage"));
-const AccountingAccountReviewPage = lazy(() => import("./pages/AccountingAccountReviewPage"));
-const AccountingReportsPage = lazy(() => import("./pages/AccountingReportsPage"));
-const AccountingReportViewerPage = lazy(() => import("./pages/AccountingReportViewerPage"));
-const AccountingSettingsPage = lazy(() => import("./pages/AccountingSettingsPage"));
-const ChartOfAccountsTreePage = lazy(() => import("./pages/ChartOfAccountsTreePage"));
-const AccountingRecordPage = lazy(() => import("./pages/AccountingRecordPage"));
-const CashBankPage = lazy(() => import("./pages/CashBankPage"));
-const JournalEntryCreatePage = lazy(() => import("./pages/JournalEntryCreatePage"));
-const JournalEntryShowPage = lazy(() => import("./pages/JournalEntryShowPage"));
-const InquiryForm = lazy(() => import("./pages/InquiryForm"));
-const ProductionGroupOrdersList = lazy(() => import("./pages/ProductionGroupOrdersList"));
-const ProductionGroupOrderWizard = lazy(() => import("./pages/ProductionGroupOrderWizard"));
-const HRPage = lazy(() => import("./pages/HRPage"));
-const FilesGalleryPage = lazy(() => import("./pages/FilesGalleryPage"));
-const WebFormsHubPage = lazy(() => import("./pages/WebFormsHubPage"));
-const WebFormBuilderPage = lazy(() => import("./pages/WebFormBuilderPage"));
-const ReportsHubPage = lazy(() => import("./pages/ReportsHubPage"));
-const ReportBuilderPage = lazy(() => import("./pages/ReportBuilderPage"));
-const ReportViewerPage = lazy(() => import("./pages/ReportViewerPage"));
-const PublicSite = lazy(() => import("./pages/PublicSite"));
-const WorkSchedulesPage = lazy(() => import("./pages/WorkSchedulesPage"));
-const HrQuickRequestPage = lazy(() => import("./pages/HrQuickRequestPage"));
-const RecycleBinPage = lazy(() => import("./pages/RecycleBinPage"));
-const ShareTargetPage = lazy(() => import("./pages/ShareTargetPage"));
+const loadProfilePage = () => import("./pages/ProfilePage");
+const loadSettingsPage = () => import("./pages/Settings/SettingsPage");
+const loadModuleListRefine = () => import("./pages/ModuleList_Refine");
+const loadModuleShow = () => import("./pages/ModuleShow");
+const loadModuleCreate = () => import("./pages/ModuleCreate").then((module) => ({ default: module.ModuleCreate }));
+const loadLogin = () => import("./pages/Login");
+const loadDashboard = () => import("./pages/Dashboard");
+const loadAccountingPage = () => import("./pages/AccountingPage");
+const loadAccountingAccountReviewPage = () => import("./pages/AccountingAccountReviewPage");
+const loadAccountingReportsPage = () => import("./pages/AccountingReportsPage");
+const loadAccountingReportViewerPage = () => import("./pages/AccountingReportViewerPage");
+const loadAccountingSettingsPage = () => import("./pages/AccountingSettingsPage");
+const loadChartOfAccountsTreePage = () => import("./pages/ChartOfAccountsTreePage");
+const loadAccountingRecordPage = () => import("./pages/AccountingRecordPage");
+const loadCashBankPage = () => import("./pages/CashBankPage");
+const loadJournalEntryCreatePage = () => import("./pages/JournalEntryCreatePage");
+const loadJournalEntryShowPage = () => import("./pages/JournalEntryShowPage");
+const loadInquiryForm = () => import("./pages/InquiryForm");
+const loadProductionGroupOrdersList = () => import("./pages/ProductionGroupOrdersList");
+const loadProductionGroupOrderWizard = () => import("./pages/ProductionGroupOrderWizard");
+const loadHRPage = () => import("./pages/HRPage");
+const loadFilesGalleryPage = () => import("./pages/FilesGalleryPage");
+const loadWebFormsHubPage = () => import("./pages/WebFormsHubPage");
+const loadWebFormBuilderPage = () => import("./pages/WebFormBuilderPage");
+const loadReportsHubPage = () => import("./pages/ReportsHubPage");
+const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
+const loadReportViewerPage = () => import("./pages/ReportViewerPage");
+const loadPublicSite = () => import("./pages/PublicSite");
+const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
+const loadHrQuickRequestPage = () => import("./pages/HrQuickRequestPage");
+const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
+const loadShareTargetPage = () => import("./pages/ShareTargetPage");
+
+const ProfilePage = lazy(loadProfilePage);
+const SettingsPage = lazy(loadSettingsPage);
+const ModuleListRefine = lazy(loadModuleListRefine);
+const ModuleShow = lazy(loadModuleShow);
+const ModuleCreate = lazy(loadModuleCreate);
+const Login = lazy(loadLogin);
+const Dashboard = lazy(loadDashboard);
+const AccountingPage = lazy(loadAccountingPage);
+const AccountingAccountReviewPage = lazy(loadAccountingAccountReviewPage);
+const AccountingReportsPage = lazy(loadAccountingReportsPage);
+const AccountingReportViewerPage = lazy(loadAccountingReportViewerPage);
+const AccountingSettingsPage = lazy(loadAccountingSettingsPage);
+const ChartOfAccountsTreePage = lazy(loadChartOfAccountsTreePage);
+const AccountingRecordPage = lazy(loadAccountingRecordPage);
+const CashBankPage = lazy(loadCashBankPage);
+const JournalEntryCreatePage = lazy(loadJournalEntryCreatePage);
+const JournalEntryShowPage = lazy(loadJournalEntryShowPage);
+const InquiryForm = lazy(loadInquiryForm);
+const ProductionGroupOrdersList = lazy(loadProductionGroupOrdersList);
+const ProductionGroupOrderWizard = lazy(loadProductionGroupOrderWizard);
+const HRPage = lazy(loadHRPage);
+const FilesGalleryPage = lazy(loadFilesGalleryPage);
+const WebFormsHubPage = lazy(loadWebFormsHubPage);
+const WebFormBuilderPage = lazy(loadWebFormBuilderPage);
+const ReportsHubPage = lazy(loadReportsHubPage);
+const ReportBuilderPage = lazy(loadReportBuilderPage);
+const ReportViewerPage = lazy(loadReportViewerPage);
+const PublicSite = lazy(loadPublicSite);
+const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
+const HrQuickRequestPage = lazy(loadHrQuickRequestPage);
+const RecycleBinPage = lazy(loadRecycleBinPage);
+const ShareTargetPage = lazy(loadShareTargetPage);
+
+const routePreloaders = [
+  loadProfilePage,
+  loadSettingsPage,
+  loadModuleListRefine,
+  loadModuleShow,
+  loadModuleCreate,
+  loadLogin,
+  loadDashboard,
+  loadAccountingPage,
+  loadAccountingAccountReviewPage,
+  loadAccountingReportsPage,
+  loadAccountingReportViewerPage,
+  loadAccountingSettingsPage,
+  loadChartOfAccountsTreePage,
+  loadAccountingRecordPage,
+  loadCashBankPage,
+  loadJournalEntryCreatePage,
+  loadJournalEntryShowPage,
+  loadInquiryForm,
+  loadProductionGroupOrdersList,
+  loadProductionGroupOrderWizard,
+  loadHRPage,
+  loadFilesGalleryPage,
+  loadWebFormsHubPage,
+  loadWebFormBuilderPage,
+  loadReportsHubPage,
+  loadReportBuilderPage,
+  loadReportViewerPage,
+  loadPublicSite,
+  loadWorkSchedulesPage,
+  loadHrQuickRequestPage,
+  loadRecycleBinPage,
+  loadShareTargetPage,
+] as const;
 
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
@@ -90,11 +156,7 @@ const getInitialBranding = (): BrandingConfig => {
   return readCachedBranding() || DEFAULT_BRANDING;
 };
 
-const RouteLoadingFallback = () => (
-  <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-500">
-    در حال بارگذاری...
-  </div>
-);
+const SilentRouteFallback = () => null;
 
 function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
@@ -205,6 +267,22 @@ function App() {
     applyBrandingRuntime(branding);
     window.dispatchEvent(new CustomEvent(BRANDING_APPLIED_EVENT));
   }, [branding]);
+
+  useEffect(() => {
+    if (!moduleSettingsReady || typeof window === "undefined") return undefined;
+
+    const preloadRoutes = () => {
+      void Promise.allSettled(routePreloaders.map((preload) => preload())).catch(() => undefined);
+    };
+
+    if ("requestIdleCallback" in window) {
+      const idleId = window.requestIdleCallback(preloadRoutes, { timeout: 5000 });
+      return () => window.cancelIdleCallback?.(idleId);
+    }
+
+    const timeoutId = globalThis.setTimeout(preloadRoutes, 1200);
+    return () => globalThis.clearTimeout(timeoutId);
+  }, [moduleSettingsReady]);
 
   useEffect(() => {
     const publicPaths = ["/inquiry", "/login", "/tazesystem"];
@@ -403,19 +481,19 @@ function App() {
     const notificationProvider = useNotificationProvider();
 
     return (
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <Refine
-          dataProvider={dataProvider(supabase)}
-          authProvider={authProvider}
-          notificationProvider={notificationProvider}
-          routerProvider={routerBindings}
-          resources={resources}
-          options={{
-            syncWithLocation: true,
-            warnWhenUnsavedChanges: true,
-            disableTelemetry: true,
-          }}
-        >
+      <Refine
+        dataProvider={dataProvider(supabase)}
+        authProvider={authProvider}
+        notificationProvider={notificationProvider}
+        routerProvider={routerBindings}
+        resources={resources}
+        options={{
+          syncWithLocation: true,
+          warnWhenUnsavedChanges: true,
+          disableTelemetry: true,
+        }}
+      >
+        <Suspense fallback={<SilentRouteFallback />}>
           <Routes>
             <Route path="/tazesystem/*" element={<PublicSite />} />
             <Route path="/login" element={<Login />} />
@@ -478,11 +556,11 @@ function App() {
               <Route path="*" element={<ErrorComponent />} />
             </Route>
           </Routes>
+        </Suspense>
 
-          <UnsavedChangesNotifier />
-          <DocumentTitleHandler handler={titleHandler} />
-        </Refine>
-      </Suspense>
+        <UnsavedChangesNotifier />
+        <DocumentTitleHandler handler={titleHandler} />
+      </Refine>
     );
   };
 
@@ -512,7 +590,10 @@ function App() {
         }}
       >
         <JalaliLocaleListener />
-        <AntdApp>
+        <AntdApp
+          message={{ top: 72, duration: 3.5, maxCount: 4 }}
+          notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
+        >
           <PwaInstallPrompt />
           <RefineAppContent />
           <UploadProgressOverlay />

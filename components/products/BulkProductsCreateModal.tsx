@@ -10,6 +10,7 @@ import { convertArea, HARD_CODED_UNIT_OPTIONS, type UnitValue } from '../../util
 import { supportsSystemCode } from '../../utils/systemCode';
 import { getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../../utils/autoName';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 interface BulkProductsCreateModalProps {
   open: boolean;
@@ -554,7 +555,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       onCreated?.(productIds.length);
       onClose();
     } catch (e: any) {
-      msg.error(e?.message || 'خطا در ایجاد گروهی محصولات');
+      msg.error(toFaErrorMessage(e, 'ایجاد گروهی محصولات ناموفق بود.'));
     } finally {
       setSaving(false);
     }

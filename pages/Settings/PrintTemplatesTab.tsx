@@ -28,6 +28,7 @@ import {
 import { MODULES } from '../../moduleRegistry';
 import PrintTemplateEditor from '../../components/moduleShow/PrintTemplateEditor';
 import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import {
   buildDefaultTemplatesForModule,
   buildDefaultFooterTemplateForModule,
@@ -211,7 +212,7 @@ const PrintTemplatesTab: React.FC = () => {
       });
       setTemplatesByModule(next);
     } catch (err: any) {
-      message.error(String(err?.message || 'خواندن قالب‌های چاپ ناموفق بود.'));
+      message.error(toFaErrorMessage(err, 'خواندن قالب‌های چاپ ناموفق بود.'));
     } finally {
       setLoading(false);
     }
@@ -249,7 +250,7 @@ const PrintTemplatesTab: React.FC = () => {
       }
       return true;
     } catch (err: any) {
-      message.error(String(err?.message || 'ذخیره قالب چاپ ناموفق بود.'));
+      message.error(toFaErrorMessage(err, 'ذخیره قالب چاپ ناموفق بود.'));
       return false;
     } finally {
       setSaving(false);

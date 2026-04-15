@@ -132,7 +132,7 @@ const fetchCandidateSettings = async (
     headers: getServiceHeaders(serviceRoleKey),
   });
   const raw = await response.text();
-  if (!response.ok) throw new Error(raw || 'Could not load VoIP settings');
+  if (!response.ok) throw new Error(raw || 'خواندن تنظیمات VoIP ناموفق بود.');
 
   const rows = parseJsonSafe(raw);
   return Array.isArray(rows) ? rows : [];
@@ -178,7 +178,7 @@ const findExistingCallLog = async (
       headers: getServiceHeaders(serviceRoleKey),
     });
     const raw = await response.text();
-    if (!response.ok) throw new Error(raw || 'Could not query call log');
+    if (!response.ok) throw new Error(raw || 'خواندن گزارش تماس ناموفق بود.');
 
     const rows = parseJsonSafe(raw);
     return Array.isArray(rows) ? rows[0] : null;
@@ -222,7 +222,7 @@ const saveCallLog = async (
     const { title: _title, ...withoutTitle } = row;
     result = await write(withoutTitle);
   }
-  if (!result.response.ok) throw new Error(result.raw || 'Could not save call log');
+  if (!result.response.ok) throw new Error(result.raw || 'ذخیره گزارش تماس ناموفق بود.');
 
   const parsed = parseJsonSafe(result.raw);
   return Array.isArray(parsed) ? parsed[0] : parsed;
@@ -234,7 +234,7 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (!supabaseUrl || !serviceRoleKey) return json(500, { success: false, message: 'Missing Supabase environment variables' });
+  if (!supabaseUrl || !serviceRoleKey) return json(500, { success: false, message: 'تنظیمات سرور کامل نیست. متغیرهای Supabase را بررسی کنید.' });
 
   try {
     const url = new URL(req.url);

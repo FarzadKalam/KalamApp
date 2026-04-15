@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { replaceDynamicOptionValueAcrossModules } from '../utils/dynamicOptionReplacement';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 interface DynamicSelectFieldProps {
   value?: string | string[];
@@ -316,7 +317,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
           console.error('Error resolving duplicate dynamic option:', lookupError);
         }
       }
-      msg.error('افزودن گزینه ناموفق بود: ' + error.message);
+      msg.error(toFaErrorMessage(error, 'افزودن گزینه ناموفق بود.'));
     } finally {
       setLoading(false);
     }
@@ -418,7 +419,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
       onOptionsUpdate?.();
     } catch (error: any) {
       console.error('Error deleting option:', error);
-      msg.error('حذف گزینه ناموفق بود: ' + error.message);
+      msg.error(toFaErrorMessage(error, 'حذف گزینه ناموفق بود.'));
     } finally {
       setLoading(false);
     }
@@ -537,7 +538,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
       msg.success(`${valuesToInsert.length + valuesToReactivate.length} مقدار از فایل اکسل وارد شد${extraText}.`);
     } catch (error: any) {
       console.error('Error importing options from excel:', error);
-      msg.error('ورود از اکسل ناموفق بود: ' + error.message);
+      msg.error(toFaErrorMessage(error, 'ورود از اکسل ناموفق بود.'));
     } finally {
       setLoading(false);
     }

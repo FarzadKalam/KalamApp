@@ -34,6 +34,7 @@ export const smsDeliveryReportsConfig: ModuleDefinition = {
       'recipient',
       'message_text',
       'message_at',
+      'phone_match_status',
       'module_id',
       'record_id',
       'assignee_id',
@@ -47,6 +48,21 @@ export const smsDeliveryReportsConfig: ModuleDefinition = {
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [
+    {
+      key: 'phone_match_status',
+      labels: { fa: 'وضعیت تطبیق شماره', en: 'Phone Match' },
+      type: FieldType.STATUS,
+      location: FieldLocation.HEADER,
+      order: 7.2,
+      isTableColumn: true,
+      options: [
+        { label: 'تطبیق قطعی', value: 'matched', color: 'green' },
+        { label: 'چند مخاطب احتمالی', value: 'ambiguous', color: 'orange' },
+        { label: 'شماره ناشناس', value: 'unknown', color: 'gray' },
+        { label: 'تطبیق دستی', value: 'manual', color: 'blue' },
+      ],
+      nature: FieldNature.SYSTEM,
+    },
     {
       key: 'title',
       labels: { fa: 'عنوان', en: 'Title' },

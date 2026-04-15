@@ -8,6 +8,7 @@ import { serializeNoteContent } from '../utils/noteContent';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
 import { getActiveChannelSettings } from '../utils/channelSettings';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 const { Text, Title } = Typography;
 
@@ -200,7 +201,7 @@ const ShareTargetPage: React.FC = () => {
         }
       } catch (error: any) {
         if (!cancelled) {
-          message.error(String(error?.message || 'بارگذاری اشتراک‌گذاری ناموفق بود.'));
+          message.error(toFaErrorMessage(error, 'بارگذاری اشتراک‌گذاری ناموفق بود.'));
         }
       } finally {
         if (!cancelled) {
@@ -499,7 +500,7 @@ const ShareTargetPage: React.FC = () => {
       message.success('اشتراک‌گذاری با موفقیت ارسال شد.');
       navigate('/', { replace: true });
     } catch (error: any) {
-      message.error(String(error?.message || 'ارسال اشتراک‌گذاری ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'ارسال اشتراک‌گذاری ناموفق بود.'));
     } finally {
       setSubmitting(false);
     }

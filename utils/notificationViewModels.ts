@@ -10,6 +10,8 @@ export type NotificationReadChecker = (
 export type SmsThreadViewModel = {
   id: string;
   phone: string;
+  phoneNumberId: string | null;
+  phoneMatchStatus: string | null;
   title: string;
   preview: string;
   unreadCount: number;
@@ -22,6 +24,8 @@ export type SmsThreadViewModel = {
 export type VoipThreadViewModel = {
   id: string;
   phone: string;
+  phoneNumberId: string | null;
+  phoneMatchStatus: string | null;
   title: string;
   unreadCount: number;
   latestEventAt: number;
@@ -86,6 +90,8 @@ export const resolveSmsCounterpartyPhone = (row: any) => {
 };
 
 export const getSmsThreadKey = (row: any) => {
+  const phoneNumberId = String(row?.phone_number_id || '').trim();
+  if (phoneNumberId) return `sms_phone:${phoneNumberId}`;
   const phone = resolveSmsCounterpartyPhone(row);
   const normalizedPhone = normalizePhoneThreadValue(phone);
   if (normalizedPhone) return `sms:${normalizedPhone}`;
@@ -102,6 +108,8 @@ export const resolveVoipCounterpartyPhone = (row: any) => {
 };
 
 export const getVoipThreadKey = (row: any) => {
+  const phoneNumberId = String(row?.phone_number_id || '').trim();
+  if (phoneNumberId) return `voip_phone:${phoneNumberId}`;
   const phone = resolveVoipCounterpartyPhone(row);
   const normalizedPhone = normalizePhoneThreadValue(phone);
   if (normalizedPhone) return `voip:${normalizedPhone}`;
@@ -130,6 +138,8 @@ export const buildSmsThreads = ({
     const threadId = getSmsThreadKey(row);
     const messageAt = getTime(row?.message_at || row?.created_at);
     const phone = resolveSmsCounterpartyPhone(row);
+    const phoneNumberId = String(row?.phone_number_id || '').trim();
+    const phoneMatchStatus = String(row?.phone_match_status || '').trim();
     const moduleId = String(row?.module_id || '').trim();
     const recordId = String(row?.record_id || '').trim();
     const title = (
@@ -148,6 +158,8 @@ export const buildSmsThreads = ({
       groups.set(threadId, {
         id: threadId,
         phone,
+        phoneNumberId: phoneNumberId || null,
+        phoneMatchStatus: phoneMatchStatus || null,
         title,
         preview,
         unreadCount,
@@ -165,6 +177,8 @@ export const buildSmsThreads = ({
       current.preview = preview;
       current.title = title;
       current.phone = phone;
+      current.phoneNumberId = phoneNumberId || current.phoneNumberId;
+      current.phoneMatchStatus = phoneMatchStatus || current.phoneMatchStatus;
       current.moduleId = moduleId || current.moduleId;
       current.recordId = recordId || current.recordId;
     }
@@ -198,6 +212,8 @@ export const buildVoipThreads = ({
     const threadId = getVoipThreadKey(row);
     const eventAt = getTime(row?.started_at || row?.created_at);
     const phone = resolveVoipCounterpartyPhone(row);
+    const phoneNumberId = String(row?.phone_number_id || '').trim();
+    const phoneMatchStatus = String(row?.phone_match_status || '').trim();
     const moduleId = String(row?.module_id || '').trim();
     const recordId = String(row?.record_id || '').trim();
     const title = (
@@ -215,6 +231,8 @@ export const buildVoipThreads = ({
       groups.set(threadId, {
         id: threadId,
         phone,
+        phoneNumberId: phoneNumberId || null,
+        phoneMatchStatus: phoneMatchStatus || null,
         title,
         unreadCount,
         latestEventAt: eventAt,
@@ -230,6 +248,8 @@ export const buildVoipThreads = ({
       current.latestEventAt = eventAt;
       current.title = title;
       current.phone = phone;
+      current.phoneNumberId = phoneNumberId || current.phoneNumberId;
+      current.phoneMatchStatus = phoneMatchStatus || current.phoneMatchStatus;
       current.moduleId = moduleId || current.moduleId;
       current.recordId = recordId || current.recordId;
     }

@@ -56,10 +56,10 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
     },
   });
   const raw = await response.text();
-  if (!response.ok) throw new Error(raw || 'Unauthorized');
+  if (!response.ok) throw new Error(raw || 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
 
   const user = parseJsonSafe(raw);
-  if (!user?.id) throw new Error('Unauthorized');
+  if (!user?.id) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   return user;
 };
 
@@ -238,7 +238,7 @@ const findExistingCallLog = async (
       headers: getServiceHeaders(serviceRoleKey),
     });
     const raw = await response.text();
-    if (!response.ok) throw new Error(raw || 'Could not query call log');
+    if (!response.ok) throw new Error(raw || 'خواندن گزارش تماس ناموفق بود.');
 
     const rows = parseJsonSafe(raw);
     return Array.isArray(rows) ? rows[0] : null;
@@ -371,12 +371,12 @@ const fetchTelefonchyCalls = async (
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (req.method !== 'POST') return json(405, { success: false, message: 'Method Not Allowed' });
+  if (req.method !== 'POST') return json(405, { success: false, message: 'روش ارسال درخواست معتبر نیست.' });
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceRoleKey) {
-    return json(500, { success: false, message: 'Missing Supabase environment variables' });
+    return json(500, { success: false, message: 'تنظیمات سرور کامل نیست. متغیرهای Supabase را بررسی کنید.' });
   }
 
   try {

@@ -311,7 +311,7 @@ export const customerModule: ModuleDefinition = {
       id: 'customer_sms_reports',
       title: 'پیامک‌ها',
       icon: 'MessageOutlined',
-      relationType: 'record_context',
+      relationType: 'phone_directory',
       targetModule: 'sms_delivery_reports',
       disableCreate: true
     },
@@ -319,7 +319,7 @@ export const customerModule: ModuleDefinition = {
       id: 'customer_voip_calls',
       title: 'تماس‌ها',
       icon: 'PhoneOutlined',
-      relationType: 'record_context',
+      relationType: 'phone_directory',
       targetModule: 'voip_call_reports',
       disableCreate: true
     }

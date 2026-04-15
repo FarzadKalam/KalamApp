@@ -12,6 +12,7 @@ import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import QrScanPopover from './QrScanPopover';
 import { buildProductFilters, runProductsQuery } from './editableTable/productionOrderHelpers';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 const { Text } = Typography;
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
@@ -448,7 +449,7 @@ const GridTable: React.FC<GridTableProps> = ({
         try {
           await persistGridRows(nextData, 'حذف شد');
         } catch (e: any) {
-          message.error(e.message || 'خطا در حذف');
+          message.error(toFaErrorMessage(e, 'خطا در حذف'));
         } finally {
           setSaving(false);
         }
@@ -514,7 +515,7 @@ const GridTable: React.FC<GridTableProps> = ({
       await persistGridRows(tempData, 'ذخیره شد');
       setActiveEditRowKey(null);
     } catch (e: any) {
-      message.error(e.message || 'خطا در ذخیره');
+      message.error(toFaErrorMessage(e, 'خطا در ذخیره'));
     } finally {
       setSaving(false);
     }
@@ -680,7 +681,7 @@ const GridTable: React.FC<GridTableProps> = ({
         try {
           await persistGridRows(nextData, 'کپی جدول انجام شد');
         } catch (e: any) {
-          message.error(e.message || 'خطا در کپی جدول');
+          message.error(toFaErrorMessage(e, 'خطا در کپی جدول'));
         } finally {
           setSaving(false);
         }

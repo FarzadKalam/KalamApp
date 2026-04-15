@@ -30,6 +30,7 @@ import {
   type RecordScope,
 } from '../../utils/permissions';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 const { Panel } = Collapse;
 
@@ -268,7 +269,7 @@ const RolesTab: React.FC = () => {
       .eq('id', selectedRoleId);
 
     if (error) {
-      message.error(error.message || 'خطا در بروزرسانی عنوان نقش');
+      message.error(toFaErrorMessage(error, 'بروزرسانی عنوان نقش ناموفق بود.'));
       return;
     }
 
@@ -426,7 +427,7 @@ const RolesTab: React.FC = () => {
         message.error('برای فعال شدن ساختار درختی نقش‌ها، migration مربوطه باید روی دیتابیس اجرا شود.');
         return;
       }
-      message.error(error.message || 'خطا در بروزرسانی سطح جایگاه');
+      message.error(toFaErrorMessage(error, 'بروزرسانی سطح جایگاه ناموفق بود.'));
       return;
     }
 
@@ -460,7 +461,7 @@ const RolesTab: React.FC = () => {
         message.error('برای فعال شدن ساختار درختی نقش‌ها، migration مربوطه باید روی دیتابیس اجرا شود.');
         return;
       }
-      message.error(error.message || 'خطا در بروزرسانی سطح جایگاه');
+      message.error(toFaErrorMessage(error, 'بروزرسانی سطح جایگاه ناموفق بود.'));
       return;
     }
 

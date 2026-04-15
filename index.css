@@ -166,7 +166,7 @@ body.ant-scrolling-effect {
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--brand-500-rgb)); /* رنگ نارنجی چرم */
+  background: rgb(var(--brand-500-rgb));
   border: 2px solid transparent;
   background-clip: content-box;
 }

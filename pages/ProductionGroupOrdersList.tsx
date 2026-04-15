@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type GroupOrderRow = {
   id: string;
@@ -47,7 +48,7 @@ const ProductionGroupOrdersList: React.FC = () => {
       if (error) throw error;
       setRows((data || []) as GroupOrderRow[]);
     } catch (err: any) {
-      msg.error(err?.message || 'خطا در دریافت سفارشات گروهی');
+      msg.error(toFaErrorMessage(err, 'دریافت سفارشات گروهی ناموفق بود.'));
     } finally {
       setLoading(false);
     }

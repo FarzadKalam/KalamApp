@@ -20,6 +20,7 @@ import {
   type GroupStartMaterial,
   splitDeliveredAcrossRequirements,
 } from '../utils/productionGroupOrders';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type GroupOrderRecord = {
   id: string;
@@ -392,7 +393,7 @@ const ProductionGroupOrderWizard: React.FC = () => {
           setCurrentStep(0);
         }
       } catch (err: any) {
-        if (mounted) msg.error(err?.message || 'خطا در بارگذاری اطلاعات سفارش گروهی');
+        if (mounted) msg.error(toFaErrorMessage(err, 'بارگذاری اطلاعات سفارش گروهی ناموفق بود.'));
       } finally {
         if (mounted) {
           setLoading(false);
@@ -564,7 +565,7 @@ const ProductionGroupOrderWizard: React.FC = () => {
       }
       msg.success('تنظیمات سفارش گروهی ذخیره شد.');
     } catch (err: any) {
-      msg.error(err?.message || 'خطا در ذخیره سفارش گروهی');
+      msg.error(toFaErrorMessage(err, 'ذخیره سفارش گروهی ناموفق بود.'));
     } finally {
       setIsSavingSetup(false);
     }
@@ -607,7 +608,7 @@ const ProductionGroupOrderWizard: React.FC = () => {
       msg.success('قطعات سفارش‌های تولید ذخیره شد.');
       await loadSelectedOrders(selectedOrderIds, true);
     } catch (err: any) {
-      msg.error(err?.message || 'خطا در ذخیره قطعات');
+      msg.error(toFaErrorMessage(err, 'ذخیره قطعات ناموفق بود.'));
     } finally {
       setIsSavingRows(false);
     }
@@ -637,7 +638,7 @@ const ProductionGroupOrderWizard: React.FC = () => {
       msg.success('تعداد سفارش‌های تولید ذخیره شد.');
       await loadSelectedOrders(selectedOrderIds, true);
     } catch (err: any) {
-      msg.error(err?.message || 'خطا در ذخیره تعداد سفارش‌ها');
+      msg.error(toFaErrorMessage(err, 'ذخیره تعداد سفارش‌ها ناموفق بود.'));
     } finally {
       setIsSavingQuantities(false);
     }
@@ -1095,7 +1096,7 @@ const ProductionGroupOrderWizard: React.FC = () => {
       await loadSelectedOrders(selectedOrderIds, true);
       msg.success('تولید گروهی با موفقیت شروع شد.');
     } catch (err: any) {
-      msg.error(err?.message || 'خطا در شروع تولید گروهی');
+      msg.error(toFaErrorMessage(err, 'شروع تولید گروهی ناموفق بود.'));
     } finally {
       setIsStartingGroup(false);
     }

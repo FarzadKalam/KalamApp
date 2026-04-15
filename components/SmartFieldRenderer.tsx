@@ -1147,7 +1147,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     } catch (error: any) {
       if (isUploadCanceledError(error)) return null;
       console.error('خطا در آپلود تصویر:', error);
-      msg.error(`خطا در آپلود: ${error.message}`);
+      msg.error(toFaErrorMessage(error, 'آپلود فایل ناموفق بود.'));
       return null;
     } finally {
       setUploading(false);

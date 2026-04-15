@@ -306,7 +306,7 @@ const uploadBinaryToStorage = async ({
   });
   const raw = await response.text();
   if (!response.ok) {
-    throw new Error(raw || 'Could not upload media file to storage');
+    throw new Error(raw || 'آپلود فایل در فضای ذخیره‌سازی ناموفق بود.');
   }
   return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
 };
@@ -349,11 +349,11 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
 
   if (!response.ok) {
     const raw = await response.text();
-    throw new Error(raw || 'Unauthorized');
+    throw new Error(raw || 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   }
 
   const user = await response.json();
-  if (!user?.id) throw new Error('Unauthorized');
+  if (!user?.id) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   return user;
 };
 
@@ -1292,19 +1292,19 @@ Deno.serve(async (req) => {
   }
 
   if (req.method !== 'POST') {
-    return json(405, { success: false, message: 'Method Not Allowed' });
+    return json(405, { success: false, message: 'روش ارسال درخواست معتبر نیست.' });
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceRoleKey) {
-    return json(500, { success: false, message: 'Missing Supabase environment variables' });
+    return json(500, { success: false, message: 'تنظیمات سرور کامل نیست. متغیرهای Supabase را بررسی کنید.' });
   }
 
   try {
     const authHeader = req.headers.get('Authorization') || '';
     if (!authHeader.startsWith('Bearer ')) {
-      return json(401, { success: false, message: 'Missing bearer token' });
+      return json(401, { success: false, message: 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.' });
     }
 
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();

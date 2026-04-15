@@ -5,6 +5,7 @@ import MessageComposerModal from './MessageComposerModal';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
 import { normalizePhoneForStorage } from '../utils/phoneNumber';
 import { buildVoipFallbackUrl, requestVoipSmartCall } from '../utils/voipGateway';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type RecordMessageActionsProps = {
   moduleId?: string | null;
@@ -67,7 +68,7 @@ const RecordMessageActions: React.FC<RecordMessageActionsProps> = ({
 
       openExternalLink(result.fallbackUrl || fallbackUrl);
     } catch (error: any) {
-      message.warning(String(error?.message || 'تماس VoIP در دسترس نیست؛ مسیر تماس معمولی باز شد.'));
+      message.warning(toFaErrorMessage(error, 'تماس VoIP در دسترس نیست؛ مسیر تماس معمولی باز شد.'));
       openExternalLink(fallbackUrl);
     } finally {
       setCalling(false);

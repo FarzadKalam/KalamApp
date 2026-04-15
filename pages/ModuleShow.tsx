@@ -2175,7 +2175,7 @@ const ModuleShow: React.FC = () => {
         ]);
 
         msg.success(`${assigneeLabel} رکورد تغییر کرد`);
-      } catch (e: any) { msg.error('خطا: ' + e.message); }
+      } catch (e: any) { msg.error(toFaErrorMessage(e, 'ذخیره جدول ناموفق بود.')); }
     }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
 
   // تابع برای کپی اقلام BOM به جداول مواد اولیه (با تایید کاربر)
@@ -2232,7 +2232,7 @@ const ModuleShow: React.FC = () => {
             setLinkedBomData(bom);
             msg.success('اقلام شناسنامه تولید بارگذاری شد و بهای تمام شده محاسبه شد');
           } catch (e: any) {
-            msg.error('خطا در بارگذاری اقلام: ' + e.message);
+            msg.error(toFaErrorMessage(e, 'بارگذاری اقلام ناموفق بود.'));
           } finally {
             bomCopyPromptRef.current = null;
           }
@@ -3088,7 +3088,7 @@ const ModuleShow: React.FC = () => {
         }
       }
     } catch (error: any) {
-      msg.error(error?.message || 'خطا در صدور سند حسابداری');
+      msg.error(toFaErrorMessage(error, 'صدور سند حسابداری ناموفق بود.'));
     } finally {
       setIssueAccountingLoading(false);
     }
@@ -3250,7 +3250,7 @@ const ModuleShow: React.FC = () => {
             });
             msg.success(moduleId === 'customers' ? 'نام کامل مشتری بروزرسانی شد.' : 'نام با موفقیت بروزرسانی شد.');
           } catch (e: any) {
-            msg.error('بروزرسانی نام ناموفق بود: ' + e.message);
+            msg.error(toFaErrorMessage(e, 'بروزرسانی نام ناموفق بود.'));
           }
         }
       });
@@ -3311,7 +3311,7 @@ const ModuleShow: React.FC = () => {
       msg.success('تصویر بروزرسانی شد');
     } catch (e: any) {
       if (isUploadCanceledError(e)) return false;
-      msg.error('خطا: ' + e.message);
+      msg.error(toFaErrorMessage(e, 'عملیات ناموفق بود.'));
     } finally { setUploadingImage(false); }
     return false;
   }, [canEditModule, id, moduleId, msg]);
@@ -3506,7 +3506,7 @@ const ModuleShow: React.FC = () => {
         uploadedUrl: uploaded.url,
         error: String((error as any)?.message || error || 'unknown_error'),
       });
-      msg.error({ key: messageKey, content: String((error as any)?.message || 'ذخیره PDF در فایل‌های رکورد ناموفق بود.') });
+      msg.error({ key: messageKey, content: toFaErrorMessage(error as any, 'ذخیره PDF در فایل‌های رکورد ناموفق بود.') });
       throw error;
     }
   };
@@ -3696,7 +3696,7 @@ const ModuleShow: React.FC = () => {
       setPrintShareMessageText('');
       msg.success('ارسال مستقیم انجام شد.');
     } catch (error: any) {
-      msg.error(String(error?.message || 'ارسال مستقیم ناموفق بود.'));
+      msg.error(toFaErrorMessage(error, 'ارسال مستقیم ناموفق بود.'));
     } finally {
       setPrintShareSubmitting(false);
     }
@@ -3765,7 +3765,7 @@ const ModuleShow: React.FC = () => {
       });
       msg.success('تصویر اصلی بروزرسانی شد');
     } catch (e: any) {
-      msg.error('خطا در بروزرسانی تصویر: ' + e.message);
+      msg.error(toFaErrorMessage(e, 'بروزرسانی تصویر ناموفق بود.'));
     }
   }, [canEditModule, data?.image_url, getFieldLabel, id, insertChangelog, moduleId, msg]);
 
@@ -3799,7 +3799,7 @@ const ModuleShow: React.FC = () => {
         navigate(`/production_orders/${inserted.id}`);
       }
     } catch (e: any) {
-      msg.error(e.message || 'خطا در ایجاد سفارش تولید');
+      msg.error(toFaErrorMessage(e, 'ایجاد سفارش تولید ناموفق بود.'));
     }
   }, [msg, navigate]);
 
@@ -3945,7 +3945,7 @@ const ModuleShow: React.FC = () => {
         setData((prev: any) => ({ ...(prev || {}), status: fallbackStatus }));
         setTempValues((prev) => ({ ...(prev || {}), status: fallbackStatus }));
       }
-      msg.error(error.message);
+      msg.error(toFaErrorMessage(error, 'عملیات ناموفق بود.'));
     } finally { setSavingField(null); }
   };
 
@@ -4154,7 +4154,7 @@ const ModuleShow: React.FC = () => {
       setIsEditDrawerOpen(false);
       void fetchRecord(true);
     } catch (err: any) {
-      msg.error(err.message);
+      msg.error(toFaErrorMessage(err, 'عملیات ناموفق بود.'));
     }
   }, [data, fetchRecord, id, logFieldChange, moduleId, msg, syncProcessTemplateStages]);
 
@@ -4220,7 +4220,7 @@ const ModuleShow: React.FC = () => {
 
       await fetchRecord(true);
     } catch (error: any) {
-      msg.error(error?.message || 'خطا در صدور سند حسابداری');
+      msg.error(toFaErrorMessage(error, 'صدور سند حسابداری ناموفق بود.'));
     } finally {
       setIssueAccountingLoading(false);
     }
@@ -4686,7 +4686,7 @@ const ModuleShow: React.FC = () => {
       msg.success('تولید آغاز شد');
       setProductionModal(null);
     } catch (e: any) {
-      msg.error(e.message || 'خطا در شروع تولید');
+      msg.error(toFaErrorMessage(e, 'شروع تولید ناموفق بود.'));
     } finally {
       setStatusLoading(false);
     }
@@ -4780,7 +4780,7 @@ const ModuleShow: React.FC = () => {
       msg.success('تولید متوقف شد');
       setProductionModal(null);
     } catch (e: any) {
-      msg.error(e.message || 'خطا در توقف تولید');
+      msg.error(toFaErrorMessage(e, 'توقف تولید ناموفق بود.'));
     } finally {
       setStatusLoading(false);
     }
@@ -4890,7 +4890,7 @@ const ModuleShow: React.FC = () => {
       msg.success('تولید تکمیل شد');
       setProductionModal(null);
     } catch (e: any) {
-      msg.error(e.message || 'خطا در تکمیل تولید');
+      msg.error(toFaErrorMessage(e, 'تکمیل تولید ناموفق بود.'));
     } finally {
       setStatusLoading(false);
     }
@@ -5026,7 +5026,7 @@ const ModuleShow: React.FC = () => {
       msg.success('محصول جدید ایجاد شد و سفارش تکمیل شد');
       setIsCreateProductOpen(false);
     } catch (e: any) {
-      msg.error(e.message || 'خطا در ایجاد محصول');
+      msg.error(toFaErrorMessage(e, 'ایجاد محصول ناموفق بود.'));
     } finally {
       setStatusLoading(false);
     }

@@ -256,6 +256,7 @@ export type RelatedTabRelationType =
   | 'fk'
   | 'fk_from_field'
   | 'record_context'
+  | 'phone_directory'
   | 'jsonb_contains'
   | 'join_table'
   | 'customer_products'

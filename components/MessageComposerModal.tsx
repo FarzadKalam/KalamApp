@@ -25,6 +25,7 @@ import {
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { sendBotMessageViaGateway } from '../utils/botGateway';
 import PhoneDisplay from './PhoneDisplay';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
 
 type ReadyTextRow = {
   id: string;
@@ -469,7 +470,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       onCancel();
     } catch (error: any) {
       console.warn('Could not send composed message', error);
-      msg.error(String(error?.message || 'ارسال پیام ناموفق بود.'));
+      msg.error(toFaErrorMessage(error, 'ارسال پیام ناموفق بود.'));
     } finally {
       setSending(false);
     }

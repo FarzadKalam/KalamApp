@@ -330,11 +330,11 @@ const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, user
 
   if (!response.ok) {
     const raw = await response.text();
-    throw new Error(raw || 'Unauthorized');
+    throw new Error(raw || 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   }
 
   const user = await response.json();
-  if (!user?.id) throw new Error('Unauthorized');
+  if (!user?.id) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   return user;
 };
 

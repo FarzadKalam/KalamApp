@@ -78,6 +78,16 @@ const isMissingColumnError = (error: any) => {
   return message.includes('does not exist') && message.includes('column');
 };
 
+const fetchRecordPhoneNumberIds = async (entityType: string, entityId: string) => {
+    const { data, error } = await supabase
+        .from('phone_number_links')
+        .select('phone_number_id')
+        .eq('entity_type', entityType)
+        .eq('entity_id', entityId);
+    if (error) throw error;
+    return Array.from(new Set((data || []).map((row: any) => String(row?.phone_number_id || '').trim()).filter(Boolean)));
+};
+
 const getModuleTableName = (moduleId?: string | null) => {
   const normalized = String(moduleId || '').trim();
   return MODULES[normalized]?.table || normalized;
@@ -319,6 +329,23 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                         .order('created_at', { ascending: false })
                         .limit(1);
                     return data?.[0]?.created_at || null;
+                }
+
+                if ((tab as RelatedTabConfig).relationType === 'phone_directory' && tab.targetModule) {
+                    const phoneNumberIds = await fetchRecordPhoneNumberIds(moduleConfig.id, recordId);
+                    if (!phoneNumberIds.length) return null;
+                    const orderField = tab.targetModule === 'sms_delivery_reports' ? 'message_at' : 'created_at';
+                    const selectFields = orderField === 'created_at' ? 'created_at' : `${orderField},created_at`;
+                    const { data } = await applyTabFilters(
+                        (supabase
+                            .from(getModuleTableName(tab.targetModule as string)) as any)
+                            .select(selectFields)
+                            .in('phone_number_id', phoneNumberIds),
+                        (tab as RelatedTabConfig).filters,
+                    )
+                        .order(orderField, { ascending: false })
+                        .limit(1);
+                    return data?.[0]?.[orderField] || data?.[0]?.created_at || null;
                 }
 
                 if (tab.targetModule && tab.foreignKey) {
