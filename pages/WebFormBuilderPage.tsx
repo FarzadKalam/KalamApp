@@ -25,13 +25,17 @@ import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import {
   buildWebFormPublicUrl,
   getMissingWebFormRequiredFields,
+  getWebFormDuplicateFieldOptions,
   getWebFormModuleOptions,
   getWebFormTargetFields,
   inferWebFormFieldType,
   isWebFormTargetModule,
+  isWebFormVirtualTargetField,
   normalizeWebFormConfig,
   normalizeWebFormFieldRecord,
   type WebFormAccessScope,
+  type WebFormDisplayMode,
+  type WebFormDuplicateStrategy,
 } from "../utils/webForms";
 
 const { Paragraph, Text, Title } = Typography;
@@ -40,6 +44,7 @@ type BuilderFieldValue = {
   label?: string;
   target_field_key?: string;
   default_value?: any;
+  help_text?: string;
   sort_order?: number;
   is_required?: boolean;
   is_hidden?: boolean;
@@ -57,6 +62,12 @@ type BuilderFormValues = {
   submit_label?: string;
   success_message?: string;
   success_redirect_url?: string;
+  display_mode?: WebFormDisplayMode;
+  slide_show_progress?: boolean;
+  slide_allow_back?: boolean;
+  slide_auto_advance?: boolean;
+  duplicate_match_field?: string;
+  duplicate_strategy?: WebFormDuplicateStrategy;
   fields?: BuilderFieldValue[];
 };
 
@@ -87,13 +98,13 @@ const buildSuggestedFields = (targetModuleId?: string | null): BuilderFieldValue
   const normalizedTargetModuleId = String(targetModuleId || "").trim();
   if (!normalizedTargetModuleId) return [];
 
-  const targetFields = getWebFormTargetFields(normalizedTargetModuleId);
+  const targetFields = getWebFormTargetFields(normalizedTargetModuleId).filter((item) => !item.isVirtual);
   const preferredKeys = ["first_name", "last_name", "full_name", "name", "title", "mobile", "mobile_1", "phone", "work_date", "start_date", "end_date", "notes", "description"];
 
   return [...targetFields]
     .sort((a, b) => {
-      const aRequired = a.field.validation?.required ? 0 : 1;
-      const bRequired = b.field.validation?.required ? 0 : 1;
+      const aRequired = a.field?.validation?.required ? 0 : 1;
+      const bRequired = b.field?.validation?.required ? 0 : 1;
       if (aRequired !== bRequired) return aRequired - bRequired;
       const aPreferred = preferredKeys.indexOf(a.value);
       const bPreferred = preferredKeys.indexOf(b.value);
@@ -106,7 +117,7 @@ const buildSuggestedFields = (targetModuleId?: string | null): BuilderFieldValue
       label: item.label,
       target_field_key: item.value,
       sort_order: (index + 1) * 10,
-      is_required: item.field.validation?.required === true,
+      is_required: item.field?.validation?.required === true,
       is_hidden: false,
     }));
 };
@@ -136,10 +147,12 @@ const WebFormBuilderPage: React.FC = () => {
   const moduleOptions = useMemo(() => getWebFormModuleOptions(), []);
   const targetModuleId = Form.useWatch("target_module_id", form);
   const accessScope = Form.useWatch("access_scope", form);
+  const duplicateMatchField = Form.useWatch("duplicate_match_field", form);
   const watchedFields = (Form.useWatch("fields", form) || []) as BuilderFieldValue[];
   const watchedSlug = Form.useWatch("route_slug", form);
   const currentPublicUrl = useMemo(() => buildWebFormPublicUrl(watchedSlug), [watchedSlug]);
-  const targetFieldItems = useMemo(() => getWebFormTargetFields(targetModuleId), [targetModuleId]);
+  const targetFieldItems = useMemo(() => getWebFormTargetFields(targetModuleId, { accessScope }), [accessScope, targetModuleId]);
+  const duplicateFieldOptions = useMemo(() => getWebFormDuplicateFieldOptions(targetModuleId), [targetModuleId]);
   const targetFieldMap = useMemo(
     () => Object.fromEntries(targetFieldItems.map((item) => [item.value, item])),
     [targetFieldItems]
@@ -153,7 +166,7 @@ const WebFormBuilderPage: React.FC = () => {
     let cancelled = false;
     const run = async () => {
       const categories = targetFieldItems
-        .map((item) => String((item.field as any).dynamicOptionsCategory || "").trim())
+        .map((item) => String((item.field as any)?.dynamicOptionsCategory || "").trim())
         .filter(Boolean);
       if (categories.length === 0) {
         setDynamicTargetOptions({});
@@ -176,13 +189,13 @@ const WebFormBuilderPage: React.FC = () => {
     (targetFieldKey?: string) => {
       const item = targetFieldMap[String(targetFieldKey || "").trim()];
       if (!item) return [];
-      if (Array.isArray(item.field.options) && item.field.options.length > 0) {
+      if (Array.isArray(item.field?.options) && item.field.options.length > 0) {
         return item.field.options.map((option) => ({
           label: String(option.label || option.value || "").trim(),
           value: String(option.value || option.label || "").trim(),
         })).filter((option) => option.value);
       }
-      const category = String((item.field as any).dynamicOptionsCategory || "").trim();
+      const category = String((item.field as any)?.dynamicOptionsCategory || "").trim();
       return category ? (dynamicTargetOptions[category] || []) : [];
     },
     [dynamicTargetOptions, targetFieldMap]
@@ -217,31 +230,39 @@ const WebFormBuilderPage: React.FC = () => {
           return;
         }
 
-        const config = normalizeWebFormConfig(webForm.config);
-        form.setFieldsValue({
-          name: webForm.name || "",
-          description: webForm.description || "",
-          route_slug: webForm.route_slug || "",
-          target_module_id: webForm.target_module_id || "",
-          access_scope: (webForm.access_scope || "public") as WebFormAccessScope,
-          is_active: webForm.is_active !== false,
-          header_title: config.header_title || webForm.name || "",
-          header_subtitle: config.header_subtitle || "",
-          submit_label: config.submit_label || "ثبت درخواست",
-          success_message: config.success_message || "درخواست شما با موفقیت ثبت شد.",
-          success_redirect_url: config.success_redirect_url || "",
-          fields: (fieldRows || []).map((item, index) => {
-            const normalized = normalizeWebFormFieldRecord(item, index);
-            return {
-              label: normalized.label,
-              target_field_key: normalized.target_field_key || undefined,
-              default_value: normalized.default_value ?? undefined,
-              sort_order: normalized.sort_order,
-              is_required: normalized.is_required !== false,
-              is_hidden: normalized.is_hidden === true,
-            };
-          }),
-        });
+          const config = normalizeWebFormConfig(webForm.config);
+          const targetModuleId = String(webForm.target_module_id || "");
+          form.setFieldsValue({
+            name: webForm.name || "",
+            description: webForm.description || "",
+            route_slug: webForm.route_slug || "",
+            target_module_id: targetModuleId,
+            access_scope: (webForm.access_scope || "public") as WebFormAccessScope,
+            is_active: webForm.is_active !== false,
+            header_title: config.header_title || webForm.name || "",
+            header_subtitle: config.header_subtitle || "",
+            submit_label: config.submit_label || "ثبت درخواست",
+            success_message: config.success_message || "درخواست شما با موفقیت ثبت شد.",
+            success_redirect_url: config.success_redirect_url || "",
+            display_mode: config.display_mode || "list",
+            slide_show_progress: config.slide_show_progress !== false,
+            slide_allow_back: config.slide_allow_back !== false,
+            slide_auto_advance: config.slide_auto_advance === true,
+            duplicate_match_field: config.duplicate_match_field || undefined,
+            duplicate_strategy: config.duplicate_strategy || "allow",
+            fields: (fieldRows || []).map((item, index) => {
+              const normalized = normalizeWebFormFieldRecord(item, index, { targetModuleId });
+              return {
+                label: normalized.label,
+                target_field_key: normalized.target_field_key || undefined,
+                default_value: normalized.default_value ?? undefined,
+                help_text: normalized.help_text ?? undefined,
+                sort_order: normalized.sort_order,
+                is_required: normalized.is_required !== false,
+                is_hidden: normalized.is_hidden === true,
+              };
+            }),
+          });
         setSlugTouched(true);
         seededFieldsRef.current = true;
         await loadRecentSubmissions(id);
@@ -261,6 +282,12 @@ const WebFormBuilderPage: React.FC = () => {
           submit_label: "ثبت درخواست",
           success_message: "درخواست شما با موفقیت ثبت شد.",
           success_redirect_url: "",
+          display_mode: "list",
+          slide_show_progress: true,
+          slide_allow_back: true,
+          slide_auto_advance: false,
+          duplicate_match_field: undefined,
+          duplicate_strategy: "allow",
           fields: buildSuggestedFields(defaultTargetModuleId),
         });
         setRecentSubmissions([]);
@@ -299,6 +326,19 @@ const WebFormBuilderPage: React.FC = () => {
     }
     if (!slugTouched && Object.prototype.hasOwnProperty.call(changedValues, "name")) {
       form.setFieldValue("route_slug", slugify(String(changedValues.name || "")));
+    }
+    if (Object.prototype.hasOwnProperty.call(changedValues, "target_module_id")) {
+      const currentDuplicateField = String(form.getFieldValue("duplicate_match_field") || "").trim();
+      if (currentDuplicateField && !duplicateFieldOptions.some((item) => item.value === currentDuplicateField)) {
+        form.setFieldValue("duplicate_match_field", undefined);
+        form.setFieldValue("duplicate_strategy", "allow");
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(changedValues, "duplicate_match_field")) {
+      const nextDuplicateField = String(changedValues.duplicate_match_field || "").trim();
+      if (!nextDuplicateField) {
+        form.setFieldValue("duplicate_strategy", "allow");
+      }
     }
   };
 
@@ -367,7 +407,7 @@ const WebFormBuilderPage: React.FC = () => {
   const renderDefaultValueInput = (fieldIndex: number) => {
     const targetFieldKey = String(watchedFields?.[fieldIndex]?.target_field_key || "").trim();
     const targetFieldItem = targetFieldMap[targetFieldKey];
-    const fieldType = inferWebFormFieldType(targetFieldItem?.field);
+    const fieldType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
     const options = resolveTargetOptions(targetFieldKey);
 
     if (fieldType === "select") {
@@ -388,6 +428,21 @@ const WebFormBuilderPage: React.FC = () => {
       return (
         <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]} valuePropName="checked">
           <Checkbox>به‌صورت پیش‌فرض فعال باشد</Checkbox>
+        </Form.Item>
+      );
+    }
+
+    if (fieldType === "multi_select") {
+      return (
+        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            options={options}
+            placeholder={targetFieldItem?.label || "انتخاب مقدار پیش‌فرض"}
+          />
         </Form.Item>
       );
     }
@@ -424,6 +479,22 @@ const WebFormBuilderPage: React.FC = () => {
       );
     }
 
+    if (fieldType === "location") {
+      return (
+        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+          <Input placeholder="مثال: 35.6892, 51.3890" />
+        </Form.Item>
+      );
+    }
+
+    if (fieldType === "image" || fieldType === "file") {
+      return (
+        <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-3 text-sm text-gray-500">
+          این نوع فیلد مقدار پیش‌فرض ثابت ندارد و فایل‌ها هنگام تکمیل وب‌فرم آپلود می‌شوند.
+        </div>
+      );
+    }
+
     return (
       <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
         <Input placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
@@ -451,6 +522,12 @@ const WebFormBuilderPage: React.FC = () => {
         submit_label: String(values.submit_label || "").trim() || "ثبت درخواست",
         success_message: String(values.success_message || "").trim() || "درخواست شما با موفقیت ثبت شد.",
         success_redirect_url: String(values.success_redirect_url || "").trim(),
+        display_mode: values.display_mode === "slide" ? "slide" : "list",
+        slide_show_progress: values.slide_show_progress !== false,
+        slide_allow_back: values.slide_allow_back !== false,
+        slide_auto_advance: values.slide_auto_advance === true,
+        duplicate_match_field: String(values.duplicate_match_field || "").trim(),
+        duplicate_strategy: values.duplicate_strategy || "allow",
       };
 
       const basePayload = {
@@ -490,9 +567,13 @@ const WebFormBuilderPage: React.FC = () => {
             field_key: targetFieldKey,
             label,
             target_field_key: targetFieldKey,
-            field_type: inferWebFormFieldType(targetFieldItem.field),
-            placeholder: label,
-            help_text: null,
+            field_type: targetFieldItem.inferredType || inferWebFormFieldType(targetFieldItem.field),
+            placeholder: (targetFieldItem.inferredType === "image"
+              ? "آپلود تصویر"
+              : targetFieldItem.inferredType === "file"
+                ? "آپلود فایل"
+                : label),
+            help_text: String(item?.help_text || "").trim() || null,
             default_value: defaultValue === "" ? null : defaultValue,
             config: {
               select_options: resolvedOptions,
@@ -596,6 +677,15 @@ const WebFormBuilderPage: React.FC = () => {
                   <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
                 </Form.Item>
 
+                <Form.Item label="مدل نمایش عمومی" name="display_mode" rules={[{ required: true }]}>
+                  <Select
+                    options={[
+                      { label: "لیستی", value: "list" },
+                      { label: "اسلایدی", value: "slide" },
+                    ]}
+                  />
+                </Form.Item>
+
                 <Form.Item label="عنوان فرم" name="header_title" className="md:col-span-2">
                   <Input placeholder="اگر خالی باشد از نام فرم استفاده می‌شود." />
                 </Form.Item>
@@ -607,6 +697,51 @@ const WebFormBuilderPage: React.FC = () => {
                 <Form.Item label="توضیحات داخلی" name="description" className="md:col-span-2">
                   <Input.TextArea rows={3} placeholder="این متن فقط داخل پنل مدیریت دیده می‌شود." />
                 </Form.Item>
+
+                <div className="md:col-span-2 rounded-2xl border border-dashed border-gray-200 p-4">
+                  <div className="mb-3 text-sm font-semibold text-gray-700">تنظیمات تجربه فرم</div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Form.Item name="slide_show_progress" valuePropName="checked" className="mb-0">
+                      <Checkbox>نمایش نوار پیشرفت</Checkbox>
+                    </Form.Item>
+                    <Form.Item name="slide_allow_back" valuePropName="checked" className="mb-0">
+                      <Checkbox>اجازه بازگشت بین اسلایدها</Checkbox>
+                    </Form.Item>
+                    <Form.Item name="slide_auto_advance" valuePropName="checked" className="mb-0">
+                      <Checkbox>حرکت خودکار برای گزینه‌های تک‌انتخابی</Checkbox>
+                    </Form.Item>
+                  </div>
+                </div>
+
+                <div className="md:col-span-2 rounded-2xl border border-dashed border-gray-200 p-4">
+                  <div className="mb-3 text-sm font-semibold text-gray-700">مدیریت رکوردهای تکراری</div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Form.Item label="فیلد تطبیق تکراری" name="duplicate_match_field">
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        options={duplicateFieldOptions.map((item) => ({ label: item.label, value: item.value }))}
+                        placeholder="مثلا موبایل، کد ملی، عنوان یا نام"
+                      />
+                    </Form.Item>
+                    <Form.Item label="رفتار با تکراری" name="duplicate_strategy">
+                      <Select
+                        disabled={!String(duplicateMatchField || "").trim()}
+                        options={[
+                          { label: "تکراری‌ها ثبت شوند", value: "allow" },
+                          { label: "تکراری‌ها بازنویسی شوند", value: "update" },
+                          { label: "تکراری‌ها ثبت نشوند", value: "skip" },
+                        ]}
+                      />
+                   </Form.Item>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {String(duplicateMatchField || "").trim()
+                      ? "وب‌فرم قبل از ثبت بر اساس همین فیلد رکورد مشابه را پیدا می‌کند و رفتار انتخاب‌شده را اعمال می‌کند."
+                      : "برای فعال‌شدن منطق تکراری‌ها، اول یک فیلد قابل تطبیق مثل موبایل، کد، نام یا تاریخ را انتخاب کنید."}
+                  </div>
+                </div>
               </div>
             </Card>
 
@@ -637,7 +772,7 @@ const WebFormBuilderPage: React.FC = () => {
                     {fields.map((field, index) => {
                       const currentTargetFieldKey = String(watchedFields?.[index]?.target_field_key || "").trim();
                       const targetFieldItem = targetFieldMap[currentTargetFieldKey];
-                      const inferredType = inferWebFormFieldType(targetFieldItem?.field);
+                      const inferredType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
                       const optionCount = resolveTargetOptions(currentTargetFieldKey).length;
 
                       return (
@@ -671,9 +806,14 @@ const WebFormBuilderPage: React.FC = () => {
                               <Input placeholder={targetFieldItem?.label || "عنوان فیلد"} />
                             </Form.Item>
 
+                            <Form.Item label="راهنمای کوتاه" name={[field.name, "help_text"]}>
+                              <Input placeholder="متن کمکی زیر فیلد" />
+                            </Form.Item>
+
                             <div className="rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-500">
                               <div>نوع ورودی: {inferredType || "-"}</div>
-                              {inferredType === "select" ? <div className="mt-1">تعداد گزینه‌ها: {optionCount}</div> : null}
+                              {inferredType === "select" || inferredType === "multi_select" ? <div className="mt-1">تعداد گزینه‌ها: {optionCount}</div> : null}
+                              {isWebFormVirtualTargetField(currentTargetFieldKey) ? <div className="mt-1">نوع ویژه: پیوست وب‌فرم</div> : null}
                               <div className="mt-1">Placeholder: {String(watchedFields?.[index]?.label || targetFieldItem?.label || "-")}</div>
                             </div>
 

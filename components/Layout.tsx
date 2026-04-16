@@ -463,6 +463,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'ابزارها',
         children: [
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
+          { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'گالری فایل‌ها' },
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
@@ -716,6 +717,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       process_runs: 'فرآیند',
       process_templates: 'الگوها',
       attendance_logs: 'تردد',
+      surveys: 'نظرسنجی',
     };
     const iconMap: Record<string, React.ReactNode> = {
       products: <AppstoreOutlined />,
@@ -742,6 +744,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       attendance_logs: <CheckSquareOutlined />,
       process_runs: <NodeIndexOutlined />,
       process_templates: <NodeIndexOutlined />,
+      surveys: <FileTextOutlined />,
     };
     const dynamicItems = mobileFooterModuleIds.map((moduleId) => ({
       key: `/${moduleId}`,

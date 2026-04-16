@@ -272,10 +272,9 @@ const createAuthUser = async (
     headers: getServiceHeaders(serviceRoleKey),
     body: JSON.stringify(payload),
   });
-  const raw = await response.text();
-  const parsed = raw ? JSON.parse(raw) : null;
+  const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || raw || 'ایجاد کاربر ناموفق بود'));
+    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ایجاد کاربر ناموفق بود'));
   }
   return unwrapAuthUserPayload(parsed);
 };
@@ -291,10 +290,9 @@ const updateAuthUser = async (
     headers: getServiceHeaders(serviceRoleKey),
     body: JSON.stringify(payload),
   });
-  const raw = await response.text();
-  const parsed = raw ? JSON.parse(raw) : null;
+  const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || raw || 'بروزرسانی کاربر ناموفق بود'));
+    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'بروزرسانی کاربر ناموفق بود'));
   }
   return unwrapAuthUserPayload(parsed);
 };
@@ -510,10 +508,9 @@ const resendOtp = async (
       type,
     }),
   });
-  const raw = await response.text();
-  const parsed = raw ? JSON.parse(raw) : null;
+  const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || raw || 'ارسال کد تایید ناموفق بود'));
+    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ارسال کد تایید ناموفق بود'));
   }
   return parsed || null;
 };
@@ -559,10 +556,9 @@ const verifyPhoneOtp = async (
       type,
     }),
   });
-  const raw = await response.text();
-  const parsed = raw ? JSON.parse(raw) : null;
+  const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || raw || 'تایید کد پیامکی ناموفق بود'));
+    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'تایید کد پیامکی ناموفق بود'));
   }
   return parsed || null;
 };
@@ -597,10 +593,9 @@ const upsertProfile = async (
     },
     body: JSON.stringify([profilePayload]),
   });
-  const raw = await response.text();
-  const parsed = raw ? JSON.parse(raw) : null;
+  const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.message || raw || 'ایجاد پروفایل ناموفق بود'));
+    throw new Error(String(parsed?.message || parsed || 'ایجاد پروفایل ناموفق بود'));
   }
   return Array.isArray(parsed) ? parsed[0] || profilePayload : parsed || profilePayload;
 };

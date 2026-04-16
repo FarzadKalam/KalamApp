@@ -9,8 +9,8 @@ begin;
 alter table public.attendance_logs
   add column if not exists actual_check_in_time time,
   add column if not exists actual_check_out_time time,
-  add column if not exists manual_check_in_time time,
-  add column if not exists manual_check_out_time time;
+  add column if not exists manual_check_in_time timestamptz,
+  add column if not exists manual_check_out_time timestamptz;
 
 create or replace function public.sync_attendance_actual_times()
 returns trigger
@@ -53,7 +53,7 @@ set
 alter table public.web_form_fields drop constraint if exists chk_web_form_fields_type;
 alter table public.web_form_fields
   add constraint chk_web_form_fields_type check (
-    field_type in ('text', 'long_text', 'number', 'phone', 'date', 'time', 'datetime', 'checkbox', 'select')
+    field_type in ('text', 'long_text', 'number', 'phone', 'date', 'time', 'datetime', 'image', 'file', 'multi_select', 'location', 'checkbox', 'select', 'relation')
   );
 
 notify pgrst, 'reload schema';

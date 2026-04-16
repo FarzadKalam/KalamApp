@@ -53,6 +53,33 @@ const json = (status: number, payload: Record<string, any>) =>
     },
   });
 
+const authHookSuccess = () =>
+  new Response(null, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'X-Kalam-Function-Build': FUNCTION_BUILD,
+    },
+  });
+
+const authHookError = (status: number, message: string) =>
+  new Response(
+    JSON.stringify({
+      error: {
+        http_code: status,
+        message: String(message || 'SMS hook failed'),
+      },
+    }),
+    {
+      status,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json',
+        'X-Kalam-Function-Build': FUNCTION_BUILD,
+      },
+    }
+  );
+
 const DEFAULT_SMS_SEND_URL = 'https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2';
 const DEFAULT_SMS_CREDIT_URL = 'https://api.payamak-panel.com/post/send.asmx/GetCredit';
 const DEFAULT_SMS_OTP_URL = 'https://rest.payamak-panel.com/api/SendSMS/SendOtp';
@@ -1157,25 +1184,31 @@ Deno.serve(async (req) => {
     );
 
     if (isAuthHookRequest) {
-      if (!hookPhone) {
-        console.warn('[send-sms] hook payload missing phone', JSON.stringify(payloadShape));
-        return json(400, { success: false, message: 'SMS hook payload did not include phone number' });
-      }
+      try {
+        if (!hookPhone) {
+          console.warn('[send-sms] hook payload missing phone', JSON.stringify(payloadShape));
+          return authHookError(400, 'SMS hook payload did not include phone number');
+        }
 
-      const settings = getHookSmsSettings(body?.overrideSettings);
-      if (hookOtp) {
-        const result = await sendOtpWithProvider(hookPhone, hookOtp, settings);
-        return json(200, { success: true, ...result });
-      }
+        const settings = getHookSmsSettings(body?.overrideSettings);
+        if (hookOtp) {
+          await sendOtpWithProvider(hookPhone, hookOtp, settings);
+          return authHookSuccess();
+        }
 
-      const hookText = extractHookMessageText(body as any);
-      if (hookText) {
-        const sentResult = await sendSmsWithProviderFallback([hookPhone], hookText, settings);
-        return json(200, { success: true, mode: 'hook_text_fallback', ...sentResult });
-      }
+        const hookText = extractHookMessageText(body as any);
+        if (hookText) {
+          await sendSmsWithProviderFallback([hookPhone], hookText, settings);
+          return authHookSuccess();
+        }
 
-      console.warn('[send-sms] hook payload missing otp', JSON.stringify(payloadShape));
-      return json(400, { success: false, message: 'SMS hook payload did not include OTP code' });
+        console.warn('[send-sms] hook payload missing otp', JSON.stringify(payloadShape));
+        return authHookError(400, 'SMS hook payload did not include OTP code');
+      } catch (hookError: any) {
+        const message = String(hookError?.message || hookError || 'SMS hook failed');
+        console.error('[send-sms] auth hook error', message);
+        return authHookError(400, message);
+      }
     }
     if (!authHeader.startsWith('Bearer ')) {
       return json(401, { success: false, message: 'Missing bearer token' });

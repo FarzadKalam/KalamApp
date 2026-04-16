@@ -10,8 +10,13 @@ export type WebFormFieldType =
   | "date"
   | "time"
   | "datetime"
+  | "image"
+  | "file"
+  | "multi_select"
+  | "location"
   | "checkbox"
-  | "select";
+  | "select"
+  | "relation";
 
 export type WebFormSelectOption = {
   label: string;
@@ -19,6 +24,8 @@ export type WebFormSelectOption = {
 };
 
 export type WebFormAccessScope = "public" | "internal";
+export type WebFormDisplayMode = "list" | "slide";
+export type WebFormDuplicateStrategy = "allow" | "update" | "skip";
 
 export type WebFormConfig = {
   header_title?: string;
@@ -26,6 +33,12 @@ export type WebFormConfig = {
   submit_label?: string;
   success_message?: string;
   success_redirect_url?: string;
+  display_mode?: WebFormDisplayMode;
+  slide_show_progress?: boolean;
+  slide_allow_back?: boolean;
+  slide_auto_advance?: boolean;
+  duplicate_match_field?: string;
+  duplicate_strategy?: WebFormDuplicateStrategy;
   default_record_values?: Record<string, any>;
 };
 
@@ -60,9 +73,33 @@ const WEB_FORM_SUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.DATE,
   FieldType.TIME,
   FieldType.DATETIME,
+  FieldType.IMAGE,
+  FieldType.MULTI_SELECT,
+  FieldType.LOCATION,
   FieldType.CHECKBOX,
   FieldType.SELECT,
+  FieldType.STATUS,
 ]);
+
+export const WEB_FORM_RECORD_IMAGE_TARGET_KEY = "__record_image__";
+export const WEB_FORM_RECORD_FILE_TARGET_KEY = "__record_files__";
+
+const WEB_FORM_VIRTUAL_TARGET_FIELDS = [
+  {
+    label: "پیوست تصویر",
+    value: WEB_FORM_RECORD_IMAGE_TARGET_KEY,
+    field: null,
+    inferredType: "image" as WebFormFieldType,
+    isVirtual: true,
+  },
+  {
+    label: "پیوست فایل",
+    value: WEB_FORM_RECORD_FILE_TARGET_KEY,
+    field: null,
+    inferredType: "file" as WebFormFieldType,
+    isVirtual: true,
+  },
+] as const;
 
 const toRecord = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -91,21 +128,54 @@ export const inferWebFormFieldType = (field?: ModuleField | null): WebFormFieldT
   if (field.type === FieldType.DATE) return "date";
   if (field.type === FieldType.TIME) return "time";
   if (field.type === FieldType.DATETIME) return "datetime";
+  if (field.type === FieldType.IMAGE) return "image";
+  if (field.type === FieldType.MULTI_SELECT) return "multi_select";
+  if (field.type === FieldType.LOCATION) return "location";
   if (field.type === FieldType.CHECKBOX) return "checkbox";
-  if (field.type === FieldType.SELECT) return "select";
+  if (field.type === FieldType.RELATION) return "relation";
+  if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) return "select";
   return "text";
 };
 
-export const getWebFormTargetFields = (moduleId?: string | null) => {
+export const isWebFormVirtualTargetField = (fieldKey?: string | null) =>
+  [WEB_FORM_RECORD_IMAGE_TARGET_KEY, WEB_FORM_RECORD_FILE_TARGET_KEY].includes(String(fieldKey || "").trim());
+
+export const getWebFormTargetField = (moduleId?: string | null, fieldKey?: string | null) => {
+  const normalizedModuleId = String(moduleId || "").trim();
+  const normalizedFieldKey = String(fieldKey || "").trim();
+  if (!normalizedModuleId || !normalizedFieldKey) return null;
+  return (MODULES[normalizedModuleId]?.fields || []).find((field) => field?.key === normalizedFieldKey) || null;
+};
+
+export const resolveWebFormFieldType = (
+  moduleId?: string | null,
+  targetFieldKey?: string | null,
+  fallbackType: unknown = "text",
+): WebFormFieldType => {
+  if (String(targetFieldKey || "").trim() === WEB_FORM_RECORD_IMAGE_TARGET_KEY) return "image";
+  if (String(targetFieldKey || "").trim() === WEB_FORM_RECORD_FILE_TARGET_KEY) return "file";
+  const targetField = getWebFormTargetField(moduleId, targetFieldKey);
+  if (targetField) return inferWebFormFieldType(targetField);
+  return (["text", "long_text", "number", "phone", "date", "time", "datetime", "image", "file", "multi_select", "location", "checkbox", "select", "relation"].includes(String(fallbackType || ""))
+    ? String(fallbackType)
+    : "text") as WebFormFieldType;
+};
+
+export const getWebFormTargetFields = (
+  moduleId?: string | null,
+  options?: { accessScope?: WebFormAccessScope | string | null },
+) => {
   const normalized = String(moduleId || "").trim();
   if (!isWebFormTargetModule(normalized)) return [];
+  const allowRelation = String(options?.accessScope || "").trim() === "internal";
 
-  return (MODULES[normalized]?.fields || [])
+  const moduleFields = (MODULES[normalized]?.fields || [])
     .filter((field) => {
       if (!field?.key) return false;
       if (field.hideInCreateForm) return false;
       if (field.readonly) return false;
       if ((field as any).nature === "system") return false;
+      if (field.type === FieldType.RELATION) return allowRelation;
       return WEB_FORM_SUPPORTED_FIELD_TYPES.has(field.type);
     })
     .map((field) => ({
@@ -113,9 +183,17 @@ export const getWebFormTargetFields = (moduleId?: string | null) => {
       value: field.key,
       field,
       inferredType: inferWebFormFieldType(field),
+      isVirtual: false,
     }))
     .sort((a, b) => a.label.localeCompare(b.label, "fa"));
+
+  return [...moduleFields, ...WEB_FORM_VIRTUAL_TARGET_FIELDS];
 };
+
+export const getWebFormDuplicateFieldOptions = (moduleId?: string | null) =>
+  getWebFormTargetFields(moduleId).filter((item) =>
+    !item.isVirtual && ["text", "number", "phone", "date", "time", "datetime", "select"].includes(item.inferredType)
+  );
 
 export const getMissingWebFormRequiredFields = (
   moduleId: string | undefined,
@@ -151,11 +229,23 @@ export const normalizeWebFormConfig = (value: unknown): WebFormConfig => {
     submit_label: String(record.submit_label || "").trim(),
     success_message: String(record.success_message || "").trim(),
     success_redirect_url: String(record.success_redirect_url || "").trim(),
+    display_mode: String(record.display_mode || "").trim() === "slide" ? "slide" : "list",
+    slide_show_progress: record.slide_show_progress !== false,
+    slide_allow_back: record.slide_allow_back !== false,
+    slide_auto_advance: record.slide_auto_advance === true,
+    duplicate_match_field: String(record.duplicate_match_field || "").trim(),
+    duplicate_strategy: (["allow", "update", "skip"].includes(String(record.duplicate_strategy || ""))
+      ? String(record.duplicate_strategy)
+      : "allow") as WebFormDuplicateStrategy,
     default_record_values: defaultRecordValues,
   };
 };
 
-export const normalizeWebFormFieldRecord = (value: unknown, index = 0): WebFormFieldRecord => {
+export const normalizeWebFormFieldRecord = (
+  value: unknown,
+  index = 0,
+  options?: { targetModuleId?: string | null },
+): WebFormFieldRecord => {
   const record = toRecord(value);
   const config = toRecord(record.config);
   const selectOptions = Array.isArray(config.select_options)
@@ -175,9 +265,11 @@ export const normalizeWebFormFieldRecord = (value: unknown, index = 0): WebFormF
     field_key: String(record.field_key || `field_${index + 1}`).trim() || `field_${index + 1}`,
     label: String(record.label || "").trim() || `فیلد ${index + 1}`,
     target_field_key: String(record.target_field_key || "").trim() || null,
-    field_type: (["text", "long_text", "number", "phone", "date", "time", "datetime", "checkbox", "select"].includes(String(record.field_type || ""))
-      ? String(record.field_type)
-      : "text") as WebFormFieldType,
+    field_type: resolveWebFormFieldType(
+      options?.targetModuleId,
+      String(record.target_field_key || "").trim() || String(record.field_key || "").trim(),
+      record.field_type,
+    ),
     placeholder: String(record.placeholder || "").trim() || null,
     help_text: String(record.help_text || "").trim() || null,
     default_value: record.default_value ?? null,

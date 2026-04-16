@@ -110,4 +110,39 @@ describe('SmartTableRenderer', () => {
       expect(checkboxes[1]).toBeChecked();
     });
   });
+
+  it('renders tags under any name or title text column using tagsMap data', () => {
+    const titleLikeModule: ModuleDefinition = {
+      ...testModule,
+      fields: [
+        {
+          key: 'stage_name',
+          labels: { fa: 'عنوان مرحله', en: 'Stage Title' },
+          type: FieldType.TEXT,
+          isTableColumn: true,
+          order: 1,
+        },
+        {
+          key: 'tags',
+          labels: { fa: 'برچسب‌ها', en: 'Tags' },
+          type: FieldType.TAGS,
+          isTableColumn: true,
+          order: 2,
+        },
+      ],
+    };
+
+    render(
+      <SmartTableRenderer
+        moduleConfig={titleLikeModule}
+        data={[{ id: 'row-1', stage_name: 'برش اولیه', tags: [] }]}
+        tagsMap={{ 'row-1': [{ id: 'tag-1', title: 'فوری', color: 'red' }] }}
+        loading={false}
+        pagination={false}
+      />
+    );
+
+    expect(screen.getByText('برش اولیه')).toBeInTheDocument();
+    expect(screen.getByText('فوری')).toBeInTheDocument();
+  });
 });

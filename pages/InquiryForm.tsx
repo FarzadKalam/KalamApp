@@ -1,15 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Checkbox, Form, Input, Select, Space, Spin, Typography } from "antd";
-import { LockOutlined, LoginOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Card, Form, Space, Spin, Typography, Upload } from "antd";
+import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import SmartFieldRenderer from "../components/SmartFieldRenderer";
+import { MODULES } from "../moduleRegistry";
 import { supabase } from "../supabaseClient";
+import { FieldType, type ModuleField } from "../types";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from "../theme/brandTheme";
 import { readRuntimeBranding } from "../utils/brandingRuntime";
+import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
+import { uploadFileWithProgress } from "../utils/uploadFileWithProgress";
+import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { normalizeWebFormConfig, normalizeWebFormFieldRecord, type WebFormAccessScope, type WebFormFieldRecord } from "../utils/webForms";
-import PersianDatePicker from "../components/PersianDatePicker";
 
 const { Paragraph, Text, Title } = Typography;
+
+type PublicUploadedAsset = {
+  url: string;
+  name: string;
+  mimeType?: string | null;
+  fileType: "image" | "file";
+};
 
 type PublicWebFormState = {
   mode: "dynamic" | "legacy";
@@ -43,6 +55,121 @@ const LEGACY_PREFIX_OPTIONS = [
   { label: "دکتر", value: "دکتر" },
   { label: "مهندس", value: "مهندس" },
 ];
+
+const mapWebFormFieldTypeToModuleFieldType = (fieldType: WebFormFieldRecord["field_type"]): FieldType => {
+  switch (fieldType) {
+    case "long_text":
+      return FieldType.LONG_TEXT;
+    case "number":
+      return FieldType.NUMBER;
+    case "phone":
+      return FieldType.PHONE;
+    case "date":
+      return FieldType.DATE;
+    case "time":
+      return FieldType.TIME;
+    case "datetime":
+      return FieldType.DATETIME;
+    case "image":
+      return FieldType.IMAGE;
+    case "multi_select":
+      return FieldType.MULTI_SELECT;
+    case "location":
+      return FieldType.LOCATION;
+    case "relation":
+      return FieldType.RELATION;
+    case "checkbox":
+      return FieldType.CHECKBOX;
+    case "select":
+      return FieldType.SELECT;
+    default:
+      return FieldType.TEXT;
+  }
+};
+
+const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: string | null): ModuleField => {
+  const normalizedTargetModuleId = String(targetModuleId || "").trim();
+  const targetFieldKey = String(field.target_field_key || field.field_key || "").trim();
+  const targetField = normalizedTargetModuleId
+    ? (MODULES[normalizedTargetModuleId]?.fields || []).find((item) => String(item?.key || "").trim() === targetFieldKey)
+    : null;
+  const configuredOptions = Array.isArray(field.config?.select_options) ? field.config.select_options : [];
+  return {
+    ...(targetField || {}),
+    key: targetFieldKey || field.field_key,
+    type: targetField?.type || mapWebFormFieldTypeToModuleFieldType(field.field_type),
+    labels: {
+      fa: field.label,
+      en: targetField?.labels?.en,
+    },
+    options: configuredOptions.length > 0 ? configuredOptions : (targetField?.options || []),
+    validation: {
+      ...(targetField?.validation || {}),
+      required: field.is_required === true,
+    },
+    dynamicOptionsCategory: targetField?.dynamicOptionsCategory,
+    relationConfig: targetField?.relationConfig,
+    mode: targetField?.mode,
+    readonly: false,
+    hideInCreateForm: false,
+  };
+};
+
+const isWideField = (field: WebFormFieldRecord) =>
+  field.field_type === "long_text"
+  || field.field_type === "checkbox"
+  || field.field_type === "location"
+  || field.field_type === "multi_select"
+  || field.field_type === "image"
+  || field.field_type === "file";
+
+const normalizePublicFieldValue = (field: WebFormFieldRecord, rawValue: any) => {
+  if (rawValue === undefined) return undefined;
+  if (rawValue === null) return null;
+
+  if (field.field_type === "checkbox") return Boolean(rawValue);
+
+  if (field.field_type === "multi_select") {
+    const list = Array.isArray(rawValue)
+      ? rawValue
+      : (rawValue === "" ? [] : [rawValue]);
+    return list
+      .map((item) => (item === null || item === undefined ? "" : String(item).trim()))
+      .filter(Boolean);
+  }
+
+  if (field.field_type === "image" || field.field_type === "file") {
+    const list = Array.isArray(rawValue)
+      ? rawValue
+      : (rawValue ? [rawValue] : []);
+    return list
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const url = String((item as any).url || "").trim();
+        if (!url) return null;
+        return {
+          url,
+          name: String((item as any).name || "").trim() || "file",
+          mimeType: String((item as any).mimeType || "").trim() || null,
+          fileType: field.field_type === "image" ? "image" : "file",
+        };
+      })
+      .filter(Boolean);
+  }
+
+  if (field.field_type === "number") {
+    if (rawValue === "") return null;
+    const parsed = Number(rawValue);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  if (typeof rawValue === "string") {
+    const trimmed = rawValue.trim();
+    return trimmed === "" ? null : trimmed;
+  }
+
+  return rawValue;
+};
 
 const LEGACY_INQUIRY_FIELDS: WebFormFieldRecord[] = [
   {
@@ -177,6 +304,8 @@ const InquiryForm = () => {
     typeof document !== "undefined" ? document.documentElement.classList.contains("dark") : false
   );
   const [authUser, setAuthUser] = useState<any>(null);
+  const [uploadingFieldKeys, setUploadingFieldKeys] = useState<Record<string, boolean>>({});
+  const watchedFormValues = Form.useWatch([], form) || {};
 
   const requestedSlug = useMemo(() => {
     const wildcard = String(params["*"] || "").trim();
@@ -235,9 +364,10 @@ const InquiryForm = () => {
   }, []);
 
   useEffect(() => {
+    if (!publicForm) return;
     form.resetFields();
     form.setFieldsValue(initialFieldValues);
-  }, [form, initialFieldValues]);
+  }, [form, initialFieldValues, publicForm]);
 
   useEffect(() => {
     let active = true;
@@ -286,8 +416,9 @@ const InquiryForm = () => {
         if (response?.form_id) {
           const webForm = toRecord(response.web_form);
           const config = normalizeWebFormConfig(webForm.config);
+          const targetModuleId = String(webForm.target_module_id || "");
           const fields = Array.isArray(response.fields)
-            ? response.fields.map((item: unknown, index: number) => normalizeWebFormFieldRecord(item, index))
+            ? response.fields.map((item: unknown, index: number) => normalizeWebFormFieldRecord(item, index, { targetModuleId }))
             : [];
 
           if (!cancelled) {
@@ -296,7 +427,7 @@ const InquiryForm = () => {
               slug: String(webForm.route_slug || requestedSlug),
               name: String(webForm.name || config.header_title || "وب فرم"),
               accessScope: (webForm.access_scope || "public") as WebFormAccessScope,
-              targetModuleId: String(webForm.target_module_id || ""),
+              targetModuleId,
               config,
               fields,
               companySettings: toRecord(response.company_settings),
@@ -368,6 +499,19 @@ const InquiryForm = () => {
     { key: "address", label: "نشانی", value: String(companySettings.address || "").trim() },
   ].filter((item) => item.value);
 
+  const visibleFields = useMemo(
+    () => (publicForm?.fields || []).filter((field) => !field.is_hidden && !(field.field_type === "relation" && publicForm?.accessScope !== "internal")),
+    [publicForm?.accessScope, publicForm?.fields]
+  );
+  const isSlideMode = publicForm?.config.display_mode === "slide";
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const currentSlideField = visibleFields[currentSlideIndex] || null;
+  const slideProgressPercent = visibleFields.length > 0 ? Math.round(((currentSlideIndex + 1) / visibleFields.length) * 100) : 0;
+
+  useEffect(() => {
+    setCurrentSlideIndex(0);
+  }, [publicForm?.slug, visibleFields.length]);
+
   const surfaceStyle = isDarkMode
     ? {
         backgroundColor: palette.darkSurface,
@@ -386,79 +530,186 @@ const InquiryForm = () => {
       : `linear-gradient(155deg, ${palette.primary}18 0%, #ffffff 36%, ${palette.secondary}12 100%)`,
   } as const;
 
-  const renderField = (field: WebFormFieldRecord) => {
-    if (field.is_hidden) return null;
+  const buildPublicUploadPath = (field: WebFormFieldRecord, file: File) => {
+    const extension = String(file.name.split(".").pop() || "").trim().toLowerCase();
+    const safeBaseName = String(file.name || "file")
+      .replace(/\.[^.]+$/, "")
+      .trim()
+      .replace(/[^0-9a-zA-Z._\-\u0600-\u06FF]+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "") || "file";
+    const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeBaseName}${extension ? `.${extension}` : ""}`;
+    return `record_files/web_forms/${publicForm?.slug || "public"}/${field.field_key}/${finalName}`;
+  };
 
-    const rules = field.is_required ? [{ required: true, message: `${field.label} را وارد کنید.` }] : [];
-    const placeholder = field.label;
-    const fieldPlaceholder =
-      String(field.config?.placeholder || "").trim()
-      || (field.field_type === "date"
-        ? "مثال: ۱۴۰۵/۰۱/۲۵"
-        : field.field_type === "time"
-          ? "مثال: ۱۸:۰۰"
-          : field.field_type === "datetime"
-            ? "مثال: ۱۴۰۵/۰۱/۲۵ ۱۸:۰۰"
-            : placeholder);
-
-    if (field.field_type === "long_text") {
-      return (
-        <Form.Item key={field.field_key} name={field.field_key} label={field.label} rules={rules}>
-          <Input.TextArea rows={4} placeholder={placeholder} />
-        </Form.Item>
-      );
+  const uploadPublicAttachment = async (field: WebFormFieldRecord, file: File): Promise<PublicUploadedAsset | null> => {
+    try {
+      setUploadingFieldKeys((prev) => ({ ...prev, [field.field_key]: true }));
+      const filePath = buildPublicUploadPath(field, file);
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: filePath,
+        file,
+        label: file.name || field.label,
+        detail: field.label,
+      });
+      const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+      return {
+        url: publicUrl,
+        name: file.name || "file",
+        mimeType: file.type || null,
+        fileType: field.field_type === "image" ? "image" : "file",
+      };
+    } catch (error: any) {
+      console.error("Public web form upload failed", error);
+      message.error(toFaErrorMessage(error, "آپلود فایل ناموفق بود."));
+      return null;
+    } finally {
+      setUploadingFieldKeys((prev) => ({ ...prev, [field.field_key]: false }));
     }
+  };
 
-    if (field.field_type === "select") {
-      const options = Array.isArray(field.config?.select_options) ? field.config.select_options : [];
-      return (
-        <Form.Item key={field.field_key} name={field.field_key} label={field.label} rules={rules}>
-          <Select allowClear={!field.is_required} showSearch optionFilterProp="label" placeholder={placeholder} options={options} />
-        </Form.Item>
-      );
-    }
+  const removePublicAttachment = (fieldKey: string, assetUrl: string) => {
+    const currentList = normalizePublicFieldValue(
+      { field_key: fieldKey, label: "", field_type: "file" } as WebFormFieldRecord,
+      form.getFieldValue(fieldKey),
+    );
+    const nextList = Array.isArray(currentList)
+      ? currentList.filter((item) => String((item as any)?.url || "") !== assetUrl)
+      : [];
+    form.setFieldValue(fieldKey, nextList);
+  };
 
-    if (field.field_type === "checkbox") {
-      return (
-        <Form.Item key={field.field_key} name={field.field_key} valuePropName="checked">
-          <Checkbox>{field.label}</Checkbox>
-        </Form.Item>
-      );
-    }
-
-    if (field.field_type === "date" || field.field_type === "time" || field.field_type === "datetime") {
-      return (
-        <Form.Item key={field.field_key} name={field.field_key} label={field.label} rules={rules}>
-          <PersianDatePicker
-            type={field.field_type === "date" ? "DATE" : field.field_type === "time" ? "TIME" : "DATETIME"}
-            placeholder={fieldPlaceholder}
-            className="w-full"
-          />
-        </Form.Item>
-      );
-    }
-
-    const inputType =
-      field.field_type === "number"
-        ? "number"
-        : field.field_type === "phone"
-          ? "tel"
-          : "text";
+  const renderAttachmentField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
+    const currentAssets = normalizePublicFieldValue(field, form.getFieldValue(field.field_key));
+    const assetList = Array.isArray(currentAssets) ? currentAssets as PublicUploadedAsset[] : [];
+    const isUploading = uploadingFieldKeys[field.field_key] === true;
+    const accept = field.field_type === "image" ? "image/*" : undefined;
+    const rules = field.is_required
+      ? [{
+          validator: async (_: unknown, value: unknown) => {
+            const normalized = normalizePublicFieldValue(field, value);
+            if (Array.isArray(normalized) && normalized.length > 0) return;
+            throw new Error(`${field.label} را وارد کنید.`);
+          },
+        }]
+      : [];
 
     return (
-      <Form.Item key={field.field_key} name={field.field_key} label={field.label} rules={rules}>
-        <Input type={inputType} placeholder={fieldPlaceholder} />
+      <Form.Item
+        key={field.field_key}
+        name={field.field_key}
+        label={options?.showLabel === false ? undefined : field.label}
+        rules={rules}
+        extra={options?.showHelp !== false && field.help_text ? (
+          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+            {field.help_text}
+          </span>
+        ) : undefined}
+      >
+        <div className="space-y-3">
+          <Upload
+            multiple
+            accept={accept}
+            showUploadList={false}
+            beforeUpload={(file) => {
+              void (async () => {
+                const uploaded = await uploadPublicAttachment(field, file);
+                if (!uploaded) return;
+                const nextList = [...assetList, uploaded];
+                form.setFieldValue(field.field_key, nextList);
+              })();
+              return false;
+            }}
+          >
+            <Button loading={isUploading}>
+              {field.field_type === "image" ? "افزودن تصویر" : "افزودن فایل"}
+            </Button>
+          </Upload>
+
+          {assetList.length > 0 ? (
+            <div className="space-y-2">
+              {assetList.map((asset) => (
+                <div
+                  key={asset.url}
+                  className="flex items-center justify-between gap-3 rounded-2xl border px-3 py-2"
+                  style={{ borderColor: isDarkMode ? `${palette.darkBorder}` : "#e5e7eb" }}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium" style={{ color: surfaceStyle.color }}>
+                      {asset.name}
+                    </div>
+                    <a
+                      href={asset.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs"
+                      style={{ color: palette.primary }}
+                    >
+                      مشاهده فایل
+                    </a>
+                  </div>
+                  <Button type="text" danger onClick={() => removePublicAttachment(field.field_key, asset.url)}>
+                    حذف
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </Form.Item>
+    );
+  };
+
+  const renderField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
+    if (field.is_hidden) return null;
+    if (field.field_type === "relation" && publicForm?.accessScope !== "internal") return null;
+    if (field.field_type === "image" || field.field_type === "file") {
+      return renderAttachmentField(field, options);
+    }
+
+    const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
+    const rules = field.is_required
+      ? [{
+          required: true,
+          message: field.field_type === "checkbox" ? `${field.label} را تعیین کنید.` : `${field.label} را وارد کنید.`,
+        }]
+      : [];
+
+    return (
+      <Form.Item
+        key={field.field_key}
+        name={field.field_key}
+        label={options?.showLabel === false ? undefined : field.label}
+        rules={rules}
+        extra={options?.showHelp !== false && field.help_text ? (
+          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+            {field.help_text}
+          </span>
+        ) : undefined}
+      >
+        <SmartFieldRenderer
+          field={moduleField}
+          value={form.getFieldValue(field.field_key)}
+          onChange={(nextValue) => form.setFieldValue(field.field_key, nextValue)}
+          forceEditMode
+          compactMode
+          moduleId={publicForm?.targetModuleId || undefined}
+          allValues={watchedFormValues}
+          overlayZIndexBase={1600}
+        />
       </Form.Item>
     );
   };
 
   const buildSubmissionPayload = (values: Record<string, any>) =>
     (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
-      const value = values[field.field_key];
+      const value = normalizePublicFieldValue(field, values[field.field_key]);
       if (value !== undefined) {
         acc[field.field_key] = value;
       } else if (field.default_value !== undefined && field.default_value !== null) {
-        acc[field.field_key] = field.default_value;
+        acc[field.field_key] = normalizePublicFieldValue(field, field.default_value);
       }
       return acc;
     }, {});
@@ -539,11 +790,12 @@ const InquiryForm = () => {
       const result = toRecord(data);
       const targetModuleId = String(result.target_module_id || publicForm.targetModuleId || "").trim();
       const targetRecord = toRecord(result.target_record);
-      if (targetModuleId && Object.keys(targetRecord).length > 0) {
+      const recordAction = String(result.record_action || "created").trim();
+      if (targetModuleId && Object.keys(targetRecord).length > 0 && ["created", "updated"].includes(recordAction)) {
         try {
           await runWorkflowsForEvent({
             moduleId: targetModuleId,
-            event: "create",
+            event: recordAction === "updated" ? "upsert" : "create",
             currentRecord: targetRecord,
           });
         } catch (workflowError) {
@@ -565,12 +817,49 @@ const InquiryForm = () => {
       if (String(error?.message || "").includes("WEB_FORM_AUTH_REQUIRED")) {
         navigate(loginRedirectUrl);
       } else {
-        console.error("Public web form submit failed", error);
-        message.error("ثبت فرم ناموفق بود.");
+        const debugInfo = {
+          message: String(error?.message || ""),
+          details: String(error?.details || ""),
+          hint: String(error?.hint || ""),
+          code: String(error?.code || ""),
+        };
+        console.error("Public web form submit failed", debugInfo, {
+          slug: publicForm.slug,
+          targetModuleId: publicForm.targetModuleId,
+        });
+        message.error(debugInfo.message || "ثبت فرم ناموفق بود.");
       }
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const goToPreviousSlide = () => {
+    if (!publicForm?.config.slide_allow_back) return;
+    setCurrentSlideIndex((prev) => Math.max(0, prev - 1));
+  };
+
+  const goToNextSlide = async () => {
+    if (!currentSlideField) return;
+    try {
+      await form.validateFields([currentSlideField.field_key]);
+      if (currentSlideIndex >= visibleFields.length - 1) {
+        form.submit();
+        return;
+      }
+      setCurrentSlideIndex((prev) => Math.min(visibleFields.length - 1, prev + 1));
+    } catch {
+      // Validation feedback is handled by Ant Form.
+    }
+  };
+
+  const handleFormValuesChange = (changedValues: Record<string, any>) => {
+    if (!isSlideMode || !publicForm?.config.slide_auto_advance || !currentSlideField) return;
+    if (!Object.prototype.hasOwnProperty.call(changedValues, currentSlideField.field_key)) return;
+    if (!["select", "checkbox"].includes(currentSlideField.field_type)) return;
+    window.setTimeout(() => {
+      void goToNextSlide();
+    }, 140);
   };
 
   if (loading) {
@@ -660,24 +949,101 @@ const InquiryForm = () => {
                 </Space>
               </Card>
             ) : (
-              <Form form={form} layout="vertical" onFinish={handleSubmit}>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {(publicForm.fields || []).map((field) => (
-                    <div key={field.field_key} className={field.field_type === "long_text" || field.field_type === "checkbox" ? "md:col-span-2" : ""}>
-                      {renderField(field)}
-                    </div>
-                  ))}
-                </div>
+              <Form form={form} layout="vertical" onFinish={handleSubmit} onValuesChange={handleFormValuesChange}>
+                {isSlideMode && currentSlideField ? (
+                  <div className="space-y-6">
+                    {publicForm.config.slide_show_progress !== false ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between text-sm">
+                          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.72)" : "#6b7280" }}>
+                            مرحله {currentSlideIndex + 1} از {visibleFields.length}
+                          </span>
+                          <span className="font-semibold" style={{ color: surfaceStyle.color }}>
+                            {slideProgressPercent}%
+                          </span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full" style={{ backgroundColor: isDarkMode ? `${palette.darkBorder}88` : "#e5e7eb" }}>
+                          <div
+                            className="h-full rounded-full transition-all duration-300"
+                            style={{
+                              width: `${slideProgressPercent}%`,
+                              background: `linear-gradient(90deg, ${palette.secondary} 0%, ${palette.primary} 100%)`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
 
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  loading={submitting}
-                  className="mt-2 h-12 rounded-2xl px-8 text-base font-bold"
-                  style={{ backgroundColor: palette.primary, boxShadow: `0 16px 34px ${palette.primary}33` }}
-                >
-                  {publicForm.config.submit_label || "ثبت درخواست"}
-                </Button>
+                    <div
+                      key={currentSlideField.field_key}
+                      className="rounded-[28px] border p-5 md:p-7"
+                      style={{
+                        borderColor: isDarkMode ? `${palette.darkBorder}` : `${palette.primary}22`,
+                        background: isDarkMode ? `${palette.darkBg}BB` : `${palette.primary}08`,
+                      }}
+                    >
+                      <div className="mb-5">
+                        <Title level={3} className="!mb-2" style={{ color: surfaceStyle.color }}>
+                          {currentSlideField.label}
+                        </Title>
+                        {currentSlideField.help_text ? (
+                          <Paragraph className="!mb-0" style={{ color: isDarkMode ? "rgba(255,255,255,0.72)" : "#6b7280" }}>
+                            {currentSlideField.help_text}
+                          </Paragraph>
+                        ) : null}
+                      </div>
+
+                      {renderField(currentSlideField, { showHelp: false, showLabel: false })}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <Button
+                        icon={<ArrowRightOutlined />}
+                        onClick={goToPreviousSlide}
+                        disabled={currentSlideIndex === 0 || publicForm.config.slide_allow_back === false}
+                        className="h-11 rounded-2xl px-5"
+                      >
+                        مرحله قبل
+                      </Button>
+
+                      <div className="flex items-center gap-3">
+                        <div className="text-sm" style={{ color: isDarkMode ? "rgba(255,255,255,0.68)" : "#6b7280" }}>
+                          {currentSlideIndex < visibleFields.length - 1 ? "پس از تکمیل این سؤال به مرحله بعد می‌روید." : "پس از این مرحله فرم ثبت می‌شود."}
+                        </div>
+                        <Button
+                          type="primary"
+                          onClick={() => void goToNextSlide()}
+                          loading={submitting}
+                          icon={currentSlideIndex < visibleFields.length - 1 ? <ArrowLeftOutlined /> : <CheckCircleOutlined />}
+                          className="h-12 rounded-2xl px-8 text-base font-bold"
+                          style={{ backgroundColor: palette.primary, boxShadow: `0 16px 34px ${palette.primary}33` }}
+                        >
+                          {currentSlideIndex < visibleFields.length - 1 ? "ادامه" : (publicForm.config.submit_label || "ثبت درخواست")}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {visibleFields.map((field) => (
+                        <div key={field.field_key} className={isWideField(field) ? "md:col-span-2" : ""}>
+                          {renderField(field)}
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      type="primary"
+                      htmlType="submit"
+                      loading={submitting}
+                      className="mt-2 h-12 rounded-2xl px-8 text-base font-bold"
+                      style={{ backgroundColor: palette.primary, boxShadow: `0 16px 34px ${palette.primary}33` }}
+                    >
+                      {publicForm.config.submit_label || "ثبت درخواست"}
+                    </Button>
+                  </>
+                )}
               </Form>
             )}
           </div>

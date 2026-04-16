@@ -122,7 +122,7 @@ create table if not exists public.web_form_fields (
   updated_by uuid references auth.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint chk_web_form_fields_type check (field_type in ('text', 'long_text', 'number', 'phone', 'date', 'datetime', 'checkbox', 'select'))
+  constraint chk_web_form_fields_type check (field_type in ('text', 'long_text', 'number', 'phone', 'date', 'time', 'datetime', 'image', 'file', 'multi_select', 'location', 'checkbox', 'select', 'relation'))
 );
 
 alter table public.web_form_fields
@@ -171,7 +171,7 @@ alter table public.web_form_fields alter column updated_at set default now();
 alter table public.web_form_fields drop constraint if exists chk_web_form_fields_type;
 
 alter table public.web_form_fields
-  add constraint chk_web_form_fields_type check (field_type in ('text', 'long_text', 'number', 'phone', 'date', 'datetime', 'checkbox', 'select'));
+  add constraint chk_web_form_fields_type check (field_type in ('text', 'long_text', 'number', 'phone', 'date', 'time', 'datetime', 'image', 'file', 'multi_select', 'location', 'checkbox', 'select', 'relation'));
 
 create unique index if not exists idx_web_form_fields_form_key_unique
   on public.web_form_fields(web_form_id, field_key);

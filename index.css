@@ -225,13 +225,14 @@ body.ant-scrolling-effect {
 .smarttable-shell .ant-table-header {
   overflow-x: hidden !important;
   backface-visibility: hidden;
-  transform: translateZ(0);
+  transform: none !important;
+  will-change: auto;
 }
 
 .smarttable-shell .ant-table-body {
   backface-visibility: hidden;
-  transform: translateZ(0);
-  will-change: scroll-position;
+  transform: none !important;
+  will-change: auto;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {

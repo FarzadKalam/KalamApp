@@ -182,6 +182,22 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     [moduleConfig?.id]
   );
   const { label: currencyLabel } = useCurrencyConfig();
+  const normalizeFieldKey = useCallback((field?: any) => String(field?.key || '').trim().toLowerCase(), []);
+  const isNameOrTitleField = useCallback((field?: any) => {
+    const key = normalizeFieldKey(field);
+    if (!key) return false;
+    if (field?.isKey) return true;
+    if (field?.type !== FieldType.TEXT) return false;
+    return (
+      key === 'name'
+      || key === 'title'
+      || key === 'full_name'
+      || key === 'business_name'
+      || key === 'legal_name'
+      || key.endsWith('_name')
+      || key.endsWith('_title')
+    );
+  }, [normalizeFieldKey]);
   const activeColumnFilters = controlledColumnFilters ?? internalColumnFilters;
   const isColumnFiltersControlled = controlledColumnFilters !== undefined;
   const renderDeferredInlinePlaceholder = useCallback(
@@ -210,6 +226,14 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     ),
     []
   );
+  const getRecordTags = useCallback((record: any, tagsFieldKey?: string | null) => {
+    if (!tagsFieldKey) return [];
+    const recordId = String(record?.id || '').trim();
+    const mappedTags = recordId ? tagsMap?.[recordId] : undefined;
+    const rawTags = mappedTags ?? record?.[tagsFieldKey];
+    if (!rawTags) return [];
+    return Array.isArray(rawTags) ? rawTags : [rawTags];
+  }, [tagsMap]);
   const renderStableTextCell = useCallback(
     (label: string, className: string) => (
       <div className="flex min-h-[22px] w-full items-center overflow-hidden">
@@ -218,9 +242,39 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     ),
     []
   );
-  const formatDisplayText = useCallback((value: any) => {
-    if (value === null || value === undefined || value === '') return '-';
-    return toPersianNumber(String(value));
+  const formatDisplayText = useCallback((rawValue: any, fallback = '-'): string => {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return fallback;
+    if (Array.isArray(rawValue)) {
+      const parts: string[] = rawValue
+        .map((item: any) => formatDisplayText(item, ''))
+        .map((item) => item.trim())
+        .filter(Boolean);
+      return parts.length > 0 ? toPersianNumber(parts.join('، ')) : fallback;
+    }
+    if (typeof rawValue === 'object') {
+      const candidate = (
+        rawValue.title
+        ?? rawValue.label
+        ?? rawValue.name
+        ?? rawValue.full_name
+        ?? rawValue.business_name
+        ?? rawValue.legal_name
+        ?? rawValue.system_code
+        ?? rawValue.value
+        ?? rawValue.id
+      );
+      if (candidate !== rawValue && candidate !== null && candidate !== undefined && candidate !== '') {
+        return formatDisplayText(candidate, fallback);
+      }
+      try {
+        const serialized = JSON.stringify(rawValue);
+        return serialized && serialized !== '{}' ? toPersianNumber(serialized) : fallback;
+      } catch {
+        return fallback;
+      }
+    }
+    const normalized = String(rawValue).trim();
+    return normalized ? toPersianNumber(normalized) : fallback;
   }, []);
 
   const updateColumnFilters = useCallback((nextFilters: Record<string, FilterValue | null>) => {
@@ -564,27 +618,27 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   // ✅ ترتیب مجدد ستون‌ها: اول تصویر، سپس نام، سپس تگ‌ها، سپس بقیه
   const tagsField = tableFields.find(f => f.type === FieldType.TAGS);
   const imageField = tableFields.find(f => f.type === FieldType.IMAGE);
-  const keyField = tableFields.find(f => f.isKey || ['name', 'title', 'business_name'].includes(f.key));
-  const otherFields = tableFields.filter(f => f !== tagsField && f !== imageField && f !== keyField);
+  const primaryTitleField = tableFields.find((f) => isNameOrTitleField(f));
+  const otherFields = tableFields.filter(f => f !== tagsField && f !== imageField && f !== primaryTitleField);
   
-  if (imageField && keyField) {
-    tableFields = [imageField, keyField, ...otherFields];
-  } else if (keyField) {
-    tableFields = [keyField, ...otherFields];
+  if (imageField && primaryTitleField) {
+    tableFields = [imageField, primaryTitleField, ...otherFields];
+  } else if (primaryTitleField) {
+    tableFields = [primaryTitleField, ...otherFields];
   }
 
   const resolvedTagFilterProps = tagsField ? getTagFilterProps(tagsField.key, tagsField.labels.fa) : null;
   const activeTagFilterValues = tagsField && Array.isArray(activeColumnFilters[tagsField.key])
     ? activeColumnFilters[tagsField.key]!.map((value) => String(value))
     : [];
-  const keyFieldMobileWidth = !isMobileViewport || !keyField
+  const keyFieldMobileWidth = !isMobileViewport || !primaryTitleField
     ? null
     : Math.min(
         280,
         Math.max(
           156,
           (data.reduce((maxLength, record: any) => {
-            const rawValue = record?.[keyField.key];
+            const rawValue = record?.[primaryTitleField.key];
             const normalized = rawValue === null || rawValue === undefined || rawValue === '' ? '-' : String(rawValue).trim();
             return Math.max(maxLength, normalized.length);
           }, 0) * 9) + 52
@@ -744,7 +798,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   };
 
   const columns: ColumnsType<any> = tableFields.map(field => {
-    const isKeyLikeField = field.isKey || ['name', 'title', 'business_name'].includes(field.key);
+    const isKeyLikeField = isNameOrTitleField(field);
     const isSearchable = field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
     const isTagField = field.type === FieldType.TAGS;
     const hasChoiceFilter =
@@ -815,7 +869,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ].includes(field.type);
 
     return {
-      title: isKeyLikeField && keyFieldTagFilterContent ? (
+      title: isKeyLikeField && primaryTitleField?.key === field.key && keyFieldTagFilterContent ? (
         <span className="inline-flex items-center gap-1">
           <span className="text-[10px] md:text-[11px] text-gray-500">{fieldLabel}</span>
           <Popover
@@ -961,7 +1015,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             const opt = moduleConfig?.id === 'tasks' && String(field?.key || '') === 'status'
               ? getTaskStatusOption(value, record, field.options || [])
               : field.options?.find(o => o.value === value);
-            const label = opt?.label || value;
+            const label = formatDisplayText(opt?.label ?? value);
             return <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>;
         }
         if (field.type === FieldType.SELECT) {
@@ -1146,10 +1200,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
              );
         }
         if (isKeyLikeField) {
-             const inlineTags = tagsField ? record?.[tagsField.key] : [];
-              if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
-                return renderStableTextCell(
-                  formatDisplayText(value),
+             const inlineTags = getRecordTags(record, tagsField?.key);
+               if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
+                 return renderStableTextCell(
+                   formatDisplayText(value),
                   "block w-full truncate text-[13px] md:text-sm font-bold text-gray-700 dark:text-gray-200"
                 );
               }
@@ -1163,7 +1217,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                 </div>
               );
         }
-        return <span className="block max-w-[220px] truncate text-xs text-gray-600 dark:text-gray-300">{value}</span>;
+        return renderStableTextCell(
+          formatDisplayText(value),
+          "block w-full truncate text-xs text-gray-600 dark:text-gray-300"
+        );
       }
     };
   });

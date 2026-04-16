@@ -54,6 +54,11 @@ import MessageComposerModal from "../components/MessageComposerModal";
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
 import { getAssigneeLabel } from "../utils/assigneeLabel";
 import { syncDefaultPriceListItemsToProducts } from "../utils/priceListDefaults";
+import {
+  isModuleListLiveInvalidationEnabled,
+  isModuleListLiveInvalidationSupportedView,
+  subscribeToModuleListLiveInvalidation,
+} from "../utils/moduleListLive";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const getDefaultGridPageSize = () => 15;
@@ -457,6 +462,14 @@ export const ModuleListRefine: React.FC<{
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
   const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
   const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
+  const moduleListLiveInvalidationEnabled = useMemo(
+    () => isModuleListLiveInvalidationEnabled(resolvedModuleId),
+    [resolvedModuleId]
+  );
+  const moduleListLiveInvalidationSupportedView = useMemo(
+    () => isModuleListLiveInvalidationSupportedView(viewMode),
+    [viewMode]
+  );
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
     resource: dataResource,
@@ -670,6 +683,50 @@ export const ModuleListRefine: React.FC<{
   useEffect(() => {
     fetchPermissions();
   }, [fetchPermissions]);
+
+  useEffect(() => {
+    if (
+      !moduleListLiveInvalidationEnabled
+      || !moduleListLiveInvalidationSupportedView
+      || !resolvedModuleId
+      || !currentOrgId
+    ) {
+      return;
+    }
+
+    let refreshTimer: number | null = null;
+    const unsubscribe = subscribeToModuleListLiveInvalidation({
+      supabaseClient: supabase,
+      orgId: currentOrgId,
+      moduleId: resolvedModuleId,
+      onInvalidate: () => {
+        if (typeof window !== "undefined" && refreshTimer !== null) {
+          window.clearTimeout(refreshTimer);
+        }
+        if (typeof window !== "undefined") {
+          refreshTimer = window.setTimeout(() => {
+            refreshTimer = null;
+            void tableQueryResult.refetch();
+          }, 300);
+        } else {
+          void tableQueryResult.refetch();
+        }
+      },
+    });
+
+    return () => {
+      if (typeof window !== "undefined" && refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      unsubscribe();
+    };
+  }, [
+    currentOrgId,
+    moduleListLiveInvalidationEnabled,
+    moduleListLiveInvalidationSupportedView,
+    resolvedModuleId,
+    tableQueryResult,
+  ]);
 
   const canViewField = useCallback(
     (fieldKey: string) => {

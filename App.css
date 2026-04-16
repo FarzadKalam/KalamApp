@@ -240,6 +240,468 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   border-left-color: #434343;
 }
 
+.kalam-adaptive-picker-popover .ant-popover-inner {
+  padding: 0 !important;
+  border-radius: 20px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.kalam-adaptive-picker-popover .ant-popover-arrow {
+  display: none !important;
+}
+
+.kalam-adaptive-picker-modal .ant-modal {
+  max-width: 100vw !important;
+  margin: 0 !important;
+  padding-bottom: 0 !important;
+  top: auto !important;
+}
+
+.kalam-adaptive-picker-modal .ant-modal-content {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.kalam-adaptive-picker-modal .ant-modal-body {
+  padding: 0 !important;
+}
+
+.kalam-adaptive-picker-modal__sheet {
+  display: flex;
+  min-height: 100vh;
+  align-items: flex-end;
+}
+
+.kalam-adaptive-picker__field {
+  width: 100%;
+}
+
+.kalam-adaptive-picker__trigger {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  text-align: right;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.kalam-adaptive-picker__trigger:hover:not(:disabled) {
+  border-color: rgba(var(--brand-400-rgb), 0.9);
+}
+
+.kalam-adaptive-picker__trigger:focus-visible {
+  outline: none;
+  border-color: rgb(var(--brand-500-rgb));
+  box-shadow: 0 0 0 2px rgba(var(--brand-500-rgb), 0.14);
+}
+
+.kalam-adaptive-picker__trigger:disabled {
+  cursor: not-allowed;
+}
+
+.kalam-adaptive-picker__trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.kalam-adaptive-picker__trigger-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: rgba(0, 0, 0, 0.35);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5714285714285714;
+}
+
+.kalam-adaptive-picker__trigger-text.is-filled {
+  color: rgba(0, 0, 0, 0.88);
+}
+
+html.dark .kalam-adaptive-picker__trigger-icon {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+html.dark .kalam-adaptive-picker__trigger-text {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+html.dark .kalam-adaptive-picker__trigger-text.is-filled {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.kalam-adaptive-picker {
+  width: min(380px, calc(100vw - 24px));
+  border: 1px solid #d9d9d9;
+  border-radius: 22px;
+  background: #ffffff;
+  color: rgba(15, 23, 42, 0.92);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+  padding: 16px;
+}
+
+.kalam-adaptive-picker--mobile {
+  width: 100%;
+  max-height: min(88vh, 760px);
+  border-radius: 28px 28px 0 0;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+.kalam-adaptive-picker__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.kalam-adaptive-picker__title {
+  color: rgba(15, 23, 42, 0.96);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.kalam-adaptive-picker__subtitle {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.8;
+}
+
+.kalam-adaptive-picker__steps {
+  display: inline-flex;
+  gap: 6px;
+  border-radius: 14px;
+  background: #f5f5f5;
+  padding: 4px;
+}
+
+.kalam-adaptive-picker__step,
+.kalam-adaptive-picker__chip,
+.kalam-adaptive-picker__action {
+  border: 0;
+  font-family: 'Vazirmatn', sans-serif;
+  cursor: pointer;
+}
+
+.kalam-adaptive-picker__step {
+  min-width: 64px;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(15, 23, 42, 0.56);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kalam-adaptive-picker__step.is-active {
+  background: #ffffff;
+  color: rgb(var(--brand-700-rgb));
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.kalam-adaptive-picker__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.kalam-adaptive-picker__chip {
+  border-radius: 999px;
+  background: #f5f5f5;
+  color: rgb(var(--brand-700-rgb));
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background-color 0.2s, transform 0.2s;
+}
+
+.kalam-adaptive-picker__chip:hover {
+  background: #ebebeb;
+  transform: translateY(-1px);
+}
+
+.kalam-adaptive-picker__calendar-wrap {
+  display: table;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  border-radius: 18px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  padding: 10px;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-wrapper,
+.kalam-adaptive-picker__calendar-wrap .rmdp-calendar {
+  width: auto !important;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month,
+.kalam-adaptive-picker__calendar-wrap .rmdp-week,
+.kalam-adaptive-picker__calendar-wrap .rmdp-day-picker {
+  width: auto !important;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day,
+.kalam-adaptive-picker__calendar-wrap .rmdp-week-day,
+.kalam-adaptive-picker__calendar-wrap .rmdp-header-values,
+.kalam-adaptive-picker__calendar-wrap .rmdp-arrow-container,
+.kalam-adaptive-picker__calendar-wrap .rmdp-time-picker,
+.kalam-adaptive-picker__calendar-wrap .rmdp-time-picker * {
+  font-family: 'Vazirmatn', sans-serif !important;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-header-values {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-week-day {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day span {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day.rmdp-selected span {
+  background: linear-gradient(135deg, rgb(var(--brand-500-rgb)), rgb(var(--brand-700-rgb))) !important;
+  color: #fff !important;
+  box-shadow: 0 10px 18px rgba(var(--brand-500-rgb), 0.24);
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day:not(.rmdp-selected) span:hover {
+  background: rgba(var(--brand-500-rgb), 0.1) !important;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--today span {
+  outline: 2px solid rgba(var(--brand-500-rgb), 0.7);
+  outline-offset: -2px;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--friday:not(.rmdp-selected) span,
+.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--holiday:not(.rmdp-selected) span {
+  color: #b91c1c !important;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--holiday:not(.rmdp-selected) span {
+  background: rgba(239, 68, 68, 0.08) !important;
+  outline: 1px solid rgba(239, 68, 68, 0.16);
+  outline-offset: -1px;
+}
+
+.kalam-adaptive-picker__holiday,
+.kalam-adaptive-picker__summary-card {
+  margin-top: 12px;
+  border-radius: 16px;
+  background: #f5f5f5;
+  border: 1px solid #f0f0f0;
+  padding: 12px 14px;
+}
+
+.kalam-adaptive-picker__holiday-label,
+.kalam-adaptive-picker__summary-card div {
+  color: rgb(var(--brand-700-rgb));
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.kalam-adaptive-picker__holiday-text,
+.kalam-adaptive-picker__summary-card strong {
+  color: rgba(15, 23, 42, 0.72);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.9;
+}
+
+.kalam-adaptive-picker__time-editor {
+  border-radius: 18px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  padding: 14px;
+}
+
+.kalam-adaptive-picker__time-fields {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.kalam-adaptive-picker__time-field {
+  display: flex;
+  min-width: 96px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kalam-adaptive-picker__time-field span {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kalam-adaptive-picker__time-field input {
+  height: 52px;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.14);
+  border-radius: 16px;
+  background: #ffffff;
+  color: rgba(15, 23, 42, 0.92);
+  text-align: center;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.kalam-adaptive-picker__time-field input:focus {
+  outline: none;
+  border-color: rgb(var(--brand-500-rgb));
+  box-shadow: 0 0 0 3px rgba(var(--brand-500-rgb), 0.14);
+}
+
+.kalam-adaptive-picker__time-separator {
+  color: rgb(var(--brand-700-rgb));
+  font-size: 26px;
+  font-weight: 800;
+  margin-top: 18px;
+}
+
+.kalam-adaptive-picker__footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.kalam-adaptive-picker__action {
+  flex: 1 1 0;
+  border-radius: 14px;
+  padding: 11px 14px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.kalam-adaptive-picker__action.is-muted {
+  background: #f5f5f5;
+  color: rgba(15, 23, 42, 0.7);
+}
+
+.kalam-adaptive-picker__action.is-danger {
+  background: #fff1f0;
+  color: #b91c1c;
+}
+
+.kalam-adaptive-picker__action.is-primary {
+  background: linear-gradient(135deg, rgb(var(--brand-500-rgb)), rgb(var(--brand-700-rgb)));
+  color: #ffffff;
+  box-shadow: 0 12px 24px rgba(var(--brand-500-rgb), 0.22);
+}
+
+html.dark .kalam-adaptive-picker {
+  border-color: #303030;
+  background: #141414;
+  color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+html.dark .kalam-adaptive-picker__title {
+  color: rgba(255, 255, 255, 0.96);
+}
+
+html.dark .kalam-adaptive-picker__subtitle,
+html.dark .kalam-adaptive-picker__step,
+html.dark .kalam-adaptive-picker__holiday-text,
+html.dark .kalam-adaptive-picker__summary-card strong,
+html.dark .kalam-adaptive-picker__time-field span {
+  color: rgba(226, 232, 240, 0.7);
+}
+
+html.dark .kalam-adaptive-picker__steps,
+html.dark .kalam-adaptive-picker__chip,
+html.dark .kalam-adaptive-picker__holiday,
+html.dark .kalam-adaptive-picker__summary-card {
+  background: #1f1f1f;
+  border-color: #303030;
+}
+
+html.dark .kalam-adaptive-picker__chip {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html.dark .kalam-adaptive-picker__chip:hover {
+  background: #2a2a2a;
+}
+
+html.dark .kalam-adaptive-picker__step.is-active {
+  background: #262626;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap,
+html.dark .kalam-adaptive-picker__time-editor {
+  background: #1a1a1a;
+  border-color: #303030;
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-week-day,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-header-values,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day:not(.rmdp-disabled) span {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--friday:not(.rmdp-selected) span,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--holiday:not(.rmdp-selected) span {
+  color: #fda4af !important;
+}
+
+html.dark .kalam-adaptive-picker__time-field input {
+  border-color: rgba(var(--brand-300-rgb), 0.18);
+  background: rgba(11, 16, 32, 0.82);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+html.dark .kalam-adaptive-picker__action.is-muted {
+  background: #262626;
+  color: rgba(226, 232, 240, 0.9);
+}
+
+@media (max-width: 768px) {
+  .kalam-adaptive-picker {
+    width: 100%;
+    padding: 16px 16px 20px;
+  }
+
+  .kalam-adaptive-picker__time-field {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+}
+
 /* Keep Persian typography consistent in Ant portal-based UI */
 .ant-modal,
 .ant-modal *,
@@ -258,7 +720,13 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
 .ant-message,
 .ant-message *,
 .ant-notification,
-.ant-notification * {
+.ant-notification *,
+.kalam-adaptive-picker-popover,
+.kalam-adaptive-picker-popover *,
+.kalam-adaptive-picker-modal,
+.kalam-adaptive-picker-modal *,
+.rmdp-container,
+.rmdp-container * {
   font-family: 'Vazirmatn', sans-serif !important;
 }
 
@@ -426,13 +894,14 @@ html.dark .ant-modal-confirm .ant-modal-content {
 .smarttable-shell .ant-table-header {
   overflow-x: hidden !important;
   backface-visibility: hidden;
-  transform: translateZ(0);
+  transform: none !important;
+  will-change: auto;
 }
 
 .smarttable-shell .ant-table-body {
   backface-visibility: hidden;
-  transform: translateZ(0);
-  will-change: scroll-position;
+  transform: none !important;
+  will-change: auto;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {

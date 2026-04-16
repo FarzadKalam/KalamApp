@@ -46,6 +46,7 @@ import { employeeAdvancesConfig } from './modules/employeeAdvancesConfig';
 import { payrollSlipsConfig } from './modules/payrollSlipsConfig';
 import { employeeContractsConfig } from './modules/employeeContractsConfig';
 import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
+import { surveysModule } from './modules/surveysConfig';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
 
 const BASE_MODULES: Record<string, ModuleDefinition> = {
@@ -97,6 +98,7 @@ const BASE_MODULES: Record<string, ModuleDefinition> = {
   payroll_slips: payrollSlipsConfig,
   employee_contracts: employeeContractsConfig,
   recruitment_applicants: recruitmentApplicantsConfig,
+  surveys: surveysModule,
 };
 
 export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(

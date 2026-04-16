@@ -800,10 +800,10 @@ const normalizeImportedDateValue = (value: string, fieldType: FieldType.DATE | F
   const formatOptions = fieldType === FieldType.DATE ? { setMidday: true } : undefined;
 
   for (const candidate of candidateValues) {
-    const formatted = toGregorianDateString(candidate, targetFormat, formatOptions);
-    if (formatted) return formatted;
     const fallbackFormatted = tryConvertStructuredDateWithDateObject(candidate, fieldType);
     if (fallbackFormatted) return fallbackFormatted;
+    const formatted = toGregorianDateString(candidate, targetFormat, formatOptions);
+    if (formatted) return formatted;
   }
 
   return englishRaw || raw;
@@ -1063,6 +1063,47 @@ const buildRelationAutoCreatePayload = (
     return { full_name: value };
   }
   return null;
+};
+
+const findRelationRecordByValue = async (
+  targetModule: string,
+  targetField: string,
+  rawValue: string,
+  label: string
+): Promise<Record<string, unknown> | undefined> => {
+  const value = stripLegacyReferencePrefix(rawValue);
+  if (!value) return undefined;
+
+  const lookupFields = getRelationLookupFields(targetModule, targetField);
+  const selectVariants = getRelationSelectVariants(targetModule, targetField);
+
+  for (const lookupField of lookupFields) {
+    for (const selectExpr of selectVariants) {
+      try {
+        const matchValues = buildFieldMatchValues(lookupField, value);
+        if (matchValues.length === 0) continue;
+        const existingResult = (await withTimeout(
+          (matchValues.length > 1
+            ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(2)
+            : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(2)),
+          20000,
+          label
+        )) as unknown as QueryResult<Record<string, unknown>[]>;
+        if (existingResult.error) throw existingResult.error;
+        if ((existingResult.data || []).length > 1) {
+          throw new Error(
+            `در ماژول «${targetModule}» بیش از یک رکورد با مقدار «${value}» پیدا شد. مقدار تطبیق را دقیق‌تر کنید.`
+          );
+        }
+        const matched = existingResult.data?.[0];
+        if (matched?.id) return matched;
+      } catch (error) {
+        if (!isMissingColumnError(error)) throw error;
+      }
+    }
+  }
+
+  return undefined;
 };
 
 const toImportField = (field: ModuleField, scope: MappingTargetScope): ImportFieldDescriptor => ({
@@ -1488,11 +1529,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       ...(DUPLICATE_FIELD_CANDIDATES_BY_MODULE[moduleId] || []),
       ...GENERIC_DUPLICATE_FIELD_CANDIDATES,
     ];
-    return Array.from(
-      new Set(
-        orderedCandidates.filter((fieldKey) => mappedFieldKeySet.has(fieldKey) && headerFieldByKey.has(fieldKey))
-      )
+    const firstMatched = orderedCandidates.find(
+      (fieldKey) => mappedFieldKeySet.has(fieldKey) && headerFieldByKey.has(fieldKey)
     );
+    return firstMatched ? [firstMatched] : [];
   }, [headerFieldByKey, mappedHeaderFieldKeys, moduleId]);
   const effectiveDuplicateFields = useMemo(
     () => (duplicateFields.length > 0 ? duplicateFields : suggestedDuplicateFields),
@@ -2450,41 +2490,18 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       if (exact) return exact;
 
       const targetModule = String(field.relationConfig?.targetModule || "").trim();
-      if (!targetModule || !RELATION_AUTOCREATE_TARGET_MODULES.has(targetModule)) {
+      if (!targetModule) {
         return undefined;
       }
 
       const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig?.targetField);
-      const lookupFields = getRelationLookupFields(targetModule, targetField);
       const selectVariants = getRelationSelectVariants(targetModule, targetField);
-
-      let existingRow: Record<string, unknown> | undefined;
-      for (const lookupField of lookupFields) {
-        for (const selectExpr of selectVariants) {
-          try {
-            const matchValues = buildFieldMatchValues(lookupField, value);
-            if (matchValues.length === 0) continue;
-            const existingResult = (await withTimeout(
-              (matchValues.length > 1
-                ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(2)
-                : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(2)),
-              20000,
-              `جستجوی رابطه (${field.labels.fa})`
-            )) as unknown as QueryResult<Record<string, unknown>[]>;
-            if (existingResult.error) throw existingResult.error;
-            if ((existingResult.data || []).length > 1) {
-              throw new Error(
-                `برای فیلد «${field.labels.fa}» بیش از یک رکورد مرتبط با مقدار «${value}» پیدا شد. مقدار تطبیق را دقیق‌تر کنید.`
-              );
-            }
-            existingRow = existingResult.data?.[0];
-            if (existingRow?.id) break;
-          } catch (error) {
-            if (!isMissingColumnError(error)) throw error;
-          }
-        }
-        if (existingRow?.id) break;
-      }
+      const existingRow = await findRelationRecordByValue(
+        targetModule,
+        targetField,
+        value,
+        `جستجوی رابطه (${field.labels.fa})`
+      );
 
       if (existingRow?.id) {
         const existingId = String(existingRow.id);
@@ -2493,6 +2510,10 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           setLookupValue(map, candidate, existingId)
         );
         return existingId;
+      }
+
+      if (!RELATION_AUTOCREATE_TARGET_MODULES.has(targetModule)) {
+        return undefined;
       }
 
       const payload = buildRelationAutoCreatePayload(targetModule, value);
@@ -3021,6 +3042,24 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       })
       .join("|");
   }, []);
+  const buildInvoiceItemLooseSignature = useCallback((item: Record<string, unknown>): string => {
+    const signatureKeys = [
+      "product_id",
+      "package_id",
+      "price_list_id",
+      "source_shelf_id",
+      "description",
+      "length",
+      "width",
+    ];
+    return signatureKeys
+      .map((key) => `${key}:${normalizeKey(item[key])}`)
+      .join("|");
+  }, []);
+  const hasSparseInvoiceItemValues = useCallback((item: Record<string, unknown>): boolean => {
+    const sparseCandidateKeys = ["unit_price", "discount", "discount_type", "vat", "vat_type", "total_price"];
+    return sparseCandidateKeys.some((key) => isValueEmpty(item[key]));
+  }, []);
   const mergeInvoiceItems = useCallback(
     (existingItems: unknown[], importedItems: Record<string, unknown>[]): Record<string, unknown>[] => {
       const mergedItems = (Array.isArray(existingItems) ? existingItems : [])
@@ -3032,9 +3071,17 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           mergedItems.push(normalizedItem);
           return;
         }
-        const existingIndex = mergedItems.findIndex(
+        let existingIndex = mergedItems.findIndex(
           (existingItem) => buildInvoiceItemSignature(existingItem) === nextSignature
         );
+        if (existingIndex === -1 && hasSparseInvoiceItemValues(normalizedItem)) {
+          const looseSignature = buildInvoiceItemLooseSignature(normalizedItem);
+          if (looseSignature.replace(/[|:]/g, "")) {
+            existingIndex = mergedItems.findIndex(
+              (existingItem) => buildInvoiceItemLooseSignature(existingItem) === looseSignature
+            );
+          }
+        }
         if (existingIndex === -1) {
           mergedItems.push(normalizedItem);
           return;
@@ -3049,7 +3096,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       });
       return mergedItems;
     },
-    [buildInvoiceItemSignature, normalizeInvoiceItemForStorage]
+    [
+      buildInvoiceItemLooseSignature,
+      buildInvoiceItemSignature,
+      hasSparseInvoiceItemValues,
+      normalizeInvoiceItemForStorage,
+    ]
   );
   const applyInvoiceSummaryValues = useCallback(
     (rawPayload: Record<string, unknown>): Record<string, unknown> => {

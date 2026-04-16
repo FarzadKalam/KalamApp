@@ -17,6 +17,15 @@ export const processTemplatesModule: ModuleDefinition = {
   defaultViewMode: ViewMode.LIST,
   fields: [
     {
+      key: 'image_url',
+      labels: { fa: 'تصویر', en: 'Image' },
+      type: FieldType.IMAGE,
+      location: FieldLocation.HEADER,
+      order: 0,
+      nature: FieldNature.PREDEFINED,
+      isTableColumn: true,
+    },
+    {
       key: 'name',
       labels: { fa: 'نام الگو', en: 'Template Name' },
       type: FieldType.TEXT,
