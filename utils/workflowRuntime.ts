@@ -1040,6 +1040,37 @@ const expandChatGroupsToMentionTargets = async (
   });
 };
 
+const resolveChatGroupMentionTargets = async (groupIds: string[]) => {
+  const ids = Array.from(new Set((groupIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (ids.length === 0) {
+    return [] as Array<{ groupId: string; userIds: string[]; roleIds: string[] }>;
+  }
+
+  const { data, error } = await supabase
+    .from('chat_groups')
+    .select('id, user_ids, role_ids')
+    .in('id', ids);
+  if (error) throw error;
+
+  return (data || [])
+    .map((group: any) => {
+      const groupId = String(group?.id || '').trim();
+      if (!groupId) return null;
+      const userIds = Array.from(new Set(
+        (Array.isArray(group?.user_ids) ? group.user_ids : [])
+          .map((id: any) => String(id || '').trim())
+          .filter(Boolean)
+      ));
+      const roleIds = Array.from(new Set(
+        (Array.isArray(group?.role_ids) ? group.role_ids : [])
+          .map((id: any) => String(id || '').trim())
+          .filter(Boolean)
+      ));
+      return { groupId, userIds, roleIds };
+    })
+    .filter((item): item is { groupId: string; userIds: string[]; roleIds: string[] } => Boolean(item));
+};
+
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const resolveRubikaCounterpartyGroupChatIds = async (candidateValues: string[]) => {
@@ -1200,13 +1231,14 @@ const resolveCommunicationValuesFromFields = async ({
   const directValues: string[] = [];
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
+  const groupIds = new Set<string>();
   const context: WorkflowEvaluationContext = {
     moduleId,
     relatedRecordCache: new Map(),
     tagsCache: new Map(),
   };
 
-  collectRecipientTargets(recipientAssignees, { directValues, userIds, roleIds });
+  collectRecipientTargets(recipientAssignees, { directValues, userIds, roleIds, groupIds });
 
   for (const fieldKey of asArray(recipientFields)) {
     const rawValue = await resolveConditionFieldValue(
@@ -1215,8 +1247,10 @@ const resolveCommunicationValuesFromFields = async ({
       moduleId,
       context
     );
-    collectRecipientTargets(rawValue, { directValues, userIds, roleIds });
+    collectRecipientTargets(rawValue, { directValues, userIds, roleIds, groupIds });
   }
+
+  await expandChatGroupsToMentionTargets(Array.from(groupIds), userIds, roleIds);
 
   const profileRows: Array<Record<string, any>> = [];
   if (userIds.size > 0) {
@@ -1290,11 +1324,20 @@ const resolveNoteRecipientsFromFields = async ({
     collectRecipientTargets(rawValue, { directValues: [], userIds, roleIds, groupIds });
   }
 
-  await expandChatGroupsToMentionTargets(Array.from(groupIds), userIds, roleIds);
+  const directUserIds = Array.from(userIds);
+  const directRoleIds = Array.from(roleIds);
+  const groupTargets = await resolveChatGroupMentionTargets(Array.from(groupIds));
+  groupTargets.forEach((group) => {
+    group.userIds.forEach((id) => userIds.add(id));
+    group.roleIds.forEach((id) => roleIds.add(id));
+  });
 
   return {
-    mentionUserIds: Array.from(userIds),
-    mentionRoleIds: Array.from(roleIds),
+    mentionUserIds: directUserIds,
+    mentionRoleIds: directRoleIds,
+    groupTargets,
+    smsMentionUserIds: Array.from(userIds),
+    smsMentionRoleIds: Array.from(roleIds),
   };
 };
 
@@ -1531,25 +1574,45 @@ export const executeWorkflowAction = async (
       recipientFields: asArray(config.recipient_fields),
       recipientAssignees: asArray(config.recipient_assignees),
     });
-    await insertNotesWithFallback([{
-      module_id: scope.module_id,
-      record_id: scope.record_id,
-      content: serializeNoteContent(noteText, attachments),
-      mention_user_ids: recipients.mentionUserIds,
-      mention_role_ids: recipients.mentionRoleIds,
+    const baseMetadata = {
       source_type: 'system',
-      metadata: {
+      workflow_action_type: action.type,
+      workflow_action_id: (action as any)?.id || null,
+    };
+    const noteRows: Record<string, any>[] = [];
+    const hasDirectRecipients = recipients.mentionUserIds.length > 0 || recipients.mentionRoleIds.length > 0;
+    if (hasDirectRecipients || recipients.groupTargets.length === 0) {
+      noteRows.push({
+        module_id: scope.module_id,
+        record_id: scope.record_id,
+        content: serializeNoteContent(noteText, attachments),
+        mention_user_ids: recipients.mentionUserIds,
+        mention_role_ids: recipients.mentionRoleIds,
         source_type: 'system',
-        workflow_action_type: action.type,
-        workflow_action_id: (action as any)?.id || null,
-      },
-    }]);
+        metadata: baseMetadata,
+      });
+    }
+    recipients.groupTargets.forEach((group) => {
+      noteRows.push({
+        module_id: scope.module_id,
+        record_id: scope.record_id,
+        content: serializeNoteContent(noteText, attachments),
+        mention_user_ids: group.userIds,
+        mention_role_ids: group.roleIds,
+        source_type: 'system',
+        metadata: {
+          ...baseMetadata,
+          chat_group_id: group.groupId,
+        },
+      });
+    });
+    await insertNotesWithFallback(noteRows);
     if (action.type === 'send_note_sms') {
       await sendNoteSmsNotifications({
         authorName: 'سیستم',
         noteText,
-        mentionUserIds: recipients.mentionUserIds,
-        mentionRoleIds: recipients.mentionRoleIds,
+        mentionUserIds: recipients.smsMentionUserIds,
+        mentionRoleIds: recipients.smsMentionRoleIds,
         moduleId: scope.module_id,
         recordId: scope.record_id,
         title: 'ارسال یادداشت خودکار',

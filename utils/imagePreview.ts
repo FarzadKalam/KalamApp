@@ -15,12 +15,37 @@ const PRESET_CONFIG: Record<ImagePreviewPreset, PreviewPresetConfig> = {
 };
 
 const SKIP_TRANSFORM_EXTENSIONS = new Set(['svg', 'gif']);
+const IMAGE_FILE_EXTENSIONS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'svg',
+  'bmp',
+  'avif',
+  'heic',
+  'heif',
+  'tif',
+  'tiff',
+  'ico',
+]);
 
 const getPathExtension = (path: string): string => {
   const clean = String(path || '').split('?')[0].split('#')[0];
   const segment = clean.split('/').pop() || '';
   if (!segment.includes('.')) return '';
   return String(segment.split('.').pop() || '').trim().toLowerCase();
+};
+
+const getValueExtension = (value: string): string => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  try {
+    return getPathExtension(new URL(normalized).pathname);
+  } catch {
+    return getPathExtension(normalized);
+  }
 };
 
 const resolveUrl = (value: string): URL | null => {
@@ -72,4 +97,19 @@ export const buildImagePreviewUrl = (rawUrl: string | null | undefined, preset: 
   }
 
   return parsed.toString();
+};
+
+export const isImageFileLike = (
+  url?: string | null,
+  fileName?: string | null,
+  mimeType?: string | null,
+): boolean => {
+  const normalizedMime = String(mimeType || '').trim().toLowerCase();
+  if (normalizedMime.startsWith('image/')) return true;
+
+  const normalizedUrl = String(url || '').trim();
+  if (normalizedUrl.startsWith('data:image/')) return true;
+
+  const extension = getValueExtension(String(fileName || '').trim()) || getValueExtension(normalizedUrl);
+  return IMAGE_FILE_EXTENSIONS.has(extension);
 };

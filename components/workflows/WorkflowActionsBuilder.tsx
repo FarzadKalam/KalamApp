@@ -913,9 +913,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
               disabled={disabled}
-              options={assigneeDirectoryOptions}
+              options={noteAssigneeDirectoryOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="انتخاب کاربر/نقش تکمیلی (اختیاری)"
+              placeholder="انتخاب کاربر/نقش/گروه داخلی تکمیلی (اختیاری)"
             />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">

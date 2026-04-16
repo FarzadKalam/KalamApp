@@ -3151,14 +3151,16 @@ useEffect(() => {
     return String(value).slice(BOT_GROUP_FORWARD_PREFIX.length) || null;
   };
 
-  const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow): Array<{ name: string; url: string }> => {
-    const list: Array<{ name: string; url: string }> = [];
+  const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow): Array<{ name: string; url: string; mimeType?: string | null }> => {
+    const list: Array<{ name: string; url: string; mimeType?: string | null }> = [];
     const fileUrl = String(row?.file_url || '').trim();
     const fileName = String(row?.file_name || '').trim();
+    const mimeType = String(row?.mime_type || '').trim() || null;
     if (fileUrl) {
       list.push({
         name: fileName || 'فایل',
         url: fileUrl,
+        mimeType,
       });
     }
     const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
@@ -3167,6 +3169,7 @@ useEffect(() => {
       list.push({
         name: String((payload as any)?.file_name || row?.file_name || 'فایل').trim(),
         url: payloadMediaUrl,
+        mimeType: String((payload as any)?.mime_type || row?.mime_type || '').trim() || null,
       });
     }
     const payloadAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];
@@ -3175,7 +3178,7 @@ useEffect(() => {
       if (!url) return;
       const name = String(item?.name || item?.file_name || 'فایل').trim();
       if (!list.some((entry) => entry.url === url)) {
-        list.push({ name, url });
+        list.push({ name, url, mimeType: String(item?.mimeType || item?.mime_type || '').trim() || null });
       }
     });
     return list;
@@ -6301,7 +6304,7 @@ useEffect(() => {
                       authorName={outgoing ? 'شما' : inboundAuthor}
                       createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
                       text={body}
-                      attachments={parsedAttachments.map((item) => ({ name: item.name, url: item.url } as any))}
+                      attachments={parsedAttachments.map((item) => ({ name: item.name, url: item.url, mimeType: item.mimeType } as any))}
                       avatarUrl={null}
                       avatarFallback={outgoing ? 'ش' : 'ب'}
                       mentionUsers={[]}

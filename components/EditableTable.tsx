@@ -22,6 +22,7 @@ import { useCurrencyConfig } from '../utils/currency';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
+import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
 import {
   buildSalesPackageDescription,
   calculateSalesPackageTotal,
@@ -60,6 +61,23 @@ const toSafeNumber = (raw: any): number => {
   if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return 0;
   const parsed = parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const roundMoney = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 100) / 100;
+};
+
+const calculatePriceWithProfit = (buyPrice: any, profitPercentage: any) => {
+  const base = toSafeNumber(buyPrice);
+  const profit = toSafeNumber(profitPercentage);
+  return roundMoney(base + (base * profit / 100));
+};
+
+const calculateProfitPercentage = (buyPrice: any, sellPrice: any) => {
+  const base = toSafeNumber(buyPrice);
+  if (base <= 0) return 0;
+  return roundMoney(((toSafeNumber(sellPrice) - base) / base) * 100);
 };
 
 const CHEQUE_STATUS_LABELS: Record<string, string> = {
@@ -994,7 +1012,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     }
 
-    if (['quantity', 'qty', 'usage', 'stock', 'unit_price', 'price', 'buy_price', 'discount', 'vat', 'length', 'width', 'main_quantity', 'sub_quantity'].includes(key)) {
+    if (isPriceListItems && ['buy_price', 'profit_percentage'].includes(key)) {
+      newData[index]['price'] = calculatePriceWithProfit(
+        newData[index]?.buy_price,
+        newData[index]?.profit_percentage,
+      );
+    }
+
+    if (['quantity', 'qty', 'usage', 'stock', 'unit_price', 'price', 'buy_price', 'profit_percentage', 'discount', 'vat', 'length', 'width', 'main_quantity', 'sub_quantity'].includes(key)) {
       newData[index]['total_price'] = calculateRow(newData[index], block.rowCalculationType);
     }
 
@@ -1266,11 +1291,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.main_unit = 'روز';
             }
             if (isPriceListItems) {
+              const sourceSellPrice = targetModule === 'billboards'
+                ? pickFirstNumber(record?.daily_rent, record?.monthly_rent, record?.print_cost, record?.sell_price)
+                : toSafeNumber(record?.sell_price);
+              const sourceBuyPrice = targetModule === 'billboards'
+                ? sourceSellPrice
+                : pickFirstNumber(record?.buy_price, sourceSellPrice);
               currentRow.unit_name = currentRow.main_unit;
               currentRow.currency_label = currencyLabel;
-              if (!toSafeNumber(currentRow.price)) {
-                currentRow.price = toSafeNumber(record?.sell_price);
-              }
+              currentRow.buy_price = sourceBuyPrice;
+              currentRow.profit_percentage = calculateProfitPercentage(sourceBuyPrice, sourceSellPrice);
+              currentRow.price = sourceBuyPrice > 0
+                ? calculatePriceWithProfit(currentRow.buy_price, currentRow.profit_percentage)
+                : sourceSellPrice;
             }
             if (targetModule === 'billboards' && !toSafeNumber(currentRow.price)) {
               currentRow.price = toSafeNumber(record?.daily_rent);
@@ -1452,6 +1485,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const numericDefaults: any = {};
     if (colKeys.has('quantity')) numericDefaults.quantity = 1;
     if (colKeys.has('unit_price')) numericDefaults.unit_price = 0;
+    if (colKeys.has('buy_price')) numericDefaults.buy_price = 0;
+    if (colKeys.has('profit_percentage')) numericDefaults.profit_percentage = 0;
     if (colKeys.has('discount')) numericDefaults.discount = 0;
     if (colKeys.has('vat')) numericDefaults.vat = 0;
     if (colKeys.has('total_price')) numericDefaults.total_price = 0;
@@ -2823,6 +2858,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
       if (error) throw error;
 
+      if (isPriceListItems) {
+        const { data: priceListRow, error: priceListError } = await supabase
+          .from('price_lists')
+          .select('status')
+          .eq('id', recordId)
+          .maybeSingle();
+        if (priceListError) throw priceListError;
+        await syncDefaultPriceListItemsToProducts(supabase, {
+          status: priceListRow?.status,
+          items: dataToSave,
+        });
+      }
+
       if (
         (moduleId === 'invoices' || moduleId === 'purchase_invoices') &&
         (block?.id === 'payments' || block?.id === 'invoiceItems')
@@ -3006,7 +3054,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
     nextRow.delivery_time = String(record?.delivery_time || '').trim() || null;
 
     if (isPriceListItems) {
-      nextRow.price = sourceSellPrice;
+      nextRow.buy_price = sourceBuyPrice;
+      nextRow.profit_percentage = calculateProfitPercentage(sourceBuyPrice, sourceSellPrice);
+      nextRow.price = sourceBuyPrice > 0
+        ? calculatePriceWithProfit(nextRow.buy_price, nextRow.profit_percentage)
+        : sourceSellPrice;
       nextRow.currency_label = currencyLabel;
       nextRow.unit_name = sourceMainUnit;
       return nextRow;
@@ -3110,6 +3162,33 @@ const EditableTable: React.FC<EditableTableProps> = ({
     } finally {
       setPriceRefreshLoading(false);
     }
+  };
+
+  const handleCalculatePriceListSellPrices = () => {
+    if (!isPriceListItems) return;
+    if (!isEditing && mode !== 'local') {
+      msg.warning('برای محاسبه قیمت، ابتدا جدول را در حالت ویرایش قرار دهید.');
+      return;
+    }
+
+    const source = isEditing ? tempData : data;
+    if (!Array.isArray(source) || source.length === 0) {
+      msg.warning('ردیفی برای محاسبه قیمت وجود ندارد.');
+      return;
+    }
+
+    let changedCount = 0;
+    const nextRows = source.map((row: any) => {
+      const nextRow = { ...(row || {}) };
+      const nextPrice = calculatePriceWithProfit(nextRow.buy_price, nextRow.profit_percentage);
+      if (toSafeNumber(nextRow.price) !== nextPrice) changedCount += 1;
+      nextRow.price = nextPrice;
+      nextRow.total_price = calculateRow(nextRow, block.rowCalculationType);
+      return nextRow;
+    });
+
+    applyRowUpdate(nextRows);
+    msg.success(changedCount > 0 ? `${toPersianNumber(changedCount)} ردیف محاسبه شد.` : 'قیمت‌ها از قبل با درصد سود فعلی یکسان بودند.');
   };
 
   const ensureRowExpanded = (rowKey: string) => {
@@ -4212,6 +4291,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
               title={!isEditing && mode !== 'local' ? 'ابتدا جدول را در حالت ویرایش قرار دهید' : 'بروزرسانی قیمت از رکورد مرتبط'}
               onClick={() => { void handleRefreshRelatedPrices(); }}
             />
+          )}
+          {isPriceListItems && (
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              disabled={!isEditing && mode !== 'local'}
+              title={!isEditing && mode !== 'local' ? 'ابتدا جدول را در حالت ویرایش قرار دهید' : 'محاسبه قیمت فروش از قیمت خرید و درصد سود جدول'}
+              onClick={handleCalculatePriceListSellPrices}
+            >
+              محاسبه قیمت
+            </Button>
           )}
           {mode === 'db' && !isEditing && !isReadOnly && <Button size="small" icon={<EditOutlined />} onClick={startEdit}>ویرایش لیست</Button>}
         </Space>

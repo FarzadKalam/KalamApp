@@ -42,6 +42,8 @@ interface HeroSectionProps {
   canViewFilesManager?: boolean;
   canEditFilesManager?: boolean;
   canDeleteFilesManager?: boolean;
+  recordTitleFieldKey?: string | null;
+  renderRecordTitle?: () => React.ReactNode;
 }
 
 const HeroSection: React.FC<HeroSectionProps> = ({
@@ -66,6 +68,8 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   canViewFilesManager = true,
   canEditFilesManager = true,
   canDeleteFilesManager = true,
+  recordTitleFieldKey,
+  renderRecordTitle,
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -156,7 +160,13 @@ const HeroSection: React.FC<HeroSectionProps> = ({
           <div>
             <div className="flex flex-wrap items-start justify-between gap-4 mb-4 mt-2">
               <div className="flex flex-wrap items-center gap-3">
-                <h1 className="text-2xl md:text-3xl font-black m-0 text-gray-800 dark:text-white">{displayRecordTitle}</h1>
+                {renderRecordTitle ? (
+                  <div className="min-w-0 text-2xl md:text-3xl font-black text-gray-800 dark:text-white">
+                    {renderRecordTitle()}
+                  </div>
+                ) : (
+                  <h1 className="text-2xl md:text-3xl font-black m-0 text-gray-800 dark:text-white">{displayRecordTitle}</h1>
+                )}
                 {displaySystemCode && (
                   <Tag className="font-mono dir-ltr bg-gray-100 dark:bg-white/10 border-none text-gray-500 px-2 py-1">
                     {displaySystemCode}
@@ -208,7 +218,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mt-6">
               {moduleConfig.fields
-                .filter((f: any) => f.location === FieldLocation.HEADER && !['name', 'image_url', 'system_code', 'tags'].includes(f.key))
+                .filter((f: any) => f.location === FieldLocation.HEADER && !['name', recordTitleFieldKey, 'image_url', 'system_code', 'tags'].filter(Boolean).includes(f.key))
                 .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
                 .filter((f: any) => (!f.logic || (checkVisibility ? checkVisibility(f.logic) : true)))
                 .map((f: any) => (

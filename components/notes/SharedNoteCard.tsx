@@ -1,16 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Avatar, Button, Input, Tag, theme } from 'antd';
+import { Avatar, Button, Input, Modal, Tag, theme } from 'antd';
 import {
   CheckOutlined,
   CloseOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EnterOutlined,
   EditOutlined,
   ForwardOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
+import { buildImagePreviewUrl, isImageFileLike } from '../../utils/imagePreview';
 import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 
@@ -46,6 +48,31 @@ interface SharedNoteCardProps {
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
 const HTML_ANCHOR_REGEX = /<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
 const LINK_CLASS_NAME = 'underline decoration-dotted underline-offset-2 break-all [overflow-wrap:anywhere] text-current';
+
+const getAttachmentLabel = (attachment: NoteAttachment) => {
+  const directName = String(attachment?.name || '').trim();
+  if (directName) return directName;
+  const rawUrl = String(attachment?.url || '').split('?')[0].split('#')[0];
+  const fallback = rawUrl.split('/').pop() || 'تصویر';
+  try {
+    return decodeURIComponent(fallback);
+  } catch {
+    return fallback;
+  }
+};
+
+const downloadAttachment = (attachment: NoteAttachment) => {
+  const url = String(attachment?.url || '').trim();
+  if (!url || typeof document === 'undefined') return;
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = getAttachmentLabel(attachment);
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
 
 const normalizeMentionLabel = (value: string, type: 'user' | 'role') => {
   let label = String(value || '').trim().replace(/^@+/, '').trim();
@@ -96,6 +123,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   animateOnMount = false,
 }) => {
   const [entered, setEntered] = useState<boolean>(!animateOnMount);
+  const [previewAttachment, setPreviewAttachment] = useState<NoteAttachment | null>(null);
   const { token } = theme.useToken();
   const normalizedMentionUsers = normalizeMentionLabels(mentionUsers, 'user');
   const normalizedMentionRoles = normalizeMentionLabels(mentionRoles, 'role');
@@ -255,7 +283,50 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
     color: token.colorTextSecondary,
   };
 
+  const renderAttachment = (attachment: NoteAttachment) => {
+    const label = getAttachmentLabel(attachment);
+    const isImage = isImageFileLike(attachment.url, label, attachment.mimeType);
+    if (!isImage) {
+      return (
+        <a
+          key={`${attachment.url}-${label}`}
+          href={attachment.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px]"
+          style={attachmentStyle}
+        >
+          <PaperClipOutlined />
+          <span className="max-w-[180px] truncate">{label}</span>
+        </a>
+      );
+    }
+
+    const thumbUrl = buildImagePreviewUrl(attachment.url, 'thumb');
+    return (
+      <button
+        key={`${attachment.url}-${label}`}
+        type="button"
+        className="group relative h-24 w-24 overflow-hidden rounded-md border p-0 text-right transition hover:opacity-90"
+        style={attachmentStyle}
+        title={label}
+        onClick={() => setPreviewAttachment(attachment)}
+      >
+        <img
+          src={thumbUrl}
+          alt={label}
+          loading="lazy"
+          className="h-full w-full object-cover"
+        />
+        <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1.5 py-1 text-[9px] text-white">
+          {label}
+        </span>
+      </button>
+    );
+  };
+
   return (
+  <>
   <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
       <Avatar
@@ -319,19 +390,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
 
         {attachments.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {attachments.map((attachment) => (
-              <a
-                key={`${attachment.url}-${attachment.name}`}
-                href={attachment.url}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px]"
-                style={attachmentStyle}
-              >
-                <PaperClipOutlined />
-                <span className="max-w-[180px] truncate">{attachment.name}</span>
-              </a>
-            ))}
+            {attachments.map(renderAttachment)}
           </div>
         ) : null}
 
@@ -363,6 +422,42 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       </div>
     </div>
   </div>
+  <Modal
+    title={previewAttachment ? getAttachmentLabel(previewAttachment) : 'پیش‌نمایش تصویر'}
+    open={Boolean(previewAttachment)}
+    onCancel={() => setPreviewAttachment(null)}
+    footer={[
+      <Button key="close" onClick={() => setPreviewAttachment(null)}>
+        بستن
+      </Button>,
+      <Button
+        key="download"
+        type="primary"
+        icon={<DownloadOutlined />}
+        disabled={!previewAttachment}
+        onClick={() => {
+          if (!previewAttachment) return;
+          downloadAttachment(previewAttachment);
+        }}
+      >
+        دانلود فایل اصلی
+      </Button>,
+    ]}
+    width={820}
+    zIndex={1700}
+    destroyOnHidden
+  >
+    {previewAttachment ? (
+      <div className="flex max-h-[72vh] items-center justify-center overflow-auto rounded-md bg-gray-50 p-2 dark:bg-black/20">
+        <img
+          src={buildImagePreviewUrl(previewAttachment.url, 'gallery')}
+          alt={getAttachmentLabel(previewAttachment)}
+          className="max-h-[68vh] max-w-full object-contain"
+        />
+      </div>
+    ) : null}
+  </Modal>
+  </>
 );
 };
 

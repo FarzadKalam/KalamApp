@@ -449,10 +449,12 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   <thead>
     <tr style="background:rgba(var(--brand-500-rgb),0.12);">
       <th style="width:6%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">ردیف</th>
-      <th style="width:44%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
-      <th style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ نهایی</th>
-      <th style="width:14%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد پول</th>
-      <th style="width:18%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
+      <th style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">کالا / شرح</th>
+      <th style="width:15%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">قیمت خرید</th>
+      <th style="width:11%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">درصد سود</th>
+      <th style="width:15%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">مبلغ نهایی</th>
+      <th style="width:9%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد پول</th>
+      <th style="width:10%; border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px; font-weight:800;">واحد</th>
     </tr>
   </thead>
   <tbody>
@@ -462,6 +464,8 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
         <div style="font-weight:700;">{{row.product_id}}</div>
         <div style="margin-top:2px; font-size:${getReducedPrintFontSize(9.8)}; color:#64748b; line-height:1.7; ${MULTILINE_PRINT_STYLE}">{{row.__invoice_item_meta__}}</div>
       </td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.buy_price}}</td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.profit_percentage}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.price}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.currency_label}}</td>
       <td style="border:1px solid var(--table-border-color, #d1d5db); padding:4px 5px;">{{row.unit_name}}</td>

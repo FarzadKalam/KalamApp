@@ -38,8 +38,27 @@ const BLOCKS = {
         },
       },
       {
+        key: 'is_default_sell_price',
+        title: 'پیش‌فرض فروش',
+        type: FieldType.CHECKBOX,
+        width: 120,
+        defaultValue: false,
+      },
+      {
+        key: 'buy_price',
+        title: 'قیمت خرید',
+        type: FieldType.PRICE,
+        width: 160,
+      },
+      {
+        key: 'profit_percentage',
+        title: 'درصد سود',
+        type: FieldType.PERCENTAGE,
+        width: 120,
+      },
+      {
         key: 'price',
-        title: 'قیمت',
+        title: 'قیمت فروش',
         type: FieldType.PRICE,
         width: 170,
       },

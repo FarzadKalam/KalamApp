@@ -8,6 +8,9 @@ const toNumber = (value: any) => {
 
 export interface PriceListItem {
   product_id?: string | null;
+  is_default_sell_price?: boolean | string | number | null;
+  buy_price?: number | string | null;
+  profit_percentage?: number | string | null;
   price?: number | string | null;
   unit_name?: string | null;
 }

@@ -5479,6 +5479,21 @@ const ModuleShow: React.FC = () => {
       }
   }
   const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });
+  const recordTitleField = (moduleConfig?.fields || []).find((field: any) => {
+    if (!field?.key || field.readonly || canViewField(field.key) === false) return false;
+    return field.isKey && [FieldType.TEXT, FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT].includes(field.type);
+  }) || (moduleConfig?.fields || []).find((field: any) => {
+    if (!field?.key || field.readonly || canViewField(field.key) === false) return false;
+    return ['name', 'title', 'business_name', 'full_name', 'subject'].includes(String(field.key))
+      && [FieldType.TEXT, FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT].includes(field.type);
+  });
+  const renderEditableRecordTitle = recordTitleField
+    ? () => (
+      <div className="min-w-0 [&_.ant-input]:!text-2xl [&_.ant-input]:md:!text-3xl [&_.ant-input]:!font-black [&_.ant-input]:!h-auto [&_.ant-input]:!py-0">
+        {renderSmartField(recordTitleField, true)}
+      </div>
+    )
+    : undefined;
   const handleHeaderRefresh = async () => {
     await fetchRecord(true);
   };
@@ -5532,6 +5547,8 @@ const ModuleShow: React.FC = () => {
         canViewField={canViewField}
         canEditModule={canEditModule}
         checkVisibility={checkVisibility}
+        recordTitleFieldKey={recordTitleField?.key || null}
+        renderRecordTitle={renderEditableRecordTitle}
       />
 
       <FieldGroupsTabs

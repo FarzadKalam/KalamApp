@@ -38,6 +38,7 @@ import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceF
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -1695,6 +1696,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (module.id === 'process_templates') {
             await syncProcessTemplateStages(recordId, templateStagesPreview);
           }
+          if (module.id === 'price_lists') {
+            await syncDefaultPriceListItemsToProducts(supabase, {
+              status: values?.status ?? initialRecord?.status,
+              active: values?.active ?? initialRecord?.active,
+              items: Array.isArray(values?.items) ? values.items : initialRecord?.items,
+            });
+          }
 
           if (module.id === 'invoices' || module.id === 'purchase_invoices') {
             await applyInvoiceFinalizationInventory({
@@ -1756,6 +1764,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
             }
             if (module.id === 'process_templates') {
               await syncProcessTemplateStages(inserted.id, templateStagesPreview);
+            }
+            if (module.id === 'price_lists') {
+              await syncDefaultPriceListItemsToProducts(supabase, {
+                status: values?.status ?? 'active',
+                active: values?.active,
+                items: values?.items,
+              });
             }
             if (module.id === 'invoices' || module.id === 'purchase_invoices') {
               await applyInvoiceFinalizationInventory({

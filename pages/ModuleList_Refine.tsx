@@ -53,6 +53,7 @@ import { formatIranMobileForInput } from "../utils/phoneNumber";
 import MessageComposerModal from "../components/MessageComposerModal";
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
 import { getAssigneeLabel } from "../utils/assigneeLabel";
+import { syncDefaultPriceListItemsToProducts } from "../utils/priceListDefaults";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const getDefaultGridPageSize = () => 15;
@@ -180,6 +181,11 @@ const toHeaderOnlyModule = (module: ModuleDefinition, hiddenBlockId: string): Mo
   blocks: (module.blocks || []).filter((block) => block.id !== hiddenBlockId),
 });
 
+const roundMoney = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 100) / 100;
+};
+
 const getBulkBuildSourceModule = (moduleId?: string | null): BulkBuildSourceModule | null => {
   if (moduleId === "products" || moduleId === "billboards") {
     return moduleId;
@@ -198,6 +204,8 @@ const getCatalogRecordBuildMeta = (record: any, sourceModule: BulkBuildSourceMod
     const printCost = Number(record?.print_cost || 0) || 0;
     return dailyRent || monthlyRent || printCost;
   })();
+  const buyPrice = isBillboard ? unitPrice : ((Number(record?.buy_price || 0) || 0) || unitPrice);
+  const profitPercentage = buyPrice > 0 ? roundMoney(((unitPrice - buyPrice) / buyPrice) * 100) : 0;
 
   return {
     product_id: record?.id || null,
@@ -205,6 +213,8 @@ const getCatalogRecordBuildMeta = (record: any, sourceModule: BulkBuildSourceMod
     product_type: isBillboard ? "service" : record?.product_type || "goods",
     main_unit: isBillboard ? "روز" : record?.main_unit || "عدد",
     unit_price: unitPrice,
+    buy_price: buyPrice,
+    profit_percentage: profitPercentage,
   };
 };
 
@@ -230,6 +240,9 @@ const buildPriceListItemsFromRecords = (records: any[], sourceModule: BulkBuildS
       const meta = getCatalogRecordBuildMeta(record, sourceModule);
       return {
         product_id: meta.product_id,
+        is_default_sell_price: false,
+        buy_price: meta.buy_price,
+        profit_percentage: meta.profit_percentage,
         price: meta.unit_price,
         currency_label: currencyLabel,
         unit_name: meta.main_unit || "",
@@ -2278,6 +2291,14 @@ export const ModuleListRefine: React.FC<{
     }
     if (insertResult.error) {
       throw insertResult.error;
+    }
+
+    if (bulkBuildTarget === "price_lists") {
+      await syncDefaultPriceListItemsToProducts(supabase, {
+        status: payload?.status ?? "active",
+        active: payload?.active,
+        items: payload?.items,
+      });
     }
 
     setBulkBuildTarget(null);
