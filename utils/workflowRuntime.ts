@@ -973,12 +973,12 @@ const queryProfilesWithCommunicationFallback = async (
 
 const parseCommunicationRecipientToken = (value: any) => {
   const raw = String(value || '').trim();
-  const match = raw.match(/^(user|role)[:_](.+)$/i);
+  const match = raw.match(/^(user|role|chat_group)[:_](.+)$/i);
   if (!match) return null;
   const kind = String(match[1] || '').toLowerCase();
   const id = String(match[2] || '').trim();
-  if (!id || (kind !== 'user' && kind !== 'role')) return null;
-  return { kind: kind as 'user' | 'role', id };
+  if (!id || (kind !== 'user' && kind !== 'role' && kind !== 'chat_group')) return null;
+  return { kind: kind as 'user' | 'role' | 'chat_group', id };
 };
 
 const collectRecipientTargets = (
@@ -987,10 +987,12 @@ const collectRecipientTargets = (
     directValues,
     userIds,
     roleIds,
+    groupIds,
   }: {
     directValues: string[];
     userIds: Set<string>;
     roleIds: Set<string>;
+    groupIds?: Set<string>;
   }
 ) => {
   asArray(values).forEach((entry) => {
@@ -1003,8 +1005,38 @@ const collectRecipientTargets = (
       roleIds.add(token.id);
       return;
     }
+    if (token?.kind === 'chat_group' && groupIds) {
+      groupIds.add(token.id);
+      return;
+    }
     const normalized = String(entry || '').trim();
     if (normalized) directValues.push(normalized);
+  });
+};
+
+const expandChatGroupsToMentionTargets = async (
+  groupIds: string[],
+  userIds: Set<string>,
+  roleIds: Set<string>
+) => {
+  const ids = Array.from(new Set((groupIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (ids.length === 0) return;
+
+  const { data, error } = await supabase
+    .from('chat_groups')
+    .select('id, user_ids, role_ids')
+    .in('id', ids);
+  if (error) throw error;
+
+  (data || []).forEach((group: any) => {
+    (Array.isArray(group?.user_ids) ? group.user_ids : []).forEach((id: any) => {
+      const normalized = String(id || '').trim();
+      if (normalized) userIds.add(normalized);
+    });
+    (Array.isArray(group?.role_ids) ? group.role_ids : []).forEach((id: any) => {
+      const normalized = String(id || '').trim();
+      if (normalized) roleIds.add(normalized);
+    });
   });
 };
 
@@ -1239,13 +1271,14 @@ const resolveNoteRecipientsFromFields = async ({
 }) => {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
+  const groupIds = new Set<string>();
   const context: WorkflowEvaluationContext = {
     moduleId,
     relatedRecordCache: new Map(),
     tagsCache: new Map(),
   };
 
-  collectRecipientTargets(recipientAssignees, { directValues: [], userIds, roleIds });
+  collectRecipientTargets(recipientAssignees, { directValues: [], userIds, roleIds, groupIds });
 
   for (const fieldKey of asArray(recipientFields)) {
     const rawValue = await resolveConditionFieldValue(
@@ -1254,8 +1287,10 @@ const resolveNoteRecipientsFromFields = async ({
       moduleId,
       context
     );
-    collectRecipientTargets(rawValue, { directValues: [], userIds, roleIds });
+    collectRecipientTargets(rawValue, { directValues: [], userIds, roleIds, groupIds });
   }
+
+  await expandChatGroupsToMentionTargets(Array.from(groupIds), userIds, roleIds);
 
   return {
     mentionUserIds: Array.from(userIds),

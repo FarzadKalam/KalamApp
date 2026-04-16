@@ -45,6 +45,7 @@ type ProcessAutomationRunArgs = {
 type MentionTarget = {
   userIds: string[];
   roleIds: string[];
+  groupIds?: string[];
 };
 
 type CommunicationTarget = {
@@ -191,11 +192,12 @@ const isTaskCompleted = (status: unknown) => COMPLETED_TASK_STATUSES.has(normali
 const mergeMentionTargets = (...targets: MentionTarget[]): MentionTarget => ({
   userIds: Array.from(new Set(targets.flatMap((item) => item.userIds).filter(Boolean))),
   roleIds: Array.from(new Set(targets.flatMap((item) => item.roleIds).filter(Boolean))),
+  groupIds: Array.from(new Set(targets.flatMap((item) => item.groupIds || []).filter(Boolean))),
 });
 
 const appendMentionTargetToken = (target: MentionTarget, value: any) => {
   const combo = String(value || '').trim();
-  const match = combo.match(/^(user|role)[:_](.+)$/i);
+  const match = combo.match(/^(user|role|chat_group)[:_](.+)$/i);
   if (!match) return;
   const id = String(match[2] || '').trim();
   if (!id) return;
@@ -203,7 +205,45 @@ const appendMentionTargetToken = (target: MentionTarget, value: any) => {
     target.userIds.push(id);
     return;
   }
+  if (String(match[1] || '').toLowerCase() === 'chat_group') {
+    target.groupIds = [...(target.groupIds || []), id];
+    return;
+  }
   target.roleIds.push(id);
+};
+
+const expandChatGroupsToMentionTarget = async (target: MentionTarget): Promise<MentionTarget> => {
+  const groupIds = Array.from(new Set((target.groupIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (groupIds.length === 0) {
+    return {
+      userIds: Array.from(new Set(target.userIds || [])),
+      roleIds: Array.from(new Set(target.roleIds || [])),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('chat_groups')
+    .select('id, user_ids, role_ids')
+    .in('id', groupIds);
+  if (error) throw error;
+
+  const userIds = new Set((target.userIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  const roleIds = new Set((target.roleIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  (data || []).forEach((group: any) => {
+    (Array.isArray(group?.user_ids) ? group.user_ids : []).forEach((id: any) => {
+      const normalized = String(id || '').trim();
+      if (normalized) userIds.add(normalized);
+    });
+    (Array.isArray(group?.role_ids) ? group.role_ids : []).forEach((id: any) => {
+      const normalized = String(id || '').trim();
+      if (normalized) roleIds.add(normalized);
+    });
+  });
+
+  return {
+    userIds: Array.from(userIds),
+    roleIds: Array.from(roleIds),
+  };
 };
 
 const getRequestedCommunicationChannels = (actions: any[]): Set<CommunicationChannel> => {
@@ -634,7 +674,7 @@ const insertAutomationNote = async (
   );
   if (!scope.hasLinkedRecord) return;
 
-  const mentionTarget = mergeMentionTargets(target);
+  const mentionTarget = await expandChatGroupsToMentionTarget(mergeMentionTargets(target));
 
   const payload: Record<string, any> = {
     module_id: scope.module_id,
@@ -793,10 +833,11 @@ export const runProcessAutomationsForTaskEvent = async ({
                 appendMentionTargetToken(acc, resolvedValue);
               });
               return acc;
-            }, { userIds: [], roleIds: [] });
+            }, { userIds: [], roleIds: [], groupIds: [] });
             const noteTarget = (
               directNoteTarget.userIds.length > 0
               || directNoteTarget.roleIds.length > 0
+              || (directNoteTarget.groupIds || []).length > 0
             )
               ? mergeMentionTargets(directNoteTarget)
               : target;

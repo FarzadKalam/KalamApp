@@ -236,6 +236,7 @@ const loadDynamicAndRelationOptions = async (
   const optionFields = (fields || []).filter(
     (field) =>
       field.key === WORKFLOW_ASSIGNEE_FIELD_KEY ||
+      String(field.key || '').endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`) ||
       field.type === FieldType.RELATION ||
       field.type === FieldType.USER ||
       field.type === FieldType.TAGS

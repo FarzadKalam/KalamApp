@@ -58,9 +58,12 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName }) => {
   const { message: messageApi, modal } = App.useApp();
-  const [collapsed, setCollapsed] = useState(true);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const initialIsMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
+  const [collapsed, setCollapsed] = useState(() => initialIsMobile || location.pathname !== '/');
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setIsMobile] = useState(initialIsMobile);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
@@ -75,10 +78,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const intervalRunnerBusyRef = useRef(false);
   const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
-  const wasMobileViewportRef = useRef(window.innerWidth < 768);
-  
-  const navigate = useNavigate();
-  const location = useLocation();
+  const wasMobileViewportRef = useRef(initialIsMobile);
+  const previousPathnameRef = useRef(location.pathname);
 
   const handleSidebarNavigate = (href: string) => {
     if (!href) return;
@@ -309,13 +310,22 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }
   }, []);
 
-  // Collapse sidebar on route change
+  // Keep the sidebar open by default only on the dashboard. Avoid toggling it
+  // between non-dashboard pages, which creates a distracting open/close flash.
   useEffect(() => {
     if (isMobile) {
       setCollapsed(true);
+      previousPathnameRef.current = location.pathname;
       return;
     }
-    setCollapsed(location.pathname !== '/');
+
+    if (location.pathname === '/') {
+      setCollapsed((prev) => (prev ? false : prev));
+    } else if (previousPathnameRef.current === '/') {
+      setCollapsed((prev) => (prev ? prev : true));
+    }
+
+    previousPathnameRef.current = location.pathname;
   }, [location.pathname, isMobile]);
 
   const handleLogout = () => {

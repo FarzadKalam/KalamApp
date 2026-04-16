@@ -25,6 +25,7 @@ import {
 import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
+import { supabase } from '../../supabaseClient';
 
 interface WorkflowActionsBuilderProps {
   value: WorkflowAction[];
@@ -263,6 +264,44 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     });
     return Array.from(optionsByValue.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
   }, [relationOptions]);
+  const [chatGroupOptions, setChatGroupOptions] = useState<Array<{ label: string; value: string }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadChatGroups = async () => {
+      const { data, error } = await supabase
+        .from('chat_groups')
+        .select('id, name')
+        .order('name', { ascending: true })
+        .limit(300);
+      if (cancelled) return;
+      if (error) {
+        setChatGroupOptions([]);
+        return;
+      }
+      setChatGroupOptions(
+        (data || [])
+          .map((row: any) => {
+            const id = String(row?.id || '').trim();
+            const name = String(row?.name || '').trim() || 'گروه';
+            return id ? { label: `گروه داخلی: ${name}`, value: `chat_group:${id}` } : null;
+          })
+          .filter((item): item is { label: string; value: string } => Boolean(item))
+      );
+    };
+
+    void loadChatGroups();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const noteAssigneeDirectoryOptions = useMemo(
+    () => Array.from(new Map([
+      ...assigneeDirectoryOptions.map((item) => [String(item.value), item] as const),
+      ...chatGroupOptions.map((item) => [String(item.value), item] as const),
+    ]).values()).sort((a, b) => a.label.localeCompare(b.label, 'fa')),
+    [assigneeDirectoryOptions, chatGroupOptions]
+  );
   const templateVariableOptions = useMemo(
     () =>
       (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
@@ -815,9 +854,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
               disabled={disabled}
-              options={assigneeDirectoryOptions}
+              options={noteAssigneeDirectoryOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="انتخاب کاربر/نقش تکمیلی (اختیاری)"
+              placeholder="انتخاب کاربر/نقش/گروه داخلی تکمیلی (اختیاری)"
               className="w-full"
               maxTagCount="responsive"
             />

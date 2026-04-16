@@ -1,7 +1,7 @@
 import React from 'react';
 import { App, ConfigProvider } from 'antd';
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BlockType, FieldLocation, FieldType } from '../types';
 
 const makeSupabaseQuery = (result: any = { data: [], error: null }) => {
@@ -124,7 +124,10 @@ const buildLargeModule = () => ({
   ],
 });
 
-const renderSmartForm = () => render(
+const renderSmartForm = (initialValues: Record<string, any> = {
+  field_0: 'مقدار اولیه',
+  field_5: 'متن فارسی',
+}) => render(
   <ConfigProvider direction="rtl">
     <App>
       <SmartForm
@@ -133,16 +136,21 @@ const renderSmartForm = () => render(
         onCancel={vi.fn()}
         onSave={vi.fn()}
         displayMode="embedded"
-        initialValues={{
-          field_0: 'مقدار اولیه',
-          field_5: 'متن فارسی',
-        }}
+        initialValues={initialValues}
       />
     </App>
   </ConfigProvider>
 );
 
 describe('SmartForm critical render', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
   it('renders a large Persian form without crashing or losing initial values', async () => {
     const startedAt = performance.now();
     renderSmartForm();
@@ -156,5 +164,42 @@ describe('SmartForm critical render', () => {
     await waitFor(() => {
       expect(performance.now() - startedAt).toBeLessThan(5000);
     });
+  });
+
+  it('keeps typed values when the parent re-renders with equivalent initial values', async () => {
+    const { rerender } = render(
+      <ConfigProvider direction="rtl">
+        <App>
+          <SmartForm
+            module={buildLargeModule() as any}
+            visible
+            onCancel={vi.fn()}
+            onSave={vi.fn()}
+            displayMode="embedded"
+            initialValues={{}}
+          />
+        </App>
+      </ConfigProvider>
+    );
+
+    const field = await screen.findByLabelText('فیلد فارسی 0');
+    fireEvent.change(field, { target: { value: 'مقدار تایپ شده' } });
+
+    rerender(
+      <ConfigProvider direction="rtl">
+        <App>
+          <SmartForm
+            module={buildLargeModule() as any}
+            visible
+            onCancel={vi.fn()}
+            onSave={vi.fn()}
+            displayMode="embedded"
+            initialValues={{}}
+          />
+        </App>
+      </ConfigProvider>
+    );
+
+    expect(screen.getByLabelText('فیلد فارسی 0')).toHaveValue('مقدار تایپ شده');
   });
 });

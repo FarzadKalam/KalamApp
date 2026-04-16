@@ -162,19 +162,74 @@ const MARKETING_LEAD_LOCKED_FROM_CUSTOMER_FIELD_KEYS = new Set([
   'location',
 ]);
 const CUSTOMER_INTEREST_SOURCE_CATEGORIES = ['product_goods_categories', 'product_service_categories'] as const;
+const EMPTY_INITIAL_VALUES: Record<string, any> = {};
+const SMART_FORM_DRAFT_PREFIX = 'kalamapp:smart-form-draft:v1';
+
+const safeJsonStringify = (value: any) => {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return '{}';
+  }
+};
+
+const readSmartFormDraft = (key: string) => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.values || typeof parsed.values !== 'object') return null;
+    return parsed as { values: Record<string, any>; initialValuesSignature?: string };
+  } catch {
+    return null;
+  }
+};
+
+const writeSmartFormDraft = (key: string, values: Record<string, any>, initialValuesSignature: string) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({
+      values,
+      initialValuesSignature,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Draft persistence is best-effort; the form must stay usable if storage is full or blocked.
+  }
+};
+
+const clearSmartFormDraft = (key: string) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors.
+  }
+};
 
 const SmartForm: React.FC<SmartFormProps> = ({ 
   module, visible, onCancel, onSave, recordId, title, isBulkEdit = false,
   initialValues: initialValuesProp,
   displayMode = 'modal'
 }) => {
-  const initialValues = useMemo(() => initialValuesProp ?? {}, [initialValuesProp]);
+  const initialValues = initialValuesProp ?? EMPTY_INITIAL_VALUES;
+  const initialValuesSignature = useMemo(() => safeJsonStringify(initialValuesProp ?? {}), [initialValuesProp]);
+  const hasInitialValuesProp = initialValuesSignature !== '{}';
+  const draftKey = useMemo(
+    () => `${SMART_FORM_DRAFT_PREFIX}:${module.id}:${isBulkEdit ? 'bulk' : (recordId ? `record:${recordId}` : 'new')}`,
+    [isBulkEdit, module.id, recordId]
+  );
   const requireInventoryShelf = initialValuesProp?.__requireInventoryShelf === true;
   const { message: messageApi } = App.useApp();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState<any>({});
   const [initialRecord, setInitialRecord] = useState<any>(null);
+  const draftKeyInitializedRef = useRef<string | null>(null);
+  const formDirtyRef = useRef(false);
+  const baselineFormDataSignatureRef = useRef<string | null>(null);
+  const suppressDraftPersistRef = useRef(false);
   const watchedValues = Form.useWatch([], form);
   const getLiveFormValues = () => {
     const liveValues = form.getFieldsValue(true);
@@ -248,9 +303,31 @@ const SmartForm: React.FC<SmartFormProps> = ({
       })
       .join('|');
   }, [formData, module.fields, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm, watchedValues]);
+
+  const getRestorableDraftValues = useCallback(() => {
+    const draft = readSmartFormDraft(draftKey);
+    if (!draft) return null;
+    if (hasInitialValuesProp && draft.initialValuesSignature !== initialValuesSignature) return null;
+    return draft.values;
+  }, [draftKey, hasInitialValuesProp, initialValuesSignature]);
+
+  const applyProgrammaticValues = useCallback((values: Record<string, any>) => {
+    suppressDraftPersistRef.current = true;
+    baselineFormDataSignatureRef.current = safeJsonStringify(values);
+    form.setFieldsValue(values);
+    setFormData(values);
+    window.setTimeout(() => {
+      suppressDraftPersistRef.current = false;
+    }, 0);
+  }, [form]);
   
   useEffect(() => {
     if (visible) {
+      if (draftKeyInitializedRef.current !== draftKey) {
+        draftKeyInitializedRef.current = draftKey;
+        formDirtyRef.current = false;
+        baselineFormDataSignatureRef.current = null;
+      }
       if (recordId && !isBulkEdit) {
         // --- حالت ویرایش ---
         const hasInitialProps = initialValues && Object.keys(initialValues).length > 0;
@@ -261,20 +338,22 @@ const SmartForm: React.FC<SmartFormProps> = ({
             assignee_combo: assigneeCombo,
             ...(hasAutoNameToggle ? { auto_name_enabled: false } : {}),
           };
-          setFormData(prefetchedValues);
-          form.setFieldsValue(prefetchedValues);
+          const draftValues = getRestorableDraftValues();
+          applyProgrammaticValues(draftValues ? { ...prefetchedValues, ...draftValues } : prefetchedValues);
+          if (draftValues) formDirtyRef.current = true;
         }
         fetchRecord(!hasInitialProps);
             } else if (isBulkEdit) {
+        suppressDraftPersistRef.current = true;
         form.resetFields();
         const bulkDefaults = hasAutoNameToggle ? { auto_name_enabled: false } : {};
-        form.setFieldsValue(bulkDefaults);
-        setFormData(bulkDefaults);
+        applyProgrammaticValues(bulkDefaults);
         setInitialRecord(null);
         setLastAppliedBomId(null);
         setLastAppliedProcessTemplateId(null);
       } else {
         // --- حالت ایجاد رکورد جدید ---
+        suppressDraftPersistRef.current = true;
         form.resetFields();
         setFormData({});
         setLastAppliedBomId(null);
@@ -326,8 +405,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
             finalValues.auto_name_enabled = false;
           }
 
-          setFormData(finalValues);
-          form.setFieldsValue(finalValues);
+          const draftValues = getRestorableDraftValues();
+          applyProgrammaticValues(draftValues ? { ...finalValues, ...draftValues } : finalValues);
+          if (draftValues) formDirtyRef.current = true;
         };
 
         applyCreateDefaults();
@@ -336,7 +416,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       // فراخوانی توابع کمکی
       fetchUserPermissions();
     }
-  }, [visible, recordId, isBulkEdit, module, initialValues, supportsAssignee, supportsAssigneeType, hasAutoNameToggle]);
+  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues]);
 
   const fetchAssignees = useCallback(async () => {
     try {
@@ -834,8 +914,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         if (hasAutoNameToggle) {
           nextValues.auto_name_enabled = false;
         }
-        form.setFieldsValue(nextValues);
-        setFormData(nextValues);
+        const draftValues = getRestorableDraftValues();
+        applyProgrammaticValues(draftValues ? { ...nextValues, ...draftValues } : nextValues);
+        if (draftValues) formDirtyRef.current = true;
         setInitialRecord(data);
         setLastAppliedProcessTemplateId(data?.process_template_id || null);
       }
@@ -1472,6 +1553,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
           templateStagesPreview,
           selectedTags,
         });
+        clearSmartFormDraft(draftKey);
+        formDirtyRef.current = false;
       } else {
         const userId = authUserId;
         const withAuditFields = (payload: Record<string, any>, mode: 'create' | 'update') => {
@@ -1718,6 +1801,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
         }
 
         messageApi.success('ثبت شد');
+        clearSmartFormDraft(draftKey);
+        formDirtyRef.current = false;
         onCancel();
       }
     } catch (err: any) {
@@ -1741,6 +1826,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
   };
 
   const handleValuesChange = (changedValues: any, allValues: any) => {
+    if (!suppressDraftPersistRef.current) {
+      formDirtyRef.current = true;
+    }
     if (module.id === 'tasks' && Object.prototype.hasOwnProperty.call(changedValues || {}, 'related_to_module')) {
       const nextModuleId = String(changedValues?.related_to_module || '').trim();
       const resetPatch: Record<string, any> = { source_record_id: null, source_module_id: nextModuleId || null };
@@ -1780,6 +1868,37 @@ const SmartForm: React.FC<SmartFormProps> = ({
     }
     setFormData((prev: any) => ({ ...prev, ...cleanedValues }));
   };
+
+  const formDataSignature = useMemo(() => safeJsonStringify(formData), [formData]);
+
+  useEffect(() => {
+    if (!visible || draftKeyInitializedRef.current !== draftKey || suppressDraftPersistRef.current) return;
+    if (!formDirtyRef.current && baselineFormDataSignatureRef.current === formDataSignature) return;
+    formDirtyRef.current = true;
+  }, [draftKey, formDataSignature, visible]);
+
+  useEffect(() => {
+    if (!visible || !formDirtyRef.current || suppressDraftPersistRef.current) return;
+    const timeoutId = window.setTimeout(() => {
+      const values = form.getFieldsValue(true);
+      writeSmartFormDraft(draftKey, { ...formData, ...(values || {}) }, initialValuesSignature);
+    }, 500);
+    return () => window.clearTimeout(timeoutId);
+  }, [draftKey, form, formData, initialValuesSignature, visible, watchedValues]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!formDirtyRef.current) return;
+      const values = form.getFieldsValue(true);
+      writeSmartFormDraft(draftKey, { ...formData, ...(values || {}) }, initialValuesSignature);
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [draftKey, form, formData, initialValuesSignature, visible]);
+
   const checkVisibility = (logicOrRule: any, values?: any) => {
     if (!logicOrRule) return true;
     
@@ -2136,7 +2255,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           {loading && !isBulkEdit ? (
             <div className="h-full flex items-center justify-center"><Spin size="large" /></div>
           ) : (
-            <Form form={form} layout="vertical" onFinish={handleFinish} onValuesChange={handleValuesChange}>
+            <Form form={form} layout="vertical" preserve onFinish={handleFinish} onValuesChange={handleValuesChange}>
               
               {((supportsAssignee && canViewField('assignee_id')) || !!statusField || showAutoNameToggle) && (
                 <div className="mb-6 flex flex-col lg:flex-row lg:items-center gap-3">
