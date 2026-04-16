@@ -188,9 +188,13 @@ const BLOCKS = {
         type: FieldType.RELATION,
         width: 220,
         relationConfig: {
-          targetModule: 'chart_of_accounts',
-          targetField: 'name',
-          filter: { account_type: 'asset', is_leaf: true, is_active: true, code__like: '110%' },
+          targetModule: 'bank_accounts',
+          targetField: 'bank_name',
+          filter: { is_active: true },
+          sourceModules: [
+            { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+            { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+          ],
         },
       },
       {

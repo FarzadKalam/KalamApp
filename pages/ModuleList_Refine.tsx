@@ -9,12 +9,13 @@ import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMod
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
-import { AppstoreAddOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
+import { AppstoreAddOutlined, BranchesOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
 import ViewManager from "../components/ViewManager";
 import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
 import Toolbar from "../components/moduleList/Toolbar";
 import BulkActionsBar from "../components/moduleList/BulkActionsBar";
+import MergeRecordsModal from "../components/moduleList/MergeRecordsModal";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
 import GridView from "../components/moduleList/GridView";
 import MapView from "../components/moduleList/MapView";
@@ -422,6 +423,10 @@ export const ModuleListRefine: React.FC<{
   const [voipCallSyncing, setVoipCallSyncing] = useState(false);
   const [bulkSmsRecipients, setBulkSmsRecipients] = useState<string[]>([]);
   const [bulkSmsSourceRecord, setBulkSmsSourceRecord] = useState<Record<string, any> | null>(null);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeRecords, setMergeRecords] = useState<Array<Record<string, any>>>([]);
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const [mergeSubmitting, setMergeSubmitting] = useState(false);
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
   const [canOpenGoals, setCanOpenGoals] = useState(true);
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
@@ -2120,6 +2125,86 @@ export const ModuleListRefine: React.FC<{
     });
   }, [moduleConfig, resolvedModuleId, selectedRowKeys]);
 
+  const handleMergeOpen = useCallback(async () => {
+    if (!selectedRowKeys.length || !moduleConfig || !resolvedModuleId) return;
+    if (isSystemManagedModule) {
+      showListMessage("warning", "رکوردهای سیستمی قابل ادغام نیستند.");
+      return;
+    }
+    if (!canEditModule) {
+      showListMessage("warning", "برای ادغام رکوردها دسترسی ویرایش لازم است.");
+      return;
+    }
+    if (selectedRowKeys.length < 2) {
+      showListMessage("warning", "برای ادغام حداقل دو رکورد انتخاب کنید.");
+      return;
+    }
+
+    setIsMergeModalOpen(true);
+    setMergeLoading(true);
+    try {
+      const rows = await fetchSelectedRecords();
+      if (rows.length < 2) {
+        showListMessage("warning", "حداقل دو رکورد معتبر برای ادغام پیدا نشد.");
+        setIsMergeModalOpen(false);
+        return;
+      }
+      setMergeRecords(rows);
+    } catch (error: any) {
+      setIsMergeModalOpen(false);
+      showListMessage("error", toFaErrorMessage(error, "آماده‌سازی ادغام ناموفق بود."));
+    } finally {
+      setMergeLoading(false);
+    }
+  }, [canEditModule, fetchSelectedRecords, isSystemManagedModule, moduleConfig, resolvedModuleId, selectedRowKeys.length, showListMessage]);
+
+  const handleMergeConfirm = useCallback(async (
+    payload: Record<string, any>,
+    meta: { survivorId: string; duplicateIds: string[] },
+  ) => {
+    if (!moduleConfig?.table || !resolvedModuleId || !meta.survivorId || meta.duplicateIds.length === 0) return;
+    setMergeSubmitting(true);
+    const hide = showListMessage("loading", "در حال ادغام رکوردها...", 0);
+    try {
+      const { error: updateError } = await supabase
+        .from(moduleConfig.table)
+        .update(payload)
+        .eq("id", meta.survivorId);
+      if (updateError) throw updateError;
+
+      if (isRecycleBinEnabledModule(resolvedModuleId)) {
+        await moveModuleRecordsToRecycleBin(resolvedModuleId, meta.duplicateIds);
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          deleteMany(
+            {
+              resource: dataResource || resolvedModuleId,
+              ids: meta.duplicateIds,
+              successNotification: false,
+              errorNotification: false,
+            },
+            {
+              onSuccess: () => resolve(),
+              onError: (error: any) => reject(error),
+            }
+          );
+        });
+      }
+
+      showListMessage("success", "رکوردهای انتخاب‌شده ادغام شدند.");
+      setIsMergeModalOpen(false);
+      setMergeRecords([]);
+      setSelectedRowKeys([]);
+      setSelectedRowsMap({});
+      tableQueryResult.refetch();
+    } catch (error: any) {
+      showListMessage("error", toFaErrorMessage(error, "ادغام رکوردها ناموفق بود."));
+    } finally {
+      hide?.();
+      setMergeSubmitting(false);
+    }
+  }, [dataResource, deleteMany, moduleConfig?.table, resolvedModuleId, showListMessage, tableQueryResult]);
+
   const handleBulkSmsOpen = useCallback(async () => {
     if (!canBulkSendSms) return;
     if (!selectedRowKeys.length) {
@@ -2714,6 +2799,16 @@ export const ModuleListRefine: React.FC<{
                       onExport={selectedRowKeys.length ? handleExport : undefined}
                       exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
                       extraActions={[
+                        ...(selectedRowKeys.length > 1 && canEditModule && !isSystemManagedModule
+                          ? [
+                              {
+                                key: "merge_records",
+                                icon: <BranchesOutlined />,
+                                tooltip: "ادغام",
+                                onClick: handleMergeOpen,
+                              },
+                            ]
+                          : []),
                         ...(bulkBuildSourceModule && selectedRowKeys.length > 0 && canEditModule && !isSystemManagedModule
                           ? [
                               {
@@ -3102,6 +3197,24 @@ export const ModuleListRefine: React.FC<{
           }
         />
       )}
+      {isMergeModalOpen && moduleConfig ? (
+        <MergeRecordsModal
+          open={isMergeModalOpen}
+          moduleConfig={moduleConfig}
+          records={mergeRecords}
+          loading={mergeLoading}
+          submitting={mergeSubmitting}
+          canViewField={canViewField}
+          dynamicOptions={dynamicOptions}
+          relationOptions={effectiveRelationOptions}
+          onCancel={() => {
+            if (mergeSubmitting) return;
+            setIsMergeModalOpen(false);
+            setMergeRecords([]);
+          }}
+          onConfirm={handleMergeConfirm}
+        />
+      ) : null}
       {resolvedModuleId === 'products' && (
         <BulkProductsCreateModal
           open={isBulkProductsModalOpen}

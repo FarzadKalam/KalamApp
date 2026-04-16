@@ -10,6 +10,7 @@ import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   createWorkflowRelatedFieldKey,
 } from './workflowTypes';
+import { PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS } from './processModuleSupport';
 
 const HIDDEN_WORKFLOW_FIELD_KEYS = new Set([
   'execution_process_draft',
@@ -30,12 +31,6 @@ const PROCESS_DRAFT_FIELD_KEYS = [
   'marketing_process_draft',
   'production_stages_draft',
 ] as const;
-const PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS = new Set([
-  'process_templates',
-  'process_runs',
-  'tasks',
-]);
-
 export const getProjectModuleOptions = () =>
   Object.values(MODULES)
     .map((module) => ({

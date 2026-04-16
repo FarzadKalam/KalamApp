@@ -4,6 +4,8 @@ const DEFAULT_RELATION_TARGET_FIELDS: Record<string, string> = {
   profiles: 'full_name',
   org_roles: 'title',
   employees: 'full_name',
+  cash_boxes: 'name',
+  bank_accounts: 'bank_name',
   work_schedules: 'title',
   journal_entries: 'entry_no',
   secretariat_documents: 'name',
@@ -57,6 +59,8 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   suppliers: ['business_name', 'last_name', 'first_name', 'system_code'],
   profiles: ['full_name', 'last_name', 'first_name', 'system_code', 'email', 'mobile_1'],
   employees: ['full_name', 'system_code'],
+  cash_boxes: ['name', 'code'],
+  bank_accounts: ['bank_name', 'account_number', 'card_number', 'shaba', 'code'],
   org_roles: ['title', 'name'],
   work_schedules: ['title', 'name'],
   journal_entries: ['entry_no', 'source_record_title', 'description'],
@@ -90,6 +94,12 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
   }
   if (moduleName === 'employees') {
     return ['full_name'];
+  }
+  if (moduleName === 'cash_boxes') {
+    return ['name', 'code'];
+  }
+  if (moduleName === 'bank_accounts') {
+    return ['bank_name', 'account_number', 'card_number', 'shaba', 'code'];
   }
   if (moduleName === 'org_roles') {
     return ['title', 'name'];

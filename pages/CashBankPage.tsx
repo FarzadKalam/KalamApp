@@ -88,6 +88,7 @@ const CashBankPage: React.FC = () => {
   const [rows, setRows] = useState<RowItem[]>([]);
   const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
   const [banks, setBanks] = useState<any[]>([]);
+  const [cashBoxes, setCashBoxes] = useState<any[]>([]);
   const [salesInvoices, setSalesInvoices] = useState<any[]>([]);
   const [purchaseInvoices, setPurchaseInvoices] = useState<any[]>([]);
   const [operations, setOperations] = useState<any[]>([]);
@@ -97,15 +98,27 @@ const CashBankPage: React.FC = () => {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
 
-  const bankLabelById = useMemo(
+  const financialAccountById = useMemo(
     () =>
       Object.fromEntries(
-        (banks || []).map((b: any) => [
-          String(b.id),
-          `${String(b.bank_name || 'بانک')} ${b.account_number ? `(${toPersianNumber(b.account_number)})` : ''}`.trim(),
-        ])
+        [
+          ...(banks || []).map((b: any) => [
+            String(b.id),
+            {
+              label: `${String(b.bank_name || 'بانک')} ${b.account_number ? `(${toPersianNumber(b.account_number)})` : ''}`.trim(),
+              moduleId: 'bank_accounts',
+            },
+          ]),
+          ...(cashBoxes || []).map((c: any) => [
+            String(c.id),
+            {
+              label: `${String(c.name || 'صندوق')} ${c.code ? `(${toPersianNumber(c.code)})` : ''}`.trim(),
+              moduleId: 'cash_boxes',
+            },
+          ]),
+        ]
       ),
-    [banks]
+    [banks, cashBoxes]
   );
   const customerLabelById = useMemo(
     () =>
@@ -179,7 +192,7 @@ const CashBankPage: React.FC = () => {
         employeesRes,
       ] = await Promise.all([
         supabase.from('bank_accounts').select('id, bank_name, account_number').eq('is_active', true).limit(1000),
-        supabase.from('cash_boxes').select('id'),
+        supabase.from('cash_boxes').select('id, name, code').eq('is_active', true).limit(1000),
         supabase
           .from('cheques')
           .select('id, cheque_type, status, amount, issue_date, due_date, party_type, party_id, serial_no, sayad_id, bank_account_id, notes, metadata, created_at')
@@ -214,6 +227,7 @@ const CashBankPage: React.FC = () => {
 
       const chequeRows = chequesRes.data || [];
       setBanks(banksRes.data || []);
+      setCashBoxes(cashRes.data || []);
       setCheques(chequeRows);
       setSalesInvoices(salesRes.data || []);
       setPurchaseInvoices(purchaseRes.data || []);
@@ -248,7 +262,9 @@ const CashBankPage: React.FC = () => {
   useEffect(() => {
     const fromSales = (salesInvoices || []).flatMap((inv: any) =>
       (Array.isArray(inv?.payments) ? inv.payments : []).map(
-        (p: any, idx: number): RowItem => ({
+        (p: any, idx: number): RowItem => {
+          const account = financialAccountById[String(p?.target_account || '')];
+          return ({
           key: `sales_${inv.id}_${idx}`,
           kind: 'sales_payment',
           rowType: 'receipt',
@@ -260,21 +276,24 @@ const CashBankPage: React.FC = () => {
           amount: Number(p?.amount || 0),
           invoiceLabel: String(inv?.name || inv?.system_code || inv?.id || '-'),
           personLabel: resolvePartyLabel('customer', inv?.customer_id ? String(inv.customer_id) : undefined),
-          bankLabel: bankLabelById[String(p?.target_account || '')] || String(p?.target_account || '-'),
+          bankLabel: account?.label || String(p?.target_account || '-'),
           chequeLabel: chequeLabelById[String(p?.cheque_id || '')] || '-',
           description: String(p?.description || ''),
           createdAt: inv?.created_at || null,
           invoiceRelation: inv?.id ? { moduleId: 'invoices', recordId: String(inv.id) } : null,
           personRelation: inv?.customer_id ? { moduleId: 'customers', recordId: String(inv.customer_id) } : null,
-          bankRelation: p?.target_account ? { moduleId: 'bank_accounts', recordId: String(p.target_account) } : null,
+          bankRelation: p?.target_account ? { moduleId: account?.moduleId || 'bank_accounts', recordId: String(p.target_account) } : null,
           chequeRelation: p?.cheque_id ? { moduleId: 'cheques', recordId: String(p.cheque_id) } : null,
-        })
+        });
+        }
       )
     );
 
     const fromPurchase = (purchaseInvoices || []).flatMap((inv: any) =>
       (Array.isArray(inv?.payments) ? inv.payments : []).map(
-        (p: any, idx: number): RowItem => ({
+        (p: any, idx: number): RowItem => {
+          const account = financialAccountById[String(p?.source_account || '')];
+          return ({
           key: `purchase_${inv.id}_${idx}`,
           kind: 'purchase_payment',
           rowType: 'payment',
@@ -286,19 +305,23 @@ const CashBankPage: React.FC = () => {
           amount: Number(p?.amount || 0),
           invoiceLabel: String(inv?.name || inv?.system_code || inv?.id || '-'),
           personLabel: resolvePartyLabel('supplier', inv?.supplier_id ? String(inv.supplier_id) : undefined),
-          bankLabel: bankLabelById[String(p?.source_account || '')] || String(p?.source_account || '-'),
+          bankLabel: account?.label || String(p?.source_account || '-'),
           chequeLabel: chequeLabelById[String(p?.cheque_id || '')] || '-',
           description: String(p?.description || ''),
           createdAt: inv?.created_at || null,
           invoiceRelation: inv?.id ? { moduleId: 'purchase_invoices', recordId: String(inv.id) } : null,
           personRelation: inv?.supplier_id ? { moduleId: 'suppliers', recordId: String(inv.supplier_id) } : null,
-          bankRelation: p?.source_account ? { moduleId: 'bank_accounts', recordId: String(p.source_account) } : null,
+          bankRelation: p?.source_account ? { moduleId: account?.moduleId || 'bank_accounts', recordId: String(p.source_account) } : null,
           chequeRelation: p?.cheque_id ? { moduleId: 'cheques', recordId: String(p.cheque_id) } : null,
-        })
+        });
+        }
       )
     );
 
-    const fromOps = (operations || []).map((op: any): RowItem => ({
+    const fromOps = (operations || []).map((op: any): RowItem => {
+      const accountId = String(op?.bank_account_id || op?.cash_box_id || '').trim();
+      const account = financialAccountById[accountId];
+      return ({
       key: `op_${op.id}`,
       kind: 'cash_bank_operation',
       rowType: String(op?.operation_type || '') === 'payment' ? 'payment' : 'receipt',
@@ -320,7 +343,7 @@ const CashBankPage: React.FC = () => {
           : op?.employee_id
             ? resolvePartyLabel('employee', String(op.employee_id))
             : '-',
-      bankLabel: bankLabelById[String(op?.bank_account_id || '')] || '-',
+      bankLabel: account?.label || '-',
       chequeLabel: chequeLabelById[String(op?.cheque_id || '')] || '-',
       description: String(op?.description || ''),
       createdAt: op?.created_at || null,
@@ -336,9 +359,10 @@ const CashBankPage: React.FC = () => {
           : op?.employee_id
             ? { moduleId: 'profiles', recordId: String(op.employee_id) }
             : null,
-      bankRelation: op?.bank_account_id ? { moduleId: 'bank_accounts', recordId: String(op.bank_account_id) } : null,
+      bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : 'bank_accounts'), recordId: accountId } : null,
       chequeRelation: op?.cheque_id ? { moduleId: 'cheques', recordId: String(op.cheque_id) } : null,
-    }));
+    });
+    });
 
     const fromCheques = (cheques || []).map((c: any): RowItem => ({
       key: `cheque_${c.id}`,
@@ -352,7 +376,7 @@ const CashBankPage: React.FC = () => {
       amount: Number(c?.amount || 0),
       invoiceLabel: '-',
       personLabel: resolvePartyLabel(String(c?.party_type || ''), c?.party_id ? String(c.party_id) : undefined),
-      bankLabel: bankLabelById[String(c?.bank_account_id || '')] || '-',
+      bankLabel: financialAccountById[String(c?.bank_account_id || '')]?.label || '-',
       chequeLabel: chequeLabelById[String(c?.id || '')] || '-',
       description: String(c?.notes || ''),
       createdAt: c?.created_at || null,
@@ -422,7 +446,7 @@ const CashBankPage: React.FC = () => {
     operations,
     cheques,
     barters,
-    bankLabelById,
+    financialAccountById,
     chequeLabelById,
     purchaseById,
     resolvePartyLabel,

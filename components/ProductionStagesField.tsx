@@ -875,8 +875,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const isProductionOrder = moduleId === 'production_orders';
   const supportsHandover = isProductionOrder;
   const processTaskModules = useMemo(
-    () => new Set(['projects', 'marketing_leads', 'customers', 'invoices', 'purchase_invoices']),
-    []
+    () => {
+      const modules = new Set(['projects', 'marketing_leads', 'customers', 'invoices', 'purchase_invoices']);
+      if (isProcessRecordModule && moduleId) modules.add(String(moduleId));
+      return modules;
+    },
+    [isProcessRecordModule, moduleId]
   );
   const processLineId = useMemo(
     () => `process-line:${String(moduleId || 'unknown')}:${String(recordId || 'draft')}`,

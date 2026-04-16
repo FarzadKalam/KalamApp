@@ -274,13 +274,14 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           };
 
           return (
-        <div id={processSectionAnchorId} key={field.key} className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
+            <div id={processSectionAnchorId} key={field.key} className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
             <h3 className="text-sm md:text-lg font-bold mb-4 text-gray-700 dark:text-gray-200 flex items-center gap-2">
               <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>                {field.labels.fa}
             </h3>
-            <ProductionStagesField 
-              recordId={data.id} 
+            <ProductionStagesField
+              recordId={data.id}
               moduleId={module.id}
+              forceProcessRecordMode={isProcessStagesField && !isTemplatePreviewField && !isRunPreviewField}
               automationContextModuleId={null}
               automationContextModuleIds={
                 module.id === 'process_templates' || module.id === 'process_runs'
@@ -294,7 +295,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               onDraftStagesChange={handleDraftStagesChange}
               showWageSummary={module.id === 'production_orders'}
             />
-        </div>
+            </div>
           );
         })()
       ))}

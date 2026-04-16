@@ -5,6 +5,10 @@ export const bankAccountsConfig: ModuleDefinition = {
   titles: { fa: 'حساب های بانکی', en: 'Bank Accounts' },
   nature: ModuleNature.FINANCE,
   table: 'bank_accounts',
+  relationDisplay: {
+    labelTemplate: '{{bank_name}} - {{account_number}}',
+    searchFields: ['bank_name', 'account_number', 'card_number', 'shaba', 'code'],
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [

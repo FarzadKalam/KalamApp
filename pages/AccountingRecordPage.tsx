@@ -116,6 +116,8 @@ const AccountingRecordPage: React.FC = () => {
           const paymentType = String(formData?.payment_type || '').trim();
           if (f.key === 'cheque_id') return paymentType === 'cheque';
           if (f.key === 'barter_id') return paymentType === 'barter';
+          if (f.key === 'cash_box_id') return paymentType === 'cash';
+          if (f.key === 'bank_account_id') return paymentType !== 'cash';
         }
         return true;
       })
@@ -133,10 +135,12 @@ const AccountingRecordPage: React.FC = () => {
     const patch: Record<string, any> = {};
     if (paymentType !== 'cheque' && formData?.cheque_id) patch.cheque_id = null;
     if (paymentType !== 'barter' && formData?.barter_id) patch.barter_id = null;
+    if (paymentType === 'cash' && formData?.bank_account_id) patch.bank_account_id = null;
+    if (paymentType !== 'cash' && formData?.cash_box_id) patch.cash_box_id = null;
     if (!Object.keys(patch).length) return;
     setFormData((prev) => ({ ...prev, ...patch }));
     form.setFieldsValue(patch);
-  }, [form, formData?.barter_id, formData?.cheque_id, formData?.payment_type, moduleId]);
+  }, [form, formData?.bank_account_id, formData?.barter_id, formData?.cash_box_id, formData?.cheque_id, formData?.payment_type, moduleId]);
 
   const standardFields = useMemo(() => {
     if (!isChequeModule) return visibleFields;
@@ -559,6 +563,17 @@ const AccountingRecordPage: React.FC = () => {
         payload[field.key] = raw;
       });
 
+      if (moduleId === 'cash_bank_operations') {
+        const paymentType = String(values.payment_type ?? formData.payment_type ?? '').trim();
+        if (paymentType === 'cash') {
+          payload.bank_account_id = null;
+          payload.cash_box_id = values.cash_box_id || formData.cash_box_id || null;
+        } else {
+          payload.cash_box_id = null;
+          payload.bank_account_id = values.bank_account_id || formData.bank_account_id || null;
+        }
+      }
+
       if (isChequeModule) {
         const issueDate =
           values.issue_date ??
@@ -590,7 +605,7 @@ const AccountingRecordPage: React.FC = () => {
 
       return payload;
     },
-    [formData, isChequeModule, visibleFields]
+    [formData, isChequeModule, moduleId, visibleFields]
   );
 
   const handleSave = async () => {

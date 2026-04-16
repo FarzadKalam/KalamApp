@@ -46,8 +46,9 @@ import { employeeAdvancesConfig } from './modules/employeeAdvancesConfig';
 import { payrollSlipsConfig } from './modules/payrollSlipsConfig';
 import { employeeContractsConfig } from './modules/employeeContractsConfig';
 import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
+import { withProcessModuleSupport } from './utils/processModuleSupport';
 
-export const MODULES: Record<string, ModuleDefinition> = {
+const BASE_MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
   billboards: billboardConfig,
   product_bundles: productBundlesConfig,
@@ -97,3 +98,7 @@ export const MODULES: Record<string, ModuleDefinition> = {
   employee_contracts: employeeContractsConfig,
   recruitment_applicants: recruitmentApplicantsConfig,
 };
+
+export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(
+  Object.entries(BASE_MODULES).map(([moduleId, module]) => [moduleId, withProcessModuleSupport(module)])
+);

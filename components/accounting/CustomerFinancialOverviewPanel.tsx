@@ -125,8 +125,9 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
         return;
       }
 
-      const [banksRes, invoicesRes, opsRes, bartersRes] = await Promise.all([
+      const [banksRes, cashRes, invoicesRes, opsRes, bartersRes] = await Promise.all([
         supabase.from('bank_accounts').select('id, bank_name, account_number').eq('is_active', true).limit(1000),
+        supabase.from('cash_boxes').select('id, name, code').eq('is_active', true).limit(1000),
         permissions?.invoices?.view !== false
           ? supabase
               .from('invoices')
@@ -150,14 +151,26 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
           : Promise.resolve({ data: [], error: null } as any),
       ]);
 
-      const error = banksRes.error || invoicesRes.error || opsRes.error || bartersRes.error;
+      const error = banksRes.error || cashRes.error || invoicesRes.error || opsRes.error || bartersRes.error;
       if (error) throw error;
 
-      const nextBankLabels = Object.fromEntries(
-        ((banksRes.data || []) as any[]).map((bank) => [
-          String(bank.id),
-          `${String(bank.bank_name || 'بانک')} ${bank.account_number ? `(${toPersianNumber(bank.account_number)})` : ''}`.trim(),
-        ])
+      const nextFinancialAccountLabels = Object.fromEntries(
+        [
+          ...((banksRes.data || []) as any[]).map((bank) => [
+            String(bank.id),
+            {
+              label: `${String(bank.bank_name || 'بانک')} ${bank.account_number ? `(${toPersianNumber(bank.account_number)})` : ''}`.trim(),
+              moduleId: 'bank_accounts',
+            },
+          ]),
+          ...((cashRes.data || []) as any[]).map((cashBox) => [
+            String(cashBox.id),
+            {
+              label: `${String(cashBox.name || 'صندوق')} ${cashBox.code ? `(${toPersianNumber(cashBox.code)})` : ''}`.trim(),
+              moduleId: 'cash_boxes',
+            },
+          ]),
+        ]
       );
       const visibleInvoices = ((invoicesRes.data || []) as any[]).filter((invoice) =>
         FINAL_SALES_INVOICE_STATUSES.has(String(invoice?.status || '').trim().toLowerCase())
@@ -191,24 +204,27 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
             if (paymentType === 'cheque' && FAILED_CHEQUE_STATUSES.has(chequeStatus)) return false;
             return Number(payment?.amount || 0) > 0;
           })
-          .map((payment: any, index: number) => ({
-            key: `payment_${invoice.id}_${index}`,
-            rowType: 'receipt' as const,
-            sourceLabel: `دریافت فاکتور فروش${PAYMENT_TYPE_LABEL[String(payment?.payment_type || '')] ? ` (${PAYMENT_TYPE_LABEL[String(payment?.payment_type || '')]})` : ''}`,
-            paymentType: String(payment?.payment_type || ''),
-            status: String(payment?.status || ''),
-            chequeStatus: String(payment?.cheque_status || ''),
-            date: payment?.date || invoice?.invoice_date || null,
-            debit: 0,
-            credit: Number(payment?.amount || 0),
-            balance: 0,
-            invoiceLabel: String(invoice?.name || invoice?.system_code || invoice?.id || '-'),
-            bankLabel: nextBankLabels[String(payment?.target_account || '')] || String(payment?.target_account || '-'),
-            description: String(payment?.description || ''),
-            createdAt: invoice?.created_at || null,
-            invoiceRelation: invoice?.id ? { moduleId: 'invoices', recordId: String(invoice.id) } : null,
-            bankRelation: payment?.target_account ? { moduleId: 'bank_accounts', recordId: String(payment.target_account) } : null,
-          }))
+          .map((payment: any, index: number) => {
+            const account = nextFinancialAccountLabels[String(payment?.target_account || '')];
+            return ({
+              key: `payment_${invoice.id}_${index}`,
+              rowType: 'receipt' as const,
+              sourceLabel: `دریافت فاکتور فروش${PAYMENT_TYPE_LABEL[String(payment?.payment_type || '')] ? ` (${PAYMENT_TYPE_LABEL[String(payment?.payment_type || '')]})` : ''}`,
+              paymentType: String(payment?.payment_type || ''),
+              status: String(payment?.status || ''),
+              chequeStatus: String(payment?.cheque_status || ''),
+              date: payment?.date || invoice?.invoice_date || null,
+              debit: 0,
+              credit: Number(payment?.amount || 0),
+              balance: 0,
+              invoiceLabel: String(invoice?.name || invoice?.system_code || invoice?.id || '-'),
+              bankLabel: account?.label || String(payment?.target_account || '-'),
+              description: String(payment?.description || ''),
+              createdAt: invoice?.created_at || null,
+              invoiceRelation: invoice?.id ? { moduleId: 'invoices', recordId: String(invoice.id) } : null,
+              bankRelation: payment?.target_account ? { moduleId: account?.moduleId || 'bank_accounts', recordId: String(payment.target_account) } : null,
+            });
+          })
       );
 
       const directOperationRows = ((opsRes.data || []) as any[])
@@ -221,24 +237,28 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
           if (paymentType === 'cheque' && FAILED_CHEQUE_STATUSES.has(chequeStatus)) return false;
           return Number(op?.amount || 0) > 0;
         })
-        .map((op) => ({
-          key: `op_${op.id}`,
-          rowType: String(op?.operation_type || '') === 'payment' ? ('payment' as const) : ('receipt' as const),
-          sourceLabel: 'ثبت مستقیم نقد و بانک',
-          paymentType: String(op?.payment_type || ''),
-          status: String(op?.status || ''),
-          chequeStatus: String(op?.cheque_status || ''),
-          date: op?.operation_date || null,
-          debit: String(op?.operation_type || '') === 'payment' ? 0 : Number(op?.amount || 0),
-          credit: String(op?.operation_type || '') === 'payment' ? Number(op?.amount || 0) : 0,
-          balance: 0,
-          invoiceLabel: '-',
-          bankLabel: nextBankLabels[String(op?.bank_account_id || '')] || '-',
-          description: String(op?.description || ''),
-          createdAt: op?.created_at || null,
-          invoiceRelation: null,
-          bankRelation: op?.bank_account_id ? { moduleId: 'bank_accounts', recordId: String(op.bank_account_id) } : null,
-        }));
+        .map((op) => {
+          const accountId = String(op?.bank_account_id || op?.cash_box_id || '').trim();
+          const account = nextFinancialAccountLabels[accountId];
+          return ({
+            key: `op_${op.id}`,
+            rowType: String(op?.operation_type || '') === 'payment' ? ('payment' as const) : ('receipt' as const),
+            sourceLabel: 'ثبت مستقیم نقد و بانک',
+            paymentType: String(op?.payment_type || ''),
+            status: String(op?.status || ''),
+            chequeStatus: String(op?.cheque_status || ''),
+            date: op?.operation_date || null,
+            debit: String(op?.operation_type || '') === 'payment' ? 0 : Number(op?.amount || 0),
+            credit: String(op?.operation_type || '') === 'payment' ? Number(op?.amount || 0) : 0,
+            balance: 0,
+            invoiceLabel: '-',
+            bankLabel: account?.label || '-',
+            description: String(op?.description || ''),
+            createdAt: op?.created_at || null,
+            invoiceRelation: null,
+            bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : 'bank_accounts'), recordId: accountId } : null,
+          });
+        });
 
       const barterRows = ((bartersRes.data || []) as any[]).map((barter) => ({
         key: `barter_${barter.id}`,

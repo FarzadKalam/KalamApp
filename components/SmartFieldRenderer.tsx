@@ -1818,16 +1818,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     const isProcessDraftField = isProcessStagesFieldKey;
-    const isProcessModule = (
-      moduleId === 'projects' ||
-      moduleId === 'invoices' ||
-      moduleId === 'purchase_invoices' ||
-      moduleId === 'customers' ||
-      moduleId === 'marketing_leads' ||
-      moduleId === 'process_templates' ||
-      moduleId === 'process_runs'
-    );
-    if (isProcessDraftField && isProcessModule) {
+    if (isProcessDraftField) {
       const nextDraftStages = Array.isArray(value)
         ? value
         : (Array.isArray((allValues as any)?.[fieldKey]) ? (allValues as any)[fieldKey] : []);
@@ -1853,6 +1844,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           compact={compactMode}
           draftStages={nextDraftStages}
           onDraftStagesChange={(stages) => onChange(stages)}
+          forceProcessRecordMode={moduleId !== 'process_templates' && moduleId !== 'process_runs'}
         />
       );
     }

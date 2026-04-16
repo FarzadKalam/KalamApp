@@ -5,6 +5,10 @@ export const cashBoxesConfig: ModuleDefinition = {
   titles: { fa: 'صندوق ها', en: 'Cash Boxes' },
   nature: ModuleNature.FINANCE,
   table: 'cash_boxes',
+  relationDisplay: {
+    labelTemplate: '{{name}} - {{code}}',
+    searchFields: ['name', 'code'],
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [

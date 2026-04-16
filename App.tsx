@@ -158,6 +158,10 @@ const getInitialBranding = (): BrandingConfig => {
 
 const SilentRouteFallback = () => null;
 
+const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
+);
+
 function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
   const [branding, setBranding] = useState<BrandingConfig>(getInitialBranding);
@@ -493,70 +497,70 @@ function App() {
           disableTelemetry: true,
         }}
       >
-        <Suspense fallback={<SilentRouteFallback />}>
-          <Routes>
-            <Route path="/tazesystem/*" element={<PublicSite />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/inquiry/*" element={<InquiryForm />} />
+        <Routes>
+          <Route path="/tazesystem/*" element={<LazyRouteBoundary><PublicSite /></LazyRouteBoundary>} />
+          <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
+          <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
 
-            <Route
-              element={
-                <Authenticated
-                  key="authenticated-inner"
-                  fallback={<CatchAllNavigate to="/login" />}
+          <Route
+            element={
+              <Authenticated
+                key="authenticated-inner"
+                fallback={<CatchAllNavigate to="/login" />}
+              >
+                <Layout
+                  isDarkMode={isDarkMode}
+                  toggleTheme={handleToggleTheme}
+                  brandShortName={branding.shortName}
                 >
-                  <Layout
-                    isDarkMode={isDarkMode}
-                    toggleTheme={handleToggleTheme}
-                    brandShortName={branding.shortName}
-                  >
+                  <LazyRouteBoundary>
                     <Outlet />
-                  </Layout>
-                </Authenticated>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="/profile" element={<ProfilePage />} />
-              <Route path="/profile/:id" element={<ProfilePage />} />
-              <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
-              <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
-              <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
-              <Route path="/hr" element={<HRPage />} />
-              <Route path="/hr/:employeeId" element={<HRPage />} />
-              <Route path="/gallery" element={<FilesGalleryPage />} />
-              <Route path="/recycle-bin" element={<RecycleBinPage />} />
-              <Route path="/share-target" element={<ShareTargetPage />} />
-              <Route path="/web_forms" element={<WebFormsHubPage />} />
-              <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
-              <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
-              <Route path="/web_forms/:id/edit" element={<WebFormBuilderPage />} />
-              <Route path="/reports" element={<ReportsHubPage />} />
-              <Route path="/reports/create" element={<ReportBuilderPage />} />
-              <Route path="/reports/:reportId" element={<ReportViewerPage />} />
-              <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
-              <Route path="/accounting" element={<AccountingPage />} />
-              <Route path="/accounting/reports" element={<AccountingReportsPage />} />
-              <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
-              <Route path="/cash_bank" element={<CashBankPage />} />
-              <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
-              <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
-              <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
-              <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
-              <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
-              <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
+                  </LazyRouteBoundary>
+                </Layout>
+              </Authenticated>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/profile/:id" element={<ProfilePage />} />
+            <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
+            <Route path="/production_group_orders/create" element={<ProductionGroupOrderWizard />} />
+            <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
+            <Route path="/hr" element={<HRPage />} />
+            <Route path="/hr/:employeeId" element={<HRPage />} />
+            <Route path="/gallery" element={<FilesGalleryPage />} />
+            <Route path="/recycle-bin" element={<RecycleBinPage />} />
+            <Route path="/share-target" element={<ShareTargetPage />} />
+            <Route path="/web_forms" element={<WebFormsHubPage />} />
+            <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
+            <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />
+            <Route path="/web_forms/:id/edit" element={<WebFormBuilderPage />} />
+            <Route path="/reports" element={<ReportsHubPage />} />
+            <Route path="/reports/create" element={<ReportBuilderPage />} />
+            <Route path="/reports/:reportId" element={<ReportViewerPage />} />
+            <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
+            <Route path="/accounting" element={<AccountingPage />} />
+            <Route path="/accounting/reports" element={<AccountingReportsPage />} />
+            <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
+            <Route path="/cash_bank" element={<CashBankPage />} />
+            <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
+            <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
+            <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />
+            <Route path="/journal_entries/create" element={<JournalEntryCreatePage />} />
+            <Route path="/journal_entries/:id" element={<JournalEntryShowPage />} />
+            <Route path="/journal_entries/:id/edit" element={<JournalEntryShowPage />} />
 
-              <Route path="/:moduleId">
-                <Route index element={<ModuleListRouteResolver />} />
-                <Route path="create" element={<ModuleCreateRouteResolver />} />
-                <Route path=":id" element={<ModuleShowRouteResolver />} />
-                <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
-              </Route>
-
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<ErrorComponent />} />
+            <Route path="/:moduleId">
+              <Route index element={<ModuleListRouteResolver />} />
+              <Route path="create" element={<ModuleCreateRouteResolver />} />
+              <Route path=":id" element={<ModuleShowRouteResolver />} />
+              <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
             </Route>
-          </Routes>
-        </Suspense>
+
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<ErrorComponent />} />
+          </Route>
+        </Routes>
 
         <UnsavedChangesNotifier />
         <DocumentTitleHandler handler={titleHandler} />

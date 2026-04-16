@@ -506,12 +506,12 @@ const resolvePaymentAccountId = (
   payment: PaymentRow,
   defaults: DefaultAccounts,
   validAccountIds: ValidAccountIdSet,
-  bankAccountToLedgerMap: Map<string, string | null>
+  financialAccountToLedgerMap: Map<string, string | null>
 ): string | null => {
   const direct = normalizeAccountId(payment.target_account || payment.source_account);
   if (direct) {
     if (validAccountIds.has(direct)) return direct;
-    const mappedLedger = normalizeAccountId(bankAccountToLedgerMap.get(direct));
+    const mappedLedger = normalizeAccountId(financialAccountToLedgerMap.get(direct));
     if (mappedLedger && validAccountIds.has(mappedLedger)) return mappedLedger;
   }
 
@@ -662,17 +662,19 @@ const buildPaymentLines = async (
     )
   );
 
-  const bankAccountToLedgerMap = new Map<string, string | null>();
+  const financialAccountToLedgerMap = new Map<string, string | null>();
   if (directAccountIds.length > 0) {
-    const { data: banks, error: bankError } = await supabase
-      .from('bank_accounts')
-      .select('id, account_id')
-      .in('id', directAccountIds);
-    if (bankError) throw bankError;
-    (banks || []).forEach((bank: any) => {
-      const id = normalizeAccountId(bank?.id);
+    const [banksRes, cashBoxesRes] = await Promise.all([
+      supabase.from('bank_accounts').select('id, account_id').in('id', directAccountIds),
+      supabase.from('cash_boxes').select('id, account_id').in('id', directAccountIds),
+    ]);
+    if (banksRes.error) throw banksRes.error;
+    if (cashBoxesRes.error) throw cashBoxesRes.error;
+
+    [...(banksRes.data || []), ...(cashBoxesRes.data || [])].forEach((account: any) => {
+      const id = normalizeAccountId(account?.id);
       if (!id) return;
-      bankAccountToLedgerMap.set(id, normalizeAccountId(bank?.account_id));
+      financialAccountToLedgerMap.set(id, normalizeAccountId(account?.account_id));
     });
   }
 
@@ -685,7 +687,7 @@ const buildPaymentLines = async (
       payment,
       defaults,
       validAccountIds,
-      bankAccountToLedgerMap
+      financialAccountToLedgerMap
     );
     if (!paymentAccountId) {
       pushSyncError(result, `حساب مقصد برای پرداخت ${String(payment.id || '')} مشخص نیست.`);

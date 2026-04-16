@@ -935,6 +935,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     if (isAnyInvoicePayments && key === 'payment_type') {
       const paymentType = String(value || '').trim();
+      const accountField = isInvoicePayments ? 'target_account' : 'source_account';
+      newData[index][accountField] = null;
       if (paymentType !== 'cheque') {
         newData[index]['use_existing_received_cheque'] = false;
         newData[index]['spent_cheque_id'] = null;
@@ -3395,6 +3397,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
           options = shelvesState?.options || [];
         }
       }
+      if (
+        isAnyInvoicePayments
+        && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'))
+        && Array.isArray(options)
+      ) {
+        const paymentType = String(record?.payment_type || '').trim();
+        if (paymentType === 'cash') {
+          options = options.filter((opt: any) => String(opt?.module || '') === 'cash_boxes');
+        } else if (paymentType) {
+          options = options.filter((opt: any) => String(opt?.module || '') === 'bank_accounts');
+        }
+      }
     }
     return options;
   };
@@ -3417,6 +3431,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
         && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'))
         && String((record as any)?.payment_type || '').trim() === 'barter');
 
+    const isInvoicePaymentAccountColumn = isAnyInvoicePayments
+      && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'));
+    const paymentType = String((record as any)?.payment_type || '').trim();
+
     const relationConfig =
       (isAnyInvoiceItems || isCatalogProductItems) && col.key === 'product_id' && col.relationConfig
         ? {
@@ -3429,6 +3447,20 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   { targetModule: 'billboards', targetField: 'name', tagLabel: 'محیطی', tagColor: 'purple' },
                 ],
           }
+        : isInvoicePaymentAccountColumn && col.relationConfig
+          ? paymentType === 'cash'
+            ? {
+                targetModule: 'cash_boxes',
+                targetField: 'name',
+                filter: { is_active: true },
+              }
+            : paymentType
+              ? {
+                  targetModule: 'bank_accounts',
+                  targetField: 'bank_name',
+                  filter: { is_active: true },
+                }
+              : col.relationConfig
         : col.relationConfig;
 
     const baseReadonly = Boolean(col.readonly)

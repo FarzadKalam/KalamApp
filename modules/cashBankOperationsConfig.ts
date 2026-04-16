@@ -1,4 +1,4 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature, LogicOperator } from '../types';
 
 export const cashBankOperationsConfig: ModuleDefinition = {
   id: 'cash_bank_operations',
@@ -85,6 +85,18 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 1,
       relationConfig: { targetModule: 'bank_accounts', targetField: 'bank_name' },
       nature: FieldNature.STANDARD,
+      logic: { visibleIf: { field: 'payment_type', operator: LogicOperator.NOT_EQUALS, value: 'cash' } },
+    },
+    {
+      key: 'cash_box_id',
+      labels: { fa: 'صندوق', en: 'Cash Box' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'relations',
+      order: 1.5,
+      relationConfig: { targetModule: 'cash_boxes', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+      logic: { visibleIf: { field: 'payment_type', operator: LogicOperator.EQUALS, value: 'cash' } },
     },
     {
       key: 'sales_invoice_id',
