@@ -6,6 +6,7 @@ const DEFAULT_RELATION_TARGET_FIELDS: Record<string, string> = {
   employees: 'full_name',
   cash_boxes: 'name',
   bank_accounts: 'bank_name',
+  petty_funds: 'name',
   work_schedules: 'title',
   journal_entries: 'entry_no',
   secretariat_documents: 'name',
@@ -61,6 +62,7 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   employees: ['full_name', 'system_code'],
   cash_boxes: ['name', 'code'],
   bank_accounts: ['bank_name', 'account_number', 'card_number', 'shaba', 'code'],
+  petty_funds: ['name', 'code'],
   org_roles: ['title', 'name'],
   work_schedules: ['title', 'name'],
   journal_entries: ['entry_no', 'source_record_title', 'description'],
@@ -96,6 +98,9 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
     return ['full_name'];
   }
   if (moduleName === 'cash_boxes') {
+    return ['name', 'code'];
+  }
+  if (moduleName === 'petty_funds') {
     return ['name', 'code'];
   }
   if (moduleName === 'bank_accounts') {

@@ -86,9 +86,10 @@ const CashBankPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [canViewPage, setCanViewPage] = useState(true);
   const [rows, setRows] = useState<RowItem[]>([]);
-  const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
+  const [stats, setStats] = useState({ bankAccounts: 0, cashBoxes: 0, pettyFunds: 0, openCheques: 0, chequesAmount: 0, openBarters: 0, bartersAmount: 0 });
   const [banks, setBanks] = useState<any[]>([]);
   const [cashBoxes, setCashBoxes] = useState<any[]>([]);
+  const [pettyFunds, setPettyFunds] = useState<any[]>([]);
   const [salesInvoices, setSalesInvoices] = useState<any[]>([]);
   const [purchaseInvoices, setPurchaseInvoices] = useState<any[]>([]);
   const [operations, setOperations] = useState<any[]>([]);
@@ -116,9 +117,16 @@ const CashBankPage: React.FC = () => {
               moduleId: 'cash_boxes',
             },
           ]),
+          ...(pettyFunds || []).map((fund: any) => [
+            String(fund.id),
+            {
+              label: `${String(fund.name || 'تنخواه')} ${fund.code ? `(${toPersianNumber(fund.code)})` : ''}`.trim(),
+              moduleId: 'petty_funds',
+            },
+          ]),
         ]
       ),
-    [banks, cashBoxes]
+    [banks, cashBoxes, pettyFunds]
   );
   const customerLabelById = useMemo(
     () =>
@@ -182,6 +190,7 @@ const CashBankPage: React.FC = () => {
       const [
         banksRes,
         cashRes,
+        pettyRes,
         chequesRes,
         salesRes,
         purchaseRes,
@@ -193,6 +202,7 @@ const CashBankPage: React.FC = () => {
       ] = await Promise.all([
         supabase.from('bank_accounts').select('id, bank_name, account_number').eq('is_active', true).limit(1000),
         supabase.from('cash_boxes').select('id, name, code').eq('is_active', true).limit(1000),
+        supabase.from('petty_funds').select('id, name, code').eq('is_active', true).limit(1000),
         supabase
           .from('cheques')
           .select('id, cheque_type, status, amount, issue_date, due_date, party_type, party_id, serial_no, sayad_id, bank_account_id, notes, metadata, created_at')
@@ -215,6 +225,7 @@ const CashBankPage: React.FC = () => {
       const hasError =
         banksRes.error ||
         cashRes.error ||
+        pettyRes.error ||
         chequesRes.error ||
         salesRes.error ||
         purchaseRes.error ||
@@ -228,6 +239,7 @@ const CashBankPage: React.FC = () => {
       const chequeRows = chequesRes.data || [];
       setBanks(banksRes.data || []);
       setCashBoxes(cashRes.data || []);
+      setPettyFunds(pettyRes.data || []);
       setCheques(chequeRows);
       setSalesInvoices(salesRes.data || []);
       setPurchaseInvoices(purchaseRes.data || []);
@@ -243,6 +255,7 @@ const CashBankPage: React.FC = () => {
       setStats({
         bankAccounts: (banksRes.data || []).length,
         cashBoxes: (cashRes.data || []).length,
+        pettyFunds: (pettyRes.data || []).length,
         openCheques: chequeRows.filter((c: any) => ['new', 'in_bank'].includes(String(c?.status || ''))).length,
         chequesAmount: chequeRows.reduce((sum: number, c: any) => sum + (Number(c?.amount) || 0), 0),
         openBarters: openBarterRows.length,
@@ -698,6 +711,11 @@ const CashBankPage: React.FC = () => {
           <Col xs={12} lg={4}>
             <Card>
               <Statistic title="صندوق‌ها" value={toPersianNumber(stats.cashBoxes)} prefix={<WalletOutlined />} />
+            </Card>
+          </Col>
+          <Col xs={12} lg={4}>
+            <Card>
+              <Statistic title="تنخواه‌ها" value={toPersianNumber(stats.pettyFunds)} prefix={<WalletOutlined />} />
             </Card>
           </Col>
           <Col xs={12} lg={4}>

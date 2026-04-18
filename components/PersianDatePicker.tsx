@@ -8,6 +8,7 @@ import persian_fa from "react-date-object/locales/persian_fa";
 import gregorian from "react-date-object/calendars/gregorian";
 import gregorian_en from "react-date-object/locales/gregorian_en";
 import { safeJalaliFormat, toPersianNumber } from "../utils/persianNumberFormatter";
+import { getHolidaySummaryForDate } from "../utils/holidayCalendar";
 
 type PickerType = "DATE" | "TIME" | "DATETIME";
 
@@ -28,7 +29,7 @@ interface PersianDatePickerProps {
 }
 
 const MOBILE_BREAKPOINT = 768;
-const holidayYearCache = new Map<number, Promise<Record<string, HolidayMarker>>>();
+const holidayMonthCache = new Map<string, Promise<Record<string, HolidayMarker>>>();
 
 const normalizeDigits = (value: string) =>
   String(value || "")
@@ -36,6 +37,27 @@ const normalizeDigits = (value: string) =>
     .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
 
 const pad2 = (value: number) => String(Math.max(0, value)).padStart(2, "0");
+
+const normalizeCalendarKey = (value: string) =>
+  normalizeDigits(String(value || "")).replace(/[^\d/]/g, "");
+
+const buildHolidayLookupKey = (year: number, month: number, day: number) => `${year}-${month}-${day}`;
+const buildGregorianLookupKey = (value: Date | DateObject | null | undefined) => {
+  if (!value) return "";
+  try {
+    const gregorianValue =
+      value instanceof DateObject
+        ? new DateObject(value).convert(gregorian, gregorian_en)
+        : new DateObject({
+            date: value,
+            calendar: gregorian,
+            locale: gregorian_en,
+          });
+    return gregorianValue.format("YYYY-MM-DD");
+  } catch {
+    return "";
+  }
+};
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -139,53 +161,59 @@ const withDate = (base: DateObject | null, picked: DateObject, type: PickerType)
   return fromJsDate(next);
 };
 
-const loadHolidayMarkers = async (jalaliYear: number): Promise<Record<string, HolidayMarker>> => {
-  if (!holidayYearCache.has(jalaliYear)) {
-    holidayYearCache.set(
-      jalaliYear,
-      fetch(`/calendar/${jalaliYear}.json`, { cache: "force-cache" })
-        .then(async (response) => {
-          if (!response.ok) return {};
-          const data = (await response.json()) as Array<any>;
-          if (!Array.isArray(data)) return {};
+const loadHolidayMarkersForMonth = async (source: DateObject): Promise<Record<string, HolidayMarker>> => {
+  const jalaliSource = new DateObject(source).convert(persian, persian_fa);
+  const year = Number(normalizeDigits(String(jalaliSource.year || 0)));
+  const month = Number(normalizeDigits(String(jalaliSource.month?.number || 0)));
+  if (!year || !month) return {};
 
-          return data.reduce<Record<string, HolidayMarker>>((acc, month) => {
-            const days = Array.isArray(month?.days) ? month.days : [];
-            days.forEach((dayItem: any) => {
-              const rawDay = normalizeDigits(String(dayItem?.day?.jalali || ""));
-              if (!rawDay) return;
-              const monthIndex = data.indexOf(month) + 1;
-              const dateKey = `${jalaliYear}/${pad2(monthIndex)}/${pad2(Number(rawDay))}`;
-              const occasions = Array.isArray(dayItem?.events?.list)
-                ? dayItem.events.list
-                    .map((entry: any) => ({
-                      title: String(entry?.event || "").trim(),
-                      isHoliday: Boolean(entry?.isHoliday),
-                    }))
-                    .filter((entry: any) => entry.title)
-                : [];
-              const isFriday =
-                new DateObject({
-                  date: dateKey,
-                  format: "YYYY/MM/DD",
-                  calendar: persian,
-                  locale: persian_fa,
-                }).weekDay.index === 5;
-              acc[dateKey] = {
-                isFriday,
-                isOfficialHoliday:
-                  Boolean(dayItem?.events?.isHoliday) || occasions.some((entry: any) => entry.isHoliday),
-                titles: occasions.map((entry: any) => entry.title),
-              };
+  const monthCacheKey = `${year}-${month}`;
+  if (!holidayMonthCache.has(monthCacheKey)) {
+    holidayMonthCache.set(
+      monthCacheKey,
+      (async () => {
+        const daysInMonth = Number(jalaliSource.month?.length || 31);
+        const results = await Promise.all(
+          Array.from({ length: daysInMonth }, async (_, dayOffset) => {
+            const day = dayOffset + 1;
+            const jalaliDateKey = `${year}/${pad2(month)}/${pad2(day)}`;
+            const dateObject = new DateObject({
+              date: jalaliDateKey,
+              format: "YYYY/MM/DD",
+              calendar: persian,
+              locale: persian_fa,
             });
-            return acc;
-          }, {});
-        })
-        .catch(() => ({}))
+            const summary = await getHolidaySummaryForDate(dateObject);
+            const marker: HolidayMarker = {
+              isFriday: Boolean(summary?.isFriday || dateObject.weekDay?.index === 5),
+              isOfficialHoliday: Boolean(summary?.isOfficialHoliday),
+              titles: summary?.occasions?.map((item) => item.title).filter(Boolean) || [],
+            };
+            const gregorianKey = buildGregorianLookupKey(dateObject);
+            return {
+              numericKey: buildHolidayLookupKey(year, month, day),
+              normalizedKey: normalizeCalendarKey(jalaliDateKey),
+              plainKey: normalizeCalendarKey(`${year}/${month}/${day}`),
+              gregorianKey,
+              marker,
+            };
+          })
+        );
+
+        return results.reduce<Record<string, HolidayMarker>>((acc, item) => {
+          acc[item.numericKey] = item.marker;
+          acc[item.normalizedKey] = item.marker;
+          acc[item.plainKey] = item.marker;
+          if (item.gregorianKey) {
+            acc[item.gregorianKey] = item.marker;
+          }
+          return acc;
+        }, {});
+      })().catch(() => ({}))
     );
   }
 
-  return holidayYearCache.get(jalaliYear) || Promise.resolve({});
+  return holidayMonthCache.get(monthCacheKey) || Promise.resolve({});
 };
 
 const QuickActionButton: React.FC<{
@@ -210,7 +238,8 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   const [open, setOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [draft, setDraft] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
-  const [step, setStep] = useState<"date" | "time">(type === "DATETIME" ? "date" : "time");
+  const [viewDate, setViewDate] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
+  const [step, setStep] = useState<"date" | "time">(type === "TIME" ? "time" : "date");
   const [holidayMarkers, setHolidayMarkers] = useState<Record<string, HolidayMarker>>({});
 
   useEffect(() => {
@@ -231,29 +260,33 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
 
   useEffect(() => {
     if (open) return;
-    setDraft(convertToPersianDateObject(value, type));
-    setStep(type === "DATETIME" ? "date" : "time");
+    const nextDraft = convertToPersianDateObject(value, type);
+    setDraft(nextDraft);
+    setViewDate(nextDraft);
+    setStep(type === "TIME" ? "time" : "date");
   }, [open, type, value]);
 
-  const syncHolidayYear = async (source: DateObject | null) => {
+  const syncHolidayMonth = async (source: DateObject | null) => {
     if (type === "TIME" || !source) return;
-    const year = Number(source.format("YYYY"));
-    if (!year) return;
-    const markers = await loadHolidayMarkers(year);
+    const markers = await loadHolidayMarkersForMonth(source);
     setHolidayMarkers((prev) => ({ ...prev, ...markers }));
   };
 
   useEffect(() => {
     if (!open || type === "TIME") return;
-    void syncHolidayYear(draft || createNowDateObject());
-  }, [draft, open, type]);
+    void syncHolidayMonth(viewDate || draft || createNowDateObject());
+  }, [draft, open, type, viewDate]);
 
   const committedValue = useMemo(() => getDisplayValue(value, type), [type, value]);
   const draftSerialized = useMemo(() => serializeDateObject(draft, type), [draft, type]);
   const draftDisplay = useMemo(() => getDisplayValue(draftSerialized, type), [draftSerialized, type]);
   const draftDateKey = useMemo(() => {
     if (!draft || type === "TIME") return "";
-    return `${normalizeDigits(String(draft.year))}/${pad2(Number(draft.month?.number || 0))}/${pad2(Number(draft.day || 0))}`;
+    return buildHolidayLookupKey(
+      Number(normalizeDigits(String(draft.year || 0))),
+      Number(normalizeDigits(String(draft.month?.number || 0))),
+      Number(normalizeDigits(String(draft.day || 0)))
+    );
   }, [draft, type]);
   const activeHoliday = draftDateKey ? holidayMarkers[draftDateKey] : null;
 
@@ -282,6 +315,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
 
     const normalized = type === "DATE" ? new DateObject(picked) : withDate(draft, picked, type);
     setDraft(normalized);
+    setViewDate(new DateObject(picked));
 
     if (type === "DATETIME") {
       setStep("time");
@@ -303,7 +337,9 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   const applyQuickDate = (offsetDays: number) => {
     const jsDate = new Date();
     jsDate.setDate(jsDate.getDate() + offsetDays);
-    setDraft(withDate(draft, fromJsDate(jsDate), type));
+    const nextDate = withDate(draft, fromJsDate(jsDate), type);
+    setDraft(nextDate);
+    setViewDate(new DateObject(nextDate));
     if (type === "DATETIME") setStep("time");
   };
 
@@ -318,19 +354,37 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
       return;
     }
     setDraft(now);
+    setViewDate(new DateObject(now));
     if (type === "DATETIME") setStep("time");
   };
 
   const renderCalendar = () => {
     if (type === "TIME") return null;
 
+    const currentCalendarDate = viewDate || draft || createNowDateObject();
+
     return (
       <div className="kalam-adaptive-picker__calendar-wrap">
         <Calendar
-          value={draft as any}
+          value={draft ?? undefined}
+          currentDate={currentCalendarDate}
           onChange={handleCalendarChange}
-          onMonthChange={(next: any) => void syncHolidayYear(Array.isArray(next) ? next[0] : next)}
-          onYearChange={(next: any) => void syncHolidayYear(Array.isArray(next) ? next[0] : next)}
+          onMonthChange={(next: any) => {
+            const nextDate = Array.isArray(next) ? next[0] : next;
+            if (nextDate) {
+              const normalized = new DateObject(nextDate);
+              setViewDate(normalized);
+              void syncHolidayMonth(normalized);
+            }
+          }}
+          onYearChange={(next: any) => {
+            const nextDate = Array.isArray(next) ? next[0] : next;
+            if (nextDate) {
+              const normalized = new DateObject(nextDate);
+              setViewDate(normalized);
+              void syncHolidayMonth(normalized);
+            }
+          }}
           calendar={persian}
           locale={persian_fa}
           format="YYYY/MM/DD"
@@ -342,14 +396,22 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
               date?.year === today?.year &&
               date?.monthIndex === today?.monthIndex &&
               date?.day === today?.day;
-            const dateKey =
-              date?.year && Number.isFinite(date?.monthIndex) && date?.day
-                ? `${normalizeDigits(String(date.year))}/${pad2(Number(date.monthIndex) + 1)}/${pad2(Number(date.day))}`
-                : typeof date?.format === "function"
-                  ? normalizeDigits(date.format("YYYY/MM/DD"))
-                  : "";
-            const marker = holidayMarkers[dateKey];
+            const year = Number(normalizeDigits(String(date?.year || 0)));
+            const month = Number(normalizeDigits(String(date?.month?.number || (Number.isFinite(date?.monthIndex) ? Number(date.monthIndex) + 1 : 0))));
+            const day = Number(normalizeDigits(String(date?.day || 0)));
+            const dateKeyCandidates = [
+              year && month && day ? buildHolidayLookupKey(year, month, day) : "",
+              typeof date?.format === "function" ? normalizeCalendarKey(date.format("YYYY/MM/DD")) : "",
+              typeof date?.format === "function" ? normalizeCalendarKey(date.format("YYYY/M/D")) : "",
+              year && month && day ? normalizeCalendarKey(`${year}/${pad2(month)}/${pad2(day)}`) : "",
+              year && month && day ? normalizeCalendarKey(`${year}/${month}/${day}`) : "",
+            ].filter(Boolean);
             const jsDate = typeof date?.toDate === "function" ? date.toDate() : null;
+            const gregorianKey = buildGregorianLookupKey(date);
+            if (gregorianKey) {
+              dateKeyCandidates.push(gregorianKey);
+            }
+            const marker = dateKeyCandidates.map((key) => holidayMarkers[key]).find(Boolean);
             const isFriday = jsDate instanceof Date && !Number.isNaN(jsDate.getTime()) ? jsDate.getDay() === 5 : Boolean(marker?.isFriday);
             const classes = [
               marker?.isOfficialHoliday ? "kalam-rmdp-day--holiday" : "",
@@ -363,15 +425,15 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
               className: classes || undefined,
               style: marker?.isOfficialHoliday
                 ? {
-                    color: "#b42318",
-                    backgroundColor: "#fff1f0",
-                    border: "1px solid rgba(239, 68, 68, 0.32)",
+                    color: "var(--kalam-holiday-fg, #b42318)",
+                    backgroundColor: "var(--kalam-holiday-bg, rgba(239, 68, 68, 0.14))",
+                    border: "1px solid var(--kalam-holiday-border, rgba(239, 68, 68, 0.3))",
                     borderRadius: "14px",
                   }
                 : isFriday
                   ? {
-                      color: "#b42318",
-                      backgroundColor: "rgba(239, 68, 68, 0.06)",
+                      color: "var(--kalam-holiday-fg, #b42318)",
+                      backgroundColor: "var(--kalam-friday-bg, rgba(239, 68, 68, 0.08))",
                       borderRadius: "14px",
                     }
                   : isToday
@@ -527,6 +589,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         onOpenChange={handleOpenChange}
         trigger="click"
         placement="bottomRight"
+        getPopupContainer={() => document.body}
         zIndex={zIndex}
         content={panelContent}
         overlayClassName="kalam-adaptive-picker-popover"

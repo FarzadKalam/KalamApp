@@ -177,12 +177,13 @@ const BLOCKS = {
           targetModule: 'bank_accounts',
           targetField: 'bank_name',
           filter: { is_active: true },
-          sourceModules: [
-            { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
-            { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
-          ],
-        },
-      },
+           sourceModules: [
+             { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+             { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+             { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+           ],
+         },
+       },
       { key: 'use_existing_received_cheque', title: 'خرج چک', type: FieldType.CHECKBOX, width: 90 },
       {
         key: 'spent_cheque_id',

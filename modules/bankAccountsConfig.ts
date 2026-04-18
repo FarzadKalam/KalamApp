@@ -87,7 +87,14 @@ export const bankAccountsConfig: ModuleDefinition = {
       blockId: 'base',
       order: 5,
       nature: FieldNature.STANDARD,
-      relationConfig: { targetModule: 'chart_of_accounts', targetField: 'name' },
+      validation: { required: true },
+      relationConfig: {
+        targetModule: 'chart_of_accounts',
+        targetField: 'name',
+        chartScopeRootNames: ['بانک ها', 'بانک‌ها', 'بانکها'],
+        requireLeaf: true,
+        requireDetail: true,
+      },
     },
     {
       key: 'is_active',

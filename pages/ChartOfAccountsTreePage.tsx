@@ -52,6 +52,15 @@ type BankAccountLink = {
   is_active: boolean;
 };
 
+type PettyFundLink = {
+  id: string;
+  code: string | null;
+  name: string;
+  account_id: string | null;
+  opening_balance: number | null;
+  is_active: boolean;
+};
+
 type StatusFilter = 'active' | 'all' | 'inactive';
 
 const ACCOUNT_TYPE_META: Record<
@@ -92,18 +101,23 @@ const ChartOfAccountsTreePage: React.FC = () => {
   const [rows, setRows] = useState<AccountRow[]>([]);
   const [cashLinks, setCashLinks] = useState<CashBoxLink[]>([]);
   const [bankLinks, setBankLinks] = useState<BankAccountLink[]>([]);
+  const [pettyFundLinks, setPettyFundLinks] = useState<PettyFundLink[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
 
   const [canView, setCanView] = useState(true);
   const [canEdit, setCanEdit] = useState(true);
+  const [canDelete, setCanDelete] = useState(true);
   const [canViewCashBoxes, setCanViewCashBoxes] = useState(true);
   const [canEditCashBoxes, setCanEditCashBoxes] = useState(true);
   const [canDeleteCashBoxes, setCanDeleteCashBoxes] = useState(true);
   const [canViewBankAccounts, setCanViewBankAccounts] = useState(true);
   const [canEditBankAccounts, setCanEditBankAccounts] = useState(true);
   const [canDeleteBankAccounts, setCanDeleteBankAccounts] = useState(true);
+  const [canViewPettyFunds, setCanViewPettyFunds] = useState(true);
+  const [canEditPettyFunds, setCanEditPettyFunds] = useState(true);
+  const [canDeletePettyFunds, setCanDeletePettyFunds] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -112,27 +126,34 @@ const ChartOfAccountsTreePage: React.FC = () => {
       const modulePerms = permissions?.chart_of_accounts || {};
       const cashPerms = permissions?.cash_boxes || {};
       const bankPerms = permissions?.bank_accounts || {};
+      const pettyPerms = permissions?.petty_funds || {};
 
       const allowView = modulePerms.view !== false;
       const allowEdit = modulePerms.edit !== false;
+      const allowDelete = modulePerms.delete !== false;
       setCanView(allowView);
       setCanEdit(allowEdit);
+      setCanDelete(allowDelete);
       setCanViewCashBoxes(cashPerms.view !== false);
       setCanEditCashBoxes(cashPerms.edit !== false);
       setCanDeleteCashBoxes(cashPerms.delete !== false);
       setCanViewBankAccounts(bankPerms.view !== false);
       setCanEditBankAccounts(bankPerms.edit !== false);
       setCanDeleteBankAccounts(bankPerms.delete !== false);
+      setCanViewPettyFunds(pettyPerms.view !== false);
+      setCanEditPettyFunds(pettyPerms.edit !== false);
+      setCanDeletePettyFunds(pettyPerms.delete !== false);
 
       if (!allowView) {
         setRows([]);
         setCashLinks([]);
         setBankLinks([]);
+        setPettyFundLinks([]);
         setExpandedKeys([]);
         return;
       }
 
-      const [accountsRes, cashRes, bankRes] = await Promise.all([
+      const [accountsRes, cashRes, bankRes, pettyRes] = await Promise.all([
         supabase
           .from('chart_of_accounts')
           .select('id,code,name,account_type,account_level,nature,parent_id,is_leaf,is_system,is_active')
@@ -145,16 +166,22 @@ const ChartOfAccountsTreePage: React.FC = () => {
           .from('bank_accounts')
           .select('id,code,bank_name,account_number,account_id,opening_balance,is_active')
           .order('bank_name', { ascending: true }),
+        supabase
+          .from('petty_funds')
+          .select('id,code,name,account_id,opening_balance,is_active')
+          .order('name', { ascending: true }),
       ]);
 
       if (accountsRes.error) throw accountsRes.error;
       if (cashRes.error) throw cashRes.error;
       if (bankRes.error) throw bankRes.error;
+      if (pettyRes.error) throw pettyRes.error;
 
       const loadedRows = ((accountsRes.data || []) as AccountRow[]).sort(sortByCode);
       setRows(loadedRows);
       setCashLinks((cashRes.data || []) as CashBoxLink[]);
       setBankLinks((bankRes.data || []) as BankAccountLink[]);
+      setPettyFundLinks((pettyRes.data || []) as PettyFundLink[]);
 
       const parentIds = new Set<string>();
       loadedRows.forEach((row) => {
@@ -190,32 +217,40 @@ const ChartOfAccountsTreePage: React.FC = () => {
   }, [statusFilter]);
 
   const cashLinksByAccount = useMemo(() => {
-    const map = new Map<string, string[]>();
+    const map = new Map<string, CashBoxLink[]>();
     cashLinks.forEach((box) => {
       const accountId = String(box.account_id || '').trim();
       if (!accountId || box.is_active === false) return;
-      const label = `${box.code ? `[${toPersianNumber(box.code)}] ` : ''}${box.name}`;
       const current = map.get(accountId) || [];
-      current.push(label);
+      current.push(box);
       map.set(accountId, current);
     });
     return map;
   }, [cashLinks]);
 
   const bankLinksByAccount = useMemo(() => {
-    const map = new Map<string, string[]>();
+    const map = new Map<string, BankAccountLink[]>();
     bankLinks.forEach((bank) => {
       const accountId = String(bank.account_id || '').trim();
       if (!accountId || bank.is_active === false) return;
-      const label = `${bank.code ? `[${toPersianNumber(bank.code)}] ` : ''}${bank.bank_name || 'بانک'}${
-        bank.account_number ? ` (${toPersianNumber(bank.account_number)})` : ''
-      }`;
       const current = map.get(accountId) || [];
-      current.push(label);
+      current.push(bank);
       map.set(accountId, current);
     });
     return map;
   }, [bankLinks]);
+
+  const pettyFundLinksByAccount = useMemo(() => {
+    const map = new Map<string, PettyFundLink[]>();
+    pettyFundLinks.forEach((fund) => {
+      const accountId = String(fund.account_id || '').trim();
+      if (!accountId || fund.is_active === false) return;
+      const current = map.get(accountId) || [];
+      current.push(fund);
+      map.set(accountId, current);
+    });
+    return map;
+  }, [pettyFundLinks]);
 
   const accountNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -245,6 +280,26 @@ const ChartOfAccountsTreePage: React.FC = () => {
     }
   }, [load, message]);
 
+  const handleDeletePettyFund = useCallback(async (id: string) => {
+    try {
+      await moveModuleRecordsToRecycleBin('petty_funds', [id]);
+      message.success('تنخواه با موفقیت حذف شد');
+      load();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در حذف تنخواه'));
+    }
+  }, [load, message]);
+
+  const handleDeleteAccount = useCallback(async (id: string) => {
+    try {
+      await moveModuleRecordsToRecycleBin('chart_of_accounts', [id]);
+      message.success('حساب با موفقیت حذف شد');
+      load();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در حذف حساب'));
+    }
+  }, [load, message]);
+
   const visibleRows = useMemo(() => {
     if (!rows.length) return [];
     const byId = new Map(rows.map((row) => [row.id, row]));
@@ -256,9 +311,16 @@ const ChartOfAccountsTreePage: React.FC = () => {
     const selected = new Set<string>();
 
     eligible.forEach((row) => {
-      const bankText = (bankLinksByAccount.get(row.id) || []).join(' ');
-      const cashText = (cashLinksByAccount.get(row.id) || []).join(' ');
-      const haystack = `${normalizeText(row.code)} ${normalizeText(row.name)} ${normalizeText(bankText)} ${normalizeText(cashText)}`;
+        const bankText = (bankLinksByAccount.get(row.id) || [])
+          .map((bank) => `${bank.bank_name || 'بانک'} ${bank.account_number || ''}`.trim())
+          .join(' ');
+        const cashText = (cashLinksByAccount.get(row.id) || [])
+          .map((cash) => `${cash.name || 'صندوق'} ${cash.code || ''}`.trim())
+          .join(' ');
+        const pettyText = (pettyFundLinksByAccount.get(row.id) || [])
+          .map((fund) => `${fund.name || 'تنخواه'} ${fund.code || ''}`.trim())
+          .join(' ');
+        const haystack = `${normalizeText(row.code)} ${normalizeText(row.name)} ${normalizeText(bankText)} ${normalizeText(cashText)} ${normalizeText(pettyText)}`;
       if (!haystack.includes(q)) return;
 
       selected.add(row.id);
@@ -273,7 +335,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
     });
 
     return eligible.filter((row) => selected.has(row.id));
-  }, [rows, isStatusVisible, searchTerm, bankLinksByAccount, cashLinksByAccount]);
+  }, [rows, isStatusVisible, searchTerm, bankLinksByAccount, cashLinksByAccount, pettyFundLinksByAccount]);
 
   const treeData = useMemo<DataNode[]>(() => {
     const byId = new Map(visibleRows.map((row) => [row.id, row]));
@@ -294,26 +356,90 @@ const ChartOfAccountsTreePage: React.FC = () => {
       const accountChildren = (childrenMap.get(row.id) || []).map(renderNode);
       const cashUsage = cashLinksByAccount.get(row.id) || [];
       const bankUsage = bankLinksByAccount.get(row.id) || [];
+      const pettyUsage = pettyFundLinksByAccount.get(row.id) || [];
+      const isEditableLeafDetail = row.is_leaf && row.account_level === 'detail';
       const usageChildren: DataNode[] = [
-        ...cashUsage.map((label, index) => ({
-          key: `cash:${row.id}:${index}`,
+        ...cashUsage.map((cash) => ({
+          key: `cash:${row.id}:${cash.id}`,
           selectable: false,
           isLeaf: true,
           title: (
-            <div className="flex items-center gap-2 py-1">
+            <div className="flex items-center justify-between gap-2 py-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
               <Tag color="gold">صندوق</Tag>
-              <span className="text-gray-700 dark:text-gray-200">{label}</span>
+                <span className="text-gray-700 dark:text-gray-200 truncate">
+                  {`${cash.code ? `[${toPersianNumber(cash.code)}] ` : ''}${cash.name || 'صندوق'}`}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Tooltip title="نمایش">
+                  <Button size="small" type="text" icon={<EyeOutlined />} onClick={(e) => { e.stopPropagation(); navigate(`/cash_boxes/${cash.id}`); }} />
+                </Tooltip>
+                <Tooltip title="ویرایش">
+                  <Button size="small" type="text" icon={<EditOutlined />} disabled={!canEditCashBoxes} onClick={(e) => { e.stopPropagation(); navigate(`/cash_boxes/${cash.id}/edit`); }} />
+                </Tooltip>
+                <Popconfirm title="حذف صندوق" description="این صندوق حذف شود؟" okText="حذف" cancelText="انصراف" okButtonProps={{ danger: true }} onConfirm={() => handleDeleteCashBox(cash.id)} disabled={!canDeleteCashBoxes}>
+                  <Tooltip title="حذف">
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDeleteCashBoxes} onClick={(e) => e.stopPropagation()} />
+                  </Tooltip>
+                </Popconfirm>
+              </div>
             </div>
           ),
         })),
-        ...bankUsage.map((label, index) => ({
-          key: `bank:${row.id}:${index}`,
+        ...bankUsage.map((bank) => ({
+          key: `bank:${row.id}:${bank.id}`,
           selectable: false,
           isLeaf: true,
           title: (
-            <div className="flex items-center gap-2 py-1">
+            <div className="flex items-center justify-between gap-2 py-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
               <Tag color="cyan">بانک</Tag>
-              <span className="text-gray-700 dark:text-gray-200">{label}</span>
+                <span className="text-gray-700 dark:text-gray-200 truncate">
+                  {`${bank.code ? `[${toPersianNumber(bank.code)}] ` : ''}${bank.bank_name || 'بانک'}${bank.account_number ? ` (${toPersianNumber(bank.account_number)})` : ''}`}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Tooltip title="نمایش">
+                  <Button size="small" type="text" icon={<EyeOutlined />} onClick={(e) => { e.stopPropagation(); navigate(`/bank_accounts/${bank.id}`); }} />
+                </Tooltip>
+                <Tooltip title="ویرایش">
+                  <Button size="small" type="text" icon={<EditOutlined />} disabled={!canEditBankAccounts} onClick={(e) => { e.stopPropagation(); navigate(`/bank_accounts/${bank.id}/edit`); }} />
+                </Tooltip>
+                <Popconfirm title="حذف حساب بانکی" description="این حساب بانکی حذف شود؟" okText="حذف" cancelText="انصراف" okButtonProps={{ danger: true }} onConfirm={() => handleDeleteBankAccount(bank.id)} disabled={!canDeleteBankAccounts}>
+                  <Tooltip title="حذف">
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDeleteBankAccounts} onClick={(e) => e.stopPropagation()} />
+                  </Tooltip>
+                </Popconfirm>
+              </div>
+            </div>
+          ),
+        })),
+        ...pettyUsage.map((fund) => ({
+          key: `petty:${row.id}:${fund.id}`,
+          selectable: false,
+          isLeaf: true,
+          title: (
+            <div className="flex items-center justify-between gap-2 py-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+              <Tag color="magenta">تنخواه</Tag>
+                <span className="text-gray-700 dark:text-gray-200 truncate">
+                  {`${fund.code ? `[${toPersianNumber(fund.code)}] ` : ''}${fund.name || 'تنخواه'}`}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Tooltip title="نمایش">
+                  <Button size="small" type="text" icon={<EyeOutlined />} onClick={(e) => { e.stopPropagation(); navigate(`/petty_funds/${fund.id}`); }} />
+                </Tooltip>
+                <Tooltip title="ویرایش">
+                  <Button size="small" type="text" icon={<EditOutlined />} disabled={!canEditPettyFunds} onClick={(e) => { e.stopPropagation(); navigate(`/petty_funds/${fund.id}/edit`); }} />
+                </Tooltip>
+                <Popconfirm title="حذف تنخواه" description="این تنخواه حذف شود؟" okText="حذف" cancelText="انصراف" okButtonProps={{ danger: true }} onConfirm={() => handleDeletePettyFund(fund.id)} disabled={!canDeletePettyFunds}>
+                  <Tooltip title="حذف">
+                    <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDeletePettyFunds} onClick={(e) => e.stopPropagation()} />
+                  </Tooltip>
+                </Popconfirm>
+              </div>
             </div>
           ),
         })),
@@ -333,13 +459,18 @@ const ChartOfAccountsTreePage: React.FC = () => {
               <Tag>{LEVEL_LABEL[row.account_level]}</Tag>
               <Tag>{natureLabel}</Tag>
               {cashUsage.length > 0 && (
-                <Tooltip title={cashUsage.join('، ')}>
+                <Tooltip title={cashUsage.map((cash) => `${cash.code ? `[${toPersianNumber(cash.code)}] ` : ''}${cash.name || 'صندوق'}`).join('، ')}>
                   <Tag color="gold">صندوق {toPersianNumber(cashUsage.length)}</Tag>
                 </Tooltip>
               )}
               {bankUsage.length > 0 && (
-                <Tooltip title={bankUsage.join('، ')}>
+                <Tooltip title={bankUsage.map((bank) => `${bank.code ? `[${toPersianNumber(bank.code)}] ` : ''}${bank.bank_name || 'بانک'}${bank.account_number ? ` (${toPersianNumber(bank.account_number)})` : ''}`).join('، ')}>
                   <Tag color="cyan">بانک {toPersianNumber(bankUsage.length)}</Tag>
+                </Tooltip>
+              )}
+              {pettyUsage.length > 0 && (
+                <Tooltip title={pettyUsage.map((fund) => `${fund.code ? `[${toPersianNumber(fund.code)}] ` : ''}${fund.name || 'تنخواه'}`).join('، ')}>
+                  <Tag color="magenta">تنخواه {toPersianNumber(pettyUsage.length)}</Tag>
                 </Tooltip>
               )}
               {!row.is_active && <Tag>غیرفعال</Tag>}
@@ -363,19 +494,39 @@ const ChartOfAccountsTreePage: React.FC = () => {
                   size="small"
                   type="text"
                   icon={<EditOutlined />}
-                  disabled={!canEdit}
+                  disabled={!canEdit || !isEditableLeafDetail}
                   onClick={(e) => {
                     e.stopPropagation();
                     navigate(`/chart_of_accounts/${row.id}/edit`);
                   }}
                 />
               </Tooltip>
+              <Popconfirm
+                title="حذف حساب"
+                description="این حساب حذف شود؟"
+                okText="حذف"
+                cancelText="انصراف"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => handleDeleteAccount(row.id)}
+                disabled={!canDelete || !isEditableLeafDetail}
+              >
+                <Tooltip title="حذف">
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    disabled={!canDelete || !isEditableLeafDetail}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </Tooltip>
+              </Popconfirm>
               <Tooltip title="افزودن زیرحساب">
                 <Button
                   size="small"
                   type="text"
                   icon={<PlusOutlined />}
-                  disabled={!canEdit}
+                  disabled={!canEdit || row.account_level === 'detail'}
                   onClick={(e) => {
                     e.stopPropagation();
                     navigate('/chart_of_accounts/create', {
@@ -400,7 +551,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
     };
 
     return (childrenMap.get(null) || []).map(renderNode);
-  }, [visibleRows, canEdit, navigate, bankLinksByAccount, cashLinksByAccount]);
+  }, [visibleRows, canDelete, canEdit, canDeleteBankAccounts, canDeleteCashBoxes, canDeletePettyFunds, canEditBankAccounts, canEditCashBoxes, canEditPettyFunds, handleDeleteAccount, handleDeleteBankAccount, handleDeleteCashBox, handleDeletePettyFund, navigate, bankLinksByAccount, cashLinksByAccount, pettyFundLinksByAccount]);
 
   const parentKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -578,6 +729,81 @@ const ChartOfAccountsTreePage: React.FC = () => {
     ]
   );
 
+  const pettyFundColumns = useMemo(
+    () => [
+      {
+        title: 'کد',
+        dataIndex: 'code',
+        width: 110,
+        render: (value: string | null) => (
+          <span className="persian-number">{toPersianNumber(value || '-')}</span>
+        ),
+      },
+      {
+        title: 'نام تنخواه',
+        dataIndex: 'name',
+        render: (value: string) => value || '-',
+      },
+      {
+        title: 'حساب متناظر',
+        dataIndex: 'account_id',
+        render: (value: string | null) => (value ? accountNameById.get(value) || '-' : '-'),
+      },
+      {
+        title: 'موجودی اول دوره',
+        dataIndex: 'opening_balance',
+        width: 170,
+        render: (value: number | null) => (
+          <span className="persian-number">{formatPersianPrice(Number(value || 0))}</span>
+        ),
+      },
+      {
+        title: 'وضعیت',
+        dataIndex: 'is_active',
+        width: 90,
+        render: (value: boolean) => (value === false ? <Tag>غیرفعال</Tag> : <Tag color="green">فعال</Tag>),
+      },
+      {
+        title: 'عملیات',
+        key: 'actions',
+        width: 130,
+        render: (_: unknown, row: PettyFundLink) => (
+          <Space size={2}>
+            <Tooltip title="ویرایش">
+              <Button
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                disabled={!canEditPettyFunds}
+                onClick={() => navigate(`/petty_funds/${row.id}/edit`)}
+              />
+            </Tooltip>
+            <Popconfirm
+              title="حذف تنخواه"
+              description="این تنخواه حذف شود؟"
+              okText="حذف"
+              cancelText="انصراف"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleDeletePettyFund(row.id)}
+              disabled={!canDeletePettyFunds}
+            >
+              <Tooltip title="حذف">
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDeletePettyFunds} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ],
+    [
+      accountNameById,
+      canDeletePettyFunds,
+      canEditPettyFunds,
+      handleDeletePettyFund,
+      navigate,
+    ]
+  );
+
   const totalCount = visibleRows.length;
 
   if (loading) {
@@ -662,8 +888,8 @@ const ChartOfAccountsTreePage: React.FC = () => {
           </div>
         )}
 
-        {(canViewCashBoxes || canViewBankAccounts) && (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-6">
+        {(canViewCashBoxes || canViewBankAccounts || canViewPettyFunds) && (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-6">
             {canViewCashBoxes && (
               <Card
                 size="small"
@@ -726,6 +952,39 @@ const ChartOfAccountsTreePage: React.FC = () => {
                   pagination={{ pageSize: 6, showSizeChanger: false }}
                   locale={{ emptyText: 'حساب بانکی ثبت نشده است' }}
                   scroll={{ x: 760 }}
+                />
+              </Card>
+            )}
+
+            {canViewPettyFunds && (
+              <Card
+                size="small"
+                title={(
+                  <span className="flex items-center gap-2">
+                    <WalletOutlined />
+                    مدیریت تنخواه گردان ها
+                  </span>
+                )}
+                extra={(
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    disabled={!canEditPettyFunds}
+                    onClick={() => navigate('/petty_funds/create')}
+                    className="bg-leather-600 border-none"
+                  >
+                    تنخواه جدید
+                  </Button>
+                )}
+              >
+                <Table
+                  size="small"
+                  rowKey="id"
+                  columns={pettyFundColumns as any}
+                  dataSource={pettyFundLinks}
+                  pagination={{ pageSize: 6, showSizeChanger: false }}
+                  locale={{ emptyText: 'تنخواهی ثبت نشده است' }}
+                  scroll={{ x: 720 }}
                 />
               </Card>
             )}

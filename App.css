@@ -258,19 +258,34 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   top: auto !important;
 }
 
+.kalam-adaptive-picker-modal .ant-modal-wrap {
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+  overflow: hidden;
+}
+
 .kalam-adaptive-picker-modal .ant-modal-content {
   background: transparent !important;
   box-shadow: none !important;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
 }
 
 .kalam-adaptive-picker-modal .ant-modal-body {
   padding: 0 !important;
+  overflow: hidden;
 }
 
 .kalam-adaptive-picker-modal__sheet {
   display: flex;
-  min-height: 100vh;
+  min-height: 100dvh;
+  max-height: 100dvh;
   align-items: flex-end;
+  padding-top: 12px;
+  width: 100%;
+  overflow: hidden;
 }
 
 .kalam-adaptive-picker__field {
@@ -352,9 +367,11 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 
 .kalam-adaptive-picker--mobile {
   width: 100%;
-  max-height: min(88vh, 760px);
+  max-height: calc(100dvh - 12px);
+  min-height: 0;
   border-radius: 28px 28px 0 0;
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  overflow: auto;
 }
 
 .kalam-adaptive-picker__header {
@@ -434,7 +451,11 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 }
 
 .kalam-adaptive-picker__calendar-wrap {
-  display: table;
+  --kalam-holiday-fg: #b42318;
+  --kalam-holiday-bg: rgba(239, 68, 68, 0.14);
+  --kalam-holiday-border: rgba(239, 68, 68, 0.3);
+  --kalam-friday-bg: rgba(239, 68, 68, 0.08);
+  display: block;
   width: fit-content;
   max-width: 100%;
   margin: 0 auto;
@@ -442,20 +463,27 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
   background: #fafafa;
   border: 1px solid #f0f0f0;
   padding: 10px;
+  overflow: hidden;
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-wrapper,
 .kalam-adaptive-picker__calendar-wrap .rmdp-calendar {
   width: auto !important;
+  max-width: 100% !important;
   border: 0;
   background: transparent;
   box-shadow: none;
+  display: block;
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-month,
 .kalam-adaptive-picker__calendar-wrap .rmdp-week,
 .kalam-adaptive-picker__calendar-wrap .rmdp-day-picker {
   width: auto !important;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month {
+  padding: 0 !important;
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-day,
@@ -476,6 +504,12 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
   color: rgba(15, 23, 42, 0.58);
   font-size: 12px;
   font-weight: 700;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-week-day,
+.kalam-adaptive-picker__calendar-wrap .rmdp-day {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-day span {
@@ -499,17 +533,17 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
   background: rgba(var(--brand-500-rgb), 0.1) !important;
 }
 
-.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--today span {
+.kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--today {
   outline: 2px solid rgba(var(--brand-500-rgb), 0.7);
   outline-offset: -2px;
 }
 
-.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--friday:not(.rmdp-selected) span,
-.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--holiday:not(.rmdp-selected) span {
+.kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--friday,
+.kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--holiday {
   color: #b91c1c !important;
 }
 
-.kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--holiday:not(.rmdp-selected) span {
+.kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--holiday {
   background: rgba(239, 68, 68, 0.08) !important;
   outline: 1px solid rgba(239, 68, 68, 0.16);
   outline-offset: -1px;
@@ -650,11 +684,12 @@ html.dark .kalam-adaptive-picker__summary-card {
 }
 
 html.dark .kalam-adaptive-picker__chip {
-  color: rgba(255, 255, 255, 0.88);
+  color: rgba(255, 255, 255, 0.96);
+  background: #252525;
 }
 
 html.dark .kalam-adaptive-picker__chip:hover {
-  background: #2a2a2a;
+  background: #303030;
 }
 
 html.dark .kalam-adaptive-picker__step.is-active {
@@ -668,14 +703,21 @@ html.dark .kalam-adaptive-picker__time-editor {
   border-color: #303030;
 }
 
+html.dark .kalam-adaptive-picker__calendar-wrap {
+  --kalam-holiday-fg: #fecaca;
+  --kalam-holiday-bg: rgba(127, 29, 29, 0.34);
+  --kalam-holiday-border: rgba(248, 113, 113, 0.28);
+  --kalam-friday-bg: rgba(127, 29, 29, 0.24);
+}
+
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-week-day,
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-header-values,
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day:not(.rmdp-disabled) span {
   color: rgba(255, 255, 255, 0.9) !important;
 }
 
-html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--friday:not(.rmdp-selected) span,
-html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day.kalam-rmdp-day--holiday:not(.rmdp-selected) span {
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--friday,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--holiday {
   color: #fda4af !important;
 }
 
@@ -694,6 +736,23 @@ html.dark .kalam-adaptive-picker__action.is-muted {
   .kalam-adaptive-picker {
     width: 100%;
     padding: 16px 16px 20px;
+  }
+
+  .kalam-adaptive-picker__header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: inherit;
+    padding-bottom: 8px;
+  }
+
+  .kalam-adaptive-picker__calendar-wrap {
+    max-height: min(50dvh, 380px);
+    overflow: auto;
+  }
+
+  .kalam-adaptive-picker--mobile {
+    max-height: min(100dvh - 12px, 92dvh);
   }
 
   .kalam-adaptive-picker__time-field {

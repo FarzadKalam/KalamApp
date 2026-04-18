@@ -86,6 +86,7 @@ export const REPORT_BUILDER_EXCLUDED_MODULE_IDS = new Set<string>([
   'cost_centers',
   'cash_boxes',
   'bank_accounts',
+  'petty_funds',
   'cheques',
   'cash_bank_operations',
 ]);

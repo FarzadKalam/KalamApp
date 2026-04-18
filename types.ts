@@ -181,12 +181,18 @@ export interface ModuleField {
     targetField?: string;
     filter?: Record<string, any>;
     dependsOn?: string;
+    chartScopeRootNames?: string[];
+    requireLeaf?: boolean;
+    requireDetail?: boolean;
     sourceModules?: Array<{
       targetModule: string;
       targetField?: string;
       filter?: Record<string, any>;
       tagLabel?: string;
       tagColor?: string;
+      chartScopeRootNames?: string[];
+      requireLeaf?: boolean;
+      requireDetail?: boolean;
     }>;
     quickCreateFieldKeys?: string[];
     quickCreateDefaults?: Record<string, any>;
@@ -215,18 +221,24 @@ export interface BlockDefinition {
     showTotal?: boolean; // <--- این خط جدید است: برای نمایش جمع کل در پایین ستون
     options?: SelectOption[];
     readonly?: boolean;
-    relationConfig?: {
-      targetModule: string;
-      targetField: string;
-      filter?: Record<string, any>;
-      sourceModules?: Array<{
+      relationConfig?: {
         targetModule: string;
-        targetField?: string;
+        targetField: string;
         filter?: Record<string, any>;
-        tagLabel?: string;
-        tagColor?: string;
-      }>;
-    };
+        chartScopeRootNames?: string[];
+        requireLeaf?: boolean;
+        requireDetail?: boolean;
+        sourceModules?: Array<{
+          targetModule: string;
+          targetField?: string;
+          filter?: Record<string, any>;
+          tagLabel?: string;
+          tagColor?: string;
+          chartScopeRootNames?: string[];
+          requireLeaf?: boolean;
+          requireDetail?: boolean;
+        }>;
+      };
   }[];
   rowCalculationType?: RowCalculationType;
   // ویژگی اتصال به دیتای خارجی

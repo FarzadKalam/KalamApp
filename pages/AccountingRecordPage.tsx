@@ -45,6 +45,7 @@ import {
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
+import { fetchRelationOptionsForField } from '../utils/relationOptions';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
 type FieldOption = { value: string; label: string; color?: string };
@@ -242,55 +243,18 @@ const AccountingRecordPage: React.FC = () => {
 
     const pairs = await Promise.all(
       relationFields.map(async (field) => {
-        const targetModule = String(field.relationConfig?.targetModule || '');
-        const targetField = String(field.relationConfig?.targetField || 'id');
-        let selectExpr = `id, ${targetField}`;
-
-        if (targetModule === 'chart_of_accounts' && targetField !== 'code') {
-          selectExpr += ', code';
-        }
-        if (targetModule === 'cheques') {
-          selectExpr += ', serial_no, due_date, amount';
-        }
-        if (targetModule === 'barters') {
-          selectExpr += ', remaining_amount, status';
-        }
-
-        const { data, error } = await supabase
-          .from(targetModule)
-          .select(selectExpr)
-          .limit(500);
-        if (error) {
+        try {
+          const options = await fetchRelationOptionsForField(supabase, field, {
+            allValues: form.getFieldsValue(true),
+            limit: 500,
+          });
+          const filtered = String(field.relationConfig?.targetModule || '') === moduleId && id
+            ? options.filter((option: any) => String(option.value) !== String(id))
+            : options;
+          return [field.key, filtered.map((option: any) => ({ value: String(option.value), label: String(option.label || option.value) }))] as const;
+        } catch {
           return [field.key, []] as const;
         }
-
-        const options = (data || []).map((row: any) => {
-          const primaryLabel = String(row?.[targetField] || row?.name || row?.title || row?.id);
-          if (targetModule === 'chart_of_accounts' && row?.code) {
-            return { value: row.id, label: `[${toPersianNumber(row.code)}] ${primaryLabel}` };
-          }
-          if (targetModule === 'cheques') {
-            const serial = String(row?.serial_no || primaryLabel || 'بدون شماره').trim();
-            const dueDateRaw = String(row?.due_date || '').trim();
-            const dueDate = dueDateRaw ? toPersianNumber(safeJalaliFormat(dueDateRaw, 'YYYY/MM/DD') || dueDateRaw) : '-';
-            const amount = Number(row?.amount || 0);
-            const amountLabel = amount > 0 ? formatPersianPrice(amount) : '-';
-            return { value: row.id, label: `${serial} (${dueDate} - ${amountLabel})` };
-          }
-          if (targetModule === 'barters') {
-            const remaining = Number(row?.remaining_amount || 0);
-            return {
-              value: row.id,
-              label: `${primaryLabel} (مانده: ${formatPersianPrice(remaining)})`,
-            };
-          }
-          return { value: row.id, label: primaryLabel };
-        });
-
-        const filtered = targetModule === moduleId && id
-          ? options.filter((option) => String(option.value) !== String(id))
-          : options;
-        return [field.key, filtered] as const;
       })
     );
 
@@ -608,6 +572,34 @@ const AccountingRecordPage: React.FC = () => {
     [formData, isChequeModule, moduleId, visibleFields]
   );
 
+  const syncOperationalFinancePayload = useCallback(async (payload: Record<string, any>) => {
+    if (!moduleId || !['bank_accounts', 'cash_boxes', 'petty_funds'].includes(moduleId)) {
+      return payload;
+    }
+
+    const accountId = String(payload.account_id || '').trim();
+    if (!accountId) {
+      throw new Error('انتخاب حساب متناظر الزامی است.');
+    }
+
+    const { data: accountRow, error } = await supabase
+      .from('chart_of_accounts')
+      .select('id, code, name')
+      .eq('id', accountId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!accountRow) {
+      throw new Error('حساب متناظر انتخاب‌شده معتبر نیست.');
+    }
+
+    const normalizedCode = String(payload.code || '').trim();
+    return {
+      ...payload,
+      account_id: accountId,
+      ...(isCreate && !normalizedCode ? { code: String(accountRow.code || '').trim() || null } : {}),
+    };
+  }, [isCreate, moduleId]);
+
   const handleSave = async () => {
     if (!moduleId || !moduleConfig) return;
     if (!canEdit) {
@@ -649,7 +641,8 @@ const AccountingRecordPage: React.FC = () => {
       }
 
       setSaving(true);
-      const payload = buildPayload(mergedValues);
+      const basePayload = buildPayload(mergedValues);
+      const payload = await syncOperationalFinancePayload(basePayload);
 
       if (isCreate) {
         const { data, error } = await supabase

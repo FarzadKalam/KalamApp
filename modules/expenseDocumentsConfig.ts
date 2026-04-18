@@ -10,6 +10,7 @@ export const expenseDocumentsConfig: ModuleDefinition = {
   defaultViewMode: ViewMode.LIST,
   relationDisplay: { labelTemplate: '{{system_code}} - {{name}}', searchFields: ['name', 'system_code', 'expense_type', 'notes'] },
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان هزینه', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'شماره هزینه', en: 'Expense No.' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'expense_date', labels: { fa: 'تاریخ هزینه', en: 'Expense Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 3, defaultValue: getTodayLocalDateValue, validation: { required: true }, nature: FieldNature.STANDARD, isTableColumn: true },
@@ -90,6 +91,7 @@ export const expenseDocumentsConfig: ModuleDefinition = {
       order: 3,
       rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
       tableColumns: [
+        { key: 'attachment', title: 'پیوست', type: FieldType.IMAGE, width: 96 },
         { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [{ label: 'نقد', value: 'cash' }, { label: 'بانک', value: 'bank' }, { label: 'کارت', value: 'card' }, { label: 'چک', value: 'cheque' }] },
         {
           key: 'status',
@@ -109,11 +111,17 @@ export const expenseDocumentsConfig: ModuleDefinition = {
           type: FieldType.RELATION,
           width: 220,
           relationConfig: {
-            targetModule: 'chart_of_accounts',
-            targetField: 'name',
-            filter: { account_type: 'asset', is_leaf: true, is_active: true, code__like: '110%' },
+            targetModule: 'bank_accounts',
+            targetField: 'bank_name',
+            filter: { is_active: true },
+            sourceModules: [
+              { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+              { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+              { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+            ],
           },
         },
+        { key: 'responsible_id', title: 'مسئول پرداخت', type: FieldType.RELATION, width: 150, relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
         { key: 'date', title: 'تاریخ', type: FieldType.DATE, width: 130 },
         { key: 'amount', title: 'مبلغ', type: FieldType.PRICE, width: 160, showTotal: true },
         { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },

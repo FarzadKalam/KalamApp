@@ -125,9 +125,10 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
         return;
       }
 
-      const [banksRes, cashRes, invoicesRes, opsRes, bartersRes] = await Promise.all([
+      const [banksRes, cashRes, pettyRes, invoicesRes, opsRes, bartersRes] = await Promise.all([
         supabase.from('bank_accounts').select('id, bank_name, account_number').eq('is_active', true).limit(1000),
         supabase.from('cash_boxes').select('id, name, code').eq('is_active', true).limit(1000),
+        supabase.from('petty_funds').select('id, name, code').eq('is_active', true).limit(1000),
         permissions?.invoices?.view !== false
           ? supabase
               .from('invoices')
@@ -151,7 +152,7 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
           : Promise.resolve({ data: [], error: null } as any),
       ]);
 
-      const error = banksRes.error || cashRes.error || invoicesRes.error || opsRes.error || bartersRes.error;
+      const error = banksRes.error || cashRes.error || pettyRes.error || invoicesRes.error || opsRes.error || bartersRes.error;
       if (error) throw error;
 
       const nextFinancialAccountLabels = Object.fromEntries(
@@ -168,6 +169,13 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
             {
               label: `${String(cashBox.name || 'صندوق')} ${cashBox.code ? `(${toPersianNumber(cashBox.code)})` : ''}`.trim(),
               moduleId: 'cash_boxes',
+            },
+          ]),
+          ...((pettyRes.data || []) as any[]).map((fund) => [
+            String(fund.id),
+            {
+              label: `${String(fund.name || 'تنخواه')} ${fund.code ? `(${toPersianNumber(fund.code)})` : ''}`.trim(),
+              moduleId: 'petty_funds',
             },
           ]),
         ]

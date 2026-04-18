@@ -664,14 +664,16 @@ const buildPaymentLines = async (
 
   const financialAccountToLedgerMap = new Map<string, string | null>();
   if (directAccountIds.length > 0) {
-    const [banksRes, cashBoxesRes] = await Promise.all([
+    const [banksRes, cashBoxesRes, pettyFundsRes] = await Promise.all([
       supabase.from('bank_accounts').select('id, account_id').in('id', directAccountIds),
       supabase.from('cash_boxes').select('id, account_id').in('id', directAccountIds),
+      supabase.from('petty_funds').select('id, account_id').in('id', directAccountIds),
     ]);
     if (banksRes.error) throw banksRes.error;
     if (cashBoxesRes.error) throw cashBoxesRes.error;
+    if (pettyFundsRes.error) throw pettyFundsRes.error;
 
-    [...(banksRes.data || []), ...(cashBoxesRes.data || [])].forEach((account: any) => {
+    [...(banksRes.data || []), ...(cashBoxesRes.data || []), ...(pettyFundsRes.data || [])].forEach((account: any) => {
       const id = normalizeAccountId(account?.id);
       if (!id) return;
       financialAccountToLedgerMap.set(id, normalizeAccountId(account?.account_id));

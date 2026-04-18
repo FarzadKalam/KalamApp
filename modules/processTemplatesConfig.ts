@@ -73,8 +73,9 @@ export const processTemplatesModule: ModuleDefinition = {
       type: FieldType.LONG_TEXT,
       location: FieldLocation.BLOCK,
       blockId: 'base_info',
-      order: 1,
+      order: 7,
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
     },
     {
       key: 'template_stages_preview',
@@ -85,6 +86,7 @@ export const processTemplatesModule: ModuleDefinition = {
       order: 2,
       readonly: true,
       nature: FieldNature.SYSTEM,
+      isTableColumn: false,
     },
   ],
   blocks: [

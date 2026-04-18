@@ -30,7 +30,7 @@ import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleA
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { syncRecordTags } from '../utils/recordTags';
-import { resolveConfiguredDefaultValue } from '../utils/defaultValues';
+import { getImplicitCreateDefaultValue } from '../utils/defaultValues';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
@@ -363,8 +363,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
         const applyCreateDefaults = async () => {
           const defaults: Record<string, any> = {};
           module.fields.forEach((field) => {
-            if (field.defaultValue !== undefined) {
-              defaults[field.key] = resolveConfiguredDefaultValue(field.defaultValue);
+            const fieldDefault = getImplicitCreateDefaultValue(field);
+            if (fieldDefault !== undefined) {
+              defaults[field.key] = fieldDefault;
             }
           });
 
@@ -1326,10 +1327,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
       if (!isBulkEdit) {
         module.fields.forEach((field) => {
-          if (field.defaultValue === undefined) return;
+          const fieldDefault = getImplicitCreateDefaultValue(field);
+          if (fieldDefault === undefined) return;
           const currentValue = values?.[field.key];
           if (currentValue === undefined || currentValue === null || currentValue === '') {
-            values[field.key] = resolveConfiguredDefaultValue(field.defaultValue);
+            values[field.key] = fieldDefault;
           }
         });
       }

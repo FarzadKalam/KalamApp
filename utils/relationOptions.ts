@@ -10,6 +10,7 @@ import { supportsSystemCode } from './systemCode';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
+import { resolveScopedChartOfAccountIds } from './chartOfAccountsScope';
 
 const RELATION_RECENT_LIMIT = 50;
 const relationOptionsCache = new Map<string, any[]>();
@@ -21,6 +22,9 @@ type RelationSourceConfig = {
   filter?: Record<string, any>;
   tagLabel?: string;
   tagColor?: string;
+  chartScopeRootNames?: string[];
+  requireLeaf?: boolean;
+  requireDetail?: boolean;
 };
 
 const normalizeSelectFieldList = (fields: string[]) =>
@@ -52,6 +56,26 @@ const buildSelectVariants = (
   );
 };
 
+const FINANCIAL_OPERATIONAL_MODULES = new Set(['bank_accounts', 'cash_boxes', 'petty_funds']);
+
+const buildFinancialOperationalLabel = (targetModule: string, item: any) => {
+  const ledgerName = String(item?.account_name || '').trim();
+  const ledgerCode = String(item?.account_code || '').trim();
+  if (ledgerName) {
+    return ledgerCode ? `[${toPersianNumber(ledgerCode)}] ${ledgerName}` : ledgerName;
+  }
+
+  if (targetModule === 'bank_accounts') {
+    const bankName = String(item?.bank_name || '').trim() || 'بانک';
+    const accountNo = String(item?.account_number || '').trim();
+    return `${bankName}${accountNo ? ` (${toPersianNumber(accountNo)})` : ''}`.trim();
+  }
+
+  const title = String(item?.name || item?.title || item?.id || 'بدون عنوان').trim();
+  const code = String(item?.code || '').trim();
+  return code ? `${title} - ${toPersianNumber(code)}` : title;
+};
+
 const buildRelationOptionLabel = (targetModule: string, item: any, targetField: string) => {
   if (targetModule === 'customers') {
     return String(item?.full_name || item?.[targetField] || item?.business_name || item?.system_code || item?.id || 'بدون نام').trim();
@@ -69,6 +93,10 @@ const buildRelationOptionLabel = (targetModule: string, item: any, targetField: 
   if (targetModule === 'barters') {
     const name = String(item?.[targetField] || item?.name || item?.system_code || item?.id || 'بدون عنوان').trim();
     return `${name} (مانده: ${formatPersianPrice(Number(item?.remaining_amount || 0))})`;
+  }
+
+  if (FINANCIAL_OPERATIONAL_MODULES.has(targetModule)) {
+    return buildFinancialOperationalLabel(targetModule, item);
   }
 
   const baseLabel = getRecordDisplayLabel(item, targetModule, {
@@ -115,6 +143,20 @@ const buildRelationSearchText = (targetModule: string, item: any, targetField: s
         .map((value) => String(value || '').trim().toLowerCase())
         .filter(Boolean)
         .join(' ')
+    : FINANCIAL_OPERATIONAL_MODULES.has(targetModule)
+      ? [
+          buildFinancialOperationalLabel(targetModule, item),
+          item?.account_name,
+          item?.account_code,
+          item?.bank_name,
+          item?.account_number,
+          item?.name,
+          item?.code,
+          item?.id,
+        ]
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean)
+          .join(' ')
     : buildRelationDisplaySearchText(targetModule, item, targetField);
 
 const isMissingColumnError = (error: any) => {
@@ -132,6 +174,7 @@ const buildModuleExtraSelect = (targetModule: string, targetField: string) => {
     ...(isShelvesTarget ? ['shelf_number'] : []),
     ...(isChequeTarget ? ['due_date', 'amount', ...(targetField === 'serial_no' ? [] : ['serial_no'])] : []),
     ...(isBarterTarget ? ['remaining_amount', 'status'] : []),
+    ...(FINANCIAL_OPERATIONAL_MODULES.has(targetModule) ? ['code', 'account_id'] : []),
     ...(needsStatus ? ['status'] : []),
   ]);
 };
@@ -284,6 +327,15 @@ const buildRelationSources = (
       filter: dependsOnModule ? undefined : source?.filter || relationConfig?.filter,
       tagLabel: source?.tagLabel,
       tagColor: source?.tagColor,
+      chartScopeRootNames: Array.isArray(source?.chartScopeRootNames)
+        ? source.chartScopeRootNames
+        : (Array.isArray(relationConfig?.chartScopeRootNames) ? relationConfig.chartScopeRootNames : undefined),
+      requireLeaf: typeof source?.requireLeaf === 'boolean'
+        ? source.requireLeaf
+        : relationConfig?.requireLeaf,
+      requireDetail: typeof source?.requireDetail === 'boolean'
+        ? source.requireDetail
+        : relationConfig?.requireDetail,
     }))
     .filter((source: RelationSourceConfig) => String(source?.targetModule || '').trim());
 };
@@ -455,12 +507,32 @@ export const fetchRelationOptionsForField = async (
     const allOptions: any[] = [];
 
     for (const source of sources as any[]) {
+      let scopedFilter = source.filter;
+      if (
+        source.moduleName === 'chart_of_accounts' &&
+        Array.isArray(source.chartScopeRootNames) &&
+        source.chartScopeRootNames.length > 0
+      ) {
+        const scopedIds = await resolveScopedChartOfAccountIds(supabaseClient, {
+          rootNames: source.chartScopeRootNames,
+          requireLeaf: source.requireLeaf,
+          requireDetail: source.requireDetail,
+        });
+        if (scopedIds.length === 0) {
+          continue;
+        }
+        scopedFilter = {
+          ...(scopedFilter || {}),
+          id__in: scopedIds,
+        };
+      }
+
       let lastMissingColumnError: any = null;
 
       for (const selectExpr of source.selectVariants) {
         try {
           const rows = await runRelationQuery(supabaseClient, source.moduleName, selectExpr, {
-            filter: source.filter,
+            filter: scopedFilter,
             search,
             searchFields: source.searchFields,
             numericSearchFields: source.numericSearchFields,
@@ -469,10 +541,41 @@ export const fetchRelationOptionsForField = async (
             targetField: source.targetField,
           });
 
-          const options = rows.map((item: any) => ({
+          let enrichedRows = rows;
+          if (FINANCIAL_OPERATIONAL_MODULES.has(source.moduleName)) {
+            const accountIds = Array.from(
+              new Set(
+                (rows || [])
+                  .map((item: any) => String(item?.account_id || '').trim())
+                  .filter(Boolean)
+              )
+            );
+            if (accountIds.length > 0) {
+              const { data: ledgerRows, error: ledgerError } = await supabaseClient
+                .from('chart_of_accounts')
+                .select('id, code, name')
+                .in('id', accountIds);
+              if (ledgerError) throw ledgerError;
+              const ledgerById = new Map(
+                (ledgerRows || []).map((row: any) => [
+                  String(row?.id || '').trim(),
+                  { code: row?.code ? String(row.code) : '', name: row?.name ? String(row.name) : '' },
+                ])
+              );
+              enrichedRows = (rows || []).map((item: any) => {
+                const ledger = ledgerById.get(String(item?.account_id || '').trim());
+                return ledger
+                  ? { ...item, account_code: ledger.code, account_name: ledger.name }
+                  : item;
+              });
+            }
+          }
+
+          const options = enrichedRows.map((item: any) => ({
             label: buildRelationOptionLabel(source.moduleName, item, source.targetField),
             value: item.id,
             module: source.moduleName,
+            account_id: item?.account_id,
             name: item?.[source.targetField] || item?.name || item?.serial_no || item?.id,
             searchText: buildRelationSearchText(source.moduleName, item, source.targetField),
             system_code: item?.system_code,
@@ -501,7 +604,17 @@ export const fetchRelationOptionsForField = async (
     }
 
     const dedupedOptions = Array.from(
-      new Map(allOptions.map((item) => [String(item?.value || '').trim(), item])).values()
+      new Map(
+        allOptions.map((item) => {
+          const accountId = String(item?.account_id || '').trim();
+          const moduleName = String(item?.module || '').trim();
+          const valueKey = String(item?.value || '').trim();
+          const dedupeKey = FINANCIAL_OPERATIONAL_MODULES.has(moduleName) && accountId
+            ? `${moduleName}:${accountId}`
+            : valueKey;
+          return [dedupeKey, item];
+        })
+      ).values()
     );
 
     relationOptionsCache.set(cacheKey, dedupedOptions);

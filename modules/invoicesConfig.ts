@@ -191,12 +191,13 @@ const BLOCKS = {
           targetModule: 'bank_accounts',
           targetField: 'bank_name',
           filter: { is_active: true },
-          sourceModules: [
-            { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
-            { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
-          ],
-        },
-      },
+           sourceModules: [
+             { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+             { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+             { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+           ],
+         },
+       },
       {
         key: 'responsible_id',
         title: 'مسئول دریافت',

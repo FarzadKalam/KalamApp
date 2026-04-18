@@ -23,6 +23,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
+import { getCachedAuthUser } from '../utils/sessionCache';
 import {
   buildSalesPackageDescription,
   calculateSalesPackageTotal,
@@ -30,6 +31,7 @@ import {
   normalizeSalesPackageItems,
 } from '../utils/salesCatalog';
 import PersianDatePicker from './PersianDatePicker';
+import { getImplicitCreateDefaultValue, getTodayLocalDateValue } from '../utils/defaultValues';
 
 const { Text } = Typography;
 
@@ -144,6 +146,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
+  const isAnyDocumentPayments = isAnyInvoicePayments || isExpensePayments;
   const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
   const isPriceListItems = moduleId === 'price_lists' && block?.id === 'items';
@@ -951,11 +954,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     }
 
-    if (isAnyInvoicePayments && key === 'payment_type') {
+    if (isAnyDocumentPayments && key === 'payment_type') {
       const paymentType = String(value || '').trim();
       const accountField = isInvoicePayments ? 'target_account' : 'source_account';
       newData[index][accountField] = null;
-      if (paymentType !== 'cheque') {
+      if (isAnyInvoicePayments && paymentType !== 'cheque') {
         newData[index]['use_existing_received_cheque'] = false;
         newData[index]['spent_cheque_id'] = null;
         newData[index]['cheque_id'] = null;
@@ -967,7 +970,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         newData[index]['cheque_bank_name'] = null;
         newData[index]['cheque_image_url'] = null;
       }
-      if (paymentType !== 'barter') {
+      if (isAnyInvoicePayments && paymentType !== 'barter') {
         newData[index]['barter_id'] = null;
         newData[index]['barter_status'] = null;
         newData[index]['barter_remaining_amount'] = null;
@@ -1189,7 +1192,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       return;
     }
 
-    if (isAnyInvoicePayments && key === 'responsible_id') {
+    if (isAnyDocumentPayments && key === 'responsible_id') {
       return;
     }
 
@@ -1470,7 +1473,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
   };
 
-  const addRow = () => {
+  const addRow = async () => {
     if (isReadOnly) return;
     const visibleColumns = (block.tableColumns || []).filter((c: any) =>
       (canViewField ? canViewField(c.key) !== false : true) &&
@@ -1479,7 +1482,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const colKeys = new Set(visibleColumns.map((c: any) => c.key));
     const defaults: any = {};
     visibleColumns.forEach((col: any) => {
-      if (col.defaultValue !== undefined) defaults[col.key] = col.defaultValue;
+      const fieldDefault = getImplicitCreateDefaultValue(col);
+      if (fieldDefault !== undefined) defaults[col.key] = fieldDefault;
     });
 
     const numericDefaults: any = {};
@@ -1518,6 +1522,42 @@ const EditableTable: React.FC<EditableTableProps> = ({
       newRow.sub_unit = newRow.sub_unit || currentProductUnits.subUnit || null;
       newRow.main_quantity = parseFloat(newRow.main_quantity) || 0;
       newRow.sub_quantity = parseFloat(newRow.sub_quantity) || 0;
+    }
+
+    if (isAnyDocumentPayments) {
+      newRow.date = newRow.date || getTodayLocalDateValue();
+      if (!newRow.status) {
+        const statusColumn = visibleColumns.find((col: any) => String(col?.key || '') === 'status');
+        const firstStatus = Array.isArray(statusColumn?.options)
+          ? statusColumn.options.find((option: any) => option?.value !== undefined)?.value
+          : undefined;
+        if (firstStatus !== undefined) newRow.status = firstStatus;
+      }
+      if (colKeys.has('responsible_id') && !newRow.responsible_id) {
+        try {
+          const authUser = await getCachedAuthUser(supabase);
+          const currentUserId = authUser?.id || null;
+          if (currentUserId) {
+            newRow.responsible_id = currentUserId;
+          }
+        } catch (error) {
+          if (!isAbortLikeError(error)) {
+            console.warn('Could not set default payment responsible user', error);
+          }
+        }
+      }
+      if (!toSafeNumber(newRow.amount)) {
+        try {
+          const remainingAmount = await getPaymentBlockDefaultAmount(Array.isArray(tempData) ? tempData : []);
+          if (remainingAmount > 0) {
+            newRow.amount = remainingAmount;
+          }
+        } catch (error) {
+          if (!isAbortLikeError(error)) {
+            console.warn('Could not set default payment amount from remaining balance', error);
+          }
+        }
+      }
     }
 
     const newData = [...tempData, newRow];
@@ -1715,6 +1755,44 @@ const EditableTable: React.FC<EditableTableProps> = ({
       remainingField: 'remaining_amount',
     }
   );
+
+  const getPaymentBlockDefaultAmount = async (currentRows: any[]) => {
+    if (!moduleId || !recordId || !isAnyDocumentPayments) return 0;
+
+    if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
+      const { data: row, error } = await supabase
+        .from(moduleId)
+        .select('total_invoice_amount')
+        .eq('id', recordId)
+        .maybeSingle();
+      if (error) throw error;
+      const totalAmount = toSafeNumber(row?.total_invoice_amount);
+      const paidAmount = currentRows.reduce((sum, paymentRow) => (
+        PAYMENT_INCLUDED_STATUSES.has(normalizePaymentStatus(paymentRow?.status))
+          ? sum + toSafeNumber(paymentRow?.amount)
+          : sum
+      ), 0);
+      return Math.max(0, roundMoney(totalAmount - paidAmount));
+    }
+
+    if (moduleId === 'expense_documents') {
+      const { data: row, error } = await supabase
+        .from('expense_documents')
+        .select('total_amount')
+        .eq('id', recordId)
+        .maybeSingle();
+      if (error) throw error;
+      const totalAmount = toSafeNumber(row?.total_amount);
+      const paidAmount = currentRows.reduce((sum, paymentRow) => (
+        PAYMENT_INCLUDED_STATUSES.has(normalizePaymentStatus(paymentRow?.status))
+          ? sum + toSafeNumber(paymentRow?.amount)
+          : sum
+      ), 0);
+      return Math.max(0, roundMoney(totalAmount - paidAmount));
+    }
+
+    return 0;
+  };
 
   const syncPaymentRowsWithCheques = async (rows: any[]) => {
     if (!isAnyInvoicePayments || !moduleId || !recordId) return rows;
@@ -2800,7 +2878,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         total_price: calculateRow(rest, block.rowCalculationType),
       }));
 
-      if (isAnyInvoicePayments) {
+      if (isAnyDocumentPayments) {
         dataToSave.forEach((row: any, rowIndex: number) => {
           const amount = Math.abs(toSafeNumber(row?.amount));
           if (!String(row?.payment_type || '').trim()) {
@@ -3477,13 +3555,16 @@ const EditableTable: React.FC<EditableTableProps> = ({
         }
       }
       if (
-        isAnyInvoicePayments
-        && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'))
+        isAnyDocumentPayments
+        && (
+          (isInvoicePayments && col.key === 'target_account')
+          || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account')
+        )
         && Array.isArray(options)
       ) {
         const paymentType = String(record?.payment_type || '').trim();
         if (paymentType === 'cash') {
-          options = options.filter((opt: any) => String(opt?.module || '') === 'cash_boxes');
+          options = options.filter((opt: any) => ['cash_boxes', 'petty_funds'].includes(String(opt?.module || '')));
         } else if (paymentType) {
           options = options.filter((opt: any) => String(opt?.module || '') === 'bank_accounts');
         }
@@ -3507,11 +3588,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
       || (isAnyInvoiceItems && ['length', 'width'].includes(col.key) && !hasDimensions(record))
       || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit))
       || (isAnyInvoicePayments
-        && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'))
-        && String((record as any)?.payment_type || '').trim() === 'barter');
+        && (
+          ((isInvoicePayments && col.key === 'target_account') || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account'))
+          && String((record as any)?.payment_type || '').trim() === 'barter'
+        ));
 
-    const isInvoicePaymentAccountColumn = isAnyInvoicePayments
-      && ((isInvoicePayments && col.key === 'target_account') || (isPurchaseInvoicePayments && col.key === 'source_account'));
+    const isInvoicePaymentAccountColumn = isAnyDocumentPayments
+      && ((isInvoicePayments && col.key === 'target_account') || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account'));
     const paymentType = String((record as any)?.payment_type || '').trim();
 
     const relationConfig =
@@ -3532,6 +3615,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 targetModule: 'cash_boxes',
                 targetField: 'name',
                 filter: { is_active: true },
+                sourceModules: [
+                  { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+                  { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+                ],
               }
             : paymentType
               ? {
@@ -3660,7 +3747,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const endDateValue = record?.end_date || null;
     const hasCalendarValue = Boolean(startDateValue || endDateValue);
     const dateDiffDays = calculateDateDiffDays(startDateValue, endDateValue);
-    const isPaymentAttachment = isAnyInvoicePayments && col.key === 'attachment';
+    const isPaymentAttachment = isAnyDocumentPayments && col.key === 'attachment';
     const attachmentUrl = String(value || '').trim();
     const showBulkPriceUnit = isBulkProductsTable && col.type === FieldType.PRICE;
     const bulkPriceUnitLabel = String(currencyLabel || '').trim();

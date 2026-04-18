@@ -26,6 +26,7 @@ import { accountingEventRulesConfig } from './modules/accountingEventRulesConfig
 import { costCentersConfig } from './modules/costCentersConfig';
 import { cashBoxesConfig } from './modules/cashBoxesConfig';
 import { bankAccountsConfig } from './modules/bankAccountsConfig';
+import { pettyFundsConfig } from './modules/pettyFundsConfig';
 import { chequesConfig } from './modules/chequesConfig';
 import { cashBankOperationsConfig } from './modules/cashBankOperationsConfig';
 import { bartersConfig } from './modules/bartersConfig';
@@ -78,6 +79,7 @@ const BASE_MODULES: Record<string, ModuleDefinition> = {
   cost_centers: costCentersConfig,
   cash_boxes: cashBoxesConfig,
   bank_accounts: bankAccountsConfig,
+  petty_funds: pettyFundsConfig,
   cheques: chequesConfig,
   barters: bartersConfig,
   cash_bank_operations: cashBankOperationsConfig,

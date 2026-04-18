@@ -5,6 +5,7 @@ export const ACCOUNTING_MINIMAL_MODULE_IDS = [
   'cost_centers',
   'cash_boxes',
   'bank_accounts',
+  'petty_funds',
   'cheques',
   'cash_bank_operations',
 ] as const;

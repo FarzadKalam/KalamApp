@@ -1,10 +1,10 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 
-export const cashBoxesConfig: ModuleDefinition = {
-  id: 'cash_boxes',
-  titles: { fa: 'صندوق ها', en: 'Cash Boxes' },
+export const pettyFundsConfig: ModuleDefinition = {
+  id: 'petty_funds',
+  titles: { fa: 'تنخواه گردان ها', en: 'Petty Funds' },
   nature: ModuleNature.FINANCE,
-  table: 'cash_boxes',
+  table: 'petty_funds',
   relationDisplay: {
     labelTemplate: '{{name}} - {{code}}',
     searchFields: ['name', 'code'],
@@ -14,7 +14,7 @@ export const cashBoxesConfig: ModuleDefinition = {
   fields: [
     {
       key: 'code',
-      labels: { fa: 'کد صندوق', en: 'Code' },
+      labels: { fa: 'کد تنخواه', en: 'Code' },
       type: FieldType.TEXT,
       location: FieldLocation.HEADER,
       order: 1,
@@ -23,7 +23,7 @@ export const cashBoxesConfig: ModuleDefinition = {
     },
     {
       key: 'name',
-      labels: { fa: 'نام صندوق', en: 'Name' },
+      labels: { fa: 'نام تنخواه', en: 'Name' },
       type: FieldType.TEXT,
       location: FieldLocation.HEADER,
       order: 2,
@@ -44,14 +44,14 @@ export const cashBoxesConfig: ModuleDefinition = {
       relationConfig: {
         targetModule: 'chart_of_accounts',
         targetField: 'name',
-        chartScopeRootNames: ['صندوق ها', 'صندوق‌ها', 'صندوقها', 'صندوق'],
+        chartScopeRootNames: ['وجوه نقد و بانک', 'تنخواه گردان ها', 'تنخواه‌گردان ها', 'تنخواه گردانها', 'تنخواه‌گردان‌ها'],
         requireLeaf: true,
         requireDetail: true,
       },
     },
     {
       key: 'responsible_id',
-      labels: { fa: 'مسئول صندوق', en: 'Responsible' },
+      labels: { fa: 'مسئول تنخواه', en: 'Responsible' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'base',
@@ -83,7 +83,7 @@ export const cashBoxesConfig: ModuleDefinition = {
   blocks: [
     {
       id: 'base',
-      titles: { fa: 'اطلاعات صندوق', en: 'Cash Box Info' },
+      titles: { fa: 'اطلاعات تنخواه', en: 'Petty Fund Info' },
       type: BlockType.FIELD_GROUP,
       order: 1,
       icon: 'WalletOutlined',

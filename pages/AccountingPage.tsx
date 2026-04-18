@@ -79,6 +79,7 @@ const AccountingPage: React.FC = () => {
           'cost_centers',
           'cash_boxes',
           'bank_accounts',
+          'petty_funds',
           'barters',
         ];
 
