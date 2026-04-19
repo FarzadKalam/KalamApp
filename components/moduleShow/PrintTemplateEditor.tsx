@@ -15,7 +15,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Divider, Tooltip } from 'antd';
 import { Extension } from '@tiptap/core';
-import { NodeSelection } from '@tiptap/pm/state';
+import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import { CellSelection } from '@tiptap/pm/tables';
 import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
@@ -547,7 +547,13 @@ const StyledHeading = Heading.extend({
 
 const iconBtn = (title: string, icon: React.ReactNode, onClick: () => void, disabled?: boolean) => (
   <Tooltip title={title}>
-    <Button size="small" icon={icon} onClick={onClick} disabled={disabled} />
+    <Button
+      size="small"
+      icon={icon}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      disabled={disabled}
+    />
   </Tooltip>
 );
 
@@ -600,14 +606,20 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
 }) => {
   const [cellColor, setCellColor] = useState('#fef3c7');
   const [tableBorderColor, setTableBorderColor] = useState('#d1d5db');
+  const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const brandPalette = useMemo(() => getBrandPalette(), []);
   const cellColorInput = useMemo(() => normalizeColorForInput(cellColor, '#fef3c7'), [cellColor]);
   const tableBorderColorInput = useMemo(
     () => normalizeColorForInput(tableBorderColor, '#d1d5db'),
     [tableBorderColor]
   );
-  const normalizedValue = useMemo(() => normalizeTableMarkup(value || ''), [value]);
+  const lastEmittedContentRef = useRef(value || '');
+  const normalizedValue = useMemo(() => {
+    const rawValue = value || '';
+    return rawValue === lastEmittedContentRef.current ? rawValue : normalizeTableMarkup(rawValue);
+  }, [value]);
   const resolvedEditorHeight = fixedHeight ? Math.max(36, Math.round(fixedHeight)) : null;
+  const resizeCursorModeRef = useRef<'row' | 'column' | null>(null);
   const cellDragSelectionRef = useRef<null | {
     table: HTMLTableElement;
     startCell: HTMLElement;
@@ -673,7 +685,22 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     }
   };
 
+  const getActiveCellPos = () => {
+    if (!editor) return null;
+    const $from = editor.state.selection.$from;
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const node = $from.node(depth);
+      const nodeName = String(node?.type?.name || '');
+      if (nodeName === 'tableCell' || nodeName === 'tableHeader') {
+        return $from.before(depth);
+      }
+    }
+    return null;
+  };
+
   const setEditorResizeCursor = (view: any, mode: 'row' | 'column' | null) => {
+    if (resizeCursorModeRef.current === mode) return;
+    resizeCursorModeRef.current = mode;
     const root = view?.dom as HTMLElement | null;
     if (!root) return;
     root.classList.toggle('row-resize-cursor', mode === 'row');
@@ -693,6 +720,19 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     if (horizontalDistance <= edgeThreshold && horizontalDistance <= verticalDistance) return 'column';
     if (verticalDistance <= edgeThreshold) return 'row';
     return null;
+  };
+
+  const isTextSelectionTarget = (target: HTMLElement | null, cell: HTMLElement) => {
+    if (!target || target === cell) return false;
+    if (target.closest('button,input,textarea,select,img,.print-editor-image-node,.column-resize-handle')) return false;
+    const textHost = target.closest('p,h1,h2,h3,h4,h5,h6,li,span,strong,em,a,code');
+    if (!textHost || !cell.contains(textHost)) return false;
+    return String(textHost.textContent || '').trim().length > 0;
+  };
+
+  const shouldStartCellRangeDrag = (target: HTMLElement | null, cell: HTMLElement, event: MouseEvent) => {
+    if (event.shiftKey || target === cell) return true;
+    return !isTextSelectionTarget(target, cell);
   };
 
   const applyRowHeight = (view: any, row: HTMLTableRowElement, nextHeight: number) => {
@@ -737,21 +777,109 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
 
   const selectCurrentTable = () => {
     if (!editor) return;
-    const table = getActiveTableDom();
-    if (!table) return;
-    const tablePos = editor.view.posAtDOM(table, 0);
-    const tr = editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, tablePos));
+    const tableInfo = getActiveTableInfo();
+    if (!tableInfo) return;
+    const tr = editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, tableInfo.pos));
     editor.view.dispatch(tr);
     editor.view.focus();
   };
 
-  const getActiveTableDom = () => {
-    if (typeof window === 'undefined') return null;
-    const selection = window.getSelection();
-    const anchorNode = selection?.anchorNode;
-    const anchorElement =
-      anchorNode instanceof Element ? anchorNode : anchorNode?.parentElement || null;
-    return anchorElement?.closest('table') as HTMLTableElement | null;
+  const getActiveTableInfo = () => {
+    if (!editor) return null;
+    const selection = editor.state.selection;
+    if (selection instanceof NodeSelection && selection.node?.type?.name === 'table') {
+      return { pos: selection.from, node: selection.node };
+    }
+    const $from = selection.$from;
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const node = $from.node(depth);
+      if (String(node?.type?.name || '') === 'table') {
+        return { pos: $from.before(depth), node };
+      }
+    }
+    return null;
+  };
+
+  const getFirstCellPosInTable = () => {
+    const tableInfo = getActiveTableInfo();
+    if (!tableInfo) return null;
+    let firstCellPos: number | null = null;
+    tableInfo.node.descendants((node: any, pos: number) => {
+      if (firstCellPos !== null) return false;
+      const nodeName = String(node?.type?.name || '');
+      if (nodeName === 'tableCell' || nodeName === 'tableHeader') {
+        firstCellPos = tableInfo.pos + 1 + pos;
+        return false;
+      }
+      return true;
+    });
+    return firstCellPos;
+  };
+
+  const ensureTableCellSelection = () => {
+    if (!editor) return false;
+    const activeCellPos = getActiveCellPos();
+    const cellPos = activeCellPos ?? getFirstCellPosInTable();
+    if (cellPos === null) return false;
+    if (activeCellPos !== null) return true;
+
+    const selection = TextSelection.near(editor.state.doc.resolve(Math.min(editor.state.doc.content.size, cellPos + 1)), 1);
+    editor.view.dispatch(editor.state.tr.setSelection(selection));
+    editor.view.focus();
+    return true;
+  };
+
+  const runTableCommand = (command: () => boolean) => {
+    if (!editor || !ensureTableCellSelection()) return;
+    command();
+    editor.view.focus();
+  };
+
+  const deleteCurrentTable = () => {
+    if (!editor) return;
+    if (editor.chain().focus().deleteTable().run()) return;
+
+    const tableInfo = getActiveTableInfo();
+    if (!tableInfo) return;
+    const tr = editor.state.tr.delete(tableInfo.pos, tableInfo.pos + tableInfo.node.nodeSize);
+    editor.view.dispatch(tr.scrollIntoView());
+    editor.view.focus();
+  };
+
+  const insertParagraphAroundTable = (placement: 'before' | 'after') => {
+    if (!editor) return;
+    const tableInfo = getActiveTableInfo();
+    const paragraph = editor.schema.nodes.paragraph?.create();
+    if (!tableInfo || !paragraph) return;
+
+    const insertPos = placement === 'before' ? tableInfo.pos : tableInfo.pos + tableInfo.node.nodeSize;
+    let tr = editor.state.tr.insert(insertPos, paragraph);
+    const selectionPos = Math.min(tr.doc.content.size, insertPos + 1);
+    tr = tr.setSelection(TextSelection.create(tr.doc, selectionPos)).scrollIntoView();
+    editor.view.dispatch(tr);
+    editor.view.focus();
+    setTableMenuOpen(false);
+  };
+
+  const updateCurrentTableWidth = (delta: number) => {
+    if (!editor) return;
+    const tableInfo = getActiveTableInfo();
+    if (!tableInfo) return;
+    const attrs = tableInfo.node.attrs || {};
+    const currentWidthText = extractStyleValue(attrs.inlineStyle, ['width']);
+    const currentWidth = currentWidthText.endsWith('%')
+      ? Number.parseFloat(currentWidthText)
+      : 100;
+    const nextWidth = Math.max(35, Math.min(100, Math.round((Number.isFinite(currentWidth) ? currentWidth : 100) + delta)));
+    let inlineStyle = setStyleProperty(attrs.inlineStyle, 'width', `${nextWidth}%`);
+    inlineStyle = setStyleProperty(inlineStyle, 'max-width', '100%');
+    inlineStyle = setStyleProperty(inlineStyle, 'margin', '10px auto');
+    const tr = editor.state.tr.setNodeMarkup(tableInfo.pos, tableInfo.node.type, {
+      ...attrs,
+      inlineStyle,
+    });
+    editor.view.dispatch(tr.scrollIntoView());
+    editor.view.focus();
   };
 
   const getSelectedImageWidth = () => {
@@ -817,7 +945,11 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       CustomTableCell,
     ],
     content: normalizedValue,
-    onUpdate: ({ editor: currentEditor }) => onChange(currentEditor.getHTML()),
+    onUpdate: ({ editor: currentEditor }) => {
+      const nextHtml = currentEditor.getHTML();
+      lastEmittedContentRef.current = nextHtml;
+      onChange(nextHtml);
+    },
     editorProps: {
       attributes: { class: 'print-template-editor-content' },
       handleDOMEvents: {
@@ -825,10 +957,39 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           onFocusSection?.();
           return false;
         },
+        keydown: (_view: any, event: Event) => {
+          const keyboardEvent = event as KeyboardEvent;
+          const selection = editor?.state.selection;
+          const selectedTable = selection instanceof NodeSelection && selection.node?.type?.name === 'table';
+          if (!selectedTable) return false;
+          if (keyboardEvent.key === 'Backspace' || keyboardEvent.key === 'Delete') {
+            keyboardEvent.preventDefault();
+            deleteCurrentTable();
+            return true;
+          }
+          if (keyboardEvent.key === 'Enter') {
+            keyboardEvent.preventDefault();
+            insertParagraphAroundTable(keyboardEvent.shiftKey ? 'before' : 'after');
+            return true;
+          }
+          return false;
+        },
         mousedown: (view: any, event: Event) => {
           const mouseEvent = event as MouseEvent;
           if (mouseEvent.button !== 0) return false;
-          const target = mouseEvent.target as HTMLElement | null;
+          const rawTarget = mouseEvent.target as Node | null;
+          const target = rawTarget instanceof Element
+            ? rawTarget as HTMLElement
+            : rawTarget?.parentElement || null;
+          if (target === view.dom) {
+            mouseEvent.preventDefault();
+            cellDragSelectionRef.current = null;
+            rowResizeStateRef.current = null;
+            setEditorResizeCursor(view, null);
+            view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+            view.focus();
+            return true;
+          }
           if (target?.closest?.('.column-resize-handle')) {
             cellDragSelectionRef.current = null;
             rowResizeStateRef.current = null;
@@ -842,6 +1003,17 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             rowResizeStateRef.current = null;
             setEditorResizeCursor(view, null);
             return false;
+          }
+          if (mouseEvent.detail >= 4) {
+            const selection = createCellRangeSelection(view, cell);
+            if (!selection) return false;
+            mouseEvent.preventDefault();
+            cellDragSelectionRef.current = null;
+            rowResizeStateRef.current = null;
+            setEditorResizeCursor(view, null);
+            view.dispatch(view.state.tr.setSelection(selection));
+            view.focus();
+            return true;
           }
           const resizeIntent = getCellResizeIntent(cell, mouseEvent);
           if (resizeIntent === 'column') {
@@ -897,8 +1069,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
             window.addEventListener('mouseup', handleUp, { once: true });
             return true;
           }
-          const clickedCellSurface = target === cell;
-          if (!clickedCellSurface || !mouseEvent.shiftKey) {
+          if (!shouldStartCellRangeDrag(target, cell, mouseEvent)) {
             cellDragSelectionRef.current = null;
             setEditorResizeCursor(view, null);
             return false;
@@ -962,8 +1133,10 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   useEffect(() => {
     if (!editor) return;
     const currentHtml = editor.getHTML();
-    if (normalizedValue !== currentHtml) {
+    const isOwnUpdate = normalizedValue === lastEmittedContentRef.current;
+    if (!isOwnUpdate && normalizedValue !== currentHtml) {
       editor.commands.setContent(normalizedValue || '', { emitUpdate: false });
+      lastEmittedContentRef.current = normalizedValue || '';
     }
   }, [editor, normalizedValue]);
 
@@ -980,6 +1153,17 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   }, [editor, value]);
 
   useEffect(() => {
+    if (!editor) return;
+    const closeWhenLeavingTable = () => {
+      if (!editor.isActive('table')) setTableMenuOpen(false);
+    };
+    editor.on('selectionUpdate', closeWhenLeavingTable);
+    return () => {
+      editor.off('selectionUpdate', closeWhenLeavingTable);
+    };
+  }, [editor]);
+
+  useEffect(() => {
     const clearDragSelection = () => {
       cellDragSelectionRef.current = null;
     };
@@ -990,79 +1174,97 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
 
   const tableTools = editor?.isActive('table') ? (
     <BubbleMenu editor={editor} shouldShow={() => editor.isActive('table') && editor.isFocused}>
-      <div className="table-bubble-menu">
-        {iconBtn('ردیف بالا', <ArrowUpOutlined />, () => editor.chain().focus().addRowBefore().run(), !editor)}
-        {iconBtn('ردیف پایین', <ArrowDownOutlined />, () => editor.chain().focus().addRowAfter().run(), !editor)}
-        {iconBtn('حذف ردیف', <DeleteOutlined />, () => editor.chain().focus().deleteRow().run(), !editor)}
-        <Divider type="vertical" />
-        {iconBtn('ستون راست', <ArrowRightOutlined />, () => editor.chain().focus().addColumnBefore().run(), !editor)}
-        {iconBtn('ستون چپ', <ArrowLeftOutlined />, () => editor.chain().focus().addColumnAfter().run(), !editor)}
-        {iconBtn('حذف ستون', <DeleteOutlined />, () => editor.chain().focus().deleteColumn().run(), !editor)}
-        <Divider type="vertical" />
-        {iconBtn('انتخاب ردیف', <ArrowRightOutlined />, selectTableRow, !editor)}
-        {iconBtn('انتخاب ستون', <ArrowDownOutlined />, selectTableColumn, !editor)}
-        {iconBtn('انتخاب جدول', <TableOutlined />, selectCurrentTable, !editor)}
-        <Divider type="vertical" />
-        {iconBtn('مرج', <CompressOutlined />, () => editor.chain().focus().mergeCells().run(), !editor)}
-        {iconBtn('جداسازی', <ExpandOutlined />, () => editor.chain().focus().splitCell().run(), !editor)}
-        {iconBtn('حذف جدول', <DeleteOutlined />, () => editor.chain().focus().deleteTable().run(), !editor)}
-        <Divider type="vertical" />
-        <label className="color-chip" title="رنگ کادر جدول">
-            <TableOutlined />
-            <input
-              type="color"
-              value={tableBorderColorInput}
-              onChange={(e) => {
-                const nextColor = e.target.value;
-                setTableBorderColor(nextColor);
-                editor.chain().focus().updateAttributes('table', { borderColor: nextColor }).run();
-            }}
+      <div className={`table-floating-tools ${tableMenuOpen ? 'open' : ''}`}>
+        <Tooltip title={tableMenuOpen ? 'بستن ابزار جدول' : 'ابزار جدول'}>
+          <Button
+            size="small"
+            shape="circle"
+            icon={<TableOutlined />}
+            className="table-menu-trigger"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setTableMenuOpen((prev) => !prev)}
           />
-          <div className="color-chip-swatches">
-            {brandPalette.map((color: string) => (
-              <button
-                key={`table-border-${color}`}
-                type="button"
-                className="color-swatch"
-                style={{ background: color }}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  setTableBorderColor(color);
-                  editor.chain().focus().updateAttributes('table', { borderColor: color }).run();
+        </Tooltip>
+        {tableMenuOpen ? (
+          <div className="table-bubble-menu">
+            {iconBtn('نوشتن قبل از جدول', <ArrowUpOutlined />, () => insertParagraphAroundTable('before'), !editor)}
+            {iconBtn('نوشتن بعد از جدول', <ArrowDownOutlined />, () => insertParagraphAroundTable('after'), !editor)}
+            {iconBtn('کوچک‌تر کردن عرض جدول', <MinusOutlined />, () => updateCurrentTableWidth(-10), !editor)}
+            {iconBtn('بزرگ‌تر کردن عرض جدول', <PlusOutlined />, () => updateCurrentTableWidth(10), !editor)}
+            {iconBtn('انتخاب جدول', <TableOutlined />, selectCurrentTable, !editor)}
+            {iconBtn('حذف جدول', <DeleteOutlined />, deleteCurrentTable, !editor)}
+            <Divider type="vertical" />
+            {iconBtn('ردیف بالا', <ArrowUpOutlined />, () => runTableCommand(() => editor.chain().focus().addRowBefore().run()), !editor)}
+            {iconBtn('ردیف پایین', <ArrowDownOutlined />, () => runTableCommand(() => editor.chain().focus().addRowAfter().run()), !editor)}
+            {iconBtn('حذف ردیف', <DeleteOutlined />, () => runTableCommand(() => editor.chain().focus().deleteRow().run()), !editor)}
+            <Divider type="vertical" />
+            {iconBtn('ستون راست', <ArrowRightOutlined />, () => runTableCommand(() => editor.chain().focus().addColumnBefore().run()), !editor)}
+            {iconBtn('ستون چپ', <ArrowLeftOutlined />, () => runTableCommand(() => editor.chain().focus().addColumnAfter().run()), !editor)}
+            {iconBtn('حذف ستون', <DeleteOutlined />, () => runTableCommand(() => editor.chain().focus().deleteColumn().run()), !editor)}
+            <Divider type="vertical" />
+            {iconBtn('انتخاب ردیف', <ArrowRightOutlined />, selectTableRow, !editor)}
+            {iconBtn('انتخاب ستون', <ArrowDownOutlined />, selectTableColumn, !editor)}
+            {iconBtn('مرج', <CompressOutlined />, () => runTableCommand(() => editor.chain().focus().mergeCells().run()), !editor)}
+            {iconBtn('جداسازی', <ExpandOutlined />, () => runTableCommand(() => editor.chain().focus().splitCell().run()), !editor)}
+            <Divider type="vertical" />
+            <label className="color-chip" title="رنگ کادر جدول">
+                <TableOutlined />
+                <input
+                  type="color"
+                  value={tableBorderColorInput}
+                  onChange={(e) => {
+                    const nextColor = e.target.value;
+                    setTableBorderColor(nextColor);
+                    runTableCommand(() => editor.chain().focus().updateAttributes('table', { borderColor: nextColor }).run());
                 }}
+              />
+              <div className="color-chip-swatches">
+                {brandPalette.map((color: string) => (
+                  <button
+                    key={`table-border-${color}`}
+                    type="button"
+                    className="color-swatch"
+                    style={{ background: color }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setTableBorderColor(color);
+                      runTableCommand(() => editor.chain().focus().updateAttributes('table', { borderColor: color }).run());
+                    }}
+                        title={color}
+                      />
+                    ))}
+                  </div>
+                </label>
+            <label className="color-chip" title="رنگ سلول">
+                <BgColorsOutlined />
+                <input
+                  type="color"
+                  value={cellColorInput}
+                  onChange={(e) => {
+                    const nextColor = e.target.value;
+                    setCellColor(nextColor);
+                    runTableCommand(() => editor.chain().focus().setCellAttribute('backgroundColor', nextColor).run());
+                }}
+              />
+              <div className="color-chip-swatches">
+                {brandPalette.map((color: string) => (
+                  <button
+                    key={`table-cell-${color}`}
+                    type="button"
+                    className="color-swatch"
+                    style={{ background: color }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setCellColor(color);
+                      runTableCommand(() => editor.chain().focus().setCellAttribute('backgroundColor', color).run());
+                    }}
                     title={color}
                   />
                 ))}
               </div>
             </label>
-        <label className="color-chip" title="رنگ سلول">
-            <BgColorsOutlined />
-            <input
-              type="color"
-              value={cellColorInput}
-              onChange={(e) => {
-                const nextColor = e.target.value;
-                setCellColor(nextColor);
-                editor.chain().focus().setCellAttribute('backgroundColor', nextColor).run();
-            }}
-          />
-          <div className="color-chip-swatches">
-            {brandPalette.map((color: string) => (
-              <button
-                key={`table-cell-${color}`}
-                type="button"
-                className="color-swatch"
-                style={{ background: color }}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  setCellColor(color);
-                  editor.chain().focus().setCellAttribute('backgroundColor', color).run();
-                }}
-                title={color}
-              />
-            ))}
           </div>
-        </label>
+        ) : null}
       </div>
     </BubbleMenu>
   ) : null;
@@ -1091,7 +1293,11 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           position: relative;
           background: transparent;
           overflow: visible;
+          z-index: 20;
           ${resolvedEditorHeight ? `height: ${resolvedEditorHeight}px;` : ''}
+        }
+        .print-template-editor-root:focus-within {
+          z-index: 80;
         }
         .print-template-editor-root[data-fill-height='true'] {
           height: 100%;
@@ -1112,12 +1318,14 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           -webkit-user-select: text;
           box-sizing: border-box;
           overflow: ${resolvedEditorHeight ? 'auto' : 'visible'};
-          overscroll-behavior: contain;
+          overscroll-behavior: auto;
+          touch-action: auto;
         }
         .print-template-editor-root[data-fill-height='true'] .print-template-editor-content {
           min-height: 0;
           height: 100%;
           overflow: auto;
+          overscroll-behavior: auto;
         }
         .print-template-editor-content * {
           user-select: text;
@@ -1340,13 +1548,33 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         .print-template-editor-content table:hover {
           box-shadow: 0 0 0 1px rgba(var(--brand-500-rgb), 0.16);
         }
+        .table-floating-tools {
+          display: inline-flex;
+          align-items: flex-start;
+          gap: 6px;
+          direction: rtl;
+          position: relative;
+          z-index: 10000;
+        }
+        .table-menu-trigger {
+          border-color: rgba(var(--brand-500-rgb), 0.35);
+          color: rgb(var(--brand-500-rgb));
+          background: rgba(255, 255, 255, 0.96);
+          box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
+        }
+        .dark .table-menu-trigger {
+          background: rgba(17, 24, 39, 0.96);
+          border-color: rgba(var(--brand-500-rgb), 0.45);
+        }
         .table-bubble-menu {
           display: flex;
           flex-wrap: wrap;
           align-items: center;
           gap: 6px;
-          max-width: 560px;
+          max-width: min(680px, 88vw);
           padding: 8px;
+          position: relative;
+          z-index: 10001;
           border: 1px solid rgba(229, 231, 235, 0.9);
           border-radius: 12px;
           background: rgba(255, 255, 255, 0.96);
@@ -1356,6 +1584,11 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         .dark .table-bubble-menu {
           background: rgba(17, 24, 39, 0.96);
           border-color: rgba(71, 85, 105, 0.95);
+        }
+        [data-tippy-root],
+        .tippy-box,
+        .tippy-content {
+          z-index: 10000 !important;
         }
         .color-chip {
           display: inline-flex;

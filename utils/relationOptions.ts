@@ -95,6 +95,14 @@ const buildRelationOptionLabel = (targetModule: string, item: any, targetField: 
     return `${name} (مانده: ${formatPersianPrice(Number(item?.remaining_amount || 0))})`;
   }
 
+  if (targetModule === 'billboards' && targetField === 'address') {
+    const address = String(item?.address || item?.name || item?.system_code || item?.id || 'بدون آدرس').trim();
+    const systemCode = String(item?.system_code || '').trim();
+    const baseLabel = systemCode && systemCode !== address ? `${address} - ${systemCode}` : address;
+    const statusLabel = getRelationStatusLabel(targetModule, item);
+    return statusLabel ? `${baseLabel} [${statusLabel}]` : baseLabel;
+  }
+
   if (FINANCIAL_OPERATIONAL_MODULES.has(targetModule)) {
     return buildFinancialOperationalLabel(targetModule, item);
   }
@@ -556,7 +564,7 @@ export const fetchRelationOptionsForField = async (
                 .select('id, code, name')
                 .in('id', accountIds);
               if (ledgerError) throw ledgerError;
-              const ledgerById = new Map(
+              const ledgerById = new Map<string, { code: string; name: string }>(
                 (ledgerRows || []).map((row: any) => [
                   String(row?.id || '').trim(),
                   { code: row?.code ? String(row.code) : '', name: row?.name ? String(row.name) : '' },

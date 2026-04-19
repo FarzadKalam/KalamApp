@@ -2,6 +2,11 @@ export type NoteAttachment = {
   name: string;
   url: string;
   mimeType?: string | null;
+  assetId?: string | null;
+  entryId?: string | null;
+  moduleId?: string | null;
+  recordId?: string | null;
+  fileType?: 'image' | 'video' | 'file' | string | null;
 };
 
 export type ParsedNoteContent = {

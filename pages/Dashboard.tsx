@@ -39,6 +39,7 @@ import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import OccasionsWidget from '../components/dashboard/OccasionsWidget';
 import TaskCalendarWidget from '../components/dashboard/TaskCalendarWidget';
 import ReportsSliderWidget from '../components/dashboard/ReportsSliderWidget';
+import OurProcessesWidget from '../components/dashboard/OurProcessesWidget';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -694,6 +695,10 @@ const Dashboard: React.FC = () => {
     return widgetPermissions[key] !== false;
   };
 
+  const showReportsWidget = canShowWidget('reports_slider');
+  const showOurProcessesWidget = canShowWidget('our_processes');
+  const showActivityCalendarWidget = canShowWidget('activity_calendar');
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-dark-bg p-4 md:p-6">
       <div className="mb-6">
@@ -791,18 +796,26 @@ const Dashboard: React.FC = () => {
         </Row>
       )}
 
-      {(canShowWidget('activity_calendar') || canShowWidget('reports_slider')) && (
+      {(showReportsWidget || showOurProcessesWidget) && (
         <Row gutter={[16, 16]} className="mb-6">
-          {canShowWidget('activity_calendar') && (
-            <Col xs={24} lg={24}>
-              <TaskCalendarWidget />
-            </Col>
-          )}
-          {canShowWidget('reports_slider') && (
-            <Col xs={24} lg={24}>
+          {showReportsWidget && (
+            <Col xs={24} lg={showOurProcessesWidget ? 12 : 24}>
               <ReportsSliderWidget />
             </Col>
           )}
+          {showOurProcessesWidget && (
+            <Col xs={24} lg={showReportsWidget ? 12 : 24}>
+              <OurProcessesWidget />
+            </Col>
+          )}
+        </Row>
+      )}
+
+      {showActivityCalendarWidget && (
+        <Row gutter={[16, 16]} className="mb-6">
+          <Col xs={24}>
+            <TaskCalendarWidget />
+          </Col>
         </Row>
       )}
 

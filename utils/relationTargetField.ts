@@ -67,6 +67,7 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   work_schedules: ['title', 'name'],
   journal_entries: ['entry_no', 'source_record_title', 'description'],
   products: ['name', 'system_code', 'status'],
+  billboards: ['address', 'name', 'system_code', 'status'],
   production_orders: ['name', 'system_code', 'status'],
   shelves: ['name', 'system_code', 'shelf_number'],
   invoices: ['name', 'system_code', 'status'],

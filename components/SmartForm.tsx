@@ -39,6 +39,12 @@ import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModul
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
+import {
+  buildStandardSelectPopupRootStyle,
+  KALAM_SELECT_FIELD_CLASSNAME,
+  mergeClassNames,
+  resolveSelectPopupContainer,
+} from '../utils/popupContainer';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -2309,12 +2315,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
                           <Select
                             variant="borderless"
                             placeholder="جستجو یا انتخاب مسئول / نقش"
-                            className="w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300"
-                            styles={{ popup: { root: { minWidth: 220, zIndex: 4000 } } }}
+                            className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300')}
+                            styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: 4000 }) } }}
                             loading={assigneesLoading}
                             options={assigneeOptions}
                             showSearch
                             optionFilterProp="label"
+                            optionLabelProp="label"
                             filterOption={(input, option) =>
                               String(option?.label || '')
                                 .toLowerCase()
@@ -2327,7 +2334,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                               </Space>
                             )}
                             disabled={!canEditModule}
-                            getPopupContainer={(node) => node.parentElement || document.body}
+                            getPopupContainer={resolveSelectPopupContainer}
                             onChange={(val) => {
                               const { assignee_id, assignee_type } = parseAssigneeCombo(String(val));
                               const normalizedType = String(assignee_type || 'user');

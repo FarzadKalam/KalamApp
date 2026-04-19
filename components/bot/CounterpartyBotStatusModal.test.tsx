@@ -66,10 +66,11 @@ describe('CounterpartyBotStatusModal', () => {
       return matched as HTMLElement;
     });
     const userDropdown = userOption.closest('.ant-select-dropdown');
-    expect(userDropdown?.closest('.ant-modal-root')).toBeTruthy();
+    expect(userDropdown?.closest('.ant-modal-root')).toBeFalsy();
     fireEvent.click(userOption);
 
     await waitFor(() => expect(onChangeAllowedUserIds).toHaveBeenCalledWith(['user-1']));
+    await waitFor(() => expect(screen.getByText('کاربر اول')).toBeInTheDocument());
 
     fireEvent.mouseDown((selects[2] as HTMLElement).querySelector('.ant-select-selector') as Element);
     const roleOption = await waitFor(() => {
@@ -79,10 +80,11 @@ describe('CounterpartyBotStatusModal', () => {
       return matched as HTMLElement;
     });
     const roleDropdown = roleOption.closest('.ant-select-dropdown');
-    expect(roleDropdown?.closest('.ant-modal-root')).toBeTruthy();
+    expect(roleDropdown?.closest('.ant-modal-root')).toBeFalsy();
     fireEvent.click(roleOption);
 
     await waitFor(() => expect(onChangeAllowedRoleIds).toHaveBeenCalledWith(['role-1']));
+    await waitFor(() => expect(screen.getByText('مدیر')).toBeInTheDocument());
     cleanup();
   }, 15000);
 });

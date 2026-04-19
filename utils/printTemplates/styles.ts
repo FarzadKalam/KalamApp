@@ -54,6 +54,12 @@ export const printStyles = `
   .invoice-custom-print-shell .print-template-page p {
     margin: 0 0 8px 0;
   }
+  .invoice-custom-print-shell .print-template-page td p,
+  .invoice-custom-print-shell .print-template-page th p {
+    margin: 0 !important;
+    font-size: inherit !important;
+    line-height: 1.6 !important;
+  }
   .invoice-custom-print-shell .print-template-page h2 {
     margin: 0 0 10px 0;
     font-size: 20px;

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import {
   App,
   Checkbox,
@@ -7,6 +7,7 @@ import {
   Drawer,
   Empty,
   Input,
+  InputNumber,
   List,
   Select,
   Space,
@@ -20,10 +21,12 @@ import {
 import {
   CopyOutlined,
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   FileTextOutlined,
   PlusOutlined,
   SaveOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import PrintTemplateEditor from '../../components/moduleShow/PrintTemplateEditor';
@@ -55,6 +58,9 @@ const HEADER_HEIGHT_MIN = 52;
 const HEADER_HEIGHT_MAX = 220;
 const FOOTER_HEIGHT_MIN = 36;
 const FOOTER_HEIGHT_MAX = 160;
+const MM_TO_PX = 96 / 25.4;
+const pxToMm = (value: number) => Math.round((Number(value || 0) / MM_TO_PX) * 10) / 10;
+const mmToPx = (value: number) => Math.round(Number(value || 0) * MM_TO_PX);
 
 const getPageFrame = (paperSize: 'A4' | 'A5' | 'A6' = 'A4', orientation: 'portrait' | 'landscape' = 'portrait') => {
   const base =
@@ -66,6 +72,8 @@ const getPageFrame = (paperSize: 'A4' | 'A5' | 'A6' = 'A4', orientation: 'portra
   const width = orientation === 'landscape' ? base.h : base.w;
   const height = orientation === 'landscape' ? base.w : base.h;
   return {
+    widthMm: width,
+    heightMm: height,
     width: `${width}mm`,
     minHeight: `${height}mm`,
     label: `${paperSize} - ${orientation === 'landscape' ? 'افقی' : 'عمودی'}`,
@@ -90,7 +98,7 @@ const PrintTemplatesTab: React.FC = () => {
   const [headerEditor, setHeaderEditor] = useState<any | null>(null);
   const [bodyEditor, setBodyEditor] = useState<any | null>(null);
   const [footerEditor, setFooterEditor] = useState<any | null>(null);
-  const resizeStateRef = useRef<{ section: 'header' | 'footer'; startY: number; startHeight: number } | null>(null);
+  const [toolbarVisible, setToolbarVisible] = useState(true);
 
   const moduleOptions = useMemo(
     () =>
@@ -138,6 +146,29 @@ const PrintTemplatesTab: React.FC = () => {
     () => getPageFrame(editingTemplate?.paperSize || 'A4', editingTemplate?.orientation || 'portrait'),
     [editingTemplate?.orientation, editingTemplate?.paperSize]
   );
+  const sectionHeightLimitsMm = useMemo(() => {
+    const pageHeight = editingPageFrame.heightMm;
+    return {
+      headerMin: pxToMm(HEADER_HEIGHT_MIN),
+      headerMax: Math.max(pxToMm(HEADER_HEIGHT_MIN), Math.min(pxToMm(HEADER_HEIGHT_MAX), pageHeight * 0.32)),
+      footerMin: pxToMm(FOOTER_HEIGHT_MIN),
+      footerMax: Math.max(pxToMm(FOOTER_HEIGHT_MIN), Math.min(pxToMm(FOOTER_HEIGHT_MAX), pageHeight * 0.28)),
+    };
+  }, [editingPageFrame.heightMm]);
+  const updateSectionHeightMm = (section: 'header' | 'footer', value: number | null) => {
+    const rawValue = Number(value);
+    if (!Number.isFinite(rawValue)) return;
+    const min = section === 'header' ? sectionHeightLimitsMm.headerMin : sectionHeightLimitsMm.footerMin;
+    const max = section === 'header' ? sectionHeightLimitsMm.headerMax : sectionHeightLimitsMm.footerMax;
+    const nextHeight = mmToPx(Math.min(max, Math.max(min, rawValue)));
+    setEditingTemplate((prev) =>
+      !prev
+        ? prev
+        : section === 'header'
+          ? { ...prev, headerHeight: nextHeight }
+          : { ...prev, footerHeight: nextHeight }
+    );
+  };
 
   const activeEditor = useMemo(() => {
     if (activeSection === 'header' && editingTemplate?.showHeader !== false && headerEditor) return headerEditor;
@@ -151,11 +182,17 @@ const PrintTemplatesTab: React.FC = () => {
     return 'بدنه';
   }, [activeSection, editingTemplate?.showFooter, editingTemplate?.showHeader]);
 
-  useEffect(() => {
-    const handlePointerMove = (event: PointerEvent) => {
-      if (!resizeStateRef.current) return;
-      const { section, startY, startHeight } = resizeStateRef.current;
-      const delta = event.clientY - startY;
+  const startSectionResize = (section: 'header' | 'footer', event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const startHeight =
+      section === 'header'
+        ? Number(editingTemplate?.headerHeight || HEADER_HEIGHT_FALLBACK)
+        : Number(editingTemplate?.footerHeight || FOOTER_HEIGHT_FALLBACK);
+
+    const applyNextHeight = (clientY: number) => {
+      const delta = clientY - startY;
       const nextHeight =
         section === 'header'
           ? Math.min(HEADER_HEIGHT_MAX, Math.max(HEADER_HEIGHT_MIN, startHeight + delta))
@@ -167,36 +204,27 @@ const PrintTemplatesTab: React.FC = () => {
           ? { ...prev, headerHeight: nextHeight }
           : { ...prev, footerHeight: nextHeight };
       });
+    };
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      applyNextHeight(moveEvent.clientY);
       document.body.style.cursor = 'ns-resize';
       document.body.style.userSelect = 'none';
     };
 
-    const handlePointerUp = () => {
-      resizeStateRef.current = null;
+    const handleUp = (upEvent: PointerEvent) => {
+      applyNextHeight(upEvent.clientY);
+      document.removeEventListener('pointermove', handleMove);
+      document.removeEventListener('pointerup', handleUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
 
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, []);
-
-  const startSectionResize = (section: 'header' | 'footer', event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    resizeStateRef.current = {
-      section,
-      startY: event.clientY,
-      startHeight:
-        section === 'header'
-          ? Number(editingTemplate?.headerHeight || HEADER_HEIGHT_FALLBACK)
-          : Number(editingTemplate?.footerHeight || FOOTER_HEIGHT_FALLBACK),
-    };
+    document.addEventListener('pointermove', handleMove);
+    document.addEventListener('pointerup', handleUp, { once: true });
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
   };
 
   const fetchData = async () => {
@@ -682,6 +710,47 @@ const PrintTemplatesTab: React.FC = () => {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-sm text-slate-500 dark:text-slate-300">ارتفاع سربرگ</span>
+                  <Typography.Text type="secondary" className="text-[11px]">
+                    میلی‌متر
+                  </Typography.Text>
+                </div>
+                <InputNumber
+                  className="w-full"
+                  min={sectionHeightLimitsMm.headerMin}
+                  max={sectionHeightLimitsMm.headerMax}
+                  step={1}
+                  precision={1}
+                  disabled={editingTemplate.showHeader === false}
+                  value={pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}
+                  onChange={(value) => updateSectionHeightMm('header', value)}
+                  addonAfter="mm"
+                />
+              </div>
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 px-3 py-2 bg-white/60 dark:bg-white/[0.03]">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-sm text-slate-500 dark:text-slate-300">ارتفاع پاورقی</span>
+                  <Typography.Text type="secondary" className="text-[11px]">
+                    میلی‌متر
+                  </Typography.Text>
+                </div>
+                <InputNumber
+                  className="w-full"
+                  min={sectionHeightLimitsMm.footerMin}
+                  max={sectionHeightLimitsMm.footerMax}
+                  step={1}
+                  precision={1}
+                  disabled={editingTemplate.showFooter === false}
+                  value={pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}
+                  onChange={(value) => updateSectionHeightMm('footer', value)}
+                  addonAfter="mm"
+                />
+              </div>
+            </div>
+
             <Input
               className="mb-4"
               value={editingTemplate.description || ''}
@@ -690,36 +759,47 @@ const PrintTemplatesTab: React.FC = () => {
             />
 
             <div className="sticky top-0 z-30 mb-4 pb-2">
-              <PrintTemplateToolbar
-                editor={activeEditor}
-                variableOptions={variableOptions}
-                activeSectionLabel={activeSectionLabel}
-                pageMargins={{
-                  top: Number(editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
-                  right: Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
-                  bottom: Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
-                  left: Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
-                }}
-                onChangePageMargins={(nextMargins) =>
-                  setEditingTemplate((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          pageMarginTop: nextMargins.top,
-                          pageMarginRight: nextMargins.right,
-                          pageMarginBottom: nextMargins.bottom,
-                          pageMarginLeft: nextMargins.left,
-                        }
-                      : prev
-                  )
-                }
-              />
+              <div className="mb-2 flex justify-end">
+                <Button
+                  size="small"
+                  icon={toolbarVisible ? <UpOutlined /> : <DownOutlined />}
+                  onClick={() => setToolbarVisible((prev) => !prev)}
+                >
+                  {toolbarVisible ? 'مخفی کردن نوار ویرایش' : 'نمایش نوار ویرایش'}
+                </Button>
+              </div>
+              {toolbarVisible ? (
+                <PrintTemplateToolbar
+                  editor={activeEditor}
+                  variableOptions={variableOptions}
+                  activeSectionLabel={activeSectionLabel}
+                  pageMargins={{
+                    top: Number(editingTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
+                    right: Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
+                    bottom: Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
+                    left: Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
+                  }}
+                  onChangePageMargins={(nextMargins) =>
+                    setEditingTemplate((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            pageMarginTop: nextMargins.top,
+                            pageMarginRight: nextMargins.right,
+                            pageMarginBottom: nextMargins.bottom,
+                            pageMarginLeft: nextMargins.left,
+                          }
+                        : prev
+                    )
+                  }
+                />
+              ) : null}
             </div>
 
             <div className="rounded-[28px] border border-slate-200/80 dark:border-slate-800 bg-gradient-to-b from-[#faf7f2] via-[#f8fafc] to-[#f1f5f9] dark:from-[#0b1120] dark:via-[#111827] dark:to-[#0f172a] p-4">
               <div className="text-xs text-slate-500 dark:text-slate-400 mb-3">{editingPageFrame.label}</div>
               <div
-                className="mx-auto rounded-[24px] border border-slate-300/70 dark:border-slate-700 bg-white overflow-hidden shadow-[0_24px_60px_rgba(15,23,42,0.18)] flex flex-col"
+                className="mx-auto rounded-[24px] border border-slate-300/70 dark:border-slate-700 bg-white overflow-visible shadow-[0_24px_60px_rgba(15,23,42,0.18)] flex flex-col"
                 style={{
                   width: `min(100%, ${editingPageFrame.width})`,
                   minHeight: editingPageFrame.minHeight,
@@ -734,7 +814,7 @@ const PrintTemplatesTab: React.FC = () => {
                   <section
                     className={`relative flex-none border-b border-dashed border-slate-300/80 ${activeSection === 'header' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
                     onClick={() => setActiveSection('header')}
-                    style={{ height: editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK }}
+                    style={{ height: `${pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}mm` }}
                   >
                     <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                       سربرگ
@@ -786,7 +866,7 @@ const PrintTemplatesTab: React.FC = () => {
                   <section
                     className={`relative flex-none border-t border-dashed border-slate-300/80 ${activeSection === 'footer' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
                     onClick={() => setActiveSection('footer')}
-                    style={{ height: editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK }}
+                    style={{ height: `${pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}mm` }}
                   >
                     <button
                       type="button"

@@ -81,6 +81,16 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const wasMobileViewportRef = useRef(initialIsMobile);
   const previousPathnameRef = useRef(location.pathname);
 
+  useEffect(() => {
+    document.documentElement.classList.add('kalam-app-shell-lock');
+    document.body.classList.add('kalam-app-shell-lock');
+
+    return () => {
+      document.documentElement.classList.remove('kalam-app-shell-lock');
+      document.body.classList.remove('kalam-app-shell-lock');
+    };
+  }, []);
+
   const handleSidebarNavigate = (href: string) => {
     if (!href) return;
     navigate(href);
@@ -465,7 +475,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
           { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
           { key: '/production_orders', label: 'سفارشات تولید' },
-          { key: '/gallery', label: 'گالری فایل‌ها' },
+          { key: '/gallery', label: 'مدیریت فایل‌ها' },
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
         ]
       },

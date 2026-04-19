@@ -1,0 +1,91 @@
+export type FileFolderType = 'manual' | 'system_module' | 'system_record' | 'system_subrecord';
+export type FileVisibility = 'private' | 'org' | 'public';
+export type FileAssetType = 'image' | 'video' | 'file' | 'audio' | 'archive' | 'document';
+export type FileEntryType = 'origin' | 'shortcut';
+
+export type FileFolderRow = {
+  id: string;
+  org_id?: string | null;
+  parent_id?: string | null;
+  name: string;
+  slug?: string | null;
+  folder_type: FileFolderType;
+  module_id?: string | null;
+  record_id?: string | null;
+  source_table?: string | null;
+  source_scope?: string | null;
+  source_key?: string | null;
+  inherited_from_folder_id?: string | null;
+  visibility: FileVisibility;
+  is_system: boolean;
+  color_token?: string | null;
+  icon_token?: string | null;
+  metadata?: Record<string, any> | null;
+  sort_order?: number | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type FileAssetRow = {
+  id: string;
+  org_id?: string | null;
+  storage_bucket: string;
+  storage_path: string;
+  target_url?: string | null;
+  display_name?: string | null;
+  canonical_name?: string | null;
+  file_ext?: string | null;
+  mime_type?: string | null;
+  file_type: FileAssetType;
+  file_size_bytes?: number | null;
+  checksum_sha256?: string | null;
+  visibility: FileVisibility;
+  is_public: boolean;
+  uploaded_by?: string | null;
+  origin_module_id?: string | null;
+  origin_record_id?: string | null;
+  origin_folder_id?: string | null;
+  metadata?: Record<string, any> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type FileEntryRow = {
+  id: string;
+  org_id?: string | null;
+  asset_id: string;
+  folder_id?: string | null;
+  entry_type: FileEntryType;
+  entry_name?: string | null;
+  module_id?: string | null;
+  record_id?: string | null;
+  source_table?: string | null;
+  source_row_id?: string | null;
+  source_field_key?: string | null;
+  source_entry_id?: string | null;
+  source_module_id?: string | null;
+  source_record_id?: string | null;
+  source_record_title?: string | null;
+  is_deleted?: boolean;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
+  sort_order?: number | null;
+  metadata?: Record<string, any> | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type FileManagerItem = {
+  id: string;
+  kind: 'folder' | 'file';
+  title: string;
+  subtitle?: string | null;
+  folder?: FileFolderRow | null;
+  asset?: FileAssetRow | null;
+  entry?: FileEntryRow | null;
+  isShortcut?: boolean;
+  isSystem?: boolean;
+  visibility?: FileVisibility;
+};

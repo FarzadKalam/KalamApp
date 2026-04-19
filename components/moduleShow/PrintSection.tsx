@@ -181,21 +181,24 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   };
 
   const handleRequestPrint = () => {
-    if (onPreparePrint || !isMobile) {
-      try {
-        onPreparePrint?.();
-      } catch (error) {
-        console.error('Prepare print failed', error);
-      }
-      pendingPrintRef.current = false;
-      onClose();
-      onPrint();
-      return;
+    try {
+      onPreparePrint?.();
+    } catch (error) {
+      console.error('Prepare print failed', error);
     }
 
     pendingPrintRef.current = true;
     onClose();
   };
+
+  useEffect(() => {
+    if (isPrintModalOpen || !pendingPrintRef.current) return;
+    pendingPrintRef.current = false;
+    const timer = window.setTimeout(() => {
+      onPrint();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isPrintModalOpen, onPrint]);
 
   const handleSendInternalPdf = async () => {
     if (!onSendInternalPdf) return;
@@ -219,84 +222,78 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 
   return (
     <>
-      <Modal
-        title="انتخاب قالب چاپ"
-        open={isPrintModalOpen}
-        onCancel={handleCancel}
-        onOk={handleRequestPrint}
-        footer={(_, { CancelBtn, OkBtn }) => (
-          <div className={`flex ${isMobile ? 'flex-col-reverse items-stretch gap-2' : 'items-center justify-end gap-2'}`}>
-            <CancelBtn />
-            {onSendInternalPdf ? (
-              <Button onClick={() => { void handleSendInternalPdf(); }} loading={sendingInternal}>
-                ارسال مستقیم
-              </Button>
-            ) : null}
-            {onSavePdfToRecord ? (
-              <Button onClick={() => { void handleSavePdfToRecord(); }} loading={savingPdfToRecord}>
-                ذخیره در نرم افزار
-              </Button>
-            ) : null}
-            <OkBtn />
-          </div>
-        )}
-        afterOpenChange={(open) => {
-          if (open || !pendingPrintRef.current) return;
-          pendingPrintRef.current = false;
-          window.setTimeout(() => {
-            onPrint();
-          }, 0);
-        }}
-        okText={isMobile && onPreparePrint ? 'ذخیره PDF' : 'چاپ'}
-        cancelText="انصراف"
-        width={isMobile ? '100vw' : 1180}
-        destroyOnHidden
-        centered={!isMobile}
-        zIndex={1000}
-        rootClassName="print-select-modal"
-        style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : undefined}
-        styles={{
-          content: isMobile
-            ? {
-                borderRadius: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                minHeight: '100dvh',
-                maxHeight: '100dvh',
-                height: '100dvh',
-                paddingBottom: 0,
-                overflow: 'hidden',
-              }
-            : undefined,
-          body: {
-            padding: 0,
-            ...(isMobile
+      {isPrintModalOpen ? (
+        <Modal
+          title="انتخاب قالب چاپ"
+          open
+          onCancel={handleCancel}
+          onOk={handleRequestPrint}
+          footer={(_, { CancelBtn, OkBtn }) => (
+            <div className={`flex ${isMobile ? 'flex-col-reverse items-stretch gap-2' : 'items-center justify-end gap-2'}`}>
+              <CancelBtn />
+              {onSendInternalPdf ? (
+                <Button onClick={() => { void handleSendInternalPdf(); }} loading={sendingInternal}>
+                  ارسال مستقیم
+                </Button>
+              ) : null}
+              {onSavePdfToRecord ? (
+                <Button onClick={() => { void handleSavePdfToRecord(); }} loading={savingPdfToRecord}>
+                  ذخیره در نرم افزار
+                </Button>
+              ) : null}
+              <OkBtn />
+            </div>
+          )}
+          okText={isMobile && onPreparePrint ? 'ذخیره PDF' : 'چاپ'}
+          cancelText="انصراف"
+          width={isMobile ? '100vw' : 1180}
+          destroyOnHidden
+          centered={!isMobile}
+          zIndex={1000}
+          rootClassName="print-select-modal"
+          style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : undefined}
+          styles={{
+            content: isMobile
               ? {
-                  flex: '1 1 auto',
-                  minHeight: 0,
-                  maxHeight: 'none',
+                  borderRadius: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: '100dvh',
+                  maxHeight: '100dvh',
+                  height: '100dvh',
+                  paddingBottom: 0,
                   overflow: 'hidden',
                 }
-              : {
-                  maxHeight: '85vh',
-                  overflow: 'hidden',
-                }),
-          },
-          footer: isMobile
-            ? {
-                flex: '0 0 auto',
-                position: 'sticky',
-                bottom: 0,
-                zIndex: 2,
-                padding: '12px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
-                marginTop: 0,
-                borderTop: '1px solid rgba(148,163,184,0.18)',
-                background: 'rgba(248,250,252,0.96)',
-                backdropFilter: 'blur(12px)',
-              }
-            : undefined,
-        }}
-      >
+              : undefined,
+            body: {
+              padding: 0,
+              ...(isMobile
+                ? {
+                    flex: '1 1 auto',
+                    minHeight: 0,
+                    maxHeight: 'none',
+                    overflow: 'hidden',
+                  }
+                : {
+                    maxHeight: '85vh',
+                    overflow: 'hidden',
+                  }),
+            },
+            footer: isMobile
+              ? {
+                  flex: '0 0 auto',
+                  position: 'sticky',
+                  bottom: 0,
+                  zIndex: 2,
+                  padding: '12px 16px calc(12px + env(safe-area-inset-bottom, 0px))',
+                  marginTop: 0,
+                  borderTop: '1px solid rgba(148,163,184,0.18)',
+                  background: 'rgba(248,250,252,0.96)',
+                  backdropFilter: 'blur(12px)',
+                }
+              : undefined,
+          }}
+        >
         <div className="print-select-shell">
           {isMobile ? (
             <div className="print-template-mobile-select-wrap">
@@ -599,7 +596,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             />
           </div>
         </div>
-      </Modal>
+        </Modal>
+      ) : null}
 
       {typeof document !== 'undefined'
         ? createPortal(

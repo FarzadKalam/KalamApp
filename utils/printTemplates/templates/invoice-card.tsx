@@ -39,6 +39,20 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
     }
     return '';
   };
+  const getBillboardRelationLabel = (value: any) => {
+    if (!value) return '';
+    for (const options of Object.values(relationOptions || {})) {
+      const match = Array.isArray(options)
+        ? options.find((opt: any) =>
+            String(opt?.value || '').trim() === String(value || '').trim() &&
+            (String(opt?.module || '').trim() === 'billboards' || String(opt?.tagLabel || '').trim() === 'محیطی')
+          )
+        : null;
+      const label = match?.label || match?.name || '';
+      if (label) return label;
+    }
+    return '';
+  };
   const customerLabel = getRelationLabel('customer_id', data.customer_id) || data.customer_name || data.customer_id || '-';
   
   const buyer = customer || data.customer || {};
@@ -69,6 +83,12 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
       || getRelationLabel('package_id', item.package_id)
       || getAnyRelationLabel(item.package_id)
       || item.package_id
+      ||
+      item.billboard?.address
+      || item.billboard_address
+      || item.selected_billboard_address
+      || item.address
+      || getBillboardRelationLabel(item.product_id)
       ||
       item.selected_billboard_name
       || item.billboard_name

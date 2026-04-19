@@ -338,6 +338,17 @@ export const buildDefaultFooterTemplateForModule = () => `
 </table>
 `;
 
+const buildInvoiceFooterTemplate = () => `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('مهر و امضا سفارش دهنده', true)}
+      ${buildPrintSignatureCell('مهر و امضا سفارش گیرنده', false)}
+    </tr>
+  </tbody>
+</table>
+`;
+
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   const invoiceConfig = getInvoiceTemplateConfig(moduleId);
 
@@ -737,12 +748,17 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
           { label: 'جمع دریافت‌شده', value: 'record.total_received_amount', kind: 'field', group: 'فیلدهای رکورد' },
           { label: 'مانده فاکتور', value: 'record.remaining_balance', kind: 'field', group: 'فیلدهای رکورد' },
           { label: 'نام مشتری', value: 'customer.full_name', kind: 'field', group: 'طرف حساب' },
+          { label: 'پیشوند مشتری', value: 'customer.prefix', kind: 'field', group: 'طرف حساب' },
+          { label: 'نام کوچک مشتری', value: 'customer.first_name', kind: 'field', group: 'طرف حساب' },
+          { label: 'نام خانوادگی مشتری', value: 'customer.last_name', kind: 'field', group: 'طرف حساب' },
           { label: 'نام کسب و کار مشتری', value: 'customer.business_name', kind: 'field', group: 'طرف حساب' },
           { label: 'نوع شخص مشتری', value: 'customer.person_type', kind: 'field', group: 'طرف حساب' },
           { label: 'شناسه ملی / کد ملی مشتری', value: 'customer.national_identifier', kind: 'field', group: 'طرف حساب' },
           { label: 'شماره ثبت مشتری', value: 'customer.registration_number', kind: 'field', group: 'طرف حساب' },
           { label: 'کد اقتصادی مشتری', value: 'customer.economic_code', kind: 'field', group: 'طرف حساب' },
           { label: 'کد پستی مشتری', value: 'customer.postal_code', kind: 'field', group: 'طرف حساب' },
+          { label: 'استان مشتری', value: 'customer.province', kind: 'field', group: 'طرف حساب' },
+          { label: 'شهر مشتری', value: 'customer.city', kind: 'field', group: 'طرف حساب' },
           { label: 'تلفن مشتری', value: 'customer.mobile_1', kind: 'field', group: 'طرف حساب' },
           { label: 'آدرس مشتری', value: 'customer.address', kind: 'field', group: 'طرف حساب' },
         ]
@@ -754,11 +770,16 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
             { label: 'جمع پرداخت‌شده', value: 'record.total_received_amount', kind: 'field', group: 'فیلدهای رکورد' },
             { label: 'مانده بدهی', value: 'record.remaining_balance', kind: 'field', group: 'فیلدهای رکورد' },
             { label: 'نام تامین‌کننده', value: 'supplier.full_name', kind: 'field', group: 'طرف حساب' },
+            { label: 'پیشوند تامین‌کننده', value: 'supplier.prefix', kind: 'field', group: 'طرف حساب' },
+            { label: 'نام رابط تامین‌کننده', value: 'supplier.first_name', kind: 'field', group: 'طرف حساب' },
+            { label: 'نام خانوادگی رابط تامین‌کننده', value: 'supplier.last_name', kind: 'field', group: 'طرف حساب' },
             { label: 'نام کسب و کار تامین‌کننده', value: 'supplier.business_name', kind: 'field', group: 'طرف حساب' },
             { label: 'شناسه ملی / کد ملی تامین‌کننده', value: 'supplier.national_identifier', kind: 'field', group: 'طرف حساب' },
             { label: 'شماره ثبت تامین‌کننده', value: 'supplier.registration_number', kind: 'field', group: 'طرف حساب' },
             { label: 'کد اقتصادی تامین‌کننده', value: 'supplier.economic_code', kind: 'field', group: 'طرف حساب' },
             { label: 'کد پستی تامین‌کننده', value: 'supplier.postal_code', kind: 'field', group: 'طرف حساب' },
+            { label: 'استان تامین‌کننده', value: 'supplier.province', kind: 'field', group: 'طرف حساب' },
+            { label: 'شهر تامین‌کننده', value: 'supplier.city', kind: 'field', group: 'طرف حساب' },
             { label: 'تلفن تامین‌کننده', value: 'supplier.mobile_1', kind: 'field', group: 'طرف حساب' },
             { label: 'آدرس تامین‌کننده', value: 'supplier.address', kind: 'field', group: 'طرف حساب' },
           ]
@@ -1646,7 +1667,7 @@ export const buildDefaultTemplatesForModule = (
     </tbody>
   </table>
 </div>`.trim(),
-      footerHtml: buildDefaultFooterTemplateForModule().trim(),
+      footerHtml: buildInvoiceFooterTemplate().trim(),
       createdAt: now,
       updatedAt: now,
     },
@@ -1756,7 +1777,7 @@ export const buildDefaultTemplatesForModule = (
     </tbody>
   </table>
 </div>`.trim(),
-      footerHtml: buildDefaultFooterTemplateForModule().trim(),
+      footerHtml: buildInvoiceFooterTemplate().trim(),
       createdAt: now,
       updatedAt: now,
     },
@@ -1810,7 +1831,7 @@ export const buildDefaultTemplatesForModule = (
     </tbody>
   </table>
 </div>`.trim(),
-      footerHtml: buildDefaultFooterTemplateForModule().trim(),
+      footerHtml: buildInvoiceFooterTemplate().trim(),
       createdAt: now,
       updatedAt: now,
     },
@@ -1863,7 +1884,7 @@ export const buildDefaultTemplatesForModule = (
     </tbody>
   </table>
 </div>`.trim(),
-      footerHtml: buildDefaultFooterTemplateForModule().trim(),
+      footerHtml: buildInvoiceFooterTemplate().trim(),
       createdAt: now,
       updatedAt: now,
     },

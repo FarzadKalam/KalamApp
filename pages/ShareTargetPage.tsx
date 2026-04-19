@@ -9,6 +9,7 @@ import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 
 const { Text, Title } = Typography;
 
@@ -34,6 +35,17 @@ type BotGroup = {
   bot_chat_id: string;
   customer_id: string | null;
   supplier_id: string | null;
+};
+
+const buildSenderPayload = (userId: string, users: Array<Record<string, any>>) => {
+  const normalizedUserId = String(userId || '').trim();
+  const user = users.find((item) => String(item?.id || '') === normalizedUserId) || null;
+  return {
+    sender_user_id: normalizedUserId || null,
+    sender_profile_id: normalizedUserId || null,
+    sender_display_name: String(user?.full_name || user?.email || user?.mobile_1 || '').trim() || null,
+    sender_avatar_url: String(user?.avatar_url || '').trim() || null,
+  };
 };
 
 const sanitizeFileName = (value: string) => {
@@ -145,7 +157,7 @@ const ShareTargetPage: React.FC = () => {
         const [directory, groupsResult, botGroupsResult] = await Promise.all([
           supabase
             .from('profiles')
-            .select('id, full_name, email, mobile_1, role_id')
+            .select('id, full_name, email, mobile_1, avatar_url, role_id')
             .eq('org_id', orgId)
             .order('full_name', { ascending: true })
             .limit(500),
@@ -366,6 +378,14 @@ const ShareTargetPage: React.FC = () => {
         });
       }
 
+      const outboundAttachments = await shortenAttachmentsForExternalShare(uploadedAttachments as any, {
+        moduleId: 'profiles',
+        recordId: currentUserId,
+        metadata: {
+          source_type: 'web_share_target',
+        },
+      });
+
       const payloads: Array<Record<string, any>> = [];
       const botTargets: BotGroup[] = [];
 
@@ -426,7 +446,7 @@ const ShareTargetPage: React.FC = () => {
         await insertNotesWithFallback(payloads);
       }
 
-      const attachmentNames = uploadedAttachments
+      const attachmentNames = outboundAttachments
         .map((item) => `🔗 ${item.name}`)
         .join('\n');
 
@@ -440,8 +460,8 @@ const ShareTargetPage: React.FC = () => {
         }
 
         const isRubikaTarget = target.channel_type === 'rubika';
-        const rubikaLinkedMessage = isRubikaTarget ? buildRubikaLinkedAttachmentMessage(String(messageText || '').trim(), uploadedAttachments) : null;
-        const externalText = [String(messageText || '').trim(), uploadedAttachments.map((item) => `فایل: ${item.url}`).join('\n')]
+        const rubikaLinkedMessage = isRubikaTarget ? buildRubikaLinkedAttachmentMessage(String(messageText || '').trim(), outboundAttachments) : null;
+        const externalText = [String(messageText || '').trim(), outboundAttachments.map((item) => `فایل: ${item.url}`).join('\n')]
           .filter(Boolean)
           .join('\n');
 
@@ -469,6 +489,7 @@ const ShareTargetPage: React.FC = () => {
         if (proxyError) throw proxyError;
         if (!proxyData?.success) throw new Error(String(proxyData?.message || 'ارسال به بات ناموفق بود.'));
 
+        const senderPayload = buildSenderPayload(currentUserId, allUsers);
         await supabase.from('counterparty_bot_messages').insert([
           {
             bot_group_id: target.id,
@@ -478,13 +499,15 @@ const ShareTargetPage: React.FC = () => {
             direction: 'outbound',
             message_type: uploadedAttachments.length > 0 ? 'file' : 'text',
             chat_id: target.bot_chat_id,
-            provider_message_id: String(proxyData?.provider_result?.result?.message_id || proxyData?.provider_result?.message_id || '') || null,
+            provider_message_id: String(proxyData?.provider_result?.result?.message_id || proxyData?.provider_result?.message_id || proxyData?.provider_result?.data?.message_id || '') || null,
             content_text: String(botMessageText || '').trim() || null,
             file_url: uploadedAttachments[0]?.url || null,
             file_name: uploadedAttachments[0]?.name || null,
             mime_type: uploadedAttachments[0]?.mimeType || null,
+            created_by: currentUserId || null,
             payload: {
               attachments: uploadedAttachments,
+              ...senderPayload,
               provider_response: proxyData?.provider_result || {},
               source_type: 'web_share_target',
             },

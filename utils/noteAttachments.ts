@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from './storageClient';
 import type { NoteAttachment } from './noteContent';
+import { createFileManagerOriginForUpload, createFileManagerShortcut, detectFileManagerTables } from './fileManagerService';
 import { uploadFileWithProgress } from './uploadFileWithProgress';
 
 const normalizeFileName = (file: File) => {
@@ -48,22 +49,40 @@ export const uploadNoteAttachments = async (
     const fileName = String(file.name || storedName).trim() || storedName;
 
     if (hasRelatedRecord) {
-      const { error: recordFileError } = await supabase
-        .from('record_files')
-        .insert([
-          {
-            module_id: normalizedModuleId,
-            record_id: normalizedRecordId,
-            file_url: fileUrl,
-            file_type: fileType,
-            file_name: fileName,
-            mime_type: file.type || null,
-            sort_order: 0,
-          },
-        ]);
+      const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+      if (hasFileManagerTables) {
+        try {
+          await createFileManagerOriginForUpload({
+            moduleId: normalizedModuleId,
+            recordId: normalizedRecordId,
+            recordTitle: normalizedRecordId,
+            fileUrl,
+            fileName,
+            mimeType: file.type || null,
+            fileType,
+            sortOrder: 0,
+          });
+        } catch (fileManagerError) {
+          console.warn('Could not insert uploaded note attachment into file manager tables', fileManagerError);
+        }
+      } else {
+        const { error: recordFileError } = await supabase
+          .from('record_files')
+          .insert([
+            {
+              module_id: normalizedModuleId,
+              record_id: normalizedRecordId,
+              file_url: fileUrl,
+              file_type: fileType,
+              file_name: fileName,
+              mime_type: file.type || null,
+              sort_order: 0,
+            },
+          ]);
 
-      if (recordFileError) {
-        console.warn('Could not insert uploaded note attachment into record_files', recordFileError);
+        if (recordFileError) {
+          console.warn('Could not insert uploaded note attachment into record_files', recordFileError);
+        }
       }
     }
 
@@ -75,4 +94,44 @@ export const uploadNoteAttachments = async (
   }
 
   return uploaded;
+};
+
+export const ensureNoteAttachmentShortcuts = async (
+  moduleId: string | null | undefined,
+  recordId: string | null | undefined,
+  attachments: NoteAttachment[],
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!normalizedModuleId || !normalizedRecordId || attachments.length === 0) return;
+
+  const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+  if (!hasFileManagerTables) return;
+
+  for (const attachment of attachments) {
+    const url = String(attachment?.url || '').trim();
+    if (!url) continue;
+    const sourceModuleId = String(attachment.moduleId || '').trim();
+    const sourceRecordId = String(attachment.recordId || '').trim();
+    if (sourceModuleId === normalizedModuleId && sourceRecordId === normalizedRecordId) continue;
+
+    try {
+      await createFileManagerShortcut({
+        assetId: attachment.assetId || null,
+        sourceEntryId: attachment.entryId || null,
+        sourceModuleId: sourceModuleId || null,
+        sourceRecordId: sourceRecordId || null,
+        sourceRecordTitle: attachment.name || null,
+        targetModuleId: normalizedModuleId,
+        targetRecordId: normalizedRecordId,
+        targetRecordTitle: normalizedRecordId,
+        fileUrl: url,
+        fileName: attachment.name || null,
+        mimeType: attachment.mimeType || null,
+        fileType: attachment.fileType || null,
+      });
+    } catch (error) {
+      console.warn('Could not create file manager shortcut for selected note attachment', error);
+    }
+  }
 };

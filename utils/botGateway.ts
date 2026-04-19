@@ -243,6 +243,21 @@ export const sendCounterpartyBotGroupMessage = async ({
     || providerResponse?.data?.message_id
     || ''
   ).trim() || null;
+  const { data: authData } = await supabase.auth.getUser();
+  const currentUserId = String(authData?.user?.id || '').trim() || null;
+  const currentUserProfile = currentUserId
+    ? (await supabase
+      .from('profiles')
+      .select('id, full_name, avatar_url')
+      .eq('id', currentUserId)
+      .maybeSingle()).data
+    : null;
+  const senderPayload = {
+    sender_user_id: currentUserId,
+    sender_profile_id: currentUserId,
+    sender_display_name: String((currentUserProfile as any)?.full_name || '').trim() || null,
+    sender_avatar_url: String((currentUserProfile as any)?.avatar_url || '').trim() || null,
+  };
 
   const { error: insertError } = await supabase
     .from('counterparty_bot_messages')
@@ -256,8 +271,10 @@ export const sendCounterpartyBotGroupMessage = async ({
       chat_id: chatId,
       provider_message_id: providerMessageId,
       content_text: messageText,
+      created_by: currentUserId,
       payload: {
         ...(payload || {}),
+        ...senderPayload,
         provider_response: providerResponse || {},
       },
     }]);

@@ -49,7 +49,7 @@ const BLOCKS = {
           sourceModules: [
             { targetModule: 'products', targetField: 'name' },
             { targetModule: 'product_bundles', targetField: 'name', tagLabel: 'پکیج', tagColor: 'cyan' },
-            { targetModule: 'billboards', targetField: 'name', tagLabel: 'محیطی', tagColor: 'purple' },
+            { targetModule: 'billboards', targetField: 'address', tagLabel: 'محیطی', tagColor: 'purple' },
           ],
         },
       },

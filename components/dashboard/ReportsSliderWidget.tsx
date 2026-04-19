@@ -76,7 +76,7 @@ const ReportsSliderWidget: React.FC = () => {
 
   if (!access.canViewHub) {
     return (
-      <Card className="shadow-sm">
+      <Card className="h-full shadow-sm">
         <Empty description="دسترسی به ویجت گزارش‌ها ندارید" />
       </Card>
     );
@@ -84,7 +84,7 @@ const ReportsSliderWidget: React.FC = () => {
 
   if (setupMissing) {
     return (
-      <Card className="shadow-sm">
+      <Card className="h-full shadow-sm">
         <Empty description="زیرساخت گزارش‌ها هنوز اعمال نشده است" />
       </Card>
     );
@@ -93,7 +93,7 @@ const ReportsSliderWidget: React.FC = () => {
   const activeReport = reports[activeIndex] || null;
 
   return (
-    <Card className="shadow-sm">
+    <Card className="h-full shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-base font-bold">گزارش‌ها</div>

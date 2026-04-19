@@ -6,6 +6,8 @@ import {
   PaperClipOutlined,
   SendOutlined,
 } from '@ant-design/icons';
+import type { NoteAttachment } from '../../utils/noteContent';
+import FileManagerPickerModal from '../files/FileManagerPickerModal';
 
 interface SharedNoteComposerProps {
   header?: React.ReactNode;
@@ -22,9 +24,14 @@ interface SharedNoteComposerProps {
   onToggleMentionPicker?: () => void;
   allowMentions?: boolean;
   attachments?: File[];
+  linkedAttachments?: NoteAttachment[];
   onFilesSelected?: (files: File[]) => void;
+  onLinkedAttachmentsSelected?: (attachments: NoteAttachment[]) => void;
   onRemoveAttachment?: (fileName: string) => void;
+  onRemoveLinkedAttachment?: (url: string) => void;
   allowAttachments?: boolean;
+  filePickerModuleId?: string | null;
+  filePickerRecordId?: string | null;
   replyActive?: boolean;
   onClearReply?: () => void;
   submitDisabled?: boolean;
@@ -87,9 +94,14 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   onToggleMentionPicker = () => undefined,
   allowMentions = true,
   attachments = [],
+  linkedAttachments = [],
   onFilesSelected = () => undefined,
+  onLinkedAttachmentsSelected = () => undefined,
   onRemoveAttachment = () => undefined,
+  onRemoveLinkedAttachment = () => undefined,
   allowAttachments = true,
+  filePickerModuleId = null,
+  filePickerRecordId = null,
   replyActive = false,
   onClearReply,
   submitDisabled = false,
@@ -99,12 +111,12 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   extraActions,
   enableImagePasteAndDrop = false,
 }) => {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastExternalValueRef = useRef(value);
   const [pendingPrompts, setPendingPrompts] = useState<PendingFilePrompt[]>([]);
   const [preparedFiles, setPreparedFiles] = useState<File[]>([]);
   const [pendingFileName, setPendingFileName] = useState('');
   const [draftValue, setDraftValue] = useState(value);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
 
   useEffect(() => {
     if (value === lastExternalValueRef.current) return;
@@ -112,10 +124,22 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
     setDraftValue(value);
   }, [value]);
 
-  const attachmentLabel = useMemo(() => attachments.map((file) => ({
-    name: file.name,
-    meta: formatFileSize(file.size),
-  })), [attachments]);
+  const attachmentLabel = useMemo(() => [
+    ...attachments.map((file) => ({
+      key: `upload:${file.name}`,
+      kind: 'upload' as const,
+      name: file.name,
+      meta: formatFileSize(file.size),
+      removeKey: file.name,
+    })),
+    ...linkedAttachments.map((attachment) => ({
+      key: `linked:${attachment.url}`,
+      kind: 'linked' as const,
+      name: attachment.name || 'فایل',
+      meta: 'فایل موجود',
+      removeKey: attachment.url,
+    })),
+  ], [attachments, linkedAttachments]);
 
   const activePrompt = pendingPrompts[0] || null;
   const activePromptExtension = activePrompt ? splitFileName(activePrompt.original.name).extension : '';
@@ -230,11 +254,15 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             <div className="mt-3 flex flex-wrap gap-2">
               {attachmentLabel.map((file) => (
                 <Tag
-                  key={file.name}
+                  key={file.key}
                   closable
                   onClose={(event) => {
                     event.preventDefault();
-                    onRemoveAttachment(file.name);
+                    if (file.kind === 'linked') {
+                      onRemoveLinkedAttachment(file.removeKey);
+                    } else {
+                      onRemoveAttachment(file.removeKey);
+                    }
                   }}
                   className="!m-0 !rounded-full !px-2 !py-1"
                 >
@@ -264,10 +292,10 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               ) : null}
               {allowAttachments ? (
                 <Button
-                  type={attachments.length > 0 ? 'primary' : 'text'}
+                  type={attachmentLabel.length > 0 ? 'primary' : 'text'}
                   size="small"
                   icon={<PaperClipOutlined />}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setFilePickerOpen(true)}
                 />
               ) : null}
               {extraActions}
@@ -280,17 +308,6 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                   اطلاع‌رسانی پیامکی
                 </Checkbox>
               ) : null}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  const nextFiles = Array.from(event.target.files || []);
-                  handleFilesPicked(nextFiles);
-                  event.target.value = '';
-                }}
-              />
             </div>
 
             <Button
@@ -339,6 +356,16 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
           </div>
         </div>
       </Modal>
+
+      <FileManagerPickerModal
+        open={filePickerOpen}
+        onClose={() => setFilePickerOpen(false)}
+        moduleId={filePickerModuleId}
+        recordId={filePickerRecordId}
+        multiple
+        onSelect={(selectedAttachments) => onLinkedAttachmentsSelected(selectedAttachments)}
+        onUploadFiles={handleFilesPicked}
+      />
     </>
   );
 };

@@ -232,9 +232,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (normalizeSalesPackageItems(row?.package_items).length > 0) return true;
     return Boolean(row?.package_id);
   };
+  const getBillboardDisplayName = (record: any) =>
+    String(record?.address || record?.name || record?.title || record?.system_code || record?.id || '').trim();
   const getInvoiceProductRelationOptions = (record?: any) => {
     const specificKey = `${block.id}_product_id`;
-    let options = mergeOptionsByValue(relationOptions[specificKey] || relationOptions.product_id || [], []);
+    let options = relationOptions[specificKey] || relationOptions.product_id || [];
     const selectedId = String(record?.product_id || '').trim();
     if (selectedId && !options.some((opt: any) => String(opt?.value || '').trim() === selectedId)) {
       const fallbackLabel = String(record?.package_name || record?.selected_product_name || record?.product_name || selectedId).trim();
@@ -244,7 +246,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
   const getCatalogProductRelationOptions = (record?: any) => {
     const specificKey = `${block.id}_product_id`;
-    let options = mergeOptionsByValue(relationOptions[specificKey] || relationOptions.product_id || [], []);
+    let options = relationOptions[specificKey] || relationOptions.product_id || [];
     const selectedId = String(record?.product_id || '').trim();
     if (selectedId && !options.some((opt: any) => String(opt?.value || '').trim() === selectedId)) {
       const fallbackLabel = String(record?.selected_product_name || record?.product_name || selectedId).trim();
@@ -345,6 +347,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const packageItems = normalizeSalesPackageItems(bundleRecord?.products || []);
     const productIds = Array.from(new Set(packageItems.map((item) => String(item.product_id || '')).filter(Boolean)));
     let productMap = new Map<string, any>();
+    let billboardMap = new Map<string, any>();
     if (productIds.length > 0) {
       const { data: productRows, error: productError } = await supabase
         .from('products')
@@ -352,12 +355,27 @@ const EditableTable: React.FC<EditableTableProps> = ({
         .in('id', productIds);
       if (productError) throw productError;
       productMap = new Map((productRows || []).map((item: any) => [String(item.id), item]));
+
+      const { data: billboardRows, error: billboardError } = await supabase
+        .from('billboards')
+        .select('id, name, address, system_code, daily_rent, monthly_rent, print_cost, width, height')
+        .in('id', productIds);
+      if (billboardError) throw billboardError;
+      billboardMap = new Map((billboardRows || []).map((item: any) => [String(item.id), item]));
     }
 
     const snapshotItems = packageItems.map((item) => {
       const productMeta = item.product_id ? productMap.get(String(item.product_id)) : null;
-      const mainUnit = String(item.main_unit || productMeta?.main_unit || 'عدد').trim() || 'عدد';
-      const unitPrice = toSafeNumber(item.unit_price || productMeta?.sell_price || 0);
+      const billboardMeta = item.product_id ? billboardMap.get(String(item.product_id)) : null;
+      const mainUnit = String(item.main_unit || productMeta?.main_unit || (billboardMeta ? 'روز' : 'عدد')).trim() || 'عدد';
+      const unitPrice = toSafeNumber(
+        item.unit_price ||
+        productMeta?.sell_price ||
+        billboardMeta?.daily_rent ||
+        billboardMeta?.monthly_rent ||
+        billboardMeta?.print_cost ||
+        0
+      );
       const quantity = Math.abs(toSafeNumber(item.quantity));
       const totalPrice = calculateRow(
         {
@@ -371,8 +389,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
       return {
         product_id: item.product_id,
-        product_name: String(item.product_name || productMeta?.name || item.product_id || '-'),
-        product_type: String(item.product_type || productMeta?.product_type || 'goods'),
+        product_name: String(getBillboardDisplayName(billboardMeta) || item.product_name || productMeta?.name || item.product_id || '-'),
+        product_type: String(item.product_type || productMeta?.product_type || (billboardMeta ? 'service' : 'goods')),
         delivery_time: String(item.delivery_time || productMeta?.delivery_time || '').trim() || null,
         quantity,
         main_unit: mainUnit,
@@ -763,10 +781,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isDayUnit = (unit: any) => DAY_UNIT_VALUES.has(String(unit || '').trim().toLowerCase());
   const isAreaAutoUnit = (unit: any) => AREA_AUTO_UNITS.has(String(unit || '').trim());
   const isGoodsInvoiceRow = (row: any) => !isServiceProduct(row?.product_type);
-  const hasDimensions = (row: any) =>
+  const hasDimensionValues = (row: any) =>
+    isGoodsInvoiceRow(row) &&
+    (toSafeNumber(row?.length) > 0 || toSafeNumber(row?.width) > 0);
+  const hasAutoDimensions = (row: any) =>
     isGoodsInvoiceRow(row) &&
     isAreaAutoUnit(row?.main_unit) &&
-    (toSafeNumber(row?.length) > 0 || toSafeNumber(row?.width) > 0);
+    hasDimensionValues(row);
   const shouldAutoSubQuantity = (row: any) => !isManualSubUnit(row?.sub_unit);
   const roundToThree = (value: number) => {
     if (!Number.isFinite(value)) return 0;
@@ -820,7 +841,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (!isGoodsInvoiceRow(row) && ['length', 'width', 'source_shelf_id'].includes(key)) {
         return false;
       }
-      if (['length', 'width'].includes(key) && !hasDimensions(row)) return false;
+      if (['length', 'width'].includes(key) && !hasDimensionValues(row)) return false;
     }
     if (isAnyInvoicePayments) {
       const paymentType = String(row?.payment_type || '').trim();
@@ -1280,8 +1301,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
           });
 
           if ((isPriceListItems || isSalesPackageItems) && key === 'product_id') {
-            currentRow.selected_product_name = record?.name || currentRow.selected_product_name || null;
-            currentRow.product_name = record?.name || currentRow.product_name || null;
+            const catalogDisplayName = targetModule === 'billboards'
+              ? getBillboardDisplayName(record)
+              : String(record?.name || '').trim();
+            currentRow.selected_product_name = catalogDisplayName || currentRow.selected_product_name || null;
+            currentRow.product_name = catalogDisplayName || currentRow.product_name || null;
             currentRow.delivery_time = String(record?.delivery_time || '').trim() || null;
             if (targetModule === 'billboards') {
               currentRow.product_type = 'service';
@@ -1364,8 +1388,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.price_list_id = null;
               currentRow.main_unit = 'روز';
               currentRow.sub_unit = 'عدد';
-              currentRow.selected_product_name = record?.name || currentRow.selected_product_name || null;
-              currentRow.product_name = record?.name || currentRow.product_name || null;
+              const billboardDisplayName = getBillboardDisplayName(record);
+              currentRow.selected_product_name = billboardDisplayName || currentRow.selected_product_name || null;
+              currentRow.product_name = billboardDisplayName || currentRow.product_name || null;
               currentRow.delivery_time = String(record?.delivery_time || '').trim() || null;
               if (record?.daily_rent !== undefined && record?.daily_rent !== null && String(record.daily_rent).trim() !== '') {
                 currentRow.unit_price = record.daily_rent;
@@ -3115,7 +3140,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const { targetModule, record } = relationResult;
     const isBillboardSource = targetModule === 'billboards';
-    const sourceName = record?.name || record?.title || nextRow.product_name || nextRow.selected_product_name || null;
+    const sourceName = isBillboardSource
+      ? (getBillboardDisplayName(record) || nextRow.product_name || nextRow.selected_product_name || null)
+      : (record?.name || record?.title || nextRow.product_name || nextRow.selected_product_name || null);
     const sourceMainUnit = isBillboardSource ? 'روز' : (String(record?.main_unit || 'عدد').trim() || 'عدد');
     const sourceProductType = isBillboardSource ? 'service' : (record?.product_type || nextRow.product_type || 'goods');
     const sourceSellPrice = isBillboardSource
@@ -3584,8 +3611,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       (isAnyInvoiceItems && col.key === 'source_shelf_id' && ((!record?.product_id && !isPackageInvoiceRow(record)) || isServiceProduct(record?.product_type)))
       || (isInvoiceItems && col.key === 'price_list_id' && (!record?.product_id || isPackageInvoiceRow(record)))
       || (isInvoiceItems && col.key === 'price_list_id' && !!record?.product_id && !isPackageInvoiceRow(record) && getPriceListOptionsForProduct(record?.product_id, record?.price_list_id).length === 0)
-      || (isAnyInvoiceItems && col.key === 'quantity' && hasDimensions(record))
-      || (isAnyInvoiceItems && ['length', 'width'].includes(col.key) && !hasDimensions(record))
+      || (isAnyInvoiceItems && col.key === 'quantity' && hasAutoDimensions(record))
+      || (isAnyInvoiceItems && ['length', 'width'].includes(col.key) && !hasDimensionValues(record))
       || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit))
       || (isAnyInvoicePayments
         && (
@@ -3606,7 +3633,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               : [
                   { targetModule: 'products', targetField: 'name' },
                   { targetModule: 'product_bundles', targetField: 'name', tagLabel: 'پکیج', tagColor: 'cyan' },
-                  { targetModule: 'billboards', targetField: 'name', tagLabel: 'محیطی', tagColor: 'purple' },
+                  { targetModule: 'billboards', targetField: 'address', tagLabel: 'محیطی', tagColor: 'purple' },
                 ],
           }
         : isInvoicePaymentAccountColumn && col.relationConfig
@@ -3731,12 +3758,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
       !isServiceProduct(record?.product_type) &&
       (!!record?.product_id || isPackageInvoiceRow(record));
     const showInvoiceDimensions = isAnyInvoiceItems && col.key === 'product_id' && !isPackageInvoiceRow(record);
-    const canEditDimensions = !isReadOnly && isEditing && !isServiceProduct(record?.product_type) && !isPackageInvoiceRow(record);
+    const canEditDimensions = !isReadOnly && isEditing && !isPackageInvoiceRow(record);
     const lengthValue = record?.length ?? null;
     const widthValue = record?.width ?? null;
     const dimensionCountValue = record?.dimension_count ?? 1;
     const dimensionCountAsSubQuantity = record?.dimension_count_to_sub_quantity === true;
     const dimensionMainUnit = String(record?.main_unit || '').trim() || 'واحد اصلی';
+    const dimensionAutoQuantity = isAreaAutoUnit(record?.main_unit);
     const dimensionComputedQuantity = roundToThree(
       toSafeNumber(lengthValue) * toSafeNumber(widthValue) * getDimensionCount(record)
     );
@@ -3751,6 +3779,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const attachmentUrl = String(value || '').trim();
     const showBulkPriceUnit = isBulkProductsTable && col.type === FieldType.PRICE;
     const bulkPriceUnitLabel = String(currencyLabel || '').trim();
+    if (col.type === FieldType.CHECKBOX) {
+      return (
+        <Checkbox
+          checked={Boolean(value)}
+          disabled={!isEditing || isReadOnly || Boolean(fieldConfig.readonly)}
+          onChange={(event) => updateRow(index, col.key, event.target.checked)}
+        />
+      );
+    }
     return (
       <div className="flex items-center gap-1 w-full min-w-0 max-w-full overflow-hidden">
         <div className="flex-1 min-w-0 overflow-hidden">
@@ -3941,7 +3978,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             content={(
               <div style={{ width: 'min(88vw, 320px)' }} className="space-y-2">
                 <div className="text-xs text-gray-600 dark:text-gray-200">
-                  طول و عرض (محاسبه خودکار) بر حسب{' '}
+                  طول و عرض ({dimensionAutoQuantity ? 'محاسبه خودکار' : 'نمایشی'}) بر حسب{' '}
                   <span className="font-semibold text-brand-700 dark:text-brand-300">{dimensionMainUnit}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -3983,9 +4020,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     افزودن بعنوان مقدار واحد فرعی (عدد)
                   </Checkbox>
                 </div>
-                <div className="text-[11px] text-gray-500 dark:text-gray-300">
-                  تعداد/مقدار = طول × عرض × تعداد = {toPersianNumber(String(dimensionComputedQuantity || 0))}
-                </div>
+                {dimensionAutoQuantity ? (
+                  <div className="text-[11px] text-gray-500 dark:text-gray-300">
+                    تعداد/مقدار = طول × عرض × تعداد = {toPersianNumber(String(dimensionComputedQuantity || 0))}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-gray-500 dark:text-gray-300">
+                    ابعاد برای نمایش و چاپ ثبت می‌شود و مقدار ردیف را تغییر نمی‌دهد.
+                  </div>
+                )}
                 {!canEditDimensions && (
                   <div className="text-[11px] text-gray-500 dark:text-gray-300">
                     طول: {toPersianNumber(lengthValue ?? 0)} | عرض: {toPersianNumber(widthValue ?? 0)} | تعداد: {toPersianNumber(dimensionCountValue ?? 1)}
@@ -4449,7 +4492,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           columns={columns}
           pagination={false}
           size="middle"
-          rowKey={(record: any) => record.key || record.id || Math.random()}
+          rowKey={(record: any, index?: number) => record.key || record.id || `${block.id || 'row'}_${index ?? 0}`}
           locale={{ emptyText: <Empty description="لیست خالی است" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
           className="custom-erp-table font-medium editable-table-main"
           tableLayout="auto"

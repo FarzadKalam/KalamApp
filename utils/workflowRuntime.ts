@@ -20,6 +20,7 @@ import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatc
 import { NoteAttachment, serializeNoteContent } from './noteContent';
 import { fetchAssigneeDirectory } from './referenceData';
 import { escapeRubikaAutoLinkText } from './rubikaLinkText';
+import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 
 type WorkflowEvent = 'create' | 'upsert' | 'interval';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -1633,14 +1634,25 @@ export const executeWorkflowAction = async (
         })
       : [];
     if (!rawMessageText && attachments.length === 0) return;
-    const rubikaLinkedMessage = isRubika && attachments.length > 0
-      ? buildRubikaLinkedAttachmentMessage(rawMessageText, attachments)
+    const externalAttachments = attachments.length > 0
+      ? await shortenAttachmentsForExternalShare(attachments, {
+          moduleId,
+          recordId: currentRecord?.id ? String(currentRecord.id) : null,
+          metadata: {
+            source_type: 'workflow',
+            workflow_action_type: action.type,
+            workflow_action_id: (action as any)?.id || null,
+          },
+        })
+      : [];
+    const rubikaLinkedMessage = isRubika && externalAttachments.length > 0
+      ? buildRubikaLinkedAttachmentMessage(rawMessageText, externalAttachments)
       : null;
-    const messageText = isRubika && attachments.length > 0
+    const messageText = isRubika && externalAttachments.length > 0
       ? (String(rubikaLinkedMessage?.text || '').trim() || 'پیوست ارسال شد')
       : rawMessageText;
-    const fallbackText = isRubika && attachments.length > 0
-      ? [rawMessageText, buildAttachmentNameText(attachments)].filter(Boolean).join('\n')
+    const fallbackText = isRubika && externalAttachments.length > 0
+      ? [rawMessageText, buildAttachmentNameText(externalAttachments)].filter(Boolean).join('\n')
       : undefined;
     const titleText = (await renderWorkflowTemplate(String(config.title || ''), currentRecord, moduleId)).trim();
     const configuredRecipientFields = asArray(config.recipient_fields)

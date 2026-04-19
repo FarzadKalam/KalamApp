@@ -61,6 +61,13 @@ import { fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSource
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
+import {
+  buildStandardSelectPopupRootStyle,
+  KALAM_SELECT_FIELD_CLASSNAME,
+  mergeClassNames,
+  resolveSelectPopupContainer,
+} from '../utils/popupContainer';
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -500,7 +507,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const scanModalZIndex = overlayZIndexBase + 15;
   const quickCreateModalZIndex = overlayZIndexBase + 20;
   const selectPlacement = 'bottomRight' as const;
-  const selectPopupContainer = popupContainer || (() => document.body);
+  const selectPopupContainer = popupContainer || resolveSelectPopupContainer;
 
   useEffect(() => {
     let cancelled = false;
@@ -528,6 +535,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const fieldKey = field?.key || 'unknown';
   const isLongTextField = fieldType === FieldType.LONG_TEXT || fieldType === FieldType.SUPER_LONG_TEXT;
   const isSuperLongTextField = fieldType === FieldType.SUPER_LONG_TEXT;
+  const formattedLongTextValue = isLongTextField ? formatTextForInput(value) : '';
+  const [longTextDraftValue, setLongTextDraftValue] = useState(formattedLongTextValue);
+  const longTextDraftValueRef = useRef(formattedLongTextValue);
+  const longTextFocusedRef = useRef(false);
+  const longTextCommitTimerRef = useRef<number | null>(null);
+  const lastCommittedLongTextValueRef = useRef(normalizeDigitsToEnglish(formattedLongTextValue));
+  const onChangeRef = useRef(onChange);
   const { label: currencyLabel } = useCurrencyConfig();
   const getProtectedDynamicValues = (dynamicCategory?: string) => (
     ['main_unit', 'task_type'].includes(String(dynamicCategory || '').trim())
@@ -544,6 +558,50 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const collapsedLongTextMaxHeightClass = isSuperLongTextField ? 'max-h-40' : 'max-h-28';
   const collapsedLongTextMinRows = isSuperLongTextField ? 6 : 4;
   const expandedLongTextMaxRows = isSuperLongTextField ? 24 : 16;
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    if (!isLongTextField) return;
+    const normalizedValue = normalizeDigitsToEnglish(formattedLongTextValue);
+    lastCommittedLongTextValueRef.current = normalizedValue;
+    if (!longTextFocusedRef.current && longTextDraftValueRef.current !== formattedLongTextValue) {
+      longTextDraftValueRef.current = formattedLongTextValue;
+      setLongTextDraftValue(formattedLongTextValue);
+    }
+  }, [formattedLongTextValue, isLongTextField]);
+
+  useEffect(() => () => {
+    if (longTextCommitTimerRef.current !== null) {
+      window.clearTimeout(longTextCommitTimerRef.current);
+      longTextCommitTimerRef.current = null;
+    }
+  }, []);
+
+  const commitLongTextValue = useCallback((nextValue: string, immediate = false) => {
+    const normalizedValue = normalizeDigitsToEnglish(nextValue);
+    const runCommit = () => {
+      longTextCommitTimerRef.current = null;
+      if (lastCommittedLongTextValueRef.current === normalizedValue) return;
+      lastCommittedLongTextValueRef.current = normalizedValue;
+      onChangeRef.current(normalizedValue);
+    };
+
+    if (longTextCommitTimerRef.current !== null) {
+      window.clearTimeout(longTextCommitTimerRef.current);
+      longTextCommitTimerRef.current = null;
+    }
+
+    if (immediate) {
+      runCommit();
+      return;
+    }
+
+    longTextCommitTimerRef.current = window.setTimeout(runCommit, 180);
+  }, []);
+
   const renderSelectOption = (option: any) => {
     const data = option?.data || option;
     const tagLabel = String(data?.tagLabel || '').trim();
@@ -1124,20 +1182,38 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
 
       if (recordId && moduleId) {
-        const { error: fileInsertError } = await supabase
-          .from('record_files')
-          .insert([
-            {
-              module_id: moduleId,
-              record_id: recordId,
-              file_url: publicUrl,
-              file_type: 'image',
-              file_name: file.name || null,
-              mime_type: file.type || null,
-            },
-          ]);
-        if (fileInsertError) {
-          console.warn('Could not append file entry after image upload', fileInsertError);
+        const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+        if (hasFileManagerTables) {
+          try {
+            await createFileManagerOriginForUpload({
+              moduleId,
+              recordId,
+              recordTitle: String(recordId),
+              fileUrl: publicUrl,
+              fileName: file.name || null,
+              mimeType: file.type || null,
+              fileType: 'image',
+              sortOrder: 0,
+            });
+          } catch (fileManagerError) {
+            console.warn('Could not append file entry after image upload into file manager tables', fileManagerError);
+          }
+        } else {
+          const { error: fileInsertError } = await supabase
+            .from('record_files')
+            .insert([
+              {
+                module_id: moduleId,
+                record_id: recordId,
+                file_url: publicUrl,
+                file_type: 'image',
+                file_name: file.name || null,
+                mime_type: file.type || null,
+              },
+            ]);
+          if (fileInsertError) {
+            console.warn('Could not append file entry after image upload', fileInsertError);
+          }
         }
       }
 
@@ -2009,8 +2085,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             <div className="flex items-start gap-2 w-full">
             <Input.TextArea
               {...commonProps}
-              value={formatTextForInput(value)}
-              onChange={e => onChange(normalizeDigitsToEnglish(e.target.value))}
+              value={longTextDraftValue}
+              onFocus={() => {
+                longTextFocusedRef.current = true;
+              }}
+              onBlur={(event) => {
+                longTextFocusedRef.current = false;
+                commitLongTextValue(event.target.value, true);
+              }}
+              onChange={(event) => {
+                const nextValue = formatTextForInput(event.target.value);
+                longTextDraftValueRef.current = nextValue;
+                setLongTextDraftValue(nextValue);
+                commitLongTextValue(nextValue);
+              }}
               rows={compactMode ? 1 : collapsedLongTextMinRows}
               autoSize={compactMode
                 ? undefined
@@ -2085,13 +2173,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         return (
             <Select 
                 {...commonProps}
+                className={KALAM_SELECT_FIELD_CLASSNAME}
                 showSearch
                 options={fieldOptions}
                 allowClear
                 optionFilterProp="label"
+                optionLabelProp="label"
                 getPopupContainer={selectPopupContainer}
                 placement={selectPlacement}
-                styles={{ popup: { root: { zIndex: selectPopupZIndex } } }}
+                styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex }) } }}
             />
         );
 
@@ -2117,14 +2207,16 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         return (
             <Select 
                 {...commonProps}
+                className={KALAM_SELECT_FIELD_CLASSNAME}
                 mode="multiple"
                 showSearch
                 options={fieldOptions}
                 allowClear
                 optionFilterProp="label"
+                optionLabelProp="label"
                 getPopupContainer={selectPopupContainer}
                 placement={selectPlacement}
-                styles={{ popup: { root: { zIndex: selectPopupZIndex } } }}
+                styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex }) } }}
             />
         );
 
@@ -2135,15 +2227,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         let filteredOptions = isRelationSearching ? relationLiveOptions : relationResolvedOptions;
 
         if (isTaskSourceRecordField && !resolvedRelationTargetModuleId) {
-          return <Select disabled placeholder="ابتدا بخش مرتبط را انتخاب کنید" style={{ width: '100%' }} value={value} options={[]} />;
+          return <Select disabled placeholder="ابتدا بخش مرتبط را انتخاب کنید" className={KALAM_SELECT_FIELD_CLASSNAME} style={{ width: '100%' }} value={value} options={[]} />;
         }
         
         const relConfigAny = field.relationConfig as any;
         if (!isTaskSourceRecordField && relConfigAny?.dependsOn && allValues) {
              const depVal = allValues[relConfigAny.dependsOn];
              if (!depVal) {
-                 return <Select disabled placeholder="ابتدا فیلد مرتبط را انتخاب کنید" style={{width:'100%'}} value={value} options={[]} />;
-             }
+                 return <Select disabled placeholder="ابتدا فیلد مرتبط را انتخاب کنید" className={KALAM_SELECT_FIELD_CLASSNAME} style={{width:'100%'}} value={value} options={[]} />;
+              }
              filteredOptions = (isRelationSearching ? relationLiveOptions : fieldOptions).filter((opt: any) => opt.module === depVal);
         }
 
@@ -2153,19 +2245,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 <Select 
                     {...commonProps}
                     style={{ ...((commonProps as any)?.style || {}), width: 'auto', flex: 1, minWidth: 0 }}
-                    className="min-w-0"
+                    className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'min-w-0')}
                     showSearch
                     options={filteredOptions}
                     loading={relationLoading}
                     optionRender={renderSelectOption}
                     optionFilterProp="searchText"
+                    optionLabelProp="label"
                     getPopupContainer={selectPopupContainer}
                     placement={selectPlacement}
                     autoClearSearchValue
                     popupMatchSelectWidth={false}
                     virtual={false}
                     listHeight={isMobileViewport ? 224 : 320}
-                    styles={{ popup: { root: { zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' } } }}
+                    styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' }) } }}
                     filterOption={false}
                     searchValue={relationSearchQuery}
                     onChange={(nextValue) => {
@@ -2381,6 +2474,49 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             </div>
           );
         }
+        if (canShowFilesGallery) {
+          return (
+            <div className="flex flex-col gap-2">
+              {value ? (
+                <img src={buildImagePreviewUrl(String(value), 'thumb')} alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
+              ) : (
+                <div className="h-16 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[11px] text-gray-400">
+                  فایلی انتخاب نشده است
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <Button
+                  size="small"
+                  icon={<UploadOutlined />}
+                  onClick={() => setIsGalleryOpen(true)}
+                  disabled={!forceEditMode || isReadonly}
+                >
+                  مدیریت و انتخاب فایل
+                </Button>
+                {!!value && (
+                  <Button
+                    size="small"
+                    danger
+                    onClick={() => onChange(null)}
+                    disabled={!forceEditMode || isReadonly}
+                  >
+                    حذف فایل
+                  </Button>
+                )}
+              </div>
+              <RecordFilesManager
+                open={isGalleryOpen}
+                onClose={() => setIsGalleryOpen(false)}
+                moduleId={String(moduleId || '')}
+                recordId={recordId}
+                mainImage={value}
+                onMainImageChange={(url) => onChange(url)}
+                canEdit={!!canEditFilesManager && !!forceEditMode && !isReadonly}
+                canDelete={!!canDeleteFilesManager && !!forceEditMode && !isReadonly}
+              />
+            </div>
+          );
+        }
         return (
             <div className="flex flex-col gap-2">
               <Upload 
@@ -2398,23 +2534,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     <div><UploadOutlined /><div style={{ marginTop: 8 }}>آپلود</div></div>
                   )}
               </Upload>
-              {canShowFilesGallery && (
-                <>
-                  <Button size="small" onClick={() => setIsGalleryOpen(true)}>
-                    گالری
-                  </Button>
-                  <RecordFilesManager
-                    open={isGalleryOpen}
-                    onClose={() => setIsGalleryOpen(false)}
-                    moduleId={String(moduleId || '')}
-                    recordId={recordId}
-                    mainImage={value}
-                    onMainImageChange={(url) => onChange(url)}
-                    canEdit={!!canEditFilesManager && !!forceEditMode && !isReadonly}
-                    canDelete={!!canDeleteFilesManager && !!forceEditMode && !isReadonly}
-                  />
-                </>
-              )}
             </div>
         );
 
@@ -2597,12 +2716,21 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                         <Button
                           size="small"
                           onClick={() => {
-                            const currentValue = String(value || '');
+                            const currentValue = isLongTextField
+                              ? normalizeDigitsToEnglish(longTextDraftValueRef.current)
+                              : String(value || '');
                             const readyTextValue = String(item.content || '');
                             const nextValue = currentValue
                               ? `${currentValue}${currentValue.endsWith('\n') ? '' : '\n'}${readyTextValue}\n`
                               : `${readyTextValue}\n`;
-                            onChange(nextValue);
+                            if (isLongTextField) {
+                              const formattedNextValue = formatTextForInput(nextValue);
+                              longTextDraftValueRef.current = formattedNextValue;
+                              setLongTextDraftValue(formattedNextValue);
+                              commitLongTextValue(formattedNextValue, true);
+                            } else {
+                              onChange(nextValue);
+                            }
                           }}
                         >
                           درج
@@ -3181,12 +3309,13 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                   <Select
                     variant="borderless"
                     placeholder="جستجو یا انتخاب مسئول / نقش"
-                    className="w-full max-w-full font-semibold text-gray-700 dark:text-gray-300"
-                    styles={{ popup: { root: { minWidth: 220, zIndex: childOverlayZIndexBase } } }}
+                    className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full max-w-full font-semibold text-gray-700 dark:text-gray-300')}
+                    styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: childOverlayZIndexBase }) } }}
                     loading={assigneesLoading}
                     options={assigneeOptions}
                     showSearch
                     optionFilterProp="label"
+                    optionLabelProp="label"
                     filterOption={(input, option) =>
                       String(option?.label || '').toLowerCase().includes(String(input || '').trim().toLowerCase())
                     }
@@ -3196,7 +3325,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                         {option.data.label}
                       </Space>
                     )}
-                    getPopupContainer={(node) => node.parentElement || document.body}
+                    getPopupContainer={resolveSelectPopupContainer}
                     onChange={(value) => {
                       const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
                       const normalizedType = String(assignee_type || 'user');

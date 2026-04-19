@@ -31,6 +31,12 @@ import {
 } from '../../utils/permissions';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import {
+  buildStandardSelectPopupRootStyle,
+  KALAM_SELECT_FIELD_CLASSNAME,
+  mergeClassNames,
+  resolveSelectPopupContainer,
+} from '../../utils/popupContainer';
 
 const { Panel } = Collapse;
 
@@ -691,10 +697,13 @@ const RolesTab: React.FC = () => {
                         value={String(mobileFooterFields[slotKey] ?? MOBILE_FOOTER_DEFAULT_MODULES[index] ?? '')}
                         options={getMobileFooterOptions(slotKey)}
                         placeholder="انتخاب ماژول"
+                        className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
                         showSearch
                         optionFilterProp="label"
+                        optionLabelProp="label"
                         allowClear={index === 3}
-                        getPopupContainer={(trigger) => trigger.parentElement || document.body}
+                        getPopupContainer={resolveSelectPopupContainer}
+                        styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 240 }) } }}
                         onChange={(value) => handleMobileFooterChange(slotKey, String(value || ''))}
                       />
                     </div>

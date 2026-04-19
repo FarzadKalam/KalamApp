@@ -76,6 +76,8 @@ import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
 import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
+import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
+import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 
 const isStatementTimeoutError = (error: any) => {
   const code = String(error?.code || '').trim();
@@ -3291,21 +3293,40 @@ const ModuleShow: React.FC = () => {
         .update({ image_url: urlData.publicUrl })
         .eq('id', id);
       if (updateError) throw updateError;
-      const { error: fileInsertError } = await supabase
-        .from('record_files')
-        .insert([
-          {
-            module_id: moduleId,
-            record_id: id,
-            file_url: urlData.publicUrl,
-            file_type: 'image',
-            file_name: file.name || null,
-            mime_type: file.type || null,
-            sort_order: 0,
-          },
-        ]);
-      if (fileInsertError) {
-        console.warn('Could not append uploaded image to record_files', fileInsertError);
+
+      const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+      if (hasFileManagerTables) {
+        try {
+          await createFileManagerOriginForUpload({
+            moduleId,
+            recordId: id,
+            recordTitle: getRecordTitle(data || { id }, moduleConfig, { fallback: String(id) }),
+            fileUrl: urlData.publicUrl,
+            fileName: file.name || null,
+            mimeType: file.type || null,
+            fileType: 'image',
+            sortOrder: 0,
+          });
+        } catch (fileManagerError) {
+          console.warn('Could not append uploaded image to file manager tables', fileManagerError);
+        }
+      } else {
+        const { error: fileInsertError } = await supabase
+          .from('record_files')
+          .insert([
+            {
+              module_id: moduleId,
+              record_id: id,
+              file_url: urlData.publicUrl,
+              file_type: 'image',
+              file_name: file.name || null,
+              mime_type: file.type || null,
+              sort_order: 0,
+            },
+          ]);
+        if (fileInsertError) {
+          console.warn('Could not append uploaded image to record_files', fileInsertError);
+        }
       }
       setData((prev: any) => ({ ...prev, image_url: urlData.publicUrl }));
       msg.success('تصویر بروزرسانی شد');
@@ -3482,22 +3503,43 @@ const ModuleShow: React.FC = () => {
     const { tracker, messageKey, uploaded } = await prepareDirectPdfAsset('print_save_to_record');
     try {
       msg.open({ key: messageKey, type: 'loading', content: 'در حال ثبت PDF در فایل‌های رکورد...', duration: 0 });
-      const { error } = await tracker.step(
-        'insert_record_file_row',
-        async () => await (supabase
-          .from('record_files')
-          .insert([{
-            module_id: moduleId,
-            record_id: id,
-            file_url: uploaded.url,
-            file_type: 'file',
-            file_name: uploaded.name,
-            mime_type: 'application/pdf',
-            sort_order: 0,
-          }]) as any),
-        (result: any) => ({ insertError: result?.error ? String(result.error.message || result.error) : null })
-      );
-      if (error) throw error;
+      const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+      if (hasFileManagerTables) {
+        await tracker.step(
+          'insert_file_manager_origin',
+          async () => await createFileManagerOriginForUpload({
+            moduleId,
+            recordId: id,
+            recordTitle: getRecordTitle(data || { id }, moduleConfig, { fallback: String(id) }),
+            fileUrl: uploaded.url,
+            fileName: uploaded.name,
+            mimeType: 'application/pdf',
+            fileType: 'file',
+            sortOrder: 0,
+          }),
+          (result: any) => ({
+            assetId: result?.asset?.id ? String(result.asset.id) : null,
+            entryId: result?.entry?.id ? String(result.entry.id) : null,
+          })
+        );
+      } else {
+        const { error } = await tracker.step(
+          'insert_record_file_row',
+          async () => await (supabase
+            .from('record_files')
+            .insert([{
+              module_id: moduleId,
+              record_id: id,
+              file_url: uploaded.url,
+              file_type: 'file',
+              file_name: uploaded.name,
+              mime_type: 'application/pdf',
+              sort_order: 0,
+            }]) as any),
+          (result: any) => ({ insertError: result?.error ? String(result.error.message || result.error) : null })
+        );
+        if (error) throw error;
+      }
       tracker.finalize({ status: 'saved_to_record', uploadedUrl: uploaded.url });
       msg.success({ key: messageKey, content: 'PDF در فایل‌های رکورد ذخیره شد.' });
     } catch (error) {
@@ -3537,7 +3579,18 @@ const ModuleShow: React.FC = () => {
     const authorName = allUsers.find((user) => String(user?.id || '') === String(currentUserId || ''))?.full_name || null;
     const noteText = String(printShareMessageText || '').trim();
     const attachment = [{ url: pendingPrintShareFile.url, name: pendingPrintShareFile.name, mimeType: 'application/pdf' }];
-    const externalText = [noteText, `فایل: ${pendingPrintShareFile.url}`].filter(Boolean).join('\n');
+    const externalAttachment = await shortenAttachmentsForExternalShare(attachment as any, {
+      moduleId: scope.module_id,
+      recordId: scope.record_id,
+      title: pendingPrintShareFile.name,
+      metadata: {
+        source_type: 'print_share',
+      },
+    });
+    const externalText = [
+      noteText,
+      externalAttachment.map((item) => `فایل: ${String(item?.url || '').trim()}`).filter(Boolean).join('\n'),
+    ].filter(Boolean).join('\n');
     const attachmentNameText = `پیوست‌ها:\n🔗 ${String(pendingPrintShareFile.name || 'فایل PDF').trim() || 'فایل PDF'}`;
     const payloads: Array<Record<string, any>> = [];
     const smsRecipients = new Set<string>();
@@ -3625,7 +3678,7 @@ const ModuleShow: React.FC = () => {
         }
         const isRubikaTarget = String(target.channel_type || '').trim() === 'rubika';
         const rubikaLinkedMessage = isRubikaTarget
-          ? buildRubikaLinkedAttachmentMessage(noteText, attachment)
+          ? buildRubikaLinkedAttachmentMessage(noteText, externalAttachment)
           : null;
         const botMessageText = isRubikaTarget
           ? (String(rubikaLinkedMessage?.text || '').trim() || 'PDF ارسال شد.')
@@ -3654,6 +3707,13 @@ const ModuleShow: React.FC = () => {
         }
 
         const providerResponse = proxyData?.provider_result || {};
+        const currentSender = allUsers.find((user) => String(user?.id || '') === String(currentUserId || '')) || null;
+        const senderPayload = {
+          sender_user_id: String(currentUserId || '').trim() || null,
+          sender_profile_id: String(currentUserId || '').trim() || null,
+          sender_display_name: String(currentSender?.full_name || currentSender?.email || currentSender?.mobile_1 || '').trim() || null,
+          sender_avatar_url: String(currentSender?.avatar_url || '').trim() || null,
+        };
         const { error: insertError } = await supabase
           .from('counterparty_bot_messages')
           .insert([{
@@ -3664,13 +3724,16 @@ const ModuleShow: React.FC = () => {
             direction: 'outbound',
             message_type: 'file',
             chat_id: target.bot_chat_id,
-            provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || '') || null,
+            provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || providerResponse?.data?.message_id || '') || null,
             content_text: String(botMessageText || '').trim(),
             file_url: pendingPrintShareFile.url,
             file_name: pendingPrintShareFile.name,
             mime_type: 'application/pdf',
+            created_by: String(currentUserId || '').trim() || null,
             payload: {
               attachments: attachment,
+              external_attachments: externalAttachment,
+              ...senderPayload,
               provider_response: providerResponse || {},
             },
           }]);

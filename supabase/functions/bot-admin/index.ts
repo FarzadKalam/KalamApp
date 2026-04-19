@@ -3,7 +3,7 @@
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
 type BotAdminBody = {
-  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file';
+  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file' | 'edit_message' | 'delete_message';
   channel?: BotChannel | string;
   connectionId?: string;
   cursor?: string | number | null;
@@ -13,6 +13,8 @@ type BotAdminBody = {
   fileId?: string;
   fileName?: string;
   messageId?: string;
+  providerMessageId?: string;
+  provider_message_id?: string;
   skipLog?: boolean;
   extraPayload?: Record<string, any>;
 };
@@ -979,6 +981,72 @@ const sendProviderMessage = async (
   throw lastError || new Error('Bot send failed');
 };
 
+const buildProviderMethodUrl = (
+  channel: BotChannel,
+  settings: Record<string, any>,
+  methodName: string
+) => {
+  const token = pick(settings?.bot_token);
+  if (!token) throw new Error('توکن بات تنظیم نشده است.');
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url, channel);
+  const path = channel === 'rubika'
+    ? `/v3/${encodeURIComponent(token)}/${methodName}`
+    : `/bot${encodeURIComponent(token)}/${methodName}`;
+  return `${baseUrl}${path}`;
+};
+
+const callProviderMessageAction = async ({
+  channel,
+  settings,
+  action,
+  chatId,
+  providerMessageId,
+  text,
+}: {
+  channel: BotChannel;
+  settings: Record<string, any>;
+  action: 'edit_message' | 'delete_message';
+  chatId: string;
+  providerMessageId: string;
+  text?: string;
+}) => {
+  const normalizedChatId = String(chatId || '').trim();
+  const normalizedMessageId = String(providerMessageId || '').trim();
+  if (!normalizedChatId) throw new Error('chatId الزامی است.');
+  if (!normalizedMessageId) throw new Error('message_id الزامی است.');
+
+  const methodName = action === 'edit_message' ? 'editMessageText' : 'deleteMessage';
+  const requestBody: Record<string, any> = {
+    chat_id: normalizedChatId,
+    message_id: normalizedMessageId,
+  };
+  if (action === 'edit_message') {
+    const nextText = String(text || '').trim();
+    if (!nextText) throw new Error('text الزامی است.');
+    requestBody.text = nextText;
+  }
+
+  const response = await fetch(buildProviderMethodUrl(channel, settings || {}, methodName), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      typeof payload === 'string'
+        ? payload
+        : String(payload?.description || payload?.message || payload?.data?.status || `HTTP ${response.status}`)
+    );
+  }
+  if (channel === 'rubika') {
+    ensureRubikaSuccess(payload);
+  } else {
+    ensureTelegramLikeSuccess(payload);
+  }
+  return payload;
+};
+
 const sendTestMessage = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1320,6 +1388,7 @@ Deno.serve(async (req) => {
     const fileId = String(body?.fileId || '').trim();
     const fileName = String(body?.fileName || '').trim();
     const messageId = String(body?.messageId || '').trim();
+    const providerMessageId = pick(body?.providerMessageId, body?.provider_message_id);
 
     if (!['telegram', 'bale', 'rubika'].includes(channel)) {
       return json(400, { success: false, message: 'channel معتبر نیست.' });
@@ -1327,7 +1396,7 @@ Deno.serve(async (req) => {
     if (!connectionId) {
       return json(400, { success: false, message: 'connectionId الزامی است.' });
     }
-    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file'].includes(action)) {
+    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file', 'edit_message', 'delete_message'].includes(action)) {
       return json(400, { success: false, message: 'action معتبر نیست.' });
     }
 
@@ -1380,6 +1449,33 @@ Deno.serve(async (req) => {
         success: true,
         channel,
         message_sent: true,
+        provider_result: payload,
+      });
+    }
+
+    if (action === 'edit_message' || action === 'delete_message') {
+      if (!chatId) {
+        return json(400, { success: false, message: 'chatId الزامی است.' });
+      }
+      if (!providerMessageId) {
+        return json(400, { success: false, message: 'providerMessageId الزامی است.' });
+      }
+      if (action === 'edit_message' && !text) {
+        return json(400, { success: false, message: 'text الزامی است.' });
+      }
+      const payload = await callProviderMessageAction({
+        channel,
+        settings: integration?.settings || {},
+        action,
+        chatId,
+        providerMessageId,
+        text,
+      });
+      return json(200, {
+        success: true,
+        channel,
+        message_action: action,
+        provider_message_id: providerMessageId,
         provider_result: payload,
       });
     }

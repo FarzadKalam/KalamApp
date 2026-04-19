@@ -11,7 +11,8 @@ import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../../uti
 import SharedNoteCard from '../notes/SharedNoteCard';
 import SharedNoteComposer from '../notes/SharedNoteComposer';
 import { parseNoteContent, serializeNoteContent } from '../../utils/noteContent';
-import { uploadNoteAttachments } from '../../utils/noteAttachments';
+import type { NoteAttachment } from '../../utils/noteContent';
+import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../utils/noteAttachments';
 import { normalizeNoteScope } from '../../utils/noteScope';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../utils/referenceData';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
@@ -63,6 +64,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [mentionsLoading, setMentionsLoading] = useState(false);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [pendingLinkedAttachments, setPendingLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
@@ -542,7 +544,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
 
   const handleSubmit = async () => {
     if (view !== 'notes') return;
-    if (!newItem.trim() && pendingFiles.length === 0) return;
+    if (!newItem.trim() && pendingFiles.length === 0 && pendingLinkedAttachments.length === 0) return;
 
     setLoading(true);
     try {
@@ -551,10 +553,17 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       const attachments = pendingFiles.length > 0
         ? await uploadNoteAttachments(scope.hasLinkedRecord ? scope.module_id : null, scope.hasLinkedRecord ? scope.record_id : null, pendingFiles)
         : [];
+      const mergedAttachments = [...pendingLinkedAttachments, ...attachments].filter((attachment, index, all) => {
+        const url = String(attachment?.url || '').trim();
+        return url && all.findIndex((item) => String(item?.url || '').trim() === url) === index;
+      });
+      if (pendingLinkedAttachments.length > 0) {
+        await ensureNoteAttachmentShortcuts(scope.module_id, scope.record_id, pendingLinkedAttachments);
+      }
       const payload = {
         module_id: scope.module_id,
         record_id: scope.record_id,
-        content: serializeNoteContent(newItem, attachments),
+        content: serializeNoteContent(newItem, mergedAttachments),
         reply_to: replyToId || null,
         mention_user_ids,
         mention_role_ids,
@@ -580,6 +589,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setMentionValues([]);
       setMentionPickerOpen(false);
       setPendingFiles([]);
+      setPendingLinkedAttachments([]);
       setReplyToId(null);
       setSmsNotificationEnabled(false);
       await fetchData();
@@ -691,6 +701,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
             mentionPickerOpen={mentionPickerOpen}
             onToggleMentionPicker={() => setMentionPickerOpen((prev) => !prev)}
             attachments={pendingFiles}
+            linkedAttachments={pendingLinkedAttachments}
             onFilesSelected={(files) => {
               setPendingFiles((prev) => {
                 const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
@@ -703,11 +714,26 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
             onRemoveAttachment={(fileName) => {
               setPendingFiles((prev) => prev.filter((file) => file.name !== fileName));
             }}
+            onLinkedAttachmentsSelected={(attachments) => {
+              setPendingLinkedAttachments((prev) => {
+                const map = new Map(prev.map((attachment) => [String(attachment.url || ''), attachment]));
+                attachments.forEach((attachment) => {
+                  const url = String(attachment.url || '').trim();
+                  if (url) map.set(url, attachment);
+                });
+                return Array.from(map.values());
+              });
+            }}
+            onRemoveLinkedAttachment={(url) => {
+              setPendingLinkedAttachments((prev) => prev.filter((attachment) => String(attachment.url || '') !== String(url || '')));
+            }}
+            filePickerModuleId={moduleId}
+            filePickerRecordId={recordId}
             replyActive={Boolean(replyToId)}
             onClearReply={() => setReplyToId(null)}
             smsNotificationEnabled={smsNotificationEnabled}
             onSmsNotificationChange={setSmsNotificationEnabled}
-            submitDisabled={!newItem.trim() && pendingFiles.length === 0}
+            submitDisabled={!newItem.trim() && pendingFiles.length === 0 && pendingLinkedAttachments.length === 0}
           />
         </div>
       ) : null}

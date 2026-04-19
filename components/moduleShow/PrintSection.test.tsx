@@ -88,4 +88,40 @@ describe('PrintSection', () => {
     expect(onSelectTemplate).toHaveBeenCalledWith('custom:a5');
     expect(screen.getAllByTestId('print-card')).toHaveLength(1);
   });
+
+  it('removes the modal portal after cancel so it cannot block page clicks', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+
+    const ControlledPrintSection = () => {
+      const [open, setOpen] = React.useState(true);
+      return (
+        <>
+          <button type="button">دکمه پشت مودال</button>
+          <PrintSection
+            isPrintModalOpen={open}
+            onClose={() => setOpen(false)}
+            onPrint={vi.fn()}
+            printTemplates={templates}
+            selectedTemplateId="custom:a4"
+            onSelectTemplate={vi.fn()}
+            renderPrintCard={() => <div data-testid="print-card">سند چاپی</div>}
+            printMode={false}
+          />
+        </>
+      );
+    };
+
+    render(<ControlledPrintSection />);
+
+    await user.click(await screen.findByRole('button', { name: 'انصراف' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('انتخاب قالب چاپ')).not.toBeInTheDocument();
+      expect(document.querySelector('.print-select-modal .ant-modal-wrap')).toBeNull();
+      expect(document.querySelector('.print-select-modal .ant-modal-mask')).toBeNull();
+    });
+
+    expect(screen.getByRole('button', { name: 'دکمه پشت مودال' })).toBeInTheDocument();
+  });
 });

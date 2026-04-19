@@ -59,6 +59,7 @@ export const DASHBOARD_WIDGET_PERMISSIONS = [
   { key: 'quick_add', label: 'افزودن سریع' },
   { key: 'activity_calendar', label: 'تقویم فعالیت‌ها' },
   { key: 'reports_slider', label: 'گزارش‌های اسلایدی' },
+  { key: 'our_processes', label: 'فرآیندهای ما' },
   { key: 'summary_cards', label: 'کارت‌های آماری' },
   { key: 'recent_lists', label: 'جدول‌های آخرین رکوردها' },
 ];
@@ -81,9 +82,12 @@ export const MODULE_GOAL_PERMISSION_FIELDS = [
 ] as const;
 
 export const FILES_PERMISSION_FIELDS = [
-  { key: 'gallery_page', label: 'گالری فایل‌ها' },
+  { key: 'gallery_page', label: 'صفحه مدیریت فایل‌ها' },
+  { key: 'explorer_page', label: 'فایل منیجر' },
   { key: 'recycle_bin_page', label: 'سطل بازیافت' },
   { key: 'record_files_manager', label: 'مدیریت فایل‌ها' },
+  { key: 'manage_manual_folders', label: 'ساخت/ویرایش پوشه‌های دستی' },
+  { key: 'share_public_links', label: 'اشتراک‌گذاری لینک عمومی' },
 ];
 
 export const ACCOUNTING_PERMISSION_FIELDS = [
@@ -553,17 +557,21 @@ export const resolveFilesAccessPermissions = (permissions: PermissionMap | null 
   const canDeleteRoot = perm.delete !== false;
 
   const canViewGallery = canViewRoot && fields.gallery_page !== false;
+  const canViewExplorer = canViewRoot && fields.explorer_page !== false;
   const canViewRecycleBin = canViewRoot && fields.recycle_bin_page !== false;
   const canViewRecordFilesManager = canViewRoot && fields.record_files_manager !== false;
 
   return {
     canViewGallery,
+    canViewExplorer,
     canEditGallery: canViewGallery && canEditRoot,
     canDeleteGallery: canViewGallery && canDeleteRoot,
     canViewRecycleBin,
     canViewRecordFilesManager,
     canEditRecordFilesManager: canViewRecordFilesManager && canEditRoot,
     canDeleteRecordFilesManager: canViewRecordFilesManager && canDeleteRoot,
+    canManageManualFolders: canViewRoot && canEditRoot && fields.manage_manual_folders !== false,
+    canSharePublicLinks: canViewRoot && canEditRoot && fields.share_public_links !== false,
   };
 };
 

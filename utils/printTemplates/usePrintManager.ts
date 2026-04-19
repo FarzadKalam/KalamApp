@@ -47,6 +47,11 @@ const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
+const PRINT_BODY_FOOTER_SAFETY_PX = 0;
+const PRINT_BODY_PAGE_STEP_PX = 28;
+const PRINT_BODY_EDGE_GUARD_PX = 28;
+const PRINT_BODY_MEASURE_TAIL_BUFFER_PX = 220;
+const PRINT_SECTION_CONTENT_PADDING = '2px 10px';
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -111,6 +116,60 @@ const toPersianWords = (value: number): string => {
 };
 
 const mmToPx = (value: number) => (value * 96) / 25.4;
+const pxToMm = (value: number) => value / mmToPx(1);
+const toCssMm = (value: number) => `${Number(pxToMm(value).toFixed(3))}mm`;
+const snapPrintBodyHeightPx = (value: number) =>
+  Math.max(80, Math.floor(Math.max(80, value) / PRINT_BODY_PAGE_STEP_PX) * PRINT_BODY_PAGE_STEP_PX);
+const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
+  Math.max(80, snapPrintBodyHeightPx(pageBodyHeightPx - PRINT_BODY_EDGE_GUARD_PX));
+
+const getMeasuredPrintBodyHeight = (bodyMeasure: HTMLElement) => {
+  const rootRect = bodyMeasure.getBoundingClientRect();
+  const descendantBottom = Array.from(bodyMeasure.querySelectorAll('*')).reduce((maxBottom, element) => {
+    const rect = (element as HTMLElement).getBoundingClientRect();
+    if (!rect.height && !rect.width) return maxBottom;
+    return Math.max(maxBottom, rect.bottom - rootRect.top);
+  }, 0);
+
+  return Math.max(
+    bodyMeasure.scrollHeight,
+    bodyMeasure.offsetHeight,
+    bodyMeasure.clientHeight,
+    Math.ceil(rootRect.height || 0),
+    Math.ceil(descendantBottom || 0),
+    1
+  );
+};
+
+const getMeasuredPrintPageCount = (bodyHeight: number, pageBodyStepPx: number) => {
+  const safeStep = Math.max(80, pageBodyStepPx || 0);
+  const safeHeight = Math.max(1, bodyHeight || 0);
+  const bufferedHeight =
+    safeHeight > safeStep
+      ? safeHeight + PRINT_BODY_MEASURE_TAIL_BUFFER_PX
+      : safeHeight;
+  return Math.max(1, Math.ceil(bufferedHeight / safeStep));
+};
+
+const getTemplatePageBodyHeightPx = ({
+  innerHeightMm,
+  showHeader,
+  showFooter,
+  headerHeight,
+  footerHeight,
+}: {
+  innerHeightMm: number;
+  showHeader: boolean;
+  showFooter: boolean;
+  headerHeight: number;
+  footerHeight: number;
+}) =>
+  snapPrintBodyHeightPx(
+    mmToPx(innerHeightMm) -
+      (showHeader ? headerHeight : 0) -
+      (showFooter ? footerHeight : 0) -
+      PRINT_BODY_FOOTER_SAFETY_PX
+  );
 
 const getPaperSizeMetrics = (
   paperSize?: 'A4' | 'A5' | 'A6',
@@ -226,16 +285,38 @@ const extractAnyRelationLabel = (relationOptions: Record<string, any[]>, value: 
   }
   return '';
 };
-const getInvoiceItemTitle = (row: any) =>
+const extractBillboardRelationLabel = (relationOptions: Record<string, any[]>, value: any) => {
+  const targetValue = String(value || '').trim();
+  if (!targetValue) return '';
+  for (const options of Object.values(relationOptions || {})) {
+    const match = Array.isArray(options)
+      ? options.find((item: any) =>
+          String(item?.value || '').trim() === targetValue &&
+          (String(item?.module || '').trim() === 'billboards' || String(item?.tagLabel || '').trim() === 'محیطی')
+        )
+      : null;
+    const label = String(match?.label || match?.name || '').trim();
+    if (label) return label;
+  }
+  return '';
+};
+const getInvoiceItemTitle = (
+  row: any,
+  resolveBillboardLabel: (row: any) => string = () => ''
+) =>
   String(
     row?.package_name ||
     row?.package?.name ||
     row?.selected_package_name ||
     row?.selected_package_label ||
     row?.package_title ||
+    resolveBillboardLabel(row) ||
     row?.selected_product_name ||
     row?.selectedProductName ||
     row?.selected_product_label ||
+    row?.billboard?.address ||
+    row?.billboard_address ||
+    row?.address ||
     row?.billboard?.name ||
     row?.billboard?.title ||
     row?.selected_billboard_name ||
@@ -322,6 +403,7 @@ export const usePrintManager = ({
   const [sellerInfo, setSellerInfo] = useState<any>(null);
   const [customerInfo, setCustomerInfo] = useState<any>(null);
   const [supplierInfo, setSupplierInfo] = useState<any>(null);
+  const [billboardPrintLabelsById, setBillboardPrintLabelsById] = useState<Record<string, string>>({});
   const [linkedAttachmentCount, setLinkedAttachmentCount] = useState<number | null>(null);
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
   const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
@@ -370,6 +452,55 @@ export const usePrintManager = ({
       mounted = false;
     };
   }, [isPrintModalOpen, loadTemplates, printMode]);
+
+  const billboardPrintCandidateIds = useMemo(() => {
+    const ids = new Set<string>();
+    const collectFromItems = (items: any) => {
+      if (!Array.isArray(items)) return;
+      items.forEach((item: any) => {
+        const productId = String(item?.product_id || '').trim();
+        if (productId) ids.add(productId);
+        const selectedProductId = String(item?.selected_product_id || '').trim();
+        if (selectedProductId) ids.add(selectedProductId);
+        if (Array.isArray(item?.package_items)) collectFromItems(item.package_items);
+      });
+    };
+
+    collectFromItems(data?.invoiceItems);
+    collectFromItems(data?.products);
+    return Array.from(ids).sort();
+  }, [data?.invoiceItems, data?.products]);
+
+  useEffect(() => {
+    if (!billboardPrintCandidateIds.length) {
+      setBillboardPrintLabelsById({});
+      return;
+    }
+
+    let mounted = true;
+    supabase
+      .from('billboards')
+      .select('id, address, name, system_code')
+      .in('id', billboardPrintCandidateIds)
+      .then(({ data: rows, error }) => {
+        if (!mounted) return;
+        if (error) {
+          console.error('Load billboard print labels failed', error);
+          return;
+        }
+        const nextLabels: Record<string, string> = {};
+        (rows || []).forEach((row: any) => {
+          const id = String(row?.id || '').trim();
+          const label = String(row?.address || row?.name || row?.system_code || '').trim();
+          if (id && label) nextLabels[id] = label;
+        });
+        setBillboardPrintLabelsById(nextLabels);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [billboardPrintCandidateIds]);
 
   const availableTemplates = useMemo<StoredPrintTemplate[]>(() => {
     const merged = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || storedTemplates);
@@ -649,20 +780,17 @@ export const usePrintManager = ({
         left: Number(selectedStoredTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
       };
       const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
-      const pageBodyHeightPx = Math.max(
-        80,
-        mmToPx(innerHeightMm) - (showHeader ? headerHeight : 0) - (showFooter ? footerHeight : 0)
-      );
+      const pageBodyHeightPx = getTemplatePageBodyHeightPx({
+        innerHeightMm,
+        showHeader,
+        showFooter,
+        headerHeight,
+        footerHeight,
+      });
+      const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
       const bodyMeasure = bodyMeasureRef.current;
-      const bodyRectHeight = Math.ceil(bodyMeasure.getBoundingClientRect().height || 0);
-      const bodyHeight = Math.max(
-        bodyMeasure.scrollHeight,
-        bodyMeasure.offsetHeight,
-        bodyMeasure.clientHeight,
-        bodyRectHeight,
-        1
-      );
-      measuredPageCount = Math.max(1, Math.ceil(Math.max(bodyHeight - 4, 1) / pageBodyHeightPx));
+      const bodyHeight = getMeasuredPrintBodyHeight(bodyMeasure);
+      measuredPageCount = getMeasuredPrintPageCount(bodyHeight, pageBodyStepPx);
     }
     if (!bodyMeasureRef.current && previewPageCount > measuredPageCount) {
       measuredPageCount = previewPageCount;
@@ -942,6 +1070,45 @@ export const usePrintManager = ({
     () => localizePlainText(sellerInfo?.currency_label || sellerInfo?.currency_code || 'ریال'),
     [sellerInfo?.currency_code, sellerInfo?.currency_label]
   );
+  const resolveBillboardPrintLabel = useCallback((row: any) => {
+    const directLabel = String(
+      row?.billboard?.address ||
+      row?.billboard_address ||
+      row?.address ||
+      row?.selected_billboard_address ||
+      ''
+    ).trim();
+    if (directLabel) return directLabel;
+
+    const candidateIds = [
+      row?.product_id,
+      row?.selected_product_id,
+      row?.billboard_id,
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+
+    for (const candidateId of candidateIds) {
+      const fetchedLabel = String(billboardPrintLabelsById[candidateId] || '').trim();
+      if (fetchedLabel) return fetchedLabel;
+      const relationLabel = extractBillboardRelationLabel(relationOptions, candidateId);
+      if (relationLabel) return relationLabel;
+    }
+
+    return '';
+  }, [billboardPrintLabelsById, relationOptions]);
+  const dataWithResolvedPrintLabels = useMemo(() => {
+    if (!Array.isArray(data?.invoiceItems) || data.invoiceItems.length === 0) return data;
+    return {
+      ...data,
+      invoiceItems: data.invoiceItems.map((item: any) => {
+        const billboardLabel = resolveBillboardPrintLabel(item);
+        return billboardLabel
+          ? { ...item, selected_product_name: billboardLabel, product_name: billboardLabel }
+          : item;
+      }),
+    };
+  }, [data, resolveBillboardPrintLabel]);
   const buildPackageSummaryTableHtml = useCallback(() => {
     if (moduleId !== 'product_bundles') return '';
     const hasAnyValue = packageSummary.gross > 0 || packageSummary.discount > 0 || packageSummary.final > 0;
@@ -1051,7 +1218,7 @@ export const usePrintManager = ({
 
     const rows = items
       .map((item: any) => {
-        const productName = getInvoiceItemTitle(item);
+        const productName = getInvoiceItemTitle(item, resolveBillboardPrintLabel);
         const deliveryTime = String(item?.delivery_time || '').trim();
         const quantity = toPersianNumber(String(item?.quantity || 0));
         const unitPrice = formatPersianPrice(Number(item?.unit_price || 0));
@@ -1083,7 +1250,7 @@ export const usePrintManager = ({
         <tbody>${rows}</tbody>
       </table>
     `;
-  }, []);
+  }, [resolveBillboardPrintLabel]);
 
   const getFieldOptionLabel = useCallback(
     (fieldKey: string, rawValue: any, blockId?: string) => {
@@ -1110,14 +1277,14 @@ export const usePrintManager = ({
       let rawValue =
         key === 'product_id'
           ? (
-              getInvoiceItemTitle(row) !== '-'
-                ? getInvoiceItemTitle(row)
+              getInvoiceItemTitle(row, resolveBillboardPrintLabel) !== '-'
+                ? getInvoiceItemTitle(row, resolveBillboardPrintLabel)
                 : extractAnyRelationLabel(relationOptions, row?.product_id)
             )
           : key === 'package_id'
             ? (
-                getInvoiceItemTitle(row) !== '-'
-                  ? getInvoiceItemTitle(row)
+                getInvoiceItemTitle(row, resolveBillboardPrintLabel) !== '-'
+                  ? getInvoiceItemTitle(row, resolveBillboardPrintLabel)
                   : extractAnyRelationLabel(relationOptions, row?.package_id)
               )
           : row?.[key] ??
@@ -1167,7 +1334,7 @@ export const usePrintManager = ({
 
       return getDisplayValue(rawValue);
     },
-    [formatPrintValue, getFieldOptionLabel, relationOptions]
+    [formatPrintValue, getFieldOptionLabel, relationOptions, resolveBillboardPrintLabel]
   );
 
   const buildBlockSummaryMap = useCallback(
@@ -1323,7 +1490,9 @@ export const usePrintManager = ({
                   return getDisplayValue(row?.cheque_bank_name || row?.bank_name || '');
                 }
                 if (!isSystemFieldVisible(`block.${blockId}.${key}`)) return '';
-                if (key === 'product_id') {
+                if (['product_id', 'product_name', 'selected_product_name'].includes(key)) {
+                  const billboardLabel = resolveBillboardPrintLabel(row);
+                  if (billboardLabel) return billboardLabel;
                   return formatCellValue(blockId, { key, title: 'محصول', type: 'relation' }, row);
                 }
                 if (key === 'dimensions') {
@@ -1373,7 +1542,7 @@ export const usePrintManager = ({
 
       return root.innerHTML;
     },
-    [buildBlockSummaryMap, buildRowMetaText, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, pruneEmptyTableCells]
+    [buildBlockSummaryMap, buildRowMetaText, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, pruneEmptyTableCells, resolveBillboardPrintLabel]
   );
 
   const buildBlockTableHtml = useCallback(
@@ -1598,6 +1767,16 @@ export const usePrintManager = ({
       }
       if ((root === 'company' || root === 'customer' || root === 'supplier') && nestedPath === 'address') {
         return getAddressDisplay(source);
+      }
+      if ((root === 'customer' || root === 'supplier') && nestedPath === 'full_name') {
+        const fullName = String(source?.full_name || '').trim();
+        if (fullName) return localizePlainText(fullName);
+        return localizePlainText(
+          [source?.prefix, source?.first_name, source?.last_name]
+            .map((part) => String(part || '').trim())
+            .filter(Boolean)
+            .join(' ')
+        );
       }
 
       const raw = getPathValue(source, nestedPath);
@@ -1826,20 +2005,17 @@ export const usePrintManager = ({
       };
 
       const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
-      const pageBodyHeightPx = Math.max(
-        80,
-        mmToPx(innerHeightMm) - (showHeader ? headerHeight : 0) - (showFooter ? footerHeight : 0)
-      );
+      const pageBodyHeightPx = getTemplatePageBodyHeightPx({
+        innerHeightMm,
+        showHeader,
+        showFooter,
+        headerHeight,
+        footerHeight,
+      });
+      const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
 
-      const bodyRectHeight = Math.ceil(bodyMeasure.getBoundingClientRect().height || 0);
-      const bodyHeight = Math.max(
-        bodyMeasure.scrollHeight,
-        bodyMeasure.offsetHeight,
-        bodyMeasure.clientHeight,
-        bodyRectHeight,
-        1
-      );
-      const nextPageCount = Math.max(1, Math.ceil(Math.max(bodyHeight - 4, 1) / pageBodyHeightPx));
+      const bodyHeight = getMeasuredPrintBodyHeight(bodyMeasure);
+      const nextPageCount = getMeasuredPrintPageCount(bodyHeight, pageBodyStepPx);
       setRenderedPageCount((prev) => (prev === nextPageCount ? prev : nextPageCount));
     };
 
@@ -1920,6 +2096,8 @@ export const usePrintManager = ({
       const showFooter = selectedStoredTemplate?.showFooter !== false;
       const headerHeight = Number(selectedStoredTemplate?.headerHeight || 84);
       const footerHeight = Number(selectedStoredTemplate?.footerHeight || 62);
+      const headerHeightCss = toCssMm(headerHeight);
+      const footerHeightCss = toCssMm(footerHeight);
       const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'}`;
       const pageMargins = {
         top: Number(selectedStoredTemplate?.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
@@ -1927,13 +2105,23 @@ export const usePrintManager = ({
         bottom: Number(selectedStoredTemplate?.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
         left: Number(selectedStoredTemplate?.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
       };
+      const innerWidthMm = Math.max(20, metrics.widthMm - pageMargins.left - pageMargins.right);
       const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
-      const pageBodyHeightPx = Math.max(
-        80,
-        mmToPx(innerHeightMm) - (showHeader ? headerHeight : 0) - (showFooter ? footerHeight : 0)
-      );
+      const pageBodyHeightPx = getTemplatePageBodyHeightPx({
+        innerHeightMm,
+        showHeader,
+        showFooter,
+        headerHeight,
+        footerHeight,
+      });
+      const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
+      const pageBodyHeightCss = toCssMm(pageBodyHeightPx);
+      const measuredCurrentPageCount = bodyMeasureRef.current
+        ? getMeasuredPrintPageCount(getMeasuredPrintBodyHeight(bodyMeasureRef.current), pageBodyStepPx)
+        : 0;
       const effectivePageCount = Math.max(
         1,
+        measuredCurrentPageCount,
         typeof pageCountOverride === 'number'
           ? pageCountOverride
           : printMode && forcedPrintPageCount
@@ -1963,7 +2151,8 @@ export const usePrintManager = ({
               position: 'absolute',
               insetInlineStart: -99999,
               top: 0,
-              width: paper.width,
+              width: `${innerWidthMm}mm`,
+              boxSizing: 'border-box',
               visibility: 'hidden',
               pointerEvents: 'none',
               zIndex: -1,
@@ -1973,6 +2162,7 @@ export const usePrintManager = ({
           React.createElement('div', {
             ref: bodyMeasureRef,
             className: 'print-template-body-measure',
+            style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
             dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
           })
         ),
@@ -2010,15 +2200,17 @@ export const usePrintManager = ({
                       width: '100%',
                       background: '#fff',
                       boxSizing: 'border-box',
-                      height: `${headerHeight}px`,
-                      minHeight: `${headerHeight}px`,
+                      flex: `0 0 ${headerHeightCss}`,
+                      height: headerHeightCss,
+                      minHeight: headerHeightCss,
+                      maxHeight: headerHeightCss,
                       overflow: 'hidden',
                       padding: 0,
                     },
                   },
                   React.createElement('div', {
                     className: 'print-template-header-inner',
-                    style: { padding: '1px 0', boxSizing: 'border-box', minHeight: 0 },
+                    style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
                     dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.headerHtml || '' },
                   })
                 )
@@ -2030,9 +2222,10 @@ export const usePrintManager = ({
                 style: {
                   width: '100%',
                   boxSizing: 'border-box',
-                  flex: '1 1 auto',
-                  minHeight: `${pageBodyHeightPx}px`,
-                  height: `${pageBodyHeightPx}px`,
+                  flex: `0 0 ${pageBodyHeightCss}`,
+                  minHeight: pageBodyHeightCss,
+                  height: pageBodyHeightCss,
+                  maxHeight: pageBodyHeightCss,
                   position: 'relative',
                   overflow: 'hidden',
                 },
@@ -2041,14 +2234,28 @@ export const usePrintManager = ({
                 'div',
                 {
                   className: 'print-template-body-segment',
-                  style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageIndex * pageBodyHeightPx}px)` },
+                  style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageIndex * pageBodyStepPx}px)` },
                 },
                 React.createElement('div', {
                   className: 'print-template-body-inner',
-                  style: { padding: '1px 0', boxSizing: 'border-box' },
+                  style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
                   dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
                 })
-              )
+              ),
+              React.createElement('div', {
+                'aria-hidden': true,
+                className: 'print-template-body-edge-guard',
+                style: {
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: toCssMm(PRINT_BODY_EDGE_GUARD_PX),
+                  background: '#fff',
+                  pointerEvents: 'none',
+                  zIndex: 2,
+                },
+              })
             ),
             showFooter
               ? React.createElement(
@@ -2059,18 +2266,24 @@ export const usePrintManager = ({
                       width: '100%',
                       background: '#fff',
                       boxSizing: 'border-box',
-                      height: `${footerHeight}px`,
-                      minHeight: `${footerHeight}px`,
+                      flex: `0 0 ${footerHeightCss}`,
+                      height: footerHeightCss,
+                      minHeight: footerHeightCss,
+                      maxHeight: footerHeightCss,
+                      marginTop: 'auto',
                       overflow: 'hidden',
                       padding: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'flex-end',
                     },
                   },
                   React.createElement(
                     'div',
-                    { className: 'print-template-footer-stack', style: { display: 'flex', flexDirection: 'column', gap: 1 } },
+                    { className: 'print-template-footer-stack', style: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%' } },
                     React.createElement('div', {
                       className: 'print-template-footer-inner',
-                      style: { padding: '1px 0', boxSizing: 'border-box', minHeight: 0 },
+                      style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
                       dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.footerHtml || '' },
                     }),
                     effectivePageCount > 1
@@ -2092,7 +2305,7 @@ export const usePrintManager = ({
       case 'invoice_sales_official':
       case 'invoice_sales_simple':
         return React.createElement(InvoiceCard, {
-          data,
+          data: dataWithResolvedPrintLabels,
           formatPersianPrice,
           toPersianNumber,
           safeJalaliFormat,
@@ -2131,6 +2344,7 @@ export const usePrintManager = ({
     printableFieldsForTemplate,
     selectedPrintFields,
     data,
+    dataWithResolvedPrintLabels,
     relationOptions,
     customerInfo,
     sellerInfo,

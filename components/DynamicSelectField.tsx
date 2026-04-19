@@ -5,6 +5,12 @@ import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import { supabase } from '../supabaseClient';
 import { replaceDynamicOptionValueAcrossModules } from '../utils/dynamicOptionReplacement';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import {
+  buildStandardSelectPopupRootStyle,
+  KALAM_SELECT_FIELD_CLASSNAME,
+  mergeClassNames,
+  resolveSelectPopupContainer,
+} from '../utils/popupContainer';
 
 interface DynamicSelectFieldProps {
   value?: string | string[];
@@ -127,9 +133,11 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   }, []);
 
   const mergedDropdownStyle: React.CSSProperties = {
-    zIndex: 13080,
-    minWidth: isMobileViewport ? 180 : 280,
-    maxWidth: isMobileViewport ? 'calc(100vw - 24px)' : 520,
+    ...buildStandardSelectPopupRootStyle({
+      zIndex: 13080,
+      minWidth: isMobileViewport ? 180 : 280,
+      maxWidth: isMobileViewport ? 'calc(100vw - 24px)' : 520,
+    }),
     width: isMobileViewport ? 'min(92vw, 420px)' : undefined,
     overscrollBehavior: 'contain',
     ...dropdownStyle,
@@ -139,14 +147,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   const resolvedPopupContainer = useMemo(
     () => (trigger: HTMLElement) => {
       const container = getPopupContainer(trigger) || document.body;
-      const isNestedInAntOverlay = container.closest?.(
-        '.ant-modal-root, .ant-modal-wrap, .ant-modal, .ant-drawer-root, .ant-drawer-content-wrapper, .ant-drawer-content, .ant-drawer'
-      );
-
-      // Dynamic selects render an interactive footer. Keeping that popup inside
-      // Ant overlay DOM can swallow option clicks, so modal/drawer callers are
-      // normalized back to the body portal while retaining z-index via styles.
-      return isNestedInAntOverlay ? document.body : container;
+      return resolveSelectPopupContainer(container === document.body ? trigger : container);
     },
     [getPopupContainer]
   );
@@ -559,16 +560,17 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         value={mode === 'multiple' ? (Array.isArray(value) ? value : (value ? [value] : [])) : value}
         onChange={handleSelectChange as any}
         placeholder={placeholder}
-        className={className}
+        className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, className)}
         showSearch={showSearch}
         allowClear={allowClear}
         disabled={disabled || loading}
         loading={loading}
         optionFilterProp="label"
+        optionLabelProp="label"
         getPopupContainer={resolvedPopupContainer}
         options={normalizedOptions}
         placement={isMobileViewport ? 'bottomLeft' : 'bottomRight'}
-        popupMatchSelectWidth
+        popupMatchSelectWidth={false}
         listHeight={isMobileViewport ? 192 : 320}
         notFoundContent={loading ? 'در حال بارگزاری...' : 'موردی وجود ندارد'}
         styles={{ popup: { root: mergedDropdownStyle } }}
@@ -687,6 +689,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
             onChange={(val) => setReplaceWithValue(String(val || ''))}
             showSearch
             optionFilterProp="label"
+            optionLabelProp="label"
             placeholder="گزینه جایگزین را انتخاب کنید"
             getPopupContainer={() => document.body}
             placement="bottomRight"

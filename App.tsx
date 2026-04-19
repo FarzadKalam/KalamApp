@@ -74,6 +74,7 @@ const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
 const loadHrQuickRequestPage = () => import("./pages/HrQuickRequestPage");
 const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
+const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 
 const ProfilePage = lazy(loadProfilePage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -107,6 +108,7 @@ const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
 const HrQuickRequestPage = lazy(loadHrQuickRequestPage);
 const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
+const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 
 const routePreloaders = [
   loadProfilePage,
@@ -141,6 +143,7 @@ const routePreloaders = [
   loadHrQuickRequestPage,
   loadRecycleBinPage,
   loadShareTargetPage,
+  loadFileShortLinkRedirectPage,
 ] as const;
 
 const getInitialDarkMode = () => {
@@ -379,7 +382,7 @@ function App() {
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
     if (pathname.startsWith("/share-target")) return "اشتراک‌گذاری";
-    if (pathname.startsWith("/gallery")) return "گالری فایل‌ها";
+    if (pathname.startsWith("/gallery")) return "مدیریت فایل‌ها";
     if (pathname.startsWith("/recycle-bin")) return "سطل بازیافت";
     if (pathname === "/reports") return "گزارشات";
     if (pathname === "/reports/create") return "گزارش جدید";
@@ -501,6 +504,7 @@ function App() {
           <Route path="/tazesystem/*" element={<LazyRouteBoundary><PublicSite /></LazyRouteBoundary>} />
           <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
+          <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
 
           <Route
             element={

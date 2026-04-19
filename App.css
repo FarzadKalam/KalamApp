@@ -856,6 +856,10 @@ html.dark .ant-message .anticon {
   color: #dc2626;
 }
 
+.ant-message {
+  z-index: 14040 !important;
+}
+
 .kalam-list-message--success .ant-message-notice-content,
 .kalam-list-message--success.ant-message-notice-content {
   border-color: rgba(5, 150, 105, 0.22);
@@ -894,6 +898,13 @@ html.dark .ant-notification-notice {
   box-shadow: 0 22px 52px rgba(15, 23, 42, 0.18);
 }
 
+.ant-modal-confirm,
+.ant-modal-confirm-root,
+.ant-modal-confirm-root .ant-modal-mask,
+.ant-modal-confirm-root .ant-modal-wrap {
+  z-index: 14060 !important;
+}
+
 html.dark .ant-modal-confirm .ant-modal-content {
   border-color: rgba(var(--brand-300-rgb), 0.18);
   background: rgb(var(--app-dark-surface-rgb));
@@ -923,6 +934,20 @@ html.dark .ant-modal-confirm .ant-modal-content {
 .smartform-inline-status .ant-select-selection-item,
 .smartform-inline-assignee-select .ant-select-selection-item {
   font-weight: 600;
+}
+
+.kalam-select-field.ant-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.kalam-select-field.ant-select .ant-select-selector {
+  width: 100%;
+}
+
+.kalam-select-field.ant-select-multiple .ant-select-selector,
+.kalam-select-field.ant-select-single .ant-select-selector {
+  min-width: 0;
 }
 
 .smarttable-shell .ant-spin-nested-loading,

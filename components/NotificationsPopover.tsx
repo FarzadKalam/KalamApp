@@ -11,7 +11,8 @@ import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
 import QrScanPopover from './QrScanPopover';
 import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
-import { uploadNoteAttachments } from '../utils/noteAttachments';
+import type { NoteAttachment } from '../utils/noteContent';
+import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/noteAttachments';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { FieldType } from '../types';
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from '../utils/taskMeta';
@@ -46,6 +47,9 @@ import {
   resolveSmsCounterpartyPhone,
 } from '../utils/notificationViewModels';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
+
+const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -220,6 +224,7 @@ type CounterpartyBotMessageRow = {
   file_name: string | null;
   mime_type?: string | null;
   payload?: Record<string, any> | null;
+  created_by?: string | null;
   created_at: string | null;
 };
 
@@ -722,6 +727,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [selectedVoipThreadKey, setSelectedVoipThreadKey] = useState<string | null>(null);
   const [botReplyToId, setBotReplyToId] = useState<string | null>(null);
   const [botAttachments, setBotAttachments] = useState<File[]>([]);
+  const [botLinkedAttachments, setBotLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [editingBotMessageId, setEditingBotMessageId] = useState<string | null>(null);
   const [editingBotMessageValue, setEditingBotMessageValue] = useState('');
   const [botMentionPickerOpen, setBotMentionPickerOpen] = useState(false);
@@ -752,6 +758,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [noteText, setNoteText] = useState('');
   const [noteReplyTo, setNoteReplyTo] = useState<string | null>(null);
   const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
+  const [noteLinkedAttachments, setNoteLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [noteSmsNotificationEnabled, setNoteSmsNotificationEnabled] = useState(false);
   const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(null);
   const [noteUserSearch, setNoteUserSearch] = useState('');
@@ -2273,7 +2280,7 @@ useEffect(() => {
     }
     const { data, error } = await supabase
       .from('counterparty_bot_messages')
-      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_at')
+      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
       .eq('bot_group_id', targetGroupId)
       .order('created_at', { ascending: false })
       .limit(200);
@@ -2296,7 +2303,7 @@ useEffect(() => {
 
     const { data, error } = await supabase
       .from('counterparty_bot_messages')
-      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_at')
+      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
       .in('bot_group_id', groupIds)
       .eq('direction', 'inbound')
       .order('created_at', { ascending: false })
@@ -2306,6 +2313,19 @@ useEffect(() => {
     setBotNotificationMessages(rows);
     return rows;
   };
+
+  const buildCurrentBotSenderPayload = useCallback(() => {
+    const userId = String(profile.id || '').trim();
+    const currentUser = directoryUsers.find((user) => String(user?.id || '') === userId) || null;
+    const displayName = String(currentUser?.display_name || '').trim();
+    const avatarUrl = String(currentUser?.avatar_url || '').trim();
+    return {
+      sender_user_id: userId || null,
+      sender_profile_id: userId || null,
+      sender_display_name: displayName || null,
+      sender_avatar_url: avatarUrl || null,
+    };
+  }, [directoryUsers, profile.id]);
 
   const sendTextToBotGroup = useCallback(async (
     group: CounterpartyBotGroupRow,
@@ -2343,6 +2363,8 @@ useEffect(() => {
     }
     const providerResponse = proxyData?.provider_result || {};
     const messageType = String(options?.messageType || 'text').trim() || 'text';
+    const senderPayload = buildCurrentBotSenderPayload();
+    const currentUserId = String(senderPayload.sender_user_id || '').trim() || null;
 
     const { error: insertError } = await supabase
       .from('counterparty_bot_messages')
@@ -2354,10 +2376,12 @@ useEffect(() => {
         direction: 'outbound',
         message_type: messageType,
         chat_id: chatId,
-        provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || '') || null,
+        provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || providerResponse?.data?.message_id || '') || null,
         content_text: text,
+        created_by: currentUserId,
         payload: {
           ...(options?.payload || {}),
+          ...senderPayload,
           provider_response: providerResponse || {},
         },
       }]);
@@ -2373,6 +2397,40 @@ useEffect(() => {
     if (patchError) throw patchError;
 
     return providerResponse;
+  }, [buildCurrentBotSenderPayload]);
+
+  const syncBotProviderMessageAction = useCallback(async (
+    group: CounterpartyBotGroupRow | null | undefined,
+    action: 'edit_message' | 'delete_message',
+    row: CounterpartyBotMessageRow,
+    text?: string,
+  ) => {
+    const channel = String(group?.channel_type || row?.payload?.channel_type || '').trim();
+    const chatId = String(row?.chat_id || group?.bot_chat_id || '').trim();
+    const providerMessageId = String(row?.provider_message_id || '').trim();
+    if (!providerMessageId) return;
+    if (!['rubika', 'telegram', 'bale'].includes(channel) || !chatId) return;
+
+    const activeConnection = await getActiveChannelSettings(channel as any);
+    const connectionId = String(activeConnection?.id || '').trim();
+    if (!connectionId) {
+      throw new Error(`تنظیمات فعال بات ${BOT_CHANNEL_LABELS_FA[channel] || channel} پیدا نشد.`);
+    }
+
+    const { data, error } = await supabase.functions.invoke('bot-admin', {
+      body: {
+        action,
+        channel,
+        connectionId,
+        chatId,
+        providerMessageId,
+        ...(action === 'edit_message' ? { text: String(text || '').trim() } : {}),
+      },
+    });
+    if (error) throw error;
+    if (!data?.success) {
+      throw new Error(String(data?.message || 'عملیات پیام بات ناموفق بود.'));
+    }
   }, []);
 
   const handleManualRefresh = async () => {
@@ -4011,12 +4069,13 @@ useEffect(() => {
     setNoteReplyTo(null);
     setMentionValues([]);
     setNoteAttachments([]);
+    setNoteLinkedAttachments([]);
     setNoteMentionPickerOpen(false);
     setNoteSmsNotificationEnabled(false);
   };
 
   const submitNote = async () => {
-    if (!noteText.trim() && noteAttachments.length === 0) return;
+    if (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0) return;
     if (noteSending) return;
 
     setNoteSending(true);
@@ -4031,11 +4090,18 @@ useEffect(() => {
       const attachments = noteAttachments.length > 0
         ? await uploadNoteAttachments(scope.hasLinkedRecord ? scope.module_id : null, scope.hasLinkedRecord ? scope.record_id : null, noteAttachments)
         : [];
+      const mergedAttachments = [...noteLinkedAttachments, ...attachments].filter((attachment, index, all) => {
+        const url = String(attachment?.url || '').trim();
+        return url && all.findIndex((item) => String(item?.url || '').trim() === url) === index;
+      });
+      if (noteLinkedAttachments.length > 0) {
+        await ensureNoteAttachmentShortcuts(scope.module_id, scope.record_id, noteLinkedAttachments);
+      }
 
       const payload = {
         module_id: scope.module_id,
         record_id: scope.record_id,
-        content: serializeNoteContent(renderedNoteText, attachments),
+        content: serializeNoteContent(renderedNoteText, mergedAttachments),
         reply_to: noteReplyTo || null,
         mention_user_ids: Array.from(new Set([...mentionUserIds, ...groupPayload.mentionUserIds])),
         mention_role_ids: Array.from(new Set([...mentionRoleIds, ...groupPayload.mentionRoleIds])),
@@ -5146,6 +5212,7 @@ useEffect(() => {
             mentionPickerOpen={noteMentionPickerOpen}
             onToggleMentionPicker={() => setNoteMentionPickerOpen((prev) => !prev)}
             attachments={noteAttachments}
+            linkedAttachments={noteLinkedAttachments}
             onFilesSelected={(files) => {
               setNoteAttachments((prev) => {
                 const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
@@ -5158,12 +5225,27 @@ useEffect(() => {
             onRemoveAttachment={(fileName) => {
               setNoteAttachments((prev) => prev.filter((file) => file.name !== fileName));
             }}
+            onLinkedAttachmentsSelected={(attachments) => {
+              setNoteLinkedAttachments((prev) => {
+                const map = new Map(prev.map((attachment) => [String(attachment.url || ''), attachment]));
+                attachments.forEach((attachment) => {
+                  const url = String(attachment.url || '').trim();
+                  if (url) map.set(url, attachment);
+                });
+                return Array.from(map.values());
+              });
+            }}
+            onRemoveLinkedAttachment={(url) => {
+              setNoteLinkedAttachments((prev) => prev.filter((attachment) => String(attachment.url || '') !== String(url || '')));
+            }}
+            filePickerModuleId={noteModuleId}
+            filePickerRecordId={noteRecordId}
             replyActive={Boolean(noteReplyTo)}
             onClearReply={() => setNoteReplyTo(null)}
             smsNotificationEnabled={noteSmsNotificationEnabled}
             onSmsNotificationChange={setNoteSmsNotificationEnabled}
             enableImagePasteAndDrop
-            submitDisabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0)}
+            submitDisabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0)}
             extraActions={(
               <Button
                 type="text"
@@ -5498,7 +5580,7 @@ useEffect(() => {
               <Button
                 type="primary"
                 loading={noteSending}
-                disabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0)}
+                disabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0)}
                 onClick={async () => {
                   await submitNote();
                 }}
@@ -6018,6 +6100,44 @@ useEffect(() => {
       const fileName = String(row.file_name || '').trim().toLowerCase();
       return `${text} ${fileName}`.includes(normalizedMessageSearch);
     });
+    const resolveOutboundBotAuthor = (row: CounterpartyBotMessageRow | null | undefined) => {
+      const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+      const userId = String(
+        (payload as any)?.sender_user_id
+        || (payload as any)?.sender_profile_id
+        || row?.created_by
+        || ''
+      ).trim();
+      const directoryUser = userId ? directoryUserMap[userId] || null : null;
+      const name = String(
+        directoryUser?.display_name
+        || (payload as any)?.sender_display_name
+        || ''
+      ).trim() || 'کاربر سازمان';
+      const avatarUrl = String(directoryUser?.avatar_url || (payload as any)?.sender_avatar_url || '').trim() || null;
+      return {
+        name,
+        avatarUrl,
+        fallback: String(name || 'ک').trim().slice(0, 1) || 'ک',
+      };
+    };
+    const resolveInboundBotAuthor = (row: CounterpartyBotMessageRow | null | undefined) => {
+      const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+      const name = String((payload as any)?.sender_display_name || '').trim()
+        || String((payload as any)?.sender_id || '').trim()
+        || String((payload as any)?.username || '').trim()
+        || 'کاربر گروه';
+      return {
+        name,
+        avatarUrl: null as string | null,
+        fallback: String(name || 'ب').trim().slice(0, 1) || 'ب',
+      };
+    };
+    const resolveBotMessageAuthor = (row: CounterpartyBotMessageRow | null | undefined) => (
+      String(row?.direction || '') === 'outbound'
+        ? resolveOutboundBotAuthor(row)
+        : resolveInboundBotAuthor(row)
+    );
 
     const sendBotMessage = async () => {
       const text = String(botMessageText || '').trim();
@@ -6040,25 +6160,43 @@ useEffect(() => {
         const renderedText = recordModuleId && botTemplateRecord
           ? renderRecordTemplate(text, botTemplateRecord, recordModuleId)
           : text;
-        const attachments = botAttachments.length > 0
+        const uploadedAttachments = botAttachments.length > 0
           ? await uploadNoteAttachments(recordModuleId, recordId || null, botAttachments)
           : [];
-        const attachmentText = attachments
+        const attachments = [...botLinkedAttachments, ...uploadedAttachments].filter((attachment, index, all) => {
+          const url = String(attachment?.url || '').trim();
+          return url && all.findIndex((item) => String(item?.url || '').trim() === url) === index;
+        });
+        if (botLinkedAttachments.length > 0) {
+          await ensureNoteAttachmentShortcuts(recordModuleId, recordId || null, botLinkedAttachments);
+        }
+        const outboundAttachments = attachments.length > 0
+          ? await shortenAttachmentsForExternalShare(attachments, {
+              moduleId: recordModuleId,
+              recordId: recordId || null,
+              metadata: {
+                source_type: 'notifications_popover',
+                channel_type: selectedGroup.channel_type,
+              },
+            })
+          : [];
+        const attachmentText = outboundAttachments
           .map((item) => `${String(item?.name || 'فایل').trim()}: ${String(item?.url || '').trim()}`)
           .filter(Boolean)
           .join('\n');
-        const attachmentNameText = buildAttachmentNameText(attachments);
+        const attachmentNameText = buildAttachmentNameText(outboundAttachments);
         const isRubikaGroup = String(selectedGroup.channel_type || '').trim() === 'rubika';
-        const rubikaLinkedMessage = isRubikaGroup && attachments.length > 0
-          ? buildRubikaLinkedAttachmentMessage(String(renderedText || '').trim(), attachments)
+        const rubikaLinkedMessage = isRubikaGroup && outboundAttachments.length > 0
+          ? buildRubikaLinkedAttachmentMessage(String(renderedText || '').trim(), outboundAttachments)
           : null;
-        const finalText = isRubikaGroup && attachments.length > 0
+        const finalText = isRubikaGroup && outboundAttachments.length > 0
           ? (String(rubikaLinkedMessage?.text || '').trim() || 'پیوست ارسال شد')
           : [renderedText, attachmentText].filter(Boolean).join('\n');
         if (!String(finalText || '').trim()) {
           message.warning('متن پیام خالی است.');
           return;
         }
+        const senderPayload = buildCurrentBotSenderPayload();
         optimisticBotMessageId = `optimistic-bot-${Date.now()}`;
         const optimisticBotMessage: CounterpartyBotMessageRow = {
           id: optimisticBotMessageId,
@@ -6074,8 +6212,10 @@ useEffect(() => {
           payload: {
             attachments,
             reply_to_message_id: botReplyToId || null,
+            ...senderPayload,
             optimistic: true,
           },
+          created_by: String(senderPayload.sender_user_id || '').trim() || null,
           created_at: new Date().toISOString(),
         };
         setBotMessages((prev) => [...prev.filter((row) => String(row?.id || '') !== optimisticBotMessageId), optimisticBotMessage]);
@@ -6097,6 +6237,7 @@ useEffect(() => {
         setBotMessageText('');
         setBotReplyToId(null);
         setBotAttachments([]);
+        setBotLinkedAttachments([]);
         setBotMentionPickerOpen(false);
         const groups = await fetchBotGroups();
         await fetchBotNotificationMessages(groups);
@@ -6280,20 +6421,10 @@ useEffect(() => {
                 const parsedAttachments = getBotMessageAttachments(row);
                 const replyToId = String(payload?.reply_to_message_id || '').trim();
                 const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
-                const replyAuthorName = replyTarget
-                  ? (String(replyTarget.direction || '') === 'outbound'
-                    ? 'شما'
-                    : (String((replyTarget.payload as any)?.sender_display_name || '').trim()
-                      || String((replyTarget.payload as any)?.sender_id || '').trim()
-                      || String((replyTarget.payload as any)?.username || '').trim()
-                      || 'کاربر گروه'))
-                  : null;
+                const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
                 const body = String(row.content_text || '').trim() || (row.file_name ? `فایل: ${row.file_name}` : 'پیام بدون متن');
                 const isEditing = editingBotMessageId === row.id;
-                const inboundAuthor = String((payload as any)?.sender_display_name || '').trim()
-                  || String((payload as any)?.sender_id || '').trim()
-                  || String((payload as any)?.username || '').trim()
-                  || 'کاربر گروه';
+                const author = resolveBotMessageAuthor(row);
                 const botReadReceipts = normalizeReadReceipts(payload);
                 const botMessageId = String(row.id || '').trim();
                 const isPersistedBotMessage = isUuidValue(botMessageId);
@@ -6301,12 +6432,12 @@ useEffect(() => {
                 return (
                   <div key={row.id}>
                     <SharedNoteCard
-                      authorName={outgoing ? 'شما' : inboundAuthor}
+                      authorName={author.name}
                       createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
                       text={body}
                       attachments={parsedAttachments.map((item) => ({ name: item.name, url: item.url, mimeType: item.mimeType } as any))}
-                      avatarUrl={null}
-                      avatarFallback={outgoing ? 'ش' : 'ب'}
+                      avatarUrl={author.avatarUrl}
+                      avatarFallback={author.fallback}
                       mentionUsers={[]}
                       mentionRoles={[]}
                       replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
@@ -6321,6 +6452,7 @@ useEffect(() => {
                       onSaveEdit={outgoing ? async () => {
                         const nextText = String(editingBotMessageValue || '').trim();
                         if (!nextText) return;
+                        await syncBotProviderMessageAction(selectedGroup, 'edit_message', row, nextText);
                         const nextPayload = {
                           ...(payload || {}),
                           is_edited: true,
@@ -6349,6 +6481,7 @@ useEffect(() => {
                         setEditingBotMessageValue(String(row.content_text || '').trim());
                       } : undefined}
                       onDelete={outgoing && isPersistedBotMessage ? async () => {
+                        await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
                         const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', row.id);
                         if (error) throw error;
                         await fetchBotMessages(selectedGroup?.id || null);
@@ -6389,6 +6522,7 @@ useEffect(() => {
             mentionPickerOpen={botMentionPickerOpen}
             onToggleMentionPicker={() => setBotMentionPickerOpen((prev) => !prev)}
             attachments={botAttachments}
+            linkedAttachments={botLinkedAttachments}
             onFilesSelected={(files) => {
               setBotAttachments((prev) => {
                 const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
@@ -6401,10 +6535,25 @@ useEffect(() => {
             onRemoveAttachment={(fileName) => {
               setBotAttachments((prev) => prev.filter((file) => file.name !== fileName));
             }}
+            onLinkedAttachmentsSelected={(attachments) => {
+              setBotLinkedAttachments((prev) => {
+                const map = new Map(prev.map((attachment) => [String(attachment.url || ''), attachment]));
+                attachments.forEach((attachment) => {
+                  const url = String(attachment.url || '').trim();
+                  if (url) map.set(url, attachment);
+                });
+                return Array.from(map.values());
+              });
+            }}
+            onRemoveLinkedAttachment={(url) => {
+              setBotLinkedAttachments((prev) => prev.filter((attachment) => String(attachment.url || '') !== String(url || '')));
+            }}
+            filePickerModuleId={selectedBotModuleId || (selectedGroup?.target_type === 'customers' ? 'customers' : selectedGroup?.target_type === 'suppliers' ? 'suppliers' : null)}
+            filePickerRecordId={selectedGroup?.target_type === 'customers' ? String(selectedGroup?.customer_id || '') : selectedGroup?.target_type === 'suppliers' ? String(selectedGroup?.supplier_id || '') : null}
             replyActive={Boolean(botReplyToId)}
             onClearReply={() => setBotReplyToId(null)}
             enableImagePasteAndDrop
-            submitDisabled={!selectedGroup || !canSend || botSending || botSuggesting || (!String(botMessageText || '').trim() && botAttachments.length === 0)}
+            submitDisabled={!selectedGroup || !canSend || botSending || botSuggesting || (!String(botMessageText || '').trim() && botAttachments.length === 0 && botLinkedAttachments.length === 0)}
             extraActions={(
               <>
                 <AiSuggestionPopoverAction
@@ -7312,7 +7461,7 @@ useEffect(() => {
           onOpenChange={(nextOpen) => {
             if (!nextOpen) setPreviewRecord(null);
           }}
-          overlayZIndex={1200}
+          overlayZIndex={NOTIFICATIONS_MODAL_Z_INDEX}
         />
       ) : null}
       {taskProcessTarget ? (

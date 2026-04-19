@@ -29,6 +29,8 @@
     font-family: 'Vazirmatn', system-ui, sans-serif;
     height: 100%;
     direction: rtl;
+    max-width: 100%;
+    overflow-x: hidden;
     scrollbar-gutter: stable;
     background-color: #f9fafb;
   }
@@ -36,6 +38,66 @@
   html.dark, .dark body, .dark #root {
     background-color: rgb(var(--app-dark-bg-rgb));
   }
+}
+
+html.kalam-app-shell-lock,
+body.kalam-app-shell-lock,
+html.kalam-app-shell-lock #root {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#kalam-popup-root {
+  position: fixed;
+  inset: 0;
+  z-index: 13000;
+  width: 100%;
+  max-width: 100%;
+  height: var(--app-viewport-height, 100dvh);
+  overflow: clip;
+  pointer-events: none;
+  contain: layout size style;
+}
+
+#kalam-popup-root > * {
+  pointer-events: auto;
+}
+
+body.kalam-app-shell-lock [class~="overflow-y-auto"]:not([class*="overflow-x-"]),
+body.kalam-app-shell-lock [class~="overflow-y-scroll"]:not([class*="overflow-x-"]) {
+  overflow-x: hidden;
+}
+
+body.kalam-app-shell-lock .ant-layout,
+body.kalam-app-shell-lock .ant-layout-content,
+body.kalam-app-shell-lock .ant-card,
+body.kalam-app-shell-lock .ant-card-body {
+  max-width: 100%;
+}
+
+body.kalam-app-shell-lock .ant-card-hoverable:hover {
+  box-shadow: inset 0 0 0 1px rgba(var(--brand-300-rgb), 0.55) !important;
+}
+
+body.kalam-app-shell-lock [class*="hover:shadow"]:hover {
+  box-shadow: inset 0 0 0 1px rgba(var(--brand-300-rgb), 0.45) !important;
+}
+
+body.kalam-app-shell-lock > .ant-tooltip,
+body.kalam-app-shell-lock > .ant-popover,
+body.kalam-app-shell-lock > .ant-dropdown,
+body.kalam-app-shell-lock > .ant-select-dropdown,
+body.kalam-app-shell-lock > .ant-picker-dropdown,
+#kalam-popup-root .ant-tooltip,
+#kalam-popup-root .ant-popover,
+#kalam-popup-root .ant-dropdown,
+#kalam-popup-root .ant-select-dropdown,
+#kalam-popup-root .ant-picker-dropdown {
+  max-width: calc(100vw - 16px);
+  contain: layout paint style;
 }
 
 /* Improve readability on dark palettes for elements missing explicit dark text classes. */
@@ -67,6 +129,7 @@
 .layout-main-scroll {
   direction: rtl;
   scrollbar-gutter: stable;
+  overflow-x: clip !important;
 }
 
 .app-main-sider .sidebar-menu-label,
@@ -233,6 +296,10 @@ body.ant-scrolling-effect {
   backface-visibility: hidden;
   transform: none !important;
   will-change: auto;
+}
+
+.smarttable-shell .ant-table-body::-webkit-scrollbar:horizontal {
+  height: 0 !important;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {
@@ -502,6 +569,18 @@ body.ant-scrolling-effect {
 
 .task-quick-modal .ant-modal-body {
   overflow: hidden;
+}
+
+.task-quick-modal-root .ant-modal-mask,
+.task-quick-modal-root .ant-modal-wrap,
+.task-create-modal-root .ant-modal-mask,
+.task-create-modal-root .ant-modal-wrap {
+  z-index: inherit !important;
+}
+
+.task-quick-modal-root .ant-modal-wrap,
+.task-create-modal-root .ant-modal-wrap {
+  pointer-events: auto !important;
 }
 
 .quick-preview-modal .ant-modal-content {

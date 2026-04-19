@@ -2,6 +2,12 @@ import React from 'react';
 import { Button, Input, Modal, Select, Skeleton } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import {
+  buildStandardSelectPopupRootStyle,
+  KALAM_SELECT_FIELD_CLASSNAME,
+  mergeClassNames,
+  resolveSelectPopupContainer,
+} from '../../utils/popupContainer';
 
 type BotChannel = 'rubika' | 'telegram' | 'bale';
 
@@ -19,12 +25,26 @@ const CHANNEL_OPTIONS: Array<{ label: string; value: BotChannel }> = [
   { label: 'بله', value: 'bale' },
 ];
 
-const resolveModalPopupContainer = (trigger?: HTMLElement | null) => {
-  if (typeof document === 'undefined') return (trigger || {}) as HTMLElement;
-  if (!trigger) return document.body;
-  return (
-    trigger.closest('.ant-modal-root, .ant-modal-wrap, .ant-modal') as HTMLElement | null
-  ) || trigger.parentElement || document.body;
+const ensureSelectedOptions = (
+  options: Array<{ label: string; value: string }>,
+  selectedValues: string[],
+  fallbackPrefix: string
+) => {
+  const map = new Map<string, { label: string; value: string }>();
+  (options || []).forEach((option) => {
+    const value = String(option?.value || '').trim();
+    if (!value) return;
+    map.set(value, {
+      label: String(option?.label || value).trim() || value,
+      value,
+    });
+  });
+  (selectedValues || []).forEach((rawValue) => {
+    const value = String(rawValue || '').trim();
+    if (!value || map.has(value)) return;
+    map.set(value, { value, label: `${fallbackPrefix} ${value}` });
+  });
+  return Array.from(map.values());
 };
 
 export type CounterpartyBotStatusModalProps = {
@@ -82,6 +102,15 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   onChangeAllowedUserIds,
   onChangeAllowedRoleIds,
 }) => {
+  const normalizedUserOptions = React.useMemo(
+    () => ensureSelectedOptions(userOptions, allowedUserIds, 'کاربر'),
+    [allowedUserIds, userOptions]
+  );
+  const normalizedRoleOptions = React.useMemo(
+    () => ensureSelectedOptions(roleOptions, allowedRoleIds, 'نقش'),
+    [allowedRoleIds, roleOptions]
+  );
+
   return (
     <Modal
       title="وضعیت گروه بات طرف‌حساب"
@@ -138,8 +167,10 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               value={channel}
               options={CHANNEL_OPTIONS}
               onChange={(value) => onChangeChannel(value as BotChannel)}
-              className="w-full"
-              getPopupContainer={resolveModalPopupContainer}
+              className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
+              optionLabelProp="label"
+              getPopupContainer={resolveSelectPopupContainer}
+              styles={{ popup: { root: buildStandardSelectPopupRootStyle() } }}
             />
           </div>
           <div>
@@ -165,12 +196,15 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               allowClear
               showSearch
               value={allowedUserIds}
-              options={userOptions}
+              options={normalizedUserOptions}
               onChange={(value) => onChangeAllowedUserIds((value || []).map((id) => String(id)))}
-              className="w-full"
+              className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
               optionFilterProp="label"
+              optionLabelProp="label"
               placeholder="اگر خالی باشد، همه کاربران مجازند"
-              getPopupContainer={resolveModalPopupContainer}
+              getPopupContainer={resolveSelectPopupContainer}
+              popupMatchSelectWidth={false}
+              styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
             />
           </div>
           <div>
@@ -180,12 +214,15 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               allowClear
               showSearch
               value={allowedRoleIds}
-              options={roleOptions}
+              options={normalizedRoleOptions}
               onChange={(value) => onChangeAllowedRoleIds((value || []).map((id) => String(id)))}
-              className="w-full"
+              className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
               optionFilterProp="label"
+              optionLabelProp="label"
               placeholder="اگر خالی باشد، همه نقش‌ها مجازند"
-              getPopupContainer={resolveModalPopupContainer}
+              getPopupContainer={resolveSelectPopupContainer}
+              popupMatchSelectWidth={false}
+              styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
             />
           </div>
         </div>

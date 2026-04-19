@@ -99,6 +99,7 @@ import {
 import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
@@ -115,6 +116,7 @@ interface ProductionStagesFieldProps {
   allowReportEditInReadOnly?: boolean;
   lazyLoad?: boolean;
   onlyLineId?: string | null;
+  onlyProcessGroupId?: string | null;
   onQuantityChange?: (qty: number) => void;
   orderStatus?: string | null;
   draftStages?: any[];
@@ -404,11 +406,22 @@ const DRAFT_AUTOMATION_HEADER_PALETTE = [
   },
 ];
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
+type ProcessBarDisplayMode = 'full' | 'dense' | 'summary';
+
+const PROCESS_BAR_BREAKPOINTS = {
+  summary: 360,
+  dense: 560,
+} as const;
+
+const PROCESS_BAR_DONE_STATUSES = new Set(['done', 'completed', 'canceled']);
+const PROCESS_BAR_ACTIVE_STATUSES = new Set(['in_progress', 'review']);
+
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [loading, setLoading] = useState(false);
+  const [isSubmittingTaskModal, setIsSubmittingTaskModal] = useState(false);
   const [isLineModalOpen, setIsLineModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -423,6 +436,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [expandedDraftAutomationRuleIds, setExpandedDraftAutomationRuleIds] = useState<string[]>([]);
   const [isSavingDraftStage, setIsSavingDraftStage] = useState(false);
   const [isReadyToLoad, setIsReadyToLoad] = useState(!lazyLoad);
+  const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draftLocalRef = useRef<any[]>(Array.isArray(draftStages) ? draftStages : []);
   const draftEditorStageIdRef = useRef<any>(null);
@@ -534,6 +548,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     taskQuickModalHistoryRef.current = null;
     setOpenTaskPopoverId(null);
   }, []);
+  const openTaskLayerConfirm = useCallback((config: Parameters<typeof Modal.confirm>[0]) => (
+    Modal.confirm({
+      zIndex: 13020,
+      centered: true,
+      maskClosable: false,
+      ...config,
+    })
+  ), []);
   useEffect(() => {
     if (!openTaskPopoverId || typeof window === 'undefined') return;
 
@@ -1403,6 +1425,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     observer.observe(target);
     return () => observer.disconnect();
   }, [lazyLoad, isReadyToLoad]);
+
+  useEffect(() => {
+    const target = containerRef.current;
+    if (!target || typeof ResizeObserver === 'undefined') return;
+
+    const updateWidth = (nextWidth?: number) => {
+      const resolved = Math.round(nextWidth ?? target.getBoundingClientRect().width ?? 0);
+      setContainerWidth((prev) => (prev === resolved ? prev : resolved));
+    };
+
+    updateWidth();
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      updateWidth(entry?.contentRect?.width);
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, []);
 
   const toNumber = useCallback((value: any) => {
     const parsed = parseFloat(value);
@@ -2787,7 +2827,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       let registerWaste = false;
       if (shortageTotal > 0) {
         registerWaste = await new Promise<boolean>((resolve) => {
-          Modal.confirm({
+          openTaskLayerConfirm({
             title: 'ثبت ضایعات',
             content: 'مقدار تحویل شده از مقداری که تحویل گرفته بودید کمتر است، بعنوان ضایعات ثبت شود؟',
             okText: 'بله',
@@ -3175,6 +3215,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   };
 
+  const closeTaskModal = useCallback(() => {
+    setIsTaskModalOpen(false);
+    taskForm.resetFields();
+    setActiveLineId(null);
+    setActiveProcessGroupMeta(null);
+    setDraftToCreate(null);
+    setTaskCustomFieldDrafts((prev) => {
+      const next = { ...prev };
+      delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
+      return next;
+    });
+  }, [taskForm]);
+
   const openTaskModal = (
     lineId: string,
     draftStage?: any,
@@ -3236,6 +3289,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handleAddTask = async (values: any) => {
     if (!recordId || !activeLineId) return;
     try {
+      setIsSubmittingTaskModal(true);
       const { data: { user } } = await supabase.auth.getUser();
       const { assigneeType, assigneeId } = parseAssigneeComboValue(values.assignee_combo);
       let dueDate = normalizeDueDateValue(values.due_date);
@@ -3388,26 +3442,39 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         }
       }
 
-      await insertTasksWithFallback([payload]);
+      const insertedRows = await insertTasksWithFallback([payload]);
+      const insertedTask = Array.isArray(insertedRows) && insertedRows.length > 0
+        ? withProcessTaskCustomFieldValues(insertedRows[0])
+        : null;
+
+      if (insertedTask) {
+        setTasks((prev) => (
+          [...prev, insertedTask]
+            .filter((task, index, source) => (
+              source.findIndex((item) => String(item?.id || '') === String(task?.id || '')) === index
+            ))
+            .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))
+        ));
+      }
+
+      const nextDrafts = draftToCreate && isProcessRecordModule
+        ? removeSingleMatchingDraftStage(
+          Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
+          draftToCreate
+        )
+        : null;
+
+      if (nextDrafts) {
+        draftLocalRef.current = nextDrafts;
+        setDraftLocal(nextDrafts);
+      }
 
       message.success(isProcessModule ? 'فعالیت جدید اضافه شد' : 'مرحله جدید اضافه شد');
-      if (draftToCreate && isProcessRecordModule) {
-        const nextDrafts = removeSingleMatchingDraftStage(
-          Array.isArray(draftLocal) ? draftLocal : [],
-          draftToCreate
-        );
+      closeTaskModal();
+
+      if (nextDrafts) {
         await saveDraftStages(nextDrafts);
       }
-      setIsTaskModalOpen(false);
-      taskForm.resetFields();
-      setTaskCustomFieldDrafts((prev) => {
-        const next = { ...prev };
-        delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
-        return next;
-      });
-      setActiveLineId(null);
-      setActiveProcessGroupMeta(null);
-      setDraftToCreate(null);
       await fetchTasks();
     } catch (error: any) {
       const debugText = String(error?.message || error?.details || error?.hint || '').trim();
@@ -3417,6 +3484,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ? `خطا در ثبت ${isProcessModule ? 'فعالیت' : 'مرحله'}: ${debugText}`
           : toFaErrorMessage(error, 'خطا در ثبت اطلاعات')
       );
+    } finally {
+      setIsSubmittingTaskModal(false);
     }
   };
 
@@ -3618,19 +3687,38 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const imageUrl = String(urlData?.publicUrl || '').trim();
       if (!imageUrl) throw new Error('TASK_IMAGE_URL_MISSING');
       await updateTaskWithFallback(taskId, { image_url: imageUrl }, { previousTask: task, runAutomation: false });
-      const { error: fileInsertError } = await supabase
-        .from('record_files')
-        .insert([{
-          module_id: 'tasks',
-          record_id: taskId,
-          file_url: imageUrl,
-          file_type: 'image',
-          file_name: file.name || null,
-          mime_type: file.type || null,
-          sort_order: 0,
-        }]);
-      if (fileInsertError) {
-        console.warn('Could not append uploaded task image to record_files', fileInsertError);
+
+      const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+      if (hasFileManagerTables) {
+        try {
+          await createFileManagerOriginForUpload({
+            moduleId: 'tasks',
+            recordId: taskId,
+            recordTitle: String(task?.name || taskId),
+            fileUrl: imageUrl,
+            fileName: file.name || null,
+            mimeType: file.type || null,
+            fileType: 'image',
+            sortOrder: 0,
+          });
+        } catch (fileManagerError) {
+          console.warn('Could not append uploaded task image to file manager tables', fileManagerError);
+        }
+      } else {
+        const { error: fileInsertError } = await supabase
+          .from('record_files')
+          .insert([{
+            module_id: 'tasks',
+            record_id: taskId,
+            file_url: imageUrl,
+            file_type: 'image',
+            file_name: file.name || null,
+            mime_type: file.type || null,
+            sort_order: 0,
+          }]);
+        if (fileInsertError) {
+          console.warn('Could not append uploaded task image to record_files', fileInsertError);
+        }
       }
       setTasks((prev) => prev.map((item: any) => (
         String(item?.id) === taskId
@@ -3776,6 +3864,57 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!durationValue) return `از ${durationFrom}`;
     return `${toPersianNumber(durationValue)} ${durationUnit} بعد از ${durationFrom}`;
   }, []);
+
+  const getProcessBarDisplayMode = useCallback((segments: any[]): ProcessBarDisplayMode => {
+    if (!compact && !cardCompact) return 'full';
+
+    const resolvedWidth = containerWidth || (cardCompact ? 320 : 480);
+    if (cardCompact || resolvedWidth <= PROCESS_BAR_BREAKPOINTS.summary || segments.length >= 7) {
+      return 'summary';
+    }
+    if (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.dense || segments.length >= 5) {
+      return 'dense';
+    }
+    return 'full';
+  }, [cardCompact, compact, containerWidth]);
+
+  const getDenseSegmentLabel = useCallback((value: unknown) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '-';
+    const compactWords = raw.split(/\s+/).filter(Boolean).slice(0, 2).join(' ');
+    if (compactWords.length <= 14) return compactWords;
+    return `${compactWords.slice(0, 13).trim()}…`;
+  }, []);
+
+  const getSummarySegmentLabel = useCallback((value: unknown) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '-';
+    if (raw.length <= 2) return raw;
+    return raw.slice(0, 2);
+  }, []);
+
+  const getSegmentProgressState = useCallback((segment: any) => {
+    if (!segment || segment.type !== 'task') return 'draft' as const;
+    const normalizedStatus = String(segment?.status || '').trim().toLowerCase();
+    if (PROCESS_BAR_DONE_STATUSES.has(normalizedStatus)) return 'done' as const;
+    if (PROCESS_BAR_ACTIVE_STATUSES.has(normalizedStatus)) return 'active' as const;
+    return 'pending' as const;
+  }, []);
+
+  const getCurrentProcessSegment = useCallback((segments: any[]) => {
+    if (!Array.isArray(segments) || segments.length === 0) return null;
+
+    const activeSegment = segments.find((segment) => getSegmentProgressState(segment) === 'active');
+    if (activeSegment) return activeSegment;
+
+    const firstPendingSegment = segments.find((segment) => {
+      const state = getSegmentProgressState(segment);
+      return state === 'pending' || state === 'draft';
+    });
+    if (firstPendingSegment) return firstPendingSegment;
+
+    return segments[segments.length - 1] || null;
+  }, [getSegmentProgressState]);
 
   const isTaskAssignedToCurrentUser = useCallback((task: any) => {
     if (!task || !currentUser.id) return false;
@@ -4536,7 +4675,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   icon={<LinkOutlined />}
                   className="text-gray-500 hover:!text-amber-600"
                   onClick={() => {
-                    Modal.confirm({
+                    openTaskLayerConfirm({
                       title: 'قطع اتصال وظیفه',
                       content: 'این وظیفه فقط از این فرآیند و رکورد جدا می‌شود و خود فعالیت باقی می‌ماند. ادامه می‌دهید؟',
                       okText: 'قطع اتصال',
@@ -4555,7 +4694,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   danger
                   icon={<DeleteOutlined />}
                   onClick={() => {
-                    Modal.confirm({
+                    openTaskLayerConfirm({
                       title: 'حذف کامل وظیفه',
                       content: 'این فعالیت به طور کامل حذف می‌شود. ادامه می‌دهید؟',
                       okText: 'حذف',
@@ -4583,7 +4722,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  closeTaskQuickModal();
+                  closeTaskQuickModal(false);
                   window.setTimeout(() => openTaskProcessModal({ task }), 0);
                 }}
               >
@@ -6100,7 +6239,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [draftCustomFieldOptionsEditorKey, draftCustomFieldOptionsForm]);
 
   const handleRemoveDraftStage = async (stageToRemove: any) => {
-    Modal.confirm({
+    openTaskLayerConfirm({
       title: 'حذف مرحله پیش‌نویس',
       content: 'آیا از حذف این مرحله پیش‌نویس مطمئن هستید؟',
       okText: 'حذف',
@@ -6611,7 +6750,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <div className="text-xs text-gray-500 dark:text-gray-400">
             {isProcessTemplateModule ? 'مراحل پیش‌نویس فرآیند' : 'مراحل پیش‌نویس (BOM)'}
           </div>
-          <div className={`flex-1 flex bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 ${compact ? 'h-5' : 'h-9'}`}>
+          <div className={`flex min-h-0 w-full items-stretch rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${compact ? 'min-h-[2.5rem]' : 'min-h-[3rem]'}`}>
             {draftSegments.length > 0 ? (
               draftSegments.map((stage: any, index: number) => (
                 <Popover
@@ -6642,13 +6781,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
                 >
                   <div
-                    className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''}`}
-                    style={{ flex: 1, border: '1px dashed #d1d5db', backgroundColor: 'transparent' }}
+                    className={`relative flex min-w-0 flex-1 basis-0 items-center justify-center rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 py-2 text-center transition-all group hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${index !== 0 ? 'mr-1' : ''}`}
                     onClick={() => {
                       if (!readOnly) openDraftStageModal(stage, 'stage');
                     }}
                   >
-                    <span className={`text-gray-600 font-medium truncate w-full text-center ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
+                    <span className={`block w-full min-w-0 truncate font-medium text-gray-700 dark:text-gray-100 ${compact ? 'text-[10px]' : 'text-[12px]'}`}>
                       {stage.label}
                     </span>
                   </div>
@@ -6688,9 +6826,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const normalizedProcessLineGroups = processLineGroups.length > 0
           ? processLineGroups
           : [{ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: [], lineSegments: [] as any[] }];
-        const visibleProcessLineGroups = normalizedProcessLineGroups.filter((group: any) =>
-          showCompletedProcessGroups || !isProcessGroupCompleted(group)
-        );
+          const normalizedOnlyProcessGroupId = String(onlyProcessGroupId || '').trim();
+          const visibleProcessLineGroups = normalizedProcessLineGroups.filter((group: any) => {
+            const groupId = String(group?.id || '').trim();
+            if (normalizedOnlyProcessGroupId && groupId !== normalizedOnlyProcessGroupId) return false;
+            return showCompletedProcessGroups || !isProcessGroupCompleted(group);
+          });
         const isProcessEmptyState = isProcessRecordModule
           && normalizedProcessLineGroups.length === 1
           && (!Array.isArray(normalizedProcessLineGroups[0]?.stages) || normalizedProcessLineGroups[0].stages.length === 0)
@@ -6698,136 +6839,214 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           && (!Array.isArray(normalizedProcessLineGroups[0]?.lineSegments) || normalizedProcessLineGroups[0].lineSegments.length === 0);
 
         const renderSegmentsBar = (segments: any[], barKey: string) => {
-          const shouldCompactSegments = cardCompact && segments.length > 5;
+          const displayMode = getProcessBarDisplayMode(segments);
+          const shouldCompactSegments = displayMode !== 'summary' && cardCompact && segments.length > 5;
           const displaySegments = shouldCompactSegments ? segments.slice(0, 5) : segments;
           const hiddenCount = shouldCompactSegments ? Math.max(0, segments.length - displaySegments.length) : 0;
-          const getCompactLabel = (value: unknown) => {
-            const raw = String(value || '').trim();
-            return raw ? raw.charAt(0) : '-';
+          const currentSegment = getCurrentProcessSegment(segments);
+          const currentSegmentIndex = currentSegment
+            ? segments.findIndex((segment) => String(segment?.id || '') === String(currentSegment?.id || ''))
+            : -1;
+          const currentSegmentLabel = currentSegment
+            ? String(currentSegment?.title || currentSegment?.name || currentSegment?.label || 'مرحله بدون عنوان').trim()
+            : 'بدون مرحله فعال';
+          const currentStatusLabel = currentSegment?.type === 'task'
+            ? getTaskStatusLabel(String(currentSegment?.status || ''), currentSegment)
+            : 'پیش نویس';
+
+          const renderTaskSegment = (segment: any, index: number, summary = false) => {
+            const isAssignedToCurrent = isTaskAssignedToCurrentUser(segment);
+            const isCurrent = currentSegment && String(currentSegment?.id || '') === String(segment?.id || '');
+            const segmentColor = getStatusColor(segment.status, segment);
+            const normalizedStatus = String(segment?.status || '').toLowerCase();
+            const segmentLabel = String(segment?.title || segment?.name || 'مرحله بدون عنوان').trim();
+
+            if (summary) {
+              return (
+                <button
+                  type="button"
+                  key={`${barKey}-task-summary-${segment.id || index}`}
+                  data-task-segment-id={String(segment.id)}
+                  title={segmentLabel}
+                  className={`relative min-w-[0.7rem] flex-1 basis-0 rounded-full transition-all ${isCurrent ? 'h-3.5 ring-2 ring-white/90 dark:ring-gray-900' : 'h-2.5 opacity-90 hover:opacity-100'} ${isAssignedToCurrent ? 'z-10' : ''}`}
+                  style={{
+                    backgroundColor: segmentColor,
+                    boxShadow: isAssignedToCurrent
+                      ? `0 0 8px ${segmentColor}55, 0 0 18px ${segmentColor}33`
+                      : undefined,
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openTaskProcessModal({ task: segment });
+                  }}
+                />
+              );
+            }
+
+            return (
+              <button
+                type="button"
+                key={`${barKey}-task-${segment.id}`}
+                data-task-segment-id={String(segment.id)}
+                className={`relative flex min-w-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-xl px-2 text-center transition-all hover:brightness-105 ${index !== 0 ? 'mr-1' : ''} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
+                style={{
+                  backgroundColor: segmentColor,
+                  boxShadow: isAssignedToCurrent
+                    ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
+                    : undefined,
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openTaskProcessModal({ task: segment });
+                }}
+              >
+                <div className="flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden">
+                  <span className={`inline-flex max-w-full items-center justify-center gap-1.5 truncate text-white drop-shadow-md ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')} font-semibold`}>
+                    {normalizedStatus === 'canceled' ? <CloseOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} /> : (
+                      PROCESS_BAR_DONE_STATUSES.has(normalizedStatus)
+                        ? <CheckOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />
+                        : <HourglassOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />
+                    )}
+                    <span className="truncate">
+                      {displayMode === 'dense'
+                        ? getDenseSegmentLabel(segmentLabel)
+                        : (shouldCompactSegments ? getSummarySegmentLabel(segmentLabel) : segmentLabel)}
+                    </span>
+                  </span>
+                  {!compact && !cardCompact && displayMode === 'full' && segment.sort_order && (
+                    <span className="rounded-full bg-black/10 px-1.5 py-0.5 text-[8px] text-white/90">
+                      {toPersianNumber(segment.sort_order)}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
           };
 
-          return (
-          <div className={`relative flex-1 flex bg-gray-100 dark:bg-gray-800 rounded-lg overflow-visible border border-gray-200 dark:border-gray-700 ${compact ? 'h-5' : 'h-9'}`}>
-            {displaySegments.map((segment: any, index: number) => (
-              segment.type === 'task' ? (
-                (() => {
-                  const isAssignedToCurrent = isTaskAssignedToCurrentUser(segment);
-                  const isHighlightedTask = isAssignedToCurrent;
-                  const segmentColor = getStatusColor(segment.status, segment);
-                  return (
-                    <div
-                      key={`${barKey}-task-${segment.id}`}
-                      data-task-segment-id={String(segment.id)}
-                      className={`relative flex items-center justify-center cursor-pointer transition-all hover:brightness-110 group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === displaySegments.length - 1 && hiddenCount === 0 ? 'rounded-l-lg' : ''} ${isHighlightedTask ? 'z-10' : ''}`}
-                      style={{
-                        flex: 1,
-                        backgroundColor: segmentColor,
-                        boxShadow: isHighlightedTask
-                          ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
-                          : undefined,
-                      }}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openTaskProcessModal({ task: segment });
-                      }}
-                    >
-                      <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
-                        <span className={`inline-flex items-center justify-center gap-1 text-white font-medium truncate w-full text-center drop-shadow-md ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                          {String(segment?.status || '').toLowerCase() === 'canceled' ? <CloseOutlined className={compact ? 'text-[8px]' : 'text-[10px]'} /> : (
-                            ['done', 'completed'].includes(String(segment?.status || '').toLowerCase())
-                              ? <CheckOutlined className={compact ? 'text-[8px]' : 'text-[10px]'} />
-                              : <HourglassOutlined className={compact ? 'text-[8px]' : 'text-[10px]'} />
-                          )}
-                          <span className="truncate">
-                            {shouldCompactSegments ? getCompactLabel(segment.title || segment.name) : (segment.title || segment.name)}
-                          </span>
-                        </span>
-                        {!compact && segment.sort_order && (
-                          <span className="text-[8px] text-white/90 absolute bottom-0.5 right-1 bg-black/10 px-1 rounded-sm">
-                            {toPersianNumber(segment.sort_order)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()
-              ) : (
-                <Popover
-                  key={`${barKey}-draft-${segment.id}-${index}`}
-                  content={
-                    <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
-                      <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{segment.label}</div>
-                      <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
-                      <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
-                      <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
-                      <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
-                      {String(segment?.task_type || '').trim() && <div>نوع فعالیت: {segment.task_type}</div>}
-                      {String(segment?.description || '').trim() && <div>توضیحات: {segment.description}</div>}
-                      <div>فیلدهای اختصاصی: {toPersianNumber(getProcessTaskCustomFieldsFromStage(segment).length || 0)}</div>
-                      <div>اتوماسیون‌ها: {toPersianNumber(normalizeProcessAutomationRules(segment?.automation_rules).length || 0)}</div>
-                      <div>زمان انجام: {formatDraftDuration(segment)}</div>
-                      {!readOnly && (
-                        <div className="flex items-center gap-2">
-                          {recordId && (
-                            <Button
-                              size="small"
-                              onClick={() => openTaskModal(line.id, segment)}
-                              className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
-                            >
-                              ایجاد فعالیت
-                            </Button>
-                          )}
-                          <Button
-                            size="small"
-                            onClick={() => openDraftStageModal(segment, 'automation')}
-                          >
-                            اتوماسیون
-                          </Button>
-                          <Button
-                            size="small"
-                            danger
-                            icon={<DeleteOutlined />}
-                              onClick={() => handleRemoveDraftStage(segment)}
-                          >
-                            حذف
-                          </Button>
-                        </div>
+          const renderDraftSegment = (segment: any, index: number, summary = false) => (
+            <Popover
+              key={`${barKey}-draft-${segment.id}-${index}-${summary ? 'summary' : 'full'}`}
+              content={
+                <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
+                  <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{segment.label}</div>
+                  <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
+                  <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
+                  <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
+                  <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
+                  {String(segment?.task_type || '').trim() && <div>نوع فعالیت: {segment.task_type}</div>}
+                  {String(segment?.description || '').trim() && <div>توضیحات: {segment.description}</div>}
+                  <div>فیلدهای اختصاصی: {toPersianNumber(getProcessTaskCustomFieldsFromStage(segment).length || 0)}</div>
+                  <div>اتوماسیون‌ها: {toPersianNumber(normalizeProcessAutomationRules(segment?.automation_rules).length || 0)}</div>
+                  <div>زمان انجام: {formatDraftDuration(segment)}</div>
+                  {!readOnly && (
+                    <div className="flex items-center gap-2">
+                      {recordId && (
+                        <Button
+                          type="primary"
+                          size="small"
+                          onClick={() => openTaskModal(line.id, segment)}
+                          className="border-none bg-[rgba(var(--brand-600-rgb),1)] text-white shadow-sm hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+                        >
+                          ایجاد فعالیت
+                        </Button>
                       )}
+                      <Button
+                        size="small"
+                        onClick={() => openDraftStageModal(segment, 'automation')}
+                      >
+                        اتوماسیون
+                      </Button>
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleRemoveDraftStage(segment)}
+                      >
+                        حذف
+                      </Button>
                     </div>
-                  }
-                  trigger={compact ? 'hover' : 'click'}
-                  overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
-                  title={null}
-                >
-                  <div
-                    className={`relative flex items-center justify-center cursor-pointer transition-all group ${index !== 0 ? 'border-r border-gray-200/70 dark:border-gray-700/80' : ''} ${index === 0 ? 'rounded-r-lg' : ''} ${index === displaySegments.length - 1 && hiddenCount === 0 ? 'rounded-l-lg' : ''}`}
-                    style={{ flex: 1, border: '1px dashed #d1d5db', backgroundColor: 'transparent' }}
-                  >
-                    <div className="flex flex-col items-center justify-center w-full px-1 overflow-hidden">
-                      <span className={`text-gray-600 font-medium truncate w-full text-center ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                        {shouldCompactSegments ? getCompactLabel(segment.label) : segment.label}
-                      </span>
-                    </div>
-                  </div>
-                </Popover>
-              )
-            ))}
-            {hiddenCount > 0 && (
-              <div
-                className={`relative flex items-center justify-center bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-100 font-semibold rounded-l-lg ${displaySegments.length !== 0 ? 'border-r border-gray-300/70 dark:border-gray-600/80' : ''} ${compact ? 'text-[9px]' : 'text-[11px]'}`}
-                style={{ flex: 0.8 }}
-                title={`${toPersianNumber(hiddenCount)} فعالیت دیگر`}
+                  )}
+                </div>
+              }
+              trigger="click"
+              overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
+              title={null}
+            >
+              <button
+                type="button"
+                className={
+                  summary
+                    ? `relative min-w-[0.7rem] flex-1 basis-0 rounded-full border border-dashed border-gray-300/90 bg-white/75 transition-all ${currentSegment && String(currentSegment?.id || '') === String(segment?.id || '') ? 'h-3.5 border-[rgba(var(--brand-400-rgb),0.95)] bg-[rgba(var(--brand-50-rgb),0.92)]' : 'h-2.5 hover:border-[rgba(var(--brand-400-rgb),0.8)]'} dark:border-gray-600 dark:bg-white/10`
+                    : `relative flex min-w-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 text-center transition-all hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${index !== 0 ? 'mr-1' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`
+                }
               >
-                +{toPersianNumber(hiddenCount)}
+                {!summary && (
+                  <span className={`block w-full min-w-0 truncate font-medium text-gray-700 dark:text-gray-100 ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
+                    {displayMode === 'dense'
+                      ? getDenseSegmentLabel(segment.label)
+                      : (shouldCompactSegments ? getSummarySegmentLabel(segment.label) : segment.label)}
+                  </span>
+                )}
+              </button>
+            </Popover>
+          );
+
+          if (segments.length === 0) {
+            return (
+              <div className={`flex w-full items-center justify-center rounded-2xl border border-dashed border-gray-300/80 bg-gray-50/90 text-gray-400 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-500 ${compact || cardCompact ? 'min-h-[2.5rem] text-[11px]' : 'min-h-[3rem] text-xs'}`}>
+                {compact ? <span className="opacity-60">-</span> : (isProcessModule ? 'بدون مرحله فرآیند' : 'بدون مرحله تولید')}
               </div>
-            )}
-            {segments.length === 0 && (
-              <div className="w-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-xs bg-gray-50 dark:bg-gray-900 h-full">
-                {compact ? <span className="opacity-50">-</span> : (isProcessModule ? 'بدون مرحله فرآیند' : 'بدون مرحله تولید')}
+            );
+          }
+
+          if (displayMode === 'summary') {
+            return (
+              <div className="w-full">
+                <div
+                  className="flex min-h-[2.75rem] items-stretch gap-1.5 overflow-hidden rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.94))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))]"
+                  title={`${currentStatusLabel} - ${currentSegmentLabel} (${toPersianNumber(`${Math.max(currentSegmentIndex + 1, 1)}/${segments.length}`)})`}
+                >
+                  {segments.map((segment: any, index: number) => (
+                    segment.type === 'task'
+                      ? renderTaskSegment(segment, index)
+                      : renderDraftSegment(segment, index)
+                  ))}
+                </div>
               </div>
-            )}
-          </div>
+            );
+          }
+
+          return (
+            <div className="w-full space-y-1.5">
+              {displayMode === 'dense' && currentSegment ? (
+                <div className="flex items-center justify-between gap-2 px-1 text-[10px] text-gray-500 dark:text-gray-400">
+                  <span className="min-w-0 truncate">
+                    {currentSegmentLabel}
+                  </span>
+                  <span className="shrink-0 rounded-full bg-[rgba(var(--brand-50-rgb),0.85)] px-2 py-0.5 font-semibold text-[rgba(var(--brand-700-rgb),1)] dark:bg-white/10 dark:text-gray-100">
+                    {currentStatusLabel}
+                  </span>
+                </div>
+              ) : null}
+              <div className={`relative flex min-h-0 w-full items-stretch rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${displayMode === 'dense' ? 'min-h-[2.75rem]' : (compact || cardCompact ? 'min-h-[2.75rem]' : 'min-h-[3.25rem]')}`}>
+                {displaySegments.map((segment: any, index: number) => (
+                  segment.type === 'task'
+                    ? renderTaskSegment(segment, index)
+                    : renderDraftSegment(segment, index)
+                ))}
+                {hiddenCount > 0 && (
+                  <div
+                    className={`relative flex items-center justify-center rounded-xl bg-gray-200/90 px-2 text-gray-700 dark:bg-gray-700 dark:text-gray-100 ${displaySegments.length !== 0 ? 'mr-1' : ''} ${displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} font-semibold`}
+                    style={{ flex: 0.8 }}
+                    title={`${toPersianNumber(hiddenCount)} فعالیت دیگر`}
+                  >
+                    +{toPersianNumber(hiddenCount)}
+                  </div>
+                )}
+              </div>
+            </div>
           );
         };
 
@@ -6993,7 +7212,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     message.warning('ابتدا فعالیت‌های متصل به این فرآیند را جدا یا حذف کنید');
                                     return;
                                   }
-                                  Modal.confirm({
+                                  openTaskLayerConfirm({
                                     title: 'حذف فرآیند',
                                     content: 'این فرآیند از پیش‌نویس حذف شود؟',
                                     okText: 'حذف',
@@ -7137,13 +7356,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         centered
         destroyOnHidden
         width={560}
-        zIndex={12000}
+        zIndex={15080}
         maskClosable={false}
         style={{ maxWidth: 'calc(100vw - 1rem)' }}
         styles={{
           body: { padding: 0, overflow: 'hidden' },
           content: { overflow: 'hidden' },
         }}
+        modalRender={(node) => (
+          <div
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+          >
+            {node}
+          </div>
+        )}
       >
         {activeTaskQuickModalTask ? renderPopupContent(activeTaskQuickModalTask) : null}
       </Modal>
@@ -7239,26 +7467,26 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
+        rootClassName="task-create-modal-root"
+        className="task-create-modal"
         title={<div className="flex items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند (فعالیت)' : 'افزودن مرحله تولید'}</div>}
         open={isTaskModalOpen}
-        onCancel={() => {
-          setIsTaskModalOpen(false);
-          taskForm.resetFields();
-          setActiveLineId(null);
-          setActiveProcessGroupMeta(null);
-          setDraftToCreate(null);
-          setTaskCustomFieldDrafts((prev) => {
-            const next = { ...prev };
-            delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
-            return next;
-          });
-        }}
+        onCancel={closeTaskModal}
         footer={null}
         zIndex={10001}
         width={560}
         centered
         destroyOnHidden
         styles={stageModalStyles}
+        modalRender={(node) => (
+          <div
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+          >
+            {node}
+          </div>
+        )}
       >
         <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-1 [&_.ant-form-item]:mb-3">
           <div className="max-h-[68vh] overflow-y-auto pr-1">
@@ -7401,18 +7629,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
           <div className="flex justify-end gap-2 mt-4 border-t pt-4">
             <Button onClick={() => {
-              setIsTaskModalOpen(false);
-              taskForm.resetFields();
-              setActiveLineId(null);
-              setActiveProcessGroupMeta(null);
-              setDraftToCreate(null);
-              setTaskCustomFieldDrafts((prev) => {
-                const next = { ...prev };
-                delete next[TASK_MODAL_CUSTOM_FIELD_DRAFT_ID];
-                return next;
-              });
+              closeTaskModal();
             }} className="rounded-lg">انصراف</Button>
-            <Button type="primary" htmlType="submit" loading={loading} className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]">
+            <Button type="primary" htmlType="submit" loading={isSubmittingTaskModal} className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]">
               {isProcessModule ? 'ثبت فعالیت' : 'ثبت مرحله'}
             </Button>
           </div>
