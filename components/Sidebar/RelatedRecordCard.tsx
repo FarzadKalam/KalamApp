@@ -3,9 +3,9 @@ import { Tag } from 'antd';
 import { Link } from 'react-router-dom';
 import { ModuleDefinition, ModuleField } from '../../types';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
-import { getRecordTitle } from '../../utils/recordTitle';
 import { formatRecordFieldValue, RelationValueMap } from '../../utils/recordDisplayFormatter';
-import { getModuleCardSummaryFields, resolveCardStatusMeta } from '../../utils/recordCardHelpers';
+import { getRecordCardSummaryFields, resolveCardStatusMeta } from '../../utils/recordCardHelpers';
+import { getRecordDisplayLabel } from '../../utils/recordLabel';
 import RelatedRecordPopover from '../RelatedRecordPopover';
 
 interface RelatedRecordCardProps {
@@ -17,7 +17,7 @@ interface RelatedRecordCardProps {
 }
 
 const getPrimaryTitle = (item: any, moduleConfig?: ModuleDefinition) =>
-  getRecordTitle(item, moduleConfig, { fallback: '-' });
+  getRecordDisplayLabel(item, moduleConfig?.id, { fallback: '-' });
 
 const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
   moduleId,
@@ -29,7 +29,7 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
   const title = getPrimaryTitle(item, moduleConfig);
   const statusMeta = resolveCardStatusMeta(item, moduleConfig, 'status');
   const assigneeName = profileNameMap?.[item?.assignee_id] || profileNameMap?.[item?.responsible_id] || null;
-  const summaryFields = useMemo(() => getModuleCardSummaryFields(moduleConfig, ['status', 'full_name'], 4), [moduleConfig]);
+  const summaryFields = useMemo(() => getRecordCardSummaryFields(item, moduleConfig, ['status', 'full_name'], 4), [item, moduleConfig]);
   const moduleLabel = moduleConfig?.titles?.fa || moduleId;
   const codeLabel = String(item?.system_code || item?.manual_code || '').trim();
   const useQuickPreviewModal = moduleConfig?.listPreviewMode === 'modal' || moduleConfig?.disableDetailView === true;

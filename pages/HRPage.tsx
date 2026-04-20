@@ -26,7 +26,6 @@ import {
   HistoryOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
-  SettingOutlined,
 } from '@ant-design/icons';
 import dayjs, { Dayjs } from 'dayjs';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -41,13 +40,33 @@ import { useCurrencyConfig } from '../utils/currency';
 import { buildClientFallbackSystemCode } from '../utils/systemCode';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import GoalsManager from '../components/goals/GoalsManager';
-import { ensureDefaultHrTaskGoals } from '../utils/goals';
+import { ensureDefaultHrTaskGoals, executeGoalProgress, normalizeGoalRecord } from '../utils/goals';
+import FormulaEditorModal from '../components/formulas/FormulaEditorModal';
+import ActivityPerformanceRulesManager from '../components/hr/ActivityPerformanceRulesManager';
+import { evaluateGoalRewardRules, type GoalRewardEntry, type GoalRewardFormula } from '../utils/goalRewardRuntime';
+import { syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
+import {
+  fetchPayrollLedgerEntries,
+  mapPayrollLedgerEntriesToLines,
+  markPayrollLedgerEntriesIncluded,
+  sumPayrollLedgerEntries,
+} from '../utils/payrollLedger';
+import {
+  evaluateActivityPerformanceRules,
+  type ActivityPerformanceEntry,
+  type ActivityPerformanceFormula,
+  type ActivityPerformanceRule,
+} from '../utils/activityPerformanceRuntime';
+import { buildCommissionPreviewRows, type CommissionBasis, type CommissionPreviewRow } from '../utils/commissionRuntime';
+import type { GoalRecord } from '../utils/goalTypes';
+import { resolveSelectPopupContainer } from '../utils/popupContainer';
 
 type TaskRecord = {
   id: string;
   name?: string | null;
   status?: string | null;
   assignee_id?: string | null;
+  assignee_role_id?: string | null;
   assignee_type?: string | null;
   due_date?: string | null;
   due_at?: string | null;
@@ -60,6 +79,7 @@ type TaskRecord = {
   related_to_module?: string | null;
   related_production_order?: string | null;
   production_line_id?: string | null;
+  [key: string]: any;
 };
 
 type ProfileRecord = {
@@ -74,6 +94,10 @@ type ProfileRecord = {
   late_penalty_rate?: number | string | null;
   early_bonus_rate?: number | string | null;
   production_bonus_rate?: number | string | null;
+  commission_percentage?: number | string | null;
+  hire_date?: string | null;
+  seniority_base_amount?: number | string | null;
+  seniority_formula_id?: string | null;
   insurance_subject?: boolean | null;
   employee_insurance_rate?: number | string | null;
   employer_insurance_rate?: number | string | null;
@@ -123,6 +147,7 @@ type EmployeeSummaryRow = {
   doneLateCount: number;
   producedQty: number;
   taskWageTotal: number;
+  activityPerformanceTotal: number;
   overtimeHours: number;
   lateHours: number;
   bonusTotal: number;
@@ -130,6 +155,7 @@ type EmployeeSummaryRow = {
   baseSalary: number;
   netPayable: number;
   detailRows: TaskDetailRow[];
+  activityPerformanceEntries: ActivityPerformanceEntry[];
 };
 
 type PayrollFormValues = {
@@ -138,6 +164,23 @@ type PayrollFormValues = {
   late_penalty_rate: number;
   early_bonus_rate: number;
   production_bonus_rate: number;
+  seniority_base_amount: number;
+  seniority_formula_id?: string | null;
+};
+
+type EmployeeGoalTouchRow = {
+  key: string;
+  employeeId: string;
+  employeeName: string;
+  goalId: string;
+  goalName: string;
+  achievedValue: number;
+  targetValue: number;
+  activeLevelLabel: string;
+  moduleLabel: string;
+  periodLabel: string;
+  rewardSuggestion: number;
+  rewardEntries: GoalRewardEntry[];
 };
 
 type HrSupportStats = {
@@ -476,11 +519,46 @@ const formatMinutesLabel = (minutes: number) => {
     : `${toPersianNumber(hours)} ساعت`;
 };
 
+const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
+  const grouped = new Map<string, AttendanceComputedRow[]>();
+  rows.forEach((row) => {
+    const key = row.employeeId || row.employeeName || 'unknown';
+    grouped.set(key, [...(grouped.get(key) || []), row]);
+  });
+
+  let total = 0;
+  grouped.forEach((items) => {
+    const sorted = [...items].sort((a, b) => {
+      const aTime = parseDate(a.occurredAt || null)?.valueOf() || 0;
+      const bTime = parseDate(b.occurredAt || null)?.valueOf() || 0;
+      return aTime - bTime;
+    });
+    let openCheckIn: dayjs.Dayjs | null = null;
+    sorted.forEach((row) => {
+      const occurred = parseDate(row.occurredAt || null);
+      if (!occurred) return;
+      if (row.logType === 'check_in') {
+        openCheckIn = occurred;
+        return;
+      }
+      if (row.logType === 'check_out' && openCheckIn) {
+        const diff = occurred.diff(openCheckIn, 'minute');
+        if (diff > 0 && diff < 24 * 60) {
+          total += diff;
+        }
+        openCheckIn = null;
+      }
+    });
+  });
+  return total;
+};
+
 const renderDateTime = (value: string | null | undefined) => safeJalaliFormat(value, 'YYYY/MM/DD HH:mm') || '-';
 
 const buildSummaries = ({
   profiles,
   tasks,
+  activityPerformanceEntries,
   monthStart,
   monthEnd,
   lineQuantityById,
@@ -488,6 +566,7 @@ const buildSummaries = ({
 }: {
   profiles: ProfileRecord[];
   tasks: TaskRecord[];
+  activityPerformanceEntries: ActivityPerformanceEntry[];
   monthStart: dayjs.Dayjs;
   monthEnd: dayjs.Dayjs;
   lineQuantityById: Record<string, number>;
@@ -495,6 +574,13 @@ const buildSummaries = ({
 }) => {
   const now = dayjs();
   const tasksByAssignee = new Map<string, TaskRecord[]>();
+  const activityEntriesByEmployee = new Map<string, ActivityPerformanceEntry[]>();
+
+  (activityPerformanceEntries || []).forEach((entry) => {
+    const employeeId = String(entry.employee_id || '').trim();
+    if (!employeeId) return;
+    activityEntriesByEmployee.set(employeeId, [...(activityEntriesByEmployee.get(employeeId) || []), entry]);
+  });
 
   tasks.forEach((task) => {
     const assigneeId = String(task.assignee_id || '');
@@ -561,6 +647,9 @@ const buildSummaries = ({
 
     const taskWageTotal = payrollDetailRows.reduce((sum, row) => sum + row.wageFinal, 0);
     const producedQty = payrollDetailRows.reduce((sum, row) => sum + row.producedQty, 0);
+    const employeeActivityEntries = (activityEntriesByEmployee.get(String(profile.source_id || profile.id || '')) || [])
+      .filter((entry) => payrollEligibleTaskIds.has(String(entry.task_id)));
+    const activityPerformanceTotal = employeeActivityEntries.reduce((sum, entry) => sum + toNumber(entry.amount), 0);
     const overtimeHours = assigneeTasks
       .filter((task) => payrollEligibleTaskIds.has(String(task.id)))
       .reduce((sum, task) => {
@@ -580,7 +669,8 @@ const buildSummaries = ({
     const bonusTotal =
       (overtimeHours * overtimeRate) +
       (earlyCount * earlyBonusRate) +
-      (producedQty * productionBonusRate);
+      (producedQty * productionBonusRate) +
+      activityPerformanceTotal;
     const penaltyTotal = lateHours * latePenaltyRate;
     const netPayable = baseSalary + taskWageTotal + bonusTotal - penaltyTotal;
 
@@ -598,6 +688,7 @@ const buildSummaries = ({
       doneLateCount: doneLateRows.length,
       producedQty,
       taskWageTotal,
+      activityPerformanceTotal,
       overtimeHours,
       lateHours,
       bonusTotal,
@@ -605,6 +696,7 @@ const buildSummaries = ({
       baseSalary,
       netPayable,
       detailRows: sortedDetailRows,
+      activityPerformanceEntries: employeeActivityEntries,
     } as EmployeeSummaryRow;
   });
 
@@ -623,10 +715,16 @@ const HRPage: React.FC = () => {
   const [selectedRange, setSelectedRange] = useState<[Dayjs, Dayjs]>(() => getInitialRangeFromQuery());
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [activityPerformanceEntries, setActivityPerformanceEntries] = useState<ActivityPerformanceEntry[]>([]);
+  const [goalTouchRows, setGoalTouchRows] = useState<EmployeeGoalTouchRow[]>([]);
+  const [goalTouchLoading, setGoalTouchLoading] = useState(false);
+  const [commissionRows, setCommissionRows] = useState<CommissionPreviewRow[]>([]);
+  const [commissionLoading, setCommissionLoading] = useState(false);
   const [lineQuantityById, setLineQuantityById] = useState<Record<string, number>>({});
   const [orderQuantityById, setOrderQuantityById] = useState<Record<string, number>>({});
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [payrollConfigModalOpen, setPayrollConfigModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProfileRecord | null>(null);
   const [savingProfileConfig, setSavingProfileConfig] = useState(false);
   const [configForm] = Form.useForm<PayrollFormValues>();
@@ -641,6 +739,19 @@ const HRPage: React.FC = () => {
   const [requestRows, setRequestRows] = useState<HrRequestRecord[]>([]);
   const [activeTab, setActiveTab] = useState('performance');
   const [showKpiManager, setShowKpiManager] = useState(false);
+  const [formulaOptions, setFormulaOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [formulaModalConfig, setFormulaModalConfig] = useState<{
+    open: boolean;
+    defaultScope: string;
+    defaultContextType: string;
+    defaultOutputType: string;
+    assignToField?: keyof PayrollFormValues;
+  }>({
+    open: false,
+    defaultScope: 'activity_performance',
+    defaultContextType: 'task',
+    defaultOutputType: 'money',
+  });
 
   const formatMoney = useCallback((value: number) => `${formatPersianPrice(value)} ${currencyLabel}`, [currencyLabel]);
 
@@ -684,7 +795,7 @@ const HRPage: React.FC = () => {
     else setLoading(true);
 
     try {
-      const [employeesResult, profilesResult, tasksResult] = await Promise.all([
+      const [employeesResult, profilesResult, tasksResult, formulasResult] = await Promise.all([
         supabase.from('employees').select('*').order('full_name', { ascending: true }),
         supabase.from('profiles').select('*').order('full_name', { ascending: true }),
         supabase
@@ -695,11 +806,16 @@ const HRPage: React.FC = () => {
           .lte('created_at', monthEnd.toISOString())
           .order('created_at', { ascending: false })
           .limit(5000),
+        supabase
+          .from('calculation_formulas')
+          .select('id, name')
+          .order('name', { ascending: true }),
       ]);
 
       if (employeesResult.error) throw employeesResult.error;
       if (profilesResult.error) throw profilesResult.error;
       if (tasksResult.error) throw tasksResult.error;
+      if (formulasResult.error) throw formulasResult.error;
 
       const normalizedEmployees = (employeesResult.data || []).map((row: any) => ({
         id: String(row?.id),
@@ -713,6 +829,10 @@ const HRPage: React.FC = () => {
         late_penalty_rate: row?.late_penalty_rate ?? 0,
         early_bonus_rate: row?.early_bonus_rate ?? 0,
         production_bonus_rate: row?.production_bonus_rate ?? 0,
+        commission_percentage: row?.commission_percentage ?? 0,
+        hire_date: row?.hire_date || null,
+        seniority_base_amount: row?.seniority_base_amount ?? 0,
+        seniority_formula_id: row?.seniority_formula_id || null,
         insurance_subject: row?.insurance_subject ?? true,
         employee_insurance_rate: row?.employee_insurance_rate ?? 7,
         employer_insurance_rate: row?.employer_insurance_rate ?? 23,
@@ -730,6 +850,8 @@ const HRPage: React.FC = () => {
         late_penalty_rate: row?.late_penalty_rate ?? 0,
         early_bonus_rate: row?.early_bonus_rate ?? 0,
         production_bonus_rate: row?.production_bonus_rate ?? 0,
+        commission_percentage: row?.commission_percentage ?? 0,
+        hire_date: row?.hire_date || null,
         insurance_subject: row?.insurance_subject ?? true,
         employee_insurance_rate: row?.employee_insurance_rate ?? 7,
         employer_insurance_rate: row?.employer_insurance_rate ?? 23,
@@ -740,10 +862,12 @@ const HRPage: React.FC = () => {
         : normalizedProfilesFallback;
 
       const normalizedTasks = (tasksResult.data || []).map((row: any) => ({
+        ...row,
         id: String(row?.id),
         name: row?.name || null,
         status: row?.status || null,
         assignee_id: row?.assignee_id || null,
+        assignee_role_id: row?.assignee_role_id || null,
         assignee_type: row?.assignee_type || null,
         due_date: row?.due_date || null,
         due_at: row?.due_at || null,
@@ -758,8 +882,70 @@ const HRPage: React.FC = () => {
         production_line_id: row?.production_line_id || null,
       })) as TaskRecord[];
 
+      let nextActivityPerformanceEntries: ActivityPerformanceEntry[] = [];
+      try {
+        const [rulesResult, performanceFormulasResult] = await Promise.all([
+          supabase
+            .from('activity_performance_rules')
+            .select('id, name, employee_id, task_type, formula_id, output_type, priority, conditions_all, conditions_any, is_active, config')
+            .eq('is_active', true)
+            .order('priority', { ascending: true }),
+          supabase
+            .from('calculation_formulas')
+            .select('id, name, expression_config, output_type, config')
+            .eq('is_active', true),
+        ]);
+
+        if (rulesResult.error) throw rulesResult.error;
+        if (performanceFormulasResult.error) throw performanceFormulasResult.error;
+
+        const employeeIdByAssigneeId = normalizedProfiles.reduce<Record<string, string>>((acc, profile) => {
+          const assigneeId = String(profile.related_profile_id || profile.id || '').trim();
+          const employeeId = String(profile.source_id || profile.id || '').trim();
+          if (assigneeId && employeeId) acc[assigneeId] = employeeId;
+          return acc;
+        }, {});
+        const taskMetricsById = normalizedTasks.reduce<Record<string, Record<string, any>>>((acc, task) => {
+          const performance = evaluateTaskPerformance(task, dayjs());
+          const spentHours = toNumber(task.spent_hours ?? task.actual_hours ?? task.duration_hours ?? 0);
+          const meta = PERFORMANCE_TAG_META[performance.code];
+          acc[String(task.id)] = {
+            performance_code: performance.code,
+            performance_label: meta.label,
+            early_hours: Math.max(0, performance.earlyHours),
+            late_hours: Math.max(0, performance.lateHours),
+            early_minutes: Math.round(Math.max(0, performance.earlyHours) * 60),
+            late_minutes: Math.round(Math.max(0, performance.lateHours) * 60),
+            activity_minutes: Math.round(Math.max(0, spentHours) * 60),
+            due_at: resolveDueDate(task),
+            weight: task.weight ?? task.wage ?? 0,
+          };
+          return acc;
+        }, {});
+
+        nextActivityPerformanceEntries = await evaluateActivityPerformanceRules({
+          rules: (rulesResult.data || []) as ActivityPerformanceRule[],
+          formulas: (performanceFormulasResult.data || []) as ActivityPerformanceFormula[],
+          tasks: normalizedTasks,
+          employeeIdByAssigneeId,
+          taskMetricsById,
+        });
+      } catch (error) {
+        console.warn('Activity performance rules are not available yet.', error);
+        nextActivityPerformanceEntries = [];
+      }
+
       setProfiles(normalizedProfiles);
       setTasks(normalizedTasks);
+      setActivityPerformanceEntries(nextActivityPerformanceEntries);
+      setFormulaOptions(
+        (formulasResult.data || [])
+          .map((row: any) => ({
+            label: String(row?.name || row?.id || '').trim(),
+            value: String(row?.id || '').trim(),
+          }))
+          .filter((item) => item.label && item.value),
+      );
 
       const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult] = await Promise.allSettled([
         supabase
@@ -993,12 +1179,13 @@ const HRPage: React.FC = () => {
     return buildSummaries({
       profiles,
       tasks,
+      activityPerformanceEntries,
       monthStart,
       monthEnd,
       lineQuantityById,
       orderQuantityById,
     });
-  }, [lineQuantityById, monthEnd, monthStart, orderQuantityById, profiles, tasks]);
+  }, [activityPerformanceEntries, lineQuantityById, monthEnd, monthStart, orderQuantityById, profiles, tasks]);
 
   const employeeOptions = useMemo(() => {
     return profiles.map((profile) => ({
@@ -1012,6 +1199,136 @@ const HRPage: React.FC = () => {
     const selectedSet = new Set(selectedEmployeeIds.map((id) => String(id)));
     return allSummaries.filter((row) => selectedSet.has(String(row.profile.id)));
   }, [allSummaries, selectedEmployeeIds]);
+
+  const singleSelectedProfileForPayrollConfig = useMemo(() => {
+    if (visibleSummaries.length !== 1) return null;
+    return visibleSummaries[0]?.profile || null;
+  }, [visibleSummaries]);
+
+  useEffect(() => {
+    if (activeTab !== 'goal_fulfillment') return;
+
+    const run = async () => {
+      setGoalTouchLoading(true);
+      try {
+        const [goalsResult, formulasResult] = await Promise.all([
+          supabase
+            .from('goals')
+            .select('*')
+            .eq('is_active', true)
+            .order('updated_at', { ascending: false }),
+          supabase
+            .from('calculation_formulas')
+            .select('id, name, expression_config, output_type, config')
+            .eq('is_active', true)
+            .eq('context_type', 'goal'),
+        ]);
+        if (goalsResult.error) throw goalsResult.error;
+        if (formulasResult.error) throw formulasResult.error;
+
+        const rewardFormulas = (formulasResult.data || []) as GoalRewardFormula[];
+
+        const selectedProfiles = visibleSummaries
+          .map((row) => row.profile)
+          .filter((profile) => profile.source_table === 'employees' && profile.source_id);
+        const nextRows: EmployeeGoalTouchRow[] = [];
+
+        for (const profile of selectedProfiles) {
+          const profileUserId = String(profile.related_profile_id || profile.id || '').trim();
+          if (!profileUserId) continue;
+          for (const rawGoal of (goalsResult.data || [])) {
+            try {
+              const goal = normalizeGoalRecord(rawGoal as GoalRecord);
+              const snapshot = await executeGoalProgress(goal, {
+                userId: profileUserId,
+                roleId: null,
+                permissions: null,
+              });
+              if (!snapshot || snapshot.achievedValue <= 0) continue;
+              const rewardEntries = evaluateGoalRewardRules({
+                snapshot,
+                formulas: rewardFormulas,
+              });
+              nextRows.push({
+                key: `${profile.source_id}_${goal.id}`,
+                employeeId: String(profile.source_id || ''),
+                employeeName: profile.full_name || String(profile.source_id || '-'),
+                goalId: goal.id,
+                goalName: goal.name,
+                achievedValue: snapshot.achievedValue,
+                targetValue: snapshot.targetValue,
+                activeLevelLabel: snapshot.activeLevelKey ? snapshot.levels.find((item) => item.key === snapshot.activeLevelKey)?.label || '-' : 'در حال پیشروی',
+                moduleLabel: snapshot.moduleLabel,
+                periodLabel: `${snapshot.mainRange.startLabel} تا ${snapshot.mainRange.endLabel}`,
+                rewardSuggestion: rewardEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0),
+                rewardEntries,
+              });
+            } catch {
+              continue;
+            }
+          }
+        }
+
+        setGoalTouchRows(nextRows);
+      } catch (error) {
+        console.warn('Goal fulfillment data is not available yet.', error);
+        setGoalTouchRows([]);
+      } finally {
+        setGoalTouchLoading(false);
+      }
+    };
+
+    void run();
+  }, [activeTab, visibleSummaries]);
+
+  useEffect(() => {
+    if (activeTab !== 'commissions') return;
+
+    const run = async () => {
+      setCommissionLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('invoices')
+          .select('id, name, status, invoice_date, total_invoice_amount, assignee_id, invoiceItems, payments')
+          .gte('invoice_date', toGregorianDateString(monthStart, 'YYYY-MM-DD') || '')
+          .lte('invoice_date', toGregorianDateString(monthEnd, 'YYYY-MM-DD') || '')
+          .limit(3000);
+        if (error) throw error;
+
+        const selectedProfiles = visibleSummaries
+          .map((row) => row.profile)
+          .filter((profile) => profile.source_table === 'employees' && profile.source_id);
+        const employeeIdByAssigneeId = selectedProfiles.reduce<Record<string, string>>((acc, profile) => {
+          const assigneeId = String(profile.related_profile_id || profile.id || '').trim();
+          const employeeId = String(profile.source_id || '').trim();
+          if (assigneeId && employeeId) acc[assigneeId] = employeeId;
+          return acc;
+        }, {});
+        const employeeDefaultCommissionByEmployeeId = selectedProfiles.reduce<Record<string, number>>((acc, profile) => {
+          const employeeId = String(profile.source_id || '').trim();
+          if (employeeId) acc[employeeId] = toNumber(profile.commission_percentage);
+          return acc;
+        }, {});
+
+        const bases: CommissionBasis[] = ['approved_invoices', 'settled_invoices', 'settled_and_collected_cheques'];
+        const nextRows = bases.flatMap((basis) => buildCommissionPreviewRows({
+          invoices: (data || []) as any[],
+          employeeIdByAssigneeId,
+          employeeDefaultCommissionByEmployeeId,
+          basis,
+        }));
+
+        setCommissionRows(nextRows);
+      } catch (error) {
+        console.warn('Commission preview is not available yet.', error);
+        setCommissionRows([]);
+      } finally {
+        setCommissionLoading(false);
+      }
+    };
+
+    void run();
+  }, [activeTab, monthEnd, monthStart, visibleSummaries]);
 
   const selectedEmployeeSummary = useMemo(() => {
     if (!employeeId) return null;
@@ -1249,8 +1566,29 @@ const HRPage: React.FC = () => {
     };
   }, [visibleSummaries]);
 
+  const goalFulfillmentTotals = useMemo(() => ({
+    touchedGoals: goalTouchRows.length,
+    achievedLevels: goalTouchRows.filter((row) => row.activeLevelLabel !== 'در حال پیشروی').length,
+    rewardSuggestion: goalTouchRows.reduce((sum, row) => sum + row.rewardSuggestion, 0),
+  }), [goalTouchRows]);
+
+  const commissionTotals = useMemo(() => {
+    const rowsByBasis = {
+      approved_invoices: commissionRows.filter((row) => row.basis === 'approved_invoices'),
+      settled_invoices: commissionRows.filter((row) => row.basis === 'settled_invoices'),
+      settled_and_collected_cheques: commissionRows.filter((row) => row.basis === 'settled_and_collected_cheques'),
+    };
+    return {
+      approved: rowsByBasis.approved_invoices.reduce((sum, row) => sum + row.commission_amount, 0),
+      settled: rowsByBasis.settled_invoices.reduce((sum, row) => sum + row.commission_amount, 0),
+      collectedCheque: rowsByBasis.settled_and_collected_cheques.reduce((sum, row) => sum + row.commission_amount, 0),
+      invoices: new Set(commissionRows.map((row) => row.invoice_id)).size,
+      pendingRows: rowsByBasis.settled_and_collected_cheques.length,
+    };
+  }, [commissionRows]);
+
   const attendanceInsights = useMemo(() => {
-    return attendanceComputedRows.reduce(
+    const deltas = attendanceComputedRows.reduce(
       (acc, row) => ({
         lateMinutes: acc.lateMinutes + row.lateMinutes,
         earlyArrivalMinutes: acc.earlyArrivalMinutes + row.earlyArrivalMinutes,
@@ -1259,6 +1597,10 @@ const HRPage: React.FC = () => {
       }),
       { lateMinutes: 0, earlyArrivalMinutes: 0, earlyLeaveMinutes: 0, overtimeStayMinutes: 0 },
     );
+    return {
+      ...deltas,
+      presenceMinutes: calculatePresenceMinutes(attendanceComputedRows),
+    };
   }, [attendanceComputedRows]);
 
   const closeAttendanceModal = useCallback(() => {
@@ -1339,7 +1681,7 @@ const HRPage: React.FC = () => {
     }
   }, [attendanceForm, attendanceModalMode, attendanceModalRecord?.id, closeAttendanceModal, fetchData, message, profileById]);
 
-  const openConfigModal = (profile: ProfileRecord) => {
+  const openPayrollConfigModal = (profile: ProfileRecord) => {
     setEditingProfile(profile);
     configForm.setFieldsValue({
       base_salary: toNumber(profile.base_salary),
@@ -1347,7 +1689,14 @@ const HRPage: React.FC = () => {
       late_penalty_rate: toNumber(profile.late_penalty_rate),
       early_bonus_rate: toNumber(profile.early_bonus_rate),
       production_bonus_rate: toNumber(profile.production_bonus_rate),
+      seniority_base_amount: toNumber(profile.seniority_base_amount),
+      seniority_formula_id: profile.seniority_formula_id || null,
     });
+    setPayrollConfigModalOpen(true);
+  };
+
+  const openConfigModal = (profile: ProfileRecord) => {
+    setEditingProfile(profile);
     setConfigModalOpen(true);
   };
 
@@ -1358,19 +1707,24 @@ const HRPage: React.FC = () => {
       setSavingProfileConfig(true);
       const targetTable = editingProfile.source_table === 'profiles' ? 'profiles' : 'employees';
       const targetId = editingProfile.source_id || editingProfile.id;
+      const patch: Record<string, any> = {
+        base_salary: toNumber(values.base_salary),
+        overtime_rate: toNumber(values.overtime_rate),
+        late_penalty_rate: toNumber(values.late_penalty_rate),
+        early_bonus_rate: toNumber(values.early_bonus_rate),
+        production_bonus_rate: toNumber(values.production_bonus_rate),
+      };
+      if (targetTable === 'employees') {
+        patch.seniority_base_amount = toNumber(values.seniority_base_amount);
+        patch.seniority_formula_id = values.seniority_formula_id || null;
+      }
       const { error } = await supabase
         .from(targetTable)
-        .update({
-          base_salary: toNumber(values.base_salary),
-          overtime_rate: toNumber(values.overtime_rate),
-          late_penalty_rate: toNumber(values.late_penalty_rate),
-          early_bonus_rate: toNumber(values.early_bonus_rate),
-          production_bonus_rate: toNumber(values.production_bonus_rate),
-        })
+        .update(patch)
         .eq('id', targetId);
       if (error) throw error;
       message.success('تنظیمات حقوق ذخیره شد.');
-      setConfigModalOpen(false);
+      setPayrollConfigModalOpen(false);
       await fetchData(true);
     } catch (err: any) {
       message.error(toFaErrorMessage(err as any, 'ذخیره تنظیمات ناموفق بود'));
@@ -1411,14 +1765,51 @@ const HRPage: React.FC = () => {
         return;
       }
 
+      await syncGoalRewardEntriesForPayroll(supabase as any, {
+        profiles: rowsToCreate
+          .map((row) => ({
+            employeeId: String(row.profile.source_id || '').trim(),
+            profileUserId: String(row.profile.related_profile_id || row.profile.id || '').trim(),
+            profileName: row.name,
+          }))
+          .filter((item) => item.employeeId && item.profileUserId),
+        periodStart,
+        periodEnd,
+      });
+
+      const rowsToCreateEmployeeIds = rowsToCreate.map((row) => String(row.profile.source_id || '')).filter(Boolean);
+      const ledgerEntries = await fetchPayrollLedgerEntries(supabase as any, rowsToCreateEmployeeIds, periodStart, periodEnd);
+      const ledgerByEmployee = new Map<string, typeof ledgerEntries>();
+      ledgerEntries.forEach((entry) => {
+        const key = String(entry.employee_id || '').trim();
+        if (!key) return;
+        ledgerByEmployee.set(key, [...(ledgerByEmployee.get(key) || []), entry]);
+      });
+
       const payloads = await Promise.all(rowsToCreate.map(async (row) => {
         const employeeIdValue = String(row.profile.source_id || '');
         const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
+        const employeeLedgerEntries = ledgerByEmployee.get(employeeIdValue) || [];
+        const ledgerLines = mapPayrollLedgerEntriesToLines(employeeLedgerEntries);
+        const ledgerNet = sumPayrollLedgerEntries(employeeLedgerEntries);
+        const ledgerBonusTotal = employeeLedgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
+        const ledgerDeductionTotal = employeeLedgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
+        const activityPerformanceTotal = toNumber(row.activityPerformanceTotal);
+        const activityPerformanceBonusTotal = Math.max(0, activityPerformanceTotal);
+        const activityPerformancePenaltyTotal = Math.abs(Math.min(0, activityPerformanceTotal));
+        const otherBonusTotal = Math.max(0, row.bonusTotal - activityPerformanceTotal);
         const lines = [
           { line_type: 'earning', title: 'حقوق پایه', amount: row.baseSalary, description: `بازه ${periodStart} تا ${periodEnd}` },
           { line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` },
-          ...(row.bonusTotal > 0 ? [{ line_type: 'bonus', title: 'مزایا و پاداش', amount: row.bonusTotal, description: 'محاسبه از عملکرد و ضرایب' }] : []),
+          ...(otherBonusTotal > 0 ? [{ line_type: 'bonus', title: 'مزایا و پاداش', amount: otherBonusTotal, description: 'محاسبه از عملکرد پایه' }] : []),
+          ...(activityPerformanceTotal !== 0 ? [{
+            line_type: activityPerformanceTotal < 0 ? 'deduction' : 'bonus',
+            title: 'ضرایب فعالیت‌ها',
+            amount: Math.abs(activityPerformanceTotal),
+            description: `${toPersianNumber(row.activityPerformanceEntries.length)} محاسبه فرمولی`,
+          }] : []),
           ...(row.penaltyTotal > 0 ? [{ line_type: 'deduction', title: 'کسورات', amount: row.penaltyTotal, description: 'تاخیر و سایر کسورات' }] : []),
+          ...ledgerLines,
           ...(row.profile?.insurance_subject !== false && (toNumber(row.profile?.employee_insurance_rate) > 0)
             ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100, description: 'برآورد از تنظیمات پرسنل' }]
             : []),
@@ -1440,12 +1831,12 @@ const HRPage: React.FC = () => {
           assignee_id: row.profile.related_profile_id || null,
           base_salary: row.baseSalary,
           task_wage_total: row.taskWageTotal,
-          bonus_total: row.bonusTotal,
-          deduction_total: row.penaltyTotal + employeeInsuranceAmount,
+          bonus_total: otherBonusTotal + activityPerformanceBonusTotal + ledgerBonusTotal,
+          deduction_total: row.penaltyTotal + activityPerformancePenaltyTotal + ledgerDeductionTotal + employeeInsuranceAmount,
           insurance_employee_amount: employeeInsuranceAmount,
           insurance_employer_amount: employerInsuranceAmount,
-          gross_amount: row.baseSalary + row.taskWageTotal + row.bonusTotal,
-          net_amount: row.netPayable - employeeInsuranceAmount,
+          gross_amount: row.baseSalary + row.taskWageTotal + otherBonusTotal + activityPerformanceBonusTotal + ledgerBonusTotal,
+          net_amount: row.netPayable + ledgerNet - employeeInsuranceAmount,
           lines,
           payments: [],
           performance_snapshot: {
@@ -1455,6 +1846,9 @@ const HRPage: React.FC = () => {
             overtime_hours: row.overtimeHours,
             late_hours: row.lateHours,
             produced_qty: row.producedQty,
+            activity_performance_total: activityPerformanceTotal,
+            activity_performance_entries: row.activityPerformanceEntries,
+            payroll_ledger_entry_ids: employeeLedgerEntries.map((entry) => entry.id),
           },
           task_ids: row.detailRows.map((detail) => detail.taskId).filter(Boolean),
           notes: `ایجاد شده از داشبورد منابع انسانی برای بازه ${periodStart} تا ${periodEnd}`,
@@ -1464,8 +1858,15 @@ const HRPage: React.FC = () => {
       const { data: insertedRows, error: insertError } = await supabase
         .from('payroll_slips')
         .insert(payloads)
-        .select('id');
+        .select('id, employee_id');
       if (insertError) throw insertError;
+
+      await Promise.all((insertedRows || []).map(async (inserted: any) => {
+        const employeeId = String(inserted?.employee_id || '').trim();
+        const slipId = String(inserted?.id || '').trim();
+        const ids = (ledgerByEmployee.get(employeeId) || []).map((entry) => entry.id);
+        await markPayrollLedgerEntriesIncluded(supabase as any, ids, slipId);
+      }));
 
       message.success(`${toPersianNumber(rowsToCreate.length)} فیش حقوقی ایجاد شد.`);
       const firstId = insertedRows?.[0]?.id ? String(insertedRows[0].id) : '';
@@ -1499,13 +1900,12 @@ const HRPage: React.FC = () => {
         <div className="font-bold text-leather-700">{row.name}</div>
         <Button
           size="small"
-          icon={<SettingOutlined />}
           onClick={(event) => {
             event.stopPropagation();
             openConfigModal(row.profile);
           }}
         >
-          ضرایب
+          ضریب
         </Button>
       </div>
       <div className="flex flex-wrap gap-1 mb-2">
@@ -1516,9 +1916,9 @@ const HRPage: React.FC = () => {
       </div>
       <div className="text-xs text-gray-600 leading-6">
         <div>تکمیل با دیرکرد: <span className="persian-number text-red-700">{toPersianNumber(row.doneLateCount)}</span></div>
-        <div>خروجی ثبت‌شده: <span className="persian-number">{toPersianNumber(row.producedQty)}</span></div>
-        <div>اضافه‌کار: <span className="persian-number text-blue-700">{toPersianNumber(row.overtimeHours.toFixed(1))}</span> ساعت</div>
-        <div>دیرکرد: <span className="persian-number text-red-700">{toPersianNumber(row.lateHours.toFixed(1))}</span> ساعت</div>
+        <div>تعجیل: <span className="persian-number text-green-700">{toPersianNumber(row.doneEarlyCount)}</span></div>
+        <div>تاخیر: <span className="persian-number text-red-700">{toPersianNumber(row.doneLateCount + row.overdueOpenCount)}</span></div>
+        <div>تکمیل‌شده: <span className="persian-number text-blue-700">{toPersianNumber(row.doneCount)}</span></div>
       </div>
     </Card>
   );
@@ -1573,53 +1973,38 @@ const HRPage: React.FC = () => {
       ),
     },
     {
-      title: 'حجم فعالیت',
-      key: 'task_counts',
-      render: (_: unknown, row: EmployeeSummaryRow) => (
-        <Space size={4} wrap>
-          <Tag color="blue">کل {toPersianNumber(row.totalTasks)}</Tag>
-          <Tag color="green">انجام‌شده {toPersianNumber(row.doneCount)}</Tag>
-          <Tag color="orange">باز {toPersianNumber(row.openCount)}</Tag>
-          <Tag color="red">عقب‌افتاده {toPersianNumber(row.overdueOpenCount)}</Tag>
-        </Space>
-      ),
+      title: 'تعداد فعالیت‌ها',
+      key: 'totalTasks',
+      render: (_: unknown, row: EmployeeSummaryRow) => <span className="persian-number">{toPersianNumber(row.totalTasks)}</span>,
     },
     {
-      title: 'کیفیت انجام',
-      key: 'timing',
-      render: (_: unknown, row: EmployeeSummaryRow) => (
-        <Space size={4} wrap>
-          <Tag color="green">تعجیل {toPersianNumber(row.doneEarlyCount)}</Tag>
-          <Tag color="blue">به‌موقع {toPersianNumber(row.doneOnTimeCount)}</Tag>
-          <Tag color="red">با دیرکرد {toPersianNumber(row.doneLateCount)}</Tag>
-        </Space>
-      ),
+      title: 'تعجیل',
+      key: 'doneEarlyCount',
+      render: (_: unknown, row: EmployeeSummaryRow) => <span className="persian-number text-green-700">{toPersianNumber(row.doneEarlyCount)}</span>,
     },
     {
-      title: 'شاخص‌های عملیاتی',
-      key: 'operational_metrics',
-      render: (_: unknown, row: EmployeeSummaryRow) => (
-        <div className="text-sm space-y-1">
-          <div>خروجی ثبت‌شده: <span className="persian-number">{toPersianNumber(row.producedQty)}</span></div>
-          <div>اضافه‌کار: <span className="persian-number text-blue-700">{toPersianNumber(row.overtimeHours.toFixed(1))}</span> ساعت</div>
-          <div>دیرکرد: <span className="persian-number text-red-700">{toPersianNumber(row.lateHours.toFixed(1))}</span> ساعت</div>
-        </div>
-      ),
+      title: 'تاخیر',
+      key: 'delayCount',
+      render: (_: unknown, row: EmployeeSummaryRow) => <span className="persian-number text-red-700">{toPersianNumber(row.doneLateCount + row.overdueOpenCount)}</span>,
     },
     {
-      title: 'تنظیمات',
+      title: 'تکمیل‌شده',
+      key: 'doneCount',
+      render: (_: unknown, row: EmployeeSummaryRow) => <span className="persian-number text-blue-700">{toPersianNumber(row.doneCount)}</span>,
+    },
+    {
+      title: 'ضریب',
       key: 'actions',
-      width: 130,
+      width: 110,
       render: (_: unknown, row: EmployeeSummaryRow) => (
         <Button
-          icon={<SettingOutlined />}
+          size="small"
           onClick={(event) => {
             event.stopPropagation();
             openConfigModal(row.profile);
           }}
-          size="small"
         >
-          ضرایب
+          ضریب
         </Button>
       ),
     },
@@ -1936,6 +2321,12 @@ const HRPage: React.FC = () => {
       render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
     },
     {
+      title: 'ضرایب فعالیت',
+      dataIndex: 'activityPerformanceTotal',
+      key: 'activityPerformanceTotal',
+      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
+    },
+    {
       title: 'مزایا',
       dataIndex: 'bonusTotal',
       key: 'bonusTotal',
@@ -1952,6 +2343,116 @@ const HRPage: React.FC = () => {
       dataIndex: 'netPayable',
       key: 'netPayable',
       render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span>,
+    },
+  ];
+
+  const goalFulfillmentColumns = [
+    {
+      title: 'کارمند',
+      dataIndex: 'employeeName',
+      key: 'employeeName',
+      render: (val: string) => <span className="font-bold text-leather-700">{val}</span>,
+    },
+    {
+      title: 'هدف',
+      dataIndex: 'goalName',
+      key: 'goalName',
+    },
+    {
+      title: 'ماژول',
+      dataIndex: 'moduleLabel',
+      key: 'moduleLabel',
+      render: (val: string) => <Tag>{val}</Tag>,
+    },
+    {
+      title: 'پیشرفت',
+      key: 'progress',
+      render: (_: unknown, row: EmployeeGoalTouchRow) => (
+        <div className="text-sm">
+          <div>تحقق: <span className="persian-number">{toPersianNumber(row.achievedValue)}</span></div>
+          <div>هدف: <span className="persian-number">{toPersianNumber(row.targetValue)}</span></div>
+        </div>
+      ),
+    },
+    {
+      title: 'سطح',
+      dataIndex: 'activeLevelLabel',
+      key: 'activeLevelLabel',
+      render: (val: string) => <Tag color={val === 'در حال پیشروی' ? 'blue' : 'gold'}>{val}</Tag>,
+    },
+    {
+      title: 'بازه هدف',
+      dataIndex: 'periodLabel',
+      key: 'periodLabel',
+    },
+    {
+      title: 'پاداش/جریمه',
+      dataIndex: 'rewardSuggestion',
+      key: 'rewardSuggestion',
+      render: (_: unknown, row: EmployeeGoalTouchRow) => (
+        <div className="text-sm">
+          <div className={`persian-number font-bold ${row.rewardSuggestion < 0 ? 'text-red-700' : 'text-green-700'}`}>
+            {formatMoney(row.rewardSuggestion)}
+          </div>
+          <div className="mt-1 text-xs leading-6 text-gray-500">
+            {row.rewardEntries.length > 0
+              ? row.rewardEntries.map((entry) => entry.title).join(' | ')
+              : 'تعریف نشده'}
+          </div>
+        </div>
+      ),
+    },
+  ];
+
+  const commissionBasisLabel: Record<CommissionBasis, string> = {
+    approved_invoices: 'فاکتور تاییدشده',
+    settled_invoices: 'فاکتور تسویه‌شده',
+    settled_and_collected_cheques: 'تسویه و چک وصول‌شده',
+  };
+
+  const commissionColumns = [
+    {
+      title: 'کارمند',
+      key: 'employeeName',
+      render: (_: unknown, row: CommissionPreviewRow) => (
+        <span className="font-bold text-leather-700">
+          {profiles.find((profile) => String(profile.source_id || '') === String(row.employee_id))?.full_name || row.employee_id}
+        </span>
+      ),
+    },
+    {
+      title: 'فاکتور',
+      dataIndex: 'invoice_name',
+      key: 'invoice_name',
+      render: (val: string, row: CommissionPreviewRow) => (
+        <a href={`/invoices/${row.invoice_id}`} className="text-leather-700 hover:underline">
+          {val}
+        </a>
+      ),
+    },
+    {
+      title: 'مبنا',
+      dataIndex: 'basis',
+      key: 'basis',
+      render: (val: CommissionBasis) => <Tag>{commissionBasisLabel[val] || val}</Tag>,
+    },
+    {
+      title: 'نسبت احراز',
+      dataIndex: 'eligible_ratio',
+      key: 'eligible_ratio',
+      render: (val: number) => <span className="persian-number">{toPersianNumber((val * 100).toFixed(1))}%</span>,
+    },
+    {
+      title: 'پورسانت',
+      dataIndex: 'commission_amount',
+      key: 'commission_amount',
+      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'تاریخ',
+      dataIndex: 'invoice_date',
+      key: 'invoice_date',
+      render: (val: string | null) => val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD')) : '-',
     },
   ];
 
@@ -2002,11 +2503,11 @@ const HRPage: React.FC = () => {
             بروزرسانی
           </Button>
           <Button
-            icon={<SettingOutlined />}
-            onClick={() => openConfigModal(selectedEmployeeSummary.profile)}
+            icon={<SafetyCertificateOutlined />}
+            onClick={() => openPayrollConfigModal(selectedEmployeeSummary.profile)}
             className="w-full rounded-xl"
           >
-            تنظیم ضرایب
+            حقوق و سنوات
           </Button>
         </div>
       </div>
@@ -2018,38 +2519,26 @@ const HRPage: React.FC = () => {
       <Row gutter={[12, 12]} className="mb-4">
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">کل فعالیت‌های ارزیابی‌شده</div>
+            <div className="text-xs text-gray-500 mb-1">تعداد فعالیت‌ها</div>
             <div className="text-2xl font-black">{toPersianNumber(performanceTotals.totalTasks)}</div>
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">نرخ انجام</div>
-            <div className="text-2xl font-black text-green-700">{toPersianNumber(performanceTotals.completionRate.toFixed(1))}%</div>
+            <div className="text-xs text-gray-500 mb-1">تعجیل</div>
+            <div className="text-2xl font-black text-green-700">{toPersianNumber(performanceTotals.doneEarlyCount)}</div>
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">تکمیل به‌موقع / تعجیل</div>
-            <div className="text-2xl font-black text-blue-700">{toPersianNumber(performanceTotals.onTimeRate.toFixed(1))}%</div>
+            <div className="text-xs text-gray-500 mb-1">تاخیر</div>
+            <div className="text-2xl font-black text-red-700">{toPersianNumber(performanceTotals.doneLateCount + performanceTotals.overdueOpenCount)}</div>
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">فعالیت باز عقب‌افتاده</div>
-            <div className="text-2xl font-black text-red-700">{toPersianNumber(performanceTotals.overdueOpenCount)}</div>
-          </Card>
-        </Col>
-        <Col xs={24} md={6}>
-          <Card>
-            <div className="text-xs text-gray-500 mb-1">تکمیل با دیرکرد</div>
-            <div className="text-2xl font-black text-red-700">{toPersianNumber(performanceTotals.lateDoneRate.toFixed(1))}%</div>
-          </Card>
-        </Col>
-        <Col xs={24} md={6}>
-          <Card>
-            <div className="text-xs text-gray-500 mb-1">خروجی ثبت‌شده</div>
-            <div className="text-2xl font-black">{toPersianNumber(performanceTotals.producedQty)}</div>
+            <div className="text-xs text-gray-500 mb-1">تکمیل‌شده</div>
+            <div className="text-2xl font-black text-blue-700">{toPersianNumber(performanceTotals.doneCount)}</div>
           </Card>
         </Col>
       </Row>
@@ -2075,40 +2564,6 @@ const HRPage: React.FC = () => {
           )
         )}
       </Card>
-
-      <Row gutter={[12, 12]} className="mt-4">
-        <Col xs={24} xl={10}>
-          <div className="h-full">
-            <GoalProgressSlider moduleId="tasks" placement="dashboard" />
-          </div>
-        </Col>
-        <Col xs={24} xl={14}>
-          <Card className="h-full">
-            <div className="flex h-full flex-col justify-between gap-4">
-              <div>
-                <div className="text-lg font-black text-gray-800 dark:text-gray-100">شاخص‌های عملکرد</div>
-                <div className="mt-2 text-sm leading-7 text-gray-600 dark:text-gray-300">
-                  KPIهای این بخش از روی فعالیت‌ها محاسبه می‌شوند و تعریف شرط‌های آن‌ها از همان موتور شرط‌های گردش‌کار استفاده می‌کند.
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="primary" onClick={() => setShowKpiManager((prev) => !prev)}>
-                  {showKpiManager ? 'بستن مدیریت KPI' : 'مدیریت KPIها'}
-                </Button>
-                <Button onClick={() => navigate('/tasks')}>
-                  مشاهده فعالیت‌ها
-                </Button>
-              </div>
-            </div>
-          </Card>
-        </Col>
-      </Row>
-
-      {showKpiManager ? (
-        <Card className="mt-4">
-          <GoalsManager inline defaultModuleId="tasks" />
-        </Card>
-      ) : null}
     </>
   );
 
@@ -2125,7 +2580,7 @@ const HRPage: React.FC = () => {
           <Card><div className="text-xs text-gray-500 mb-1">خروج‌ها</div><div className="text-2xl font-black text-red-700">{toPersianNumber(supportStats.attendance.checkOuts)}</div></Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card><div className="text-xs text-gray-500 mb-1">ثبت مرخصی/ماموریت</div><div className="text-2xl font-black">{toPersianNumber(supportStats.attendance.leaveLogs + supportStats.attendance.missionLogs)}</div></Card>
+          <Card><div className="text-xs text-gray-500 mb-1">جمع حضور</div><div className="text-lg font-black text-blue-700">{formatMinutesLabel(attendanceInsights.presenceMinutes)}</div></Card>
         </Col>
         <Col xs={24} md={6}>
           <Card><div className="text-xs text-gray-500 mb-1">جمع دیرکرد</div><div className="text-lg font-black text-red-700">{formatMinutesLabel(attendanceInsights.lateMinutes)}</div></Card>
@@ -2244,6 +2699,113 @@ const HRPage: React.FC = () => {
     </>
   );
 
+  const goalFulfillmentTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">اهداف لمس‌شده</div>
+            <div className="text-2xl font-black">{toPersianNumber(goalFulfillmentTotals.touchedGoals)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">سطح‌های محقق‌شده</div>
+            <div className="text-2xl font-black">{toPersianNumber(goalFulfillmentTotals.achievedLevels)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">پاداش هدف پیشنهادی</div>
+            <div className="text-2xl font-black">{formatMoney(goalFulfillmentTotals.rewardSuggestion)}</div>
+          </Card>
+        </Col>
+      </Row>
+      <Card className="mb-4">
+        <GoalProgressSlider moduleId="tasks" placement="dashboard" />
+      </Card>
+      <Card>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => setActiveTab('performance')}>مشاهده عملکرد فعالیت‌ها</Button>
+          <Button onClick={() => navigate('/reports')}>گزارش‌ساز</Button>
+          <Button onClick={() => setShowKpiManager((prev) => !prev)}>
+            {showKpiManager ? 'بستن مدیریت اهداف' : 'مدیریت اهداف'}
+          </Button>
+        </div>
+        {goalTouchLoading ? (
+          <div className="py-10 flex items-center justify-center"><Spin /></div>
+        ) : goalTouchRows.length === 0 ? (
+          <Empty description="برای نیروهای انتخاب‌شده هنوز هدف لمس‌شده‌ای پیدا نشد." />
+        ) : (
+          <Table
+            rowKey="key"
+            columns={goalFulfillmentColumns}
+            dataSource={goalTouchRows}
+            pagination={{ pageSize: 12, showSizeChanger: false }}
+            scroll={{ x: 1200 }}
+          />
+        )}
+      </Card>
+      {showKpiManager ? (
+        <Card className="mt-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-black text-gray-800 dark:text-gray-100">مدیریت اهداف</div>
+              <div className="mt-1 text-xs leading-6 text-gray-500">
+                فرمول‌های پاداش و محاسبه هر هدف داخل فرم ایجاد یا ویرایش همان هدف تعریف می‌شوند.
+              </div>
+            </div>
+          </div>
+          <GoalsManager inline defaultModuleId="tasks" />
+        </Card>
+      ) : null}
+    </>
+  );
+
+  const commissionsTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">پورسانت بر مبنای تایید</div>
+            <div className="text-2xl font-black">{formatMoney(commissionTotals.approved)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">پورسانت بر مبنای تسویه</div>
+            <div className="text-2xl font-black">{formatMoney(commissionTotals.settled)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">مبنای وصول چک</div>
+            <div className="text-2xl font-black">{formatMoney(commissionTotals.collectedCheque)}</div>
+          </Card>
+        </Col>
+      </Row>
+      <Card>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => navigate('/invoices')}>فاکتورهای فروش</Button>
+          <Button onClick={() => navigate('/products')}>درصد پورسانت محصولات</Button>
+        </div>
+        {commissionLoading ? (
+          <div className="py-10 flex items-center justify-center"><Spin /></div>
+        ) : commissionRows.length === 0 ? (
+          <Empty description="برای این بازه پورسانتی محاسبه نشد." />
+        ) : (
+          <Table
+            rowKey={(row) => `${row.employee_id}_${row.invoice_id}_${row.basis}`}
+            columns={commissionColumns}
+            dataSource={commissionRows}
+            pagination={{ pageSize: 15, showSizeChanger: false }}
+            scroll={{ x: 1200 }}
+          />
+        )}
+      </Card>
+    </>
+  );
+
   const payrollTabContent = (
     <>
       <Row gutter={[12, 12]} className="mb-4">
@@ -2269,10 +2831,21 @@ const HRPage: React.FC = () => {
       <Card>
         <div className="flex flex-wrap gap-2 mb-4">
           <Button onClick={() => navigate('/employees')}>تنظیمات حقوقی کارکنان</Button>
+          <Button
+            onClick={() => singleSelectedProfileForPayrollConfig && openPayrollConfigModal(singleSelectedProfileForPayrollConfig)}
+            disabled={!singleSelectedProfileForPayrollConfig}
+          >
+            تنظیمات حقوق و سنوات
+          </Button>
           <Button type="primary" onClick={handleCreatePayrollSlips}>
             ایجاد فیش حقوقی
           </Button>
         </div>
+        {!singleSelectedProfileForPayrollConfig ? (
+          <div className="mb-4 text-xs leading-6 text-gray-500">
+            برای ویرایش حقوق پایه، اضافه‌کار و سنوات، یک کارمند را از فیلتر بالای صفحه انتخاب کنید.
+          </div>
+        ) : null}
         {visibleSummaries.length === 0 ? (
           <Empty description="داده‌ای برای محاسبه حقوق در این بازه یافت نشد." />
         ) : (
@@ -2410,7 +2983,9 @@ const HRPage: React.FC = () => {
               { key: 'attendance', label: 'تردد', children: attendanceTabContent },
               { key: 'schedules', label: 'برنامه حضور', children: schedulesTabContent },
               { key: 'requests', label: 'درخواست‌ها', children: requestsTabContent },
-              { key: 'payroll', label: 'حقوق و بیمه', children: payrollTabContent },
+              { key: 'goals', label: 'تحقق اهداف', children: goalFulfillmentTabContent },
+              { key: 'commissions', label: 'پورسانت‌ها', children: commissionsTabContent },
+              { key: 'payroll', label: 'فیش حقوقی', children: payrollTabContent },
             ]}
           />
         </>
@@ -2557,48 +3132,99 @@ const HRPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title={`تنظیم ضرایب حقوق - ${editingProfile?.full_name || editingProfile?.id || ''}`}
+        title={`ضرایب فعالیت‌ها - ${editingProfile?.full_name || editingProfile?.id || ''}`}
         open={configModalOpen}
-        forceRender
         onCancel={() => setConfigModalOpen(false)}
+        footer={null}
+        width={980}
+        destroyOnHidden
+      >
+        <ActivityPerformanceRulesManager
+          employeeProfileId={String(editingProfile?.related_profile_id || editingProfile?.id || '').trim() || null}
+        />
+      </Modal>
+
+      <Modal
+        title={`تنظیمات حقوق و سنوات - ${editingProfile?.full_name || editingProfile?.id || ''}`}
+        open={payrollConfigModalOpen}
+        forceRender
+        onCancel={() => setPayrollConfigModalOpen(false)}
         onOk={handleSavePayrollConfig}
         confirmLoading={savingProfileConfig}
         okText="ذخیره"
         cancelText="انصراف"
+        width={780}
       >
-        <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-xs leading-7 text-gray-600 dark:border-gray-800 dark:bg-white/5 dark:text-gray-300">
-          شاخص‌های عملکرد شرط‌محور از تب عملکرد همین صفحه مدیریت می‌شوند.
-          <div className="mt-2">
-            <Button
-              size="small"
-              onClick={() => {
-                setConfigModalOpen(false);
-                setActiveTab('performance');
-                setShowKpiManager(true);
-              }}
-            >
-              رفتن به مدیریت KPIها
-            </Button>
-          </div>
-        </div>
         <Form form={configForm} layout="vertical">
-          <Form.Item name="base_salary" label="حقوق پایه ماهانه">
-            <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="overtime_rate" label="نرخ هر ساعت اضافه‌کار">
-            <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="late_penalty_rate" label="جریمه هر ساعت دیرکرد">
-            <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="early_bonus_rate" label="پاداش هر فعالیت با تعجیل">
-            <InputNumber min={0} className="w-full" />
-          </Form.Item>
-          <Form.Item name="production_bonus_rate" label="پاداش به ازای هر واحد تولید">
-            <InputNumber min={0} className="w-full" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Form.Item name="base_salary" label="حقوق پایه ماهانه">
+              <InputNumber min={0} className="w-full" />
+            </Form.Item>
+            <Form.Item name="overtime_rate" label="نرخ هر ساعت اضافه‌کار">
+              <InputNumber min={0} className="w-full" />
+            </Form.Item>
+            <Form.Item name="late_penalty_rate" label="جریمه هر ساعت دیرکرد">
+              <InputNumber min={0} className="w-full" />
+            </Form.Item>
+            <Form.Item name="early_bonus_rate" label="پاداش هر فعالیت با تعجیل">
+              <InputNumber min={0} className="w-full" />
+            </Form.Item>
+            <Form.Item name="production_bonus_rate" label="پاداش به ازای هر واحد تولید">
+              <InputNumber min={0} className="w-full" />
+            </Form.Item>
+            <Form.Item name="seniority_base_amount" label="مبلغ پایه سنوات">
+              <InputNumber min={0} className="w-full" />
+            </Form.Item>
+          </div>
+          <Form.Item name="seniority_formula_id" label="فرمول سنوات">
+            <Space.Compact className="w-full">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                getPopupContainer={resolveSelectPopupContainer}
+                value={configForm.getFieldValue('seniority_formula_id') || undefined}
+                onChange={(value) => configForm.setFieldValue('seniority_formula_id', value || null)}
+                options={formulaOptions.map((item: any) => ({
+                  label: item.label,
+                  value: item.value,
+                }))}
+                placeholder="فرمول سنوات را انتخاب کنید"
+                className="w-full"
+              />
+              <Button
+                onClick={() =>
+                  setFormulaModalConfig({
+                    open: true,
+                    defaultScope: 'payroll',
+                    defaultContextType: 'employee',
+                    defaultOutputType: 'money',
+                    assignToField: 'seniority_formula_id',
+                  })
+                }
+              >
+                +
+              </Button>
+            </Space.Compact>
           </Form.Item>
         </Form>
       </Modal>
+      <FormulaEditorModal
+        open={formulaModalConfig.open}
+        onCancel={() => setFormulaModalConfig((current) => ({ ...current, open: false }))}
+        defaultScope={formulaModalConfig.defaultScope}
+        defaultContextType={formulaModalConfig.defaultContextType}
+        defaultOutputType={formulaModalConfig.defaultOutputType}
+        onSaved={(formula) => {
+          setFormulaOptions((current) => {
+            if (current.some((item) => item.value === formula.id)) return current;
+            return [...current, { label: formula.name, value: formula.id }].sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+          });
+          if (formulaModalConfig.assignToField) {
+            configForm.setFieldValue(formulaModalConfig.assignToField, formula.id);
+          }
+        }}
+      />
       <style>{`
         .hr-range-popup .ant-picker-panels > *:last-child {
           display: none !important;

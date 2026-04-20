@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Empty, Select, Skeleton, Tag } from 'antd';
-import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { CaretRightOutlined, LeftOutlined, PauseOutlined, RightOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import {
@@ -169,6 +169,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const [subperiodSelections, setSubperiodSelections] = useState<Record<string, GoalPeriodUnit>>({});
   const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
   const [editingGoal, setEditingGoal] = useState<GoalProgressSnapshot['goal'] | null>(null);
+  const [isAutoPlayPaused, setIsAutoPlayPaused] = useState(false);
   const rowCacheRef = useRef<Map<string, any[]>>(new Map());
   const fiscalYearRef = useRef<FiscalYearSnapshot | null>(null);
   const switchTimerRef = useRef<number | null>(null);
@@ -484,12 +485,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }, [activeIndex, visibleIndex]);
 
   useEffect(() => {
-    if (cards.length <= 1) return;
+    if (cards.length <= 1 || isAutoPlayPaused) return;
     const handle = window.setInterval(() => {
       setActiveIndex((current) => (current + 1) % cards.length);
     }, 6500);
     return () => window.clearInterval(handle);
-  }, [cards.length]);
+  }, [cards.length, isAutoPlayPaused]);
 
   const activeCard = cards[visibleIndex] || null;
   const canEditActiveGoal = activeCard
@@ -528,6 +529,31 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       </div>
     );
   }, [activeCard, shellClasses.tag]);
+
+  const primaryReward = useMemo(() => {
+    const rewardRules = Array.isArray(activeCard?.goal?.config?.goal_reward_rules)
+      ? activeCard!.goal.config!.goal_reward_rules!
+      : [];
+    return rewardRules.find((item: any) => item?.is_primary === true) || rewardRules[0] || null;
+  }, [activeCard]);
+
+  const primaryRewardToneClass = primaryReward
+    ? String(primaryReward.output_type || 'bonus').trim() === 'penalty'
+      ? 'border-red-200 bg-red-50/90 text-red-700 dark:border-red-800/60 dark:bg-red-950/20 dark:text-red-100'
+      : String(primaryReward.output_type || '').trim() === 'score'
+        ? 'border-violet-200 bg-violet-50/90 text-violet-700 dark:border-violet-800/60 dark:bg-violet-950/20 dark:text-violet-100'
+        : 'border-emerald-200 bg-emerald-50/90 text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-950/20 dark:text-emerald-100'
+    : '';
+
+  const primaryRewardTriggerLabel = useMemo(() => {
+    const trigger = String(primaryReward?.trigger_type || '').trim();
+    if (trigger === 'touch') return 'با هر ورود به کارت هدف';
+    if (trigger === 'achieve') return 'با تحقق کامل هدف';
+    if (trigger === 'bronze') return 'با تحقق سطح برنزی';
+    if (trigger === 'silver') return 'با تحقق سطح نقره‌ای';
+    if (trigger === 'gold') return 'با تحقق سطح طلایی';
+    return '';
+  }, [primaryReward]);
 
   const editorModal = editingGoal ? (
     <GoalEditorModal
@@ -647,6 +673,16 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 }}
                 className="!h-6 !w-6 !min-w-6"
               />
+              <Button
+                size="small"
+                shape="circle"
+                icon={isAutoPlayPaused ? <CaretRightOutlined /> : <PauseOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsAutoPlayPaused((current) => !current);
+                }}
+                className="!h-6 !w-6 !min-w-6"
+              />
             </div>
           ) : null}
         </div>
@@ -712,6 +748,15 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 setActiveIndex((current) => (current + 1) % cards.length);
               }}
             />
+            <Button
+              size="small"
+              shape="circle"
+              icon={isAutoPlayPaused ? <CaretRightOutlined /> : <PauseOutlined />}
+              onClick={(event) => {
+                event.stopPropagation();
+                setIsAutoPlayPaused((current) => !current);
+              }}
+            />
           </div>
         ) : null}
       </div>
@@ -733,6 +778,44 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
           هدف: {formatMetricNumber(activeCard.targetValue, activeCard.goal.metric_type)}
         </span>
       </div>
+
+      {primaryReward ? (
+        <div className={`mt-4 rounded-2xl border px-4 py-3 shadow-sm ${primaryRewardToneClass}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] font-bold opacity-80">
+                {primaryReward.is_primary ? 'پاداش/جریمه اصلی هدف' : 'پاداش هدف'}
+              </div>
+              <div className="mt-1 truncate text-sm font-black">
+                {String(primaryReward.title || '').trim() || 'فرمول پاداش هدف'}
+              </div>
+              {primaryRewardTriggerLabel ? (
+                <div className="mt-1 text-[11px] opacity-80">
+                  {primaryRewardTriggerLabel}
+                </div>
+              ) : null}
+            </div>
+            <Tag
+              className="!m-0 rounded-full"
+              color={
+                String(primaryReward.output_type || '').trim() === 'penalty'
+                  ? 'red'
+                  : String(primaryReward.output_type || '').trim() === 'score'
+                    ? 'purple'
+                    : 'green'
+              }
+            >
+              {String(primaryReward.output_type || '').trim() === 'penalty'
+                ? 'جریمه'
+                : String(primaryReward.output_type || '').trim() === 'wage'
+                  ? 'دستمزد'
+                  : String(primaryReward.output_type || '').trim() === 'score'
+                    ? 'امتیاز'
+                    : 'پاداش'}
+            </Tag>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div className="text-[11px] text-gray-500 dark:text-gray-400">

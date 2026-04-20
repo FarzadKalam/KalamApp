@@ -6,7 +6,6 @@ import { FieldType } from '../types';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import PhoneActionsPopover from './PhoneActionsPopover';
 import RecordMessageActions from './RecordMessageActions';
-import { getRecordTitle } from '../utils/recordTitle';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
@@ -15,6 +14,7 @@ import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRecordTagsMap } from '../utils/referenceData';
 import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { getRecordDisplayLabel } from '../utils/recordLabel';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -280,8 +280,8 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
   const previewTitle = useMemo(() => {
     if (!moduleConfig) return label || recordId || '-';
-    return getRecordTitle(record || {}, moduleConfig, { fallback: label || recordId || '-' });
-  }, [label, moduleConfig, record, recordId]);
+    return getRecordDisplayLabel(record || {}, moduleId, { fallback: label || recordId || '-' });
+  }, [label, moduleConfig, moduleId, record, recordId]);
 
   const hasQuickMessageActions = useMemo(() => {
     if (!record) return false;

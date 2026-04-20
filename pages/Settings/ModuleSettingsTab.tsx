@@ -49,8 +49,14 @@ import {
 } from './moduleSettingsTypes';
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
 import { MODULE_SETTINGS_UPDATED_EVENT } from '../../utils/moduleSettingsRuntime';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
 
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+const getResolvedCurrentOrgId = async () => {
+  const session = await fetchSessionBootstrap(supabase);
+  return String(session?.orgId || '').trim() || null;
+};
 
 const toRecord = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -402,11 +408,17 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
   const loadStoredSettings = useCallback(async () => {
     setLoadingSettings(true);
     try {
-      const { data, error } = await supabase
+      const currentOrgId = await getResolvedCurrentOrgId();
+      let query = supabase
         .from('integration_settings')
         .select('id, provider, settings')
-        .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-        .maybeSingle();
+        .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE);
+
+      query = currentOrgId
+        ? query.eq('org_id', currentOrgId)
+        : query.is('org_id', null);
+
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         const code = String((error as any)?.code || '').toUpperCase();
@@ -560,6 +572,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
         ...settingsByModule,
         [selectedModuleId]: currentConfig,
       };
+      const currentOrgId = await getResolvedCurrentOrgId();
 
       const payload: Record<string, unknown> = {
         connection_type: SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
@@ -569,6 +582,9 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
           modules: nextModules,
         },
       };
+      if (currentOrgId) {
+        payload.org_id = currentOrgId;
+      }
 
       if (settingsRowId) {
         payload.id = settingsRowId;

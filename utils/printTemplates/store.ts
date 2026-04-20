@@ -327,17 +327,6 @@ export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
 `;
 };
 
-export const buildDefaultFooterTemplateForModule = () => `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('مهر و امضا سازمان', true)}
-      ${buildPrintSignatureCell('امضا / تایید طرف مقابل', false)}
-    </tr>
-  </tbody>
-</table>
-`;
-
 const buildInvoiceFooterTemplate = () => `
 <table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
   <tbody>
@@ -348,6 +337,27 @@ const buildInvoiceFooterTemplate = () => `
   </tbody>
 </table>
 `;
+
+const normalizeInvoiceFooterHtml = (html: string) =>
+  String(html || '')
+    .replace(/مهر و امضا(?:ی)?\s*(?:مدیر\s*عامل|سازمان|شرکت|صادرکننده)/g, 'مهر و امضا سفارش دهنده')
+    .replace(/امضا\s*\/\s*تایید\s*طرف\s*مقابل/g, 'مهر و امضا سفارش گیرنده')
+    .replace(/مهر و امضا(?:ی)?\s*طرف\s*مقابل/g, 'مهر و امضا سفارش گیرنده');
+
+export const buildDefaultFooterTemplateForModule = (moduleId = '') => {
+  if (isInvoiceModule(moduleId)) return buildInvoiceFooterTemplate();
+
+  return `
+<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
+  <tbody>
+    <tr>
+      ${buildPrintSignatureCell('مهر و امضا سازمان', true)}
+      ${buildPrintSignatureCell('امضا / تایید طرف مقابل', false)}
+    </tr>
+  </tbody>
+</table>
+`;
+};
 
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   const invoiceConfig = getInvoiceTemplateConfig(moduleId);
@@ -537,6 +547,7 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     raw?.isSystem === true ||
     raw?.is_system === true ||
     String(id).startsWith('default_');
+  const footerHtml = String(raw?.footerHtml || raw?.footer_html || '').trim();
 
   return {
     id,
@@ -546,7 +557,9 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     scope,
     headerHtml: String(raw?.headerHtml || raw?.header_html || '').trim() || buildDefaultHeaderTemplateForModule(moduleId),
     contentHtml,
-    footerHtml: String(raw?.footerHtml || raw?.footer_html || '').trim() || buildDefaultFooterTemplateForModule(),
+    footerHtml: isInvoiceModule(moduleId)
+      ? normalizeInvoiceFooterHtml(footerHtml || buildDefaultFooterTemplateForModule(moduleId))
+      : footerHtml || buildDefaultFooterTemplateForModule(moduleId),
     isActive: raw?.isActive !== false,
     showHeader: raw?.showHeader !== false,
     showFooter: raw?.showFooter !== false,

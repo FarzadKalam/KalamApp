@@ -21,6 +21,7 @@ import { NoteAttachment, serializeNoteContent } from './noteContent';
 import { fetchAssigneeDirectory } from './referenceData';
 import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
+import { getRecordTitle } from './recordTitle';
 
 type WorkflowEvent = 'create' | 'upsert' | 'interval';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -238,10 +239,56 @@ const renderWorkflowTemplate = async (
 };
 
 const ATTACHMENT_FILE_NAME_REGEX = /[^0-9a-zA-Z._\-\u0600-\u06FF]+/g;
+const ATTACHMENT_NAME_EXT_REGEX = /\.([a-z0-9]{2,10})$/i;
+const NUMERICISH_ATTACHMENT_BASENAME_REGEX = /^[\d\s._-]+$/;
 
 const sanitizeAttachmentName = (value: string, fallback = 'file') => {
   const normalized = String(value || '').trim().replace(ATTACHMENT_FILE_NAME_REGEX, '_');
   return normalized || fallback;
+};
+
+const getWorkflowFieldLabel = (moduleId: string, fieldKey: string) => {
+  const moduleConfig = MODULES[moduleId];
+  const field = (moduleConfig?.fields || []).find((item: any) => String(item?.key || '').trim() === String(fieldKey || '').trim());
+  return String(field?.labels?.fa || field?.labels?.en || field?.key || fieldKey || '').trim();
+};
+
+const isNumericishAttachmentBaseName = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  return NUMERICISH_ATTACHMENT_BASENAME_REGEX.test(raw);
+};
+
+const buildWorkflowAttachmentFallbackName = ({
+  moduleId,
+  currentRecord,
+  fieldKey,
+  sourceName,
+}: {
+  moduleId: string;
+  currentRecord: Record<string, any>;
+  fieldKey: string;
+  sourceName?: string | null;
+}) => {
+  const sourceRaw = String(sourceName || '').trim();
+  const sourceExtMatch = sourceRaw.match(ATTACHMENT_NAME_EXT_REGEX);
+  const sourceExt = String(sourceExtMatch?.[1] || '').trim().toLowerCase();
+  const sourceBase = sourceExt ? sourceRaw.slice(0, -(sourceExt.length + 1)) : sourceRaw;
+  const fieldLabel = sanitizeAttachmentName(getWorkflowFieldLabel(moduleId, fieldKey) || fieldKey || 'file');
+  const recordTitle = sanitizeAttachmentName(
+    getRecordTitle(currentRecord, MODULES[moduleId], { fallback: '' }) || ''
+  );
+  const preferredBase = [recordTitle, fieldLabel].filter(Boolean).join('_') || fieldLabel || recordTitle || 'file';
+
+  if (!sourceRaw) {
+    return sourceExt ? `${preferredBase}.${sourceExt}` : preferredBase;
+  }
+
+  if (!isNumericishAttachmentBaseName(sourceBase)) {
+    return sanitizeAttachmentName(sourceRaw, preferredBase);
+  }
+
+  return sourceExt ? `${preferredBase}.${sourceExt}` : preferredBase;
 };
 
 const decodeAttachmentUrlName = (url: string) => {
@@ -299,7 +346,16 @@ const normalizeAttachmentObject = (
     const url = String((value as any).url || (value as any).file_url || (value as any).src || '').trim();
     if (!url || !looksLikeAttachmentUrl(url)) return [];
     const sourceName = String((value as any).name || (value as any).file_name || decodeAttachmentUrlName(url) || '').trim();
-    const name = sanitizeAttachmentName(sourceName || fallbackName, fallbackName);
+    const fallbackBaseName = String(fallbackName || '').trim() || 'file';
+    const sourceExtMatch = sourceName.match(ATTACHMENT_NAME_EXT_REGEX);
+    const sourceExt = String(sourceExtMatch?.[1] || '').trim().toLowerCase();
+    const sourceBase = sourceExt ? sourceName.slice(0, -(sourceExt.length + 1)) : sourceName;
+    const preferredName = sourceName && !isNumericishAttachmentBaseName(sourceBase)
+      ? sourceName
+      : (sourceExt && !fallbackBaseName.toLowerCase().endsWith(`.${sourceExt}`)
+        ? `${fallbackBaseName}.${sourceExt}`
+        : fallbackBaseName);
+    const name = sanitizeAttachmentName(preferredName, fallbackBaseName);
     const mimeType = String((value as any).mimeType || (value as any).mime_type || '').trim()
       || inferAttachmentMimeType(url)
       || null;
@@ -319,7 +375,16 @@ const normalizeAttachmentObject = (
   if (!looksLikeAttachmentUrl(raw)) return [];
 
   const sourceName = decodeAttachmentUrlName(raw);
-  const name = sanitizeAttachmentName(sourceName || fallbackName, fallbackName);
+  const fallbackBaseName = String(fallbackName || '').trim() || 'file';
+  const sourceExtMatch = sourceName.match(ATTACHMENT_NAME_EXT_REGEX);
+  const sourceExt = String(sourceExtMatch?.[1] || '').trim().toLowerCase();
+  const sourceBase = sourceExt ? sourceName.slice(0, -(sourceExt.length + 1)) : sourceName;
+  const preferredName = sourceName && !isNumericishAttachmentBaseName(sourceBase)
+    ? sourceName
+    : (sourceExt && !fallbackBaseName.toLowerCase().endsWith(`.${sourceExt}`)
+      ? `${fallbackBaseName}.${sourceExt}`
+      : fallbackBaseName);
+  const name = sanitizeAttachmentName(preferredName, fallbackBaseName);
   return [{
     name,
     url: raw,
@@ -1367,7 +1432,11 @@ export const resolveNoteAttachmentsFromFields = async ({
       moduleId,
       context
     );
-    const fallbackName = sanitizeAttachmentName(normalizedFieldKey.replace(/[^\w\u0600-\u06FF.-]+/g, '_') || 'file');
+    const fallbackName = buildWorkflowAttachmentFallbackName({
+      moduleId,
+      currentRecord,
+      fieldKey: normalizedFieldKey,
+    });
     attachments.push(...normalizeAttachmentObject(rawValue, fallbackName));
   }
 

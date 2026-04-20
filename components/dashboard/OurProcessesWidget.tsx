@@ -32,6 +32,7 @@ const LIMIT_STEP = 15;
 const MIN_TASK_FETCH_LIMIT = 180;
 const MAX_TASK_FETCH_LIMIT = 600;
 const MAX_PROCESS_RECORD_FETCH_PER_MODULE = 40;
+const COMPLETED_PROCESS_TASK_STATUSES = new Set(['done', 'completed', 'confirmed', 'final', 'settled']);
 
 const TASK_PROCESS_COLUMNS = [
   'id',
@@ -127,6 +128,48 @@ const getStageProcessMeta = (stage: any, fallbackTemplateId?: string | null) => 
   };
 };
 
+const isProcessTaskCompleted = (task: any) =>
+  COMPLETED_PROCESS_TASK_STATUSES.has(String(task?.status || '').trim().toLowerCase());
+
+const getProcessSummaryKey = (
+  moduleId: string | null,
+  recordId: string | null,
+  groupId: string | null,
+  templateId: string | null
+) => [
+  normalizeId(moduleId),
+  normalizeId(recordId),
+  normalizeId(groupId || templateId || 'default_process_group') || 'default_process_group',
+].join(':');
+
+const getTaskProcessSummaryKeys = (task: any) => {
+  const source = resolveTaskSourceLink(task);
+  const moduleId = normalizeId(source.moduleId);
+  const recordId = normalizeId(source.recordId);
+  if (!moduleId || !recordId) return [];
+
+  const meta = getTaskProcessMeta(task);
+  const keys = new Set<string>();
+  if (meta.groupId) keys.add(getProcessSummaryKey(moduleId, recordId, meta.groupId, null));
+  if (meta.templateId) keys.add(getProcessSummaryKey(moduleId, recordId, null, meta.templateId));
+  if (!meta.groupId && !meta.templateId) keys.add(getProcessSummaryKey(moduleId, recordId, null, null));
+  return Array.from(keys);
+};
+
+const addTaskToProcessSummary = (
+  map: Map<string, { total: number; active: number }>,
+  task: any
+) => {
+  const completed = isProcessTaskCompleted(task);
+  getTaskProcessSummaryKeys(task).forEach((key) => {
+    const previous = map.get(key) || { total: 0, active: 0 };
+    map.set(key, {
+      total: previous.total + 1,
+      active: previous.active + (completed ? 0 : 1),
+    });
+  });
+};
+
 const normalizeAssigneeRecord = (row: any) => {
   if (!row || typeof row !== 'object') return row;
   if (row.assignee_type) return row;
@@ -190,8 +233,7 @@ const OurProcessesWidget: React.FC = () => {
     const key = [
       item.moduleId,
       item.recordId,
-      item.lineId || '',
-      item.groupId || '',
+      item.groupId || item.templateId || 'default_process_group',
     ].join(':');
     const previous = map.get(key);
     const next = { ...item, key };
@@ -199,6 +241,7 @@ const OurProcessesWidget: React.FC = () => {
       map.set(key, {
         ...previous,
         ...next,
+        lineId: previous && previous.lineId !== next.lineId ? null : next.lineId,
         templateName: next.templateName || previous?.templateName || null,
         templateId: next.templateId || previous?.templateId || null,
       });
@@ -238,10 +281,12 @@ const OurProcessesWidget: React.FC = () => {
       if (taskResult.error) throw taskResult.error;
 
       const taskRows = Array.isArray(taskResult.data) ? taskResult.data : [];
+      const processTaskSummaryMap = new Map<string, { total: number; active: number }>();
       const linkedRecordsByModule = new Map<string, Set<string>>();
       const linkedTasksByKey = new Map<string, any[]>();
 
       const addTaskProcessItem = (task: any, reason: ProcessWidgetItem['reason']) => {
+        if (isProcessTaskCompleted(task)) return;
         const source = resolveTaskSourceLink(task);
         const moduleId = normalizeId(source.moduleId);
         const recordId = normalizeId(source.recordId);
@@ -262,6 +307,8 @@ const OurProcessesWidget: React.FC = () => {
       };
 
       taskRows.forEach((task: any) => {
+        addTaskToProcessSummary(processTaskSummaryMap, task);
+
         if (isAssignedToAccess(task, access)) {
           addTaskProcessItem(task, 'task');
         }
@@ -325,6 +372,7 @@ const OurProcessesWidget: React.FC = () => {
           const recordId = normalizeId(record?.id);
           if (!recordId) return;
           const stages = parseStageDrafts(record?.execution_process_draft);
+          if (stages.length === 0) return;
           const baseTemplateId = normalizeId(record?.process_template_id) || null;
           if (baseTemplateId) templateIds.add(baseTemplateId);
 
@@ -345,6 +393,8 @@ const OurProcessesWidget: React.FC = () => {
             : [{ groupId: null, templateId: baseTemplateId, templateName: null }];
 
           groups.forEach((group) => {
+            const summary = processTaskSummaryMap.get(getProcessSummaryKey(moduleId, recordId, group.groupId, group.templateId));
+            if (summary && summary.total > 0 && summary.active === 0) return;
             addItem(candidateMap, {
               key: '',
               moduleId,

@@ -970,11 +970,6 @@ html.dark .ant-modal-confirm .ant-modal-content {
   min-height: 0;
 }
 
-.smarttable-shell .ant-table-content,
-.smarttable-shell .ant-table-body {
-  scrollbar-gutter: stable;
-}
-
 .smarttable-shell .ant-table-header {
   overflow-x: hidden !important;
   backface-visibility: hidden;

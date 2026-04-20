@@ -1362,11 +1362,7 @@ export const usePrintManager = ({
       if (row?.length || row?.width) {
         const countValue = Number(row?.dimension_count || 0) > 0
           ? formatCellValue(blockId, { key: 'dimension_count', title: 'تعداد', type: 'number' }, row)
-          : (
-              String(row?.sub_unit || '').trim() === 'عدد'
-                ? formatCellValue(blockId, { key: 'sub_quantity', title: 'تعداد', type: 'number' }, row)
-                : '-'
-            );
+          : '-';
         optionalParts.push(`ابعاد: ${formatCellValue(blockId, { key: 'dimensions', title: 'ابعاد', type: 'text' }, row)}${countValue !== '-' ? ` | تعداد: ${countValue}` : ''}`);
       }
       if (row?.start_date) optionalParts.push(`شروع: ${formatCellValue(blockId, { key: 'start_date', title: 'تاریخ شروع', type: 'date' }, row)}`);
@@ -1374,7 +1370,7 @@ export const usePrintManager = ({
       if (Number(row?.sub_quantity || 0) !== 0) {
         const subQty = formatCellValue(blockId, { key: 'sub_quantity', title: 'تعداد فرعی', type: 'number' }, row);
         const subUnit = formatCellValue(blockId, { key: 'sub_unit', title: 'واحد فرعی', type: 'text' }, row);
-        if (subQty !== '-') optionalParts.push(`فرعی: ${subQty}${subUnit && subUnit !== '-' ? ` ${subUnit}` : ''}`);
+        if (subQty !== '-') optionalParts.push(`${subQty}${subUnit && subUnit !== '-' ? ` ${subUnit}` : ''}`);
       }
       return optionalParts.join(' | ');
     },

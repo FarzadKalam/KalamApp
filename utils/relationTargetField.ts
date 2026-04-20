@@ -59,7 +59,7 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   customers: ['full_name', 'last_name', 'business_name', 'legal_name', 'first_name', 'system_code'],
   suppliers: ['business_name', 'last_name', 'first_name', 'system_code'],
   profiles: ['full_name', 'last_name', 'first_name', 'system_code', 'email', 'mobile_1'],
-  employees: ['full_name', 'system_code'],
+  employees: ['full_name', 'prefix', 'first_name', 'last_name', 'legacy_system_code', 'system_code', 'national_code', 'mobile_1', 'phone'],
   cash_boxes: ['name', 'code'],
   bank_accounts: ['bank_name', 'account_number', 'card_number', 'shaba', 'code'],
   petty_funds: ['name', 'code'],
@@ -96,7 +96,7 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
     return ['full_name', 'last_name', 'first_name'];
   }
   if (moduleName === 'employees') {
-    return ['full_name'];
+    return ['full_name', 'first_name', 'last_name', 'legacy_system_code', 'system_code'];
   }
   if (moduleName === 'cash_boxes') {
     return ['name', 'code'];

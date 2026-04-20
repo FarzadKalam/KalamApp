@@ -221,30 +221,43 @@ const normalizeLegacyCustomerDefaults = (config: ResolvedSystemCodeConfig, namin
   return config;
 };
 
+let moduleSettingsCacheOrgId: string | null = null;
+let moduleSettingsPromiseOrgId: string | null = null;
+
 const loadModuleSettings = async (supabaseClient: any) => {
-  if (moduleSettingsCache) return moduleSettingsCache;
-  if (moduleSettingsPromise) return moduleSettingsPromise;
+  const orgId = await getCurrentOrgId(supabaseClient);
+  if (moduleSettingsCache && moduleSettingsCacheOrgId === orgId) return moduleSettingsCache;
+  if (moduleSettingsPromise && moduleSettingsPromiseOrgId === orgId) return moduleSettingsPromise;
 
   moduleSettingsPromise = (async () => {
     try {
-      const { data } = await supabaseClient
+      let query = supabaseClient
         .from('integration_settings')
         .select('settings')
         .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
         .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
+
+      query = orgId
+        ? query.eq('org_id', orgId)
+        : query.is('org_id', null);
+
+      const { data } = await query.maybeSingle();
 
       const modules = data?.settings?.modules;
+      moduleSettingsCacheOrgId = orgId;
       moduleSettingsCache = modules && typeof modules === 'object' ? modules : {};
       return moduleSettingsCache;
     } catch {
+      moduleSettingsCacheOrgId = orgId;
       moduleSettingsCache = {};
       return moduleSettingsCache;
     } finally {
       moduleSettingsPromise = null;
+      moduleSettingsPromiseOrgId = null;
     }
   })();
+  moduleSettingsPromiseOrgId = orgId;
 
   return moduleSettingsPromise;
 };
@@ -252,6 +265,8 @@ const loadModuleSettings = async (supabaseClient: any) => {
 export const clearSystemCodeSettingsCache = () => {
   moduleSettingsCache = null;
   moduleSettingsPromise = null;
+  moduleSettingsCacheOrgId = null;
+  moduleSettingsPromiseOrgId = null;
   generatedSystemCodeLastNumbers.clear();
 };
 

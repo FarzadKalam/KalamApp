@@ -10,6 +10,7 @@ import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
+import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 
 const { Text, Title } = Typography;
 
@@ -67,7 +68,7 @@ const buildRubikaLinkedAttachmentMessage = (
   (attachments || []).forEach((item, index) => {
     const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
     const url = String(item?.url || '').trim();
-    lines.push({ text: `🔗 ${name}`, linkUrl: url || undefined });
+    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
   });
 
   let text = '';

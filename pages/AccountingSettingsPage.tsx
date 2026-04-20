@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { ACCOUNTING_PERMISSION_KEY, SETTINGS_PERMISSION_KEY } from '../utils/permissions';
 import { ModuleSettingsStore, SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE } from './Settings/moduleSettingsTypes';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
 
 const { Title, Text } = Typography;
 
@@ -86,6 +87,11 @@ const resolveDefaultAccountsByCode = (accounts: AccountOption[]) => {
   ) as Record<string, string>;
 };
 
+const getResolvedCurrentOrgId = async () => {
+  const session = await fetchSessionBootstrap(supabase);
+  return String(session?.orgId || '').trim() || null;
+};
+
 // Helper to get nested property
 const get = (obj: object, path: string, defaultValue: any = undefined) => {
   const travel = (regexp: RegExp) =>
@@ -135,12 +141,18 @@ const DefaultAccountsModal: React.FC<{
   const fetchSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      const currentOrgId = await getResolvedCurrentOrgId();
+      let query = supabase
         .from('integration_settings')
         .select('id, settings')
         .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
+
+      query = currentOrgId
+        ? query.eq('org_id', currentOrgId)
+        : query.is('org_id', null);
+
+      const { data, error } = await query.maybeSingle();
 
       if (error) {
         if (String(error.code) !== 'PGRST116') throw error;
@@ -183,13 +195,19 @@ const DefaultAccountsModal: React.FC<{
     setSaving(true);
     try {
       const values = await form.validateFields();
+      const currentOrgId = await getResolvedCurrentOrgId();
       
-      const { data: currentSettingsData, error: fetchError } = await supabase
+      let fetchQuery = supabase
         .from('integration_settings')
         .select('id, settings')
         .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
+
+      fetchQuery = currentOrgId
+        ? fetchQuery.eq('org_id', currentOrgId)
+        : fetchQuery.is('org_id', null);
+
+      const { data: currentSettingsData, error: fetchError } = await fetchQuery.maybeSingle();
 
       if (fetchError && String(fetchError.code) !== 'PGRST116') throw fetchError;
       
@@ -210,6 +228,7 @@ const DefaultAccountsModal: React.FC<{
         .from('integration_settings')
         .upsert({
           id: currentSettingsData?.id || undefined,
+          org_id: currentOrgId,
           connection_type: SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
           provider: 'core',
           is_active: true,

@@ -7,7 +7,7 @@ import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, isInsideIran, parseLocat
 import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL, sanitizeMapStyle } from '../../utils/mapConfig';
 import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../../utils/maplibreRuntime';
 import { createThemeMapPinElement } from '../../utils/mapPin';
-import RelatedRecordPopover from '../RelatedRecordPopover';
+import MapRecordModal from './MapRecordModal';
 
 type MapViewProps = {
   data: any[];
@@ -238,11 +238,6 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
     });
   }, [mapMaxZoom, points]);
 
-  const activePoint = useMemo(
-    () => (previewRecordId ? points.find((point) => String(point.id) === String(previewRecordId)) || null : null),
-    [points, previewRecordId]
-  );
-
   if (!locationFieldKeys.length) {
     return (
       <div className="h-full min-h-[420px] rounded-2xl border border-dashed border-gray-300 dark:border-gray-700 bg-white/70 dark:bg-[#171717] flex items-center justify-center">
@@ -271,16 +266,12 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
       <div ref={mapContainerRef} className="kalam-map-container h-full w-full rounded-2xl" />
 
       {previewRecordId && (
-        <RelatedRecordPopover
-          mode="modal"
+        <MapRecordModal
           moduleId={moduleId}
           recordId={previewRecordId}
-          label={activePoint?.label || previewRecordId}
           open={!!previewRecordId}
           overlayZIndex={6200}
-          onOpenChange={(next) => {
-            if (!next) setPreviewRecordId(null);
-          }}
+          onClose={() => setPreviewRecordId(null)}
           onNavigate={(path) => {
             setPreviewRecordId(null);
             navigate(path);

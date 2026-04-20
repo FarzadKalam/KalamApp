@@ -32,6 +32,7 @@ import {
 import { loadRecordFileItems } from '../utils/fileManagerQueries';
 import type { FileFolderRow } from '../utils/fileManagerTypes';
 import { sendCounterpartyBotGroupMessage } from '../utils/botGateway';
+import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import FileManagerBrowser, { type FileManagerBrowserItem } from './files/FileManagerBrowser';
 
 export type RecordFileType = 'image' | 'video' | 'file';
@@ -146,7 +147,7 @@ const buildRubikaLinkedAttachmentMessage = (
   (attachments || []).forEach((item, index) => {
     const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
     const url = String(item?.url || '').trim();
-    lines.push({ text: `🔗 ${name}`, linkUrl: url || undefined });
+    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
   });
 
   let text = '';

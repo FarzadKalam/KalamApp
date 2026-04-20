@@ -1,4 +1,5 @@
 import { fetchSessionBootstrap } from './sessionCache';
+import { getMergedTaskTypeOptions } from './taskMeta';
 
 type DynamicOptionRow = { label: string; value: string };
 type AssigneeDirectory = {
@@ -347,7 +348,9 @@ export const fetchDynamicOptionsByCategory = async (
       .eq('category', normalizedCategory)
       .eq('is_active', true);
 
-    const normalized = normalizeDynamicOptions(data || []);
+    const normalized = normalizedCategory === 'task_type'
+      ? getMergedTaskTypeOptions(data || [])
+      : normalizeDynamicOptions(data || []);
     dynamicOptionsCache.set(normalizedCategory, {
       data: normalized,
       expiresAt: Date.now() + REFERENCE_TTL_MS,

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { NavigateFunction } from 'react-router-dom';
 import { MODULES } from '../moduleRegistry';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE } from '../pages/Settings/moduleSettingsTypes';
+import { fetchSessionBootstrap } from './sessionCache';
 
 type SupportedInvoiceModule = 'invoices' | 'purchase_invoices';
 
@@ -354,12 +355,19 @@ const fetchAutoDefaultAccountsFromCoa = async (supabase: SupabaseClient): Promis
 };
 
 const fetchDefaultAccounts = async (supabase: SupabaseClient): Promise<DefaultAccounts> => {
-  const { data, error } = await supabase
+  const session = await fetchSessionBootstrap(supabase);
+  const currentOrgId = String(session?.orgId || '').trim() || null;
+  let query = supabase
     .from('integration_settings')
     .select('settings')
     .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  query = currentOrgId
+    ? query.eq('org_id', currentOrgId)
+    : query.is('org_id', null);
+
+  const { data, error } = await query.maybeSingle();
 
   if (error && String(error.code) !== 'PGRST116') {
     throw new Error('خواندن تنظیمات حسابداری ناموفق بود.');

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   App,
   Button,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -10,6 +11,7 @@ import {
   Select,
   Switch,
 } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
@@ -32,6 +34,7 @@ import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveModuleGoalAccessPermissions } from '../../utils/permissions';
 import PersianDatePicker from '../PersianDatePicker';
+import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 
 type GoalEditorModalProps = {
@@ -63,8 +66,30 @@ type FormValues = {
   gold_value?: number | null;
   assignee_user_ids: string[];
   assignee_role_ids: string[];
+  reward_rules?: Array<{
+    title?: string;
+    trigger_type?: 'touch' | 'achieve' | 'bronze' | 'silver' | 'gold';
+    output_type?: 'bonus' | 'wage' | 'penalty' | 'score';
+    formula_id?: string | null;
+    is_primary?: boolean;
+  }>;
   is_active?: boolean;
 };
+
+const GOAL_REWARD_TRIGGER_OPTIONS = [
+  { label: 'هر بار ورود به کارت هدف', value: 'touch' },
+  { label: 'هر بار تحقق هدف', value: 'achieve' },
+  { label: 'تحقق سطح برنزی', value: 'bronze' },
+  { label: 'تحقق سطح نقره‌ای', value: 'silver' },
+  { label: 'تحقق سطح طلایی', value: 'gold' },
+];
+
+const GOAL_REWARD_OUTPUT_OPTIONS = [
+  { label: 'پاداش', value: 'bonus' },
+  { label: 'دستمزد', value: 'wage' },
+  { label: 'جریمه', value: 'penalty' },
+  { label: 'امتیاز', value: 'score' },
+];
 
 const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   open,
@@ -85,6 +110,9 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [userOptions, setUserOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [roleOptions, setRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [formulaOptions, setFormulaOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [formulaModalOpen, setFormulaModalOpen] = useState(false);
+  const [formulaTargetIndex, setFormulaTargetIndex] = useState<number | null>(null);
 
   const isEditMode = !!record?.id;
   const metricType = Form.useWatch('metric_type', form);
@@ -109,6 +137,12 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const conditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
   const popupContainer = (triggerNode: HTMLElement | null) =>
     triggerNode?.parentElement || document.body;
+  const rewardTriggerOptions = useMemo(
+    () => levelsEnabled
+      ? GOAL_REWARD_TRIGGER_OPTIONS
+      : GOAL_REWARD_TRIGGER_OPTIONS.filter((item) => item.value === 'touch' || item.value === 'achieve'),
+    [levelsEnabled]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -134,6 +168,15 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       gold_value: normalized?.gold_value ?? undefined,
       assignee_user_ids: getGoalUserSelectionValue(normalized),
       assignee_role_ids: Array.isArray(normalized?.assignee_role_ids) ? normalized!.assignee_role_ids! : [],
+      reward_rules: Array.isArray(normalized?.config?.goal_reward_rules)
+        ? normalized!.config!.goal_reward_rules!.map((item: any) => ({
+          title: String(item?.title || '').trim() || undefined,
+          trigger_type: item?.trigger_type || 'achieve',
+          output_type: item?.output_type || 'bonus',
+          formula_id: item?.formula_id || undefined,
+          is_primary: item?.is_primary === true,
+        }))
+        : [],
       is_active: normalized?.is_active !== false,
     });
     setConditionsAll(Array.isArray(normalized?.conditions_all) ? normalized!.conditions_all! : []);
@@ -194,6 +237,38 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           setUserOptions([]);
           setRoleOptions([]);
         }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('calculation_formulas')
+          .select('id, name')
+          .eq('context_type', 'goal')
+          .eq('is_active', true)
+          .order('updated_at', { ascending: false });
+        if (error) throw error;
+        if (!cancelled) {
+          setFormulaOptions(
+            (data || [])
+              .map((item: any) => ({
+                label: String(item?.name || item?.id || '').trim(),
+                value: String(item?.id || '').trim(),
+              }))
+              .filter((item) => item.label && item.value)
+          );
+        }
+      } catch {
+        if (!cancelled) setFormulaOptions([]);
       }
     };
     void run();
@@ -283,6 +358,15 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           assignment_users_mode: useAllUsers ? 'all' : 'selected',
           goal_start_date: values.goal_start_date || null,
           goal_end_date: values.goal_end_date || null,
+          goal_reward_rules: (Array.isArray(values.reward_rules) ? values.reward_rules : [])
+            .map((item) => ({
+              title: String(item?.title || '').trim() || null,
+              trigger_type: item?.trigger_type || 'achieve',
+              output_type: item?.output_type || 'bonus',
+              formula_id: item?.formula_id || null,
+              is_primary: item?.is_primary === true,
+            }))
+            .filter((item) => item.formula_id),
         },
         is_active: values.is_active !== false,
         updated_by: userId,
@@ -478,7 +562,136 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
             </div>
           </div>
         </div>
+
+        <div className="mt-4 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h4 className="m-0 font-bold">پاداش و محاسبه هدف</h4>
+              <div className="mt-1 text-xs leading-6 text-gray-500">
+                فرمول‌ها و محاسبه‌های پیچیده هر هدف از همین‌جا تعریف می‌شوند.
+              </div>
+            </div>
+          </div>
+
+          <Form.List name="reward_rules">
+            {(fields, { add, remove }) => (
+              <div className="space-y-3">
+                {fields.map((field) => (
+                  <div key={field.key} className="rounded-2xl border border-gray-200 p-3 dark:border-gray-800">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <Form.Item label="عنوان" name={[field.name, 'title']}>
+                        <Input placeholder="مثال: پاداش تحقق سطح طلایی" />
+                      </Form.Item>
+                      <Form.Item
+                        label="نوع خروجی"
+                        name={[field.name, 'output_type']}
+                        initialValue="bonus"
+                        rules={[{ required: true, message: 'نوع خروجی را انتخاب کنید.' }]}
+                      >
+                        <Select options={GOAL_REWARD_OUTPUT_OPTIONS} getPopupContainer={popupContainer} />
+                      </Form.Item>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-[240px_minmax(0,1fr)_auto]">
+                      <Form.Item
+                        label="رویداد"
+                        name={[field.name, 'trigger_type']}
+                        initialValue="achieve"
+                        rules={[{ required: true, message: 'رویداد را انتخاب کنید.' }]}
+                      >
+                        <Select options={rewardTriggerOptions} getPopupContainer={popupContainer} />
+                      </Form.Item>
+                      <Form.Item
+                        label="فرمول محاسبه"
+                        name={[field.name, 'formula_id']}
+                        rules={[{ required: true, message: 'فرمول را انتخاب کنید.' }]}
+                      >
+                        <Select
+                          showSearch
+                          allowClear
+                          optionFilterProp="label"
+                          options={formulaOptions}
+                          getPopupContainer={popupContainer}
+                          placeholder="انتخاب فرمول پاداش هدف"
+                        />
+                      </Form.Item>
+                      <div className="flex items-end gap-2">
+                        <Button
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            setFormulaTargetIndex(field.name);
+                            setFormulaModalOpen(true);
+                          }}
+                        >
+                          فرمول
+                        </Button>
+                        <Button danger onClick={() => remove(field.name)}>
+                          حذف
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Form.Item
+                      shouldUpdate={(prev, next) => prev.reward_rules !== next.reward_rules}
+                      noStyle
+                    >
+                      {() => (
+                        <Checkbox
+                          checked={form.getFieldValue(['reward_rules', field.name, 'is_primary']) === true}
+                          onChange={(event) => {
+                            const current = Array.isArray(form.getFieldValue('reward_rules'))
+                              ? [...form.getFieldValue('reward_rules')]
+                              : [];
+                            current.forEach((item, index) => {
+                              current[index] = {
+                                ...(item || {}),
+                                is_primary: index === field.name ? event.target.checked : false,
+                              };
+                            });
+                            form.setFieldValue('reward_rules', current);
+                          }}
+                        >
+                          این ردیف پاداش/جریمه اصلی هدف باشد
+                        </Checkbox>
+                      )}
+                    </Form.Item>
+                  </div>
+                ))}
+
+                <Button
+                  type="dashed"
+                  icon={<PlusOutlined />}
+                  onClick={() => add({ output_type: 'bonus', trigger_type: levelsEnabled ? 'bronze' : 'achieve' })}
+                >
+                  افزودن ردیف پاداش هدف
+                </Button>
+              </div>
+            )}
+          </Form.List>
+        </div>
       </Form>
+
+      <FormulaEditorModal
+        open={formulaModalOpen}
+        onCancel={() => {
+          setFormulaModalOpen(false);
+          setFormulaTargetIndex(null);
+        }}
+        defaultScope="goal_reward"
+        defaultContextType="goal"
+        defaultOutputType="money"
+        onSaved={(formula) => {
+          setFormulaOptions((current) => {
+            if (current.some((item) => item.value === formula.id)) return current;
+            return [...current, { label: formula.name, value: formula.id }].sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+          });
+          if (formulaTargetIndex !== null) {
+            form.setFieldValue(['reward_rules', formulaTargetIndex, 'formula_id'], formula.id);
+          }
+          setFormulaModalOpen(false);
+          setFormulaTargetIndex(null);
+        }}
+      />
     </Modal>
   );
 };

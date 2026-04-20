@@ -7,7 +7,7 @@ import { getRecordTitle } from "../../utils/recordTitle";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { getResolvedAssigneeId } from "../../utils/assigneeValue";
 import { formatRecordDisplayValue, formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
-import { getModuleCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
+import { getRecordCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
 import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
@@ -197,7 +197,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     'sell_price',
     'related_to_module',
   ].filter(Boolean) as string[];
-  const summaryFields = getModuleCardSummaryFields(moduleConfig, summaryExcludedKeys, minimal ? 2 : 3);
+  const summaryFields = getRecordCardSummaryFields(cardItem, moduleConfig, summaryExcludedKeys, minimal ? 2 : 3);
 
   const renderAssignee = () => {
     if (!assigneeId) {

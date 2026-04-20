@@ -322,6 +322,16 @@ const buildAutoCustomerName = (values: Record<string, unknown>) => {
   return realName || businessName;
 };
 
+const buildAutoEmployeeName = (values: Record<string, unknown>) => {
+  const normalize = (value: unknown) => sanitizeImportedTextValue(value);
+  return [values?.prefix, values?.first_name, values?.last_name]
+    .map((part) => normalize(part))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
 const stripLegacyReferencePrefix = (value: unknown): string =>
   String(value ?? "").trim().replace(LEGACY_PREFIX_REGEX, "").trim();
 
@@ -1060,7 +1070,13 @@ const buildRelationAutoCreatePayload = (
     return { business_name: value };
   }
   if (targetModule === "employees") {
-    return { full_name: value };
+    const parts = value.split(/\s+/).filter(Boolean);
+    if (parts.length <= 1) return { full_name: value, first_name: value };
+    return {
+      full_name: value,
+      first_name: parts.slice(0, -1).join(" "),
+      last_name: parts[parts.length - 1],
+    };
   }
   return null;
 };
@@ -3219,6 +3235,13 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         }
         const nextFullName = buildAutoCustomerName(payload);
         if (nextFullName && (autoNameEnabled || isValueEmpty(payload.full_name))) {
+          payload.full_name = nextFullName;
+        }
+      }
+
+      if (moduleId === "employees") {
+        const nextFullName = buildAutoEmployeeName(payload);
+        if (nextFullName && isValueEmpty(payload.full_name)) {
           payload.full_name = nextFullName;
         }
       }

@@ -13,6 +13,103 @@ const normalizeKey = (value: any) => String(value || '').trim().toLowerCase();
 const hasFieldOptions = (field?: ModuleField | null) => Array.isArray(field?.options) && field.options.length > 0;
 
 const getCardFieldKey = (field?: ModuleField | null) => normalizeKey(field?.key);
+const isEmptyValue = (value: any) => (
+  value === null
+  || value === undefined
+  || value === ''
+  || (Array.isArray(value) && value.length === 0)
+);
+
+const CARD_FIELD_TYPE_SCORES: Record<string, number> = {
+  [normalizeKey(FieldType.PHONE)]: 260,
+  [normalizeKey(FieldType.RELATION)]: 240,
+  [normalizeKey(FieldType.USER)]: 220,
+  [normalizeKey(FieldType.STATUS)]: 210,
+  [normalizeKey(FieldType.SELECT)]: 200,
+  [normalizeKey(FieldType.MULTI_SELECT)]: 180,
+  [normalizeKey(FieldType.DATE)]: 190,
+  [normalizeKey(FieldType.DATETIME)]: 185,
+  [normalizeKey(FieldType.PRICE)]: 230,
+  [normalizeKey(FieldType.NUMBER)]: 170,
+  [normalizeKey(FieldType.TEXT)]: 150,
+  [normalizeKey(FieldType.CHECKBOX)]: 110,
+  [normalizeKey(FieldType.LONG_TEXT)]: 40,
+  [normalizeKey(FieldType.SUPER_LONG_TEXT)]: 10,
+  [normalizeKey(FieldType.JSON)]: -100,
+  [normalizeKey(FieldType.IMAGE)]: -1000,
+  [normalizeKey(FieldType.LOCATION)]: 20,
+  [normalizeKey(FieldType.TAGS)]: -1000,
+  [normalizeKey(FieldType.PROGRESS_STAGES)]: -1000,
+  [normalizeKey(FieldType.READONLY_LOOKUP)]: 160,
+};
+
+const HIGH_SIGNAL_HINTS: Array<[string, number]> = [
+  ['mobile', 420],
+  ['phone', 420],
+  ['tel', 420],
+  ['email', 400],
+  ['amount', 390],
+  ['total', 380],
+  ['balance', 380],
+  ['remaining', 370],
+  ['city', 350],
+  ['province', 330],
+  ['category', 320],
+  ['industry', 315],
+  ['rank', 310],
+  ['type', 280],
+  ['date', 250],
+  ['code', 220],
+  ['count', 210],
+  ['position', 205],
+];
+
+const LOW_SIGNAL_HINTS = new Set([
+  'first_name',
+  'last_name',
+  'prefix',
+  'notes',
+  'description',
+  'address',
+  'location',
+  'portal_permissions_override',
+]);
+
+const getCardFieldPriorityScore = (
+  field?: ModuleField | null,
+  moduleConfig?: ModuleDefinition,
+  excludedKeys: string[] = [],
+) => {
+  if (!field?.key) return -10000;
+
+  const key = getCardFieldKey(field);
+  const type = normalizeKey(field.type);
+  const recentList = new Set(
+    (moduleConfig?.dashboard?.recentListFields || []).map((entry) => normalizeKey(entry)),
+  );
+  const exclusions = new Set(excludedKeys.map((entry) => normalizeKey(entry)));
+
+  if (exclusions.has(key)) return -10000;
+  if (LOW_SIGNAL_HINTS.has(key)) return -200;
+
+  let score = Number(CARD_FIELD_TYPE_SCORES[type] ?? 0);
+
+  if (field?.isKey) score += 1200;
+  if (recentList.has(key)) score += 900;
+  if (field?.isTableColumn) score += 320;
+  if (field?.location === 'header') score += 180;
+
+  HIGH_SIGNAL_HINTS.forEach(([hint, hintScore]) => {
+    if (key.includes(hint)) score += hintScore;
+  });
+
+  if (key.endsWith('_id') && type !== normalizeKey(FieldType.RELATION) && type !== normalizeKey(FieldType.USER)) {
+    score -= 400;
+  }
+
+  score -= Number(field?.order || 0) / 100;
+  return score;
+};
 
 const getStatusFieldScore = (field?: ModuleField | null, explicitKey?: string | null) => {
   if (!field?.key || !hasFieldOptions(field)) return -1;
@@ -97,8 +194,26 @@ export const getModuleCardSummaryFields = (
   ]);
 
   return fields
-    .filter((field) => field?.isTableColumn)
     .filter((field) => field?.key && !exclusions.has(normalizeKey(field.key)))
+    .map((field) => ({
+      field,
+      score: getCardFieldPriorityScore(field, moduleConfig, Array.from(exclusions)),
+    }))
+    .filter((entry) => entry.score > -1000)
+    .sort((a, b) => b.score - a.score || Number(a.field?.order || 0) - Number(b.field?.order || 0))
+    .slice(0, limit)
+    .map((entry) => entry.field);
+};
+
+export const getRecordCardSummaryFields = (
+  item: any,
+  moduleConfig?: ModuleDefinition,
+  excludedKeys: string[] = [],
+  limit = 4,
+) => {
+  const candidateFields = getModuleCardSummaryFields(moduleConfig, excludedKeys, Math.max(limit * 3, limit + 4));
+  return candidateFields
+    .filter((field) => field?.key && !isEmptyValue(item?.[field.key]))
     .slice(0, limit);
 };
 

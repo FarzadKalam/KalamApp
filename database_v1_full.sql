@@ -197,8 +197,15 @@ begin
   end if;
 end $$;
 
-create unique index if not exists idx_integration_settings_connection_type
-  on public.integration_settings(connection_type);
+drop index if exists public.idx_integration_settings_connection_type;
+
+create unique index if not exists idx_integration_settings_org_connection_type
+  on public.integration_settings(org_id, connection_type)
+  where org_id is not null and connection_type is not null;
+
+create unique index if not exists idx_integration_settings_global_connection_type
+  on public.integration_settings(connection_type)
+  where org_id is null and connection_type is not null;
 
 create index if not exists idx_integration_settings_org
   on public.integration_settings(org_id, connection_type);
@@ -684,6 +691,10 @@ alter table public.employees
   add column if not exists org_id uuid references public.organizations(id) on delete set null default public.current_org_id(),
   add column if not exists image_url text,
   add column if not exists full_name text,
+  add column if not exists prefix text,
+  add column if not exists first_name text,
+  add column if not exists last_name text,
+  add column if not exists legacy_system_code text,
   add column if not exists system_code text,
   add column if not exists related_profile_id uuid references public.profiles(id) on delete set null,
   add column if not exists employment_status text not null default 'active',
@@ -694,9 +705,13 @@ alter table public.employees
   add column if not exists job_title text,
   add column if not exists national_code text,
   add column if not exists father_name text,
+  add column if not exists issued_from text,
   add column if not exists birth_certificate_number text,
   add column if not exists insurance_number text,
   add column if not exists gender text,
+  add column if not exists marital_status text,
+  add column if not exists children_count integer not null default 0,
+  add column if not exists military_service_status text,
   add column if not exists birth_date date,
   add column if not exists hire_date date,
   add column if not exists termination_date date,
@@ -707,6 +722,10 @@ alter table public.employees
   add column if not exists province text,
   add column if not exists city text,
   add column if not exists address text,
+  add column if not exists family_contact_name text,
+  add column if not exists family_contact_phone text,
+  add column if not exists acquaintance_contact_name text,
+  add column if not exists acquaintance_contact_phone text,
   add column if not exists default_work_schedule_id uuid references public.work_schedules(id) on delete set null,
   add column if not exists has_flexible_hours boolean not null default false,
   add column if not exists overtime_auto_approve boolean not null default false,
@@ -739,7 +758,9 @@ alter table public.employees
 
 update public.employees
 set
+  full_name = coalesce(nullif(full_name, ''), nullif(trim(concat_ws(' ', nullif(prefix, ''), nullif(first_name, ''), nullif(last_name, ''))), '')),
   employment_status = coalesce(nullif(employment_status, ''), 'active'),
+  children_count = coalesce(children_count, 0),
   has_flexible_hours = coalesce(has_flexible_hours, false),
   overtime_auto_approve = coalesce(overtime_auto_approve, false),
   leave_auto_approve = coalesce(leave_auto_approve, false),
@@ -759,8 +780,11 @@ set
   profit_share_percentage = coalesce(profit_share_percentage, 0),
   profit_share_basis = coalesce(nullif(profit_share_basis, ''), 'net_profit')
 where
-  employment_status is null
+  full_name is null
+  or full_name = ''
+  or employment_status is null
   or employment_status = ''
+  or children_count is null
   or has_flexible_hours is null
   or overtime_auto_approve is null
   or leave_auto_approve is null
@@ -784,6 +808,8 @@ where
 alter table public.employees
   alter column employment_status set default 'active',
   alter column employment_status set not null,
+  alter column children_count set default 0,
+  alter column children_count set not null,
   alter column has_flexible_hours set default false,
   alter column has_flexible_hours set not null,
   alter column overtime_auto_approve set default false,
@@ -825,6 +851,9 @@ create index if not exists idx_employees_org_name on public.employees(org_id, fu
 create unique index if not exists idx_employees_org_system_code
   on public.employees(org_id, system_code)
   where system_code is not null and system_code <> '';
+create index if not exists idx_employees_org_legacy_system_code
+  on public.employees(org_id, legacy_system_code)
+  where legacy_system_code is not null and legacy_system_code <> '';
 create unique index if not exists idx_employees_related_profile
   on public.employees(related_profile_id)
   where related_profile_id is not null;
@@ -834,6 +863,27 @@ create index if not exists idx_employees_default_work_schedule
 create index if not exists idx_employees_profit_share_cost_center
   on public.employees(profit_share_cost_center_id)
   where profit_share_cost_center_id is not null;
+
+create or replace function public.set_employee_full_name()
+returns trigger
+language plpgsql
+as $$
+declare
+  computed_name text;
+begin
+  computed_name := nullif(trim(concat_ws(' ', nullif(new.prefix, ''), nullif(new.first_name, ''), nullif(new.last_name, ''))), '');
+  if computed_name is not null then
+    new.full_name := computed_name;
+  end if;
+  new.children_count := coalesce(new.children_count, 0);
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_employees_full_name on public.employees;
+create trigger trg_employees_full_name
+  before insert or update of prefix, first_name, last_name, full_name, children_count on public.employees
+  for each row execute function public.set_employee_full_name();
 
 create table if not exists public.attendance_logs (
   id uuid primary key default gen_random_uuid()

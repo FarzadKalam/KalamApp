@@ -846,6 +846,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
     return realName || businessName;
   };
 
+  const buildAutoEmployeeName = (values: any) => {
+    const normalize = (value: any) => String(value ?? '').replace(/\s+/g, ' ').trim();
+    return [values?.prefix, values?.first_name, values?.last_name]
+      .map((part) => normalize(part))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
   const buildAutoProductionOrderName = (values: any) => {
     const parts: string[] = [];
     const addPart = (part?: string) => {
@@ -1130,6 +1140,15 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const currentValues = getLiveFormValues();
     if (!getAutoNameToggleValue(normalizeAutoNameEnabled(currentValues?.auto_name_enabled, false))) return;
     const nextFullName = buildAutoCustomerName(currentValues);
+    if (!nextFullName || nextFullName === currentValues?.full_name) return;
+    form.setFieldValue('full_name', nextFullName);
+    setFormData((prev: any) => ({ ...prev, full_name: nextFullName }));
+  }, [module.id, watchedValues, formData, form]);
+
+  useEffect(() => {
+    if (module.id !== 'employees') return;
+    const currentValues = getLiveFormValues();
+    const nextFullName = buildAutoEmployeeName(currentValues);
     if (!nextFullName || nextFullName === currentValues?.full_name) return;
     form.setFieldValue('full_name', nextFullName);
     setFormData((prev: any) => ({ ...prev, full_name: nextFullName }));
@@ -1478,6 +1497,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (values.portal_permissions_override === '') {
             delete values.portal_permissions_override;
           }
+        }
+      }
+      if (module.id === 'employees') {
+        const nextFullName = buildAutoEmployeeName(values);
+        if (nextFullName) {
+          values.full_name = nextFullName;
         }
       }
       if (module.id === 'suppliers' && Array.isArray(values?.rank)) {

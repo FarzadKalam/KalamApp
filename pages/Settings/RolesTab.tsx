@@ -5,6 +5,7 @@ import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import {
   buildDefaultPermissions,
+  clearCurrentUserRoleContextCache,
   collectModulePermissionFields,
   mergePermissionsWithDefaults,
   SETTINGS_PERMISSION_KEY,
@@ -31,6 +32,8 @@ import {
 } from '../../utils/permissions';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { MODULE_SETTINGS_APPLIED_EVENT } from '../../utils/moduleSettingsRuntime';
+import { FieldNature } from '../../types';
 import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
@@ -39,6 +42,21 @@ import {
 } from '../../utils/popupContainer';
 
 const { Panel } = Collapse;
+
+type PermissionFieldItem = {
+  key: string;
+  label: string;
+  group: 'custom' | 'standard' | 'system' | 'structure' | 'action';
+};
+
+const FIELD_GROUP_ORDER: PermissionFieldItem['group'][] = ['custom', 'standard', 'system', 'structure', 'action'];
+const FIELD_GROUP_LABELS: Record<PermissionFieldItem['group'], string> = {
+  custom: 'فیلدهای سفارشی سازمان',
+  standard: 'فیلدهای اصلی',
+  system: 'فیلدهای سیستمی',
+  structure: 'بخش‌ها و جدول‌ها',
+  action: 'دکمه‌ها و عملیات',
+};
 
 const isRoleTreeColumnMissingError = (error: any) => {
   const text = String(error?.message || error?.details || error || '').toLowerCase();
@@ -56,8 +74,10 @@ const RolesTab: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [supportsRoleTreeSchema, setSupportsRoleTreeSchema] = useState<boolean | null>(null);
+  const [permissionSchemaVersion, setPermissionSchemaVersion] = useState(0);
+  const [fieldSearchByModule, setFieldSearchByModule] = useState<Record<string, string>>({});
 
-  const defaultPermissions = useMemo(() => buildDefaultPermissions(MODULES), []);
+  const defaultPermissions = useMemo(() => buildDefaultPermissions(MODULES), [permissionSchemaVersion]);
   const mobileFooterModuleOptions = useMemo(
     () =>
       Object.values(MODULES)
@@ -76,6 +96,17 @@ const RolesTab: React.FC = () => {
   useEffect(() => {
     fetchRoles();
   }, [currentOrgId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleModuleSettingsApplied = () => {
+      setPermissionSchemaVersion((prev) => prev + 1);
+    };
+    window.addEventListener(MODULE_SETTINGS_APPLIED_EVENT, handleModuleSettingsApplied as EventListener);
+    return () => {
+      window.removeEventListener(MODULE_SETTINGS_APPLIED_EVENT, handleModuleSettingsApplied as EventListener);
+    };
+  }, []);
 
   const loadCurrentUser = async () => {
     const snapshot = await fetchSessionBootstrap(supabase, { force: true });
@@ -333,6 +364,7 @@ const RolesTab: React.FC = () => {
       message.success('دسترسی ها بروزرسانی شد');
       setRoles((prev) => prev.map((r) => (r.id === selectedRoleId ? { ...r, permissions: normalized } : r)));
       setPermissions(normalized);
+      clearCurrentUserRoleContextCache();
     }
     setLoading(false);
   };
@@ -559,27 +591,127 @@ const RolesTab: React.FC = () => {
     return merged[moduleId] || { view: true, edit: true, delete: true, fields: {} };
   };
 
+  const getPermissionFieldItems = (moduleId: string, fields: Array<{ key: string; label: string }>): PermissionFieldItem[] => {
+    const moduleDef = MODULES[moduleId];
+    const items = new Map<string, PermissionFieldItem>();
+    const fallbackLabelMap = new Map(fields.map((field) => [field.key, field.label]));
+    const pushItem = (
+      key: string,
+      label: string | undefined,
+      group: PermissionFieldItem['group']
+    ) => {
+      const normalizedKey = String(key || '').trim();
+      if (!normalizedKey) return;
+      items.set(normalizedKey, {
+        key: normalizedKey,
+        label: String(label || fallbackLabelMap.get(normalizedKey) || normalizedKey).trim() || normalizedKey,
+        group,
+      });
+    };
+
+    (moduleDef?.fields || []).forEach((field: any) => {
+      const nature = String(field?.nature || '').trim();
+      let group: PermissionFieldItem['group'] = 'standard';
+      if (!nature) {
+        group = 'custom';
+      } else if (nature === FieldNature.SYSTEM) {
+        group = 'system';
+      } else {
+        group = 'standard';
+      }
+      pushItem(String(field?.key || ''), field?.labels?.fa || field?.key, group);
+    });
+
+    (moduleDef?.blocks || []).forEach((block: any) => {
+      const blockId = String(block?.id || '').trim();
+      const blockLabel = block?.titles?.fa || blockId;
+      if (!blockId) return;
+      pushItem(blockId, `بخش: ${blockLabel}`, 'structure');
+      (block?.tableColumns || []).forEach((column: any) => {
+        const columnKey = String(column?.key || '').trim();
+        if (!columnKey) return;
+        pushItem(columnKey, column?.title || columnKey, 'structure');
+        pushItem(`${blockId}.${columnKey}`, `${blockLabel}: ${column?.title || columnKey}`, 'structure');
+      });
+    });
+
+    (moduleDef?.actionButtons || []).forEach((action: any) => {
+      const actionId = String(action?.id || '').trim();
+      if (!actionId) return;
+      pushItem(`__action_${actionId}`, `عملیات: ${action?.label || actionId}`, 'action');
+    });
+
+    fields.forEach((field) => {
+      const normalizedKey = String(field?.key || '').trim();
+      if (!normalizedKey || items.has(normalizedKey)) return;
+      const group = normalizedKey.startsWith('__action_')
+        ? 'action'
+        : (normalizedKey.startsWith('__') || normalizedKey.includes('.'))
+          ? 'structure'
+          : 'custom';
+      pushItem(normalizedKey, field.label, group);
+    });
+
+    return Array.from(items.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+  };
+
   const renderFieldSwitches = (
     moduleId: string,
     fields: Array<{ key: string; label: string }>,
     disabled: boolean
   ) => {
     const modPerms = getModulePerms(moduleId);
+    const searchValue = String(fieldSearchByModule[moduleId] || '').trim().toLocaleLowerCase('fa');
+    const groupedFields = FIELD_GROUP_ORDER
+      .map((groupKey) => {
+        const items = getPermissionFieldItems(moduleId, fields).filter((field) => {
+          if (field.group !== groupKey) return false;
+          if (!searchValue) return true;
+          const haystack = `${field.label} ${field.key}`.toLocaleLowerCase('fa');
+          return haystack.includes(searchValue);
+        });
+        return { key: groupKey, label: FIELD_GROUP_LABELS[groupKey], items };
+      })
+      .filter((group) => group.items.length > 0);
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {fields.map((field) => (
-          <div
-            key={field.key}
-            className="flex items-center gap-2 text-sm bg-gray-50 dark:bg-white/5 p-2 rounded border border-transparent dark:border-gray-800"
-          >
-            <Switch
-              size="small"
-              checked={modPerms.fields?.[field.key] !== false}
-              onChange={(checked) => handlePermissionChange(moduleId, 'field', field.key, checked)}
-              disabled={disabled}
-              className="bg-gray-300"
-            />
-            <span className="text-gray-600 dark:text-gray-400">{field.label}</span>
+      <div className="space-y-4">
+        {fields.length > 8 ? (
+          <Input
+            value={fieldSearchByModule[moduleId] || ''}
+            onChange={(event) => {
+              const nextValue = String(event.target.value || '');
+              setFieldSearchByModule((prev) => ({ ...prev, [moduleId]: nextValue }));
+            }}
+            placeholder="جستجوی فیلد یا بخش..."
+            className="dark:bg-[#303030] dark:border-gray-700 dark:text-white"
+          />
+        ) : null}
+        {groupedFields.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="فیلدی برای این جستجو پیدا نشد." />
+        ) : null}
+        {groupedFields.map((group) => (
+          <div key={`${moduleId}-${group.key}`} className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-gray-500 dark:text-gray-400">{group.label}</span>
+              <span className="text-[11px] text-gray-400 dark:text-gray-500">{group.items.length}</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {group.items.map((field) => (
+                <div
+                  key={field.key}
+                  className="flex items-center gap-2 text-sm bg-gray-50 dark:bg-white/5 p-2 rounded border border-transparent dark:border-gray-800"
+                >
+                  <Switch
+                    size="small"
+                    checked={modPerms.fields?.[field.key] !== false}
+                    onChange={(checked) => handlePermissionChange(moduleId, 'field', field.key, checked)}
+                    disabled={disabled}
+                    className="bg-gray-300"
+                  />
+                  <span className="text-gray-600 dark:text-gray-400">{field.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>

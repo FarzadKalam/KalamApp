@@ -10,6 +10,8 @@ import { supabase } from '../../supabaseClient';
 import { parseDateValue } from '../../utils/persianNumberFormatter';
 import PersianDatePicker from '../PersianDatePicker';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
+import { fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { getMergedTaskTypeOptions } from '../../utils/taskMeta';
 
 type TaskCalendarRow = {
   id: string;
@@ -94,6 +96,7 @@ const TaskCalendarWidget: React.FC = () => {
   const [dateFrom, setDateFrom] = useState<string>(formatIsoDate(createDefaultRange().from));
   const [dateTo, setDateTo] = useState<string>(formatIsoDate(createDefaultRange().to));
   const [recordAccess, setRecordAccess] = useState<Awaited<ReturnType<typeof fetchCurrentUserRecordAccessContext>> | null>(null);
+  const [allTaskTypeOptions, setAllTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
 
   const loadTasks = useCallback(async () => {
     if (!tasksModule) {
@@ -148,6 +151,28 @@ const TaskCalendarWidget: React.FC = () => {
   }, [loadTasks]);
 
   React.useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const options = taskTypeField?.dynamicOptionsCategory
+          ? await fetchDynamicOptionsByCategory(supabase, taskTypeField.dynamicOptionsCategory)
+          : getMergedTaskTypeOptions([]);
+        if (!cancelled) {
+          setAllTaskTypeOptions(options);
+        }
+      } catch {
+        if (!cancelled) {
+          setAllTaskTypeOptions(getMergedTaskTypeOptions([]));
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
     const now = createDateAtMidday(new Date());
     if (rangeType === 'week') {
       setDateFrom(formatIsoDate(startOfWeek(now)));
@@ -161,9 +186,8 @@ const TaskCalendarWidget: React.FC = () => {
   }, [rangeType]);
 
   const taskTypeOptions = useMemo(() => {
-    const staticOptions = Array.isArray(taskTypeField?.options) ? taskTypeField!.options : [];
     const map = new Map<string, { label: string; value: string }>();
-    staticOptions.forEach((item: any) => {
+    allTaskTypeOptions.forEach((item: any) => {
       const value = String(item?.value || '').trim();
       if (!value) return;
       map.set(value, { value, label: String(item?.label || value) });
@@ -174,7 +198,7 @@ const TaskCalendarWidget: React.FC = () => {
       map.set(value, { value, label: value });
     });
     return [{ value: 'all', label: 'همه نوع‌ها' }, ...Array.from(map.values())];
-  }, [rows]);
+  }, [allTaskTypeOptions, rows]);
 
   const filteredRows = useMemo(() => {
     if (!recordAccess) return [];

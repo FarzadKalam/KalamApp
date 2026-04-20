@@ -1,4 +1,5 @@
-﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio } from 'antd';
 import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
@@ -29,6 +30,7 @@ import {
   buildTaskSourceInitialValues,
   getMergedTaskTypeOptions,
   getTaskTypeProtectedValues,
+  resolveTaskSourceLink,
 } from '../utils/taskMeta';
 import { TASK_AUTOMATION_SELECT, updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import {
@@ -422,6 +424,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [loading, setLoading] = useState(false);
   const [isSubmittingTaskModal, setIsSubmittingTaskModal] = useState(false);
+  const taskCreateLockRef = useRef<string | null>(null);
+  const autoAssignLockRef = useRef<Set<string>>(new Set());
+  const [autoAssigningProcessIds, setAutoAssigningProcessIds] = useState<Record<string, boolean>>({});
   const [isLineModalOpen, setIsLineModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -474,6 +479,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [appendProcessTemplateLabel, setAppendProcessTemplateLabel] = useState<string | null>(null);
   const [appendProcessTargetModuleIds, setAppendProcessTargetModuleIds] = useState<string[]>([]);
   const [appendProcessLinkedRecords, setAppendProcessLinkedRecords] = useState<Record<string, string | null>>({});
+  const appendProcessLinkedRecordsRef = useRef<Record<string, string | null>>({});
   const [appendProcessRelationOptions, setAppendProcessRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [, setAppendProcessRelationLoading] = useState<Record<string, boolean>>({});
   const [showEmptyProcessDetails, setShowEmptyProcessDetails] = useState(false);
@@ -896,14 +902,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const isProcessModule = isProcessRecordModule || isProcessPreviewModule;
   const isProductionOrder = moduleId === 'production_orders';
   const supportsHandover = isProductionOrder;
-  const processTaskModules = useMemo(
-    () => {
-      const modules = new Set(['projects', 'marketing_leads', 'customers', 'invoices', 'purchase_invoices']);
-      if (isProcessRecordModule && moduleId) modules.add(String(moduleId));
-      return modules;
-    },
-    [isProcessRecordModule, moduleId]
-  );
+
   const processLineId = useMemo(
     () => `process-line:${String(moduleId || 'unknown')}:${String(recordId || 'draft')}`,
     [moduleId, recordId]
@@ -1122,6 +1121,38 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return {};
     }
   }, []);
+  const getRelatedTaskRecordRows = useCallback((task: any) => {
+    const rows = new Map<string, { moduleId: string; recordId: string; label: string; value: string }>();
+    const addRow = (targetModuleId: unknown, targetRecordId: unknown) => {
+      const normalizedModuleId = String(targetModuleId || '').trim();
+      const normalizedRecordId = String(targetRecordId || '').trim();
+      if (!normalizedModuleId || !normalizedRecordId || !MODULES[normalizedModuleId]) return;
+      if (!canViewModuleByPermissions(normalizedModuleId)) return;
+      const moduleTitle = MODULES[normalizedModuleId]?.titles?.faSingular
+        || MODULES[normalizedModuleId]?.titles?.fa
+        || normalizedModuleId;
+      const titleKey = `${normalizedModuleId}:${normalizedRecordId}`;
+      rows.set(titleKey, {
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+        label: `${moduleTitle} مرتبط`,
+        value: relatedRecordTitleMap[titleKey] || normalizedRecordId,
+      });
+    };
+
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    const sourceLink = resolveTaskSourceLink(task);
+    addRow(sourceLink.moduleId, sourceLink.recordId);
+    Object.entries(parseProcessLinkMap(recurrence?.process_links)).forEach(([targetModuleId, targetRecordId]) => {
+      addRow(targetModuleId, targetRecordId);
+    });
+
+    TASK_RELATED_FIELD_DEFINITIONS.forEach((meta) => {
+      addRow(meta.moduleId, task?.[meta.fieldKey]);
+    });
+
+    return Array.from(rows.values());
+  }, [canViewModuleByPermissions, parseRecurrenceInfo, relatedRecordTitleMap]);
 
   const getTaskCustomFields = useCallback((task: any) => {
     const recurrence = parseRecurrenceInfo(task?.recurrence_info);
@@ -1228,12 +1259,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     dueDate,
     processLinkMap,
     previousTask,
+    relatedRecordCache,
   }: {
     taskName?: string | null;
     taskType?: string | null;
     dueDate?: string | null;
     processLinkMap?: Record<string, any> | null;
     previousTask?: any;
+    relatedRecordCache?: Map<string, Record<string, any>>;
   }) => {
     const record: Record<string, any> = {
       task_name: String(taskName || '').trim(),
@@ -1243,17 +1276,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       task_status_label: getTaskStatusLabel('todo'),
       task_due_date: dueDate || '',
     };
-    const relatedRecordCache = new Map<string, Record<string, any>>();
+    const effectiveRelatedRecordCache = relatedRecordCache || new Map<string, Record<string, any>>();
     let sourceRecordSnapshot: Record<string, any> | null = null;
 
     if (recordId && moduleId) {
       try {
-        const { data: sourceRecord, error } = await supabase
-          .from(MODULES[moduleId]?.table || moduleId)
-          .select('*')
-            .eq('id', recordId)
-            .maybeSingle();
-        if (error) throw error;
+        const sourceCacheKey = `${moduleId}:${recordId}`;
+        let sourceRecord = effectiveRelatedRecordCache.get(sourceCacheKey);
+        if (!sourceRecord) {
+          const { data, error } = await supabase
+            .from(MODULES[moduleId]?.table || moduleId)
+            .select('*')
+              .eq('id', recordId)
+              .maybeSingle();
+          if (error) throw error;
+          if (data) {
+            sourceRecord = data as Record<string, any>;
+            effectiveRelatedRecordCache.set(sourceCacheKey, sourceRecord);
+          }
+        }
         sourceRecordSnapshot = (sourceRecord || null) as Record<string, any> | null;
         Object.assign(record, sourceRecordSnapshot || {});
         if (sourceRecordSnapshot) {
@@ -1277,14 +1318,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         if (!normalizedModuleId || !normalizedRecordId) return;
         if (normalizedModuleId === moduleId && normalizedRecordId === String(recordId || '')) return;
         try {
-          const { data, error } = await supabase
-            .from(MODULES[normalizedModuleId]?.table || normalizedModuleId)
-            .select('*')
-            .eq('id', normalizedRecordId)
-            .maybeSingle();
-          if (error) throw error;
-          if (!data) return;
-          const linkedRecord = data as Record<string, any>;
+          const linkCacheKey = `${normalizedModuleId}:${normalizedRecordId}`;
+          let linkedRecord = effectiveRelatedRecordCache.get(linkCacheKey);
+          if (!linkedRecord) {
+            const { data, error } = await supabase
+              .from(MODULES[normalizedModuleId]?.table || normalizedModuleId)
+              .select('*')
+              .eq('id', normalizedRecordId)
+              .maybeSingle();
+            if (error) throw error;
+            if (!data) return;
+            linkedRecord = data as Record<string, any>;
+            effectiveRelatedRecordCache.set(linkCacheKey, linkedRecord);
+          }
           assignProcessLinkedRecordFields(record, normalizedModuleId, linkedRecord);
         } catch (error) {
           console.warn('Could not load linked process record for task template rendering', error);
@@ -1308,7 +1354,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const relationId = String(sourceRecordSnapshot?.[meta.relationFieldKey] || '').trim();
         if (!relationId) return;
         const cacheKey = `${meta.targetModuleId}:${relationId}`;
-        let relatedRecord = relatedRecordCache.get(cacheKey);
+        let relatedRecord = effectiveRelatedRecordCache.get(cacheKey);
         if (!relatedRecord) {
           try {
             const { data, error } = await supabase
@@ -1319,7 +1365,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             if (error) throw error;
             if (!data) return;
             relatedRecord = data as Record<string, any>;
-            relatedRecordCache.set(cacheKey, relatedRecord);
+            effectiveRelatedRecordCache.set(cacheKey, relatedRecord);
           } catch (error) {
             console.warn('Could not load related record for task template rendering', error);
             return;
@@ -3288,6 +3334,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const handleAddTask = async (values: any) => {
     if (!recordId || !activeLineId) return;
+    const createLockKey = [
+      activeLineId,
+      draftToCreate?.id || draftToCreate?.sort_order || values?.sort_order || 'manual',
+      draftToCreate?.process_group_id || activeProcessGroupMeta?.id || '',
+    ].join(':');
+    if (taskCreateLockRef.current === createLockKey || isSubmittingTaskModal) return;
+    taskCreateLockRef.current = createLockKey;
     try {
       setIsSubmittingTaskModal(true);
       const { data: { user } } = await supabase.auth.getUser();
@@ -3379,6 +3432,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         resolvedStageCustomFields,
         resolvedDraftCustomFieldValues
       );
+
+      if (draftToCreate && isProcessRecordModule) {
+        const targetStageKey = buildProcessStageTaskKey(
+          activeProcessGroupMeta?.id || getStageProcessGroupMeta(draftToCreate).groupId,
+          resolvedTaskName || values.name,
+          values.sort_order || draftToCreate?.sort_order
+        );
+        const alreadyExists = targetStageKey && (Array.isArray(tasks) ? tasks : []).some((task: any) => {
+          const taskMeta = getTaskProcessGroupMeta(task);
+          return buildProcessStageTaskKey(
+            taskMeta.groupId || activeProcessGroupMeta?.id || 'default_process_group',
+            task?.name || task?.title || '',
+            task?.sort_order
+          ) === targetStageKey;
+        });
+        if (alreadyExists) {
+          message.info('برای این مرحله قبلا فعالیت ثبت شده است');
+          closeTaskModal();
+          return;
+        }
+      }
 
       const payload: any = {
         name: resolvedTaskName || values.name,
@@ -3485,6 +3559,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           : toFaErrorMessage(error, 'خطا در ثبت اطلاعات')
       );
     } finally {
+      taskCreateLockRef.current = null;
       setIsSubmittingTaskModal(false);
     }
   };
@@ -4386,16 +4461,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       || (processTemplateId ? processTemplateNameMap[processTemplateId] : '')
       || ''
     ).trim();
-    const relatedRows = TASK_RELATED_FIELD_DEFINITIONS
-      .map((meta) => {
-        const relatedId = String(task?.[meta.fieldKey] || '').trim();
-        if (!relatedId) return null;
-        if (!canViewModuleByPermissions(meta.moduleId)) return null;
-        const titleKey = `${meta.moduleId}:${relatedId}`;
-        const title = relatedRecordTitleMap[titleKey] || relatedId;
-        return { label: meta.label, value: title };
-      })
-      .filter(Boolean) as Array<{ label: string; value: string }>;
+    const relatedRows = getRelatedTaskRecordRows(task);
+
 
     return (
       <div
@@ -4598,9 +4665,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </div>
             ) : null}
             {relatedRows.map((row) => (
-              <div key={`${task.id}-${row.label}`} className="flex items-center gap-2">
+              <div key={`${task.id}-${row.moduleId}-${row.recordId}`} className="flex items-center gap-2">
                 <LinkOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />
-                <span>{row.label}: {toPersianNumber(row.value)}</span>
+                <span className="min-w-0">
+                  {row.label}:{' '}
+                  <Link
+                    to={`/${row.moduleId}/${row.recordId}`}
+                    className="text-[rgba(var(--brand-700-rgb),1)] hover:underline"
+                    onClick={() => closeTaskQuickModal(false)}
+                  >
+                    {toPersianNumber(row.value)}
+                  </Link>
+                </span>
               </div>
             ))}
             {hasWage && (
@@ -4707,27 +4783,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   }}
                 />
               </Tooltip>
-              <Button
-                size="small"
-                type="link"
-                icon={<ArrowRightOutlined />}
-                className="text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)]"
+              <Link
+                to={`/tasks/${task.id}`}
+                className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)] hover:underline"
                 onMouseDown={(event) => {
-                  event.preventDefault();
                   event.stopPropagation();
                 }}
                 onTouchStart={(event) => {
                   event.stopPropagation();
                 }}
                 onClick={(event) => {
-                  event.preventDefault();
                   event.stopPropagation();
                   closeTaskQuickModal(false);
-                  window.setTimeout(() => openTaskProcessModal({ task }), 0);
                 }}
               >
+                <ArrowRightOutlined />
                 جزئیات کامل
-              </Button>
+              </Link>
             </div>
           </div>
         </div>
@@ -4866,6 +4938,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setAppendProcessTemplateId(null);
     setAppendProcessTemplateLabel(null);
     setAppendProcessTargetModuleIds([]);
+    appendProcessLinkedRecordsRef.current = {};
     setAppendProcessLinkedRecords({});
     setAppendProcessRelationOptions({});
     setAppendProcessRelationLoading({});
@@ -4875,6 +4948,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setAppendProcessTemplateId(normalizedTemplateId);
       setAppendProcessTemplateLabel(null);
       setAppendProcessTargetModuleIds(seededTargetModuleIds);
+      appendProcessLinkedRecordsRef.current = seededLinks;
       setAppendProcessLinkedRecords(seededLinks);
     }
   }, [isProcessRecordModule, loadProcessTemplateOptions, moduleId, readOnly]);
@@ -4951,6 +5025,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   };
 
   useEffect(() => {
+    appendProcessLinkedRecordsRef.current = appendProcessLinkedRecords;
+  }, [appendProcessLinkedRecords]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleTaskRuntimeUpdated = (event: Event) => {
       const detail = (event as CustomEvent<TaskRuntimeUpdatedPayload>)?.detail;
@@ -4972,6 +5050,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   useEffect(() => {
     if (!appendProcessModalOpen) {
       setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
+      appendProcessLinkedRecordsRef.current = {};
       setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
       setAppendProcessRelationOptions((prev) => (hasObjectKeys(prev) ? {} : prev));
       setAppendProcessRelationLoading((prev) => (hasObjectKeys(prev) ? {} : prev));
@@ -4979,23 +5058,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
     if (!appendProcessTemplateId && appendProcessModalMode === 'append') {
       setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
+      appendProcessLinkedRecordsRef.current = {};
       setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
       setAppendProcessRelationOptions((prev) => (hasObjectKeys(prev) ? {} : prev));
       setAppendProcessRelationLoading((prev) => (hasObjectKeys(prev) ? {} : prev));
       return;
     }
     if (!appendProcessTemplateId && appendProcessModalMode === 'links') {
+      const latestLinks = appendProcessLinkedRecordsRef.current || {};
       const inferredTargetModuleIds = normalizeProcessTargetModuleIds(
         [
           ...appendProcessTargetModuleIds,
-          ...Object.keys(appendProcessLinkedRecords || {}),
+          ...Object.keys(latestLinks),
         ],
         moduleId
       );
       if (inferredTargetModuleIds.length > 0) {
         void Promise.all(
           inferredTargetModuleIds.map((targetModuleId) =>
-            loadAppendProcessRelationOptions(targetModuleId, appendProcessLinkedRecords[targetModuleId] || null)
+            loadAppendProcessRelationOptions(targetModuleId, latestLinks[targetModuleId] || null)
           )
         );
       }
@@ -5023,9 +5104,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         ));
 
         const knownLinks = appendProcessModalMode === 'links'
-          ? (appendProcessLinkedRecords || {})
+          ? (appendProcessLinkedRecordsRef.current || {})
           : (await resolveKnownProcessLinks(targetModuleIds) || {});
         if (cancelled) return;
+        appendProcessLinkedRecordsRef.current = knownLinks;
         setAppendProcessLinkedRecords((prev) => (
           areProcessLinkMapsEqual(prev, knownLinks) ? prev : knownLinks
         ));
@@ -5040,6 +5122,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         if (!cancelled) {
           setAppendProcessTargetModuleIds((prev) => (prev.length > 0 ? [] : prev));
           if (appendProcessModalMode !== 'links') {
+            appendProcessLinkedRecordsRef.current = {};
             setAppendProcessLinkedRecords((prev) => (hasObjectKeys(prev) ? {} : prev));
           }
         }
@@ -5052,7 +5135,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
   }, [
     appendProcessTargetModuleIds,
-    appendProcessLinkedRecords,
     appendProcessModalMode,
     appendProcessModalOpen,
     appendProcessTemplateId,
@@ -5115,6 +5197,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         existingGroupCount + 1
       )}`;
       const nextGroupName = String(selectedTemplate?.label || fallbackGroupName).trim() || fallbackGroupName;
+      const currentLinkedRecords = appendProcessLinkedRecordsRef.current || appendProcessLinkedRecords;
 
       const appendedStages = incomingStages.map((stage: any, index: number) => {
         const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
@@ -5143,7 +5226,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_group_id: nextGroupId,
           process_group_name: nextGroupName,
           process_target_module_ids: appendProcessTargetModuleIds,
-          process_link_map: appendProcessLinkedRecords,
+          process_link_map: currentLinkedRecords,
         };
         cursor += 10;
         return row;
@@ -5180,13 +5263,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
     try {
       setLoading(true);
+      const currentLinkedRecords = appendProcessLinkedRecordsRef.current || appendProcessLinkedRecords;
       const nextStages = (Array.isArray(draftLocal) ? draftLocal : []).map((stage: any) => {
         const stageGroupId = String(stage?.process_group_id || stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
         if (stageGroupId !== normalizedGroupId) return stage;
         return {
           ...stage,
           process_target_module_ids: appendProcessTargetModuleIds,
-          process_link_map: appendProcessLinkedRecords,
+          process_link_map: currentLinkedRecords,
         };
       });
       await saveDraftStages(nextStages);
@@ -5475,6 +5559,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handleAutoAssignProcess = useCallback(async (targetGroupId?: string | null) => {
     if (!isProcessRecordModule || !recordId || !moduleId) return;
     const normalizedTargetGroupId = String(targetGroupId || '').trim();
+    const autoAssignKey = normalizedTargetGroupId || 'all';
+    if (autoAssignLockRef.current.has(autoAssignKey)) return;
+    autoAssignLockRef.current.add(autoAssignKey);
+    setAutoAssigningProcessIds((prev) => ({ ...prev, [autoAssignKey]: true }));
     const stageRows = (Array.isArray(draftLocal) ? draftLocal : [])
       .filter((stage: any) => {
         const hasName = String(stage?.name || stage?.title || '').trim() !== '';
@@ -5508,7 +5596,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       const existingByStageKey = new Set(
         (Array.isArray(tasks) ? tasks : [])
-          .filter((task: any) => processTaskModules.has(String(task?.related_to_module || '')))
           .map((task: any) => {
             const taskMeta = getTaskProcessGroupMeta(task);
             return buildProcessStageTaskKey(
@@ -5522,6 +5609,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       const payload: any[] = [];
       let previousResolvedTask: any = null;
+      const templateRecordCache = new Map<string, Record<string, any>>();
       const creatableStages = stageRows
         .filter((stage: any) => {
           const stageName = String(stage?.name || stage?.title || '').trim();
@@ -5565,6 +5653,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           dueDate,
           processLinkMap: effectiveProcessLinkMap,
           previousTask: previousResolvedTask,
+          relatedRecordCache: templateRecordCache,
         });
         const resolvedStageName = String(
           renderTemplateValueFromRecord(stageName, templateContext, FieldType.TEXT) ?? stageName
@@ -5633,11 +5722,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         return;
       }
       await insertTasksWithFallback(payload);
+      const nextDrafts = creatableStages.reduce((currentDrafts: any[], stage: any) => (
+        removeSingleMatchingDraftStage(currentDrafts, stage)
+      ), Array.isArray(draftLocalRef.current) ? draftLocalRef.current : []);
+      draftLocalRef.current = nextDrafts;
+      setDraftLocal(nextDrafts);
+      await saveDraftStages(nextDrafts);
       await fetchTasks();
       message.success(`${toPersianNumber(payload.length)} فعالیت ایجاد شد`);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ارجاع خودکار فرآیند ناموفق بود'));
     } finally {
+      autoAssignLockRef.current.delete(autoAssignKey);
+      setAutoAssigningProcessIds((prev) => {
+        const next = { ...prev };
+        delete next[autoAssignKey];
+        return next;
+      });
       setLoading(false);
     }
   }, [
@@ -5650,11 +5751,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     getTaskProcessGroupMeta,
     getProcessBaseDate,
     insertTasksWithFallback,
+    removeSingleMatchingDraftStage,
+    saveDraftStages,
     isProcessRecordModule,
     moduleId,
     normalizeStageName,
     parseStageAssignee,
-    processTaskModules,
     recordId,
     tasks,
   ]);
@@ -6589,12 +6691,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     const loadRelatedTitles = async () => {
       const groupedIds = new Map<string, Set<string>>();
+      const addRelatedId = (targetModuleId: unknown, targetRecordId: unknown) => {
+        const normalizedModuleId = String(targetModuleId || '').trim();
+        const normalizedRecordId = String(targetRecordId || '').trim();
+        if (!normalizedModuleId || !normalizedRecordId || !MODULES[normalizedModuleId]) return;
+        if (!canViewModuleByPermissions(normalizedModuleId)) return;
+        if (!groupedIds.has(normalizedModuleId)) groupedIds.set(normalizedModuleId, new Set<string>());
+        groupedIds.get(normalizedModuleId)!.add(normalizedRecordId);
+      };
+
       (tasks || []).forEach((task: any) => {
+        const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+        const sourceLink = resolveTaskSourceLink(task);
+        addRelatedId(sourceLink.moduleId, sourceLink.recordId);
+        Object.entries(parseProcessLinkMap(recurrence?.process_links)).forEach(([targetModuleId, targetRecordId]) => {
+          addRelatedId(targetModuleId, targetRecordId);
+        });
         TASK_RELATED_FIELD_DEFINITIONS.forEach((meta) => {
-          const rawId = String(task?.[meta.fieldKey] || '').trim();
-          if (!rawId || !MODULES[meta.moduleId] || !canViewModuleByPermissions(meta.moduleId)) return;
-          if (!groupedIds.has(meta.moduleId)) groupedIds.set(meta.moduleId, new Set<string>());
-          groupedIds.get(meta.moduleId)!.add(rawId);
+          addRelatedId(meta.moduleId, task?.[meta.fieldKey]);
         });
       });
 
@@ -6631,7 +6745,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return () => {
       cancelled = true;
     };
-  }, [canViewModuleByPermissions, tasks]);
+  }, [canViewModuleByPermissions, parseRecurrenceInfo, tasks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -7188,6 +7302,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             {showAutoAssignButton ? (
                               <Button
                                 size={compact ? 'small' : 'middle'}
+                                loading={!!autoAssigningProcessIds[String(group?.id || '').trim() || 'all']}
+                                disabled={!!autoAssigningProcessIds[String(group?.id || '').trim() || 'all']}
                                 onClick={() => { void handleAutoAssignProcess(String(group?.id || '')); }}
                                 className="border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
                               >
@@ -8633,14 +8749,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         relationConfig: { targetModule: targetModuleId },
                       } as ModuleField}
                       value={appendProcessLinkedRecords[targetModuleId] || undefined}
-                      onChange={(value) => setAppendProcessLinkedRecords((prev) => ({
-                        ...prev,
-                        [targetModuleId]: value ? String(value) : null,
-                      }))}
+                      onChange={(value) => {
+                        const normalizedValue = value ? String(value) : null;
+                        setAppendProcessLinkedRecords((prev) => {
+                          const next = {
+                            ...prev,
+                            [targetModuleId]: normalizedValue,
+                          };
+                          appendProcessLinkedRecordsRef.current = next;
+                          return next;
+                        });
+                        if (normalizedValue) {
+                          void loadAppendProcessRelationOptions(targetModuleId, normalizedValue);
+                        }
+                      }}
                       forceEditMode={true}
                       options={appendProcessRelationOptions[targetModuleId] || []}
-                      onOptionsUpdate={() => { void loadAppendProcessRelationOptions(targetModuleId, appendProcessLinkedRecords[targetModuleId] || null); }}
-                      allValues={appendProcessLinkedRecords}
+                      onOptionsUpdate={() => {
+                        const latestLinks = appendProcessLinkedRecordsRef.current || appendProcessLinkedRecords;
+                        void loadAppendProcessRelationOptions(targetModuleId, latestLinks[targetModuleId] || null);
+                      }}
+                      allValues={{
+                        ...appendProcessLinkedRecords,
+                        [createProcessLinkedFieldKey(targetModuleId, 'id')]: appendProcessLinkedRecords[targetModuleId] || undefined,
+                      }}
                       moduleId={moduleId}
                       recordId={recordId}
                       overlayZIndexBase={13080}

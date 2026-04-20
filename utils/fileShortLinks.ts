@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import type { NoteAttachment } from './noteContent';
+import { FILE_STORAGE_BUCKET, fileStorageClient } from './storageClient';
 
 const SHORT_FILE_ROUTE_PREFIX = '/f';
 const SHORT_FILE_CODE_LENGTH = 6;
@@ -29,6 +30,72 @@ const normalizeTargetUrl = (value: string) => {
   } catch {
     return '';
   }
+};
+
+const STORAGE_URL_MARKERS = [
+  '/storage/v1/object/public/',
+  '/storage/v1/object/sign/',
+  '/storage/v1/object/authenticated/',
+  '/storage/v1/render/image/public/',
+  '/storage/v1/render/image/sign/',
+] as const;
+
+const extractBucketAndPathFromStorageUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  for (const marker of STORAGE_URL_MARKERS) {
+    const index = raw.indexOf(marker);
+    if (index < 0) continue;
+    const suffix = raw.slice(index + marker.length).split('?')[0].split('#')[0];
+    const slashIndex = suffix.indexOf('/');
+    if (slashIndex <= 0) continue;
+    const bucket = suffix.slice(0, slashIndex).trim();
+    const encodedPath = suffix.slice(slashIndex + 1).trim();
+    if (!bucket || !encodedPath) continue;
+    try {
+      return {
+        bucket: decodeURIComponent(bucket),
+        path: decodeURIComponent(encodedPath),
+      };
+    } catch {
+      return { bucket, path: encodedPath };
+    }
+  }
+  return null;
+};
+
+const looksLikeStoragePath = (value: string) =>
+  /^[\w\-./% ]+\.[a-z0-9]{2,10}$/i.test(String(value || '').trim()) && !String(value || '').includes('://');
+
+const normalizeAttachmentTargetUrl = async (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('data:') || raw.startsWith('blob:')) return raw;
+
+  if (raw.startsWith('/')) {
+    const storageRef = extractBucketAndPathFromStorageUrl(raw);
+    if (storageRef) {
+      return String(
+        fileStorageClient.storage.from(storageRef.bucket).getPublicUrl(storageRef.path).data.publicUrl || ''
+      ).trim() || buildAbsoluteUrl(raw);
+    }
+    return buildAbsoluteUrl(raw);
+  }
+
+  const storageRef = extractBucketAndPathFromStorageUrl(raw);
+  if (storageRef) {
+    return String(
+      fileStorageClient.storage.from(storageRef.bucket).getPublicUrl(storageRef.path).data.publicUrl || ''
+    ).trim() || normalizeTargetUrl(raw) || raw;
+  }
+
+  if (looksLikeStoragePath(raw)) {
+    return String(
+      fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(raw).data.publicUrl || ''
+    ).trim() || raw;
+  }
+
+  return normalizeTargetUrl(raw) || raw;
 };
 
 const getRandomValues = (length: number) => {
@@ -145,16 +212,19 @@ export const shortenAttachmentsForExternalShare = async (
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
 
   return Promise.all(
-    attachments.map(async (attachment) => ({
-      ...attachment,
-      url: await getOrCreateShortFileUrl(String(attachment?.url || '').trim(), {
-        ...payload,
-        title: String(attachment?.name || payload.title || '').trim() || payload.title || null,
-        metadata: {
-          ...(payload.metadata || {}),
-          mime_type: attachment?.mimeType || null,
-        },
-      }),
-    })),
+    attachments.map(async (attachment) => {
+      const publicTargetUrl = await normalizeAttachmentTargetUrl(String(attachment?.url || '').trim());
+      return {
+        ...attachment,
+        url: await getOrCreateShortFileUrl(publicTargetUrl, {
+          ...payload,
+          title: String(attachment?.name || payload.title || '').trim() || payload.title || null,
+          metadata: {
+            ...(payload.metadata || {}),
+            mime_type: attachment?.mimeType || null,
+          },
+        }),
+      };
+    }),
   );
 };

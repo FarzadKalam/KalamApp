@@ -48,6 +48,7 @@ import {
 } from '../utils/notificationViewModels';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
+import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 
@@ -1758,6 +1759,25 @@ useEffect(() => {
     const userId = profile.id;
     const roleId = profile.role_id;
 
+    const fetchRowsByIds = async (table: string, ids: string[]) => {
+      const normalizedIds = Array.from(new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean)));
+      if (normalizedIds.length === 0) return [] as any[];
+
+      const rows: any[] = [];
+      const chunkSize = 100;
+      for (let index = 0; index < normalizedIds.length; index += chunkSize) {
+        const chunk = normalizedIds.slice(index, index + chunkSize);
+        const { data, error } = await supabase
+          .from(table)
+          .select('*')
+          .in('id', chunk);
+        if (error) throw error;
+        rows.push(...(data || []));
+      }
+
+      return rows;
+    };
+
     const inboxItems = await fetchNotificationInboxSection('responsibilities', 200);
     if (inboxItems) {
       const moduleByTable = new Map<string, any>();
@@ -1784,19 +1804,17 @@ useEffect(() => {
         grouped.set(key, current);
       });
 
-      const results: any[] = [];
+        const results: any[] = [];
       for (const group of grouped.values()) {
         const idList = Array.from(new Set(group.ids.filter(Boolean)));
         const itemByRecordId = new Map(group.items.map((item) => [String(item.record_id || item.source_id || '').trim(), item]));
         let rows: any[] = [];
         if (idList.length > 0) {
-          const { data, error } = await supabase
-            .from(group.table)
-            .select('*')
-            .in('id', idList)
-            .limit(80);
-          if (!error) {
-            rows = data || [];
+          try {
+            rows = await fetchRowsByIds(group.table, idList);
+          } catch (error) {
+            console.warn('Failed to load full responsibility rows from inbox group', group.table, error);
+            rows = [];
           }
         }
 
@@ -1841,12 +1859,10 @@ useEffect(() => {
       const ids = await fetchAssignedIdsForModule(table, userId, roleId);
       const idList = (ids || []).map((row: any) => row.id).filter(Boolean);
       if (!idList.length) continue;
-      const { data, error } = await supabase
-        .from(table)
-        .select('*')
-        .in('id', idList)
-        .limit(50);
-      if (error) {
+      let data: any[] = [];
+      try {
+        data = await fetchRowsByIds(table, idList);
+      } catch (error) {
         if (isMissingTableLikeError(error) || isMissingColumnError(error, 'id')) {
           ASSIGNEE_QUERY_MODE_CACHE.set(String(table || '').trim(), 'none');
         }
@@ -3274,7 +3290,7 @@ useEffect(() => {
     (attachments || []).forEach((item, index) => {
       const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
       const url = String(item?.url || '').trim();
-      lines.push({ text: `🔗 ${name}`, linkUrl: url || undefined });
+      lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
     });
 
     if (lines.length === 0) {

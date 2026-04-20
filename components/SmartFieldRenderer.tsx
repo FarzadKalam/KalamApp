@@ -889,6 +889,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     if (realName && businessName) return `${realName} - ${businessName}`;
     return realName || businessName;
   };
+  const buildQuickCreateAutoEmployeeName = (values: any) => {
+    const normalize = (input: any) => String(input ?? '').replace(/\s+/g, ' ').trim();
+    return [values?.prefix, values?.first_name, values?.last_name]
+      .map((item) => normalize(item))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
   const buildQuickCreateAutoProductionOrderName = (values: any) => {
     const parts: string[] = [];
     const addPart = (part?: string) => {
@@ -915,6 +924,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
     if (quickCreateTargetModuleId === 'customers' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
       const nextFullName = buildQuickCreateAutoCustomerName(nextValues);
+      if (nextFullName) nextValues.full_name = nextFullName;
+    }
+    if (quickCreateTargetModuleId === 'employees') {
+      const nextFullName = buildQuickCreateAutoEmployeeName(nextValues);
       if (nextFullName) nextValues.full_name = nextFullName;
     }
 
@@ -1520,6 +1533,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     const nextValues = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
     const computedEntries = Object.entries(nextValues).filter(([key, value]) => {
       if (quickCreateTargetModuleId === 'customers' && key === 'full_name') {
+        return value && value !== quickCreateForm.getFieldValue('full_name');
+      }
+      if (quickCreateTargetModuleId === 'employees' && key === 'full_name') {
         return value && value !== quickCreateForm.getFieldValue('full_name');
       }
       if ((quickCreateTargetModuleId === 'products' || quickCreateTargetModuleId === 'production_orders') && key === 'name') {

@@ -6,7 +6,6 @@ import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import RelatedRecordCard from './RelatedRecordCard';
 import { FieldType, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
-import { getRecordTitle } from '../../utils/recordTitle';
 import {
   buildRelationValueMap,
   formatRecordDisplayValue,
@@ -17,6 +16,7 @@ import {
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getTaskStatusOption } from '../../utils/processTaskStatusOptions';
 import { getModuleCardSummaryFields } from '../../utils/recordCardHelpers';
+import { getRecordDisplayLabel } from '../../utils/recordLabel';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
@@ -524,7 +524,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         return;
       }
 
-      const summaryFields = getModuleCardSummaryFields(targetConfig, ['status', 'full_name'], 4);
+      const summaryFields = getModuleCardSummaryFields(targetConfig, ['status', 'full_name'], 8);
       const fields = Array.from(
         new Map(
           [...(summaryFields || []), ...(targetConfig?.fields || []).filter((field: any) => field?.isKey)]
@@ -568,7 +568,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
       return items.filter((item: any) => {
         const moduleId = String(item?.__moduleId || '');
         const moduleConfig = MODULES[moduleId];
-        const title = getRecordTitle(item, moduleConfig, { fallback: '' });
+        const title = getRecordDisplayLabel(item, moduleId, { fallback: '' });
         return [
           title,
           moduleConfig?.titles?.faSingular,
@@ -579,7 +579,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     }
 
     return items.filter((item: any) => {
-      const title = getRecordTitle(item, targetConfig, { fallback: '' });
+      const title = getRecordDisplayLabel(item, tab.targetModule, { fallback: '' });
       if (String(title).toLowerCase().includes(term)) return true;
       return (targetConfig?.fields || [])
         .filter((field) => field.isTableColumn)
@@ -686,7 +686,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           renderItem={(item: any) => {
             const moduleId = String(item?.__moduleId || 'products');
             const moduleConfig = MODULES[moduleId];
-            const title = getRecordTitle(item, moduleConfig, { fallback: '-' });
+            const title = getRecordDisplayLabel(item, moduleId, { fallback: '-' });
             const statusMeta = resolveStatusMeta(item, moduleId);
             const codeLabel = String(item?.system_code || item?.manual_code || '').trim();
 

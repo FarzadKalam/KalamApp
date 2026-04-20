@@ -31,7 +31,6 @@
     direction: rtl;
     max-width: 100%;
     overflow-x: hidden;
-    scrollbar-gutter: stable;
     background-color: #f9fafb;
   }
 
@@ -122,13 +121,11 @@ body.kalam-app-shell-lock > .ant-picker-dropdown,
 .ant-modal-body:not([dir="ltr"]),
 .ant-drawer-body:not([dir="ltr"]) {
   direction: rtl;
-  scrollbar-gutter: stable;
 }
 
 /* Main layout scroll container (RTL => scrollbar on left). */
 .layout-main-scroll {
   direction: rtl;
-  scrollbar-gutter: stable;
   overflow-x: clip !important;
 }
 
@@ -282,7 +279,6 @@ body.ant-scrolling-effect {
 .smarttable-shell .ant-table-content {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  scrollbar-gutter: stable;
 }
 
 .smarttable-shell .ant-table-header {

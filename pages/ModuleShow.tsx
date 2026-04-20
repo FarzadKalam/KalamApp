@@ -1,10 +1,10 @@
-﻿import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button, App, Avatar, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
 import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import { FieldType, BlockType, LogicOperator } from '../types';
+import { FieldType, BlockType, LogicOperator, FieldLocation, FieldNature } from '../types';
 import SmartForm from '../components/SmartForm';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
@@ -63,7 +63,15 @@ import { applyTaskSourceRecordFilter, buildTaskSourcePatch, fetchTaskSourceRecor
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
-import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
+import {
+  getProcessTaskCustomFieldsFromRecurrence,
+  getProcessTaskCustomFieldValuesFromRecurrence,
+  mergeProcessTaskCustomFieldValues,
+  normalizeProcessTaskCustomFields,
+  PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+  PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  withProcessTaskCustomFieldValues,
+} from '../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
@@ -77,6 +85,7 @@ import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
 import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
+import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 
 const isStatementTimeoutError = (error: any) => {
@@ -140,7 +149,7 @@ const buildRubikaLinkedAttachmentMessage = (
   (attachments || []).forEach((item, index) => {
     const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
     const url = String(item?.url || '').trim();
-    lines.push({ text: `🔗 ${name}`, linkUrl: url || undefined });
+    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
   });
 
   if (lines.length === 0) {
@@ -291,12 +300,44 @@ const ModuleShow: React.FC = () => {
   const navigate = useNavigate();
   const { message: msg, modal } = App.useApp();
   const { label: currencyLabel } = useCurrencyConfig();
-  const moduleConfig = MODULES[moduleId];
-  const supportsAssignee = supportsModuleAssignee(moduleConfig);
-  const supportsRoleAssignee = supportsModuleRoleAssignee(moduleConfig);
+  const baseModuleConfig = MODULES[moduleId];
+  const supportsAssignee = supportsModuleAssignee(baseModuleConfig);
+  const supportsRoleAssignee = supportsModuleRoleAssignee(baseModuleConfig);
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const taskProcessCustomFields = useMemo(() => {
+    if (moduleId !== 'tasks' || !data?.recurrence_info) return [] as any[];
+    const recurrence = data.recurrence_info && typeof data.recurrence_info === 'object' ? data.recurrence_info : {};
+    return getProcessTaskCustomFieldsFromRecurrence(recurrence).map((field: any, index: number) => ({
+      ...field,
+      location: FieldLocation.BLOCK,
+      blockId: 'process_task_custom_fields',
+      order: 100 + index,
+      nature: FieldNature.STANDARD,
+      __processTaskCustomField: true,
+    }));
+  }, [data?.recurrence_info, moduleId]);
+  const moduleConfig = useMemo(() => {
+    if (moduleId !== 'tasks' || taskProcessCustomFields.length === 0) return baseModuleConfig;
+    const existingFieldKeys = new Set((baseModuleConfig?.fields || []).map((field: any) => String(field?.key || '').trim()));
+    const extraFields = taskProcessCustomFields.filter((field: any) => !existingFieldKeys.has(String(field?.key || '').trim()));
+    if (extraFields.length === 0) return baseModuleConfig;
+    const hasCustomBlock = (baseModuleConfig?.blocks || []).some((block: any) => String(block?.id || '') === 'process_task_custom_fields');
+    return {
+      ...baseModuleConfig,
+      fields: [...(baseModuleConfig?.fields || []), ...extraFields],
+      blocks: [
+        ...(baseModuleConfig?.blocks || []),
+        ...(hasCustomBlock ? [] : [{
+          id: 'process_task_custom_fields',
+          titles: { fa: 'فیلدهای اختصاصی فعالیت', en: 'Activity Custom Fields' },
+          type: BlockType.FIELD_GROUP,
+          order: 1.6,
+        }]),
+      ],
+    };
+  }, [baseModuleConfig, moduleId, taskProcessCustomFields]);
   
   const [, setLinkedBomData] = useState<any>(null);
   const [currentTags, setCurrentTags] = useState<any[]>([]); // استیت تگ‌ها
@@ -1231,7 +1272,7 @@ const ModuleShow: React.FC = () => {
           };
         }
         if (moduleId === 'tasks') {
-          nextRecord = normalizeTaskSourceValues(nextRecord);
+          nextRecord = withProcessTaskCustomFieldValues(normalizeTaskSourceValues(nextRecord));
         }
         if (activeRecordRequestRef.current !== requestId) return;
         skipNextOptionsFetchRef.current = true;
@@ -1915,6 +1956,11 @@ const ModuleShow: React.FC = () => {
       setOptionsReady(true);
     }
   }, [moduleConfig, moduleId, processDraftFieldKey]);
+
+  useEffect(() => {
+    if (moduleId !== 'tasks' || !data || taskProcessCustomFields.length === 0) return;
+    void fetchOptions(data);
+  }, [data?.recurrence_info, moduleId, taskProcessCustomFields.length]);
 
   useEffect(() => {
     if (data) {
@@ -3354,6 +3400,17 @@ const ModuleShow: React.FC = () => {
     return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
   }, []);
 
+  const buildDirectPrintDisplayName = useCallback((templateTitleValue?: string | null) => {
+    const recordTitle = String(getRecordTitle(data || { id }, moduleConfig, { fallback: '' }) || '').trim();
+    const templateTitle = String(templateTitleValue || '').trim();
+    const baseName = [recordTitle, templateTitle]
+      .filter(Boolean)
+      .filter((value, index, all) => all.findIndex((item) => item === value) === index)
+      .join(' - ')
+      .trim() || recordTitle || templateTitle || 'فایل PDF';
+    return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
+  }, [data, id, moduleConfig]);
+
   const normalizeSmsPhone = useCallback((value: unknown) => {
     let digits = String(value ?? '')
       .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
@@ -3370,16 +3427,19 @@ const ModuleShow: React.FC = () => {
   const uploadGeneratedPdf = useCallback(async (
     blob: Blob,
     rawFileName: string,
+    templateTitle?: string | null,
     tracker?: ReturnType<typeof createPrintPerformanceTracker>
   ) => {
     if (!id) {
       throw new Error('record_missing');
     }
     const fileName = sanitizePrintFileName(rawFileName);
+    const displayName = buildDirectPrintDisplayName(templateTitle);
     const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
     const filePath = `record_files/${moduleId}/${id}/prints/${Date.now()}_${fileName}`;
     tracker?.addMetadata({
       uploadFileName: fileName,
+      displayFileName: displayName,
       uploadFileSize: blob.size,
     });
     const uploadTask = async () => {
@@ -3394,7 +3454,7 @@ const ModuleShow: React.FC = () => {
       const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
       return {
         url: urlData.publicUrl,
-        name: fileName,
+        name: displayName,
       };
     };
     const uploaded = tracker
@@ -3407,7 +3467,7 @@ const ModuleShow: React.FC = () => {
       url: uploaded.url,
       name: uploaded.name,
     };
-  }, [id, moduleId, sanitizePrintFileName]);
+  }, [buildDirectPrintDisplayName, id, moduleId, sanitizePrintFileName]);
 
   const printShareTargetOptions = useMemo(() => [
     ...printShareBotGroups.map((group) => ({
@@ -3890,6 +3950,38 @@ const ModuleShow: React.FC = () => {
         'purchase_invoice_id',
         'marketing_lead_id',
       ]);
+      const processTaskCustomField = taskProcessCustomFields.find((field: any) => String(field?.key || '') === String(key));
+      if (moduleId === 'tasks' && processTaskCustomField) {
+        const recurrence = data?.recurrence_info && typeof data.recurrence_info === 'object' ? data.recurrence_info : {};
+        const fields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
+        const currentValues = mergeProcessTaskCustomFieldValues(
+          fields,
+          getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
+        );
+        const nextValues = {
+          ...currentValues,
+          [key]: newValue,
+        };
+        const nextRecurrence = {
+          ...recurrence,
+          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: fields,
+          [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues,
+        };
+        const { error } = await supabase.from('tasks').update({ recurrence_info: nextRecurrence }).eq('id', id);
+        if (error) throw error;
+        const nextData = withProcessTaskCustomFieldValues({ ...(data || {}), recurrence_info: nextRecurrence });
+        setData(nextData);
+        await insertChangelog({
+          action: 'update',
+          fieldName: key,
+          fieldLabel: getFieldLabel(key),
+          oldValue: data?.[key],
+          newValue,
+        });
+        msg.success('ذخیره شد');
+        setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
+        return;
+      }
       if (moduleId === 'tasks' && key === 'status') {
         const optimisticStatus = String(newValue || '');
         setData((prev: any) => ({ ...(prev || {}), status: optimisticStatus }));
@@ -4554,7 +4646,7 @@ const ModuleShow: React.FC = () => {
       const pdfResult = await printManager.generateCurrentPdfBlob({ tracker });
       msg.open({ key: messageKey, type: 'loading', content: 'در حال بارگذاری فایل PDF...', duration: 0 });
 
-      const uploaded = await uploadGeneratedPdf(pdfResult.blob, pdfResult.filename, tracker);
+      const uploaded = await uploadGeneratedPdf(pdfResult.blob, pdfResult.filename, pdfResult.title, tracker);
       return { tracker, messageKey, uploaded, pdfResult };
     } catch (error) {
       tracker.finalize({

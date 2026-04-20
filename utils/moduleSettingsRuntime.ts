@@ -1,6 +1,7 @@
 import { MODULES } from '../moduleRegistry';
 import { BlockDefinition, ModuleDefinition, ModuleField } from '../types';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE, type ModuleSettingsConfig, type ModuleSettingsStore } from '../pages/Settings/moduleSettingsTypes';
+import { fetchSessionBootstrap } from './sessionCache';
 
 export const MODULE_SETTINGS_APPLIED_EVENT = 'kalam:module-settings-applied';
 export const MODULE_SETTINGS_UPDATED_EVENT = 'kalam:module-settings-updated';
@@ -13,11 +14,13 @@ const isModuleSettingsUnavailableError = (error: any) =>
   || String(error?.code || '').toUpperCase() === 'PGRST205';
 
 const moduleSettingsCache: {
+  orgId: string | null;
   data: ModuleSettingsStore | null;
   expiresAt: number;
   unavailable: boolean;
   promise: Promise<ModuleSettingsStore | null> | null;
 } = {
+  orgId: null,
   data: null,
   expiresAt: 0,
   unavailable: false,
@@ -89,28 +92,36 @@ export const applyModuleSettingsStoreToRegistry = (
 };
 
 export const loadModuleSettingsStore = async (supabaseClient: any): Promise<ModuleSettingsStore | null> => {
+  const session = await fetchSessionBootstrap(supabaseClient);
+  const orgId = String(session?.orgId || '').trim() || null;
   const now = Date.now();
-  if (moduleSettingsCache.expiresAt > now) {
+  if (moduleSettingsCache.orgId === orgId && moduleSettingsCache.expiresAt > now) {
     if (moduleSettingsCache.unavailable) return null;
     if (moduleSettingsCache.data) return moduleSettingsCache.data;
   }
 
-  if (moduleSettingsCache.promise) {
+  if (moduleSettingsCache.orgId === orgId && moduleSettingsCache.promise) {
     return moduleSettingsCache.promise;
   }
 
   moduleSettingsCache.promise = (async () => {
-    const { data, error } = await supabaseClient
+    let query = supabaseClient
       .from('integration_settings')
       .select('settings')
       .eq('connection_type', SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE)
       .eq('is_active', true)
       .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    query = orgId
+      ? query.eq('org_id', orgId)
+      : query.is('org_id', null);
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
       if (isModuleSettingsUnavailableError(error)) {
+        moduleSettingsCache.orgId = orgId;
         moduleSettingsCache.data = null;
         moduleSettingsCache.unavailable = true;
         moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
@@ -121,6 +132,7 @@ export const loadModuleSettingsStore = async (supabaseClient: any): Promise<Modu
 
     const settings = data?.settings;
     if (!settings || typeof settings !== 'object') {
+      moduleSettingsCache.orgId = orgId;
       moduleSettingsCache.data = null;
       moduleSettingsCache.unavailable = false;
       moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
@@ -128,6 +140,7 @@ export const loadModuleSettingsStore = async (supabaseClient: any): Promise<Modu
     }
     const modules = (settings as any)?.modules;
     if (!modules || typeof modules !== 'object') {
+      moduleSettingsCache.orgId = orgId;
       moduleSettingsCache.data = null;
       moduleSettingsCache.unavailable = false;
       moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
@@ -135,6 +148,7 @@ export const loadModuleSettingsStore = async (supabaseClient: any): Promise<Modu
     }
 
     const store = { modules: modules as Record<string, ModuleSettingsConfig> };
+    moduleSettingsCache.orgId = orgId;
     moduleSettingsCache.data = store;
     moduleSettingsCache.unavailable = false;
     moduleSettingsCache.expiresAt = Date.now() + MODULE_SETTINGS_TTL_MS;
