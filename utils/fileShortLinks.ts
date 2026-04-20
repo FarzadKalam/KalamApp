@@ -15,9 +15,41 @@ type ShortLinkInsertPayload = {
   metadata?: Record<string, any>;
 };
 
+const isLocalHost = (hostname: string) =>
+  hostname === 'localhost'
+  || hostname === '127.0.0.1'
+  || hostname === '0.0.0.0'
+  || hostname === '::1'
+  || hostname.endsWith('.local');
+
+const resolvePublicAppBaseUrl = () => {
+  const explicit = String(
+    import.meta.env.VITE_PUBLIC_SITE_URL
+    || import.meta.env.VITE_SITE_URL
+    || import.meta.env.VITE_APP_URL
+    || ''
+  ).trim();
+  if (explicit) {
+    try {
+      return new URL(explicit).toString().replace(/\/+$/, '');
+    } catch {
+      return explicit.replace(/\/+$/, '');
+    }
+  }
+
+  if (typeof window === 'undefined') return '';
+  try {
+    const origin = new URL(window.location.origin);
+    return isLocalHost(origin.hostname) ? '' : origin.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+};
+
 const buildAbsoluteUrl = (pathname: string) => {
-  if (typeof window === 'undefined') return pathname;
-  return new URL(pathname, window.location.origin).toString();
+  const publicBaseUrl = resolvePublicAppBaseUrl();
+  if (!publicBaseUrl) return '';
+  return new URL(pathname, `${publicBaseUrl}/`).toString();
 };
 
 const normalizeTargetUrl = (value: string) => {

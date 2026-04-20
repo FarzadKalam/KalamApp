@@ -29,6 +29,17 @@ const LEGACY_TARGET_FIELD_ALIASES: Record<string, Record<string, string>> = {
   journal_entries: { name: 'entry_no' },
 };
 
+export const normalizeRelationFieldAlias = (
+  targetModule?: string | null,
+  fieldName?: string | null
+): string => {
+  const moduleName = String(targetModule || '').trim();
+  const normalizedFieldName = String(fieldName || '').trim();
+  if (!normalizedFieldName) return '';
+  const aliasMap = LEGACY_TARGET_FIELD_ALIASES[moduleName];
+  return aliasMap?.[normalizedFieldName.toLowerCase()] || normalizedFieldName;
+};
+
 export const getPreferredRelationTargetField = (
   targetModule?: string | null,
   explicitTargetField?: string | null
@@ -39,9 +50,7 @@ export const getPreferredRelationTargetField = (
 
   if (!explicit) return defaultField;
 
-  const aliasMap = LEGACY_TARGET_FIELD_ALIASES[moduleName];
-  const normalizedExplicit = explicit.toLowerCase();
-  const preferredField = aliasMap?.[normalizedExplicit] || explicit;
+  const preferredField = normalizeRelationFieldAlias(moduleName, explicit);
 
   const safeSelectableFields = MODULE_RELATION_SELECTABLE_FIELDS[moduleName];
   if (Array.isArray(safeSelectableFields) && safeSelectableFields.length > 0) {
@@ -82,6 +91,11 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   employee_contracts: ['name', 'system_code', 'status'],
   recruitment_applicants: ['name', 'system_code', 'mobile', 'status'],
   marketing_leads: ['name', 'full_name', 'business_name', 'system_code', 'sarnakh_code', 'legacy_system_code', 'status'],
+};
+
+export const getRelationSelectableFields = (targetModule?: string | null): string[] => {
+  const moduleName = String(targetModule || '').trim();
+  return [...(MODULE_RELATION_SELECTABLE_FIELDS[moduleName] || [])];
 };
 
 export const getRelationLabelFallbackFields = (targetModule?: string | null): string[] => {

@@ -35,6 +35,7 @@ import MessageComposerModal from './MessageComposerModal';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
+import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import {
@@ -565,6 +566,71 @@ const probeAssigneeSelect = async (table: string, select: string) => {
   return error || null;
 };
 
+const buildResponsibilitySelectColumns = (moduleId?: string | null) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const moduleConfig = MODULES[normalizedModuleId];
+  const moduleFieldKeys = new Set(
+    (moduleConfig?.fields || [])
+      .map((field: any) => String(field?.key || '').trim())
+      .filter(Boolean)
+  );
+
+  const moduleAwareColumns = [
+    ...buildRecordTitleSelectColumns(normalizedModuleId),
+    ...(moduleFieldKeys.has('status') ? ['status'] : []),
+    ...(moduleFieldKeys.has('category') ? ['category'] : []),
+    ...(moduleFieldKeys.has('created_by') ? ['created_by'] : []),
+    ...(moduleFieldKeys.has('created_by_id') ? ['created_by_id'] : []),
+  ];
+
+  return Array.from(
+    new Set([
+      'id',
+      'created_at',
+      'updated_at',
+      'assignee_id',
+      'assignee_role_id',
+      'assignee_type',
+      ...moduleAwareColumns,
+    ])
+  );
+};
+
+const safeFetchResponsibilityRows = async (table: string, moduleId: string, ids: string[]) => {
+  const normalizedTable = String(table || '').trim();
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedIds = Array.from(new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!normalizedTable || normalizedIds.length === 0) return [] as any[];
+
+  const rows: any[] = [];
+  const chunkSize = normalizedTable === 'customers' || normalizedTable === 'suppliers' ? 40 : 80;
+  const selectColumns = buildResponsibilitySelectColumns(normalizedModuleId);
+
+  for (let index = 0; index < normalizedIds.length; index += chunkSize) {
+    const chunk = normalizedIds.slice(index, index + chunkSize);
+    const result = await runSelectWithCompatibleColumns<any[]>({
+      cacheKey: `responsibility:${normalizedModuleId || normalizedTable}:${normalizedTable}`,
+      columns: selectColumns,
+      execute: (selectExpr) =>
+        supabase
+          .from(normalizedTable)
+          .select(selectExpr)
+          .in('id', chunk),
+    });
+
+    if (result.error) {
+      if (isMissingTableLikeError(result.error)) {
+        throw result.error;
+      }
+      throw result.error;
+    }
+
+    rows.push(...(result.data || []));
+  }
+
+  return rows;
+};
+
 const resolveAssigneeQueryModeForTable = async (table: string): Promise<AssigneeQueryMode> => {
   const normalizedTable = String(table || '').trim();
   if (!normalizedTable) return 'none';
@@ -827,6 +893,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const liveRefreshTimerRef = useRef<number | null>(null);
   const liveSectionRefreshTimersRef = useRef<Partial<Record<NotificationSectionKey, number>>>({});
   const realtimeDisabledRef = useRef(false);
+  const realtimeChannelSubscribedRef = useRef(false);
   const refreshAllRef = useRef<((notify?: boolean, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshSectionRef = useRef<((section: NotificationSectionKey, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshAllInFlightRef = useRef(false);
@@ -1759,24 +1826,8 @@ useEffect(() => {
     const userId = profile.id;
     const roleId = profile.role_id;
 
-    const fetchRowsByIds = async (table: string, ids: string[]) => {
-      const normalizedIds = Array.from(new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean)));
-      if (normalizedIds.length === 0) return [] as any[];
-
-      const rows: any[] = [];
-      const chunkSize = 100;
-      for (let index = 0; index < normalizedIds.length; index += chunkSize) {
-        const chunk = normalizedIds.slice(index, index + chunkSize);
-        const { data, error } = await supabase
-          .from(table)
-          .select('*')
-          .in('id', chunk);
-        if (error) throw error;
-        rows.push(...(data || []));
-      }
-
-      return rows;
-    };
+    const fetchRowsByIds = async (table: string, moduleId: string, ids: string[]) =>
+      safeFetchResponsibilityRows(table, moduleId, ids);
 
     const inboxItems = await fetchNotificationInboxSection('responsibilities', 200);
     if (inboxItems) {
@@ -1811,7 +1862,7 @@ useEffect(() => {
         let rows: any[] = [];
         if (idList.length > 0) {
           try {
-            rows = await fetchRowsByIds(group.table, idList);
+            rows = await fetchRowsByIds(group.table, String(group.mod?.id || group.table), idList);
           } catch (error) {
             console.warn('Failed to load full responsibility rows from inbox group', group.table, error);
             rows = [];
@@ -1861,7 +1912,7 @@ useEffect(() => {
       if (!idList.length) continue;
       let data: any[] = [];
       try {
-        data = await fetchRowsByIds(table, idList);
+        data = await fetchRowsByIds(table, String(mod?.id || table), idList);
       } catch (error) {
         if (isMissingTableLikeError(error) || isMissingColumnError(error, 'id')) {
           ASSIGNEE_QUERY_MODE_CACHE.set(String(table || '').trim(), 'none');
@@ -2546,6 +2597,7 @@ useEffect(() => {
   useEffect(() => {
     if (!profile.id) return;
     if (realtimeDisabledRef.current) return;
+    realtimeChannelSubscribedRef.current = false;
     const currentUserId = String(profile.id || '').trim();
     const currentRoleId = String(profile.role_id || '').trim();
     if (!currentUserId) return;
@@ -2717,8 +2769,10 @@ useEffect(() => {
     }
 
     channel.subscribe((status) => {
+      realtimeChannelSubscribedRef.current = status === 'SUBSCRIBED';
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         realtimeDisabledRef.current = true;
+        realtimeChannelSubscribedRef.current = false;
         void supabase.removeChannel(channel);
       }
     });
@@ -2734,9 +2788,11 @@ useEffect(() => {
         });
       }
       liveSectionRefreshTimersRef.current = {};
-      supabase.removeChannel(channel);
+      if (realtimeChannelSubscribedRef.current) {
+        void supabase.removeChannel(channel);
+      }
       broadcastChannels.forEach((broadcastChannel) => {
-        supabase.removeChannel(broadcastChannel);
+        void supabase.removeChannel(broadcastChannel);
       });
     };
   }, [profile.can_view_all_calls, profile.id, profile.org_id, profile.role_id, profile.voip_extension, variant]);

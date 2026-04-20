@@ -2,6 +2,11 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { formatPhoneForDisplay } from './phoneNumber';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
+import {
+  getPreferredRelationTargetField,
+  getRelationSelectableFields,
+  normalizeRelationFieldAlias,
+} from './relationTargetField';
 
 const TEMPLATE_TOKEN_REGEX = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 
@@ -19,20 +24,38 @@ const dedupeSegments = (segments: string[]) => {
 
 export const getRelationDisplayConfig = (moduleId: string) => MODULES[String(moduleId || '').trim()]?.relationDisplay;
 
+const normalizeConfiguredRelationField = (moduleId: string, fieldKey: string) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedFieldKey = normalizeRelationFieldAlias(normalizedModuleId, fieldKey);
+  if (!normalizedFieldKey) return '';
+  const safeSelectableFields = getRelationSelectableFields(normalizedModuleId);
+  if (safeSelectableFields.length > 0 && !safeSelectableFields.includes(normalizedFieldKey)) {
+    return '';
+  }
+  return normalizedFieldKey;
+};
+
 export const getRelationDisplayFields = (moduleId: string, targetField: string) => {
-  const moduleConfig = MODULES[String(moduleId || '').trim()];
+  const normalizedModuleId = String(moduleId || '').trim();
+  const moduleConfig = MODULES[normalizedModuleId];
+  const resolvedTargetField = normalizeConfiguredRelationField(
+    normalizedModuleId,
+    getPreferredRelationTargetField(normalizedModuleId, targetField)
+  );
   const displayConfig = moduleConfig?.relationDisplay;
   const moduleFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || '').trim()).filter(Boolean));
   const templateKeys = Array.from(
     new Set(
-      Array.from(displayConfig?.labelTemplate?.matchAll(TEMPLATE_TOKEN_REGEX) || []).map((match) => String(match?.[1] || '').trim()).filter(Boolean)
+      Array.from(displayConfig?.labelTemplate?.matchAll(TEMPLATE_TOKEN_REGEX) || [])
+        .map((match) => normalizeConfiguredRelationField(normalizedModuleId, String(match?.[1] || '').trim()))
+        .filter(Boolean)
     )
   );
 
   return Array.from(
     new Set(
       [
-        String(targetField || '').trim(),
+        String(resolvedTargetField || '').trim(),
         ...templateKeys,
         ...(moduleFieldKeys.has('system_code') ? ['system_code'] : []),
       ].filter(Boolean)
@@ -41,7 +64,12 @@ export const getRelationDisplayFields = (moduleId: string, targetField: string) 
 };
 
 export const getRelationSearchFields = (moduleId: string, targetField: string) => {
-  const moduleConfig = MODULES[String(moduleId || '').trim()];
+  const normalizedModuleId = String(moduleId || '').trim();
+  const moduleConfig = MODULES[normalizedModuleId];
+  const resolvedTargetField = normalizeConfiguredRelationField(
+    normalizedModuleId,
+    getPreferredRelationTargetField(normalizedModuleId, targetField)
+  );
   const searchableTextFieldTypes = new Set([
     FieldType.TEXT,
     FieldType.LONG_TEXT,
@@ -61,17 +89,19 @@ export const getRelationSearchFields = (moduleId: string, targetField: string) =
   );
   const displayConfig = moduleConfig?.relationDisplay;
   const configuredSearchFields = Array.isArray(displayConfig?.searchFields)
-    ? displayConfig.searchFields.map((item) => String(item || '').trim()).filter(Boolean)
+    ? displayConfig.searchFields
+        .map((item) => normalizeConfiguredRelationField(normalizedModuleId, String(item || '').trim()))
+        .filter(Boolean)
     : [];
 
   const fallbackSearchFields = [
-    String(targetField || '').trim(),
-    'name',
-    'title',
-    'full_name',
-    'business_name',
-    'legal_name',
-    'system_code',
+    resolvedTargetField,
+    normalizeConfiguredRelationField(normalizedModuleId, 'name'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'title'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'full_name'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'business_name'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'legal_name'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'system_code'),
   ].filter(Boolean);
 
   const sourceFields = configuredSearchFields.length > 0 ? configuredSearchFields : fallbackSearchFields;
@@ -116,11 +146,15 @@ const formatValueByFieldType = (moduleId: string, fieldKey: string, rawValue: an
 const renderTemplateSegment = (moduleId: string, row: any, segment: string) => {
   const tokens = Array.from(segment.matchAll(TEMPLATE_TOKEN_REGEX)).map((match) => String(match?.[1] || '').trim()).filter(Boolean);
   if (tokens.length === 0) return cleanText(segment);
-  if (tokens.every((token) => !cleanText(row?.[token]))) return '';
+  const normalizedTokens = new Map(
+    tokens.map((token) => [token, normalizeConfiguredRelationField(moduleId, token)])
+  );
+  if (tokens.every((token) => !cleanText(row?.[normalizedTokens.get(token) || token]))) return '';
 
   let output = segment;
   tokens.forEach((token) => {
-    const formattedValue = formatValueByFieldType(moduleId, token, row?.[token]);
+    const normalizedToken = normalizedTokens.get(token) || token;
+    const formattedValue = formatValueByFieldType(moduleId, normalizedToken, row?.[normalizedToken]);
     output = output.replace(new RegExp(`\\{\\{\\s*${token}\\s*\\}\\}`, 'g'), formattedValue);
   });
   return cleanText(output);
@@ -138,6 +172,7 @@ const buildTemplateLabel = (moduleId: string, row: any, template: string) => {
 
 export const buildRelationDisplayLabel = (moduleId: string, row: any, targetField: string) => {
   const normalizedModuleId = String(moduleId || '').trim();
+  const resolvedTargetField = getPreferredRelationTargetField(normalizedModuleId, targetField);
   const displayConfig = getRelationDisplayConfig(normalizedModuleId);
   const template = String(displayConfig?.labelTemplate || '').trim();
 
@@ -147,7 +182,7 @@ export const buildRelationDisplayLabel = (moduleId: string, row: any, targetFiel
   }
 
   const baseValue = cleanText(
-    row?.[targetField] ||
+    row?.[resolvedTargetField] ||
     row?.name ||
     row?.title ||
     row?.full_name ||

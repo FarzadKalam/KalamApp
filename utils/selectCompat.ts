@@ -1,6 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleDefinition } from '../types';
-import { getRelationDisplayFields } from './relationDisplay';
+import { getRelationDisplayFields, getRelationSearchFields } from './relationDisplay';
 import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from './relationTargetField';
 
 const selectColumnCache = new Map<string, string[]>();
@@ -80,29 +80,39 @@ const getRecordTitleCandidateColumns = (moduleId?: string | null, moduleConfig?:
 
   const safeFallbackFields = SAFE_FALLBACK_TITLE_COLUMNS.filter((field) => fieldKeys.has(field));
 
+  const relationSearchFields = getRelationSearchFields(String(moduleId || '').trim(), primaryTargetField)
+    .filter((field) => fieldKeys.has(field));
+
   const descriptiveTextFields = moduleConfig.fields
     .filter((field) => {
       const key = String(field?.key || '').trim();
       if (!key) return false;
       if (!TEXTUAL_FIELD_TYPES.has(field?.type as FieldType)) return false;
-      return /name|title|subject|code|number|description|notes|city|address|status|type/i.test(key);
+      return /name|title|subject|code|number|status/i.test(key);
     })
     .map((field) => String(field.key || '').trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, 4);
 
-  const emergencyFields = moduleConfig.fields
-    .filter((field) => TEXTUAL_FIELD_TYPES.has(field?.type as FieldType))
-    .slice(0, 3)
-    .map((field) => String(field.key || '').trim())
-    .filter(Boolean);
-
-  return unique([
+  const primaryCandidates = unique([
     ...keyFields,
     ...relationDisplayFields,
+    ...relationSearchFields,
     ...relationFallbackFields,
     ...safeFallbackFields,
+  ]);
+
+  if (primaryCandidates.length > 0) {
+    return primaryCandidates;
+  }
+
+  return unique([
     ...descriptiveTextFields,
-    ...emergencyFields,
+    ...moduleConfig.fields
+      .filter((field) => TEXTUAL_FIELD_TYPES.has(field?.type as FieldType))
+      .slice(0, 3)
+      .map((field) => String(field.key || '').trim())
+      .filter(Boolean),
   ]);
 };
 

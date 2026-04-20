@@ -106,6 +106,8 @@ const dashboardCardCache = new Map<string, { data: DashboardCardItem | null; exp
 const dashboardCardPromiseCache = new Map<string, Promise<DashboardCardItem | null>>();
 const dashboardRecentSectionCache = new Map<string, { data: DashboardRecentSection | null; expiresAt: number }>();
 const dashboardRecentSectionPromiseCache = new Map<string, Promise<DashboardRecentSection | null>>();
+const dashboardSelectableColumnsCache = new Map<string, string[]>();
+const dashboardOrderableColumnsCache = new Map<string, string[]>();
 
 const getTodayPersianDate = () => {
   try {
@@ -243,6 +245,82 @@ const getModuleRecordScope = (permissions: PermissionMap | null | undefined, mod
   return modulePerm.record_scope ?? (modulePerm.view === false ? 'own' : 'all');
 };
 
+const parseMissingColumnName = (error: any) => {
+  const text = String(error?.message || error?.details || error?.hint || '').trim();
+  if (!text) return null;
+  const patterns = [
+    /column ["']?([a-zA-Z0-9_]+)["']?/i,
+    /could not find the ['"]?([a-zA-Z0-9_]+)['"]? column/i,
+    /schema cache.*\b([a-zA-Z0-9_]+)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return String(match[1]).trim();
+  }
+  return null;
+};
+
+const normalizeColumnList = (columns: string[]) =>
+  Array.from(new Set((columns || []).map((column) => String(column || '').trim()).filter(Boolean)));
+
+const safeSelectRows = async (
+  table: string,
+  columns: string[],
+  options?: {
+    limit?: number;
+    orderBy?: Array<{ field: string; ascending: boolean; nullsFirst?: boolean }>;
+  }
+) => {
+  const normalizedTable = String(table || '').trim();
+  let activeColumns = normalizeColumnList(columns);
+  const cachedColumns = dashboardSelectableColumnsCache.get(normalizedTable);
+  if (cachedColumns?.length) {
+    const filtered = activeColumns.filter((column) => cachedColumns.includes(column));
+    if (filtered.length) activeColumns = filtered;
+  }
+
+  let activeOrderBy = (options?.orderBy || []).filter((entry) => entry?.field).map((entry) => ({
+    field: String(entry.field).trim(),
+    ascending: Boolean(entry.ascending),
+    nullsFirst: entry.nullsFirst,
+  }));
+  const cachedOrderFields = dashboardOrderableColumnsCache.get(normalizedTable);
+  if (cachedOrderFields?.length) {
+    const filtered = activeOrderBy.filter((entry) => cachedOrderFields.includes(entry.field));
+    if (filtered.length) activeOrderBy = filtered;
+  }
+
+  while (activeColumns.length > 0) {
+    let query = supabase.from(normalizedTable).select(activeColumns.join(','));
+    activeOrderBy.forEach((entry) => {
+      query = query.order(entry.field, { ascending: entry.ascending, nullsFirst: entry.nullsFirst });
+    });
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const { data, error } = await query;
+    if (!error) {
+      dashboardSelectableColumnsCache.set(normalizedTable, [...activeColumns]);
+      dashboardOrderableColumnsCache.set(normalizedTable, activeOrderBy.map((entry) => entry.field));
+      return { data: data || [], error: null };
+    }
+
+    const missingColumn = parseMissingColumnName(error);
+    if (missingColumn && activeColumns.includes(missingColumn)) {
+      activeColumns = activeColumns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    if (missingColumn && activeOrderBy.some((entry) => entry.field === missingColumn)) {
+      activeOrderBy = activeOrderBy.filter((entry) => entry.field !== missingColumn);
+      continue;
+    }
+    return { data: [] as any[], error };
+  }
+
+  return { data: [] as any[], error: null };
+};
+
 const moduleSupportsScopedRecords = (moduleId: string) => {
   const module = MODULES[moduleId];
   const fieldKeys = new Set((module?.fields || []).map((field: any) => String(field?.key || '')));
@@ -340,9 +418,7 @@ const loadCardForModule = async (
 
   switch (preset) {
     case 'tasks_pending_mine': {
-      const { data } = await supabase
-        .from('tasks')
-        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, status');
+      const { data } = await safeSelectRows('tasks', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'status']);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const pendingCount = scopedRows.filter((row: any) =>
         ['todo', 'in_progress', 'review'].includes(String(row?.status || ''))
@@ -358,9 +434,7 @@ const loadCardForModule = async (
     }
 
     case 'invoices_total_amount_mine': {
-      const { data } = await supabase
-        .from('invoices')
-        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, total_invoice_amount');
+      const { data } = await safeSelectRows('invoices', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'total_invoice_amount']);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalAmount = scopedRows.reduce((sum: number, row: any) => sum + Number(row?.total_invoice_amount || 0), 0);
       const count = scopedRows.length;
@@ -374,9 +448,7 @@ const loadCardForModule = async (
     }
 
     case 'customers_new_mine': {
-      const { data } = await supabase
-        .from('customers')
-        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, created_at');
+      const { data } = await safeSelectRows('customers', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at']);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
       return {
@@ -408,9 +480,7 @@ const loadCardForModule = async (
     }
 
     case 'billboards_opening': {
-      const { data } = await supabase
-        .from('billboards')
-        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, status');
+      const { data } = await safeSelectRows('billboards', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'status']);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const openingCount = scopedRows.filter((row: any) => String(row?.status || '') === 'opening').length;
       const freeCount = scopedRows.filter((row: any) => String(row?.status || '') === 'free').length;
@@ -424,9 +494,7 @@ const loadCardForModule = async (
     }
 
     case 'products_total': {
-      const { data } = await supabase
-        .from('products')
-        .select('id, org_id, assignee_id, assignee_role_id, assignee_type, created_at');
+      const { data } = await safeSelectRows('products', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at']);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalCount = scopedRows.length;
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
@@ -443,9 +511,7 @@ const loadCardForModule = async (
       const selectFields = moduleSupportsScopedRecords(moduleId)
         ? 'id, org_id, assignee_id, assignee_role_id, assignee_type, created_at'
         : 'id, created_at';
-      const { data } = await supabase
-        .from(module.table)
-        .select(selectFields);
+      const { data } = await safeSelectRows(module.table || moduleId, selectFields.split(','));
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalCount = scopedRows.length;
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
@@ -501,12 +567,13 @@ const loadRecentSection = async (
     ? Array.from(new Set([...selectKeys, 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type']))
     : selectKeys;
 
-  const { data } = await supabase
-    .from(module.table)
-    .select(scopedSelectKeys.join(','))
-    .order('updated_at', { ascending: false })
-    .order('created_at', { ascending: false })
-    .limit(RECENT_RECORDS_LIMIT * 5);
+  const { data } = await safeSelectRows(module.table || moduleId, scopedSelectKeys, {
+    orderBy: [
+      { field: 'updated_at', ascending: false, nullsFirst: false },
+      { field: 'created_at', ascending: false, nullsFirst: false },
+    ],
+    limit: RECENT_RECORDS_LIMIT * 5,
+  });
 
   const columns = getRecentFieldKeys(module).map((fieldKey) => ({
     title: getFieldMeta(module, fieldKey)?.labels?.fa || fieldKey,
