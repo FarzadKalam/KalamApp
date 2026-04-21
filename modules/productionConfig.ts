@@ -1,4 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, FieldNature } from '../types';
 
 export const productionBomModule: ModuleDefinition = {
   id: 'production_boms',
@@ -21,6 +21,8 @@ export const productionBomModule: ModuleDefinition = {
       validation: { required: false },
       isTableColumn: true,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 4.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'production_stages',
       labels: { fa: 'مراحل تولید', en: 'Stages' },
@@ -101,6 +103,8 @@ export const productionOrderModule: ModuleDefinition = {
     { key: 'production_started_at', labels: { fa: 'زمان شروع تولید', en: 'Production Start Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'production_stopped_at', labels: { fa: 'زمان توقف تولید', en: 'Production Stop Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'production_completed_at', labels: { fa: 'زمان تکمیل تولید', en: 'Production Complete Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 4.3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 4.4, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'production_stages',
       labels: { fa: 'مراحل تولید', en: 'Stages' },

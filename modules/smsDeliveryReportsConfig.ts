@@ -146,7 +146,7 @@ export const smsDeliveryReportsConfig: ModuleDefinition = {
     { key: 'related_task_id', labels: { fa: 'وظیفه مرتبط', en: 'Related Task' }, type: FieldType.RELATION, relationConfig: { targetModule: 'tasks', targetField: 'name' }, location: FieldLocation.BLOCK, blockId: 'details', order: 6.6, nature: FieldNature.STANDARD },
     { key: 'metadata', labels: { fa: 'جزئیات سیستمی', en: 'Metadata' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'details', order: 7, nature: FieldNature.SYSTEM },
     { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'details', order: 8, nature: FieldNature.SYSTEM },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6, isTableColumn: true, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6, nature: FieldNature.STANDARD, isTableColumn: true },
   ],
   blocks: [
     {

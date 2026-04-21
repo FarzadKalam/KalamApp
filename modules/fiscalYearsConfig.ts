@@ -1,4 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 
 export const fiscalYearsConfig: ModuleDefinition = {
   id: 'fiscal_years',
@@ -39,6 +39,8 @@ export const fiscalYearsConfig: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.PREDEFINED,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'is_active',
       labels: { fa: 'سال فعال', en: 'Is Active' },

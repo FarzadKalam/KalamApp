@@ -1,4 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 
 export const accountingEventRulesConfig: ModuleDefinition = {
   id: 'accounting_event_rules',
@@ -29,6 +29,8 @@ export const accountingEventRulesConfig: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.PREDEFINED,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'rule_mode',
       labels: { fa: 'حالت قاعده', en: 'Rule Mode' },

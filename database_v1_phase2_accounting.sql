@@ -209,6 +209,7 @@ create table if not exists public.journal_lines (
   party_type text,
   party_id uuid,
   metadata jsonb not null default '{}'::jsonb,
+  tags jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint chk_journal_lines_non_negative check (debit >= 0 and credit >= 0),

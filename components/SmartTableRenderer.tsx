@@ -799,6 +799,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   const columns: ColumnsType<any> = tableFields.map(field => {
     const isKeyLikeField = isNameOrTitleField(field);
+    const isPrimaryTitleColumn = isKeyLikeField && primaryTitleField?.key === field.key;
     const isSearchable = field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
     const isTagField = field.type === FieldType.TAGS;
     const hasChoiceFilter =
@@ -869,7 +870,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ].includes(field.type);
 
     return {
-      title: isKeyLikeField && primaryTitleField?.key === field.key && keyFieldTagFilterContent ? (
+      title: isPrimaryTitleColumn && keyFieldTagFilterContent ? (
         <span className="inline-flex items-center gap-1">
           <span className="text-[10px] md:text-[11px] text-gray-500">{fieldLabel}</span>
           <Popover
@@ -1200,7 +1201,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
              );
         }
         if (isKeyLikeField) {
-             const inlineTags = getRecordTags(record, tagsField?.key);
+             const inlineTags = isPrimaryTitleColumn ? getRecordTags(record, tagsField?.key) : [];
                if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
                  return renderStableTextCell(
                    formatDisplayText(value),

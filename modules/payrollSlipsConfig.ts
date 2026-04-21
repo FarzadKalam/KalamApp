@@ -31,6 +31,8 @@ export const payrollSlipsConfig: ModuleDefinition = {
       ],
     },
     { key: 'assignee_id', labels: { fa: 'مسئول پرداخت', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 7, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7.1, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'base_salary', labels: { fa: 'حقوق پایه', en: 'Base Salary' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'task_wage_total', labels: { fa: 'کارکرد', en: 'Task Wage' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'bonus_total', labels: { fa: 'مزایا', en: 'Bonuses' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, nature: FieldNature.STANDARD, isTableColumn: true },

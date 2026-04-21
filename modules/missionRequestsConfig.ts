@@ -71,7 +71,9 @@ export const missionRequestsModule: ModuleDefinition = {
       order: 6,
       nature: FieldNature.STANDARD,
     },
-  ],
+  
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
+],
   blocks: [
     {
       id: 'details',

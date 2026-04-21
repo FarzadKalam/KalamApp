@@ -151,7 +151,9 @@ export const counterpartyBotGroupsConfig: ModuleDefinition = {
       readonly: true,
       nature: FieldNature.SYSTEM,
     },
-  ],
+  
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.4, nature: FieldNature.STANDARD, isTableColumn: true },
+],
   blocks: [
     {
       id: 'connection_info',

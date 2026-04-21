@@ -131,7 +131,7 @@ export const secretariatDocumentsConfig: ModuleDefinition = {
     { key: 'related_record_id', labels: { fa: 'رکورد مرتبط', en: 'Related Record' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'relations', order: 5, relationConfig: { targetModule: '', dependsOn: 'related_module_id' }, nature: FieldNature.STANDARD },
     { key: 'body', labels: { fa: 'متن نامه', en: 'Body' }, type: FieldType.SUPER_LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'content', order: 1, nature: FieldNature.STANDARD },
     { key: 'summary', labels: { fa: 'خلاصه و نتیجه', en: 'Summary' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'content', order: 2, nature: FieldNature.STANDARD },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.BLOCK, blockId: 'content', order: 3, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'process_template_id', labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 1, relationConfig: { targetModule: 'process_templates', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
   ],

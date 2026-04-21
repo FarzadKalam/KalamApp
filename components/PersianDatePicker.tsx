@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import { Modal } from "antd";
 import { Calendar } from "react-multi-date-picker";
@@ -26,6 +26,7 @@ interface PersianDatePickerProps {
   disabled?: boolean;
   placeholder?: string;
   zIndex?: number;
+  modalContainer?: (trigger?: HTMLElement | null) => HTMLElement;
 }
 
 const holidayMonthCache = new Map<string, Promise<Record<string, HolidayMarker>>>();
@@ -232,8 +233,10 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   disabled,
   placeholder,
   zIndex = 10050,
+  modalContainer,
 }) => {
   const safeOnChange = onChange ?? (() => {});
+  const fieldRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
   const [viewDate, setViewDate] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
@@ -563,9 +566,15 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
       </div>
     </div>
   );
+  const getModalContainer = modalContainer
+    ? () => {
+        const activeElement = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
+        return modalContainer(fieldRef.current || activeElement);
+      }
+    : undefined;
 
   return (
-    <div className={`kalam-adaptive-picker__field ${className || ""}`.trim()}>
+    <div ref={fieldRef} className={`kalam-adaptive-picker__field ${className || ""}`.trim()}>
       <button
         type="button"
         className="kalam-rmdp-input kalam-adaptive-picker__trigger"
@@ -590,11 +599,35 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         width="auto"
         zIndex={zIndex}
         className="kalam-adaptive-picker-modal"
+        rootClassName="kalam-adaptive-picker-modal-root"
+        getContainer={getModalContainer}
         closeIcon={null}
+        style={{
+          maxWidth: "min(calc(100vw - 24px), 460px)",
+          margin: "0 auto",
+          paddingBottom: 0,
+        }}
         styles={{
-          mask: { backgroundColor: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(4px)" },
-          content: { padding: 0, background: "transparent", boxShadow: "none" },
-          body: { padding: 0 },
+          mask: { zIndex, backgroundColor: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(4px)" },
+          wrapper: {
+            zIndex: zIndex + 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 12,
+            overflow: "auto",
+          },
+          content: {
+            position: "relative",
+            zIndex: 1,
+            display: "flex",
+            flexDirection: "column",
+            maxHeight: "calc(100dvh - 24px)",
+            padding: 0,
+            background: "transparent",
+            boxShadow: "none",
+          },
+          body: { padding: 0, overflow: "visible" },
         }}
       >
         <div className="kalam-adaptive-picker-modal__sheet">{panelContent}</div>

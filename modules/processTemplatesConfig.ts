@@ -67,6 +67,8 @@ export const processTemplatesModule: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 4.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'description',
       labels: { fa: 'توضیحات', en: 'Description' },

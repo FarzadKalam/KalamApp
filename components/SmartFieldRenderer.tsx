@@ -2418,6 +2418,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             disabled={!forceEditMode}
             placeholder={compactMode ? undefined : "انتخاب تاریخ"}
             zIndex={overlayZIndexBase + 40}
+            modalContainer={popupContainer}
           />
         );
 
@@ -2431,6 +2432,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             disabled={!forceEditMode}
             placeholder={compactMode ? undefined : "انتخاب زمان"}
             zIndex={overlayZIndexBase + 40}
+            modalContainer={popupContainer}
           />
         );
 
@@ -2444,6 +2446,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             disabled={!forceEditMode}
             placeholder={compactMode ? undefined : "انتخاب تاریخ و زمان"}
             zIndex={overlayZIndexBase + 40}
+            modalContainer={popupContainer}
           />
         );
 
@@ -3026,6 +3029,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   onOk,
   overlayZIndexBase = 12600,
 }) => {
+  const [fallbackForm] = Form.useForm();
+  const effectiveForm = form || fallbackForm;
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [assigneesLoading, setAssigneesLoading] = useState(false);
   const pendingAutoNameToggleValueRef = useRef<boolean | null>(null);
@@ -3042,9 +3047,17 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   const showAutoNameToggle = !!autoNameToggleField && (moduleId === 'products' || moduleId === 'production_orders' || moduleId === 'customers');
   const autoNameToggleKey = autoNameToggleField?.key || '';
   const autoNameToggleDefault = false;
-  const watchedAssigneeCombo = Form.useWatch('assignee_combo', form);
-  const watchedQuickCreateValues = Form.useWatch([], form) || {};
-  const childOverlayZIndexBase = overlayZIndexBase + 20;
+  const watchedAssigneeCombo = Form.useWatch('assignee_combo', effectiveForm);
+  const watchedQuickCreateValues = Form.useWatch([], effectiveForm) || {};
+  const childOverlayZIndexBase = overlayZIndexBase + 100;
+  const quickCreatePopupContainer = useCallback((triggerNode?: HTMLElement | null) => {
+    if (typeof document === 'undefined') {
+      return (triggerNode || {}) as HTMLElement;
+    }
+
+    const modalRoot = triggerNode?.closest?.('.ant-modal-root') as HTMLElement | null;
+    return modalRoot || triggerNode?.parentElement || document.body;
+  }, []);
   const clearPendingAutoNameToggleWrite = useCallback(() => {
     if (pendingAutoNameToggleFrameRef.current !== null && typeof window !== 'undefined') {
       window.cancelAnimationFrame(pendingAutoNameToggleFrameRef.current);
@@ -3059,9 +3072,9 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     }
     pendingAutoNameToggleFrameRef.current = null;
     if (pendingAutoNameToggleValueRef.current === null) return;
-    form?.setFieldValue?.(autoNameToggleKey, pendingAutoNameToggleValueRef.current);
+    effectiveForm?.setFieldValue?.(autoNameToggleKey, pendingAutoNameToggleValueRef.current);
     pendingAutoNameToggleValueRef.current = null;
-  }, [autoNameToggleKey, form, showAutoNameToggle]);
+  }, [autoNameToggleKey, effectiveForm, showAutoNameToggle]);
   const setDeferredAutoNameToggleFormValue = useCallback((nextValue: boolean) => {
     if (!autoNameToggleKey) return;
     pendingAutoNameToggleValueRef.current = nextValue;
@@ -3069,17 +3082,17 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       window.cancelAnimationFrame(pendingAutoNameToggleFrameRef.current);
     }
     if (typeof window === 'undefined') {
-      form?.setFieldValue?.(autoNameToggleKey, nextValue);
+      effectiveForm?.setFieldValue?.(autoNameToggleKey, nextValue);
       pendingAutoNameToggleValueRef.current = null;
       pendingAutoNameToggleFrameRef.current = null;
       return;
     }
     pendingAutoNameToggleFrameRef.current = window.requestAnimationFrame(() => {
-      form?.setFieldValue?.(autoNameToggleKey, nextValue);
+      effectiveForm?.setFieldValue?.(autoNameToggleKey, nextValue);
       pendingAutoNameToggleValueRef.current = null;
       pendingAutoNameToggleFrameRef.current = null;
     });
-  }, [autoNameToggleKey, form]);
+  }, [autoNameToggleKey, effectiveForm]);
   const handleQuickCreateCancel = useCallback(() => {
     clearPendingAutoNameToggleWrite();
     onCancel();
@@ -3096,9 +3109,9 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   const currentAssigneeComboValue = String(
     watchedAssigneeCombo
     || buildResolvedAssigneeCombo({
-      assignee_id: form?.getFieldValue?.('assignee_id'),
-      assignee_role_id: form?.getFieldValue?.('assignee_role_id'),
-      assignee_type: form?.getFieldValue?.('assignee_type'),
+      assignee_id: effectiveForm?.getFieldValue?.('assignee_id'),
+      assignee_role_id: effectiveForm?.getFieldValue?.('assignee_role_id'),
+      assignee_type: effectiveForm?.getFieldValue?.('assignee_type'),
     })
     || ''
   ).trim();
@@ -3211,11 +3224,11 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         const userId = String(snapshot?.user?.id || '').trim();
         if (!userId || cancelled) return;
 
-        form.setFieldValue('assignee_combo', `user_${userId}`);
-        form.setFieldValue('assignee_id', userId);
-        form.setFieldValue('assignee_role_id', null);
+        effectiveForm.setFieldValue('assignee_combo', `user_${userId}`);
+        effectiveForm.setFieldValue('assignee_id', userId);
+        effectiveForm.setFieldValue('assignee_role_id', null);
         if (supportsAssigneeType) {
-          form.setFieldValue('assignee_type', 'user');
+          effectiveForm.setFieldValue('assignee_type', 'user');
         }
 
         const profile = snapshot?.profile;
@@ -3245,7 +3258,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [currentAssigneeComboValue, form, open, supportsAssignee, supportsAssigneeType]);
+  }, [currentAssigneeComboValue, effectiveForm, open, supportsAssignee, supportsAssigneeType]);
 
   const renderQuickField = (field: ModuleField) => {
     const fieldDynamicOptionsCategory = String((field as any)?.dynamicOptionsCategory || '').trim();
@@ -3259,8 +3272,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     return (
       <SmartFieldRenderer
         field={field}
-        value={form.getFieldValue(field.key)}
-        onChange={(value) => form.setFieldValue(field.key, value)}
+        value={effectiveForm.getFieldValue(field.key)}
+        onChange={(value) => effectiveForm.setFieldValue(field.key, value)}
         compactMode
         forceEditMode={(field as any)?.readonly !== true}
         options={mergedFieldOptions}
@@ -3269,6 +3282,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         allValues={watchedQuickCreateValues}
         disableRequired
         overlayZIndexBase={childOverlayZIndexBase}
+        popupContainer={quickCreatePopupContainer}
       />
     );
   };
@@ -3300,7 +3314,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       }}
     >
       <Form
-        form={form}
+        form={effectiveForm}
         layout="vertical"
         onFinish={handleQuickCreateOk}
         className="max-h-[72dvh] overflow-y-auto pr-1"
@@ -3314,7 +3328,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                   <QuickCreateAutoNameSwitch
                     open={open}
                     field={autoNameToggleField}
-                    form={form}
+                    form={effectiveForm}
                     fallback={autoNameToggleDefault}
                     onImmediateChange={setDeferredAutoNameToggleFormValue}
                     disabled={(autoNameToggleField as any)?.readonly === true}
@@ -3358,24 +3372,24 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                         {option.data.label}
                       </Space>
                     )}
-                    getPopupContainer={resolveSelectPopupContainer}
+                    getPopupContainer={quickCreatePopupContainer}
                     onChange={(value) => {
                       const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
                       const normalizedType = String(assignee_type || 'user');
-                      form.setFieldValue('assignee_combo', value || null);
-                      form.setFieldValue('assignee_id', normalizedType === 'role' ? null : (assignee_id || null));
-                      form.setFieldValue('assignee_role_id', normalizedType === 'role' && supportsRoleAssignee ? assignee_id : null);
+                      effectiveForm.setFieldValue('assignee_combo', value || null);
+                      effectiveForm.setFieldValue('assignee_id', normalizedType === 'role' ? null : (assignee_id || null));
+                      effectiveForm.setFieldValue('assignee_role_id', normalizedType === 'role' && supportsRoleAssignee ? assignee_id : null);
                       if (supportsAssigneeType) {
-                        form.setFieldValue('assignee_type', normalizedType);
+                        effectiveForm.setFieldValue('assignee_type', normalizedType);
                       }
                     }}
                     allowClear
                     onClear={() => {
-                      form.setFieldValue('assignee_combo', null);
-                      form.setFieldValue('assignee_id', null);
-                      form.setFieldValue('assignee_role_id', null);
+                      effectiveForm.setFieldValue('assignee_combo', null);
+                      effectiveForm.setFieldValue('assignee_id', null);
+                      effectiveForm.setFieldValue('assignee_role_id', null);
                       if (supportsAssigneeType) {
-                        form.setFieldValue('assignee_type', null);
+                        effectiveForm.setFieldValue('assignee_type', null);
                       }
                     }}
                   />
@@ -3385,15 +3399,18 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
           </>
         )}
         {visibleFields.map((field) => (
-          <Form.Item
-            key={field.key}
-            name={field.key}
-            label={renderQuickFieldLabel(field)}
-            valuePropName={field.type === FieldType.CHECKBOX ? 'checked' : 'value'}
-            rules={field.validation?.required ? [{ required: true, message: 'الزامی است' }] : undefined}
-          >
-            {renderQuickField(field)}
-          </Form.Item>
+          <div key={field.key}>
+            <Form.Item
+              name={field.key}
+              hidden
+              rules={field.validation?.required ? [{ required: true, message: 'الزامی است' }] : undefined}
+            >
+              <Input />
+            </Form.Item>
+            <Form.Item label={renderQuickFieldLabel(field)} className="!mb-4">
+              {renderQuickField(field)}
+            </Form.Item>
+          </div>
         ))}
       </Form>
       <div className="text-xs text-gray-400 mt-1">
