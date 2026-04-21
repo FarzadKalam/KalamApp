@@ -25,7 +25,7 @@ import {
   VOIP_PERMISSION_KEY,
   VOIP_PERMISSION_FIELDS,
   MOBILE_FOOTER_PERMISSION_KEY,
-  MOBILE_FOOTER_DEFAULT_MODULES,
+  DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES,
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
   type PermissionMap,
   type RecordScope,
@@ -815,25 +815,25 @@ const RolesTab: React.FC = () => {
 
             <div className="flex-1 overflow-y-auto pr-2">
               <div className="mb-5 rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-white/5 p-4">
-                <div className="mb-1 text-sm font-bold text-gray-800 dark:text-gray-100">ماژول های پر استفاده این نقش</div>
-                <div className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-                  سه ماژول اول در فوتر نسخه موبایل نمایش داده می‌شوند. هر چهار ماژول برای شخصی‌سازی داشبورد این نقش استفاده می‌شوند و ماژول چهارم اختیاری است.
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div className="mb-1 text-sm font-bold text-gray-800 dark:text-gray-100">ماژول های پر استفاده و افزودن سریع این نقش</div>
+                  <div className="mb-4 text-xs text-gray-500 dark:text-gray-400">
+                  سه ماژول اول در فوتر نسخه موبایل نمایش داده می‌شوند. تا ۸ ماژول برای افزودن سریع داشبورد قابل تعریف است. پیش‌فرض‌های تکمیلی این نقش شامل تردد، مرخصی و ماموریت هستند.
+                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                   {PREFERRED_ROLE_MODULE_SLOT_KEYS.map((slotKey, index) => (
                     <div key={slotKey}>
                       <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-                        {index === 3 ? 'ماژول 4 (اختیاری)' : `ماژول ${index + 1}`}
+                        {index < 3 ? `ماژول ${index + 1} فوتر موبایل` : index === 3 ? 'ماژول 4 داشبورد' : `افزودن سریع ${index + 1}`}
                       </div>
                       <Select
-                        value={String(mobileFooterFields[slotKey] ?? MOBILE_FOOTER_DEFAULT_MODULES[index] ?? '')}
+                        value={String(mobileFooterFields[slotKey] ?? DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[index] ?? '')}
                         options={getMobileFooterOptions(slotKey)}
                         placeholder="انتخاب ماژول"
                         className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
                         showSearch
                         optionFilterProp="label"
                         optionLabelProp="label"
-                        allowClear={index === 3}
+                        allowClear={index >= 3}
                         getPopupContainer={resolveSelectPopupContainer}
                         styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 240 }) } }}
                         onChange={(value) => handleMobileFooterChange(slotKey, String(value || ''))}
@@ -910,7 +910,8 @@ const RolesTab: React.FC = () => {
                   className="dark:border-gray-800"
                   header={
                     <div className="flex items-center justify-between w-full dark:text-gray-200">
-                      <span className="font-bold">تنظیمات</span>`r`n                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                      <span className="font-bold">تنظیمات</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
                           className="dark:text-gray-400"
                           checked={getModulePerms(SETTINGS_PERMISSION_KEY).view !== false}
@@ -918,7 +919,7 @@ const RolesTab: React.FC = () => {
                             handlePermissionChange(SETTINGS_PERMISSION_KEY, 'view', undefined, e.target.checked)
                           }
                         >
-                          ??????
+                          مشاهده
                         </Checkbox>
                         <Checkbox
                           className="dark:text-gray-400"
@@ -928,7 +929,7 @@ const RolesTab: React.FC = () => {
                             handlePermissionChange(SETTINGS_PERMISSION_KEY, 'edit', undefined, e.target.checked)
                           }
                         >
-                          ??????/?????
+                          ویرایش/ایجاد
                         </Checkbox>
                         <Checkbox
                           className="dark:text-gray-400"
@@ -938,9 +939,10 @@ const RolesTab: React.FC = () => {
                             handlePermissionChange(SETTINGS_PERMISSION_KEY, 'delete', undefined, e.target.checked)
                           }
                         >
-                          ???
+                          حذف
                         </Checkbox>
-                      </div>                    </div>
+                      </div>
+                    </div>
                   }
                 >
                   <div className="pl-6 pt-2">

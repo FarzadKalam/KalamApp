@@ -539,6 +539,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [longTextDraftValue, setLongTextDraftValue] = useState(formattedLongTextValue);
   const longTextDraftValueRef = useRef(formattedLongTextValue);
   const longTextFocusedRef = useRef(false);
+  const longTextComposingRef = useRef(false);
   const longTextCommitTimerRef = useRef<number | null>(null);
   const lastCommittedLongTextValueRef = useRef(normalizeDigitsToEnglish(formattedLongTextValue));
   const onChangeRef = useRef(onChange);
@@ -567,7 +568,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     if (!isLongTextField) return;
     const normalizedValue = normalizeDigitsToEnglish(formattedLongTextValue);
     lastCommittedLongTextValueRef.current = normalizedValue;
-    if (!longTextFocusedRef.current && longTextDraftValueRef.current !== formattedLongTextValue) {
+    if (!longTextFocusedRef.current && !longTextComposingRef.current && longTextDraftValueRef.current !== formattedLongTextValue) {
       longTextDraftValueRef.current = formattedLongTextValue;
       setLongTextDraftValue(formattedLongTextValue);
     }
@@ -2105,15 +2106,31 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               onFocus={() => {
                 longTextFocusedRef.current = true;
               }}
-              onBlur={(event) => {
-                longTextFocusedRef.current = false;
-                commitLongTextValue(event.target.value, true);
+              onCompositionStart={() => {
+                longTextComposingRef.current = true;
               }}
-              onChange={(event) => {
-                const nextValue = formatTextForInput(event.target.value);
+              onCompositionEnd={(event: React.CompositionEvent<HTMLTextAreaElement>) => {
+                longTextComposingRef.current = false;
+                const nextValue = event.currentTarget.value;
                 longTextDraftValueRef.current = nextValue;
                 setLongTextDraftValue(nextValue);
                 commitLongTextValue(nextValue);
+              }}
+              onBlur={(event) => {
+                longTextFocusedRef.current = false;
+                longTextComposingRef.current = false;
+                const nextValue = event.target.value;
+                longTextDraftValueRef.current = formatTextForInput(nextValue);
+                setLongTextDraftValue(formatTextForInput(nextValue));
+                commitLongTextValue(nextValue, true);
+              }}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                longTextDraftValueRef.current = nextValue;
+                setLongTextDraftValue(nextValue);
+                if (!longTextComposingRef.current) {
+                  commitLongTextValue(nextValue);
+                }
               }}
               rows={compactMode ? 1 : collapsedLongTextMinRows}
               autoSize={compactMode

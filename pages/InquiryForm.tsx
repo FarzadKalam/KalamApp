@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Form, Space, Spin, Typography, Upload } from "antd";
+import { Alert, App, Button, Card, Form, Input, Space, Spin, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import PersianDatePicker from "../components/PersianDatePicker";
 import SmartFieldRenderer from "../components/SmartFieldRenderer";
 import { MODULES } from "../moduleRegistry";
 import { supabase } from "../supabaseClient";
@@ -12,6 +13,7 @@ import { readRuntimeBranding } from "../utils/brandingRuntime";
 import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
 import { uploadFileWithProgress } from "../utils/uploadFileWithProgress";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
+import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import { normalizeWebFormConfig, normalizeWebFormFieldRecord, type WebFormAccessScope, type WebFormFieldRecord } from "../utils/webForms";
 
 const { Paragraph, Text, Title } = Typography;
@@ -47,6 +49,11 @@ type PublicWebFormRpcRow = {
   fields?: unknown;
   company_settings?: unknown;
   branding_settings?: unknown;
+};
+
+type PublicChoiceOption = {
+  label: string;
+  value: string;
 };
 
 const LEGACY_PREFIX_OPTIONS = [
@@ -94,6 +101,8 @@ const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: stri
     ? (MODULES[normalizedTargetModuleId]?.fields || []).find((item) => String(item?.key || "").trim() === targetFieldKey)
     : null;
   const configuredOptions = Array.isArray(field.config?.select_options) ? field.config.select_options : [];
+  const liveOptions = Array.isArray(targetField?.options) ? targetField.options : [];
+  const resolvedOptions = liveOptions.length > 0 ? liveOptions : configuredOptions;
   return {
     ...(targetField || {}),
     key: targetFieldKey || field.field_key,
@@ -102,7 +111,7 @@ const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: stri
       fa: field.label,
       en: targetField?.labels?.en,
     },
-    options: configuredOptions.length > 0 ? configuredOptions : (targetField?.options || []),
+    options: resolvedOptions,
     validation: {
       ...(targetField?.validation || {}),
       required: field.is_required === true,
@@ -114,6 +123,9 @@ const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: stri
     hideInCreateForm: false,
   };
 };
+
+const getSlideFieldHeightClass = (field: WebFormFieldRecord) =>
+  field.field_type === "long_text" ? "min-h-[180px]" : "min-h-[64px]";
 
 const isWideField = (field: WebFormFieldRecord) =>
   field.field_type === "long_text"
@@ -305,6 +317,7 @@ const InquiryForm = () => {
   );
   const [authUser, setAuthUser] = useState<any>(null);
   const [uploadingFieldKeys, setUploadingFieldKeys] = useState<Record<string, boolean>>({});
+  const [dynamicFieldOptions, setDynamicFieldOptions] = useState<Record<string, PublicChoiceOption[]>>({});
   const watchedFormValues = Form.useWatch([], form) || {};
 
   const requestedSlug = useMemo(() => {
@@ -368,6 +381,34 @@ const InquiryForm = () => {
     form.resetFields();
     form.setFieldsValue(initialFieldValues);
   }, [form, initialFieldValues, publicForm]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDynamicOptions = async () => {
+      const categories = Array.from(new Set(
+        (publicForm?.fields || [])
+          .map((field) => {
+            const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
+            return String(moduleField.dynamicOptionsCategory || "").trim();
+          })
+          .filter(Boolean),
+      ));
+      if (categories.length === 0) {
+        setDynamicFieldOptions({});
+        return;
+      }
+      try {
+        const result = await fetchDynamicOptionsMap(supabase, categories);
+        if (!cancelled) setDynamicFieldOptions(result);
+      } catch {
+        if (!cancelled) setDynamicFieldOptions({});
+      }
+    };
+    void loadDynamicOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicForm]);
 
   useEffect(() => {
     let active = true;
@@ -581,6 +622,194 @@ const InquiryForm = () => {
     form.setFieldValue(fieldKey, nextList);
   };
 
+  const getChoiceOptions = (field: WebFormFieldRecord) => {
+    const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
+    const staticOptions = Array.isArray(moduleField.options)
+      ? moduleField.options
+          .map((option) => {
+            const label = String(option?.label || option?.value || "").trim();
+            const value = String(option?.value || option?.label || "").trim();
+            if (!label || !value) return null;
+            return { label, value };
+          })
+          .filter(Boolean) as PublicChoiceOption[]
+      : [];
+    const dynamicCategory = String(moduleField.dynamicOptionsCategory || "").trim();
+    const dynamicOptions = dynamicCategory ? (dynamicFieldOptions[dynamicCategory] || []) : [];
+    return dynamicOptions.length > 0 ? dynamicOptions : staticOptions;
+  };
+
+  const renderSlideChoiceField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
+    const isMultiSelect = field.field_type === "multi_select";
+    const choiceOptions = getChoiceOptions(field);
+    const currentValue = form.getFieldValue(field.field_key);
+    const normalizedValues = isMultiSelect
+      ? (Array.isArray(currentValue) ? currentValue.map((item) => String(item)) : [])
+      : [String(currentValue ?? "")].filter(Boolean);
+    const rules = field.is_required
+      ? [{
+          validator: async (_: unknown, value: unknown) => {
+            if (isMultiSelect) {
+              if (Array.isArray(value) && value.length > 0) return;
+            } else if (value !== undefined && value !== null && String(value).trim() !== "") {
+              return;
+            }
+            throw new Error(`${field.label} را انتخاب کنید.`);
+          },
+        }]
+      : [];
+
+    return (
+      <Form.Item
+        key={field.field_key}
+        name={field.field_key}
+        label={options?.showLabel === false ? undefined : field.label}
+        rules={rules}
+        extra={options?.showHelp !== false && field.help_text ? (
+          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+            {field.help_text}
+          </span>
+        ) : undefined}
+      >
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            {choiceOptions.map((option, index) => {
+              const isSelected = normalizedValues.includes(String(option.value));
+              return (
+                <button
+                  key={`${field.field_key}_${option.value}_${index}`}
+                  type="button"
+                  onClick={() => {
+                    if (isMultiSelect) {
+                      const nextValues = isSelected
+                        ? normalizedValues.filter((item) => item !== String(option.value))
+                        : [...normalizedValues, String(option.value)];
+                      form.setFieldValue(field.field_key, nextValues);
+                      return;
+                    }
+                    form.setFieldValue(field.field_key, option.value);
+                  }}
+                  className="group relative overflow-hidden rounded-[24px] border px-4 py-4 text-right transition duration-200"
+                  style={{
+                    borderColor: isSelected
+                      ? palette.primary
+                      : (isDarkMode ? `${palette.darkBorder}` : `${palette.primary}22`),
+                    background: isSelected
+                      ? `linear-gradient(135deg, ${palette.primary}18 0%, ${palette.secondary}14 100%)`
+                      : (isDarkMode ? `${palette.darkBg}CC` : "#fff"),
+                    boxShadow: isSelected ? `0 16px 34px ${palette.primary}22` : "none",
+                    color: surfaceStyle.color,
+                  }}
+                >
+                  <div
+                    className="absolute inset-y-0 right-0 w-1.5 rounded-r-[24px] transition-opacity"
+                    style={{ backgroundColor: palette.primary, opacity: isSelected ? 1 : 0 }}
+                  />
+                  <div className="flex items-start gap-3">
+                    <div
+                      className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border text-xs font-black"
+                      style={{
+                        borderColor: isSelected ? palette.primary : (isDarkMode ? `${palette.darkBorder}` : "#d1d5db"),
+                        backgroundColor: isSelected ? palette.primary : "transparent",
+                        color: isSelected ? "#fff" : surfaceStyle.color,
+                      }}
+                    >
+                      {isSelected ? "✓" : index + 1}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-base font-semibold">{option.label}</div>
+                      <div
+                        className="mt-1 text-xs"
+                        style={{ color: isDarkMode ? "rgba(255,255,255,0.56)" : "#6b7280" }}
+                      >
+                        {isMultiSelect
+                          ? (isSelected ? "برای حذف دوباره لمس کنید" : "برای انتخاب لمس کنید")
+                          : "برای انتخاب این گزینه لمس کنید"}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {isMultiSelect ? (
+            <div className="text-xs" style={{ color: isDarkMode ? "rgba(255,255,255,0.62)" : "#6b7280" }}>
+              امکان انتخاب چند گزینه وجود دارد.
+            </div>
+          ) : null}
+        </div>
+      </Form.Item>
+    );
+  };
+
+  const renderSlideTextLikeField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
+    const rules = field.is_required
+      ? [{
+          required: true,
+          message: `${field.label} را ${field.field_type === "long_text" ? "تکمیل" : "وارد"} کنید.`,
+        }]
+      : [];
+    const sharedClassName = `w-full rounded-[24px] border-0 bg-white/90 px-5 text-[16px] font-medium shadow-[0_18px_48px_rgba(15,23,42,0.08)] outline-none transition focus:shadow-[0_22px_54px_rgba(15,23,42,0.12)] ${getSlideFieldHeightClass(field)}`;
+    const placeholder = field.placeholder || field.label;
+
+    let control: JSX.Element;
+    if (field.field_type === "long_text") {
+      control = (
+        <Input.TextArea
+          rows={6}
+          className="webform-slide-textarea"
+          placeholder={placeholder}
+          autoSize={{ minRows: 6, maxRows: 10 }}
+          style={{
+            borderRadius: 24,
+            padding: "18px 20px",
+            fontSize: 16,
+            lineHeight: 2,
+            background: isDarkMode ? `${palette.darkBg}D9` : "rgba(255,255,255,0.92)",
+            color: surfaceStyle.color,
+            boxShadow: "0 18px 48px rgba(15,23,42,0.08)",
+            border: "none",
+          }}
+        />
+      );
+    } else if (field.field_type === "date") {
+      control = <PersianDatePicker type="DATE" placeholder={placeholder} className="webform-slide-date-trigger" />;
+    } else if (field.field_type === "time") {
+      control = <PersianDatePicker type="TIME" placeholder={placeholder} className="webform-slide-date-trigger" />;
+    } else if (field.field_type === "datetime") {
+      control = <PersianDatePicker type="DATETIME" placeholder={placeholder} className="webform-slide-date-trigger" />;
+    } else {
+      control = (
+        <input
+          type={field.field_type === "phone" ? "tel" : field.field_type === "number" ? "number" : "text"}
+          inputMode={field.field_type === "number" ? "decimal" : field.field_type === "phone" ? "tel" : "text"}
+          className={sharedClassName}
+          placeholder={placeholder}
+          style={{
+            background: isDarkMode ? `${palette.darkBg}D9` : "rgba(255,255,255,0.92)",
+            color: surfaceStyle.color,
+          }}
+        />
+      );
+    }
+
+    return (
+      <Form.Item
+        key={field.field_key}
+        name={field.field_key}
+        label={options?.showLabel === false ? undefined : field.label}
+        rules={rules}
+        extra={options?.showHelp !== false && field.help_text ? (
+          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+            {field.help_text}
+          </span>
+        ) : undefined}
+      >
+        {control}
+      </Form.Item>
+    );
+  };
+
   const renderAttachmentField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
     const currentAssets = normalizePublicFieldValue(field, form.getFieldValue(field.field_key));
     const assetList = Array.isArray(currentAssets) ? currentAssets as PublicUploadedAsset[] : [];
@@ -608,7 +837,7 @@ const InquiryForm = () => {
           </span>
         ) : undefined}
       >
-        <div className="space-y-3">
+        <div className={`space-y-3 ${isSlideMode ? "webform-slide-upload" : ""}`}>
           <Upload
             multiple
             accept={accept}
@@ -623,19 +852,54 @@ const InquiryForm = () => {
               return false;
             }}
           >
-            <Button loading={isUploading}>
-              {field.field_type === "image" ? "افزودن تصویر" : "افزودن فایل"}
-            </Button>
+            {isSlideMode ? (
+              <button
+                type="button"
+                className="w-full rounded-[28px] border border-dashed px-5 py-7 text-right transition"
+                style={{
+                  borderColor: isDarkMode ? `${palette.darkBorder}` : `${palette.primary}44`,
+                  background: isDarkMode ? `${palette.darkBg}CC` : `linear-gradient(135deg, ${palette.primary}10 0%, #fff 100%)`,
+                  color: surfaceStyle.color,
+                }}
+              >
+                <div className="mb-2 text-lg font-black">
+                  {field.field_type === "image" ? "آپلود تصویر" : "آپلود فایل"}
+                </div>
+                <div className="text-sm" style={{ color: isDarkMode ? "rgba(255,255,255,0.65)" : "#6b7280" }}>
+                  برای انتخاب فایل لمس کنید. می‌توانید چند فایل ثبت کنید.
+                </div>
+                {isUploading ? (
+                  <div className="mt-3 text-sm font-semibold" style={{ color: palette.primary }}>
+                    در حال آپلود...
+                  </div>
+                ) : null}
+              </button>
+            ) : (
+              <Button loading={isUploading}>
+                {field.field_type === "image" ? "افزودن تصویر" : "افزودن فایل"}
+              </Button>
+            )}
           </Upload>
 
           {assetList.length > 0 ? (
-            <div className="space-y-2">
+            <div className={`space-y-2 ${isSlideMode && field.field_type === "image" ? "grid gap-3 md:grid-cols-2" : ""}`}>
               {assetList.map((asset) => (
                 <div
                   key={asset.url}
                   className="flex items-center justify-between gap-3 rounded-2xl border px-3 py-2"
-                  style={{ borderColor: isDarkMode ? `${palette.darkBorder}` : "#e5e7eb" }}
+                  style={{
+                    borderColor: isDarkMode ? `${palette.darkBorder}` : "#e5e7eb",
+                    background: isSlideMode ? (isDarkMode ? `${palette.darkBg}C7` : "#fff") : undefined,
+                    padding: isSlideMode ? "16px" : undefined,
+                  }}
                 >
+                  {isSlideMode && field.field_type === "image" ? (
+                    <img
+                      src={asset.url}
+                      alt={asset.name}
+                      className="h-20 w-20 rounded-2xl object-cover"
+                    />
+                  ) : null}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium" style={{ color: surfaceStyle.color }}>
                       {asset.name}
@@ -667,6 +931,12 @@ const InquiryForm = () => {
     if (field.field_type === "relation" && publicForm?.accessScope !== "internal") return null;
     if (field.field_type === "image" || field.field_type === "file") {
       return renderAttachmentField(field, options);
+    }
+    if (isSlideMode && ["select", "multi_select"].includes(field.field_type)) {
+      return renderSlideChoiceField(field, options);
+    }
+    if (isSlideMode && ["text", "phone", "number", "long_text", "date", "time", "datetime"].includes(field.field_type)) {
+      return renderSlideTextLikeField(field, options);
     }
 
     const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);

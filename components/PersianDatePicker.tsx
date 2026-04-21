@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
-import { Modal, Popover } from "antd";
+import { Modal } from "antd";
 import { Calendar } from "react-multi-date-picker";
 import DateObject from "react-date-object";
 import persian from "react-date-object/calendars/persian";
@@ -28,7 +28,6 @@ interface PersianDatePickerProps {
   zIndex?: number;
 }
 
-const MOBILE_BREAKPOINT = 768;
 const holidayMonthCache = new Map<string, Promise<Record<string, HolidayMarker>>>();
 
 const normalizeDigits = (value: string) =>
@@ -236,27 +235,10 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
 }) => {
   const safeOnChange = onChange ?? (() => {});
   const [open, setOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
   const [draft, setDraft] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
   const [viewDate, setViewDate] = useState<DateObject | null>(() => convertToPersianDateObject(value, type));
   const [step, setStep] = useState<"date" | "time">(type === "TIME" ? "time" : "date");
   const [holidayMarkers, setHolidayMarkers] = useState<Record<string, HolidayMarker>>({});
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-
-    const query = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
-    const apply = () => setIsMobile(query.matches);
-    apply();
-
-    if (typeof query.addEventListener === "function") {
-      query.addEventListener("change", apply);
-      return () => query.removeEventListener("change", apply);
-    }
-
-    query.addListener(apply);
-    return () => query.removeListener(apply);
-  }, []);
 
   useEffect(() => {
     if (open) return;
@@ -507,7 +489,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   const panelSubtitle =
     draftDisplay || (placeholder && placeholder !== panelTitle ? placeholder : "");
   const panelContent = (
-    <div className={`kalam-adaptive-picker kalam-adaptive-picker--${isMobile ? "mobile" : "desktop"}`}>
+    <div className="kalam-adaptive-picker">
       <div className="kalam-adaptive-picker__header">
         <div>
           <div className="kalam-adaptive-picker__title">{panelTitle}</div>
@@ -584,42 +566,33 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
 
   return (
     <div className={`kalam-adaptive-picker__field ${className || ""}`.trim()}>
-      <Popover
-        open={!isMobile && open}
-        onOpenChange={handleOpenChange}
-        trigger="click"
-        placement="bottomRight"
-        getPopupContainer={() => document.body}
-        zIndex={zIndex}
-        content={panelContent}
-        overlayClassName="kalam-adaptive-picker-popover"
+      <button
+        type="button"
+        className="kalam-rmdp-input kalam-adaptive-picker__trigger"
+        disabled={disabled}
+        aria-label={panelTitle}
+        onClick={() => handleOpenChange(true)}
       >
-        <button
-          type="button"
-          className="kalam-rmdp-input kalam-adaptive-picker__trigger"
-          disabled={disabled}
-          aria-label={panelTitle}
-          onClick={() => handleOpenChange(true)}
-        >
-          <span className="kalam-adaptive-picker__trigger-icon">{triggerIcon}</span>
-          <span className={`kalam-adaptive-picker__trigger-text ${committedValue ? "is-filled" : ""}`}>
-            {committedValue || placeholder || panelTitle}
-          </span>
-        </button>
-      </Popover>
+        <span className="kalam-adaptive-picker__trigger-icon">{triggerIcon}</span>
+        <span className={`kalam-adaptive-picker__trigger-text ${committedValue ? "is-filled" : ""}`}>
+          {committedValue || placeholder || panelTitle}
+        </span>
+      </button>
 
       <Modal
-        open={isMobile && open}
+        open={open}
         footer={null}
         onCancel={() => setOpen(false)}
+        maskClosable
+        keyboard
         destroyOnHidden={false}
-        centered={false}
-        width="100%"
+        centered
+        width="auto"
         zIndex={zIndex}
         className="kalam-adaptive-picker-modal"
         closeIcon={null}
         styles={{
-          mask: { backgroundColor: "rgba(15, 23, 42, 0.46)" },
+          mask: { backgroundColor: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(4px)" },
           content: { padding: 0, background: "transparent", boxShadow: "none" },
           body: { padding: 0 },
         }}

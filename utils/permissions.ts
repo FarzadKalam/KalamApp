@@ -112,12 +112,32 @@ export const VOIP_PERMISSION_FIELDS = [
 ];
 
 export const MOBILE_FOOTER_DEFAULT_MODULES = ['products', 'production_orders', 'invoices', 'customers'] as const;
-export const PREFERRED_ROLE_MODULE_SLOT_KEYS = ['slot_1', 'slot_2', 'slot_3', 'slot_4'] as const;
+export const DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES = [
+  ...MOBILE_FOOTER_DEFAULT_MODULES,
+  'attendance_logs',
+  'leave_requests',
+  'mission_requests',
+  '',
+] as const;
+export const PREFERRED_ROLE_MODULE_SLOT_KEYS = [
+  'slot_1',
+  'slot_2',
+  'slot_3',
+  'slot_4',
+  'slot_5',
+  'slot_6',
+  'slot_7',
+  'slot_8',
+] as const;
 export const MOBILE_FOOTER_PERMISSION_FIELDS = [
   { key: 'slot_1', label: 'ماژول پر استفاده اول' },
   { key: 'slot_2', label: 'ماژول پر استفاده دوم' },
   { key: 'slot_3', label: 'ماژول پر استفاده سوم' },
   { key: 'slot_4', label: 'ماژول پر استفاده چهارم' },
+  { key: 'slot_5', label: 'افزودن سریع پنجم' },
+  { key: 'slot_6', label: 'افزودن سریع ششم' },
+  { key: 'slot_7', label: 'افزودن سریع هفتم' },
+  { key: 'slot_8', label: 'افزودن سریع هشتم' },
 ] as const;
 
 const ensureField = (map: Map<string, string>, key: string, label: string) => {
@@ -301,10 +321,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     delete: true,
     record_scope: 'all',
     fields: {
-      slot_1: MOBILE_FOOTER_DEFAULT_MODULES[0],
-      slot_2: MOBILE_FOOTER_DEFAULT_MODULES[1],
-      slot_3: MOBILE_FOOTER_DEFAULT_MODULES[2],
-      slot_4: MOBILE_FOOTER_DEFAULT_MODULES[3],
+      slot_1: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[0],
+      slot_2: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[1],
+      slot_3: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[2],
+      slot_4: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[3],
+      slot_5: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[4],
+      slot_6: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[5],
+      slot_7: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[6],
+      slot_8: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[7],
     },
   };
 
@@ -330,7 +354,7 @@ export const mergePermissionsWithDefaults = (
 export const resolvePreferredRoleModuleIds = (
   permissions: PermissionMap | null | undefined,
   modules: Record<string, ModuleDefinition>,
-  limit = 4
+  limit = 8
 ) => {
   const fields = permissions?.[MOBILE_FOOTER_PERMISSION_KEY]?.fields || {};
   const visibleModules = Object.keys(modules).filter((moduleId) => permissions?.[moduleId]?.view !== false);
@@ -346,7 +370,7 @@ export const resolvePreferredRoleModuleIds = (
     .filter(Boolean)
     .forEach(pushUnique);
 
-  MOBILE_FOOTER_DEFAULT_MODULES.forEach((moduleId) => pushUnique(String(moduleId)));
+  DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES.forEach((moduleId) => pushUnique(String(moduleId)));
   visibleModules.forEach(pushUnique);
 
   return next.slice(0, limit);

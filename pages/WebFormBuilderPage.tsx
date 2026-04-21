@@ -25,6 +25,7 @@ import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import {
   buildWebFormPublicUrl,
   getMissingWebFormRequiredFields,
+  getWebFormModuleDefaultValues,
   getWebFormDuplicateFieldOptions,
   getWebFormModuleOptions,
   getWebFormTargetFields,
@@ -94,14 +95,18 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
-const buildSuggestedFields = (targetModuleId?: string | null): BuilderFieldValue[] => {
+const buildSuggestedFields = (
+  targetModuleId?: string | null,
+  accessScope?: WebFormAccessScope | string | null,
+): BuilderFieldValue[] => {
   const normalizedTargetModuleId = String(targetModuleId || "").trim();
   if (!normalizedTargetModuleId) return [];
 
-  const targetFields = getWebFormTargetFields(normalizedTargetModuleId).filter((item) => !item.isVirtual);
+  const targetFields = getWebFormTargetFields(normalizedTargetModuleId, { accessScope }).filter((item) => !item.isVirtual);
+  const managedFields = targetFields.filter((item) => item.isManaged);
   const preferredKeys = ["first_name", "last_name", "full_name", "name", "title", "mobile", "mobile_1", "phone", "work_date", "start_date", "end_date", "notes", "description"];
 
-  return [...targetFields]
+  const preferredFields = [...targetFields]
     .sort((a, b) => {
       const aRequired = a.field?.validation?.required ? 0 : 1;
       const bRequired = b.field?.validation?.required ? 0 : 1;
@@ -113,13 +118,77 @@ const buildSuggestedFields = (targetModuleId?: string | null): BuilderFieldValue
       return aScore - bScore;
     })
     .slice(0, 6)
-    .map((item, index) => ({
-      label: item.label,
-      target_field_key: item.value,
-      sort_order: (index + 1) * 10,
-      is_required: item.field?.validation?.required === true,
-      is_hidden: false,
-    }));
+    .map((item) => item.value);
+
+  const orderedKeys = [...new Set([...managedFields.map((item) => item.value), ...preferredFields])];
+
+  return orderedKeys
+    .map((fieldKey, index) => {
+      const item = targetFields.find((candidate) => candidate.value === fieldKey);
+      if (!item) return null;
+      return {
+        label: item.label,
+        target_field_key: item.value,
+        default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
+        sort_order: (index + 1) * 10,
+        is_required: item.field?.validation?.required === true,
+        is_hidden: false,
+      };
+    })
+    .filter(Boolean) as BuilderFieldValue[];
+};
+
+const mergeManagedFields = (
+  fields: BuilderFieldValue[] | undefined,
+  targetModuleId?: string | null,
+  accessScope?: WebFormAccessScope | string | null,
+): BuilderFieldValue[] => {
+  const currentFields = Array.isArray(fields) ? fields : [];
+  const currentByTargetFieldKey = new Map(
+    currentFields
+      .map((field, index) => ({ field, index, targetFieldKey: String(field?.target_field_key || "").trim() }))
+      .filter((item) => item.targetFieldKey)
+      .map((item) => [item.targetFieldKey, item]),
+  );
+  const managedTargets = getWebFormTargetFields(targetModuleId, { accessScope })
+    .filter((item) => !item.isVirtual && item.isManaged);
+
+  if (managedTargets.length === 0) return currentFields;
+
+  const nextFields = [...currentFields];
+  let nextSortOrder = nextFields.reduce((max, field, index) => {
+    const value = Number(field?.sort_order || ((index + 1) * 10));
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+
+  managedTargets.forEach((targetField) => {
+    const existing = currentByTargetFieldKey.get(targetField.value);
+    if (!existing) {
+      nextSortOrder += 10;
+      nextFields.push({
+        label: targetField.label,
+        target_field_key: targetField.value,
+        default_value: targetField.hasModuleDefault ? targetField.moduleDefaultValue : undefined,
+        sort_order: nextSortOrder,
+        is_required: targetField.isModuleRequired,
+        is_hidden: false,
+      });
+      return;
+    }
+
+    const existingField = existing.field || {};
+    nextFields[existing.index] = {
+      ...existingField,
+      label: String(existingField.label || "").trim() || targetField.label,
+      default_value:
+        existingField.default_value !== undefined && existingField.default_value !== null && existingField.default_value !== ""
+          ? existingField.default_value
+          : (targetField.hasModuleDefault ? targetField.moduleDefaultValue : existingField.default_value),
+      is_required: existingField.is_required === true || targetField.isModuleRequired,
+    };
+  });
+
+  return nextFields;
 };
 
 const WebFormBuilderPage: React.FC = () => {
@@ -288,7 +357,7 @@ const WebFormBuilderPage: React.FC = () => {
           slide_auto_advance: false,
           duplicate_match_field: undefined,
           duplicate_strategy: "allow",
-          fields: buildSuggestedFields(defaultTargetModuleId),
+          fields: buildSuggestedFields(defaultTargetModuleId, "public"),
         });
         setRecentSubmissions([]);
       }
@@ -309,16 +378,21 @@ const WebFormBuilderPage: React.FC = () => {
   }, [loadPage]);
 
   useEffect(() => {
-    if (isEditMode) return;
-    if (!targetModuleId || seededFieldsRef.current) return;
-    const currentFields = form.getFieldValue("fields");
-    if (Array.isArray(currentFields) && currentFields.length > 0) {
+    if (!targetModuleId) return;
+    const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
+    if (!seededFieldsRef.current) {
+      if (!isEditMode && currentFields.length === 0) {
+        form.setFieldValue("fields", buildSuggestedFields(targetModuleId, accessScope));
+      }
       seededFieldsRef.current = true;
       return;
     }
-    form.setFieldValue("fields", buildSuggestedFields(targetModuleId));
-    seededFieldsRef.current = true;
-  }, [form, isEditMode, targetModuleId]);
+
+    const mergedFields = mergeManagedFields(currentFields, targetModuleId, accessScope);
+    if (JSON.stringify(currentFields) !== JSON.stringify(mergedFields)) {
+      form.setFieldValue("fields", mergedFields);
+    }
+  }, [accessScope, form, isEditMode, targetModuleId]);
 
   const handleValuesChange = (changedValues: Partial<BuilderFormValues>) => {
     if (Object.prototype.hasOwnProperty.call(changedValues, "route_slug")) {
@@ -333,6 +407,7 @@ const WebFormBuilderPage: React.FC = () => {
         form.setFieldValue("duplicate_match_field", undefined);
         form.setFieldValue("duplicate_strategy", "allow");
       }
+      seededFieldsRef.current = false;
     }
     if (Object.prototype.hasOwnProperty.call(changedValues, "duplicate_match_field")) {
       const nextDuplicateField = String(changedValues.duplicate_match_field || "").trim();
@@ -528,6 +603,7 @@ const WebFormBuilderPage: React.FC = () => {
         slide_auto_advance: values.slide_auto_advance === true,
         duplicate_match_field: String(values.duplicate_match_field || "").trim(),
         duplicate_strategy: values.duplicate_strategy || "allow",
+        default_record_values: getWebFormModuleDefaultValues(values.target_module_id, { accessScope: values.access_scope }),
       };
 
       const basePayload = {
@@ -552,7 +628,9 @@ const WebFormBuilderPage: React.FC = () => {
 
       if (!webFormId) throw new Error("WEB_FORM_SAVE_NO_ID");
 
-      const cleanedFields = (values.fields || [])
+      const mergedFields = mergeManagedFields(values.fields || [], values.target_module_id, values.access_scope);
+
+      const cleanedFields = mergedFields
         .map((item, index) => {
           const targetFieldKey = String(item?.target_field_key || "").trim();
           const targetFieldItem = targetFieldMap[targetFieldKey];
@@ -749,7 +827,7 @@ const WebFormBuilderPage: React.FC = () => {
               className="rounded-3xl"
               title="فیلدهای فرم"
               extra={
-                <Button type="link" disabled={!targetModuleId} onClick={() => form.setFieldValue("fields", buildSuggestedFields(targetModuleId))}>
+                  <Button type="link" disabled={!targetModuleId} onClick={() => form.setFieldValue("fields", buildSuggestedFields(targetModuleId, accessScope))}>
                   بارگذاری فیلدهای پیشنهادی
                 </Button>
               }
@@ -774,6 +852,7 @@ const WebFormBuilderPage: React.FC = () => {
                       const targetFieldItem = targetFieldMap[currentTargetFieldKey];
                       const inferredType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
                       const optionCount = resolveTargetOptions(currentTargetFieldKey).length;
+                      const isManagedField = targetFieldItem?.isManaged === true;
 
                       return (
                         <Card
@@ -781,7 +860,7 @@ const WebFormBuilderPage: React.FC = () => {
                           size="small"
                           className="rounded-2xl border border-dashed"
                           title={<span>فیلد {index + 1}</span>}
-                          extra={<Button danger type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)}>حذف</Button>}
+                          extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField} onClick={() => remove(field.name)}>حذف</Button>}
                         >
                           <div className="grid gap-4 md:grid-cols-2">
                             <Form.Item label="فیلد مقصد" name={[field.name, "target_field_key"]} rules={[{ required: true, message: "فیلد مقصد را انتخاب کنید." }]}>
@@ -812,6 +891,9 @@ const WebFormBuilderPage: React.FC = () => {
 
                             <div className="rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-500">
                               <div>نوع ورودی: {inferredType || "-"}</div>
+                              {targetFieldItem?.isModuleRequired ? <div className="mt-1 text-red-500">الزامی در ماژول مقصد</div> : null}
+                              {targetFieldItem?.hasModuleDefault ? <div className="mt-1 text-blue-600">پیش‌فرض ماژول: {String(targetFieldItem.moduleDefaultValue)}</div> : null}
+                              {isManagedField ? <div className="mt-1">این فیلد به‌خاطر تنظیمات ماژول باید در فرم باقی بماند.</div> : null}
                               {inferredType === "select" || inferredType === "multi_select" ? <div className="mt-1">تعداد گزینه‌ها: {optionCount}</div> : null}
                               {isWebFormVirtualTargetField(currentTargetFieldKey) ? <div className="mt-1">نوع ویژه: پیوست وب‌فرم</div> : null}
                               <div className="mt-1">Placeholder: {String(watchedFields?.[index]?.label || targetFieldItem?.label || "-")}</div>
@@ -824,7 +906,7 @@ const WebFormBuilderPage: React.FC = () => {
                             {renderDefaultValueInput(index)}
 
                             <Form.Item name={[field.name, "is_required"]} valuePropName="checked" className="mb-0">
-                              <Checkbox>اجباری</Checkbox>
+                              <Checkbox>اجباری برای ثبت‌کننده</Checkbox>
                             </Form.Item>
 
                             <Form.Item name={[field.name, "is_hidden"]} valuePropName="checked" className="mb-0">

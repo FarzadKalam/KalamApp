@@ -3,6 +3,7 @@ import {
   buildWebFormPublicPath,
   formatWebFormOptionsText,
   getWebFormDuplicateFieldOptions,
+  getWebFormModuleDefaultValues,
   getMissingWebFormRequiredFields,
   getWebFormTargetFields,
   normalizeWebFormConfig,
@@ -115,6 +116,21 @@ describe('web form utilities', () => {
     expect(publicTargets.map((item) => item.value)).toContain('__record_files__');
     expect(publicTargets.some((item) => item.inferredType === 'relation')).toBe(false);
     expect(internalTargets.some((item) => item.inferredType === 'relation')).toBe(true);
+  });
+
+  it('exposes module-required and module-default metadata for managed web form fields', () => {
+    const attendanceTargets = getWebFormTargetFields('attendance_logs');
+    const logTypeField = attendanceTargets.find((item) => item.value === 'log_type');
+    const sourceTypeField = attendanceTargets.find((item) => item.value === 'source_type');
+
+    expect(logTypeField?.isManaged).toBe(true);
+    expect(logTypeField?.hasModuleDefault).toBe(true);
+    expect(logTypeField?.moduleDefaultValue).toBe('check_in');
+    expect(sourceTypeField?.moduleDefaultValue).toBe('manual');
+    expect(getWebFormModuleDefaultValues('attendance_logs')).toMatchObject({
+      log_type: 'check_in',
+      source_type: 'manual',
+    });
   });
 
   it('resolves field type from the current target module instead of stale saved metadata', () => {

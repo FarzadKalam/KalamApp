@@ -29,7 +29,6 @@ import { FieldLocation, FieldNature, FieldType, ModuleField } from '../types';
 import PersianDatePicker from '../components/PersianDatePicker';
 import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
-import ProductionStagesField from '../components/ProductionStagesField';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
@@ -48,7 +47,7 @@ import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../uti
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
-type FieldOption = { value: string; label: string; color?: string };
+type FieldOption = { value: string; label: string; color?: string; module?: string };
 
 const isNumericField = (fieldType: FieldType) =>
   fieldType === FieldType.NUMBER ||
@@ -117,8 +116,7 @@ const AccountingRecordPage: React.FC = () => {
           const paymentType = String(formData?.payment_type || '').trim();
           if (f.key === 'cheque_id') return paymentType === 'cheque';
           if (f.key === 'barter_id') return paymentType === 'barter';
-          if (f.key === 'cash_box_id') return paymentType === 'cash';
-          if (f.key === 'bank_account_id') return paymentType !== 'cash';
+          if (f.key === 'cash_box_id' || f.key === 'petty_fund_id') return false;
         }
         return true;
       })
@@ -136,12 +134,10 @@ const AccountingRecordPage: React.FC = () => {
     const patch: Record<string, any> = {};
     if (paymentType !== 'cheque' && formData?.cheque_id) patch.cheque_id = null;
     if (paymentType !== 'barter' && formData?.barter_id) patch.barter_id = null;
-    if (paymentType === 'cash' && formData?.bank_account_id) patch.bank_account_id = null;
-    if (paymentType !== 'cash' && formData?.cash_box_id) patch.cash_box_id = null;
     if (!Object.keys(patch).length) return;
     setFormData((prev) => ({ ...prev, ...patch }));
     form.setFieldsValue(patch);
-  }, [form, formData?.bank_account_id, formData?.barter_id, formData?.cash_box_id, formData?.cheque_id, formData?.payment_type, moduleId]);
+  }, [form, formData?.barter_id, formData?.cheque_id, formData?.payment_type, moduleId]);
 
   const standardFields = useMemo(() => {
     if (!isChequeModule) return visibleFields;
@@ -235,6 +231,84 @@ const AccountingRecordPage: React.FC = () => {
     [chequeBankMetaById, form]
   );
 
+  const fetchSuggestedCode = useCallback(async (nextModuleId: string, values: Record<string, any>) => {
+    if (['bank_accounts', 'cash_boxes', 'petty_funds'].includes(nextModuleId)) {
+      const accountId = String(values.account_id || '').trim();
+      if (!accountId) return null;
+      const [{ data: accountRow, error: accountError }, { data: existingRows, error: existingError }] = await Promise.all([
+        supabase
+          .from('chart_of_accounts')
+          .select('code')
+          .eq('id', accountId)
+          .maybeSingle(),
+        supabase
+          .from(nextModuleId)
+          .select('code')
+          .eq('account_id', accountId),
+      ]);
+      if (accountError) throw accountError;
+      if (existingError) throw existingError;
+
+      const parentCode = String(accountRow?.code || '').trim();
+      if (!parentCode) return null;
+
+      let maxSuffix = 0;
+      (existingRows || []).forEach((row: any) => {
+        const code = String(row?.code || '').trim();
+        if (!code.startsWith(parentCode) || code.length <= parentCode.length) return;
+        const suffix = code.slice(parentCode.length);
+        if (!/^\d+$/.test(suffix)) return;
+        maxSuffix = Math.max(maxSuffix, Number(suffix));
+      });
+      return `${parentCode}${maxSuffix + 1}`;
+    }
+
+    if (nextModuleId === 'chart_of_accounts') {
+      const parentId = String(values.parent_id || '').trim();
+      if (!parentId) return null;
+
+      const [{ data: parentRow, error: parentError }, { data: siblings, error: siblingsError }] = await Promise.all([
+        supabase.from('chart_of_accounts').select('code').eq('id', parentId).maybeSingle(),
+        supabase.from('chart_of_accounts').select('code').eq('parent_id', parentId),
+      ]);
+      if (parentError) throw parentError;
+      if (siblingsError) throw siblingsError;
+
+      const parentCode = String(parentRow?.code || '').trim();
+      if (!parentCode) return null;
+
+      let maxSuffix = 0;
+      (siblings || []).forEach((row: any) => {
+        const code = String(row?.code || '').trim();
+        if (!code.startsWith(parentCode) || code.length <= parentCode.length) return;
+        const suffix = code.slice(parentCode.length);
+        if (!/^\d+$/.test(suffix)) return;
+        maxSuffix = Math.max(maxSuffix, Number(suffix));
+      });
+      return `${parentCode}${maxSuffix + 1}`;
+    }
+
+    return null;
+  }, []);
+
+  const applySuggestedCodeIfNeeded = useCallback(async (
+    nextValues: Record<string, any>,
+    options?: { force?: boolean }
+  ) => {
+    if (!moduleId || !isCreate) return;
+    if (!['bank_accounts', 'cash_boxes', 'petty_funds', 'chart_of_accounts'].includes(moduleId)) return;
+
+    const currentCode = String(nextValues.code || '').trim();
+    if (currentCode && !options?.force) return;
+
+    const suggestedCode = await fetchSuggestedCode(moduleId, nextValues);
+    if (!suggestedCode) return;
+
+    const patch = { code: suggestedCode };
+    setFormData((prev) => ({ ...prev, ...patch }));
+    form.setFieldsValue(patch);
+  }, [fetchSuggestedCode, form, isCreate, moduleId]);
+
   const loadRelationOptions = useCallback(async () => {
     if (!moduleConfig) return {};
     const relationFields = (moduleConfig.fields || []).filter(
@@ -251,7 +325,11 @@ const AccountingRecordPage: React.FC = () => {
           const filtered = String(field.relationConfig?.targetModule || '') === moduleId && id
             ? options.filter((option: any) => String(option.value) !== String(id))
             : options;
-          return [field.key, filtered.map((option: any) => ({ value: String(option.value), label: String(option.label || option.value) }))] as const;
+          return [field.key, filtered.map((option: any) => ({
+            value: String(option.value),
+            label: String(option.label || option.value),
+            module: option?.module ? String(option.module) : undefined,
+          }))] as const;
         } catch {
           return [field.key, []] as const;
         }
@@ -362,9 +440,20 @@ const AccountingRecordPage: React.FC = () => {
         const normalizedInitialValues = isChequeModule
           ? { ...initialValues, due_date: initialValues.issue_date || initialValues.due_date || null }
           : initialValues;
+        const createInitialValues = { ...normalizedInitialValues };
+        if (!String(createInitialValues.code || '').trim()) {
+          try {
+            const suggestedCode = await fetchSuggestedCode(String(moduleId || ''), createInitialValues);
+            if (suggestedCode) {
+              createInitialValues.code = suggestedCode;
+            }
+          } catch {
+            // Ignore suggestion errors and keep the form usable.
+          }
+        }
         setRecord(null);
-        setFormData(normalizedInitialValues);
-        form.setFieldsValue(normalizedInitialValues);
+        setFormData(createInitialValues);
+        form.setFieldsValue(createInitialValues);
         return;
       }
 
@@ -375,7 +464,12 @@ const AccountingRecordPage: React.FC = () => {
       const row = (data || {}) as Record<string, any>;
       const normalizedRow = isChequeModule
         ? { ...row, due_date: row.issue_date || row.due_date || null }
-        : row;
+        : moduleId === 'cash_bank_operations'
+          ? {
+              ...row,
+              bank_account_id: row.bank_account_id || row.cash_box_id || row.petty_fund_id || null,
+            }
+          : row;
       setRecord(normalizedRow);
       setFormData(normalizedRow);
       form.setFieldsValue(normalizedRow);
@@ -403,7 +497,7 @@ const AccountingRecordPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [form, id, isChequeModule, loadDynamicOptions, loadRelationOptions, location.state, message, moduleConfig, moduleId, isCreate]);
+  }, [fetchSuggestedCode, form, id, isChequeModule, loadDynamicOptions, loadRelationOptions, location.state, message, moduleConfig, moduleId, isCreate]);
 
   useEffect(() => {
     load();
@@ -528,14 +622,14 @@ const AccountingRecordPage: React.FC = () => {
       });
 
       if (moduleId === 'cash_bank_operations') {
-        const paymentType = String(values.payment_type ?? formData.payment_type ?? '').trim();
-        if (paymentType === 'cash') {
-          payload.bank_account_id = null;
-          payload.cash_box_id = values.cash_box_id || formData.cash_box_id || null;
-        } else {
-          payload.cash_box_id = null;
-          payload.bank_account_id = values.bank_account_id || formData.bank_account_id || null;
-        }
+        const selectedAccountId = String(values.bank_account_id ?? formData.bank_account_id ?? '').trim();
+        const selectedOption = (relationOptions.bank_account_id || []).find(
+          (option) => String(option.value || '').trim() === selectedAccountId
+        );
+        const selectedModule = String(selectedOption?.module || '').trim();
+        payload.bank_account_id = selectedModule === 'bank_accounts' && selectedAccountId ? selectedAccountId : null;
+        payload.cash_box_id = selectedModule === 'cash_boxes' && selectedAccountId ? selectedAccountId : null;
+        payload.petty_fund_id = selectedModule === 'petty_funds' && selectedAccountId ? selectedAccountId : null;
       }
 
       if (isChequeModule) {
@@ -569,7 +663,7 @@ const AccountingRecordPage: React.FC = () => {
 
       return payload;
     },
-    [formData, isChequeModule, moduleId, visibleFields]
+    [formData, isChequeModule, moduleId, relationOptions.bank_account_id, visibleFields]
   );
 
   const syncOperationalFinancePayload = useCallback(async (payload: Record<string, any>) => {
@@ -593,12 +687,15 @@ const AccountingRecordPage: React.FC = () => {
     }
 
     const normalizedCode = String(payload.code || '').trim();
+    const suggestedCode = isCreate && !normalizedCode
+      ? await fetchSuggestedCode(moduleId, payload)
+      : null;
     return {
       ...payload,
       account_id: accountId,
-      ...(isCreate && !normalizedCode ? { code: String(accountRow.code || '').trim() || null } : {}),
+      ...(isCreate && !normalizedCode ? { code: suggestedCode || String(accountRow.code || '').trim() || null } : {}),
     };
-  }, [isCreate, moduleId]);
+  }, [fetchSuggestedCode, isCreate, moduleId]);
 
   const handleSave = async () => {
     if (!moduleId || !moduleConfig) return;
@@ -745,6 +842,8 @@ const AccountingRecordPage: React.FC = () => {
           />
         );
       case FieldType.RELATION:
+      case FieldType.JSON:
+      case FieldType.PROGRESS_STAGES:
         return (
           <SmartFieldRenderer
             field={field}
@@ -801,8 +900,18 @@ const AccountingRecordPage: React.FC = () => {
               }
 
               commitPatch(basePatch);
+              if (
+                isCreate &&
+                (
+                  (moduleId === 'chart_of_accounts' && field.key === 'parent_id')
+                  || (['bank_accounts', 'cash_boxes', 'petty_funds'].includes(String(moduleId || '')) && field.key === 'account_id')
+                )
+              ) {
+                void applySuggestedCodeIfNeeded({ ...formData, ...basePatch });
+              }
             }}
             forceEditMode={!disabled}
+            compactMode
             options={options}
             moduleId={moduleId}
             recordId={id}
@@ -821,6 +930,7 @@ const AccountingRecordPage: React.FC = () => {
               form.setFieldsValue(patch);
             }}
             forceEditMode={!disabled}
+            compactMode
             options={options}
             moduleId={moduleId}
             recordId={id}
@@ -998,23 +1108,6 @@ const AccountingRecordPage: React.FC = () => {
                   </Form.Item>
                 ))}
               </div>
-            )}
-
-            {!isCreate && id && (
-              <Card
-                size="small"
-                title="فرآیندها"
-                className="mb-4 rounded-xl border border-gray-200 dark:border-gray-800"
-              >
-                <ProductionStagesField
-                  recordId={String(id)}
-                  moduleId={moduleId}
-                  readOnly
-                  compact
-                  cardCompact
-                  forceProcessRecordMode
-                />
-              </Card>
             )}
 
             {sortedBlocks.map((block) => {

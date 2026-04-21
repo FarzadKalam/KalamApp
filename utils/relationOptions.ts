@@ -61,19 +61,37 @@ const FINANCIAL_OPERATIONAL_MODULES = new Set(['bank_accounts', 'cash_boxes', 'p
 const buildFinancialOperationalLabel = (targetModule: string, item: any) => {
   const ledgerName = String(item?.account_name || '').trim();
   const ledgerCode = String(item?.account_code || '').trim();
-  if (ledgerName) {
-    return ledgerCode ? `[${toPersianNumber(ledgerCode)}] ${ledgerName}` : ledgerName;
-  }
+  const ledgerSuffix = ledgerName
+    ? ` - ${ledgerCode ? `[${toPersianNumber(ledgerCode)}] ` : ''}${ledgerName}`.trim()
+    : '';
 
   if (targetModule === 'bank_accounts') {
     const bankName = String(item?.bank_name || '').trim() || 'بانک';
     const accountNo = String(item?.account_number || '').trim();
-    return `${bankName}${accountNo ? ` (${toPersianNumber(accountNo)})` : ''}`.trim();
+    const baseLabel = `${bankName}${accountNo ? ` (${toPersianNumber(accountNo)})` : ''}`.trim();
+    return `${baseLabel}${ledgerSuffix}`.trim();
   }
 
   const title = String(item?.name || item?.title || item?.id || 'بدون عنوان').trim();
   const code = String(item?.code || '').trim();
-  return code ? `${title} - ${toPersianNumber(code)}` : title;
+  const baseLabel = code ? `${title} - ${toPersianNumber(code)}` : title;
+  return `${baseLabel}${ledgerSuffix}`.trim();
+};
+
+const buildFinancialOperationalSearchValues = (targetModule: string, item: any) => {
+  const ledgerName = String(item?.account_name || '').trim();
+  const ledgerCode = String(item?.account_code || '').trim();
+  const baseValues =
+    targetModule === 'bank_accounts'
+      ? [item?.bank_name, item?.account_number, item?.card_number, item?.shaba]
+      : [item?.name, item?.title, item?.code];
+  return [
+    buildFinancialOperationalLabel(targetModule, item),
+    ...baseValues,
+    ledgerName,
+    ledgerCode,
+    item?.id,
+  ];
 };
 
 const buildRelationOptionLabel = (targetModule: string, item: any, targetField: string) => {
@@ -152,16 +170,7 @@ const buildRelationSearchText = (targetModule: string, item: any, targetField: s
         .filter(Boolean)
         .join(' ')
     : FINANCIAL_OPERATIONAL_MODULES.has(targetModule)
-      ? [
-          buildFinancialOperationalLabel(targetModule, item),
-          item?.account_name,
-          item?.account_code,
-          item?.bank_name,
-          item?.account_number,
-          item?.name,
-          item?.code,
-          item?.id,
-        ]
+      ? buildFinancialOperationalSearchValues(targetModule, item)
           .map((value) => String(value || '').trim().toLowerCase())
           .filter(Boolean)
           .join(' ')
@@ -618,7 +627,7 @@ export const fetchRelationOptionsForField = async (
           const moduleName = String(item?.module || '').trim();
           const valueKey = String(item?.value || '').trim();
           const dedupeKey = FINANCIAL_OPERATIONAL_MODULES.has(moduleName) && accountId
-            ? `${moduleName}:${accountId}`
+            ? `${moduleName}:${valueKey}`
             : valueKey;
           return [dedupeKey, item];
         })

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Card, Col, Empty, Grid, Row, Spin, Statistic, Table, Tag } from 'antd';
 import {
   AppstoreOutlined,
@@ -634,7 +634,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
     };
   }
 
-  const preferredModuleIds = resolvePreferredRoleModuleIds(permissions, MODULES, 4);
+  const preferredModuleIds = resolvePreferredRoleModuleIds(permissions, MODULES, 8);
   const dashboardModuleIds = resolveDashboardModuleIds(permissions, preferredModuleIds);
   const cacheKey = [
     userId,
@@ -709,6 +709,13 @@ const Dashboard: React.FC = () => {
   const [quickActions, setQuickActions] = useState<DashboardQuickAction[]>([]);
   const [cards, setCards] = useState<DashboardCardItem[]>([]);
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
+  const quickActionDesktopColumns = useMemo(() => {
+    const count = quickActions.length;
+    if (count <= 0) return 1;
+    if (count <= 4) return count;
+    if (count <= 6) return 3;
+    return 4;
+  }, [quickActions.length]);
 
   useEffect(() => {
     const syncBranding = () => {
@@ -806,13 +813,20 @@ const Dashboard: React.FC = () => {
       {canShowWidget('quick_add') && quickActions.length > 0 && (
         <div className="mb-6">
           <Card className="shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div className="text-lg font-bold">افزودن سریع</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">بر اساس ماژول های پر استفاده این نقش</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">بر اساس ماژول های پر استفاده و انتخاب های سریع این نقش</div>
             </div>
-            <Row gutter={[16, 16]}>
+            <div
+              className="grid gap-4"
+              style={{
+                gridTemplateColumns: isMobile
+                  ? 'minmax(0, 1fr)'
+                  : `repeat(${quickActionDesktopColumns}, minmax(0, 1fr))`,
+              }}
+            >
               {quickActions.map((action, index) => (
-                <Col xs={24} sm={12} lg={6} key={action.moduleId}>
+                <div key={action.moduleId}>
                   <Button
                     type={index === 0 ? 'primary' : 'default'}
                     icon={getModuleIcon(action.moduleId)}
@@ -826,9 +840,9 @@ const Dashboard: React.FC = () => {
                       <div className="mt-1 text-xs opacity-75">{action.description}</div>
                     </div>
                   </Button>
-                </Col>
+                </div>
               ))}
-            </Row>
+            </div>
           </Card>
         </div>
       )}

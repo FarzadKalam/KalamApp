@@ -76,8 +76,60 @@ function Assert-Command {
   }
 }
 
+function ConvertTo-Bool {
+  param(
+    [string]$Value,
+    [bool]$DefaultValue = $false
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return $DefaultValue
+  }
+
+  switch ($Value.Trim().ToLowerInvariant()) {
+    '1' { return $true }
+    'true' { return $true }
+    'yes' { return $true }
+    'on' { return $true }
+    '0' { return $false }
+    'false' { return $false }
+    'no' { return $false }
+    'off' { return $false }
+    default { return $DefaultValue }
+  }
+}
+
+function New-SshSessionOptions {
+  param(
+    [string]$DeployPort,
+    [string]$DeployHost,
+    [string]$RepoRoot
+  )
+
+  $controlDir = Join-Path $RepoRoot '.ssh-control'
+  New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
+  $controlPath = [System.IO.Path]::GetFullPath((Join-Path $controlDir ("kalamapp-ssh-{0}-{1}" -f $DeployHost, $DeployPort)))
+  return [pscustomobject]@{
+    SshArgs = @(
+      '-p', $DeployPort,
+      '-o', 'ControlMaster=auto',
+      '-o', 'ControlPersist=600',
+      '-o', "ControlPath=$controlPath"
+    )
+    ScpArgs = @(
+      '-P', $DeployPort,
+      '-o', 'ControlMaster=auto',
+      '-o', 'ControlPersist=600',
+      '-o', "ControlPath=$controlPath"
+    )
+  }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $localArchive = $null
+$sshCommonArgs = $null
+$target = $null
+$sharedSessionOpened = $false
 
 Push-Location $repoRoot
 try {
@@ -95,6 +147,7 @@ try {
   $keepReleases = Get-OptionalEnv -Name "DEPLOY_KEEP_RELEASES" -DefaultValue "5"
   $buildCommand = Get-OptionalEnv -Name "DEPLOY_BUILD_COMMAND" -DefaultValue "npm run build"
   $archiveName = Get-OptionalEnv -Name "DEPLOY_ARCHIVE_NAME" -DefaultValue "kalamapp-dist.tar.gz"
+  $useSharedSsh = ConvertTo-Bool -Value (Get-OptionalEnv -Name 'DEPLOY_USE_SHARED_SSH') -DefaultValue $false
 
   if (-not $SkipBuild) {
     Write-Step "Building production bundle"
@@ -122,9 +175,28 @@ try {
 
   $target = "{0}@{1}" -f $deployUser, $deployHost
   $remoteArchive = "/tmp/$archiveName"
+  $sshCommonArgs = @('-p', $deployPort)
+  $scpCommonArgs = @('-P', $deployPort)
+  if ($useSharedSsh) {
+    $sessionOptions = New-SshSessionOptions -DeployPort $deployPort -DeployHost $deployHost -RepoRoot $repoRoot
+    $sshCommonArgs = $sessionOptions.SshArgs
+    $scpCommonArgs = $sessionOptions.ScpArgs
+  }
+
+  if ($useSharedSsh) {
+    Write-Step "Opening shared SSH session to $target"
+    & ssh @sshCommonArgs -Nf $target
+    if ($LASTEXITCODE -eq 0) {
+      $sharedSessionOpened = $true
+    } else {
+      Write-Warning 'Shared SSH session is not available on this client. Falling back to direct ssh/scp calls.'
+      $sshCommonArgs = @('-p', $deployPort)
+      $scpCommonArgs = @('-P', $deployPort)
+    }
+  }
 
   Write-Step "Uploading archive to $target"
-  & scp -P $deployPort $localArchive "$target`:$remoteArchive"
+  & scp @scpCommonArgs $localArchive "$target`:$remoteArchive"
   if ($LASTEXITCODE -ne 0) {
     throw "Upload failed."
   }
@@ -159,7 +231,7 @@ echo "Deployed $RELEASE_DIR"
 
   Write-Step "Activating release on server"
   $remoteScriptLf = $remoteScript -replace "`r", ""
-  $remoteScriptLf | & ssh -p $deployPort $target "bash -s -- '$deployPath' '$remoteArchive' '$keepReleases'"
+  $remoteScriptLf | & ssh @sshCommonArgs $target "bash -s -- '$deployPath' '$remoteArchive' '$keepReleases'"
   if ($LASTEXITCODE -ne 0) {
     throw "Remote activation failed."
   }
@@ -167,6 +239,10 @@ echo "Deployed $RELEASE_DIR"
   Write-Step "Deploy completed successfully"
 }
 finally {
+  if ($sharedSessionOpened -and $sshCommonArgs -and $target) {
+    & ssh @sshCommonArgs -O exit $target 2>$null | Out-Null
+  }
+
   Pop-Location
 
   if ($localArchive -and (Test-Path -LiteralPath $localArchive)) {

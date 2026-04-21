@@ -90,6 +90,10 @@ const WEB_FORM_VIRTUAL_TARGET_FIELDS = [
     value: WEB_FORM_RECORD_IMAGE_TARGET_KEY,
     field: null,
     inferredType: "image" as WebFormFieldType,
+    isModuleRequired: false,
+    hasModuleDefault: false,
+    moduleDefaultValue: undefined,
+    isManaged: false,
     isVirtual: true,
   },
   {
@@ -97,6 +101,10 @@ const WEB_FORM_VIRTUAL_TARGET_FIELDS = [
     value: WEB_FORM_RECORD_FILE_TARGET_KEY,
     field: null,
     inferredType: "file" as WebFormFieldType,
+    isModuleRequired: false,
+    hasModuleDefault: false,
+    moduleDefaultValue: undefined,
+    isManaged: false,
     isVirtual: true,
   },
 ] as const;
@@ -135,6 +143,25 @@ export const inferWebFormFieldType = (field?: ModuleField | null): WebFormFieldT
   if (field.type === FieldType.RELATION) return "relation";
   if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) return "select";
   return "text";
+};
+
+export const resolveModuleFieldDefaultValue = (field?: ModuleField | null) => {
+  if (!field) return undefined;
+  const rawDefaultValue = field.defaultValue;
+  if (typeof rawDefaultValue === "function") {
+    try {
+      return rawDefaultValue();
+    } catch {
+      return undefined;
+    }
+  }
+  return rawDefaultValue;
+};
+
+const hasMeaningfulDefaultValue = (value: unknown) => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  return true;
 };
 
 export const isWebFormVirtualTargetField = (fieldKey?: string | null) =>
@@ -178,17 +205,36 @@ export const getWebFormTargetFields = (
       if (field.type === FieldType.RELATION) return allowRelation;
       return WEB_FORM_SUPPORTED_FIELD_TYPES.has(field.type);
     })
-    .map((field) => ({
-      label: field.labels?.fa || field.key,
-      value: field.key,
-      field,
-      inferredType: inferWebFormFieldType(field),
-      isVirtual: false,
-    }))
+    .map((field) => {
+      const moduleDefaultValue = resolveModuleFieldDefaultValue(field);
+      const isModuleRequired = field.validation?.required === true;
+      const hasModuleDefault = hasMeaningfulDefaultValue(moduleDefaultValue);
+      return {
+        label: field.labels?.fa || field.key,
+        value: field.key,
+        field,
+        inferredType: inferWebFormFieldType(field),
+        isModuleRequired,
+        hasModuleDefault,
+        moduleDefaultValue,
+        isManaged: isModuleRequired || hasModuleDefault,
+        isVirtual: false,
+      };
+    })
     .sort((a, b) => a.label.localeCompare(b.label, "fa"));
 
   return [...moduleFields, ...WEB_FORM_VIRTUAL_TARGET_FIELDS];
 };
+
+export const getWebFormModuleDefaultValues = (
+  moduleId?: string | null,
+  options?: { accessScope?: WebFormAccessScope | string | null },
+) =>
+  getWebFormTargetFields(moduleId, options).reduce<Record<string, any>>((acc, item) => {
+    if (item.isVirtual || !item.hasModuleDefault) return acc;
+    acc[item.value] = item.moduleDefaultValue;
+    return acc;
+  }, {});
 
 export const getWebFormDuplicateFieldOptions = (moduleId?: string | null) =>
   getWebFormTargetFields(moduleId).filter((item) =>
@@ -214,7 +260,7 @@ export const getMissingWebFormRequiredFields = (
       if (field.hideInCreateForm) return false;
       if (field.readonly) return false;
       if (!field.validation?.required) return false;
-      if (field.defaultValue !== undefined && field.defaultValue !== null && field.defaultValue !== "") return false;
+      if (hasMeaningfulDefaultValue(resolveModuleFieldDefaultValue(field))) return false;
       return WEB_FORM_SUPPORTED_FIELD_TYPES.has(field.type) && !mappedTargetKeys.has(field.key);
     })
     .map((field) => field.labels?.fa || field.key);

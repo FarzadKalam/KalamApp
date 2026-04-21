@@ -332,7 +332,7 @@ const CashBankPage: React.FC = () => {
     );
 
     const fromOps = (operations || []).map((op: any): RowItem => {
-      const accountId = String(op?.bank_account_id || op?.cash_box_id || '').trim();
+      const accountId = String(op?.bank_account_id || op?.cash_box_id || op?.petty_fund_id || '').trim();
       const account = financialAccountById[accountId];
       return ({
       key: `op_${op.id}`,
@@ -372,7 +372,7 @@ const CashBankPage: React.FC = () => {
           : op?.employee_id
             ? { moduleId: 'profiles', recordId: String(op.employee_id) }
             : null,
-      bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : 'bank_accounts'), recordId: accountId } : null,
+      bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : op?.petty_fund_id ? 'petty_funds' : 'bank_accounts'), recordId: accountId } : null,
       chequeRelation: op?.cheque_id ? { moduleId: 'cheques', recordId: String(op.cheque_id) } : null,
     });
     });

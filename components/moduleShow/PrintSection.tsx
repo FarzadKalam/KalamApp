@@ -72,6 +72,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [savingPdfToRecord, setSavingPdfToRecord] = useState(false);
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
+  const mobileTemplateSelectWrapRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
   const pendingPrintRef = useRef(false);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
@@ -296,7 +297,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         >
         <div className="print-select-shell">
           {isMobile ? (
-            <div className="print-template-mobile-select-wrap">
+            <div
+              ref={mobileTemplateSelectWrapRef}
+              className="print-template-mobile-select-wrap"
+            >
               <div className="print-template-mobile-select-label">قالب چاپ</div>
               <Select
                 value={selectedTemplateId || undefined}
@@ -313,7 +317,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                 listHeight={320}
                 popupMatchSelectWidth
                 optionFilterProp="label"
-                getPopupContainer={() => document.body}
+                getPopupContainer={(trigger) => trigger?.parentElement || mobileTemplateSelectWrapRef.current || document.body}
+                styles={{ popup: { root: { zIndex: 12020 } } }}
                 labelRender={() =>
                   selectedTemplate ? (
                     <div className="print-template-mobile-value">

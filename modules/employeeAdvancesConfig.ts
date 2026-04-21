@@ -54,7 +54,22 @@ export const employeeAdvancesConfig: ModuleDefinition = {
       rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
       tableColumns: [
         { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [{ label: 'نقد', value: 'cash' }, { label: 'بانک', value: 'bank' }, { label: 'کارت', value: 'card' }, { label: 'چک', value: 'cheque' }] },
-        { key: 'source_account', title: 'حساب پرداخت', type: FieldType.RELATION, width: 180, relationConfig: { targetModule: 'bank_accounts', targetField: 'bank_name' } },
+        {
+          key: 'source_account',
+          title: 'حساب پرداخت',
+          type: FieldType.RELATION,
+          width: 220,
+          relationConfig: {
+            targetModule: 'bank_accounts',
+            targetField: 'bank_name',
+            filter: { is_active: true },
+            sourceModules: [
+              { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+              { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+              { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+            ],
+          },
+        },
         { key: 'date', title: 'تاریخ', type: FieldType.DATE, width: 130 },
         { key: 'amount', title: 'مبلغ', type: FieldType.PRICE, width: 160, showTotal: true },
         { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },

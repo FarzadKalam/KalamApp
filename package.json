@@ -1,7 +1,7 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.0.2.5",
+  "version": "2.0.2.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,11 @@
     "test:view-filters": "vitest run components/workflows/WorkflowConditionsGroup.test.tsx",
     "test:perf": "vitest run utils/notificationViewModels.test.ts components/SmartForm.test.tsx",
     "preview": "vite preview",
+    "db:sql": "powershell -ExecutionPolicy Bypass -File ./scripts/run-db-sql.ps1",
+    "db:phase109": "powershell -ExecutionPolicy Bypass -File ./scripts/run-db-sql.ps1 -SqlFile ./database_v1_phase109_web_forms_attendance_occurred_at.sql",
+    "db:migrate:server": "powershell -ExecutionPolicy Bypass -File ./scripts/run-server-db-migrations.ps1",
+    "db:migrate:server:list": "powershell -ExecutionPolicy Bypass -File ./scripts/run-server-db-migrations.ps1 -ListPending",
+    "db:migrate:server:latest": "powershell -ExecutionPolicy Bypass -File ./scripts/run-server-db-migrations.ps1 -LatestOnly",
     "deploy:prod": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1",
     "deploy:prod:skip-build": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy.ps1 -SkipBuild",
     "deploy:function": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-supabase-function.ps1",

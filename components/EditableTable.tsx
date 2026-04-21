@@ -174,6 +174,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [calendarPopoverRowKey, setCalendarPopoverRowKey] = useState<string | null>(null);
   const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
   const shelfAutoLoadRef = useRef<Record<string, string>>({});
+  const dataRef = useRef<any[]>(initialData || []);
+  const tempDataRef = useRef<any[]>([]);
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
@@ -185,6 +187,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return empty;
   });
   const [userToggledCollapse, setUserToggledCollapse] = useState(false);
+
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
+  useEffect(() => {
+    tempDataRef.current = tempData;
+  }, [tempData]);
 
   useEffect(() => {
     if (userToggledCollapse) return;
@@ -889,10 +899,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
   };
 
+  const getActiveRowsSnapshot = () => (isEditing ? tempDataRef.current : dataRef.current);
+
   const applyRowUpdate = (nextRows: any[]) => {
     if (isEditing) {
+      tempDataRef.current = nextRows;
       setTempData(nextRows);
     } else {
+      dataRef.current = nextRows;
       setData(nextRows);
     }
     if (mode === 'local' && onChange) onChange(nextRows);
@@ -907,7 +921,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       dimension_count_to_sub_quantity?: boolean;
     }
   ) => {
-    const source = isEditing ? tempData : data;
+    const source = getActiveRowsSnapshot();
     const nextRows = [...source];
     const nextRow = { ...(nextRows[index] || {}), ...changes };
 
@@ -920,7 +934,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const updateInvoiceDateRange = (index: number, changes: { start_date?: string | null; end_date?: string | null }) => {
-    const source = isEditing ? tempData : data;
+    const source = getActiveRowsSnapshot();
     const nextRows = [...source];
     const nextRow = { ...(nextRows[index] || {}), ...changes };
     applyInvoiceAutoQuantity(nextRow);
@@ -932,7 +946,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const updateRow = (index: number, key: string, value: any) => {
-    const source = isEditing ? tempData : data;
+    const source = getActiveRowsSnapshot();
     const newData = [...source];
     newData[index] = { ...newData[index], [key]: value };
 
@@ -1047,12 +1061,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       newData[index]['total_price'] = calculateRow(newData[index], block.rowCalculationType);
     }
 
-    if (isEditing) {
-      setTempData(newData);
-    } else {
-      setData(newData);
-    }
-    if (mode === 'local' && onChange) onChange(newData);
+    applyRowUpdate(newData);
 
     if (isProductionOrder && isBomItemBlock) {
       const filterableKeys = new Set((block.tableColumns || []).filter((c: any) => c.filterable).map((c: any) => c.key));
@@ -1070,10 +1079,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }));
       supabase.from(moduleId).update({ [block.id]: dataToSave }).eq('id', recordId);
     }
+    return newData;
   };
 
   const clearSelectedProduct = (rowIndex: number) => {
-    const source = isEditing ? tempData : data;
+    const source = getActiveRowsSnapshot();
     const baseRow = source[rowIndex] || {};
     const rowKey = String(baseRow?.key || baseRow?.id || rowIndex);
     const nextRow: any = { ...baseRow };
@@ -1090,16 +1100,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const newData = [...source];
     newData[rowIndex] = nextRow;
-    if (isEditing) setTempData(newData);
-    else setData(newData);
-    if (mode === 'local' && onChange) onChange(newData);
+    applyRowUpdate(newData);
   };
 
   const handleRelationChange = async (index: number, key: string, value: any, relationConfig: any) => {
     updateRow(index, key, value);
 
     if (isAnyInvoiceItems && key === 'product_id' && !value) {
-      const sourceRows = isEditing ? tempData : data;
+      const sourceRows = getActiveRowsSnapshot();
       const nextRows = [...sourceRows];
       const currentRow = { ...(nextRows[index] || {}), product_id: null };
       const rowKey = String(currentRow?.key || currentRow?.id || index);
@@ -1121,7 +1129,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
 
     if (isInvoiceItems && key === 'price_list_id') {
-      const sourceRows = isEditing ? tempData : data;
+      const sourceRows = getActiveRowsSnapshot();
       const nextRows = [...sourceRows];
       const currentRow = { ...(nextRows[index] || {}), [key]: value || null };
       const rowKey = String(currentRow?.key || currentRow?.id || index);
@@ -1155,7 +1163,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
 
     if (isInvoiceItems && key === 'package_id') {
-      const sourceRows = isEditing ? tempData : data;
+      const sourceRows = getActiveRowsSnapshot();
       const nextRows = [...sourceRows];
       const currentRow = { ...(nextRows[index] || {}), [key]: value || null };
       const rowKey = String(currentRow?.key || currentRow?.id || index);
@@ -1223,7 +1231,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         let record: any = null;
         let error: any = null;
         const invoiceProductOption = isAnyInvoiceItems && key === 'product_id'
-          ? getInvoiceProductRelationOptions((isEditing ? tempData : data)[index]).find((opt: any) => String(opt?.value || '') === String(value))
+          ? getInvoiceProductRelationOptions(getActiveRowsSnapshot()[index]).find((opt: any) => String(opt?.value || '') === String(value))
           : null;
 
         if (isAnyInvoiceItems && key === 'product_id') {
@@ -1280,7 +1288,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         }
 
         if (!error && record) {
-          const sourceRows = isEditing ? tempData : data;
+          const sourceRows = getActiveRowsSnapshot();
           const newData = [...sourceRows];
           const currentRow = { ...newData[index], [key]: value };
           const isBarterRelationSelection = isAnyInvoicePayments && key === 'barter_id';
@@ -1479,9 +1487,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           currentRow['total_price'] = calculateRow(currentRow, block.rowCalculationType);
 
           newData[index] = currentRow;
-          if (isEditing) setTempData(newData);
-          else setData(newData);
-          if (mode === 'local' && onChange) onChange(newData);
+          applyRowUpdate(newData);
           if (isAnyInvoiceItems && ['product_id', 'price_list_id', 'package_id'].includes(key)) {
             bumpRowReloadVersion(String(currentRow?.key || currentRow?.id || index));
           }
@@ -3349,7 +3355,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const applySelectedProduct = (rowIndex: number, rowKey: string, selected: any) => {
     if (rowIndex < 0 || !selected) return;
 
-    const source = isEditing ? tempData : data;
+    const source = getActiveRowsSnapshot();
     const baseRow = source[rowIndex] || {};
     const nextRow: any = { ...baseRow };
 
@@ -3380,9 +3386,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const newData = [...source];
     newData[rowIndex] = nextRow;
-    if (isEditing) setTempData(newData);
-    else setData(newData);
-    if (mode === 'local' && onChange) onChange(newData);
+    applyRowUpdate(newData);
 
     if (selected?.id) {
       loadShelvesForRow(rowKey, selected.id);
@@ -3581,21 +3585,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
           options = shelvesState?.options || [];
         }
       }
-      if (
-        isAnyDocumentPayments
-        && (
-          (isInvoicePayments && col.key === 'target_account')
-          || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account')
-        )
-        && Array.isArray(options)
-      ) {
-        const paymentType = String(record?.payment_type || '').trim();
-        if (paymentType === 'cash') {
-          options = options.filter((opt: any) => ['cash_boxes', 'petty_funds'].includes(String(opt?.module || '')));
-        } else if (paymentType) {
-          options = options.filter((opt: any) => String(opt?.module || '') === 'bank_accounts');
-        }
-      }
     }
     return options;
   };
@@ -3622,8 +3611,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const isInvoicePaymentAccountColumn = isAnyDocumentPayments
       && ((isInvoicePayments && col.key === 'target_account') || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account'));
-    const paymentType = String((record as any)?.payment_type || '').trim();
-
     const relationConfig =
       (isAnyInvoiceItems || isCatalogProductItems) && col.key === 'product_id' && col.relationConfig
         ? {
@@ -3637,23 +3624,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 ],
           }
         : isInvoicePaymentAccountColumn && col.relationConfig
-          ? paymentType === 'cash'
-            ? {
-                targetModule: 'cash_boxes',
-                targetField: 'name',
-                filter: { is_active: true },
-                sourceModules: [
-                  { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
-                  { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
-                ],
-              }
-            : paymentType
-              ? {
-                  targetModule: 'bank_accounts',
-                  targetField: 'bank_name',
-                  filter: { is_active: true },
-                }
-              : col.relationConfig
+          ? col.relationConfig
         : col.relationConfig;
 
     const baseReadonly = Boolean(col.readonly)

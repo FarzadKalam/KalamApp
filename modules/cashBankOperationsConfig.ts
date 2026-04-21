@@ -1,4 +1,4 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature, LogicOperator } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 
 export const cashBankOperationsConfig: ModuleDefinition = {
   id: 'cash_bank_operations',
@@ -78,25 +78,32 @@ export const cashBankOperationsConfig: ModuleDefinition = {
     },
     {
       key: 'bank_account_id',
-      labels: { fa: 'حساب بانکی', en: 'Bank Account' },
+      labels: { fa: 'حساب دریافت/پرداخت', en: 'Treasury Account' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'relations',
       order: 1,
-      relationConfig: { targetModule: 'bank_accounts', targetField: 'bank_name' },
+      relationConfig: {
+        targetModule: 'bank_accounts',
+        targetField: 'bank_name',
+        filter: { is_active: true },
+        sourceModules: [
+          { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+          { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+          { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+        ],
+      },
       nature: FieldNature.STANDARD,
-      logic: { visibleIf: { field: 'payment_type', operator: LogicOperator.NOT_EQUALS, value: 'cash' } },
     },
     {
       key: 'cash_box_id',
-      labels: { fa: 'صندوق', en: 'Cash Box' },
+      labels: { fa: 'حساب دریافت/پرداخت', en: 'Treasury Account' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'relations',
       order: 1.5,
       relationConfig: { targetModule: 'cash_boxes', targetField: 'name' },
       nature: FieldNature.STANDARD,
-      logic: { visibleIf: { field: 'payment_type', operator: LogicOperator.EQUALS, value: 'cash' } },
     },
     {
       key: 'sales_invoice_id',

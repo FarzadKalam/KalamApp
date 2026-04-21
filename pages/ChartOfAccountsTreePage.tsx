@@ -90,6 +90,24 @@ const NEXT_LEVEL: Record<AccountRow['account_level'], AccountRow['account_level'
 
 const normalizeText = (value: string | null | undefined) => String(value || '').trim().toLowerCase();
 
+const normalizeScopeText = (value: unknown) =>
+  String(value || '')
+    .normalize('NFKC')
+    .replace(/\u200c/g, ' ')
+    .replace(/[يى]/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[ۀة]/g, 'ه')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+const TREASURY_GROUP_NAMES = {
+  cash: ['صندوق', 'صندوق ها', 'صندوق‌ها', 'صندوقها'],
+  bank: ['بانک ها', 'بانک‌ها', 'بانکها'],
+  petty: ['تنخواه گردان', 'تنخواه گردان ها', 'تنخواه‌گردان ها', 'تنخواه گردانها', 'تنخواه‌گردان‌ها'],
+} as const;
+
 const sortByCode = (a: AccountRow, b: AccountRow) =>
   String(a.code || '').localeCompare(String(b.code || ''), 'fa', { numeric: true, sensitivity: 'base' });
 
@@ -216,41 +234,102 @@ const ChartOfAccountsTreePage: React.FC = () => {
     return !row.is_active;
   }, [statusFilter]);
 
-  const cashLinksByAccount = useMemo(() => {
+  const treasuryGroupIds = useMemo(() => {
+    const result: Record<'cash' | 'bank' | 'petty', string | null> = {
+      cash: null,
+      bank: null,
+      petty: null,
+    };
+    rows.forEach((row) => {
+      const normalizedName = normalizeScopeText(row.name);
+      if (!result.cash && TREASURY_GROUP_NAMES.cash.some((name) => normalizeScopeText(name) === normalizedName)) {
+        result.cash = row.id;
+      }
+      if (!result.bank && TREASURY_GROUP_NAMES.bank.some((name) => normalizeScopeText(name) === normalizedName)) {
+        result.bank = row.id;
+      }
+      if (!result.petty && TREASURY_GROUP_NAMES.petty.some((name) => normalizeScopeText(name) === normalizedName)) {
+        result.petty = row.id;
+      }
+    });
+    return result;
+  }, [rows]);
+
+  const treasuryDescendantIds = useMemo(() => {
+    const childrenByParent = new Map<string | null, string[]>();
+    rows.forEach((row) => {
+      const parentId = row.parent_id ? String(row.parent_id) : null;
+      const list = childrenByParent.get(parentId) || [];
+      list.push(row.id);
+      childrenByParent.set(parentId, list);
+    });
+
+    const collectDescendants = (rootId: string | null) => {
+      const ids = new Set<string>();
+      if (!rootId) return ids;
+      const stack = [rootId];
+      while (stack.length > 0) {
+        const currentId = String(stack.pop() || '').trim();
+        if (!currentId || ids.has(currentId)) continue;
+        ids.add(currentId);
+        (childrenByParent.get(currentId) || []).forEach((childId) => {
+          if (!ids.has(childId)) stack.push(childId);
+        });
+      }
+      return ids;
+    };
+
+    return {
+      cash: collectDescendants(treasuryGroupIds.cash),
+      bank: collectDescendants(treasuryGroupIds.bank),
+      petty: collectDescendants(treasuryGroupIds.petty),
+    };
+  }, [rows, treasuryGroupIds]);
+
+  const groupedCashLinksByAccount = useMemo(() => {
     const map = new Map<string, CashBoxLink[]>();
     cashLinks.forEach((box) => {
       const accountId = String(box.account_id || '').trim();
       if (!accountId || box.is_active === false) return;
-      const current = map.get(accountId) || [];
+      const targetId = treasuryGroupIds.cash && treasuryDescendantIds.cash.has(accountId)
+        ? treasuryGroupIds.cash
+        : accountId;
+      const current = map.get(targetId) || [];
       current.push(box);
-      map.set(accountId, current);
+      map.set(targetId, current);
     });
     return map;
-  }, [cashLinks]);
+  }, [cashLinks, treasuryDescendantIds.cash, treasuryGroupIds.cash]);
 
-  const bankLinksByAccount = useMemo(() => {
+  const groupedBankLinksByAccount = useMemo(() => {
     const map = new Map<string, BankAccountLink[]>();
     bankLinks.forEach((bank) => {
       const accountId = String(bank.account_id || '').trim();
       if (!accountId || bank.is_active === false) return;
-      const current = map.get(accountId) || [];
+      const targetId = treasuryGroupIds.bank && treasuryDescendantIds.bank.has(accountId)
+        ? treasuryGroupIds.bank
+        : accountId;
+      const current = map.get(targetId) || [];
       current.push(bank);
-      map.set(accountId, current);
+      map.set(targetId, current);
     });
     return map;
-  }, [bankLinks]);
+  }, [bankLinks, treasuryDescendantIds.bank, treasuryGroupIds.bank]);
 
-  const pettyFundLinksByAccount = useMemo(() => {
+  const groupedPettyFundLinksByAccount = useMemo(() => {
     const map = new Map<string, PettyFundLink[]>();
     pettyFundLinks.forEach((fund) => {
       const accountId = String(fund.account_id || '').trim();
       if (!accountId || fund.is_active === false) return;
-      const current = map.get(accountId) || [];
+      const targetId = treasuryGroupIds.petty && treasuryDescendantIds.petty.has(accountId)
+        ? treasuryGroupIds.petty
+        : accountId;
+      const current = map.get(targetId) || [];
       current.push(fund);
-      map.set(accountId, current);
+      map.set(targetId, current);
     });
     return map;
-  }, [pettyFundLinks]);
+  }, [pettyFundLinks, treasuryDescendantIds.petty, treasuryGroupIds.petty]);
 
   const accountNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -311,13 +390,13 @@ const ChartOfAccountsTreePage: React.FC = () => {
     const selected = new Set<string>();
 
     eligible.forEach((row) => {
-        const bankText = (bankLinksByAccount.get(row.id) || [])
+        const bankText = (groupedBankLinksByAccount.get(row.id) || [])
           .map((bank) => `${bank.bank_name || 'بانک'} ${bank.account_number || ''}`.trim())
           .join(' ');
-        const cashText = (cashLinksByAccount.get(row.id) || [])
+        const cashText = (groupedCashLinksByAccount.get(row.id) || [])
           .map((cash) => `${cash.name || 'صندوق'} ${cash.code || ''}`.trim())
           .join(' ');
-        const pettyText = (pettyFundLinksByAccount.get(row.id) || [])
+        const pettyText = (groupedPettyFundLinksByAccount.get(row.id) || [])
           .map((fund) => `${fund.name || 'تنخواه'} ${fund.code || ''}`.trim())
           .join(' ');
         const haystack = `${normalizeText(row.code)} ${normalizeText(row.name)} ${normalizeText(bankText)} ${normalizeText(cashText)} ${normalizeText(pettyText)}`;
@@ -335,7 +414,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
     });
 
     return eligible.filter((row) => selected.has(row.id));
-  }, [rows, isStatusVisible, searchTerm, bankLinksByAccount, cashLinksByAccount, pettyFundLinksByAccount]);
+  }, [rows, isStatusVisible, searchTerm, groupedBankLinksByAccount, groupedCashLinksByAccount, groupedPettyFundLinksByAccount]);
 
   const treeData = useMemo<DataNode[]>(() => {
     const byId = new Map(visibleRows.map((row) => [row.id, row]));
@@ -354,10 +433,30 @@ const ChartOfAccountsTreePage: React.FC = () => {
       const typeMeta = ACCOUNT_TYPE_META[row.account_type];
       const natureLabel = row.nature === 'debit' ? 'بدهکار' : row.nature === 'credit' ? 'بستانکار' : 'خنثی';
       const accountChildren = (childrenMap.get(row.id) || []).map(renderNode);
-      const cashUsage = cashLinksByAccount.get(row.id) || [];
-      const bankUsage = bankLinksByAccount.get(row.id) || [];
-      const pettyUsage = pettyFundLinksByAccount.get(row.id) || [];
+      const cashUsage = groupedCashLinksByAccount.get(row.id) || [];
+      const bankUsage = groupedBankLinksByAccount.get(row.id) || [];
+      const pettyUsage = groupedPettyFundLinksByAccount.get(row.id) || [];
       const isEditableLeafDetail = row.is_leaf && row.account_level === 'detail';
+      const treasuryCreateAction =
+        row.id === treasuryGroupIds.cash
+          ? {
+              title: 'ایجاد صندوق',
+              disabled: !canEditCashBoxes,
+              onClick: () => navigate('/cash_boxes/create', { state: { initialValues: { account_id: row.id, is_active: true } } }),
+            }
+          : row.id === treasuryGroupIds.bank
+            ? {
+                title: 'ایجاد حساب بانکی',
+                disabled: !canEditBankAccounts,
+                onClick: () => navigate('/bank_accounts/create', { state: { initialValues: { account_id: row.id, is_active: true } } }),
+              }
+            : row.id === treasuryGroupIds.petty
+              ? {
+                  title: 'ایجاد تنخواه',
+                  disabled: !canEditPettyFunds,
+                  onClick: () => navigate('/petty_funds/create', { state: { initialValues: { account_id: row.id, is_active: true } } }),
+                }
+              : null;
       const usageChildren: DataNode[] = [
         ...cashUsage.map((cash) => ({
           key: `cash:${row.id}:${cash.id}`,
@@ -521,14 +620,18 @@ const ChartOfAccountsTreePage: React.FC = () => {
                   />
                 </Tooltip>
               </Popconfirm>
-              <Tooltip title="افزودن زیرحساب">
+              <Tooltip title={treasuryCreateAction?.title || 'افزودن زیرحساب'}>
                 <Button
                   size="small"
                   type="text"
                   icon={<PlusOutlined />}
-                  disabled={!canEdit || row.account_level === 'detail'}
+                  disabled={treasuryCreateAction ? treasuryCreateAction.disabled : (!canEdit || row.account_level === 'detail')}
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (treasuryCreateAction) {
+                      treasuryCreateAction.onClick();
+                      return;
+                    }
                     navigate('/chart_of_accounts/create', {
                       state: {
                         initialValues: {
@@ -551,7 +654,7 @@ const ChartOfAccountsTreePage: React.FC = () => {
     };
 
     return (childrenMap.get(null) || []).map(renderNode);
-  }, [visibleRows, canDelete, canEdit, canDeleteBankAccounts, canDeleteCashBoxes, canDeletePettyFunds, canEditBankAccounts, canEditCashBoxes, canEditPettyFunds, handleDeleteAccount, handleDeleteBankAccount, handleDeleteCashBox, handleDeletePettyFund, navigate, bankLinksByAccount, cashLinksByAccount, pettyFundLinksByAccount]);
+  }, [visibleRows, canDelete, canEdit, canDeleteBankAccounts, canDeleteCashBoxes, canDeletePettyFunds, canEditBankAccounts, canEditCashBoxes, canEditPettyFunds, handleDeleteAccount, handleDeleteBankAccount, handleDeleteCashBox, handleDeletePettyFund, navigate, groupedBankLinksByAccount, groupedCashLinksByAccount, groupedPettyFundLinksByAccount, treasuryGroupIds]);
 
   const parentKeys = useMemo(() => {
     const keys = new Set<string>();

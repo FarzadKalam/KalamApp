@@ -43,6 +43,8 @@ declare
   v_duplicate_column_exists boolean := false;
   v_record_action text := 'created';
   v_update_assignments text := '';
+  v_insert_columns text := '';
+  v_insert_select_columns text := '';
   v_match_value_text text := '';
   v_first_upload_url text := '';
   v_target_record_id_text text := '';
@@ -185,6 +187,10 @@ begin
   end loop;
 
   if v_form.target_module_id = 'attendance_logs' then
+    if nullif(coalesce(v_record_payload->>'log_type', ''), '') is null then
+      v_record_payload := v_record_payload || jsonb_build_object('log_type', 'check_in');
+    end if;
+
     if nullif(coalesce(v_record_payload->>'source_type', ''), '') is null then
       v_record_payload := v_record_payload || jsonb_build_object('source_type', 'web_form');
     end if;
@@ -197,6 +203,28 @@ begin
       else
         v_record_payload := v_record_payload || jsonb_build_object('occurred_at', now());
       end if;
+    end if;
+  end if;
+
+  if auth.uid() is not null then
+    if exists (
+      select 1
+      from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = v_form.target_module_id
+        and c.column_name = 'created_by'
+    ) and nullif(coalesce(v_record_payload->>'created_by', ''), '') is null then
+      v_record_payload := v_record_payload || jsonb_build_object('created_by', auth.uid());
+    end if;
+
+    if exists (
+      select 1
+      from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = v_form.target_module_id
+        and c.column_name = 'updated_by'
+    ) and nullif(coalesce(v_record_payload->>'updated_by', ''), '') is null then
+      v_record_payload := v_record_payload || jsonb_build_object('updated_by', auth.uid());
     end if;
   end if;
 
@@ -374,10 +402,24 @@ begin
 
     v_insert_payload := v_record_payload;
 
+    select
+      string_agg(format('%1$I', c.column_name), ', ' order by c.ordinal_position),
+      string_agg(format('src.%1$I', c.column_name), ', ' order by c.ordinal_position)
+    into v_insert_columns, v_insert_select_columns
+    from information_schema.columns c
+    where c.table_schema = 'public'
+      and c.table_name = v_form.target_module_id
+      and exists (
+        select 1
+        from jsonb_each(v_insert_payload) payload
+        where payload.key = c.column_name
+      );
+
     execute format(
-      'insert into public.%I as t select * from jsonb_populate_record(null::public.%I, $1) returning to_jsonb(t)',
+      'insert into public.%1$I as t (%2$s) select %3$s from jsonb_populate_record(null::public.%1$I, $1) as src returning to_jsonb(t)',
       v_form.target_module_id,
-      v_form.target_module_id
+      v_insert_columns,
+      v_insert_select_columns
     )
     into v_target_record
     using v_insert_payload;

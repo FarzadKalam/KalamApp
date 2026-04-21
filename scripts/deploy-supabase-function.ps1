@@ -106,6 +106,32 @@ function Assert-Command {
   }
 }
 
+function New-SshSessionOptions {
+  param(
+    [string]$DeployPort,
+    [string]$DeployHost,
+    [string]$RepoRoot
+  )
+
+  $controlDir = Join-Path $RepoRoot '.ssh-control'
+  New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
+  $controlPath = [System.IO.Path]::GetFullPath((Join-Path $controlDir ("kalamapp-ssh-{0}-{1}" -f $DeployHost, $DeployPort)))
+  return [pscustomobject]@{
+    SshArgs = @(
+      '-p', $DeployPort,
+      '-o', 'ControlMaster=auto',
+      '-o', 'ControlPersist=600',
+      '-o', "ControlPath=$controlPath"
+    )
+    ScpArgs = @(
+      '-P', $DeployPort,
+      '-o', 'ControlMaster=auto',
+      '-o', 'ControlPersist=600',
+      '-o', "ControlPath=$controlPath"
+    )
+  }
+}
+
 function Get-LocalFunctionNames {
   param([string]$FunctionsRoot)
 
@@ -157,6 +183,9 @@ function Normalize-RequestedFunctions {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $functionsRoot = Join-Path $repoRoot 'supabase/functions'
 $localArchive = $null
+$sshCommonArgs = $null
+$target = $null
+$sharedSessionOpened = $false
 
 Push-Location $repoRoot
 try {
@@ -193,6 +222,7 @@ try {
   $restartWithSudo = Get-OptionalBoolEnv -Name 'DEPLOY_FUNCTIONS_RESTART_WITH_SUDO' -DefaultValue $false
   $shouldRestart = -not $SkipRestart
   $needsTty = $filesWithSudo -or $restartWithSudo
+  $useSharedSsh = Get-OptionalBoolEnv -Name 'DEPLOY_USE_SHARED_SSH' -DefaultValue $false
 
   $localArchive = Join-Path ([System.IO.Path]::GetTempPath()) $archiveName
   if (Test-Path -LiteralPath $localArchive) {
@@ -208,9 +238,28 @@ try {
 
   $target = '{0}@{1}' -f $deployUser, $deployHost
   $remoteArchive = "/tmp/$archiveName"
+  $sshCommonArgs = @('-p', $deployPort)
+  $scpCommonArgs = @('-P', $deployPort)
+  if ($useSharedSsh) {
+    $sessionOptions = New-SshSessionOptions -DeployPort $deployPort -DeployHost $deployHost -RepoRoot $repoRoot
+    $sshCommonArgs = $sessionOptions.SshArgs
+    $scpCommonArgs = $sessionOptions.ScpArgs
+  }
+
+  if ($useSharedSsh) {
+    Write-Step "Opening shared SSH session to $target"
+    & ssh @sshCommonArgs -Nf $target
+    if ($LASTEXITCODE -eq 0) {
+      $sharedSessionOpened = $true
+    } else {
+      Write-Warning 'Shared SSH session is not available on this client. Falling back to direct ssh/scp calls.'
+      $sshCommonArgs = @('-p', $deployPort)
+      $scpCommonArgs = @('-P', $deployPort)
+    }
+  }
 
   Write-Step "Uploading archive to $target"
-  & scp -P $deployPort $localArchive "$target`:$remoteArchive"
+  & scp @scpCommonArgs $localArchive "$target`:$remoteArchive"
   if ($LASTEXITCODE -ne 0) {
     throw 'Upload failed.'
   }
@@ -284,10 +333,7 @@ fi
 echo "Deployed functions: ${FUNCTION_NAMES[*]}"
 '@
 
-  $sshArgs = @(
-    '-p',
-    $deployPort
-  )
+  $sshArgs = @()
   if ($needsTty) {
     $sshArgs += '-tt'
   }
@@ -308,7 +354,7 @@ echo "Deployed functions: ${FUNCTION_NAMES[*]}"
 
   Write-Step 'Copying functions on server'
   $remoteScriptLf = $remoteScript -replace "`r", ''
-  $remoteScriptLf | & ssh @sshArgs
+  $remoteScriptLf | & ssh @sshCommonArgs @sshArgs
   if ($LASTEXITCODE -ne 0) {
     throw 'Remote function deploy failed.'
   }
@@ -316,6 +362,10 @@ echo "Deployed functions: ${FUNCTION_NAMES[*]}"
   Write-Step 'Supabase function deploy completed successfully'
 }
 finally {
+  if ($sharedSessionOpened -and $sshCommonArgs -and $target) {
+    & ssh @sshCommonArgs -O exit $target 2>$null | Out-Null
+  }
+
   Pop-Location
 
   if ($localArchive -and (Test-Path -LiteralPath $localArchive)) {

@@ -246,7 +246,7 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
           return Number(op?.amount || 0) > 0;
         })
         .map((op) => {
-          const accountId = String(op?.bank_account_id || op?.cash_box_id || '').trim();
+          const accountId = String(op?.bank_account_id || op?.cash_box_id || op?.petty_fund_id || '').trim();
           const account = nextFinancialAccountLabels[accountId];
           return ({
             key: `op_${op.id}`,
@@ -264,7 +264,7 @@ const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelPro
             description: String(op?.description || ''),
             createdAt: op?.created_at || null,
             invoiceRelation: null,
-            bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : 'bank_accounts'), recordId: accountId } : null,
+            bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : op?.petty_fund_id ? 'petty_funds' : 'bank_accounts'), recordId: accountId } : null,
           });
         });
 

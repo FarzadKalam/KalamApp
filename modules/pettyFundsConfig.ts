@@ -44,7 +44,7 @@ export const pettyFundsConfig: ModuleDefinition = {
       relationConfig: {
         targetModule: 'chart_of_accounts',
         targetField: 'name',
-        chartScopeRootNames: ['وجوه نقد و بانک', 'تنخواه گردان ها', 'تنخواه‌گردان ها', 'تنخواه گردانها', 'تنخواه‌گردان‌ها'],
+        chartScopeRootNames: ['تنخواه گردان', 'تنخواه گردان ها', 'تنخواه‌گردان ها', 'تنخواه گردانها', 'تنخواه‌گردان‌ها'],
         requireLeaf: true,
         requireDetail: true,
       },

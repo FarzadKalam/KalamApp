@@ -240,52 +240,38 @@ html.dark .rmdp-container .rmdp-leather.ep-arrow[direction="right"] {
   border-left-color: #434343;
 }
 
-.kalam-adaptive-picker-popover .ant-popover-inner {
-  padding: 0 !important;
-  border-radius: 20px !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.kalam-adaptive-picker-popover .ant-popover-arrow {
-  display: none !important;
-}
-
 .kalam-adaptive-picker-modal .ant-modal {
-  max-width: 100vw !important;
-  margin: 0 !important;
+  max-width: min(100vw - 24px, 460px) !important;
+  margin: 0 auto !important;
   padding-bottom: 0 !important;
-  top: auto !important;
 }
 
 .kalam-adaptive-picker-modal .ant-modal-wrap {
   display: flex;
-  align-items: flex-end;
-  justify-content: stretch;
-  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
 }
 
 .kalam-adaptive-picker-modal .ant-modal-content {
   background: transparent !important;
   box-shadow: none !important;
-  max-height: 100dvh;
+  max-height: calc(100dvh - 24px);
   display: flex;
   flex-direction: column;
 }
 
 .kalam-adaptive-picker-modal .ant-modal-body {
   padding: 0 !important;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .kalam-adaptive-picker-modal__sheet {
   display: flex;
-  min-height: 100dvh;
-  max-height: 100dvh;
-  align-items: flex-end;
-  padding-top: 12px;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  overflow: hidden;
 }
 
 .kalam-adaptive-picker__field {
@@ -356,21 +342,15 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 }
 
 .kalam-adaptive-picker {
-  width: min(380px, calc(100vw - 24px));
+  width: min(420px, calc(100vw - 24px));
+  max-width: 100%;
+  max-height: min(88dvh, 760px);
   border: 1px solid #d9d9d9;
-  border-radius: 22px;
+  border-radius: 24px;
   background: #ffffff;
   color: rgba(15, 23, 42, 0.92);
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.22);
   padding: 16px;
-}
-
-.kalam-adaptive-picker--mobile {
-  width: 100%;
-  max-height: calc(100dvh - 12px);
-  min-height: 0;
-  border-radius: 28px 28px 0 0;
-  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   overflow: auto;
 }
 
@@ -459,10 +439,10 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
   width: fit-content;
   max-width: 100%;
   margin: 0 auto;
-  border-radius: 18px;
+  border-radius: 16px;
   background: #fafafa;
   border: 1px solid #f0f0f0;
-  padding: 10px;
+  padding: 8px;
   overflow: hidden;
 }
 
@@ -496,13 +476,13 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-header-values {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 800;
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-week-day {
   color: rgba(15, 23, 42, 0.58);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -513,10 +493,10 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-day span {
-  width: 38px;
-  height: 38px;
-  border-radius: 14px;
-  font-size: 13px;
+  width: 33px;
+  height: 33px;
+  border-radius: 12px;
+  font-size: 12px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
@@ -551,17 +531,17 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 
 .kalam-adaptive-picker__holiday,
 .kalam-adaptive-picker__summary-card {
-  margin-top: 12px;
-  border-radius: 16px;
+  margin-top: 10px;
+  border-radius: 14px;
   background: #f5f5f5;
   border: 1px solid #f0f0f0;
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 .kalam-adaptive-picker__holiday-label,
 .kalam-adaptive-picker__summary-card div {
   color: rgb(var(--brand-700-rgb));
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   margin-bottom: 4px;
 }
@@ -569,29 +549,29 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 .kalam-adaptive-picker__holiday-text,
 .kalam-adaptive-picker__summary-card strong {
   color: rgba(15, 23, 42, 0.72);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.9;
 }
 
 .kalam-adaptive-picker__time-editor {
-  border-radius: 18px;
+  border-radius: 16px;
   background: #fafafa;
   border: 1px solid #f0f0f0;
-  padding: 14px;
+  padding: 12px;
 }
 
 .kalam-adaptive-picker__time-fields {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .kalam-adaptive-picker__time-field {
   display: flex;
-  min-width: 96px;
+  min-width: 82px;
   flex-direction: column;
   gap: 6px;
 }
@@ -603,13 +583,13 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 }
 
 .kalam-adaptive-picker__time-field input {
-  height: 52px;
+  height: 46px;
   border: 1px solid rgba(var(--brand-500-rgb), 0.14);
-  border-radius: 16px;
+  border-radius: 14px;
   background: #ffffff;
   color: rgba(15, 23, 42, 0.92);
   text-align: center;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 800;
 }
 
@@ -621,7 +601,7 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 
 .kalam-adaptive-picker__time-separator {
   color: rgb(var(--brand-700-rgb));
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 800;
   margin-top: 18px;
 }
@@ -634,10 +614,34 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 
 .kalam-adaptive-picker__action {
   flex: 1 1 0;
-  border-radius: 14px;
-  padding: 11px 14px;
-  font-size: 13px;
+  border-radius: 12px;
+  padding: 9px 12px;
+  font-size: 12px;
   font-weight: 800;
+}
+
+.webform-slide-date-trigger .kalam-adaptive-picker__trigger {
+  min-height: 64px;
+  height: 64px;
+  border-radius: 24px;
+  padding: 0 18px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+  border: none;
+}
+
+.webform-slide-date-trigger .kalam-adaptive-picker__trigger-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.webform-slide-date-trigger .kalam-adaptive-picker__trigger-text {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
+  background: rgba(15, 23, 42, 0.85);
 }
 
 .kalam-adaptive-picker__action.is-muted {
@@ -734,8 +738,10 @@ html.dark .kalam-adaptive-picker__action.is-muted {
 
 @media (max-width: 768px) {
   .kalam-adaptive-picker {
-    width: 100%;
-    padding: 16px 16px 20px;
+    width: min(100%, calc(100vw - 16px));
+    max-height: min(92dvh, 900px);
+    border-radius: 24px;
+    padding: 16px 16px calc(20px + env(safe-area-inset-bottom, 0px));
   }
 
   .kalam-adaptive-picker__header {
@@ -747,12 +753,8 @@ html.dark .kalam-adaptive-picker__action.is-muted {
   }
 
   .kalam-adaptive-picker__calendar-wrap {
-    max-height: min(50dvh, 380px);
+    max-height: min(46dvh, 360px);
     overflow: auto;
-  }
-
-  .kalam-adaptive-picker--mobile {
-    max-height: min(100dvh - 12px, 92dvh);
   }
 
   .kalam-adaptive-picker__time-field {

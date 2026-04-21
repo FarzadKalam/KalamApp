@@ -22,6 +22,7 @@ import {
 } from 'antd';
 import {
   ArrowRightOutlined,
+  CloseOutlined,
   ClockCircleOutlined,
   HistoryOutlined,
   ReloadOutlined,
@@ -88,6 +89,7 @@ type ProfileRecord = {
   related_profile_id?: string | null;
   source_table?: 'employees' | 'profiles';
   source_id?: string;
+  employment_status?: string | null;
   role?: string | null;
   base_salary?: number | string | null;
   overtime_rate?: number | string | null;
@@ -215,6 +217,10 @@ type AttendanceLogRecord = {
   log_type?: string | null;
   occurred_at?: string | null;
   source_type?: string | null;
+  actual_check_in_time?: string | null;
+  actual_check_out_time?: string | null;
+  manual_check_in_time?: string | null;
+  manual_check_out_time?: string | null;
   location_text?: string | null;
   notes?: string | null;
   created_by?: string | null;
@@ -703,6 +709,11 @@ const buildSummaries = ({
   return rows.sort((a, b) => b.netPayable - a.netPayable);
 };
 
+const isCurrentlyCollaboratingProfile = (profile: ProfileRecord) => {
+  if (profile.source_table !== 'employees') return true;
+  return String(profile.employment_status || 'active').trim().toLowerCase() === 'active';
+};
+
 const HRPage: React.FC = () => {
   const navigate = useNavigate();
   const { employeeId } = useParams();
@@ -723,6 +734,7 @@ const HRPage: React.FC = () => {
   const [lineQuantityById, setLineQuantityById] = useState<Record<string, number>>({});
   const [orderQuantityById, setOrderQuantityById] = useState<Record<string, number>>({});
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
+  const [employeeFilterInitialized, setEmployeeFilterInitialized] = useState(false);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [payrollConfigModalOpen, setPayrollConfigModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProfileRecord | null>(null);
@@ -823,6 +835,7 @@ const HRPage: React.FC = () => {
         related_profile_id: row?.related_profile_id || null,
         source_table: 'employees' as const,
         source_id: String(row?.id),
+        employment_status: row?.employment_status || 'active',
         role: row?.employment_type || null,
         base_salary: row?.base_salary ?? 0,
         overtime_rate: row?.overtime_rate ?? 0,
@@ -844,6 +857,7 @@ const HRPage: React.FC = () => {
         related_profile_id: row?.id || null,
         source_table: 'profiles' as const,
         source_id: String(row?.id),
+        employment_status: null,
         role: row?.role || null,
         base_salary: row?.base_salary ?? 0,
         overtime_rate: row?.overtime_rate ?? 0,
@@ -950,7 +964,7 @@ const HRPage: React.FC = () => {
       const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult] = await Promise.allSettled([
         supabase
           .from('attendance_logs')
-          .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, source_type, location_text, notes, created_by, updated_by, created_at, updated_at')
+          .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
           .gte('occurred_at', monthStart.toISOString())
           .lte('occurred_at', monthEnd.toISOString())
           .order('occurred_at', { ascending: false })
@@ -992,6 +1006,10 @@ const HRPage: React.FC = () => {
           log_type: row?.log_type || null,
           occurred_at: row?.occurred_at || null,
           source_type: row?.source_type || null,
+          actual_check_in_time: row?.actual_check_in_time || null,
+          actual_check_out_time: row?.actual_check_out_time || null,
+          manual_check_in_time: row?.manual_check_in_time || null,
+          manual_check_out_time: row?.manual_check_out_time || null,
           location_text: row?.location_text || null,
           notes: row?.notes || null,
           created_by: row?.created_by || null,
@@ -1159,17 +1177,20 @@ const HRPage: React.FC = () => {
       setLineQuantityById(lineMap);
       setOrderQuantityById(orderMap);
 
-      setSelectedEmployeeIds((prev) => {
-        if (prev.length > 0) return prev;
-        return normalizedProfiles.map((profile) => profile.id);
-      });
+      if (!employeeFilterInitialized) {
+        const defaultSelectedIds = normalizedProfiles
+          .filter((profile) => isCurrentlyCollaboratingProfile(profile))
+          .map((profile) => profile.id);
+        setSelectedEmployeeIds(defaultSelectedIds);
+        setEmployeeFilterInitialized(true);
+      }
     } catch (err: any) {
       message.error(toFaErrorMessage(err as any, 'خطا در دریافت داده‌های منابع انسانی'));
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [message, monthEnd, monthStart]);
+  }, [employeeFilterInitialized, message, monthEnd, monthStart]);
 
   useEffect(() => {
     fetchData();
@@ -2109,8 +2130,6 @@ const HRPage: React.FC = () => {
         const map: Record<string, { label: string; color: string }> = {
           check_in: { label: 'ورود', color: 'green' },
           check_out: { label: 'خروج', color: 'red' },
-          leave: { label: 'مرخصی', color: 'gold' },
-          mission: { label: 'ماموریت', color: 'blue' },
         };
         const meta = map[String(val || '')] || { label: val || '-', color: 'default' };
         return <Tag color={meta.color}>{meta.label}</Tag>;
@@ -2943,7 +2962,7 @@ const HRPage: React.FC = () => {
             </div>
 
             <div className="bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 p-2">
-              <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[280px_minmax(260px,1fr)_auto]'}`}>
+              <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[280px_minmax(260px,1fr)_auto_auto]'}`}>
                 <DatePicker.RangePicker
                   value={selectedRange}
                   onChange={onDateRangeChange}
@@ -2963,6 +2982,14 @@ const HRPage: React.FC = () => {
                   options={employeeOptions}
                   className="w-full min-w-0"
                 />
+                <Button
+                  icon={<CloseOutlined />}
+                  onClick={() => setSelectedEmployeeIds([])}
+                  disabled={!selectedEmployeeIds.length}
+                  className="w-full rounded-xl"
+                >
+                  حذف فیلتر
+                </Button>
                 <Button
                   icon={<ReloadOutlined />}
                   onClick={() => fetchData(true)}
@@ -3027,8 +3054,6 @@ const HRPage: React.FC = () => {
                     options={[
                       { label: 'ورود', value: 'check_in' },
                       { label: 'خروج', value: 'check_out' },
-                      { label: 'مرخصی', value: 'leave' },
-                      { label: 'ماموریت', value: 'mission' },
                     ]}
                   />
                 </Form.Item>
@@ -3073,6 +3098,42 @@ const HRPage: React.FC = () => {
           {attendanceModalRecord && (
             <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/5">
               <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <ClockCircleOutlined className="text-green-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">ورود واقعی</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">
+                      {attendanceModalRecord.actual_check_in_time ? toPersianNumber(attendanceModalRecord.actual_check_in_time.slice(0, 5)) : '-'}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <ClockCircleOutlined className="text-red-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">خروج واقعی</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">
+                      {attendanceModalRecord.actual_check_out_time ? toPersianNumber(attendanceModalRecord.actual_check_out_time.slice(0, 5)) : '-'}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <ClockCircleOutlined className="text-sky-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">ورود دستی</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">
+                      {renderDateTime(attendanceModalRecord.manual_check_in_time)}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                  <ClockCircleOutlined className="text-orange-600" />
+                  <div className="min-w-0">
+                    <div className="text-gray-400">خروج دستی</div>
+                    <div className="truncate font-bold text-gray-700 dark:text-gray-200">
+                      {renderDateTime(attendanceModalRecord.manual_check_out_time)}
+                    </div>
+                  </div>
+                </div>
                 <div className="flex items-center gap-2 rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5">
                   <SafetyCertificateOutlined className="text-green-600" />
                   <div className="min-w-0">

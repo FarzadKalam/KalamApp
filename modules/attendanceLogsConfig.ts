@@ -26,8 +26,6 @@ export const attendanceLogsModule: ModuleDefinition = {
       options: [
         { label: "ورود", value: "check_in", color: "green" },
         { label: "خروج", value: "check_out", color: "red" },
-        { label: "مرخصی", value: "leave", color: "orange" },
-        { label: "ماموریت", value: "mission", color: "blue" },
       ],
       isTableColumn: true,
       nature: FieldNature.STANDARD,
