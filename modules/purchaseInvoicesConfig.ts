@@ -251,7 +251,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       options: [
         { label: 'ایجاد شده', value: 'created', color: 'blue' },
         { label: 'پیش فاکتور', value: 'proforma', color: 'orange' },
-        { label: 'فاکتور نهایی', value: 'final', color: 'green' },
+        { label: 'تایید شده', value: 'final', color: 'green' },
         { label: 'تسویه شده', value: 'settled', color: 'purple' },
         { label: 'لغو شده', value: 'canceled', color: 'red' },
         { label: 'تکمیل شده', value: 'completed', color: 'gray' },
