@@ -3952,8 +3952,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.dense || segments.length >= 5) {
       return 'dense';
     }
-    return 'full';
+      return 'full';
   }, [cardCompact, compact, containerWidth]);
+
+  const isMobileMainProcessView = !compact && !cardCompact && containerWidth > 0 && containerWidth <= PROCESS_BAR_BREAKPOINTS.dense;
 
   const getDenseSegmentLabel = useCallback((value: unknown) => {
     const raw = String(value || '').trim();
@@ -7020,6 +7022,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
         const renderSegmentsBar = (segments: any[], barKey: string) => {
           const displayMode = getProcessBarDisplayMode(segments);
+          const useVerticalMainLayout = isMobileMainProcessView && displayMode === 'full';
           const shouldCompactSegments = displayMode !== 'summary' && cardCompact && segments.length > 5;
           const displaySegments = shouldCompactSegments ? segments.slice(0, 5) : segments;
           const hiddenCount = shouldCompactSegments ? Math.max(0, segments.length - displaySegments.length) : 0;
@@ -7069,7 +7072,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 type="button"
                 key={`${barKey}-task-${segment.id}`}
                 data-task-segment-id={String(segment.id)}
-                className={`relative flex min-w-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-xl px-2 text-center transition-all hover:brightness-105 ${index !== 0 ? 'mr-1' : ''} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
+                className={`relative flex min-w-0 overflow-hidden rounded-xl px-2 text-center transition-all hover:brightness-105 ${useVerticalMainLayout ? `w-full justify-between gap-3 text-right ${index !== 0 ? 'mt-1.5' : ''}` : `flex-1 basis-0 items-center justify-center ${index !== 0 ? 'mr-1' : ''}`} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
                 style={{
                   backgroundColor: segmentColor,
                   boxShadow: isAssignedToCurrent
@@ -7082,15 +7085,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   openTaskProcessModal({ task: segment });
                 }}
               >
-                <div className="flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden">
-                  <span className={`inline-flex max-w-full items-center justify-center gap-1.5 truncate text-white drop-shadow-md ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')} font-semibold`}>
+                <div className={`flex min-w-0 overflow-hidden ${useVerticalMainLayout ? 'flex-1 items-center justify-between gap-3' : 'flex-col items-center justify-center gap-1'}`}>
+                  <span className={`inline-flex max-w-full items-center gap-1.5 text-white drop-shadow-md ${useVerticalMainLayout ? 'justify-start text-right' : 'justify-center truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')} font-semibold`}>
                     {renderTaskAssigneeAvatar(segment, displayMode)}
                     {normalizedStatus === 'canceled' ? <CloseOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} /> : (
                       PROCESS_BAR_DONE_STATUSES.has(normalizedStatus)
                         ? <CheckOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />
                         : <HourglassOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />
                     )}
-                    <span className="truncate">
+                    <span className={useVerticalMainLayout ? 'min-w-0 flex-1 whitespace-normal break-words leading-5' : 'truncate'}>
                       {displayMode === 'dense'
                         ? getDenseSegmentLabel(segmentLabel)
                         : (shouldCompactSegments ? getSummarySegmentLabel(segmentLabel) : segmentLabel)}
@@ -7160,11 +7163,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 className={
                   summary
                     ? `relative min-w-[0.7rem] flex-1 basis-0 rounded-full border border-dashed border-gray-300/90 bg-white/75 transition-all ${currentSegment && String(currentSegment?.id || '') === String(segment?.id || '') ? 'h-3.5 border-[rgba(var(--brand-400-rgb),0.95)] bg-[rgba(var(--brand-50-rgb),0.92)]' : 'h-2.5 hover:border-[rgba(var(--brand-400-rgb),0.8)]'} dark:border-gray-600 dark:bg-white/10`
-                    : `relative flex min-w-0 flex-1 basis-0 items-center justify-center overflow-hidden rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 text-center transition-all hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${index !== 0 ? 'mr-1' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`
+                    : `relative flex min-w-0 overflow-hidden rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 text-center transition-all hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${useVerticalMainLayout ? `w-full justify-start ${index !== 0 ? 'mt-1.5' : ''}` : `flex-1 basis-0 items-center justify-center ${index !== 0 ? 'mr-1' : ''}`} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`
                 }
               >
                 {!summary && (
-                  <span className={`block w-full min-w-0 truncate font-medium text-gray-700 dark:text-gray-100 ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
+                  <span className={`block w-full min-w-0 font-medium text-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? 'whitespace-normal break-words text-right leading-5' : 'truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
                     {displayMode === 'dense'
                       ? getDenseSegmentLabel(segment.label)
                       : (shouldCompactSegments ? getSummarySegmentLabel(segment.label) : segment.label)}
@@ -7211,7 +7214,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   </span>
                 </div>
               ) : null}
-              <div className={`relative flex min-h-0 w-full items-stretch rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${displayMode === 'dense' ? 'min-h-[2.75rem]' : (compact || cardCompact ? 'min-h-[2.75rem]' : 'min-h-[3.25rem]')}`}>
+              <div className={`relative min-h-0 w-full rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${useVerticalMainLayout ? 'flex flex-col items-stretch' : 'flex items-stretch'} ${displayMode === 'dense' ? 'min-h-[2.75rem]' : (compact || cardCompact ? 'min-h-[2.75rem]' : 'min-h-[3.25rem]')}`}>
                 {displaySegments.map((segment: any, index: number) => (
                   segment.type === 'task'
                     ? renderTaskSegment(segment, index)
@@ -7219,8 +7222,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 ))}
                 {hiddenCount > 0 && (
                   <div
-                    className={`relative flex items-center justify-center rounded-xl bg-gray-200/90 px-2 text-gray-700 dark:bg-gray-700 dark:text-gray-100 ${displaySegments.length !== 0 ? 'mr-1' : ''} ${displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} font-semibold`}
-                    style={{ flex: 0.8 }}
+                    className={`relative flex items-center justify-center rounded-xl bg-gray-200/90 px-2 text-gray-700 dark:bg-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? `${displaySegments.length !== 0 ? 'mt-1.5' : ''} w-full py-2.5` : `${displaySegments.length !== 0 ? 'mr-1' : ''}`} ${displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} font-semibold`}
+                    style={useVerticalMainLayout ? undefined : { flex: 0.8 }}
                     title={`${toPersianNumber(hiddenCount)} فعالیت دیگر`}
                   >
                     +{toPersianNumber(hiddenCount)}
@@ -7416,7 +7419,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             <span>مبدا فرآیند: {processOriginLabel}</span>
                           </div>
                         ) : null}
-                        <div className="w-full flex items-center gap-2">
+                        <div className={`w-full flex gap-2 ${isMobileMainProcessView ? 'flex-col items-stretch' : 'items-center'}`}>
                           {renderSegmentsBar(group?.lineSegments || [], `${line.id}-${group.id}-${groupIndex}`)}
                           {!readOnly && !!recordId && (
                             <Tooltip title="افزودن مرحله جدید">
