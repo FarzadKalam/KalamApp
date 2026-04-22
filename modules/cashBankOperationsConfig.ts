@@ -76,6 +76,8 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       validation: { required: true },
       nature: FieldNature.PREDEFINED,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'bank_account_id',
       labels: { fa: 'حساب دریافت/پرداخت', en: 'Treasury Account' },

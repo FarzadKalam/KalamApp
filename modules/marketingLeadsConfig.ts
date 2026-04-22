@@ -98,15 +98,7 @@ export const marketingLeadsModule: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
-    {
-      key: 'tags',
-      labels: { fa: '\u0628\u0631\u0686\u0633\u0628\u200c\u0647\u0627', en: 'Tags' },
-      type: FieldType.TAGS,
-      location: FieldLocation.HEADER,
-      order: 7,
-      isTableColumn: true,
-      nature: FieldNature.STANDARD,
-    },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
     //{
       //key: 'lead_source',
       //labels: { fa: 'منبع لید', en: 'Source Detail' },

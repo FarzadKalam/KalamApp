@@ -68,7 +68,7 @@ export const automationExecutionReportsConfig: ModuleDefinition = {
     { key: 'execution_mode', labels: { fa: 'حالت اجرا', en: 'Execution Mode' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 3, nature: FieldNature.SYSTEM },
     { key: 'details', labels: { fa: 'جزئیات سیستمی', en: 'Details' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'details', order: 4, nature: FieldNature.SYSTEM },
     { key: 'created_at', labels: { fa: 'زمان اجرا', en: 'Run Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 6, isTableColumn: true, nature: FieldNature.SYSTEM },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7, isTableColumn: true, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
   ],
   blocks: [
     {

@@ -175,7 +175,7 @@ export const voipCallReportsConfig: ModuleDefinition = {
       relationConfig: { targetModule: 'tasks', targetField: 'name' },
       nature: FieldNature.STANDARD,
     },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 9, isTableColumn: true, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 9, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'metadata', labels: { fa: 'جزئیات سیستمی', en: 'Metadata' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'details', order: 11, nature: FieldNature.SYSTEM },
     { key: 'created_at', labels: { fa: 'زمان ثبت', en: 'Created At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'details', order: 12, nature: FieldNature.SYSTEM },
   ],

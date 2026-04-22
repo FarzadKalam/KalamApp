@@ -8785,6 +8785,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
             <Select
               {...modalSelectProps}
+              placement="topRight"
+              getPopupContainer={(node) => node?.parentElement || document.body}
+              styles={{ popup: { root: { zIndex: 16020, maxWidth: 'calc(100vw - 1rem)' } } }}
               labelInValue
               value={appendProcessTemplateSelectValue}
               onChange={handleAppendProcessTemplateSelectChange}
@@ -8842,7 +8845,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       }}
                       moduleId={moduleId}
                       recordId={recordId}
-                      overlayZIndexBase={13080}
+                      overlayZIndexBase={16040}
+                      popupContainer={(node) => node?.parentElement || document.body}
                     />
                   </div>
                 ))}

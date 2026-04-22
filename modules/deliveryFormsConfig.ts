@@ -73,7 +73,7 @@ export const deliveryFormsConfig: ModuleDefinition = {
     { key: 'related_module_id', labels: { fa: 'مرتبط با بخش', en: 'Related Module' }, type: FieldType.SELECT, location: FieldLocation.BLOCK, blockId: 'details', order: 4, options: RELATED_MODULE_OPTIONS, nature: FieldNature.STANDARD },
     { key: 'related_record_id', labels: { fa: 'رکورد مرتبط', en: 'Related Record' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 5, relationConfig: { targetModule: '', dependsOn: 'related_module_id' }, nature: FieldNature.STANDARD },
     { key: 'notes', labels: { fa: 'یادداشت‌ها و شرایط تحویل', en: 'Notes' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'notes', order: 1, nature: FieldNature.STANDARD },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.BLOCK, blockId: 'notes', order: 2, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'process_template_id', labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 1, relationConfig: { targetModule: 'process_templates', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
   ],

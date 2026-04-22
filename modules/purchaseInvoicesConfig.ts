@@ -290,6 +290,8 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       nature: FieldNature.STANDARD,
       isTableColumn: true,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.6, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'description',
       labels: { fa: '\u062A\u0648\u0636\u06CC\u062D\u0627\u062A \u0641\u0627\u06A9\u062A\u0648\u0631 \u062E\u0631\u06CC\u062F', en: 'Purchase Invoice Description' },

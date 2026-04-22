@@ -54,7 +54,7 @@ export const employeeContractsConfig: ModuleDefinition = {
     { key: 'title', labels: { fa: 'سمت/عنوان شغلی', en: 'Job Title' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'terms', order: 3, nature: FieldNature.STANDARD },
     { key: 'body', labels: { fa: 'متن قرارداد', en: 'Contract Body' }, type: FieldType.SUPER_LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'content', order: 1, nature: FieldNature.STANDARD },
     { key: 'terms', labels: { fa: 'بندهای قرارداد', en: 'Terms' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'content', order: 2, nature: FieldNature.STANDARD },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.BLOCK, blockId: 'content', order: 3, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'process_template_id', labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 1, relationConfig: { targetModule: 'process_templates', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
   ],

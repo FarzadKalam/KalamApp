@@ -1,4 +1,13 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, LogicOperator } from '../types';
+import {
+  BlockType,
+  FieldLocation,
+  FieldNature,
+  FieldType,
+  LogicOperator,
+  ModuleDefinition,
+  ModuleNature,
+  ViewMode,
+} from '../types';
 
 export const employeesModule: ModuleDefinition = {
   id: 'employees',
@@ -197,7 +206,9 @@ export const employeesModule: ModuleDefinition = {
     { key: 'iban', labels: { fa: 'شماره شبا', en: 'IBAN' }, type: FieldType.TEXT, blockId: 'banking_info', order: 9.3 },
 
     { key: 'notes', labels: { fa: 'توضیحات', en: 'Notes' }, type: FieldType.LONG_TEXT, blockId: 'notes_info', order: 10 },
-  ],
+  
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.8, nature: FieldNature.STANDARD, isTableColumn: true },
+],
   blocks: [
     { id: 'identity_info', titles: { fa: 'اطلاعات پایه' }, type: BlockType.FIELD_GROUP, order: 1 },
     { id: 'legal_info', titles: { fa: 'اطلاعات هویتی' }, type: BlockType.FIELD_GROUP, order: 2 },

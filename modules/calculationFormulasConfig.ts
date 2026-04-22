@@ -61,6 +61,8 @@ export const calculationFormulasModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     { key: 'is_active', labels: { fa: 'فعال', en: 'Active' }, type: FieldType.CHECKBOX, location: FieldLocation.HEADER, order: 1.5, defaultValue: true, isTableColumn: true, nature: FieldNature.STANDARD },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.6, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'formula', labels: { fa: 'نمایش فرمول', en: 'Formula' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'base', order: 2, validation: { required: true }, nature: FieldNature.STANDARD },
     { key: 'expression_config', labels: { fa: 'ساختار فرمول', en: 'Expression Config' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'base', order: 2.2, nature: FieldNature.STANDARD },
     { key: 'config', labels: { fa: 'تنظیمات', en: 'Config' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'base', order: 2.4, nature: FieldNature.STANDARD },

@@ -1,4 +1,4 @@
-import { ModuleDefinition, FieldType, FieldLocation, BlockType } from '../types';
+import { ModuleDefinition, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 import { SOFTWARE_ROLE_OPTIONS } from '../utils/softwareRoles';
 
 const SOFTWARE_ROLE_OPTION_COLORS: Record<string, string> = {
@@ -27,6 +27,7 @@ export const profilesModule: ModuleDefinition = {
       type: FieldType.TEXT, 
       location: FieldLocation.HEADER
     },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.1, nature: FieldNature.STANDARD, isTableColumn: true },
     { 
       key: 'job_title', 
       labels: { fa: 'عنوان شغلی' }, 

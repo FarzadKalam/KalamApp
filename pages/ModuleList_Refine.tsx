@@ -62,9 +62,51 @@ import {
 } from "../utils/moduleListLive";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
+const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
 const getDefaultGridPageSize = () => 15;
 const getGridLoadStep = () => 15;
 const getDefaultKanbanPageSize = () => 15;
+
+const getTagViewFilterMeta = (filter: any, moduleConfig?: ModuleDefinition | null) => {
+  if (!filter || typeof filter !== "object") return null;
+
+  const tagFields = (moduleConfig?.fields || []).filter((field) => field.type === FieldType.TAGS);
+  if (tagFields.length === 0) return null;
+
+  const tagFieldKeys = new Set(tagFields.map((field) => String(field.key || "").trim()).filter(Boolean));
+  const firstTagFieldKey = String(tagFields[0]?.key || "").trim();
+  const directField = String(filter.field || "").trim();
+  const displayField = String(filter._displayField || "").trim();
+  const payload = filter.value && typeof filter.value === "object" && !Array.isArray(filter.value) ? filter.value : {};
+  const payloadField = String(payload?.fieldKey || "").trim();
+  const isCustomTagFilter = filter._isTagViewFilter === true || directField === TAG_VIEW_FILTER_FIELD;
+  const tagFieldKey =
+    (tagFieldKeys.has(directField) ? directField : "") ||
+    (tagFieldKeys.has(displayField) ? displayField : "") ||
+    (tagFieldKeys.has(payloadField) ? payloadField : "") ||
+    (isCustomTagFilter ? payloadField || displayField || firstTagFieldKey : "");
+
+  if (!tagFieldKey) return null;
+
+  const rawTagIds =
+    Array.isArray(payload?.tagIds)
+      ? payload.tagIds
+      : Object.prototype.hasOwnProperty.call(filter, "_displayValue")
+        ? filter._displayValue
+        : Object.prototype.hasOwnProperty.call(payload, "tagIds")
+          ? payload.tagIds
+          : filter.value;
+
+  const tagIds = (Array.isArray(rawTagIds) ? rawTagIds : rawTagIds !== undefined && rawTagIds !== null && rawTagIds !== "" ? [rawTagIds] : [])
+    .map((tagId) => String(tagId || "").trim())
+    .filter(Boolean);
+
+  return {
+    fieldKey: tagFieldKey,
+    sourceOperator: String(payload?.sourceOperator || filter._displayOperator || filter.operator || "eq").trim(),
+    tagIds,
+  };
+};
 const getKanbanLoadStep = () => 15;
 type ColumnFiltersState = Record<string, FilterValue | null>;
 type BulkBuildTarget = "product_bundles" | "price_lists" | null;
@@ -426,6 +468,10 @@ export const ModuleListRefine: React.FC<{
   const [tagsMap, setTagsMap] = useState<Record<string, any[]>>({});  // ✅ Map of record id to tags
   const [tagsLoading, setTagsLoading] = useState(false);
   const [loadedTagsRecordIdsSignature, setLoadedTagsRecordIdsSignature] = useState("");
+  const [tagViewFilterRows, setTagViewFilterRows] = useState<any[]>([]);
+  const [tagViewFilterTotal, setTagViewFilterTotal] = useState(0);
+  const [tagViewFilterLoading, setTagViewFilterLoading] = useState(false);
+  const [tagViewFilterRefreshSeed, setTagViewFilterRefreshSeed] = useState(0);
   const [gridPageSize, setGridPageSize] = useState<number>(() => getDefaultGridPageSize()); // ✅ Grid pagination
   const [kanbanVisibleCounts, setKanbanVisibleCounts] = useState<Record<string, number>>({});
   const [kanbanDraggingRecordId, setKanbanDraggingRecordId] = useState<string | null>(null);
@@ -467,6 +513,7 @@ export const ModuleListRefine: React.FC<{
   const lastAppliedFiltersSignatureRef = useRef<string | null>(null);
   const utilitySlotRef = useRef<HTMLDivElement | null>(null);
   const kanbanDragRef = useRef<{ record: any; sourceColumnKey: string; fieldKey: string } | null>(null);
+  const tagViewFilterIdsCacheRef = useRef<{ signature: string; ids: string[] } | null>(null);
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
   const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
   const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
@@ -496,10 +543,10 @@ export const ModuleListRefine: React.FC<{
 
   const { mutate: deleteMany } = useDeleteMany();
 
-  const loading = tableQueryResult.isLoading;
-  const queryPending = loading || tableQueryResult.isFetching;
-  const allData = tableQueryResult.data?.data || EMPTY_ROWS;
-  const hasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
+  const baseLoading = tableQueryResult.isLoading;
+  const baseQueryPending = baseLoading || tableQueryResult.isFetching;
+  const baseAllData = tableQueryResult.data?.data || EMPTY_ROWS;
+  const baseHasQueryResult = !!tableQueryResult.data || !!tableQueryResult.error;
   const stableSorters = useMemo(
     () => ensureStableCrudSorters(resolveCrudSortersWithDefault(sorters as CrudSort[], moduleConfig)),
     [moduleConfig, sorters]
@@ -508,6 +555,20 @@ export const ModuleListRefine: React.FC<{
     () => stripStableIdSorter(stableSorters),
     [stableSorters]
   );
+  const activeTagViewFilters = useMemo(
+    () =>
+      (viewFiltersState || [])
+        .map((item: any) => getTagViewFilterMeta(item, moduleConfig))
+        .filter(Boolean) as Array<{ fieldKey: string; sourceOperator: string; tagIds: string[] }>,
+    [moduleConfig, viewFiltersState]
+  );
+  const hasActiveTagViewFilters = activeTagViewFilters.length > 0;
+  const loading = hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading;
+  const queryPending = hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending;
+  const allData = hasActiveTagViewFilters ? tagViewFilterRows : baseAllData;
+  const hasQueryResult = hasActiveTagViewFilters
+    ? (!tagViewFilterLoading || tagViewFilterRows.length > 0)
+    : baseHasQueryResult;
   const selectedRows = useMemo(
     () =>
       selectedRowKeys
@@ -529,17 +590,33 @@ export const ModuleListRefine: React.FC<{
   const isListPageSizeReady = viewMode !== ViewMode.LIST || Number(pageSize || 0) === DEFAULT_LIST_PAGE_SIZE;
   const totalFilteredRecordCount = useMemo(
     () => {
+      if (hasActiveTagViewFilters) {
+        return Number(tagViewFilterTotal || 0);
+      }
       const paginationConfig = tableProps?.pagination as { total?: number } | undefined;
       const paginationTotal = Number(paginationConfig?.total || 0);
       return Number(paginationTotal || tableQueryResult.data?.total || 0);
     },
-    [tableProps?.pagination, tableQueryResult.data?.total]
+    [hasActiveTagViewFilters, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
   );
+  const effectiveTablePagination = useMemo(() => {
+    if (!hasActiveTagViewFilters) return tableProps.pagination;
+    return {
+      ...(tableProps.pagination || {}),
+      total: tagViewFilterTotal,
+      current: Math.max(1, Number(current || 1)),
+      pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
+    };
+  }, [current, hasActiveTagViewFilters, pageSize, tableProps.pagination, tagViewFilterTotal]);
 
   useEffect(() => {
     autoSortSyncDoneRef.current = false;
     lastRequestedPageSizeRef.current = null;
     lastAppliedFiltersSignatureRef.current = null;
+    tagViewFilterIdsCacheRef.current = null;
+    setTagViewFilterRows([]);
+    setTagViewFilterTotal(0);
+    setTagViewFilterLoading(false);
   }, [resolvedModuleId, viewMode]);
 
   useEffect(() => {
@@ -1459,6 +1536,8 @@ export const ModuleListRefine: React.FC<{
   }, [viewMode, availableCalendarFields.length, moduleConfig?.defaultViewMode]);
 
   const handleRefresh = useCallback(() => {
+    tagViewFilterIdsCacheRef.current = null;
+    setTagViewFilterRefreshSeed((prev) => prev + 1);
     void tableQueryResult.refetch();
   }, [tableQueryResult]);
 
@@ -1616,7 +1695,9 @@ export const ModuleListRefine: React.FC<{
   }
 
   function buildMergedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState): CrudFilters {
-    const mergedFilters = [...nextViewFilters];
+    const mergedFilters = [...nextViewFilters].filter((item: any) => {
+      return !getTagViewFilterMeta(item, moduleConfig);
+    });
     mergedFilters.push(...buildColumnCrudFilters(nextColumnFilters));
     if (searchTargetField && nextSearchTerm.trim()) {
       mergedFilters.push({
@@ -1813,87 +1894,19 @@ export const ModuleListRefine: React.FC<{
           .map((item) => String(item ?? "").trim())
           .filter(Boolean);
 
-        const loadTaggedRecordIds = async () => {
-          const query = supabase
-            .from("record_tags")
-            .select("record_id")
-            .eq("module_id", resolvedModuleId);
-
-          if (normalizedTagIds.length > 0) {
-            query.in("tag_id", normalizedTagIds);
-          }
-
-          const { data, error } = await query;
-          if (error) throw error;
-          return Array.from(
-            new Set(
-              (data || [])
-                .map((row: any) => String(row?.record_id || "").trim())
-                .filter(Boolean)
-            )
-          );
-        };
-
-        try {
-          const taggedRecordIds = await loadTaggedRecordIds();
-
-          if (operator === "is_null") {
-            if (taggedRecordIds.length > 0) {
-              filters.push({
-                field: "id",
-                operator: "nin",
-                value: taggedRecordIds,
-                _displayField: fieldKey,
-                _displayOperator: operator,
-                _displayValue: normalizedTagIds,
-              } as any);
-            }
-            continue;
-          }
-
-          if (operator === "not_null") {
-            filters.push({
-              field: "id",
-              operator: "in",
-              value: taggedRecordIds.length > 0 ? taggedRecordIds : ["__no_matching_record__"],
-              _displayField: fieldKey,
-              _displayOperator: operator,
-              _displayValue: normalizedTagIds,
-            } as any);
-            continue;
-          }
-
-          if (normalizedTagIds.length === 0) continue;
-
-          if (["eq", "in", "contains"].includes(operator)) {
-            filters.push({
-              field: "id",
-              operator: "in",
-              value: taggedRecordIds.length > 0 ? taggedRecordIds : ["__no_matching_record__"],
-              _displayField: fieldKey,
-              _displayOperator: operator,
-              _displayValue: normalizedTagIds,
-            } as any);
-            continue;
-          }
-
-          if (["neq", "not_in", "not_contains"].includes(operator)) {
-            if (taggedRecordIds.length > 0) {
-              filters.push({
-                field: "id",
-                operator: "nin",
-                value: taggedRecordIds,
-                _displayField: fieldKey,
-                _displayOperator: operator,
-                _displayValue: normalizedTagIds,
-              } as any);
-            }
-            continue;
-          }
-        } catch (error) {
-          console.warn("Could not resolve tag view filter", { moduleId: resolvedModuleId, fieldKey, operator, error });
-        }
-
+        filters.push({
+          field: TAG_VIEW_FILTER_FIELD,
+          operator: "eq",
+          value: {
+            fieldKey,
+            sourceOperator: operator,
+            tagIds: normalizedTagIds,
+          },
+          _displayField: fieldKey,
+          _displayOperator: operator,
+          _displayValue: normalizedTagIds,
+          _isTagViewFilter: true,
+        } as any);
         continue;
       }
 
@@ -1981,6 +1994,220 @@ export const ModuleListRefine: React.FC<{
     setColumnFilters(nextFilters);
     applyCombinedFilters(viewFiltersState, searchTerm, nextFilters);
   }, [searchTerm, viewFiltersState]);
+
+  useEffect(() => {
+    if (!hasActiveTagViewFilters || !resolvedModuleId || !dataResource) {
+      setTagViewFilterRows((prev) => (prev.length > 0 ? [] : prev));
+      setTagViewFilterTotal((prev) => (prev !== 0 ? 0 : prev));
+      setTagViewFilterLoading((prev) => (prev ? false : prev));
+      tagViewFilterIdsCacheRef.current = null;
+      return;
+    }
+
+    let isActive = true;
+
+    const loadTagFilteredRows = async () => {
+      try {
+        setTagViewFilterLoading(true);
+
+        const serverFilters = buildMergedFilters(viewFiltersState, searchTerm, columnFilters);
+        const normalizedTagFilters = activeTagViewFilters.map((item) => ({
+          sourceOperator: String(item?.sourceOperator || "eq").trim(),
+          tagIds: (Array.isArray(item?.tagIds) ? item.tagIds : [])
+            .map((tagId) => String(tagId || "").trim())
+            .filter(Boolean),
+        }));
+        const cacheSignature = JSON.stringify({
+          moduleId: resolvedModuleId,
+          dataResource,
+          filters: serverFilters,
+          sorters: stableSorters,
+          tagFilters: normalizedTagFilters,
+        });
+
+        let orderedFilteredIds: string[] = [];
+        if (tagViewFilterIdsCacheRef.current?.signature === cacheSignature) {
+          orderedFilteredIds = tagViewFilterIdsCacheRef.current.ids;
+        } else {
+          const requiresAnyTagLookup = normalizedTagFilters.some(
+            (item) => item.sourceOperator === "is_null" || item.sourceOperator === "not_null"
+          );
+          const unionTagIds = Array.from(
+            new Set(normalizedTagFilters.flatMap((item) => item.tagIds).filter(Boolean))
+          );
+          const tagsByRecord = new Map<string, Set<string>>();
+          const RECORD_TAGS_SCAN_SIZE = 1000;
+
+          let tagsPage = 0;
+          while (true) {
+            let tagQuery = supabase
+              .from("record_tags")
+              .select("record_id, tag_id")
+              .eq("module_id", resolvedModuleId)
+              .range(tagsPage * RECORD_TAGS_SCAN_SIZE, ((tagsPage + 1) * RECORD_TAGS_SCAN_SIZE) - 1);
+
+            if (!requiresAnyTagLookup && unionTagIds.length > 0) {
+              tagQuery = tagQuery.in("tag_id", unionTagIds);
+            }
+
+            const { data: tagRows, error: tagError } = await tagQuery;
+            if (tagError) throw tagError;
+
+            const normalizedRows = Array.isArray(tagRows) ? tagRows : [];
+            normalizedRows.forEach((row: any) => {
+              const recordId = String(row?.record_id || "").trim();
+              const tagId = String(row?.tag_id || "").trim();
+              if (!recordId || !tagId) return;
+              if (!tagsByRecord.has(recordId)) {
+                tagsByRecord.set(recordId, new Set<string>());
+              }
+              tagsByRecord.get(recordId)!.add(tagId);
+            });
+
+            if (normalizedRows.length < RECORD_TAGS_SCAN_SIZE) break;
+            tagsPage += 1;
+          }
+
+          const passesTagFilters = (recordId: string) => {
+            const recordTagIds = tagsByRecord.get(recordId) || new Set<string>();
+            const hasAnyTag = recordTagIds.size > 0;
+
+            for (const tagFilter of normalizedTagFilters) {
+              const op = String(tagFilter.sourceOperator || "eq");
+              const tagIds = tagFilter.tagIds;
+
+              if (op === "is_null") {
+                if (hasAnyTag) return false;
+                continue;
+              }
+
+              if (op === "not_null") {
+                if (!hasAnyTag) return false;
+                continue;
+              }
+
+              if (tagIds.length === 0) continue;
+              const hasSelectedTag = tagIds.some((tagId) => recordTagIds.has(tagId));
+
+              if (op === "eq" || op === "in" || op === "contains") {
+                if (!hasSelectedTag) return false;
+                continue;
+              }
+
+              if (op === "neq" || op === "not_in" || op === "not_contains") {
+                if (hasSelectedTag) return false;
+                continue;
+              }
+            }
+
+            return true;
+          };
+
+          const SCAN_PAGE_SIZE = 1000;
+          let scanPage = 1;
+          let totalPages = 1;
+          while (scanPage <= totalPages) {
+            const response = await refineProvider.getList({
+              resource: dataResource,
+              pagination: { current: scanPage, pageSize: SCAN_PAGE_SIZE },
+              sorters: stableSorters,
+              filters: serverFilters,
+              meta: { select: "id" },
+            });
+
+            const rows = Array.isArray(response?.data) ? response.data : [];
+            const ids = rows
+              .map((row: any) => String(row?.id || "").trim())
+              .filter(Boolean);
+
+            ids.forEach((id) => {
+              if (passesTagFilters(id)) {
+                orderedFilteredIds.push(id);
+              }
+            });
+
+            if (scanPage === 1) {
+              const totalRows = Number(response?.total || 0);
+              if (totalRows > 0) {
+                totalPages = Math.max(1, Math.ceil(totalRows / SCAN_PAGE_SIZE));
+              } else if (rows.length < SCAN_PAGE_SIZE) {
+                break;
+              } else {
+                totalPages = Number.MAX_SAFE_INTEGER;
+              }
+            } else if (rows.length < SCAN_PAGE_SIZE && totalPages === Number.MAX_SAFE_INTEGER) {
+              break;
+            }
+
+            if (rows.length === 0) break;
+            scanPage += 1;
+          }
+
+          tagViewFilterIdsCacheRef.current = {
+            signature: cacheSignature,
+            ids: orderedFilteredIds,
+          };
+        }
+
+        const safeCurrent = Math.max(1, Number(current || 1));
+        const safePageSize = Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE));
+        const fromIndex = (safeCurrent - 1) * safePageSize;
+        const pageIds = orderedFilteredIds.slice(fromIndex, fromIndex + safePageSize);
+
+        let pageRows: any[] = [];
+        if (pageIds.length > 0) {
+          const pageResponse = await refineProvider.getList({
+            resource: dataResource,
+            pagination: { current: 1, pageSize: Math.max(pageIds.length, 1) },
+            sorters: stableSorters,
+            filters: [
+              ...serverFilters,
+              { field: "id", operator: "in", value: pageIds } as any,
+            ],
+          });
+          const fetchedRows = Array.isArray(pageResponse?.data) ? pageResponse.data : [];
+          const rowById = new Map(
+            fetchedRows.map((row: any) => [String(row?.id || "").trim(), row])
+          );
+          pageRows = pageIds
+            .map((id) => rowById.get(id))
+            .filter(Boolean);
+        }
+
+        if (!isActive) return;
+        setTagViewFilterRows(pageRows);
+        setTagViewFilterTotal(orderedFilteredIds.length);
+      } catch (error) {
+        if (!isActive) return;
+        console.error("Error while applying tag view filters:", error);
+        setTagViewFilterRows([]);
+        setTagViewFilterTotal(0);
+      } finally {
+        if (isActive) {
+          setTagViewFilterLoading(false);
+        }
+      }
+    };
+
+    void loadTagFilteredRows();
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    activeTagViewFilters,
+    columnFilters,
+    current,
+    dataResource,
+    hasActiveTagViewFilters,
+    pageSize,
+    refineProvider,
+    resolvedModuleId,
+    searchTerm,
+    stableSorters,
+    tagViewFilterRefreshSeed,
+    viewFiltersState,
+  ]);
 
   const handleViewChange = useCallback((view: SavedView | null, config: any) => {
     const currentConfig = currentView?.config || null;
@@ -3125,7 +3352,7 @@ export const ModuleListRefine: React.FC<{
                      tableLayout="fixed"
                      singleScrollContainer
                      visibleColumns={visibleColumns.length > 0 ? visibleColumns : undefined}
-                     pagination={tableProps.pagination}
+                     pagination={effectiveTablePagination}
                      onChange={handleTableChange}
                      rowSelection={{ selectedRowKeys, onChange: handleRowSelectionChange, preserveSelectedRowKeys: true }}
                     onVisibleDataChange={handleVisibleDataChange}

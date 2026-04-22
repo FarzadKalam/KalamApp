@@ -1,4 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 
 export const journalEntriesConfig: ModuleDefinition = {
   id: 'journal_entries',
@@ -46,6 +46,8 @@ export const journalEntriesConfig: ModuleDefinition = {
         { label: 'برگشتی', value: 'reversed', color: 'red' },
       ],
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'fiscal_year_id',
       labels: { fa: 'سال مالی', en: 'Fiscal Year' },

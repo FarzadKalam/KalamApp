@@ -69,6 +69,8 @@ export const bartersConfig: ModuleDefinition = {
       validation: { required: true },
       nature: FieldNature.PREDEFINED,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'initial_amount',
       labels: { fa: 'مبلغ اولیه', en: 'Initial Amount' },

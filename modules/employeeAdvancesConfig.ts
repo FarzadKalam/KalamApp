@@ -40,7 +40,7 @@ export const employeeAdvancesConfig: ModuleDefinition = {
     { key: 'reason', labels: { fa: 'شرح درخواست', en: 'Reason' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 4, nature: FieldNature.STANDARD },
     { key: 'paid_amount', labels: { fa: 'پرداخت شده', en: 'Paid Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'remaining_amount', labels: { fa: 'مانده', en: 'Remaining' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.BLOCK, blockId: 'details', order: 5, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'process_template_id', labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 1, relationConfig: { targetModule: 'process_templates', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
   ],

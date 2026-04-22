@@ -113,6 +113,8 @@ export const priceListsConfig: ModuleDefinition = {
       ],
       nature: FieldNature.PREDEFINED,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'description',
       labels: { fa: 'توضیحات', en: 'Description' },

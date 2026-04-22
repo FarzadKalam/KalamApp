@@ -34,6 +34,12 @@ import {
   workflowExecutionModeOptions,
 } from '../../utils/workflowTypes';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import {
+  buildStandardSelectPopupRootStyle,
+  KALAM_SELECT_FIELD_CLASSNAME,
+  mergeClassNames,
+  resolveSelectPopupContainer,
+} from '../../utils/popupContainer';
 import PersianDatePicker from '../PersianDatePicker';
 import WorkflowActionsBuilder from './WorkflowActionsBuilder';
 import WorkflowConditionsGroup from './WorkflowConditionsGroup';
@@ -412,9 +418,13 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Form.Item label="ماژول مرتبط" name="module_id" rules={[{ required: true }]}>
               <Select
+                className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
                 showSearch
                 optionFilterProp="label"
+                optionLabelProp="label"
                 options={moduleOptions}
+                getPopupContainer={resolveSelectPopupContainer}
+                styles={{ popup: { root: buildStandardSelectPopupRootStyle() } }}
                 onChange={(nextVal) => setModuleId(String(nextVal || ''))}
                 placeholder="انتخاب ماژول"
               />

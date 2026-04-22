@@ -1,4 +1,13 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, LogicOperator } from '../types';
+import {
+  BlockType,
+  FieldLocation,
+  FieldNature,
+  FieldType,
+  LogicOperator,
+  ModuleDefinition,
+  ModuleNature,
+  ViewMode,
+} from '../types';
 
 export const customerModule: ModuleDefinition = {
   id: 'customers',
@@ -258,7 +267,9 @@ export const customerModule: ModuleDefinition = {
     { key: 'total_paid_amount', labels: { fa: 'جمع پرداخت‌های مشتری', en: 'Customer Payment Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
     { key: 'acquaintance_days', labels: { fa: 'تعداد روزهای آشنایی', en: 'Acquaintance Days' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
     { key: 'cooperation_days', labels: { fa: 'تعداد روزهای همکاری', en: 'Cooperation Days' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
-  ],
+  
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2.3, nature: FieldNature.STANDARD, isTableColumn: true },
+],
   blocks: [
     {
       id: 'basic_info', titles: { fa: 'اطلاعات پایه', en: 'Basic Info' }, type: BlockType.FIELD_GROUP,

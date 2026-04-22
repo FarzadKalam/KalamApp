@@ -32,6 +32,8 @@ export const pettyFundsConfig: ModuleDefinition = {
       isKey: true,
       nature: FieldNature.PREDEFINED,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'account_id',
       labels: { fa: 'حساب متناظر', en: 'Account' },

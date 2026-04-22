@@ -57,6 +57,8 @@ export const attendanceLogsModule: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: "actual_check_in_time",
       labels: { fa: "زمان ورود واقعی", en: "Actual Check In Time" },

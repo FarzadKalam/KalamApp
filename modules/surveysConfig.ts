@@ -100,6 +100,8 @@ export const surveysModule: ModuleDefinition = {
       ],
       nature: FieldNature.STANDARD,
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: "overall_experience",
       labels: { fa: "ارزیابی کلی", en: "Overall Experience" },

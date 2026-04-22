@@ -1,4 +1,4 @@
-﻿import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
 
 export const chartOfAccountsConfig: ModuleDefinition = {
   id: 'chart_of_accounts',
@@ -45,6 +45,8 @@ export const chartOfAccountsConfig: ModuleDefinition = {
         { label: 'هزینه', value: 'expense', color: 'red' },
       ],
     },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'account_level',
       labels: { fa: 'سطح حساب', en: 'Level' },

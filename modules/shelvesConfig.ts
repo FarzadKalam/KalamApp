@@ -99,7 +99,9 @@ export const shelvesConfig: ModuleDefinition = {
       relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
       nature: FieldNature.STANDARD,
     },
-  ],
+  
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
+],
   blocks: [BLOCKS.shelfInventory, BLOCKS.shelfStockMovements],
   relatedTabs: [],
 };

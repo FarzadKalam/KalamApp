@@ -51,6 +51,8 @@ export const warehousesConfig: ModuleDefinition = {
     },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Sys Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true },
     { key: 'category', labels: { fa: 'نوع انبار', en: 'type' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 4, options: [{ label: 'انبار داخلی', value: 'inside', color: 'green' }, { label: 'انبار تولید', value: 'production', color: 'blue' }, { label: 'انبار تامین کننده', value: 'supplier', color: 'orange' }], defaultValue: 'inside' },
+    
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 4.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'location',
       labels: { fa: 'موقعیت', en: 'Location' },

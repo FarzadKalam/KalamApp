@@ -41,7 +41,7 @@ export const recruitmentApplicantsConfig: ModuleDefinition = {
     { key: 'related_employee_id', labels: { fa: 'کارمند ایجادشده', en: 'Related Employee' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'review', order: 4, relationConfig: { targetModule: 'employees', targetField: 'full_name' }, nature: FieldNature.STANDARD },
     { key: 'resume_url', labels: { fa: 'رزومه', en: 'Resume' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'review', order: 5, nature: FieldNature.STANDARD },
     { key: 'notes', labels: { fa: 'یادداشت ارزیابی', en: 'Notes' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'review', order: 6, nature: FieldNature.STANDARD },
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.BLOCK, blockId: 'review', order: 7, nature: FieldNature.STANDARD },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'process_template_id', labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 1, relationConfig: { targetModule: 'process_templates', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
   ],
