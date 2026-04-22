@@ -65,9 +65,9 @@ const Toolbar: React.FC<ToolbarProps> = ({
           />
         </div>
         <Button
-          type="default"
+          type="text"
           icon={<AppstoreOutlined />}
-          className="module-list-toolbar__compact-icon"
+          className="module-list-toolbar__compact-icon !h-9 !w-9 !min-w-9 !rounded-full !border-0 !bg-transparent !p-0 !shadow-none !text-gray-500 hover:!bg-black/5 hover:!text-leather-600 dark:!text-gray-300 dark:hover:!bg-white/10"
           aria-label={viewModeLauncherLabel}
           title={viewModeLauncherLabel}
           onClick={onViewModeLauncherClick}

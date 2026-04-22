@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Avatar } from 'antd';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Avatar, Grid } from 'antd';
 import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
@@ -23,7 +23,7 @@ import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/invent
 import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField, SelectOption } from '../types';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { resolveOverlayPopupContainer } from '../utils/popupContainer';
+import { buildStandardSelectPopupRootStyle, resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../utils/popupContainer';
 import {
   applyTaskSourceRecordFilter,
   buildTaskSourcePatch,
@@ -419,6 +419,8 @@ const PROCESS_BAR_DONE_STATUSES = new Set(['done', 'completed', 'canceled']);
 const PROCESS_BAR_ACTIVE_STATUSES = new Set(['in_progress', 'review']);
 
 const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
+  const screens = Grid.useBreakpoint();
+  const isMobileProcessViewport = !screens.md;
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
@@ -485,6 +487,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [showEmptyProcessDetails, setShowEmptyProcessDetails] = useState(false);
   const [showCompletedProcessGroups, setShowCompletedProcessGroups] = useState(false);
   const [processOriginTitleMap, setProcessOriginTitleMap] = useState<Record<string, string>>({});
+  const [openDraftSegmentPopoverKey, setOpenDraftSegmentPopoverKey] = useState<string | null>(null);
   const [draftTemplatePickerSearch, setDraftTemplatePickerSearch] = useState('');
   const [draftTemplatePickerOpenKey, setDraftTemplatePickerOpenKey] = useState<string | null>(null);
   const [activeProcessGroupMeta, setActiveProcessGroupMeta] = useState<{
@@ -632,12 +635,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       allowClear: true,
       showSearch: true,
       optionFilterProp: 'label' as const,
-      getPopupContainer: () => document.body,
+      getPopupContainer: resolveSelectPopupContainer,
       placement: 'bottomRight' as const,
       popupMatchSelectWidth: false,
       listHeight: 260,
       virtual: false,
-      styles: { popup: { root: { zIndex: 13080, maxWidth: 'calc(100vw - 1rem)' } } },
+      styles: { popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 13080, maxWidth: 'calc(100vw - 1rem)' }) } },
     }),
     []
   );
@@ -784,21 +787,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const stageModalStyles = useMemo(
     () => ({
       header: {
-        padding: '16px 20px 12px',
+        padding: isMobileProcessViewport ? '14px 16px 10px' : '16px 20px 12px',
         borderBottom: '1px solid rgba(var(--brand-200-rgb), 0.28)',
         background: 'linear-gradient(180deg, rgba(var(--brand-100-rgb), 0.9) 0%, rgba(255,255,255,0) 100%)',
       },
       body: {
-        padding: '16px 20px 20px',
+        padding: isMobileProcessViewport ? '14px 16px calc(16px + env(safe-area-inset-bottom, 0px))' : '16px 20px 20px',
         background: 'transparent',
       },
       content: {
         overflow: 'hidden',
-        borderRadius: 24,
+        borderRadius: isMobileProcessViewport ? 0 : 24,
       },
     }),
-    []
+    [isMobileProcessViewport]
   );
+  const responsiveProcessModalStyle = useMemo(
+    () => ({
+      maxWidth: isMobileProcessViewport ? '100vw' : 'calc(100vw - 1rem)',
+      top: isMobileProcessViewport ? 0 : undefined,
+      paddingBottom: isMobileProcessViewport ? 0 : undefined,
+    }),
+    [isMobileProcessViewport]
+  );
+  const responsiveProcessBodyMaxHeight = isMobileProcessViewport ? 'calc(100dvh - 154px)' : '68vh';
 
   const onQuantityChangeRef = useRef<((qty: number) => void) | undefined>();
 
@@ -3281,6 +3293,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     draftStage?: any,
     processGroupMeta?: { id: string; label?: string | null; templateId?: string | null; templateName?: string | null }
   ) => {
+    setOpenDraftSegmentPopoverKey(null);
     setActiveLineId(lineId);
     setDraftToCreate(draftStage || null);
     if (processGroupMeta?.id) {
@@ -4203,7 +4216,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           className="w-full"
           allowClear
           showSearch
-          getPopupContainer={(node) => node?.parentElement || document.body}
+          getPopupContainer={resolveSelectPopupContainer}
+          popupStyle={buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' })}
           onOptionsUpdate={() => { void loadTaskCustomFieldOptions([field]); }}
           protectedValues={field.dynamicOptionsCategory === 'task_type' ? getTaskTypeProtectedValues() : undefined}
         />
@@ -4256,6 +4270,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           onChange={(nextValue) => onValueChange(nextValue)}
           className="w-full"
           zIndex={12620}
+          modalContainer={resolveOverlayPopupContainer}
         />
       );
     }
@@ -4269,6 +4284,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           onChange={(nextValue) => onValueChange(nextValue)}
           className="w-full"
           zIndex={12620}
+          modalContainer={resolveOverlayPopupContainer}
         />
       );
     }
@@ -4282,6 +4298,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           onChange={(nextValue) => onValueChange(nextValue)}
           className="w-full"
           zIndex={12620}
+          modalContainer={resolveOverlayPopupContainer}
         />
       );
     }
@@ -4297,7 +4314,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           optionFilterProp="label"
           showSearch
           maxTagCount="responsive"
-          getPopupContainer={(node) => node?.parentElement || document.body}
+          getPopupContainer={resolveSelectPopupContainer}
+          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' }) } }}
           onChange={(nextValue) => onValueChange(nextValue)}
         />
       );
@@ -4313,7 +4331,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           className="w-full"
           tokenSeparators={[',']}
           maxTagCount="responsive"
-          getPopupContainer={(node) => node?.parentElement || document.body}
+          getPopupContainer={resolveSelectPopupContainer}
+          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' }) } }}
           onChange={(nextValue) => onValueChange(nextValue)}
         />
       );
@@ -4334,7 +4353,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           className="w-full"
           showSearch
           optionFilterProp="label"
-          getPopupContainer={(node) => node?.parentElement || document.body}
+          getPopupContainer={resolveSelectPopupContainer}
+          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' }) } }}
           onChange={(nextValue) => onValueChange(nextValue)}
         />
       );
@@ -4364,7 +4384,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     <Popover
       trigger={[]}
       placement="bottomRight"
-      getPopupContainer={() => document.body}
+      getPopupContainer={resolveOverlayPopupContainer}
       zIndex={13050}
       overlayStyle={{ zIndex: 13050, maxWidth: 'calc(100vw - 1rem)' }}
       styles={{ root: { zIndex: 13050 } }}
@@ -4597,8 +4617,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   allowClear
                   showSearch
                   optionFilterProp="label"
-                  getPopupContainer={(node) => node?.parentElement || document.body}
-                  styles={{ popup: { root: { minWidth: 220, zIndex: 12050 } } }}
+                  getPopupContainer={resolveSelectPopupContainer}
+                  styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: 12050, maxWidth: 'calc(100vw - 1rem)' }) } }}
                 >
                   {shouldRenderCurrentAssigneeFallbackOption && currentAssigneeCombo ? (
                     <Select.Option
@@ -4639,8 +4659,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   onChange={(val) => { void handleStatusChange(task.id, val); }}
                   className="w-full max-w-full font-semibold text-gray-700 dark:text-gray-300"
                   disabled={!canEditTaskStatus}
-                  getPopupContainer={(node) => node?.parentElement || document.body}
-                  styles={{ popup: { root: { minWidth: 180, zIndex: 12050 } } }}
+                  getPopupContainer={resolveSelectPopupContainer}
+                  styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 180, zIndex: 12050, maxWidth: 'calc(100vw - 1rem)' }) } }}
                   options={taskStatusOptions.map((option) => ({
                     value: option.value,
                     label: option.label,
@@ -6062,6 +6082,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [closeDraftStageModal, saveDraftStageFromEditor, validateDraftModalStep]);
 
   const openDraftStageModal = useCallback((stage?: any | null, tab: DraftModalTabKey = 'stage') => {
+    setOpenDraftSegmentPopoverKey(null);
     const nextEditingDraft = stage ? normalizeDraftStageForEditor(stage, 0) : null;
     draftEditorStageIdRef.current = nextEditingDraft?.id ?? null;
     setEditingDraft(nextEditingDraft);
@@ -7109,9 +7130,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             );
           };
 
-          const renderDraftSegment = (segment: any, index: number, summary = false) => (
+          const renderDraftSegment = (segment: any, index: number, summary = false) => {
+            const draftPopoverKey = `${barKey}-draft-${segment.id}-${index}-${summary ? 'summary' : 'full'}`;
+            return (
             <Popover
-              key={`${barKey}-draft-${segment.id}-${index}-${summary ? 'summary' : 'full'}`}
+              key={draftPopoverKey}
               content={
                 <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
                   <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{segment.label}</div>
@@ -7130,15 +7153,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         <Button
                           type="primary"
                           size="small"
-                          onClick={() => openTaskModal(line.id, segment)}
-                          className="border-none bg-[rgba(var(--brand-600-rgb),1)] text-white shadow-sm hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+                          onClick={() => {
+                            setOpenDraftSegmentPopoverKey(null);
+                            openTaskModal(line.id, segment);
+                          }}
+                          className="border-none bg-[rgba(var(--brand-700-rgb),1)] text-white shadow-md ring-1 ring-[rgba(var(--brand-300-rgb),0.45)] hover:!bg-[rgba(var(--brand-600-rgb),1)] hover:shadow-lg focus:!bg-[rgba(var(--brand-700-rgb),1)] active:!bg-[rgba(var(--brand-800-rgb),1)]"
                         >
                           ایجاد فعالیت
                         </Button>
                       )}
                       <Button
                         size="small"
-                        onClick={() => openDraftStageModal(segment, 'automation')}
+                        onClick={() => {
+                          setOpenDraftSegmentPopoverKey(null);
+                          openDraftStageModal(segment, 'automation');
+                        }}
                       >
                         اتوماسیون
                       </Button>
@@ -7146,7 +7175,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         size="small"
                         danger
                         icon={<DeleteOutlined />}
-                        onClick={() => handleRemoveDraftStage(segment)}
+                        onClick={() => {
+                          setOpenDraftSegmentPopoverKey(null);
+                          handleRemoveDraftStage(segment);
+                        }}
                       >
                         حذف
                       </Button>
@@ -7155,6 +7187,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 </div>
               }
               trigger="click"
+              getPopupContainer={resolveOverlayPopupContainer}
+              open={openDraftSegmentPopoverKey === draftPopoverKey}
+              onOpenChange={(open) => setOpenDraftSegmentPopoverKey(open ? draftPopoverKey : null)}
               overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
               title={null}
             >
@@ -7176,6 +7211,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </button>
             </Popover>
           );
+          };
 
           if (segments.length === 0) {
             return (
@@ -7564,11 +7600,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       <Modal
         title="افزودن خط تولید"
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
+        className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         open={isLineModalOpen && isProductionOrder}
         onCancel={() => setIsLineModalOpen(false)}
         footer={null}
-        centered
+        centered={!isMobileProcessViewport}
         destroyOnHidden
+        width={isMobileProcessViewport ? '100vw' : 520}
+        style={responsiveProcessModalStyle}
+        styles={stageModalStyles}
       >
         <Form form={lineForm} onFinish={handleAddLine} layout="vertical" className="pt-2">
           <div className="grid grid-cols-12 gap-3">
@@ -7595,12 +7636,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       <Modal
         title="افزودن مرحله الگوی فرآیند"
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
+        className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         open={draftStageChooserOpen}
         onCancel={() => setDraftStageChooserOpen(false)}
         footer={null}
-        width={560}
-        centered
+        width={isMobileProcessViewport ? '100vw' : 560}
+        centered={!isMobileProcessViewport}
         destroyOnHidden
+        style={responsiveProcessModalStyle}
+        styles={stageModalStyles}
       >
         <div className="space-y-3 pt-2">
           <Button
@@ -7653,16 +7698,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       </Modal>
 
       <Modal
-        rootClassName="task-create-modal-root"
-        className="task-create-modal"
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root task-create-modal-root' : 'task-create-modal-root'}
+        className={`task-create-modal ${isMobileProcessViewport ? 'process-stage-modal' : ''}`.trim()}
         title={<div className="flex items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div> {isProcessModule ? 'افزودن مرحله فرآیند (فعالیت)' : 'افزودن مرحله تولید'}</div>}
         open={isTaskModalOpen}
         onCancel={closeTaskModal}
         footer={null}
         zIndex={10001}
-        width={560}
-        centered
+        width={isMobileProcessViewport ? '100vw' : 560}
+        centered={!isMobileProcessViewport}
         destroyOnHidden
+        style={responsiveProcessModalStyle}
         styles={stageModalStyles}
         modalRender={(node) => (
           <div
@@ -7675,7 +7721,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         )}
       >
         <Form form={taskForm} onFinish={handleAddTask} layout="vertical" className="pt-1 [&_.ant-form-item]:mb-3">
-          <div className="max-h-[68vh] overflow-y-auto pr-1">
+          <div className="overflow-y-auto pr-1" style={{ maxHeight: responsiveProcessBodyMaxHeight }}>
           <div className="grid grid-cols-12 gap-3">
             <div className="col-span-9">
               <Form.Item name="name" label={isProcessModule ? 'عنوان فعالیت' : 'عنوان مرحله'} rules={[{ required: true, message: 'الزامی' }]}> 
@@ -7807,6 +7853,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   placeholder="تاریخ و ساعت (اختیاری)"
                   className="w-full"
                   zIndex={10060}
+                  modalContainer={resolveOverlayPopupContainer}
                 />
               </Form.Item>
             </div>
@@ -7826,13 +7873,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       <Modal
         title={<div className="flex items-center gap-2 text-[rgba(var(--brand-800-rgb),1)]"><div className="rounded bg-[rgba(var(--brand-50-rgb),1)] p-1 text-[rgba(var(--brand-600-rgb),1)]"><PlusOutlined /></div> {editingDraft ? 'ویرایش مرحله پیش‌نویس' : (isProcessModule ? 'افزودن مرحله پیش‌نویس فرآیند' : 'افزودن مرحله پیش‌نویس')}</div>}
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
+        className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         open={isDraftModalOpen}
         onCancel={closeDraftStageModal}
         footer={null}
         zIndex={10001}
-        width={1040}
-        centered
+        width={isMobileProcessViewport ? '100vw' : 1040}
+        centered={!isMobileProcessViewport}
         destroyOnHidden
+        style={responsiveProcessModalStyle}
         styles={stageModalStyles}
       >
         <Form
@@ -8640,8 +8690,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         onCancel={closeDraftCustomFieldModal}
         onOk={() => { void saveDraftCustomField(); }}
         okText={editingDraftCustomFieldKey ? 'بروزرسانی فیلد' : 'ایجاد فیلد'}
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
+        className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         zIndex={10002}
         destroyOnHidden
+        width={isMobileProcessViewport ? '100vw' : 560}
+        centered={!isMobileProcessViewport}
+        style={responsiveProcessModalStyle}
+        styles={stageModalStyles}
       >
         <Form
           form={draftCustomFieldForm}
@@ -8700,8 +8756,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         }}
         onOk={() => { void saveDraftCustomFieldOptions(); }}
         okText="ثبت گزینه‌ها"
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
+        className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         zIndex={10003}
         destroyOnHidden
+        width={isMobileProcessViewport ? '100vw' : 620}
+        centered={!isMobileProcessViewport}
+        style={responsiveProcessModalStyle}
+        styles={stageModalStyles}
       >
         <div className="mb-3 text-xs text-gray-500">
           هر خط به‌صورت <code>label|value|color</code> وارد شود. رنگ اختیاری است.
@@ -8715,9 +8777,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       <Modal
         title={appendProcessModalMode === 'links' ? 'رکوردهای مرتبط با این فرآیند' : 'افزودن فرآیند جدید'}
+        rootClassName={isMobileProcessViewport ? 'process-stage-modal-root' : undefined}
+        className={isMobileProcessViewport ? 'process-stage-modal' : undefined}
         open={appendProcessModalOpen}
-        width={appendProcessModalMode === 'links' ? 1120 : 760}
-        style={{ maxWidth: 'calc(100vw - 1rem)' }}
+        width={isMobileProcessViewport ? '100vw' : (appendProcessModalMode === 'links' ? 1120 : 760)}
+        style={responsiveProcessModalStyle}
         onCancel={() => {
           setAppendProcessModalOpen(false);
           setAppendProcessModalGroupId(null);
@@ -8777,6 +8841,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </Button>,
             ]}
         destroyOnHidden
+        centered={!isMobileProcessViewport}
+        styles={stageModalStyles}
       >
         <div className="space-y-3 pt-2">
           <div className="text-xs text-gray-500">
@@ -8789,8 +8855,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <Select
               {...modalSelectProps}
               placement="topRight"
-              getPopupContainer={(node) => node?.parentElement || document.body}
-              styles={{ popup: { root: { zIndex: 16020, maxWidth: 'calc(100vw - 1rem)' } } }}
+              getPopupContainer={resolveSelectPopupContainer}
+              styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 16020, maxWidth: 'calc(100vw - 1rem)' }) } }}
               labelInValue
               value={appendProcessTemplateSelectValue}
               onChange={handleAppendProcessTemplateSelectChange}
@@ -8849,7 +8915,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       moduleId={moduleId}
                       recordId={recordId}
                       overlayZIndexBase={16040}
-                      popupContainer={(node) => node?.parentElement || document.body}
+                      popupContainer={resolveSelectPopupContainer}
                     />
                   </div>
                 ))}
@@ -8909,6 +8975,38 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           />
         </>
       )}
+      <style>{`
+        @media (max-width: 768px) {
+          .process-stage-modal-root .ant-modal-wrap {
+            overflow: hidden;
+          }
+
+          .process-stage-modal {
+            top: 0 !important;
+            max-width: 100vw !important;
+            margin: 0 !important;
+            padding-bottom: 0 !important;
+          }
+
+          .process-stage-modal .ant-modal-content {
+            min-height: 100dvh;
+            max-height: 100dvh;
+            border-radius: 0 !important;
+            display: flex;
+            flex-direction: column;
+          }
+
+          .process-stage-modal .ant-modal-body {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+          }
+
+          .process-stage-modal .ant-modal-footer {
+            padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+          }
+        }
+      `}</style>
     </div>
   );
 };

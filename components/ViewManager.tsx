@@ -17,6 +17,7 @@ import {
   ArrowDownOutlined,
   ArrowUpOutlined,
   CheckSquareOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   FilterOutlined,
@@ -243,6 +244,26 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setIsModalOpen(true);
   };
 
+  const handleCopyView = (view: SavedView, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const rawConfig = (view.config as any) || {};
+    const safeConfig: ViewConfig = {
+      columns:
+        Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
+          ? rawConfig.columns
+          : moduleConfig.fields.map((f) => f.key),
+      filters: normalizeViewFilters(rawConfig.filters).map((filter) => ({
+        ...filter,
+        id: createWorkflowId(),
+      })),
+      sort: rawConfig.sort,
+    };
+    setConfig(safeConfig);
+    setViewName(`${view.name} (کپی)`);
+    setEditingViewId(null);
+    setIsModalOpen(true);
+  };
+
   const handleEditViewFromSheet = (view: SavedView) => {
     const rawConfig = (view.config as any) || {};
     const safeConfig: ViewConfig = {
@@ -263,6 +284,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     }
     setIsMobileSheetOpen(false);
     setIsModalOpen(true);
+  };
+
+  const handleCopyViewFromSheet = (view: SavedView) => {
+    setIsMobileSheetOpen(false);
+    handleCopyView(view);
   };
 
   const handleSaveView = async () => {
@@ -424,6 +450,22 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                     </span>
                   </Tooltip>
 
+                  <Tooltip
+                    title="کپی"
+                    placement="bottom"
+                    align={{ offset: [0, 8] }}
+                    mouseEnterDelay={0.45}
+                    getPopupContainer={() => document.body}
+                    destroyOnHidden
+                  >
+                    <span
+                      className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/10"
+                      onClick={(e) => handleCopyView(view, e)}
+                    >
+                      <CopyOutlined className="text-[10px]" />
+                    </span>
+                  </Tooltip>
+
                   {!view.is_default && !view.id.startsWith('default_') && (
                     <Popconfirm
                       title="حذف نما؟"
@@ -465,9 +507,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const renderMobileSheet = () => (
     <>
       <Button
-        type="default"
+        type="text"
         icon={<FilterOutlined />}
-        className="module-list-toolbar__compact-icon"
+        className="module-list-toolbar__compact-icon !h-9 !w-9 !min-w-9 !rounded-full !border-0 !bg-transparent !p-0 !shadow-none !text-gray-500 hover:!bg-black/5 hover:!text-leather-600 dark:!text-gray-300 dark:hover:!bg-white/10"
         aria-label="لیست‌های نمایش"
         title="لیست‌های نمایش"
         onClick={() => setIsMobileSheetOpen(true)}
@@ -531,6 +573,14 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                       >
                         ویرایش
                       </Button>
+                      <Button
+                        size="small"
+                        icon={<CopyOutlined />}
+                        className="!rounded-xl"
+                        onClick={() => handleCopyViewFromSheet(view)}
+                      >
+                        کپی
+                      </Button>
                       {canDelete ? (
                         <Popconfirm
                           title="حذف نما؟"
@@ -591,7 +641,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
             <Alert
               type="info"
               showIcon
-              message="شما در حال کپی کردن یک نمای پایه هستید."
+                message="شما در حال ساخت کپی از یک نمای موجود هستید."
               className="mb-2"
             />
           )}

@@ -609,15 +609,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
             setEditingGoal(activeCard.goal);
           }
         }}
-        className={`relative overflow-hidden rounded-xl border border-gray-200 bg-gradient-to-br px-3.5 py-1.5 shadow-sm dark:border-gray-800 ${canEditActiveGoal ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
+        className={`relative overflow-hidden rounded-lg border border-gray-200 bg-gradient-to-br px-2.5 py-1 shadow-sm dark:border-gray-800 ${canEditActiveGoal ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
       >
-        <div className={`flex items-center gap-2.5 transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
-          <div className="min-w-0 w-[96px] shrink-0 md:w-[132px]">
-            <div className="truncate text-[8px] leading-3.5 text-gray-500 dark:text-gray-400">
-              <span className="truncate">{activeCard.goal.goal_scope === 'team' ? 'هدف تیمی' : 'هدف فردی'}</span>
-              <span>•</span>
-              <span className="truncate">{activeCard.mainRange.startLabel} - {activeCard.mainRange.endLabel}</span>
-            </div>
+        <div className={`flex h-7 items-center gap-2 transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
+          <div className="min-w-0 w-[108px] shrink-0 md:w-[132px]">
             <div className="truncate text-[11px] font-black leading-4 text-gray-800 dark:text-gray-100">
               {activeCard.goal.name}
             </div>
@@ -625,28 +620,14 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
+              <div className="h-1.5 min-w-[72px] flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
                 <div
                   className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.bar}`}
                   style={{ width: `${mainPercent}%` }}
                 />
               </div>
-              <div className="shrink-0 whitespace-nowrap text-[9px] text-gray-600 dark:text-gray-300">
+              <div className="shrink-0 whitespace-nowrap text-[9px] font-semibold text-gray-600 dark:text-gray-300">
                 {formatMetricNumber(activeCard.achievedValue, activeCard.goal.metric_type)} / {formatMetricNumber(activeCard.targetValue, activeCard.goal.metric_type)}
-              </div>
-            </div>
-            <div className="mt-1 flex items-center gap-2">
-              <div className="hidden shrink-0 whitespace-nowrap text-[8px] text-gray-500 dark:text-gray-400 md:block">
-                {activeCard.subRange.startLabel} - {activeCard.subRange.endLabel}
-              </div>
-              <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
-                <div
-                  className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.subBar}`}
-                  style={{ width: `${subPercent}%` }}
-                />
-              </div>
-              <div className="truncate text-[8px] text-gray-500 dark:text-gray-400 md:hidden">
-                {activeCard.subRange.startLabel} - {activeCard.subRange.endLabel}
               </div>
             </div>
           </div>
@@ -661,7 +642,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                   event.stopPropagation();
                   setActiveIndex((current) => (current - 1 + cards.length) % cards.length);
                 }}
-                className="!h-6 !w-6 !min-w-6"
+                className="!h-5 !w-5 !min-w-5"
               />
               <Button
                 size="small"
@@ -671,7 +652,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                   event.stopPropagation();
                   setActiveIndex((current) => (current + 1) % cards.length);
                 }}
-                className="!h-6 !w-6 !min-w-6"
+                className="!h-5 !w-5 !min-w-5"
               />
               <Button
                 size="small"
@@ -681,7 +662,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                   event.stopPropagation();
                   setIsAutoPlayPaused((current) => !current);
                 }}
-                className="!h-6 !w-6 !min-w-6"
+                className="!h-5 !w-5 !min-w-5"
               />
             </div>
           ) : null}

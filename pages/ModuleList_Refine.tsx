@@ -3182,11 +3182,11 @@ export const ModuleListRefine: React.FC<{
              />
             </div>
 
-            {((canShowGoalCards && !isSystemManagedModule) || selectedRowKeys.length > 0) ? (
-              <div className="order-last basis-full pt-1 min-w-0 md:order-none md:-mt-1 md:basis-auto md:pt-0 md:flex md:flex-[0_1_666px] md:items-start md:justify-start md:self-start xl:flex-[0_1_742px]">
+            {(selectedRowKeys.length > 0 || (isMobileViewport && canShowGoalCards && !isSystemManagedModule)) ? (
+              <div className="order-last basis-full pt-0 min-w-0 md:order-none md:mt-0 md:basis-auto md:pt-0 md:flex md:flex-[0_1_420px] md:items-center md:justify-start md:self-center xl:flex-[0_1_460px]">
                 <div
                   ref={canShowGoalCards && selectedRowKeys.length === 0 ? utilitySlotRef : undefined}
-                  className="w-full min-h-[42px]"
+                  className="w-full min-h-[30px]"
                   style={selectedRowKeys.length > 0 && utilitySlotHeight ? { minHeight: `${utilitySlotHeight}px` } : undefined}
                 >
                   {selectedRowKeys.length > 0 ? (
@@ -3272,7 +3272,7 @@ export const ModuleListRefine: React.FC<{
                       }
                     />
                   ) : (
-                    !isSystemManagedModule ? (
+                    isMobileViewport && !isSystemManagedModule ? (
                       <GoalProgressSlider
                         moduleId={resolvedModuleId}
                         placement="module_list"

@@ -47,6 +47,7 @@ import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { syncRecordTags } from '../utils/recordTags';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRelationOptionsForField, RELATION_DEFAULT_LIMIT } from '../utils/relationOptions';
 import { mergeSelectOptions } from '../utils/selectOptions';
@@ -507,7 +508,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const selectPopupZIndex = overlayZIndexBase;
   const modalOverlayZIndex = overlayZIndexBase + 10;
   const scanModalZIndex = overlayZIndexBase + 15;
-  const quickCreateModalZIndex = overlayZIndexBase + 20;
+  const quickCreateModalZIndex = overlayZIndexBase + 260;
   const selectPlacement = 'bottomRight' as const;
   const selectPopupContainer = popupContainer || resolveSelectPopupContainer;
 
@@ -753,22 +754,21 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     const moduleFields = quickCreateTargetModule?.fields || [];
     const unsupported = new Set<string>([
       FieldType.IMAGE,
-      FieldType.TAGS,
       FieldType.PROGRESS_STAGES,
       FieldType.JSON,
       FieldType.READONLY_LOOKUP,
     ]);
 
-    const selected = moduleFields
+    const writableFields = moduleFields
       .filter((f: any) => !!f?.key)
       .filter((f: any) => f?.nature !== FieldNature.SYSTEM)
       .filter((f: any) => !['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(String(f?.key || '')))
-      .filter((f: any) => !unsupported.has(String(f?.type || '')))
+      .filter((f: any) => !unsupported.has(String(f?.type || '')));
+
+    const selected = writableFields
       .filter((f: any) => {
-        if (configuredQuickCreateKeys.length === 0) return true;
-        return configuredQuickCreateKeys.includes(String(f?.key || ''));
-      })
-      .filter((f: any) => {
+        if (f?.type === FieldType.TAGS) return true;
+        if (configuredQuickCreateKeys.includes(String(f?.key || ''))) return true;
         const isHeader = f?.location === 'header';
         const isRequiredField = f?.validation?.required === true;
         const isKeyField = f?.isKey === true;
@@ -779,6 +779,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       .sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0));
 
     const map = new Map<string, ModuleField>();
+    writableFields.forEach((f: any) => map.set(String(f.key), f as ModuleField));
     selected.forEach((f: any) => map.set(String(f.key), f as ModuleField));
 
     if (!map.has(quickCreateTargetField)) {
@@ -796,6 +797,33 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
 
     return Array.from(map.values()).sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0));
+  }, [configuredQuickCreateKeys, quickCreateTargetField, quickCreateTargetModule]);
+
+  const quickCreatePrimaryFieldKeys = useMemo(() => {
+    const moduleFields = quickCreateTargetModule?.fields || [];
+    const keys = new Set<string>();
+    moduleFields.forEach((f: any) => {
+      const key = String(f?.key || '');
+      if (!key) return;
+      if (f?.type === FieldType.TAGS) {
+        keys.add(key);
+        return;
+      }
+      if (configuredQuickCreateKeys.includes(key)) {
+        keys.add(key);
+        return;
+      }
+      const isHeader = f?.location === 'header';
+      const isRequiredField = f?.validation?.required === true;
+      const isKeyField = f?.isKey === true;
+      const isTableColumn = f?.isTableColumn === true;
+      const isTargetField = key === quickCreateTargetField;
+      if (isHeader || isRequiredField || isKeyField || isTableColumn || isTargetField) {
+        keys.add(key);
+      }
+    });
+    keys.add(quickCreateTargetField);
+    return Array.from(keys);
   }, [configuredQuickCreateKeys, quickCreateTargetField, quickCreateTargetModule]);
   const getQuickCreateFieldValueLabel = (fieldKey: string, rawValue: any) => {
     if (rawValue === undefined || rawValue === null) return '';
@@ -1807,9 +1835,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       await quickCreateForm.validateFields();
       const values = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
       const payload: Record<string, any> = {};
+      const tagsFieldKey = quickCreateFields.find((f: any) => f?.type === FieldType.TAGS)?.key || null;
+      const selectedTags = tagsFieldKey && Array.isArray(values?.[tagsFieldKey]) ? values[tagsFieldKey] : [];
 
       quickCreateFields.forEach((f: any) => {
         if (!f?.key) return;
+        if (f.type === FieldType.TAGS) return;
         let nextValue = values?.[f.key];
         if (nextValue === undefined) return;
         if (typeof nextValue === 'string') nextValue = nextValue.trim();
@@ -1848,11 +1879,14 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       }
       const insertResult = await insertQuickCreatePayload(normalizedPayload);
       if (insertResult.error) throw insertResult.error;
+      const insertedRow: any = insertResult.data as any;
+      if (tagsFieldKey && insertedRow?.id) {
+        await syncRecordTags(supabase, quickCreateTargetModuleId, String(insertedRow.id), selectedTags);
+      }
 
       msg.success('رکورد جدید ایجاد شد');
       closeQuickCreate();
       if (onOptionsUpdate) onOptionsUpdate();
-      const insertedRow: any = insertResult.data as any;
       if (insertedRow?.id) onChange(insertedRow.id);
     } catch (err: any) {
       if (Array.isArray(err?.errorFields)) return;
@@ -2355,6 +2389,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                         افزودن مورد جدید
                       </Button>
                     ) : null}
+                    closeMobileOnToolbarClick
                 />
                 <QrScanPopover
                   label=""
@@ -2900,6 +2935,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     label={fieldLabel}
                     moduleId={quickCreateTargetModuleId}
                     fields={quickCreateFields}
+                    primaryFieldKeys={quickCreatePrimaryFieldKeys}
                     form={quickCreateForm}
                     loading={quickCreateLoading}
                     relationOptions={quickCreateRelationOptions}
@@ -2952,6 +2988,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 label={fieldLabel}
                 moduleId={quickCreateTargetModuleId}
                 fields={quickCreateFields}
+                primaryFieldKeys={quickCreatePrimaryFieldKeys}
                 form={quickCreateForm}
                 loading={quickCreateLoading}
                 relationOptions={quickCreateRelationOptions}
@@ -2991,6 +3028,7 @@ interface QuickCreateProps {
   label: string;
   moduleId?: string;
   fields: ModuleField[];
+  primaryFieldKeys?: string[];
   form: any;
   loading: boolean;
   relationOptions: Record<string, any[]>;
@@ -3044,6 +3082,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   label,
   moduleId,
   fields,
+  primaryFieldKeys = [],
   form,
   loading,
   relationOptions,
@@ -3056,6 +3095,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   const effectiveForm = form || fallbackForm;
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
   const [assigneesLoading, setAssigneesLoading] = useState(false);
+  const [showAllFields, setShowAllFields] = useState(false);
   const pendingAutoNameToggleValueRef = useRef<boolean | null>(null);
   const pendingAutoNameToggleFrameRef = useRef<number | null>(null);
   const supportsAssignee = supportsGlobalAssignee(String(moduleId || ''));
@@ -3183,17 +3223,36 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       }] : []),
     ];
   }, [assignees.roles, assignees.users, currentAssigneePlaceholder, supportsRoleAssignee]);
-  const visibleFields = useMemo(
+  const baseVisibleFields = useMemo(
     () => (supportsAssignee
       ? fields.filter((field) => !['assignee_id', 'assignee_type', 'assignee_role_id', 'assignee_combo'].includes(String(field?.key || '')))
       : fields)
       .filter((field) => String(field?.key || '') !== 'auto_name_enabled'),
     [fields, supportsAssignee],
   );
+  const primaryFieldKeySet = useMemo(
+    () => new Set((primaryFieldKeys || []).map((key) => String(key || '').trim()).filter(Boolean)),
+    [primaryFieldKeys]
+  );
+  const visibleFields = useMemo(() => {
+    const primaryFields = baseVisibleFields.filter((field) => primaryFieldKeySet.has(String(field?.key || '')));
+    if (primaryFieldKeySet.size === 0 || primaryFields.length === 0) return baseVisibleFields;
+    if (showAllFields) {
+      const secondaryFields = baseVisibleFields.filter((field) => !primaryFieldKeySet.has(String(field?.key || '')));
+      return [...primaryFields, ...secondaryFields];
+    }
+    return primaryFields;
+  }, [baseVisibleFields, primaryFieldKeySet, showAllFields]);
+  const hiddenFieldsCount = Math.max(0, baseVisibleFields.length - visibleFields.length);
 
   useEffect(() => () => {
     clearPendingAutoNameToggleWrite();
   }, [clearPendingAutoNameToggleWrite]);
+
+  useEffect(() => {
+    if (!open) return;
+    setShowAllFields(false);
+  }, [moduleId, open]);
 
   useEffect(() => {
     if (!open || typeof window === 'undefined') return;
@@ -3430,10 +3489,17 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
             </Form.Item>
           </div>
         ))}
+        {!showAllFields && hiddenFieldsCount > 0 ? (
+          <Button
+            type="text"
+            icon={<DownOutlined />}
+            onClick={() => setShowAllFields(true)}
+            className="mt-1 px-0 text-xs font-semibold text-gray-500 hover:!text-leather-600"
+          >
+            مشاهده همه فیلدها
+          </Button>
+        ) : null}
       </Form>
-      <div className="text-xs text-gray-400 mt-1">
-        فیلدهای کلیدی، هدر، الزامی و ستون‌های لیست برای ثبت سریع نمایش داده شده‌اند.
-      </div>
     </Modal>
   );
 };

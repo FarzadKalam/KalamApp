@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Button, Empty, Modal, Table, Tabs, Tag } from 'antd';
+import { Button, Empty, Grid, Modal, Table, Tabs, Tag } from 'antd';
 import { CheckOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
@@ -59,6 +59,8 @@ const TaskHandoverFormsModal: React.FC<TaskHandoverFormsModalProps> = ({
   onOpenSelectedForm,
   onClose,
 }) => {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const totalShortage = useMemo(
     () =>
       summaries.reduce((sum, item) => {
@@ -102,12 +104,19 @@ const TaskHandoverFormsModal: React.FC<TaskHandoverFormsModalProps> = ({
   return (
     <Modal
       title="فرم‌های تحویل کالا"
+      rootClassName={isMobile ? 'process-stage-modal-root' : undefined}
+      className={isMobile ? 'process-stage-modal' : undefined}
       open={open}
       onCancel={onClose}
-      width="min(1080px, calc(100vw - 24px))"
+      width={isMobile ? '100vw' : 'min(1080px, calc(100vw - 24px))'}
       footer={null}
       destroyOnHidden
-      styles={{ body: { maxHeight: '74vh', overflowY: 'auto' } }}
+      centered={!isMobile}
+      style={isMobile ? { maxWidth: '100vw', top: 0, paddingBottom: 0 } : undefined}
+      styles={{
+        body: { maxHeight: isMobile ? 'calc(100dvh - 124px)' : '74vh', overflowY: 'auto' },
+        content: { borderRadius: isMobile ? 0 : undefined },
+      }}
     >
       <div className="space-y-4">
         <div className="text-sm text-gray-700">
@@ -299,6 +308,33 @@ const TaskHandoverFormsModal: React.FC<TaskHandoverFormsModalProps> = ({
           )}
         </div>
       </div>
+      <style>{`
+        @media (max-width: 768px) {
+          .process-stage-modal-root .ant-modal-wrap {
+            overflow: hidden;
+          }
+
+          .process-stage-modal {
+            top: 0 !important;
+            max-width: 100vw !important;
+            margin: 0 !important;
+            padding-bottom: 0 !important;
+          }
+
+          .process-stage-modal .ant-modal-content {
+            min-height: 100dvh;
+            max-height: 100dvh;
+            border-radius: 0 !important;
+            display: flex;
+            flex-direction: column;
+          }
+
+          .process-stage-modal .ant-modal-body {
+            flex: 1;
+            min-height: 0;
+          }
+        }
+      `}</style>
     </Modal>
   );
 };

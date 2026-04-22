@@ -83,6 +83,7 @@ type FileManagerBrowserProps = {
   title?: string;
   items: FileManagerBrowserItem[];
   loading?: boolean;
+  refreshing?: boolean;
   emptyDescription?: string;
   folders?: FileManagerBrowserFolder[];
   activeFolderKey?: string;
@@ -238,6 +239,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   title,
   items,
   loading = false,
+  refreshing = false,
   emptyDescription = 'فایلی ثبت نشده است.',
   folders = [],
   activeFolderKey = 'all',
@@ -247,7 +249,6 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onDeleteItem,
   onCopyItems,
   copyItemsLabel = 'کپی',
-  onCreateShortcutsHere,
   onMoveItems,
   onRenameItem,
   onCreateFolder,
@@ -975,9 +976,6 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
               <Tooltip title={copyItemsLabel}>
                 <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)} />
               </Tooltip>
-              <Tooltip title="میانبر به اینجا">
-                <Button icon={<RetweetOutlined />} disabled={!canEdit || !onCreateShortcutsHere || selectedItems.length === 0} onClick={() => onCreateShortcutsHere?.(selectedItems)} />
-              </Tooltip>
               <Tooltip title="انتقال">
                 <Button icon={<SwapOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)} />
               </Tooltip>
@@ -1009,9 +1007,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
             </Space>
           </div>
         ) : (
-          <div className="flex h-full items-center text-xs text-gray-400 dark:text-gray-500">
-            برای ورود به پوشه‌ها دبل‌کلیک کنید.
-          </div>
+          <div className="h-full" />
         )}
       </div>
 
@@ -1019,18 +1015,29 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         <div className="rounded-[2rem] border border-gray-200 bg-white p-10 text-center dark:border-gray-800 dark:bg-[#1a1a1a]">
           <Spin />
         </div>
-      ) : visibleEntryCount === 0 ? (
-        <div className="rounded-[2rem] border border-gray-200 bg-white p-10 dark:border-gray-800 dark:bg-[#1a1a1a]">
-          <Empty description={emptyDescription} />
-        </div>
       ) : (
-        <div className={viewMode === 'icon'
-          ? 'grid gap-2'
-          : 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'}
-          style={viewMode === 'icon' ? { gridTemplateColumns: `repeat(auto-fill, minmax(${iconTileMinWidth}px, 1fr))` } : undefined}
-        >
-          {visibleFolders.map(renderFolderCard)}
-          {displayedItems.map(renderItemCard)}
+        <div className="relative">
+          {refreshing ? (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center rounded-[2rem] bg-white/45 pt-6 backdrop-blur-[1px] dark:bg-[#111]/35">
+              <div className="rounded-full border border-gray-200 bg-white/90 px-3 py-1 shadow-sm dark:border-gray-700 dark:bg-[#1f1f1f]/90">
+                <Spin size="small" />
+              </div>
+            </div>
+          ) : null}
+          {visibleEntryCount === 0 ? (
+            <div className="rounded-[2rem] border border-gray-200 bg-white p-10 dark:border-gray-800 dark:bg-[#1a1a1a]">
+              <Empty description={emptyDescription} />
+            </div>
+          ) : (
+            <div className={viewMode === 'icon'
+              ? 'grid gap-2'
+              : 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'}
+              style={viewMode === 'icon' ? { gridTemplateColumns: `repeat(auto-fill, minmax(${iconTileMinWidth}px, 1fr))` } : undefined}
+            >
+              {visibleFolders.map(renderFolderCard)}
+              {displayedItems.map(renderItemCard)}
+            </div>
+          )}
         </div>
       )}
 

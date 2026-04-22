@@ -292,6 +292,7 @@ export const invoicesConfig: ModuleDefinition = {
       validation: { required: true },
       nature: FieldNature.STANDARD,
       isTableColumn: true,
+      defaultValue: true,
     },
     {
       key: 'sale_source',

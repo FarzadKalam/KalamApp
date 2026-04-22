@@ -20,6 +20,18 @@ type RequestContext = {
   recordId?: string | null;
   visibleRecordIds?: string[];
   selectedRecordIds?: string[];
+  intent?: 'process_guide' | string;
+  processFieldKey?: string | null;
+  selectedProcessId?: string | null;
+  selectedProcessGroupId?: string | null;
+  processGuideContext?: Record<string, any> | null;
+  availableProcesses?: Array<{
+    id: string;
+    label: string;
+    templateId?: string | null;
+    templateName?: string | null;
+    stageCount?: number;
+  }>;
 };
 
 const corsHeaders = {
@@ -606,6 +618,24 @@ const normalizeContext = (context: RequestContext | null | undefined): RequestCo
   recordId: context?.recordId ? String(context.recordId).trim() : null,
   visibleRecordIds: Array.isArray(context?.visibleRecordIds) ? context.visibleRecordIds.map(String) : [],
   selectedRecordIds: Array.isArray(context?.selectedRecordIds) ? context.selectedRecordIds.map(String) : [],
+  intent: String(context?.intent || '').trim() || undefined,
+  processFieldKey: context?.processFieldKey ? String(context.processFieldKey).trim() : null,
+  selectedProcessId: context?.selectedProcessId ? String(context.selectedProcessId).trim() : null,
+  selectedProcessGroupId: context?.selectedProcessGroupId ? String(context.selectedProcessGroupId).trim() : null,
+  processGuideContext: context?.processGuideContext && typeof context.processGuideContext === 'object'
+    ? context.processGuideContext
+    : null,
+  availableProcesses: Array.isArray(context?.availableProcesses)
+    ? context.availableProcesses
+        .map((item) => ({
+          id: String(item?.id || '').trim(),
+          label: String(item?.label || '').trim(),
+          templateId: item?.templateId ? String(item.templateId).trim() : null,
+          templateName: item?.templateName ? String(item.templateName).trim() : null,
+          stageCount: Number(item?.stageCount || 0) || 0,
+        }))
+        .filter((item) => item.id && item.label)
+    : [],
 });
 
 const normalizeIds = (ids: any[]) => Array.from(
@@ -850,6 +880,11 @@ const buildPermittedPageContext = async (
       recordId: context.recordId,
       recordScope,
       relatedContexts,
+      processGuideContext: context.processGuideContext || null,
+      intent: context.intent || null,
+      processFieldKey: context.processFieldKey || null,
+      selectedProcessId: context.selectedProcessId || context.selectedProcessGroupId || null,
+      availableProcesses: context.availableProcesses || [],
     };
   }
 
@@ -882,12 +917,17 @@ const buildPermittedPageContext = async (
       : visibleIds.length
       ? `زمینه مجاز: ${permittedRows.length} رکورد از صفحه فعلی لیست ${moduleId}.`
       : `زمینه مجاز: آخرین ${permittedRows.length} رکورد قابل مشاهده از ماژول ${moduleId}.`,
-    records: permittedRows,
-    moduleId,
-    recordId: null,
-    recordScope,
-    relatedContexts: [],
-  };
+      records: permittedRows,
+      moduleId,
+      recordId: null,
+      recordScope,
+      relatedContexts: [],
+      processGuideContext: context.processGuideContext || null,
+      intent: context.intent || null,
+      processFieldKey: context.processFieldKey || null,
+      selectedProcessId: context.selectedProcessId || context.selectedProcessGroupId || null,
+      availableProcesses: context.availableProcesses || [],
+    };
 };
 
 const tokenize = (value: string) =>
@@ -1112,11 +1152,24 @@ const buildPromptMessages = (
       records: pageContext.records,
       related_contexts: pageContext.relatedContexts || [],
     },
+    process_guide: pageContext.intent === 'process_guide'
+      ? {
+          intent: pageContext.intent,
+          process_field_key: pageContext.processFieldKey || null,
+          selected_process_id: pageContext.selectedProcessId || null,
+          available_processes: pageContext.availableProcesses || [],
+          process_guide_context: pageContext.processGuideContext || null,
+        }
+      : null,
     retrieved_permitted_contexts: retrievedContexts,
     ai_instructions: aiInstructions,
     organization_knowledge: otherKnowledge,
     user_question: message,
   };
+
+  const systemContent = pageContext.intent === 'process_guide'
+    ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) برای هر مرحله بگویید اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و مخاطب آن کیست 5) شرط‌ها، فیلدها و اکشن‌ها را با label فارسی موجود در context توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
+    : 'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.';
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -1129,8 +1182,7 @@ const buildPromptMessages = (
   return [
     {
       role: 'system',
-      content:
-        'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.',
+      content: systemContent,
     },
     ...historyMessages,
     {

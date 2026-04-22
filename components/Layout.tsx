@@ -26,13 +26,14 @@ import {
   DollarOutlined,
   ToolOutlined,
   ReloadOutlined,
+  ArrowLeftOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import NotificationsPopover from './NotificationsPopover';
 import GlobalTaskProcessModalHost from './tasks/GlobalTaskProcessModalHost';
-import { getRecordTitle } from '../utils/recordTitle';
+import GoalProgressSlider from './goals/GoalProgressSlider';
 import {
   ACCOUNTING_PERMISSION_KEY,
   REPORTS_PERMISSION_KEY,
@@ -45,6 +46,11 @@ import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
 import { runWorkflowsIntervalTick } from '../utils/workflowRuntime';
 import { runProcessAutomationsIntervalTick } from '../utils/processAutomationRuntime';
+import {
+  buildGlobalSearchModules,
+  searchGlobalRecords,
+  type GlobalSearchGroup,
+} from '../utils/globalSearch';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -69,13 +75,15 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState<Array<{ moduleId: string; moduleTitle: string; items: any[] }>>([]);
+  const [searchResults, setSearchResults] = useState<GlobalSearchGroup[]>([]);
+  const [searchTouched, setSearchTouched] = useState(false);
   const [refreshingPage, setRefreshingPage] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
+  const searchRequestRef = useRef(0);
   const intervalRunnerBusyRef = useRef(false);
   const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
   const wasMobileViewportRef = useRef(initialIsMobile);
@@ -592,15 +600,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, [visibleRawMenuItems]);
 
   const searchableModules = useMemo(() => {
-    return Object.entries(MODULES).map(([id, config]) => {
-      const fieldKeys = (config.fields || []).map((f: any) => f.key);
-      const preferred = ['name', 'title', 'system_code', 'manual_code', 'business_name'];
-      const keyField = config.fields?.find((f: any) => f.isKey)?.key;
-      const inferred = fieldKeys.filter((key: string) => /name|title|code|number|subject/i.test(key));
-      const keys = Array.from(new Set([...preferred, ...(keyField ? [keyField] : []), ...inferred])).filter((key) => fieldKeys.includes(key));
-      return { id, title: config.titles?.fa || id, keys };
-    });
-  }, []);
+    return buildGlobalSearchModules(MODULES, rolePermissions);
+  }, [rolePermissions]);
 
   useEffect(() => {
     const matchedPath = findMenuPath(rawMenuItems, location.pathname);
@@ -617,33 +618,31 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const term = globalSearch.trim();
     if (!term) {
       setSearchResults([]);
+      setSearchLoading(false);
+      setSearchTouched(false);
       return;
     }
 
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
     const handle = setTimeout(async () => {
       try {
         setSearchLoading(true);
-        const results = await Promise.all(
-          searchableModules.map(async (mod) => {
-            if (!mod.keys.length) return { moduleId: mod.id, moduleTitle: mod.title, items: [] };
-            const orFilters = mod.keys
-              .map((key) => `${key}.ilike.%${term}%`)
-              .join(',');
-            const selectFields = Array.from(new Set(['id', ...mod.keys])).join(', ');
-            const { data } = await supabase
-              .from(mod.id)
-              .select(selectFields)
-              .or(orFilters)
-              .limit(8);
-            return { moduleId: mod.id, moduleTitle: mod.title, items: data || [] };
-          })
-        );
-        setSearchResults(results.filter((r) => r.items.length > 0));
+        const results = await searchGlobalRecords(supabase, MODULES, searchableModules, {
+          query: term,
+          limitPerModule: 5,
+        });
+        if (searchRequestRef.current !== requestId) return;
+        setSearchResults(results);
+        setSearchTouched(true);
       } catch (err) {
         console.warn('Global search failed', err);
-        setSearchResults([]);
+        if (searchRequestRef.current === requestId) {
+          setSearchResults([]);
+          setSearchTouched(true);
+        }
       } finally {
-        setSearchLoading(false);
+        if (searchRequestRef.current === requestId) setSearchLoading(false);
       }
     }, 250);
 
@@ -654,7 +653,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const handleClickOutside = (event: MouseEvent) => {
       if (!searchBoxRef.current) return;
       if (searchBoxRef.current.contains(event.target as Node)) return;
+      searchRequestRef.current += 1;
       setSearchResults([]);
+      setSearchTouched(false);
+      setSearchLoading(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -782,6 +784,38 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }, 120);
   };
 
+  const activeModuleId = useMemo(() => {
+    const firstSegment = location.pathname.split('/').filter(Boolean)[0] || '';
+    return firstSegment && MODULES[firstSegment] ? firstSegment : null;
+  }, [location.pathname]);
+
+  const openGlobalSearchPage = useCallback(() => {
+    const term = globalSearch.trim();
+    if (!term) return;
+    navigate(`/search?q=${encodeURIComponent(term)}`);
+    setSearchResults([]);
+    setSearchTouched(false);
+    setSearchLoading(false);
+  }, [globalSearch, navigate]);
+
+  const openSearchResult = useCallback((moduleId: string, recordId: string) => {
+    if (!moduleId || !recordId) return;
+    navigate(`/${moduleId}/${recordId}`);
+    setGlobalSearch('');
+    setSearchResults([]);
+    setSearchTouched(false);
+    setSearchLoading(false);
+  }, [navigate]);
+
+  const getSearchModuleIcon = (moduleId: string) => {
+    if (moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees') return <TeamOutlined />;
+    if (moduleId === 'tasks' || moduleId === 'attendance_logs') return <CheckSquareOutlined />;
+    if (moduleId === 'projects') return <ProjectOutlined />;
+    if (moduleId === 'invoices' || moduleId === 'purchase_invoices' || moduleId === 'secretariat_documents') return <FileTextOutlined />;
+    if (moduleId === 'cash_boxes' || moduleId === 'bank_accounts' || moduleId === 'journal_entries') return <BankOutlined />;
+    return <AppstoreOutlined />;
+  };
+
   return (
     <AntLayout
       className="overflow-hidden bg-gray-100 dark:bg-dark-bg transition-colors duration-300"
@@ -872,59 +906,135 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             backgroundColor: isDarkMode ? 'rgba(23, 28, 48, 0.82)' : 'rgba(255, 255, 255, 0.82)',
           }}
         >
-          <div className="relative flex items-center gap-4" ref={searchBoxRef}>          
-            <div className="flex items-center bg-gray-100 dark:bg-dark-surface rounded-xl px-3 py-1.5 border border-gray-200 dark:border-dark-border w-48 sm:w-72 transition-colors">
-              <SearchOutlined className="text-gray-400" />
+          <div className="relative flex items-center gap-4" ref={searchBoxRef}>
+            <div className="flex h-10 items-center rounded-2xl border border-gray-200 bg-white/80 px-3 shadow-sm transition-all focus-within:border-leather-400 focus-within:bg-white focus-within:shadow-md dark:border-dark-border dark:bg-dark-surface/85 dark:focus-within:border-leather-400 w-48 sm:w-80 lg:w-[360px]">
+              <SearchOutlined className="text-gray-400 dark:text-gray-500" />
               <Input
                 ref={searchRef}
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
+                onPressEnter={openGlobalSearchPage}
                 placeholder="جستجو در همه جا..."
                 className="bg-transparent border-none outline-none text-xs text-gray-700 dark:text-gray-200 w-full mr-2 placeholder-gray-400"
                 variant="borderless"
               />
             </div>
 
-            {(searchLoading || searchResults.length > 0) && globalSearch.trim() && (
-              <div className="absolute top-12 right-0 z-[1200] w-72 sm:w-[420px] max-h-[60vh] overflow-auto rounded-b-2xl rounded-t-none border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-surface shadow-2xl p-1.5">
-                {searchLoading && (
-                  <div className="flex items-center gap-2 text-xs text-gray-500 p-2">
-                    <Spin size="small" /> در حال جستجو...
+            {(searchLoading || searchTouched || searchResults.length > 0) && globalSearch.trim() && (
+              <div
+                className="absolute top-12 right-0 z-[1200] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl ring-1 ring-black/5 dark:border-dark-border dark:bg-dark-surface dark:ring-white/10"
+                style={{ width: 'min(420px, calc(100vw - 24px))', maxHeight: 'min(68vh, 440px)' }}
+              >
+                <div className="flex h-12 items-center justify-between gap-3 border-b border-gray-100 px-3 dark:border-white/10">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold text-gray-400">جستجوی سراسری</div>
+                    <div className="truncate text-xs font-semibold text-gray-700 dark:text-gray-200">{globalSearch.trim()}</div>
                   </div>
-                )}
-                {!searchLoading && searchResults.length === 0 && (
-                  <div className="text-xs text-gray-400 p-2">نتیجه‌ای یافت نشد</div>
-                )}
-                {!searchLoading && searchResults.map((group) => (
-                  <div key={group.moduleId} className="mb-0.5">
-                    <div className="text-[11px] text-gray-400 px-2 py-0.5">{group.moduleTitle}</div>
-                    <div className="h-[2px] bg-leather-500 rounded-full mx-2 mt-0.5 mb-0.5" />
-                    <div className="space-y-0.5">
-                      {group.items.map((item: any) => {
-                        const moduleConfig = MODULES[group.moduleId];
-                        const label = getRecordTitle(item, moduleConfig, { fallback: '-' });
-                        const code = item.system_code || item.manual_code;
-                        return (
-                          <div
-                            key={item.id}
-                            className="px-2 py-0.5 rounded-lg text-xs text-leather-600 dark:text-leather-400 hover:underline hover:bg-gray-100 dark:hover:bg-white/5 cursor-pointer flex items-center justify-between"
-                            onClick={() => {
-                              navigate(`/${group.moduleId}/${item.id}`);
-                              setGlobalSearch('');
-                              setSearchResults([]);
-                            }}
-                          >
-                            <span className="truncate">{label}</span>
-                            {code && <span className="text-[10px] text-gray-400">{code}</span>}
-                          </div>
-                        );
-                      })}
+                  {searchLoading ? <Spin size="small" /> : null}
+                </div>
+
+                <div className="overflow-y-auto p-2" style={{ maxHeight: '340px' }}>
+                  {searchLoading && searchResults.length === 0 && (
+                    <div className="space-y-2 p-2">
+                      {[0, 1, 2].map((item) => (
+                        <div key={item} className="h-10 animate-pulse rounded-xl bg-gray-100 dark:bg-white/5" />
+                      ))}
                     </div>
-                  </div>
-                ))}
+                  )}
+
+                  {!searchLoading && searchTouched && searchResults.length === 0 && (
+                    <div className="px-3 py-8 text-center text-xs text-gray-400">
+                      نتیجه‌ای برای این جستجو پیدا نشد
+                    </div>
+                  )}
+
+                  {searchResults.map((group) => (
+                    <div key={group.moduleId} className="mb-2 last:mb-0">
+                      <div className="mb-1 flex items-center justify-between px-2">
+                        <div className="flex min-w-0 items-center gap-2 text-[11px] font-black text-gray-500 dark:text-gray-300">
+                          <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-leather-50 text-[11px] text-leather-600 dark:bg-leather-500/10 dark:text-leather-300">
+                            {getSearchModuleIcon(group.moduleId)}
+                          </span>
+                          <span className="truncate">{group.moduleTitle}</span>
+                        </div>
+                        {group.hasMore ? (
+                          <button
+                            type="button"
+                            className="text-[11px] font-semibold text-leather-600 hover:text-leather-500 dark:text-leather-300"
+                            onClick={openGlobalSearchPage}
+                          >
+                            موارد بیشتر
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="space-y-1">
+                        {group.items.map((item) => (
+                          <button
+                            type="button"
+                            key={`${item.moduleId}:${item.recordId}`}
+                            className="flex h-12 w-full items-center justify-between gap-3 rounded-xl px-3 text-right transition hover:bg-gray-50 focus:bg-gray-50 focus:outline-none dark:hover:bg-white/5 dark:focus:bg-white/5"
+                            onClick={() => openSearchResult(item.moduleId, item.recordId)}
+                            style={{ minHeight: 48, maxHeight: 48 }}
+                          >
+                            <span className="min-w-0 flex-1 overflow-hidden">
+                              <span
+                                className="block truncate font-bold text-gray-800 dark:text-gray-100"
+                                style={{ fontSize: 12, lineHeight: '18px', maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                              >
+                                {item.title}
+                              </span>
+                              <span
+                                className="mt-0.5 flex min-w-0 items-center gap-1 text-gray-400"
+                                style={{ fontSize: 10, lineHeight: '14px', maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden' }}
+                              >
+                                {item.subtitle ? (
+                                  <span className="persian-number truncate" style={{ maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {item.subtitle}
+                                  </span>
+                                ) : null}
+                                {item.subtitle && item.matchedFields.length ? <span>·</span> : null}
+                                {item.matchedFields[0] ? (
+                                  <span className="truncate text-leather-500 dark:text-leather-300" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {item.matchedFields[0].label}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </span>
+                            <ArrowLeftOutlined className="shrink-0 text-[11px] text-gray-300" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="border-t border-gray-100 bg-gray-50/80 p-1.5 dark:border-white/10 dark:bg-white/5">
+                  <Button
+                    type="text"
+                    block
+                    size="small"
+                    icon={<SearchOutlined />}
+                    onClick={openGlobalSearchPage}
+                    className="!h-8 !rounded-xl !text-xs !font-bold !text-leather-600 dark:!text-leather-300"
+                  >
+                    مشاهده بیشتر
+                  </Button>
+                </div>
               </div>
             )}
           </div>
+          {!isMobile && activeModuleId ? (
+            <div
+              className="pointer-events-auto absolute left-1/2 top-1/2 hidden w-[280px] -translate-x-1/2 -translate-y-1/2 md:block lg:w-[380px] xl:w-[460px]"
+              style={{ animation: 'goalHeaderSlideIn 260ms ease-out both' }}
+            >
+              <GoalProgressSlider
+                moduleId={activeModuleId}
+                placement="module_list"
+                className="w-full"
+              />
+            </div>
+          ) : null}
           <div className="flex items-center gap-2 md:gap-4">
             <Button
               type="text"

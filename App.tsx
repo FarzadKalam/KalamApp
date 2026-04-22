@@ -75,6 +75,7 @@ const loadHrQuickRequestPage = () => import("./pages/HrQuickRequestPage");
 const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
+const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 
 const ProfilePage = lazy(loadProfilePage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -109,6 +110,7 @@ const HrQuickRequestPage = lazy(loadHrQuickRequestPage);
 const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
+const GlobalSearchPage = lazy(loadGlobalSearchPage);
 
 const routePreloaders = [
   loadProfilePage,
@@ -144,6 +146,7 @@ const routePreloaders = [
   loadRecycleBinPage,
   loadShareTargetPage,
   loadFileShortLinkRedirectPage,
+  loadGlobalSearchPage,
 ] as const;
 
 const getInitialDarkMode = () => {
@@ -382,6 +385,7 @@ function App() {
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
     if (pathname.startsWith("/share-target")) return "اشتراک‌گذاری";
+    if (pathname.startsWith("/search")) return "جستجو";
     if (pathname.startsWith("/gallery")) return "مدیریت فایل‌ها";
     if (pathname.startsWith("/recycle-bin")) return "سطل بازیافت";
     if (pathname === "/reports") return "گزارشات";
@@ -535,6 +539,7 @@ function App() {
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/share-target" element={<ShareTargetPage />} />
+            <Route path="/search" element={<GlobalSearchPage />} />
             <Route path="/web_forms" element={<WebFormsHubPage />} />
             <Route path="/web_forms/create" element={<WebFormBuilderPage />} />
             <Route path="/web_forms/:id" element={<WebFormBuilderPage />} />

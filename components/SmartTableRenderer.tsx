@@ -617,8 +617,9 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       );
   }
 
+  const allViewableFields = moduleConfig.fields.filter(f => (canViewField ? canViewField(f.key) !== false : true));
   // ✅ ترتیب مجدد ستون‌ها: اول تصویر، سپس نام، سپس تگ‌ها، سپس بقیه
-  const tagsField = tableFields.find(f => f.type === FieldType.TAGS);
+  const tagsField = allViewableFields.find(f => f.type === FieldType.TAGS);
   const imageField = tableFields.find(f => f.type === FieldType.IMAGE);
   const primaryTitleField = tableFields.find((f) => isNameOrTitleField(f));
   const otherFields = tableFields.filter(f => f !== tagsField && f !== imageField && f !== primaryTitleField);

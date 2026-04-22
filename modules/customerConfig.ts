@@ -50,8 +50,8 @@ export const customerModule: ModuleDefinition = {
     { key: 'legal_name', labels: { fa: 'نام حقوقی', en: 'Legal Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.45, logic: { visibleIf: { field: 'person_type', operator: LogicOperator.EQUALS, value: 'legal' } } },
     { key: 'business_name', labels: { fa: 'نام کسب و کار', en: 'Business' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.5, isTableColumn: true },
 
-    { key: 'system_code', labels: { fa: 'کد اشتراک', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, isTableColumn: true },
-    { key: 'legacy_contact_code', labels: { fa: 'کد سیستم قبلی', en: 'Legacy Contact Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2.05, isTableColumn: false },
+    { key: 'system_code', labels: { fa: 'کد اشتراک', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, hideInCreateForm: true, isTableColumn: true },
+    { key: 'legacy_contact_code', labels: { fa: 'کد سیستم قبلی', en: 'Legacy Contact Code' }, type: FieldType.TEXT, blockId: 'basic_info', order: 4.46, isTableColumn: false },
     {
       key: 'rank', labels: { fa: 'سطح مشتری', en: 'Rank' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 1.1,
       options: [
@@ -61,7 +61,7 @@ export const customerModule: ModuleDefinition = {
         { label: 'VIP', value: 'vip', color: 'purple' }
       ], defaultValue: 'normal', isTableColumn: true
     },
-    { key: 'mobile_1', labels: { fa: 'موبایل اصلی', en: 'Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 2.2, isTableColumn: true },
+    { key: 'mobile_1', labels: { fa: 'موبایل اصلی', en: 'Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 1.55, isTableColumn: true },
     {
       key: 'auto_name_enabled',
       labels: { fa: 'نامگذاری خودکار', en: 'Auto Name' },

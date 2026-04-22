@@ -23,7 +23,7 @@ import SharedNoteComposer from './notes/SharedNoteComposer';
 import RenderCardItem from './moduleList/RenderCardItem';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import ProductionStagesField from './ProductionStagesField';
-import { NOTES_UPDATED_EVENT } from '../utils/aiAssistantEvents';
+import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
@@ -2669,6 +2669,24 @@ useEffect(() => {
     setDesktopActiveKey(nextRequested);
     setMobileActiveKey(nextRequested);
   }, [requestedTab, variant]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || variant !== 'chat') return undefined;
+    const handleAiOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ requestedTab?: DrawerTabKey; context?: AssistantContext }>).detail || {};
+      const requested = normalizeTabForVariant('chat', detail.requestedTab || 'assistant');
+      setDesktopActiveKey(requested);
+      setMobileActiveKey(requested);
+      setOpen(true);
+      if (detail.context) {
+        window.requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, { detail: detail.context }));
+        });
+      }
+    };
+    window.addEventListener(AI_OPEN_EVENT, handleAiOpen as EventListener);
+    return () => window.removeEventListener(AI_OPEN_EVENT, handleAiOpen as EventListener);
+  }, [variant]);
 
   useEffect(() => {
     if (open && activeDrawerSection) {

@@ -1,4 +1,4 @@
-import { ModuleDefinition } from './types';
+import { FieldLocation, FieldNature, FieldType, ModuleDefinition } from './types';
 import { productsConfig } from './modules/productsConfig';
 import { billboardConfig } from './modules/billboardsConfig';
 import { productBundlesConfig } from './modules/productBundlesConfig';
@@ -49,6 +49,46 @@ import { employeeContractsConfig } from './modules/employeeContractsConfig';
 import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
 import { surveysModule } from './modules/surveysConfig';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
+
+const TAGS_FIELD_KEY = 'tags';
+
+const resolveTagsOrder = (module: ModuleDefinition) => {
+  const headerFields = (module.fields || [])
+    .filter((field) => field.key !== TAGS_FIELD_KEY)
+    .filter((field) => field.location === FieldLocation.HEADER)
+    .filter((field) => field.type !== FieldType.IMAGE);
+  const anchorField = headerFields.find((field) => field.isKey)
+    || headerFields.find((field) => field.isTableColumn)
+    || headerFields[0];
+  const anchorOrder = Number(anchorField?.order);
+  return Number.isFinite(anchorOrder) ? anchorOrder + 0.05 : 1.05;
+};
+
+const withStandardTagsField = (module: ModuleDefinition): ModuleDefinition => {
+  const fields = module.fields || [];
+  const tagsOrder = resolveTagsOrder(module);
+  const existingTagsField = fields.find((field) => field.key === TAGS_FIELD_KEY);
+  const normalizedTagsField = {
+    ...(existingTagsField || {}),
+    key: TAGS_FIELD_KEY,
+    labels: {
+      fa: existingTagsField?.labels?.fa || 'برچسب‌ها',
+      en: existingTagsField?.labels?.en || 'Tags',
+    },
+    type: FieldType.TAGS,
+    location: FieldLocation.HEADER,
+    order: tagsOrder,
+    nature: FieldNature.STANDARD,
+    isTableColumn: true,
+  };
+
+  return {
+    ...module,
+    fields: existingTagsField
+      ? fields.map((field) => (field.key === TAGS_FIELD_KEY ? normalizedTagsField : field))
+      : [...fields, normalizedTagsField],
+  };
+};
 
 const BASE_MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
@@ -104,5 +144,5 @@ const BASE_MODULES: Record<string, ModuleDefinition> = {
 };
 
 export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(
-  Object.entries(BASE_MODULES).map(([moduleId, module]) => [moduleId, withProcessModuleSupport(module)])
+  Object.entries(BASE_MODULES).map(([moduleId, module]) => [moduleId, withStandardTagsField(withProcessModuleSupport(module))])
 );

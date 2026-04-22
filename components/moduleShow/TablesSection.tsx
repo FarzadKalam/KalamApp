@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Tooltip } from 'antd';
 import EditableTable from '../EditableTable.tsx';
 import GridTable from '../GridTable';
 import SummaryCard from '../SummaryCard';
 import ProductionStagesField from '../../components/ProductionStagesField';
+import AiSparkleIcon from '../ai/AiSparkleIcon';
 import { calculateSummary } from '../../utils/calculations';
 import { SummaryCalculationType, FieldType } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY } from '../../utils/processTaskStatusOptions';
+import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
+import { buildProcessGuideContext } from '../../utils/processGuideContext';
 
 // 👇 اینترفیس اصلاح شد: حذف linkedBomData و ...
 interface TablesSectionProps {
@@ -118,12 +122,75 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   }, [module?.id, onDataUpdate, refreshInvoiceSummary]);
   const isProductionOrder = module.id === 'production_orders';
   const productionLocked = isProductionOrder && ['in_progress', 'completed'].includes(data?.status);
+  const [processGuideTasks, setProcessGuideTasks] = useState<any[]>([]);
   const processStageFieldKeys = useMemo(() => new Set([
     'execution_process_draft',
     'marketing_process_draft',
     'template_stages_preview',
     'run_stages_preview',
   ]), []);
+  const processGuideTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    processStageFieldKeys.forEach((fieldKey) => {
+      (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : []).forEach((stage: any) => {
+        const taskId = String(stage?.task_id || '').trim();
+        if (taskId) ids.add(taskId);
+      });
+    });
+    return Array.from(ids);
+  }, [data, processStageFieldKeys]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadProcessGuideTasks = async () => {
+      const moduleId = String(module?.id || '').trim();
+      const recordId = String(data?.id || '').trim();
+      if (!moduleId || !recordId) {
+        setProcessGuideTasks([]);
+        return;
+      }
+      const rowsById = new Map<string, any>();
+      const selectColumns = 'id,name,title,status,task_type,assignee_id,assignee_role_id,assignee_type,sort_order,source_stage_sort_order,source_template_id,source_module_id,source_record_id,related_to_module,process_group_id,recurrence_info,due_date,start_date,completed_at';
+      try {
+        const { data: sourceRows, error: sourceError } = await supabase
+          .from('tasks')
+          .select(selectColumns)
+          .eq('source_module_id', moduleId)
+          .eq('source_record_id', recordId)
+          .limit(500);
+        if (sourceError) throw sourceError;
+        (sourceRows || []).forEach((row: any) => {
+          if (row?.id) rowsById.set(String(row.id), row);
+        });
+      } catch (error) {
+        console.warn('Could not load source tasks for process guide', error);
+      }
+
+      if (processGuideTaskIds.length > 0) {
+        try {
+          const { data: taskRows, error: taskError } = await supabase
+            .from('tasks')
+            .select(selectColumns)
+            .in('id', processGuideTaskIds)
+            .limit(500);
+          if (taskError) throw taskError;
+          (taskRows || []).forEach((row: any) => {
+            if (row?.id) rowsById.set(String(row.id), row);
+          });
+        } catch (error) {
+          console.warn('Could not load explicit stage tasks for process guide', error);
+        }
+      }
+
+      if (!cancelled) {
+        setProcessGuideTasks(Array.from(rowsById.values()));
+      }
+    };
+    void loadProcessGuideTasks();
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.id, module?.id, processGuideTaskIds]);
   const isUuid = useCallback((value: any) => (
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(String(value || ''))
@@ -244,6 +311,46 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           const stageDraftValue = isProcessStagesField
             ? (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : [])
             : (data?.production_stages_draft || []);
+          const processGuideContext = isProcessStagesField
+            ? buildProcessGuideContext({
+                moduleId: module?.id,
+                recordId: String(data?.id || '').trim() || null,
+                fieldKey,
+                stages: Array.isArray(stageDraftValue) ? stageDraftValue : [],
+                tasks: processGuideTasks,
+              })
+            : null;
+          const availableProcesses = Array.isArray(processGuideContext?.available_processes)
+            ? processGuideContext.available_processes
+            : [];
+          const handleOpenProcessGuide = () => {
+            if (typeof window === 'undefined' || !processGuideContext || availableProcesses.length === 0) return;
+            const detail: AssistantContext = {
+              mode: 'record',
+              moduleId: String(module?.id || '').trim() || null,
+              recordId: String(data?.id || '').trim() || null,
+              route: `${window.location.pathname}${window.location.search || ''}`,
+              intent: 'process_guide',
+              processFieldKey: fieldKey,
+              selectedProcessId: availableProcesses.length === 1 ? availableProcesses[0].id : null,
+              selectedProcessGroupId: availableProcesses.length === 1 ? availableProcesses[0].id : null,
+              availableProcesses: availableProcesses.map((process) => ({
+                id: process.id,
+                label: process.label,
+                templateId: process.templateId,
+                templateName: process.templateName,
+                stageCount: process.stageCount,
+              })),
+              processGuideContext: processGuideContext,
+            };
+            window.dispatchEvent(new CustomEvent(AI_OPEN_EVENT, {
+              detail: {
+                requestedTab: 'assistant',
+                context: detail,
+              },
+            }));
+            window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, { detail }));
+          };
           const handleDraftStagesChange = async (nextStages: any[]) => {
             if (!onDataUpdate) return;
             if (isTemplatePreviewField && module.id === 'process_templates' && data?.id) {
@@ -275,9 +382,23 @@ const TablesSection: React.FC<TablesSectionProps> = ({
 
           return (
             <div id={processSectionAnchorId} key={field.key} className="bg-white dark:bg-[#1e1e1e] p-4 md:p-6 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-sm">
-            <h3 className="text-sm md:text-lg font-bold mb-4 text-gray-700 dark:text-gray-200 flex items-center gap-2">
-              <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>                {field.labels.fa}
-            </h3>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="m-0 text-sm md:text-lg font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>
+                {field.labels.fa}
+              </h3>
+              {isProcessStagesField && availableProcesses.length > 0 ? (
+                <Tooltip title="راهنمای هوشمند فرآیند">
+                  <Button
+                    type="text"
+                    size="small"
+                    onClick={handleOpenProcessGuide}
+                    className="inline-flex items-center justify-center !text-[rgb(var(--brand-700-rgb))] dark:!text-[rgb(var(--brand-300-rgb))]"
+                    icon={<AiSparkleIcon className="h-4 w-4" />}
+                  />
+                </Tooltip>
+              ) : null}
+            </div>
             <ProductionStagesField
               recordId={data.id}
               moduleId={module.id}

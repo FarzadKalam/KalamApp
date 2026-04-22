@@ -160,4 +160,48 @@ describe('SmartTableRenderer', () => {
     expect(screen.getByText('برش اولیه')).toBeInTheDocument();
     expect(screen.getByText('فوری')).toBeInTheDocument();
   });
+
+  it('keeps record tags under the first title column when tags are not in visible columns', () => {
+    const moduleWithHiddenTags: ModuleDefinition = {
+      ...testModule,
+      fields: [
+        {
+          key: 'name',
+          labels: { fa: 'نام', en: 'Name' },
+          type: FieldType.TEXT,
+          isTableColumn: true,
+          order: 1,
+        },
+        {
+          key: 'status',
+          labels: { fa: 'وضعیت', en: 'Status' },
+          type: FieldType.STATUS,
+          isTableColumn: true,
+          order: 2,
+          options: [{ label: 'فعال', value: 'active', color: 'green' }],
+        },
+        {
+          key: 'tags',
+          labels: { fa: 'برچسب‌ها', en: 'Tags' },
+          type: FieldType.TAGS,
+          isTableColumn: true,
+          order: 3,
+        },
+      ],
+    };
+
+    render(
+      <SmartTableRenderer
+        moduleConfig={moduleWithHiddenTags}
+        data={[{ id: 'row-1', name: 'پرونده فروش', status: 'active', tags: [] }]}
+        visibleColumns={['name', 'status']}
+        tagsMap={{ 'row-1': [{ id: 'tag-1', title: 'پیگیری', color: 'orange' }] }}
+        loading={false}
+        pagination={false}
+      />
+    );
+
+    expect(screen.getByText('پرونده فروش')).toBeInTheDocument();
+    expect(screen.getByText('پیگیری')).toBeInTheDocument();
+  });
 });

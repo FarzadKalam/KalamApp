@@ -1,22 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Avatar, Button, Empty, Input, Popconfirm, Popover, Space, Spin, Tag, Tooltip } from 'antd';
+import { Alert, App, Avatar, Button, Empty, Input, Popconfirm, Popover, Select, Space, Spin, Tag, Tooltip } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SendOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
-import { AI_CONTEXT_EVENT } from '../../utils/aiAssistantEvents';
+import { AI_CONTEXT_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import AiSparkleIcon from './AiSparkleIcon';
 import { AI_INSTRUCTIONS_DOCUMENT_TYPE, isAiInstructionsConfigured } from '../../utils/aiKnowledge';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
-
-type AssistantContext = {
-  route?: string;
-  mode?: 'record' | 'list' | 'page';
-  moduleId?: string | null;
-  recordId?: string | null;
-  visibleRecordIds?: string[];
-  selectedRecordIds?: string[];
-};
+import { narrowProcessGuideContext } from '../../utils/processGuideContext';
 
 type ChatMessage = {
   id: string;
@@ -75,6 +67,22 @@ const buildClientContextKey = (context: AssistantContext) => {
   return 'page:unknown';
 };
 
+const buildProcessGuidePrompt = (context: AssistantContext) => {
+  const processLabel = Array.isArray(context.availableProcesses)
+    ? context.availableProcesses.find((item) => String(item?.id || '') === String(context.selectedProcessId || ''))?.label
+    : null;
+  const processTitle = String(processLabel || 'این فرآیند').trim() || 'این فرآیند';
+  return [
+    `این ${processTitle} را برای آموزش کارکنان توضیح بده.`,
+    'اول یک نمای کلی کوتاه بده.',
+    'بعد مرحله به مرحله توضیح بده هر مرحله چه کاری است.',
+    'برای هر مرحله مشخص کن پیش‌نویس است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد وضعیت فعلی آن را هم بگو.',
+    'اگر فعالیت واقعی به نقش/تیم ارجاع شده و هنوز شخص مشخص ندارد، این موضوع را صریح بگو.',
+    'برای هر مرحله بگو اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و برای چه کسی.',
+    'اگر بخشی از مسئول، پیام یا اتوماسیون در داده‌ها نامشخص است، همان ابهام را صریح بگو.',
+  ].join('\n');
+};
+
 const toFaDateTime = (value?: string | null) => {
   if (!value) return '';
   try {
@@ -124,7 +132,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
   const [aiKnowledgeConfigured, setAiKnowledgeConfigured] = useState(true);
   const [checkingAiKnowledge, setCheckingAiKnowledge] = useState(false);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
+  const [pendingProcessSelectionId, setPendingProcessSelectionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastAutoPromptSignatureRef = useRef<string>('');
 
   useEffect(() => {
     const handleContextUpdate = (event: Event) => {
@@ -137,6 +147,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
         recordId: detail.recordId || null,
         visibleRecordIds: Array.isArray(detail.visibleRecordIds) ? detail.visibleRecordIds : [],
         selectedRecordIds: Array.isArray(detail.selectedRecordIds) ? detail.selectedRecordIds : [],
+        intent: detail.intent || undefined,
+        processFieldKey: detail.processFieldKey || null,
+        selectedProcessId: detail.selectedProcessId || null,
+        selectedProcessGroupId: detail.selectedProcessGroupId || null,
+        processGuideContext: detail.processGuideContext || null,
+        availableProcesses: Array.isArray(detail.availableProcesses) ? detail.availableProcesses : [],
       });
     };
     window.addEventListener(AI_CONTEXT_EVENT, handleContextUpdate as EventListener);
@@ -145,6 +161,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
 
   const context = useMemo(() => {
     const routeContext = parseRouteContext(location.pathname, location.search);
+    const sameRouteContext = !!liveContext
+      && liveContext.moduleId === routeContext.moduleId
+      && String(liveContext.recordId || '') === String(routeContext.recordId || '');
     if (
       routeContext.mode === 'list'
       && liveContext?.mode === 'list'
@@ -154,6 +173,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
         ...routeContext,
         visibleRecordIds: liveContext.visibleRecordIds || [],
         selectedRecordIds: liveContext.selectedRecordIds || [],
+        intent: liveContext.intent,
+        processFieldKey: liveContext.processFieldKey || null,
+        selectedProcessId: liveContext.selectedProcessId || null,
+        selectedProcessGroupId: liveContext.selectedProcessGroupId || null,
+        processGuideContext: liveContext.processGuideContext || null,
+        availableProcesses: Array.isArray(liveContext.availableProcesses) ? liveContext.availableProcesses : [],
+      };
+    }
+    if (sameRouteContext && liveContext?.intent === 'process_guide') {
+      return {
+        ...routeContext,
+        intent: liveContext.intent,
+        processFieldKey: liveContext.processFieldKey || null,
+        selectedProcessId: liveContext.selectedProcessId || null,
+        selectedProcessGroupId: liveContext.selectedProcessGroupId || null,
+        processGuideContext: liveContext.processGuideContext || null,
+        availableProcesses: Array.isArray(liveContext.availableProcesses) ? liveContext.availableProcesses : [],
       };
     }
     return routeContext;
@@ -173,6 +209,36 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
     }
     return moduleTitle;
   }, [context]);
+
+  const processGuideAvailableProcesses = useMemo(
+    () => Array.isArray(context.availableProcesses) ? context.availableProcesses : [],
+    [context.availableProcesses]
+  );
+
+  const selectedProcessId = useMemo(
+    () => String(
+      context.selectedProcessId
+      || context.selectedProcessGroupId
+      || pendingProcessSelectionId
+      || ''
+    ).trim() || null,
+    [context.selectedProcessGroupId, context.selectedProcessId, pendingProcessSelectionId]
+  );
+
+  const resolvedProcessGuideContext = useMemo(() => {
+    if (context.intent !== 'process_guide') return null;
+    return narrowProcessGuideContext(context.processGuideContext || null, selectedProcessId);
+  }, [context.intent, context.processGuideContext, selectedProcessId]);
+
+  const contextWithSelection = useMemo<AssistantContext>(() => {
+    if (context.intent !== 'process_guide') return context;
+    return {
+      ...context,
+      selectedProcessId,
+      selectedProcessGroupId: selectedProcessId,
+      processGuideContext: resolvedProcessGuideContext,
+    };
+  }, [context, resolvedProcessGuideContext, selectedProcessId]);
 
   const callAssistant = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
@@ -235,6 +301,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
   }, [active, contextKey, loadThread]);
 
   useEffect(() => {
+    if (context.intent !== 'process_guide') {
+      setPendingProcessSelectionId(null);
+      return;
+    }
+    const nextSelectedId = String(context.selectedProcessId || context.selectedProcessGroupId || '').trim() || null;
+    if (nextSelectedId) {
+      setPendingProcessSelectionId(nextSelectedId);
+      return;
+    }
+    if (processGuideAvailableProcesses.length === 1) {
+      setPendingProcessSelectionId(processGuideAvailableProcesses[0].id);
+      return;
+    }
+    setPendingProcessSelectionId(null);
+  }, [context.intent, context.selectedProcessGroupId, context.selectedProcessId, processGuideAvailableProcesses]);
+
+  useEffect(() => {
     if (!active) return;
     void loadAiKnowledgeStatus();
   }, [active, loadAiKnowledgeStatus]);
@@ -246,6 +329,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
       if (node) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
     });
   }, [active, messages, submitting]);
+
+  useEffect(() => {
+    if (!active || loadingThread || submitting || context.intent !== 'process_guide') return;
+    const availableCount = processGuideAvailableProcesses.length;
+    if (availableCount > 1 && !selectedProcessId) return;
+    const scopedContext = contextWithSelection;
+    if (!scopedContext.processGuideContext) return;
+    const prompt = buildProcessGuidePrompt(scopedContext);
+    const signature = JSON.stringify({
+      contextKey,
+      fieldKey: scopedContext.processFieldKey || null,
+      selectedProcessId: scopedContext.selectedProcessId || null,
+      processGuideContext: scopedContext.processGuideContext || null,
+    });
+    if (lastAutoPromptSignatureRef.current === signature) return;
+    lastAutoPromptSignatureRef.current = signature;
+    setInput((current) => String(current || '').trim() ? current : prompt);
+  }, [active, context.intent, contextKey, contextWithSelection, loadingThread, processGuideAvailableProcesses.length, selectedProcessId, submitting]);
 
   const submitChat = useCallback(async () => {
     const text = input.trim();
@@ -259,7 +360,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
         action: 'chat',
         message: text,
         threadId,
-        context,
+        context: contextWithSelection,
       });
       if (data.threadId) setThreadId(String(data.threadId));
       setMessages((prev) => [
@@ -287,7 +388,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
     } finally {
       setSubmitting(false);
     }
-  }, [callAssistant, context, input, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, input, message, submitting, threadId]);
 
   const clearThread = useCallback(async () => {
     if (!threadId) {
@@ -413,6 +514,32 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
       </div>
 
       <div className="border-t border-gray-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)]">
+        {context.intent === 'process_guide' ? (
+          <div className="mb-3">
+            <Alert
+              type="warning"
+              showIcon
+              message="راهنمای هوشمند فرآیند"
+              description={processGuideAvailableProcesses.length > 1 && !selectedProcessId
+                ? 'برای تولید راهنمای دقیق، اول فرآیند موردنظر را انتخاب کنید.'
+                : 'شما در حال ارسال درخواست خلاصه‌سازی فرآیند به هوش مصنوعی هستید؛ این اقدام ممکن است توکن زیادی از شارژ هوش مصنوعی شما را بسوزاند.'}
+            />
+            {processGuideAvailableProcesses.length > 1 ? (
+              <div className="mt-2">
+                <Select
+                  value={selectedProcessId || undefined}
+                  onChange={(value) => setPendingProcessSelectionId(String(value || '').trim() || null)}
+                  placeholder="انتخاب فرآیند"
+                  className="w-full"
+                  options={processGuideAvailableProcesses.map((process) => ({
+                    label: `${process.label}${process.stageCount ? ` · ${Number(process.stageCount).toLocaleString('fa-IR')} مرحله` : ''}`,
+                    value: process.id,
+                  }))}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <Input.TextArea
           value={input}
           onChange={(event) => setInput(event.target.value)}
@@ -425,13 +552,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
           placeholder="سوال خود را بنویسید..."
           autoSize={{ minRows: 2, maxRows: 5 }}
           className="!text-[12px] !leading-5"
+          disabled={context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId}
         />
         <div className="mt-2 flex items-center justify-end gap-2">
           <Button
             type="primary"
             icon={<SendOutlined />}
             loading={submitting}
-            disabled={!input.trim()}
+            disabled={!input.trim() || (context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId)}
             onClick={submitChat}
             size="small"
           >

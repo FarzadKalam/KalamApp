@@ -51,6 +51,7 @@ interface AdaptiveSelectFieldProps {
   renderMobileOption?: (option: OptionLike, selected: boolean) => React.ReactNode;
   mobileSearchPlaceholder?: string;
   optionDisplayFallback?: (option: OptionLike) => string;
+  closeMobileOnToolbarClick?: boolean;
   styles?: any;
   [key: string]: any;
 }
@@ -98,12 +99,14 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   renderMobileOption,
   mobileSearchPlaceholder = 'جستجو...',
   optionDisplayFallback = defaultOptionLabel,
+  closeMobileOnToolbarClick = false,
   styles,
   ...restProps
 }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [internalSearch, setInternalSearch] = useState('');
   const [draftValue, setDraftValue] = useState<any>(mode === 'multiple' || mode === 'tags' ? [] : undefined);
+  const [displayValue, setDisplayValue] = useState<any>(value);
   const resolvedMode = resolveAdaptivePickerMode(adaptiveMode);
   const mobileSheetMode = resolvedMode === 'mobile-sheet';
 
@@ -120,13 +123,20 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
 
   const currentSearch = searchValue ?? internalSearch;
   const isMulti = mode === 'multiple' || mode === 'tags';
-  const selectedValues = useMemo(() => (isMulti ? normalizeArray(value) : [normalizeScalar(value)].filter(Boolean)), [isMulti, value]);
+  const selectedValues = useMemo(
+    () => (isMulti ? normalizeArray(displayValue) : [normalizeScalar(displayValue)].filter(Boolean)),
+    [displayValue, isMulti]
+  );
+
+  useEffect(() => {
+    setDisplayValue(value);
+  }, [value]);
 
   useEffect(() => {
     if (!mobileOpen) return;
-    setDraftValue(isMulti ? normalizeArray(value) : (value ?? undefined));
+    setDraftValue(isMulti ? normalizeArray(displayValue) : (displayValue ?? undefined));
     setInternalSearch(searchValue ?? '');
-  }, [isMulti, mobileOpen, searchValue, value]);
+  }, [displayValue, isMulti, mobileOpen, searchValue]);
 
   const filteredOptions = useMemo(() => {
     if (!mobileSheetMode) return normalizedOptions;
@@ -161,6 +171,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   }, [optionDisplayFallback, optionMap, placeholder, selectedValues]);
 
   const commitValue = () => {
+    setDisplayValue(draftValue);
     onChange?.(draftValue);
     setMobileOpen(false);
     onOpenChange?.(false);
@@ -169,6 +180,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   const clearValue = () => {
     const nextValue = isMulti ? [] : undefined;
     setDraftValue(nextValue);
+    setDisplayValue(nextValue);
     onChange?.(nextValue);
     setMobileOpen(false);
     onOpenChange?.(false);
@@ -187,6 +199,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
       return;
     }
     setDraftValue(option.value);
+    setDisplayValue(option.value);
     onChange?.(option.value);
     setMobileOpen(false);
     onOpenChange?.(false);
@@ -283,7 +296,18 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
             allowClear
           />
         ) : null}
-        {sheetToolbar ? <div className="kalam-adaptive-picker__toolbar">{sheetToolbar}</div> : null}
+        {sheetToolbar ? (
+          <div
+            className="kalam-adaptive-picker__toolbar"
+            onClick={() => {
+              if (!closeMobileOnToolbarClick) return;
+              setMobileOpen(false);
+              onOpenChange?.(false);
+            }}
+          >
+            {sheetToolbar}
+          </div>
+        ) : null}
         {isMulti && draftSelectedValues.length > 0 ? (
           <div className="kalam-adaptive-picker__selected-tags">
             {draftSelectedValues.map((item) => (

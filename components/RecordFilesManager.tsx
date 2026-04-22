@@ -28,7 +28,12 @@ import {
   ensureSystemFoldersForRecord,
   renameFileFolder,
 } from '../utils/fileManagerService';
-import { buildFileManagerTree, loadRecordFileItems, type FileManagerTreeResult } from '../utils/fileManagerQueries';
+import {
+  buildFileManagerTree,
+  loadRecordFileItems,
+  type FileManagerListItem,
+  type FileManagerTreeResult,
+} from '../utils/fileManagerQueries';
 import type { FileFolderRow } from '../utils/fileManagerTypes';
 import { sendCounterpartyBotGroupMessage } from '../utils/botGateway';
 import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
@@ -211,7 +216,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 }) => {
   const { message: msg } = App.useApp();
   const [items, setItems] = useState<RecordFileItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadedScopeKey, setLoadedScopeKey] = useState('');
   const [recordFilesEnabled, setRecordFilesEnabled] = useState<boolean>(recordFilesTableExistsCache !== false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -227,6 +233,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const [shareTargetIds, setShareTargetIds] = useState<string[]>([]);
   const [shareInRelatedRecords, setShareInRelatedRecords] = useState(false);
   const [fileManagerEnabled, setFileManagerEnabled] = useState(false);
+  const [initialFolderKey, setInitialFolderKey] = useState('all');
   const [browserFolderKey, setBrowserFolderKey] = useState('all');
   const [browserTree, setBrowserTree] = useState<FileManagerTreeResult | null>(null);
   const [browserPage, setBrowserPage] = useState(1);
@@ -258,6 +265,13 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
   const resolveBrowserScope = (folderKey: string) => {
     const normalizedKey = String(folderKey || '').trim();
+    if (!normalizedKey) {
+      return {
+        scope: 'record' as const,
+        moduleId,
+        recordId: recordId || null,
+      };
+    }
     if (normalizedKey.startsWith('record:')) {
       const rest = normalizedKey.slice('record:'.length);
       const [nextModuleId, ...recordParts] = rest.split(':');
@@ -279,6 +293,15 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       moduleId: null,
       recordId: null,
     };
+  };
+
+  const getDefaultRecordFolderKey = () => (
+    moduleId && recordId ? `record:${moduleId}:${recordId}` : 'all'
+  );
+
+  const getEffectiveFolderKey = (folderKey?: string | null) => {
+    const normalized = String(folderKey || browserFolderKey || initialFolderKey || '').trim();
+    return normalized || getDefaultRecordFolderKey();
   };
 
   const imageItems = useMemo(
@@ -380,13 +403,12 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     }
   };
 
-  const loadFiles = async (forceCheck = false) => {
+  const bootstrapRecordContext = async (forceCheck = false) => {
     const scopeKey = `${String(moduleId || '').trim()}:${String(recordId || '').trim()}`;
     if (!recordId || !moduleId) {
       setLoadedScopeKey(scopeKey);
       return;
     }
-    setLoading(true);
     try {
       const nextRecordTitle = await resolveCurrentRecordTitle();
       setRecordDisplayTitle(nextRecordTitle);
@@ -413,24 +435,12 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             && String(folder.folder_type || '').trim() === 'manual'
           ),
         });
-        if (recordFolder) {
-          setBrowserFolderKey((prev) => {
-            const recordKey = `record:${moduleId}:${recordId}`;
-            const exists = prev === 'all'
-              || prev === recordKey
-              || allFolders.some((folder) => `folder:${String(folder.id)}` === String(prev));
-            return prev === 'all' || !exists ? recordKey : prev;
-          });
-        }
       } else {
         setSystemFolders({ recordFolder: null, subfolders: [] });
-        setBrowserFolderKey('all');
       }
       const tableExists = await detectRecordFilesTable(supabase, forceCheck);
       recordFilesTableExistsCache = tableExists;
       setRecordFilesEnabled(tableExists);
-
-      const loadedItems = await loadRecordFileItems(moduleId, recordId, nextRecordTitle);
       if (!tableExists && !hasFileManagerTables) {
         setRecordFilesEnabled(false);
       } else if (tableExists) {
@@ -438,89 +448,203 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         setRecordFilesTableAvailability(true);
         setRecordFilesEnabled(true);
       }
-
-      const baseItems = loadedItems.map((row, idx) => ({
-        id: String(row.id),
-        asset_id: row.asset_id ? String(row.asset_id) : null,
-        entry_id: row.entry_id ? String(row.entry_id) : null,
-        module_id: String(row.module_id || moduleId),
-        record_id: String(row.record_id || recordId),
-        file_url: String(row.file_url || ''),
-        file_type: normalizeType(row.file_type, row.mime_type, row.file_url),
-        file_name: row.file_name ? String(row.file_name) : null,
-        mime_type: row.mime_type ? String(row.mime_type) : null,
-        sort_order: idx,
-        folder_id: row.folder_id ? String(row.folder_id) : null,
-        visibility: row.visibility ? String(row.visibility) as any : null,
-        is_shortcut: row.is_shortcut === true,
-        is_main_image: row.is_main_image === true || Boolean(String(mainImage || '').trim() && String(row.file_url || '').trim() === String(mainImage || '').trim()),
-        source_module_id: row.source_module_id ? String(row.source_module_id) : null,
-        source_record_id: row.source_record_id ? String(row.source_record_id) : null,
-        source_record_title: row.source_record_title ? String(row.source_record_title) : null,
-        created_at: row.created_at ? String(row.created_at) : undefined,
-        tags: Array.isArray(row.tags) ? row.tags : [],
-      }));
-      const mergedItems = await mergeItemsWithNoteAttachments(baseItems);
-      setItems(mergedItems);
-      if (hasFileManagerTables) {
-        const resolvedScope = resolveBrowserScope(browserFolderKey);
-        const nextTree = await buildFileManagerTree({
-          scope: resolvedScope.scope,
-          page: browserPage,
-          pageSize: browserPageSize,
-          folderKey: browserFolderKey === 'all' ? undefined : browserFolderKey,
-          moduleId: resolvedScope.moduleId,
-          recordId: resolvedScope.recordId,
-          recordTitleMap: { [`${moduleId}:${recordId}`]: nextRecordTitle },
-          moduleTitleMap: { [moduleId]: MODULES[moduleId]?.titles?.fa || moduleId },
-        });
-        setBrowserTree(nextTree);
-        if (browserFolderKey === 'all' || nextTree.activeFolderKey !== browserFolderKey) {
-          setBrowserFolderKey(nextTree.activeFolderKey);
-        }
-      } else {
-        setBrowserTree(null);
-      }
     } catch (error: any) {
       if (isMissingRecordFilesError(error)) {
         recordFilesTableExistsCache = false;
         setRecordFilesTableAvailability(false);
         setRecordFilesEnabled(false);
-        const legacyItems = await loadLegacyProductImages().catch(() => []);
-        setItems(await mergeItemsWithNoteAttachments(legacyItems));
         msg.warning('جدول record_files هنوز روی دیتابیس ایجاد نشده است. لطفا migration را اجرا کنید.');
       } else {
         console.warn('Could not load record files', error);
         msg.error('بارگذاری فایل‌ها ناموفق بود');
       }
+    }
+    setLoadedScopeKey(scopeKey);
+  };
+
+  const mapRecordItems = async (loadedItems: Awaited<ReturnType<typeof loadRecordFileItems>>) => {
+    const baseItems = loadedItems.map((row, idx) => ({
+      id: String(row.id),
+      asset_id: row.asset_id ? String(row.asset_id) : null,
+      entry_id: row.entry_id ? String(row.entry_id) : null,
+      module_id: String(row.module_id || moduleId),
+      record_id: String(row.record_id || recordId),
+      file_url: String(row.file_url || ''),
+      file_type: normalizeType(row.file_type, row.mime_type, row.file_url),
+      file_name: row.file_name ? String(row.file_name) : null,
+      mime_type: row.mime_type ? String(row.mime_type) : null,
+      sort_order: idx,
+      folder_id: row.folder_id ? String(row.folder_id) : null,
+      visibility: row.visibility ? String(row.visibility) as any : null,
+      is_shortcut: row.is_shortcut === true,
+      is_main_image: row.is_main_image === true || Boolean(String(mainImage || '').trim() && String(row.file_url || '').trim() === String(mainImage || '').trim()),
+      source_module_id: row.source_module_id ? String(row.source_module_id) : null,
+      source_record_id: row.source_record_id ? String(row.source_record_id) : null,
+      source_record_title: row.source_record_title ? String(row.source_record_title) : null,
+      created_at: row.created_at ? String(row.created_at) : undefined,
+      tags: Array.isArray(row.tags) ? row.tags : [],
+    }));
+    return mergeItemsWithNoteAttachments(baseItems);
+  };
+
+  const isItemVisibleInFolder = (item: Pick<RecordFileItem, 'folder_id' | 'file_type'>, folderKey?: string | null) => {
+    const normalizedFolderKey = getEffectiveFolderKey(folderKey);
+    const itemFolderId = String(item.folder_id || '').trim();
+    const rootFolderId = String(systemFolders.recordFolder?.id || '').trim();
+    if (normalizedFolderKey.startsWith('folder:')) {
+      return itemFolderId === normalizedFolderKey.slice('folder:'.length);
+    }
+    if (normalizedFolderKey.startsWith('record:')) {
+      return !itemFolderId || itemFolderId === rootFolderId;
+    }
+    if (normalizedFolderKey === 'all' || normalizedFolderKey.startsWith('module:')) {
+      return false;
+    }
+    return item.file_type === normalizedFolderKey;
+  };
+
+  const toBrowserListItem = (item: RecordFileItem): FileManagerListItem => ({
+    id: String(item.id),
+    asset_id: item.asset_id || null,
+    entry_id: item.entry_id || null,
+    folder_id: item.folder_id || null,
+    module_id: String(item.module_id || moduleId),
+    record_id: String(item.record_id || recordId || ''),
+    file_url: String(item.file_url || ''),
+    file_type: item.file_type,
+    file_name: item.file_name || null,
+    mime_type: item.mime_type || null,
+    created_at: item.created_at ? String(item.created_at) : null,
+    is_main_image: item.is_main_image === true,
+    entry_metadata: null,
+    entry_type: item.is_shortcut ? 'shortcut' : 'origin',
+    is_shortcut: item.is_shortcut === true,
+    source_module_id: item.source_module_id || null,
+    source_record_id: item.source_record_id || null,
+    source_record_title: item.source_record_title || null,
+    visibility: item.visibility || null,
+    tags: Array.isArray(item.tags) ? item.tags : [],
+  });
+
+  const appendOptimisticItem = (item: RecordFileItem, folderKey?: string | null) => {
+    setItems((prev) => {
+      if (prev.some((current) => current.id === item.id)) return prev;
+      return [...prev, item];
+    });
+    setBrowserTree((prev) => {
+      if (!prev) return prev;
+      const nextBrowserItem = toBrowserListItem(item);
+      const existsInAll = prev.allItems.some((current) => current.id === item.id);
+      const nextAllItems = existsInAll ? prev.allItems : [...prev.allItems, nextBrowserItem];
+      const shouldAppear = isItemVisibleInFolder(item, folderKey || prev.activeFolderKey);
+      const nextVisibleItems = shouldAppear && !prev.items.some((current) => current.id === item.id)
+        ? [...prev.items, nextBrowserItem]
+        : prev.items;
+      return {
+        ...prev,
+        allItems: nextAllItems,
+        items: nextVisibleItems,
+        totalItems: shouldAppear && !existsInAll ? prev.totalItems + 1 : prev.totalItems,
+      };
+    });
+  };
+
+  const patchOptimisticItem = (itemId: string, updater: (item: RecordFileItem) => RecordFileItem) => {
+    setItems((prev) => prev.map((item) => (item.id === itemId ? updater(item) : item)));
+    setBrowserTree((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map((item) => (item.id === itemId ? toBrowserListItem(updater(item as RecordFileItem)) : item)),
+        allItems: prev.allItems.map((item) => (item.id === itemId ? toBrowserListItem(updater(item as RecordFileItem)) : item)),
+      };
+    });
+  };
+
+  const removeOptimisticItem = (itemId: string) => {
+    setItems((prev) => prev.filter((item) => item.id !== itemId));
+    setBrowserTree((prev) => {
+      if (!prev) return prev;
+      const nextVisibleItems = prev.items.filter((item) => item.id !== itemId);
+      const removedVisibleCount = prev.items.length - nextVisibleItems.length;
+      return {
+        ...prev,
+        items: nextVisibleItems,
+        allItems: prev.allItems.filter((item) => item.id !== itemId),
+        totalItems: Math.max(0, prev.totalItems - removedVisibleCount),
+      };
+    });
+  };
+
+  const loadVisibleTree = async (options?: { forceCheck?: boolean; keepItems?: boolean; folderKey?: string | null }) => {
+    if (!recordId || !moduleId) return;
+    const activeFolderKey = getEffectiveFolderKey(options?.folderKey);
+    const nextRefreshing = Boolean(options?.keepItems);
+    if (nextRefreshing) {
+      setRefreshing(true);
+    } else {
+      setInitialLoading(true);
+    }
+    try {
+      const hasFileManagerTables = await detectFileManagerTables(supabase, Boolean(options?.forceCheck));
+      if (!hasFileManagerTables) {
+        const legacyItems = await loadLegacyProductImages().catch(() => []);
+        setBrowserTree(null);
+        setItems(await mergeItemsWithNoteAttachments(legacyItems));
+        return;
+      }
+
+      const [loadedItems, nextTree] = await Promise.all([
+        loadRecordFileItems(moduleId, recordId, recordDisplayTitle || String(recordId)),
+        (async () => {
+          const resolvedScope = resolveBrowserScope(activeFolderKey);
+          return buildFileManagerTree({
+            scope: resolvedScope.scope,
+            page: browserPage,
+            pageSize: browserPageSize,
+            folderKey: activeFolderKey || undefined,
+            moduleId: resolvedScope.moduleId,
+            recordId: resolvedScope.recordId,
+            recordTitleMap: { [`${moduleId}:${recordId}`]: recordDisplayTitle || String(recordId) },
+            moduleTitleMap: { [moduleId]: MODULES[moduleId]?.titles?.fa || moduleId },
+          });
+        })(),
+      ]);
+
+      setBrowserTree(nextTree);
+      setItems(await mapRecordItems(loadedItems));
+      if ((!String(activeFolderKey || '').trim() || !nextTree.folders.some((folder) => folder.key === activeFolderKey)) && nextTree.activeFolderKey) {
+        setBrowserFolderKey(nextTree.activeFolderKey);
+      }
+    } catch (error) {
+      console.warn('Could not load visible file manager tree', error);
+      msg.error('بارگذاری فایل‌ها ناموفق بود');
     } finally {
-      setLoading(false);
-      setLoadedScopeKey(scopeKey);
+      setRefreshing(false);
+      setInitialLoading(false);
     }
   };
 
   useEffect(() => {
     if (!open) return;
-    void loadFiles(false);
+    const nextInitialFolderKey = getDefaultRecordFolderKey();
+    setInitialFolderKey(nextInitialFolderKey);
+    setBrowserFolderKey(nextInitialFolderKey);
+    setBrowserPage(1);
+    void (async () => {
+      await bootstrapRecordContext(false);
+      await loadVisibleTree({ forceCheck: false, keepItems: false, folderKey: nextInitialFolderKey });
+    })();
   }, [open, moduleId, recordId]);
 
   const loadBrowserTree = async () => {
     if (!open || !fileManagerEnabled || !moduleId || !recordId) return;
-    const resolvedScope = resolveBrowserScope(browserFolderKey);
-    const nextTree = await buildFileManagerTree({
-      scope: resolvedScope.scope,
-      page: browserPage,
-      pageSize: browserPageSize,
-      folderKey: browserFolderKey === 'all' ? undefined : browserFolderKey,
-      moduleId: resolvedScope.moduleId,
-      recordId: resolvedScope.recordId,
-      recordTitleMap: { [`${moduleId}:${recordId}`]: recordDisplayTitle || String(recordId) },
-      moduleTitleMap: { [moduleId]: MODULES[moduleId]?.titles?.fa || moduleId },
-    });
-    setBrowserTree(nextTree);
-    if (nextTree.activeFolderKey !== browserFolderKey) {
-      setBrowserFolderKey(nextTree.activeFolderKey);
-    }
+    await loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
+  };
+
+  const refreshCurrentScope = async (forceCheck = false) => {
+    await bootstrapRecordContext(forceCheck);
+    await loadVisibleTree({ forceCheck, keepItems: true, folderKey: getEffectiveFolderKey() });
   };
 
   useEffect(() => {
@@ -634,7 +758,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 
   useEffect(() => {
     if (!open || !highlightFileId) return;
-    setBrowserFolderKey(recordId ? `record:${moduleId}:${recordId}` : 'all');
+    setBrowserFolderKey(getDefaultRecordFolderKey());
   }, [highlightFileId, open]);
 
   const buildStoredFileName = (file: File, desiredName: string) => {
@@ -872,7 +996,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     }
     try {
       for (const [index, item] of shortcutItems.entries()) {
-        await createFileManagerShortcut({
+        const created = await createFileManagerShortcut({
           assetId: item.asset_id || null,
           sourceEntryId: item.entry_id || null,
           sourceModuleId: item.module_id || moduleId,
@@ -889,9 +1013,29 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           sortOrder: index,
           tags: item.tags || [],
         });
+        appendOptimisticItem({
+          id: String(created?.recordFileId || created?.entry?.id || `${item.id}:shortcut:${index}`),
+          asset_id: item.asset_id || null,
+          entry_id: created?.entry?.id ? String(created.entry.id) : null,
+          module_id: moduleId,
+          record_id: String(recordId),
+          file_url: item.file_url,
+          file_type: item.file_type,
+          file_name: getDisplayFileName(item),
+          mime_type: item.mime_type || null,
+          sort_order: index,
+          folder_id: folderId,
+          visibility: item.visibility || null,
+          is_shortcut: true,
+          source_module_id: item.module_id || moduleId,
+          source_record_id: item.record_id || String(recordId),
+          source_record_title: item.source_record_title || recordDisplayTitle || String(recordId),
+          created_at: new Date().toISOString(),
+          tags: item.tags || [],
+        }, browserFolderKey);
       }
       msg.success('میانبرها در این مسیر ساخته شدند');
-      await loadFiles(false);
+      await loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
     } catch (error) {
       console.warn('Create shortcut in current folder failed', error);
       msg.error('ساخت میانبر در این مسیر ناموفق بود');
@@ -937,9 +1081,12 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             .in('file_entry_id', entryIds);
           if (recordFileByEntryError && !isMissingRecordFilesError(recordFileByEntryError)) throw recordFileByEntryError;
         }
+        destinationItems.forEach((item) => {
+          patchOptimisticItem(item.id, (current) => ({ ...current, folder_id: folderId }));
+        });
       } else {
         for (const [index, item] of destinationItems.entries()) {
-          await createFileManagerShortcut({
+          const created = await createFileManagerShortcut({
             assetId: item.asset_id || null,
             sourceEntryId: item.entry_id || null,
             sourceModuleId: item.module_id || moduleId,
@@ -956,6 +1103,26 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             sortOrder: index,
             tags: item.tags || [],
           });
+          appendOptimisticItem({
+            id: String(created?.recordFileId || created?.entry?.id || `${item.id}:copy:${index}`),
+            asset_id: item.asset_id || null,
+            entry_id: created?.entry?.id ? String(created.entry.id) : null,
+            module_id: moduleId,
+            record_id: String(recordId),
+            file_url: item.file_url,
+            file_type: item.file_type,
+            file_name: getDisplayFileName(item),
+            mime_type: item.mime_type || null,
+            sort_order: index,
+            folder_id: folderId,
+            visibility: item.visibility || null,
+            is_shortcut: true,
+            source_module_id: item.module_id || moduleId,
+            source_record_id: item.record_id || String(recordId),
+            source_record_title: recordDisplayTitle || String(recordId),
+            created_at: new Date().toISOString(),
+            tags: item.tags || [],
+          }, browserFolderKey);
         }
       }
 
@@ -963,7 +1130,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       setDestinationModalOpen(false);
       setDestinationItems([]);
       setDestinationFolderId('');
-      await loadFiles(false);
+      await loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
     } catch (error) {
       console.warn('File destination operation failed', error);
       msg.error(destinationAction === 'move' ? 'انتقال فایل‌ها ناموفق بود' : 'کپی فایل‌ها ناموفق بود');
@@ -1037,7 +1204,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       setFolderTarget(null);
       setFolderParentId('');
       setFolderNameValue('');
-      await loadFiles(false);
+      await refreshCurrentScope(false);
     } catch (error: any) {
       console.warn('Folder save failed', error);
       if (String(error?.message || '') === 'system_folder_locked') {
@@ -1057,7 +1224,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         setBrowserFolderKey(systemFolders.recordFolder?.id ? `record:${moduleId}:${recordId}` : 'all');
       }
       msg.success('پوشه حذف شد');
-      await loadFiles(false);
+      await refreshCurrentScope(false);
     } catch (error: any) {
       console.warn('Folder delete failed', error);
       if (String(error?.message || '') === 'system_folder_locked') {
@@ -1142,7 +1309,26 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           sortOrder: nextOrder,
           tags: pendingTags,
         });
-        await loadFiles(false);
+        const optimisticItem: RecordFileItem = {
+          id: String(created?.recordFileId || created?.entry?.id || url),
+          asset_id: created?.asset?.id ? String(created.asset.id) : null,
+          entry_id: created?.entry?.id ? String(created.entry.id) : null,
+          module_id: moduleId,
+          record_id: String(recordId),
+          file_url: url,
+          file_type: type,
+          file_name: desiredName,
+          mime_type: file.type || null,
+          sort_order: nextOrder,
+          created_at: new Date().toISOString(),
+          folder_id: getActiveFolderId(),
+          visibility: created?.asset?.visibility ? String(created.asset.visibility) as any : null,
+          is_shortcut: false,
+          source_record_title: recordDisplayTitle || String(recordId),
+          tags: pendingTags,
+        };
+        appendOptimisticItem(optimisticItem, browserFolderKey);
+        void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
         if (!mainImage && onMainImageChange) onMainImageChange(url);
         msg.success('فایل اضافه شد');
         return {
@@ -1174,24 +1360,23 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         .single();
       if (error) throw error;
 
-        setItems((prev) => [
-          ...prev,
-          {
-          id: String(data.id),
-          module_id: String(data.module_id),
-          record_id: String(data.record_id),
-          file_url: String(data.file_url),
-          file_type: normalizeType(data.file_type, data.mime_type, data.file_url),
-          file_name: data.file_name ? String(data.file_name) : null,
-          mime_type: data.mime_type ? String(data.mime_type) : null,
-          sort_order: Number.isFinite(data.sort_order) ? data.sort_order : nextOrder,
-          source_module_id: data.source_module_id ? String(data.source_module_id) : null,
-            source_record_id: data.source_record_id ? String(data.source_record_id) : null,
-            source_record_title: data.source_record_title ? String(data.source_record_title) : null,
-            created_at: data.created_at ? String(data.created_at) : undefined,
-            tags: pendingTags,
-          },
-        ]);
+      appendOptimisticItem({
+        id: String(data.id),
+        module_id: String(data.module_id),
+        record_id: String(data.record_id),
+        file_url: String(data.file_url),
+        file_type: normalizeType(data.file_type, data.mime_type, data.file_url),
+        file_name: data.file_name ? String(data.file_name) : null,
+        mime_type: data.mime_type ? String(data.mime_type) : null,
+        sort_order: Number.isFinite(data.sort_order) ? data.sort_order : nextOrder,
+        source_module_id: data.source_module_id ? String(data.source_module_id) : null,
+        source_record_id: data.source_record_id ? String(data.source_record_id) : null,
+        source_record_title: data.source_record_title ? String(data.source_record_title) : null,
+        created_at: data.created_at ? String(data.created_at) : undefined,
+        folder_id: getActiveFolderId(),
+        tags: pendingTags,
+      }, browserFolderKey);
+      void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
 
       if (!mainImage && onMainImageChange) onMainImageChange(url);
       msg.success('فایل اضافه شد');
@@ -1298,7 +1483,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const publicUrl = String(urlData.publicUrl || '').trim();
     if (!publicUrl) throw new Error('archive_url_missing');
 
-    if (fileManagerEnabled) {
+      if (fileManagerEnabled) {
       const nextOrder = documentItems.length + imageItems.length + videoItems.length;
       const created = await createFileManagerOriginForUpload({
         moduleId,
@@ -1308,10 +1493,25 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         fileName: finalFileName,
         mimeType: 'application/zip',
         fileType: 'archive',
-        folderId: getActiveFolderId(),
-        sortOrder: nextOrder,
-      });
-      await loadFiles(false);
+          folderId: getActiveFolderId(),
+          sortOrder: nextOrder,
+        });
+      appendOptimisticItem({
+        id: String(created?.recordFileId || created?.entry?.id || publicUrl),
+        asset_id: created?.asset?.id ? String(created.asset.id) : null,
+        entry_id: created?.entry?.id ? String(created.entry.id) : null,
+        module_id: moduleId,
+        record_id: String(recordId),
+        file_url: publicUrl,
+        file_type: 'file',
+        file_name: finalFileName,
+        mime_type: 'application/zip',
+        created_at: new Date().toISOString(),
+        folder_id: getActiveFolderId(),
+        visibility: created?.asset?.visibility ? String(created.asset.visibility) as any : null,
+        is_shortcut: false,
+      } as RecordFileItem, browserFolderKey);
+      void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
       return {
         id: String(created?.recordFileId || created?.entry?.id || publicUrl),
         asset_id: created?.asset?.id ? String(created.asset.id) : null,
@@ -1344,7 +1544,19 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       .select('id, module_id, record_id, file_url, file_name, mime_type, created_at')
       .single();
     if (error) throw error;
-    await loadFiles(false);
+    appendOptimisticItem({
+      id: String(data?.id || publicUrl),
+      module_id: String(data?.module_id || moduleId),
+      record_id: String(data?.record_id || recordId),
+      file_url: String(data?.file_url || publicUrl),
+      file_type: 'file',
+      file_name: data?.file_name ? String(data.file_name) : finalFileName,
+      mime_type: data?.mime_type ? String(data.mime_type) : 'application/zip',
+      created_at: data?.created_at ? String(data.created_at) : new Date().toISOString(),
+      folder_id: getActiveFolderId(),
+      sort_order: documentItems.length + imageItems.length + videoItems.length,
+    }, browserFolderKey);
+    void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
     return {
       id: String(data?.id || publicUrl),
       module_id: String(data?.module_id || moduleId),
@@ -1546,7 +1758,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         if (error) throw error;
       }
 
-      await loadFiles(false);
+      patchOptimisticItem(target.id, (current) => ({ ...current, file_name: nextName, tags: renameTags }));
+      void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
       setRenameModalOpen(false);
       setRenameTarget(null);
       setRenameValue('');
@@ -1668,10 +1881,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         if (entryError) throw entryError;
       }
 
-      setItems((prev) => prev.map((current) => (
-        current.id === item.id ? { ...current, tags: normalizedTags } : current
-      )));
-      await loadBrowserTree();
+      patchOptimisticItem(item.id, (current) => ({ ...current, tags: normalizedTags }));
+      void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
       msg.success('برچسب‌های فایل بروزرسانی شد');
     } catch (error) {
       console.warn('Update file tags failed', error);
@@ -1705,7 +1916,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       }
 
       const nextItems = items.filter((it) => it.id !== fileId);
-      setItems(nextItems);
+      removeOptimisticItem(fileId);
       if (target?.file_url === mainImage) {
         const nextImage = nextItems.find((item) => item.file_type === 'image');
         onMainImageChange?.(nextImage?.file_url || null);
@@ -1771,9 +1982,30 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     return items.filter((item) => item.file_type === browserFolderKey);
   }, [browserFolderKey, browserTree, fileManagerEnabled, items, moduleId, recordId, systemFolders.recordFolder]);
 
+  const activeBrowserFolderLabel = useMemo(() => {
+    const normalizedKey = String(browserFolderKey || '').trim();
+    const folder = browserFolders.find((item) => item.key === normalizedKey);
+    if (folder?.label) return folder.label;
+    if (normalizedKey === 'all') return 'خانه';
+    return recordDisplayTitle || 'فایل‌ها';
+  }, [browserFolderKey, browserFolders, recordDisplayTitle]);
+
+  const recordRootFolderKey = getDefaultRecordFolderKey();
+
   return (
     <Modal
-      title={recordDisplayTitle ? `فایل های "${recordDisplayTitle}"` : 'مدیریت فایل‌ها'}
+      title={recordDisplayTitle ? (
+        <button
+          type="button"
+          className="cursor-pointer border-0 bg-transparent p-0 text-right text-inherit"
+          onClick={() => {
+            setBrowserPage(1);
+            setBrowserFolderKey(recordRootFolderKey);
+          }}
+        >
+          {`پنجره فایل های "${recordDisplayTitle}"`}
+        </button>
+      ) : 'مدیریت فایل‌ها'}
       open={open}
       onCancel={onClose}
       footer={null}
@@ -1784,7 +2016,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       {browserReady && !recordFilesEnabled && !fileManagerEnabled && (
         <div className="mb-3 flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100">
           <span>حالت سازگاری فعال است: جدول `record_files` روی دیتابیس ایجاد نشده. فعلا فقط عکس‌های محصول از `product_images` خوانده می‌شود.</span>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadFiles(true)}>بررسی مجدد</Button>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => void refreshCurrentScope(true)}>بررسی مجدد</Button>
         </div>
       )}
 
@@ -1798,7 +2030,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           </div>
         ) : (
           <FileManagerBrowser
-            title={recordDisplayTitle ? `فایل های "${recordDisplayTitle}"` : 'فایل‌ها'}
+            title={activeBrowserFolderLabel}
             items={browserVisibleItems}
             folders={browserFolders}
             activeFolderKey={browserFolderKey}
@@ -1806,7 +2038,9 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
               setBrowserPage(1);
               setBrowserFolderKey(key);
             }}
-            onRefresh={() => void loadFiles(true)}
+            loading={initialLoading}
+            refreshing={refreshing}
+            onRefresh={() => void refreshCurrentScope(true)}
             onDeleteItem={(item) => void handleDelete(item.id)}
             onCopyItems={(selected) => openDestinationModal('copy', selected as RecordFileItem[])}
             copyItemsLabel={`کپی میانبر به "${recordDisplayTitle || 'رکورد فعلی'}"`}
@@ -1853,8 +2087,6 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           <span>{items.length} فایل</span>
         </div>
       </div>
-
-      {loading && <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">در حال بارگذاری...</div>}
 
       <Modal
         title="نام فایل آپلودی"
