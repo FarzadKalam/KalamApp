@@ -148,6 +148,74 @@ const AiSuggestionPopoverAction: React.FC<AiSuggestionPopoverActionProps> = ({
   );
 };
 
+type SmsDrawerComposerProps = {
+  recipient: string;
+  activeThreadId?: string | null;
+  sending: boolean;
+  onSubmit: (text: string) => Promise<boolean> | boolean;
+  onSuggestReply: (instruction: string) => Promise<string | null>;
+};
+
+const SmsDrawerComposer = React.memo<SmsDrawerComposerProps>(({
+  recipient,
+  activeThreadId,
+  sending,
+  onSubmit,
+  onSuggestReply,
+}) => {
+  const [draft, setDraft] = useState('');
+  const [suggesting, setSuggesting] = useState(false);
+  const [aiPopoverOpen, setAiPopoverOpen] = useState(false);
+  const canSuggest = Boolean(activeThreadId || String(recipient || '').trim());
+
+  const submitDraft = useCallback(async () => {
+    const text = String(draft || '').trim();
+    const sent = await onSubmit(text);
+    if (sent) {
+      setDraft('');
+    }
+  }, [draft, onSubmit]);
+
+  const requestSuggestion = useCallback(async (instruction: string) => {
+    if (suggesting) return;
+    setSuggesting(true);
+    setAiPopoverOpen(false);
+    try {
+      const suggested = await onSuggestReply(instruction);
+      if (suggested) {
+        setDraft(suggested);
+      }
+    } finally {
+      setSuggesting(false);
+    }
+  }, [onSuggestReply, suggesting]);
+
+  return (
+    <SharedNoteComposer
+      value={draft}
+      onChange={setDraft}
+      onSubmit={submitDraft}
+      placeholder="متن پیامک..."
+      submitText="ارسال پیامک"
+      allowMentions={false}
+      allowAttachments={false}
+      submitLoading={sending}
+      submitDisabled={sending || suggesting || !String(recipient || '').trim() || !String(draft || '').trim()}
+      extraActions={(
+        <AiSuggestionPopoverAction
+          open={aiPopoverOpen}
+          onOpenChange={setAiPopoverOpen}
+          loading={suggesting}
+          disabled={sending || suggesting || !canSuggest}
+          onSubmit={requestSuggestion}
+        />
+      )}
+    />
+  );
+});
+
+SmsDrawerComposer.displayName = 'SmsDrawerComposer';
+
 const MAX_ITEMS = 10;
 const NOTIFICATIONS_CACHE_TTL_MS = 45_000;
 const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
@@ -829,10 +897,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
   const [selectedSmsThreadKey, setSelectedSmsThreadKey] = useState<string | null>(null);
   const [smsRecipient, setSmsRecipient] = useState('');
-  const [smsText, setSmsText] = useState('');
   const [smsSending, setSmsSending] = useState(false);
-  const [smsSuggesting, setSmsSuggesting] = useState(false);
-  const [smsAiPopoverOpen, setSmsAiPopoverOpen] = useState(false);
   const [voipCalls, setVoipCalls] = useState<any[]>([]);
   const [selectedVoipThreadKey, setSelectedVoipThreadKey] = useState<string | null>(null);
   const [botReplyToId, setBotReplyToId] = useState<string | null>(null);
@@ -5824,16 +5889,16 @@ useEffect(() => {
     const activeThread = selectedSmsThread;
     const threadMessages = displayedSmsMessages;
 
-    const sendSmsMessage = async () => {
+    const sendSmsMessage = async (draftText: string) => {
       const recipient = String(smsRecipient || '').trim();
-      const text = String(smsText || '').trim();
+      const text = String(draftText || '').trim();
       if (!recipient) {
         message.warning('شماره گیرنده پیامک را وارد کنید.');
-        return;
+        return false;
       }
       if (!text) {
         message.warning('متن پیامک خالی است.');
-        return;
+        return false;
       }
 
       const optimisticId = `optimistic-sms-${Date.now()}`;
@@ -5857,7 +5922,6 @@ useEffect(() => {
           created_at: nowIso,
         },
       ]);
-      setSmsText('');
 
       try {
         await sendSmsViaGateway({
@@ -5867,9 +5931,11 @@ useEffect(() => {
           metadata: { source: 'notifications_drawer_sms' },
         });
         await refreshSection('sms_messages', { force: true });
+        return true;
       } catch (error: any) {
         setSmsMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticId));
         message.error(toFaErrorMessage(error, 'ارسال پیامک ناموفق بود.'));
+        return false;
       } finally {
         setSmsSending(false);
       }
@@ -5878,11 +5944,8 @@ useEffect(() => {
     const suggestSmsReply = async (instruction = '') => {
       if (!activeThread?.id && !smsRecipient.trim()) {
         message.warning('ابتدا یک گفتگو یا شماره پیامک را انتخاب کنید.');
-        return;
+        return null;
       }
-      if (smsSuggesting) return;
-      setSmsSuggesting(true);
-      setSmsAiPopoverOpen(false);
       try {
         const recentMessages = (threadMessages || []).slice(-16).map((row: any) => {
           const direction = String(row?.direction || '').trim() || 'inbound';
@@ -5911,11 +5974,10 @@ useEffect(() => {
           },
           recentMessages,
         });
-        setSmsText(suggested);
+        return suggested;
       } catch (error: any) {
         message.error(toFaErrorMessage(error, 'پیشنهاد پاسخ پیامک ناموفق بود.'));
-      } finally {
-        setSmsSuggesting(false);
+        return null;
       }
     };
 
@@ -6089,25 +6151,12 @@ useEffect(() => {
                 </div>
               )}
             </div>
-            <SharedNoteComposer
-              value={smsText}
-              onChange={setSmsText}
+            <SmsDrawerComposer
+              recipient={smsRecipient}
+              activeThreadId={activeThread?.id || null}
+              sending={smsSending}
               onSubmit={sendSmsMessage}
-              placeholder="متن پیامک..."
-              submitText="ارسال پیامک"
-              allowMentions={false}
-              allowAttachments={false}
-              submitLoading={smsSending}
-              submitDisabled={smsSending || smsSuggesting || !smsRecipient.trim() || !smsText.trim()}
-              extraActions={(
-                <AiSuggestionPopoverAction
-                  open={smsAiPopoverOpen}
-                  onOpenChange={setSmsAiPopoverOpen}
-                  loading={smsSuggesting}
-                  disabled={smsSending || smsSuggesting || (!activeThread?.id && !smsRecipient.trim())}
-                  onSubmit={(instruction) => suggestSmsReply(instruction)}
-                />
-              )}
+              onSuggestReply={suggestSmsReply}
             />
           </div>
         </div>

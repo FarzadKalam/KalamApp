@@ -227,7 +227,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               event.preventDefault();
               handleFilesPicked(imageFiles);
             }}
-            autoSize={{ minRows: 1, maxRows: 4 }}
+            autoSize={{ minRows: 1, maxRows: 12 }}
             className="!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none"
           />
 
