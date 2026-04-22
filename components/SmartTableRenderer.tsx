@@ -65,7 +65,7 @@ export const buildSmartTablePagination = (pagination: any, isMobileViewport = fa
         showLessItems: isMobileViewport,
         responsive: !isMobileViewport,
         pageSizeOptions: [10, 20, 50, 100],
-        style: isMobileViewport ? undefined : { marginTop: 10 },
+        style: isMobileViewport ? undefined : { marginTop: 0 },
         showTotal: (total: number, range: [number, number]) =>
           isMobileViewport
             ? `${toPersianNumber(total)} ${'\u0631\u06a9\u0648\u0631\u062f'}`
@@ -909,11 +909,14 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ),
       dataIndex: field.key,
       key: field.key,
+      align: field.type === FieldType.IMAGE ? 'center' : undefined,
+      onCell: field.type === FieldType.IMAGE ? () => ({ className: 'smarttable-image-cell' }) : undefined,
+      onHeaderCell: field.type === FieldType.IMAGE ? () => ({ className: 'smarttable-image-cell' }) : undefined,
       width:
         field.key === 'id'
           ? 60
           : field.type === FieldType.IMAGE
-            ? 80
+            ? 62
           : isKeyLikeField
             ? (isMobileViewport && keyFieldMobileWidth ? keyFieldMobileWidth : (moduleConfig?.id === 'products' ? 380 : 340))
             : isTagField
@@ -975,7 +978,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[10px] md:text-[11px]">-</span>;
         
         if (field.type === FieldType.IMAGE) {
-            return <Avatar src={buildImagePreviewUrl(String(value || ''), 'avatar') || undefined} icon={<AppstoreOutlined />} shape="square" size="default" className="bg-gray-100 border border-gray-200" />;
+            return <Avatar src={buildImagePreviewUrl(String(value || ''), 'avatar') || undefined} icon={<AppstoreOutlined />} shape="square" size={36} className="bg-gray-100 border border-gray-200" />;
         }
         if (shouldDeferFieldValue) {
           if (field.type === FieldType.TAGS || field.type === FieldType.MULTI_SELECT) {
@@ -1458,21 +1461,18 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const headerEl = root.querySelector('.ant-table-thead') as HTMLElement | null;
     const paginationHeight = pagination === false ? 0 : (paginationEl?.offsetHeight || (nextIsMobileViewport ? 60 : 52));
     const headerHeight = headerEl?.offsetHeight || 44;
-    const tableBodyEl = root.querySelector('.ant-table-body') as HTMLElement | null;
-    const horizontalScrollbarHeight = singleScrollContainer
-      ? 0
-      : tableBodyEl
-        ? Math.max(0, tableBodyEl.offsetHeight - tableBodyEl.clientHeight)
-        : 0;
-    const desktopPaginationReserve = pagination === false || nextIsMobileViewport
-      ? 0
-      : Math.max(24, horizontalScrollbarHeight + 28);
-    const safetyOffset = nextIsMobileViewport ? 12 : 8;
+    const desktopPaginationReserve = 0;
+    const safetyOffset = nextIsMobileViewport ? 6 : 2;
     const minBodyHeight = nextIsMobileViewport ? 220 : 280;
-    const nextHeight = Math.max(
-      minBodyHeight,
-      containerHeight - filterBarHeight - paginationHeight - desktopPaginationReserve - headerHeight - safetyOffset
-    );
+    const nextHeight = singleScrollContainer
+      ? Math.max(
+          minBodyHeight,
+          containerHeight - filterBarHeight - safetyOffset
+        )
+      : Math.max(
+          minBodyHeight,
+          containerHeight - filterBarHeight - paginationHeight - desktopPaginationReserve - headerHeight - safetyOffset
+        );
 
     setScrollHeight((prev) => (Math.abs(prev - nextHeight) > 1 ? nextHeight : prev));
   }, [disableScroll, pagination, singleScrollContainer]);
@@ -1572,7 +1572,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         </div>
       ) : null}
       <div className="smarttable-table-host flex h-full min-h-0 flex-1 flex-col">
-      <Table 
+        <Table 
           className="smarttable-table h-full min-h-0"
           columns={columns} 
           dataSource={filteredData} 
@@ -1581,6 +1581,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           size="small" 
           style={{ height: '100%' }}
           tableLayout={tableLayout}
+          sticky={disableScroll ? false : { offsetHeader: 0 }}
           pagination={tablePagination} 
           onChange={handleTableChange}
           scroll={tableScroll}

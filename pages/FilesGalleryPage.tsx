@@ -36,6 +36,23 @@ const FilesGalleryPage: React.FC = () => {
   const [canViewRecordFilesManager, setCanViewRecordFilesManager] = useState(true);
   const [fileManagerEnabled, setFileManagerEnabled] = useState<boolean>(false);
 
+  const resolveScopeFromFolderKey = (folderKey: string) => {
+    const normalized = String(folderKey || '').trim();
+    if (normalized.startsWith('record:')) {
+      const rest = normalized.slice('record:'.length);
+      const [moduleId, ...recordParts] = rest.split(':');
+      return { scope: 'record' as const, moduleId, recordId: recordParts.join(':') };
+    }
+    if (normalized.startsWith('module:')) {
+      return { scope: 'module' as const, moduleId: normalized.slice('module:'.length), recordId: null };
+    }
+    return {
+      scope: moduleFilter !== 'all' ? 'module' as const : 'global' as const,
+      moduleId: moduleFilter !== 'all' ? moduleFilter : null,
+      recordId: null,
+    };
+  };
+
   const loadFiles = async (forceCheck = false) => {
     setLoading(true);
     try {
@@ -44,12 +61,15 @@ const FilesGalleryPage: React.FC = () => {
       const tableExists = await detectRecordFilesTable(supabase, forceCheck);
       recordFilesTableExistsCache = tableExists;
       setRecordFilesEnabled(tableExists);
+      const resolvedScope = resolveScopeFromFolderKey(activeFolderKey);
 
       const nextTree = await buildFileManagerTree({
+        scope: resolvedScope.scope,
         page,
         pageSize,
         folderKey: activeFolderKey,
-        initialModuleId: moduleFilter === 'all' ? null : moduleFilter,
+        moduleId: resolvedScope.moduleId,
+        recordId: resolvedScope.recordId,
         search: searchTerm,
         fileTypes: typeFilter === 'all' ? undefined : [typeFilter],
         moduleTitleMap,
@@ -99,12 +119,16 @@ const FilesGalleryPage: React.FC = () => {
   }, [activeFolderKey, page, pageSize, searchTerm, typeFilter, moduleFilter]);
 
   const moduleOptions = useMemo(() => {
-    const used = Array.from(new Set(items.map((item) => item.module_id))).filter(Boolean);
+    const used = Array.from(new Set(
+      (tree?.folders || [])
+        .map((folder) => String(folder.moduleId || '').trim())
+        .filter(Boolean)
+    ));
     return [
       { label: 'همه بخش‌ها', value: 'all' },
       ...used.map((moduleId) => ({ label: MODULES[moduleId]?.titles?.fa || moduleId, value: moduleId })),
     ];
-  }, [items]);
+  }, [tree?.folders]);
 
   const openRecordGallery = (item: { module_id?: string; record_id?: string; id: string }) => {
     if (!item.module_id || !item.record_id) return;
@@ -213,9 +237,16 @@ const FilesGalleryPage: React.FC = () => {
           folders={tree?.folders || []}
           activeFolderKey={activeFolderKey}
           onFolderChange={(key) => {
-            setActiveFolderKey(String(key));
-            const moduleId = String(key).startsWith('module:') ? String(key).slice('module:'.length) : 'all';
-            if (moduleId === 'all' || MODULES[moduleId]) setModuleFilter(moduleId);
+            const normalizedKey = String(key);
+            setActiveFolderKey(normalizedKey);
+            const nextScope = resolveScopeFromFolderKey(normalizedKey);
+            if (nextScope.scope === 'module' && nextScope.moduleId && MODULES[nextScope.moduleId]) {
+              setModuleFilter(nextScope.moduleId);
+            } else if (nextScope.scope === 'record' && nextScope.moduleId && MODULES[nextScope.moduleId]) {
+              setModuleFilter(nextScope.moduleId);
+            } else if (normalizedKey === 'all') {
+              setModuleFilter('all');
+            }
             setPage(1);
           }}
           onOpenItem={openRecordGallery}

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 import MessageComposerModal from '../MessageComposerModal';
 import PersianDatePicker from '../PersianDatePicker';
 import { MODULES } from '../../moduleRegistry';
@@ -26,6 +27,7 @@ import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 interface WorkflowActionsBuilderProps {
   value: WorkflowAction[];
@@ -162,7 +164,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
-  const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
+  const popupContainer = (node?: HTMLElement | null) => resolveOverlayPopupContainer(node);
 
   const commonSelectProps = {
     showSearch: true,
@@ -171,6 +173,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 260,
     virtual: false,
+    overlayZIndexBase: 1400,
   };
 
   const updatableFieldOptions = useMemo(
@@ -528,6 +531,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           category={field.dynamicOptionsCategory}
           className="w-full"
           disabled={disabled}
+          getPopupContainer={popupContainer as any}
+          overlayZIndexBase={1400}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -547,7 +553,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       field.type === FieldType.USER
     ) {
       return (
-        <Select
+        <AdaptiveSelectField
           {...commonSelectProps}
           value={value}
           options={options}
@@ -555,6 +561,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           onChange={(nextVal) => onValueChange(normalizeWorkflowValueByFieldType(field, nextVal))}
           className="w-full"
           placeholder="مقدار"
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -584,6 +591,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           onChange={onValueChange}
           disabled={disabled}
           placeholder="تاریخ"
+          modalContainer={popupContainer}
+          overlayZIndexBase={1400}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -596,6 +606,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           onChange={onValueChange}
           disabled={disabled}
           placeholder="ساعت"
+          modalContainer={popupContainer}
+          overlayZIndexBase={1400}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -608,6 +621,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           onChange={onValueChange}
           disabled={disabled}
           placeholder="تاریخ و زمان"
+          modalContainer={popupContainer}
+          overlayZIndexBase={1400}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -661,7 +677,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       <div className="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-2">
         <div className="text-xs text-gray-500 mb-2">انتخاب فیلد برای متغیر</div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <Select
+          <AdaptiveSelectField
             {...commonSelectProps}
             value={config.variable_field}
             options={variableFieldOptions}
@@ -679,15 +695,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               );
             }}
             placeholder="فیلد متغیر"
+            pickerTitle="فیلد متغیر"
           />
           {targets.length > 1 ? (
-            <Select
+            <AdaptiveSelectField
               {...commonSelectProps}
               value={selectedTarget}
               options={targets.map((item) => ({ label: item.label, value: item.key }))}
               disabled={disabled}
               onChange={(nextVal) => updateActionConfig(action.id, { variable_target: nextVal })}
               placeholder="محل درج متغیر"
+              pickerTitle="محل درج متغیر"
             />
           ) : (
             <div className="h-10 flex items-center text-xs text-gray-400 px-2 border rounded-md border-gray-200 dark:border-gray-700">
@@ -706,13 +724,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (valueMode === 'from_source' || valueMode === 'from_related') {
       const options = valueMode === 'from_related' ? relatedVariableFieldOptions : sourceVariableFieldOptions;
       return (
-        <Select
+        <AdaptiveSelectField
           {...commonSelectProps}
           value={action?.config?.source_field}
           options={options}
           disabled={disabled}
           onChange={(nextVal) => updateActionConfig(action.id, { source_field: nextVal })}
           placeholder={valueMode === 'from_related' ? 'فیلد رکورد مرتبط' : 'فیلد رکورد جاری'}
+          pickerTitle={valueMode === 'from_related' ? 'فیلد رکورد مرتبط' : 'فیلد رکورد جاری'}
         />
       );
     }

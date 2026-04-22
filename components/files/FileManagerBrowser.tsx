@@ -44,6 +44,7 @@ import { getOrCreateShortFileUrl } from '../../utils/fileShortLinks';
 import { supabase } from '../../supabaseClient';
 import { buildZipArchive } from '../../utils/zipArchive';
 import FileExtensionTile from './FileExtensionTile';
+import TagInput from '../TagInput';
 
 const { Text } = Typography;
 
@@ -64,6 +65,7 @@ export type FileManagerBrowserItem = {
   source_record_title?: string | null;
   visibility?: 'private' | 'org' | 'public' | null;
   is_shortcut?: boolean;
+  tags?: Array<{ id: string; title: string; color?: string | null }>;
 };
 
 export type FileManagerBrowserFolder = {
@@ -72,6 +74,9 @@ export type FileManagerBrowserFolder = {
   parentKey?: string | null;
   count?: number;
   isSystem?: boolean;
+  colorToken?: string | null;
+  folderType?: string | null;
+  tags?: Array<{ id: string; title: string; color?: string | null }>;
 };
 
 type FileManagerBrowserProps = {
@@ -87,6 +92,7 @@ type FileManagerBrowserProps = {
   onDeleteItem?: (item: FileManagerBrowserItem) => void | Promise<void>;
   onCopyItems?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
   copyItemsLabel?: string;
+  onCreateShortcutsHere?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
   onMoveItems?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
   onRenameItem?: (item: FileManagerBrowserItem) => void | Promise<void>;
   onCreateFolder?: (parentKey: string) => void | Promise<void>;
@@ -123,6 +129,10 @@ type FileManagerBrowserProps = {
   onAddCompressedArchive?: (
     archive: { blob: Blob; fileName: string; sourceItems: FileManagerBrowserItem[] },
   ) => Promise<FileManagerBrowserItem>;
+  onUpdateItemTags?: (
+    item: FileManagerBrowserItem,
+    tags: Array<{ id: string; title: string; color?: string | null }>,
+  ) => void | Promise<void>;
 };
 
 type FileShareDeliveryMode = 'original' | 'preview' | 'compressed';
@@ -175,6 +185,21 @@ const renderPreview = (item: FileManagerBrowserItem, compact = false) => {
   );
 };
 
+const renderCompactTags = (tags?: Array<{ id: string; title: string; color?: string | null }>, limit = 2) => {
+  const visibleTags = (tags || []).filter((tag) => String(tag?.title || '').trim()).slice(0, limit);
+  if (visibleTags.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+      {visibleTags.map((tag) => (
+        <Tag key={tag.id} color={tag.color || 'default'} className="m-0 rounded-full text-[10px]">
+          {tag.title}
+        </Tag>
+      ))}
+      {(tags || []).length > limit ? <Tag className="m-0 rounded-full text-[10px]">+{(tags || []).length - limit}</Tag> : null}
+    </div>
+  );
+};
+
 const formatDateTime = (value?: string | null) => {
   const raw = String(value || '').trim();
   if (!raw) return '-';
@@ -222,6 +247,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onDeleteItem,
   onCopyItems,
   copyItemsLabel = 'کپی',
+  onCreateShortcutsHere,
   onMoveItems,
   onRenameItem,
   onCreateFolder,
@@ -251,6 +277,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   directShareTargetOptions = [],
   onDirectShareItems,
   onAddCompressedArchive,
+  onUpdateItemTags,
 }) => {
   const { message } = App.useApp();
   const [viewMode, setViewMode] = useState<'icon' | 'card'>(defaultViewMode);
@@ -259,6 +286,8 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   const [detailsItem, setDetailsItem] = useState<FileManagerBrowserItem | null>(null);
   const [previewItem, setPreviewItem] = useState<FileManagerBrowserItem | null>(null);
   const [detailsShortUrl, setDetailsShortUrl] = useState('');
+  const [detailsTags, setDetailsTags] = useState<Array<{ id: string; title: string; color?: string | null }>>([]);
+  const [detailsSaving, setDetailsSaving] = useState(false);
   const [shareItems, setShareItems] = useState<FileManagerBrowserItem[]>([]);
   const [sharePublicAccess, setSharePublicAccess] = useState(false);
   const [shareDeliveryMode, setShareDeliveryMode] = useState<FileShareDeliveryMode>('original');
@@ -305,6 +334,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   }, [folders]);
 
   const activeFolder = folderMap.get(activeFolderKey) || null;
+  const canCreateFolderInActivePath = activeFolderKey.startsWith('folder:') || activeFolderKey.startsWith('record:');
 
   const breadcrumbFolders = useMemo(() => {
     const chain: FileManagerBrowserFolder[] = [];
@@ -383,15 +413,6 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     if (selectedItems[0]) onRenameItem?.(selectedItems[0]);
   };
 
-  const openSelectedEntry = () => {
-    if (totalSelectedCount !== 1) return;
-    if (selectedFolders[0]) {
-      onFolderChange?.(selectedFolders[0].key);
-      return;
-    }
-    if (selectedItems[0]) setPreviewItem(selectedItems[0]);
-  };
-
   const markAsMainImages = (nextItems: FileManagerBrowserItem[]) => {
     const validItems = nextItems.filter((item) => item.file_type === 'image');
     if (validItems.length === 0 || !onSetMainImages) return;
@@ -422,6 +443,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   const openDetails = async (item: FileManagerBrowserItem) => {
     setDetailsItem(item);
     setDetailsShortUrl('');
+    setDetailsTags(Array.isArray(item.tags) ? item.tags : []);
     try {
       const nextShortUrl = await getOrCreateShortFileUrl(item.file_url, {
         assetId: item.asset_id || null,
@@ -691,6 +713,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         <div className="mt-1 text-xs text-gray-500 truncate dark:text-gray-400" title={displayFileName}>
           نام فایل: {displayFileName}
         </div>
+        {renderCompactTags(item.tags, 3)}
       </>
     ) : (
       <div className="flex min-h-[96px] flex-col items-center justify-center gap-1.5 px-1.5 py-1 text-center">
@@ -716,6 +739,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           {displayFileName}
         </div>
         {item.is_shortcut ? <span className="text-[10px] leading-3 text-blue-600">میانبر</span> : null}
+        {renderCompactTags(item.tags, 1)}
       </div>
     );
 
@@ -729,7 +753,12 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           toggleItemSelection(item.id);
         }}
         onDoubleClick={() => {
-          if (!selectionMode) setPreviewItem(item);
+          if (selectionMode) return;
+          if (onOpenItem) {
+            onOpenItem(item);
+            return;
+          }
+          setPreviewItem(item);
         }}
       >
         {viewMode === 'icon' ? (
@@ -762,6 +791,12 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   const renderFolderCard = (folder: FileManagerBrowserFolder) => {
     const canManageThisFolder = canEdit && !folder.isSystem;
     const isSelected = selectedFolderKeys.includes(folder.key);
+    const folderToneClass = folder.isSystem
+      ? 'border-[rgba(var(--brand-300-rgb),0.28)] bg-[rgba(var(--brand-900-rgb),0.12)] text-[rgb(var(--brand-400-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-900-rgb),0.22)]'
+      : 'border-amber-100 bg-amber-50 text-amber-500 dark:border-amber-500/20 dark:bg-amber-500/10';
+    const folderIconClass = folder.isSystem
+      ? 'text-[rgb(var(--brand-400-rgb))]'
+      : 'text-amber-500';
     const folderActions = canManageThisFolder ? (
       <Space size={4} className={viewMode === 'icon' ? 'opacity-0 transition-opacity group-hover:opacity-100' : ''}>
         <Tooltip title="تغییر نام پوشه">
@@ -789,7 +824,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     ) : null;
     const body = viewMode === 'card' ? (
       <>
-        <div className="flex h-44 w-full items-center justify-center rounded-xl border border-amber-100 bg-amber-50 text-6xl text-amber-500 dark:border-amber-500/20 dark:bg-amber-500/10">
+        <div className={`flex h-44 w-full items-center justify-center rounded-xl border text-6xl ${folderToneClass}`}>
           <FolderFilled />
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
@@ -797,14 +832,16 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           <span className="text-xs text-gray-500 dark:text-gray-400">{folder.count || 0} مورد</span>
         </div>
         <div className="mt-1 truncate text-sm font-bold text-gray-700 dark:text-gray-100">{folder.label}</div>
+        {renderCompactTags(folder.tags, 3)}
       </>
     ) : (
       <div className="flex min-h-[96px] flex-col items-center justify-center gap-1.5 px-1.5 py-1 text-center">
-        <FolderFilled className="text-[46px] text-amber-500" />
+        <FolderFilled className={`text-[46px] ${folderIconClass}`} />
         <div className="line-clamp-2 w-full break-words text-xs font-semibold leading-5 text-gray-700 dark:text-gray-100" title={folder.label}>
           {folder.label}
         </div>
         <span className="text-[10px] text-gray-500 dark:text-gray-400">{folder.count || 0} مورد</span>
+        {renderCompactTags(folder.tags, 1)}
       </div>
     );
 
@@ -893,7 +930,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
             <Button
               className="rounded-xl"
               icon={<FolderAddOutlined />}
-              disabled={!canEdit || activeFolderKey === 'all'}
+              disabled={!canEdit || !canCreateFolderInActivePath}
               onClick={() => onCreateFolder(activeFolderKey)}
             >
               پوشه جدید
@@ -911,18 +948,11 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         </Space>
       </div>
 
-      {totalSelectedCount > 0 ? (
-        <div className="rounded-2xl border border-leather-200 bg-leather-50 px-4 py-3 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-900-rgb),0.18)]">
+      <div className={`min-h-[72px] rounded-2xl border px-4 py-3 transition-colors ${totalSelectedCount > 0 ? 'border-leather-200 bg-leather-50 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-900-rgb),0.18)]' : 'border-transparent bg-transparent'}`}>
+        {totalSelectedCount > 0 ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm font-bold text-gray-700 dark:text-gray-100">{totalSelectedCount} مورد انتخاب شده</div>
             <Space wrap>
-              <Button
-                icon={<FolderOpenOutlined />}
-                disabled={totalSelectedCount !== 1 || (selectedItems.length === 1 && !onOpenItem) || (selectedFolders.length === 1 && !onFolderChange)}
-                onClick={openSelectedEntry}
-              >
-                باز کردن
-              </Button>
               {selectionMode ? (
                 <Button
                   type="primary"
@@ -934,43 +964,56 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
                 </Button>
               ) : null}
               {canSetMainImage ? (
-                <Button
-                  icon={<StarOutlined />}
-                  disabled={!onSetMainImages || selectedImageItems.length === 0}
-                  onClick={() => markAsMainImages(selectedImageItems)}
-                >
-                  {setMainImageLabel}
-                </Button>
+                <Tooltip title={setMainImageLabel}>
+                  <Button
+                    icon={<StarOutlined />}
+                    disabled={!onSetMainImages || selectedImageItems.length === 0}
+                    onClick={() => markAsMainImages(selectedImageItems)}
+                  />
+                </Tooltip>
               ) : null}
-              <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)}>{copyItemsLabel}</Button>
-              <Button icon={<SwapOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)}>انتقال</Button>
-              <Button
-                icon={<ShareAltOutlined />}
-                disabled={!canShare || selectedItems.length === 0 || selectedFolders.length > 0}
-                onClick={() => openShareModal(selectedItems)}
-              >
-                اشتراک
-              </Button>
-              <Button
-                icon={<EditOutlined />}
-                disabled={!canEdit || totalSelectedCount !== 1 || (selectedFolders.length === 1 ? !onRenameFolder || selectedFolders[0].isSystem : !onRenameItem)}
-                onClick={renameSelectedEntry}
-              >
-                تغییر نام
-              </Button>
-              <Button
-                icon={<DeleteOutlined />}
-                danger
-                disabled={!canDelete || totalSelectedCount === 0 || selectedFolders.some((folder) => folder.isSystem) || (selectedItems.length > 0 && !onDeleteItem) || (selectedFolders.length > 0 && !onDeleteFolder)}
-                onClick={() => void deleteSelectedEntries()}
-              >
-                حذف
-              </Button>
-              <Button icon={<InfoCircleOutlined />} disabled={selectedItems.length !== 1 || selectedFolders.length > 0} onClick={() => selectedItems[0] && void openDetails(selectedItems[0])}>جزئیات</Button>
+              <Tooltip title={copyItemsLabel}>
+                <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)} />
+              </Tooltip>
+              <Tooltip title="میانبر به اینجا">
+                <Button icon={<RetweetOutlined />} disabled={!canEdit || !onCreateShortcutsHere || selectedItems.length === 0} onClick={() => onCreateShortcutsHere?.(selectedItems)} />
+              </Tooltip>
+              <Tooltip title="انتقال">
+                <Button icon={<SwapOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)} />
+              </Tooltip>
+              <Tooltip title="اشتراک">
+                <Button
+                  icon={<ShareAltOutlined />}
+                  disabled={!canShare || selectedItems.length === 0 || selectedFolders.length > 0}
+                  onClick={() => openShareModal(selectedItems)}
+                />
+              </Tooltip>
+              <Tooltip title="تغییر نام">
+                <Button
+                  icon={<EditOutlined />}
+                  disabled={!canEdit || totalSelectedCount !== 1 || (selectedFolders.length === 1 ? !onRenameFolder || selectedFolders[0].isSystem : !onRenameItem)}
+                  onClick={renameSelectedEntry}
+                />
+              </Tooltip>
+              <Tooltip title="حذف">
+                <Button
+                  icon={<DeleteOutlined />}
+                  danger
+                  disabled={!canDelete || totalSelectedCount === 0 || selectedFolders.some((folder) => folder.isSystem) || (selectedItems.length > 0 && !onDeleteItem) || (selectedFolders.length > 0 && !onDeleteFolder)}
+                  onClick={() => void deleteSelectedEntries()}
+                />
+              </Tooltip>
+              <Tooltip title="جزئیات">
+                <Button icon={<InfoCircleOutlined />} disabled={selectedItems.length !== 1 || selectedFolders.length > 0} onClick={() => selectedItems[0] && void openDetails(selectedItems[0])} />
+              </Tooltip>
             </Space>
           </div>
-        </div>
-      ) : null}
+        ) : (
+          <div className="flex h-full items-center text-xs text-gray-400 dark:text-gray-500">
+            برای ورود به پوشه‌ها دبل‌کلیک کنید.
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div className="rounded-[2rem] border border-gray-200 bg-white p-10 text-center dark:border-gray-800 dark:bg-[#1a1a1a]">
@@ -1025,6 +1068,34 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
             <div><Text strong>رکورد اصلی مرتبط:</Text> {recordTitleMap[`${detailsItem.module_id}:${detailsItem.record_id}`] || detailsItem.record_id || '-'}</div>
             <div><Text strong>رکوردهای میانبر:</Text> {detailsItem.is_shortcut ? 'این مورد یک میانبر است' : 'فعلاً از منبع داده موجود قابل محاسبه نیست'}</div>
             <div><Text strong>دسترسی:</Text> {detailsItem.visibility === 'public' ? 'عمومی' : detailsItem.visibility === 'org' ? 'سازمانی' : 'خصوصی'}</div>
+            <div className="space-y-2">
+              <Text strong>برچسب‌ها</Text>
+              <TagInput
+                moduleId="file_assets"
+                initialTags={detailsTags as any}
+                onChange={(tags) => setDetailsTags((tags || []) as any)}
+                disabled={!canEdit || !onUpdateItemTags}
+                popupZIndex={13620}
+              />
+              {canEdit && onUpdateItemTags ? (
+                <Button
+                  size="small"
+                  loading={detailsSaving}
+                  onClick={async () => {
+                    if (!detailsItem) return;
+                    setDetailsSaving(true);
+                    try {
+                      await onUpdateItemTags(detailsItem, detailsTags);
+                      setDetailsItem({ ...detailsItem, tags: detailsTags });
+                    } finally {
+                      setDetailsSaving(false);
+                    }
+                  }}
+                >
+                  ذخیره برچسب‌ها
+                </Button>
+              ) : null}
+            </div>
             <div className="space-y-1">
               <Text strong>لینک اصلی</Text>
               <div className="flex gap-2">

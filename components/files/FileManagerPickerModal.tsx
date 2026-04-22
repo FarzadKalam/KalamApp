@@ -72,16 +72,33 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   const normalizedModuleId = String(moduleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
   const hasRecordScope = Boolean(normalizedModuleId && normalizedRecordId);
+  const resolveScope = (folderKey: string) => {
+    const normalized = String(folderKey || '').trim();
+    if (normalized.startsWith('record:')) {
+      const rest = normalized.slice('record:'.length);
+      const [moduleId, ...recordParts] = rest.split(':');
+      return { scope: 'record' as const, moduleId, recordId: recordParts.join(':') };
+    }
+    if (normalized.startsWith('module:')) {
+      return { scope: 'module' as const, moduleId: normalized.slice('module:'.length), recordId: null };
+    }
+    if (hasRecordScope) {
+      return { scope: 'record' as const, moduleId: normalizedModuleId, recordId: normalizedRecordId };
+    }
+    return { scope: 'global' as const, moduleId: null, recordId: null };
+  };
 
   const loadFiles = async () => {
     setLoading(true);
     try {
+      const resolvedScope = resolveScope(activeFolderKey);
       const loaded = await buildFileManagerTree({
+        scope: resolvedScope.scope,
         page,
         pageSize,
         folderKey: activeFolderKey,
-        initialModuleId: normalizedModuleId,
-        initialRecordId: normalizedRecordId,
+        moduleId: resolvedScope.moduleId,
+        recordId: resolvedScope.recordId,
         fileTypes,
         moduleTitleMap,
       });

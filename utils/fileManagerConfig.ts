@@ -1,75 +1,95 @@
-export type FileSystemSubfolderDefinition = {
-  key: string;
-  title: string;
-  colorToken?: string;
-  iconToken?: string;
-};
+import { MODULES } from '../moduleRegistry';
 
 export type FileSystemModuleDefinition = {
   moduleId: string;
   rootTitle: string;
   rootColorToken: string;
-  recordSubfolders?: FileSystemSubfolderDefinition[];
+  relatedAttachmentSources?: Array<{
+    moduleId: string;
+    foreignKey: string;
+    attachmentFieldKeys: string[];
+  }>;
 };
 
-const DEFAULT_RECORD_SUBFOLDER: FileSystemSubfolderDefinition = {
-  key: 'attachments',
-  title: 'پیوست‌ها',
-  colorToken: 'manual-neutral',
-  iconToken: 'paperclip',
+const DEFAULT_ROOT_COLOR_TOKEN = 'system-default';
+
+const MODULE_ROOT_COLOR_TOKENS: Record<string, string> = {
+  products: 'system-product',
+  invoices: 'system-sales',
+  purchase_invoices: 'system-purchase',
+  expense_documents: 'system-expense',
+  employee_advances: 'system-finance',
+  tasks: 'system-task',
+  customers: 'system-customer',
+  suppliers: 'system-supplier',
+  projects: 'system-project',
+  cheques: 'system-finance',
 };
 
 export const FILE_SYSTEM_MODULE_DEFINITIONS: Record<string, FileSystemModuleDefinition> = {
   products: {
     moduleId: 'products',
-    rootTitle: 'فایل‌های محصولات',
+    rootTitle: 'محصولات',
     rootColorToken: 'system-product',
-    recordSubfolders: [
-      { key: 'images', title: 'تصاویر محصول', colorToken: 'system-image', iconToken: 'image' },
-      DEFAULT_RECORD_SUBFOLDER,
-    ],
   },
   invoices: {
     moduleId: 'invoices',
     rootTitle: 'فاکتورهای فروش',
     rootColorToken: 'system-sales',
-    recordSubfolders: [
-      { key: 'invoice_media', title: 'تصاویر فاکتور', colorToken: 'system-image', iconToken: 'image' },
-      { key: 'receipts', title: 'دریافت‌ها', colorToken: 'system-finance', iconToken: 'wallet' },
+    relatedAttachmentSources: [
+      {
+        moduleId: 'cash_bank_operations',
+        foreignKey: 'sales_invoice_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
+      {
+        moduleId: 'barters',
+        foreignKey: 'source_invoice_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
     ],
   },
   purchase_invoices: {
     moduleId: 'purchase_invoices',
     rootTitle: 'فاکتورهای خرید',
     rootColorToken: 'system-purchase',
-    recordSubfolders: [
-      { key: 'invoice_media', title: 'تصاویر فاکتور', colorToken: 'system-image', iconToken: 'image' },
-      { key: 'payments', title: 'پرداخت‌ها', colorToken: 'system-finance', iconToken: 'wallet' },
+    relatedAttachmentSources: [
+      {
+        moduleId: 'cash_bank_operations',
+        foreignKey: 'purchase_invoice_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
+      {
+        moduleId: 'barters',
+        foreignKey: 'source_purchase_invoice_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
     ],
   },
   expense_documents: {
     moduleId: 'expense_documents',
     rootTitle: 'هزینه‌ها',
     rootColorToken: 'system-expense',
-    recordSubfolders: [
-      { key: 'documents', title: 'اسناد', colorToken: 'system-doc', iconToken: 'file' },
-      { key: 'payments', title: 'پرداخت‌ها', colorToken: 'system-finance', iconToken: 'wallet' },
-    ],
   },
   tasks: {
     moduleId: 'tasks',
     rootTitle: 'وظایف',
     rootColorToken: 'system-task',
-    recordSubfolders: [DEFAULT_RECORD_SUBFOLDER],
   },
 };
 
 export const getFileSystemModuleDefinition = (moduleId?: string | null): FileSystemModuleDefinition => {
   const normalizedModuleId = String(moduleId || '').trim();
-  return FILE_SYSTEM_MODULE_DEFINITIONS[normalizedModuleId] || {
+  const existing = FILE_SYSTEM_MODULE_DEFINITIONS[normalizedModuleId];
+  if (existing) {
+    return {
+      ...existing,
+      rootTitle: existing.rootTitle || MODULES[normalizedModuleId]?.titles?.fa || normalizedModuleId || 'فایل‌ها',
+    };
+  }
+  return {
     moduleId: normalizedModuleId,
-    rootTitle: normalizedModuleId ? `فایل‌های ${normalizedModuleId}` : 'فایل‌ها',
-    rootColorToken: 'system-default',
-    recordSubfolders: [DEFAULT_RECORD_SUBFOLDER],
+    rootTitle: MODULES[normalizedModuleId]?.titles?.fa || normalizedModuleId || 'فایل‌ها',
+    rootColorToken: MODULE_ROOT_COLOR_TOKENS[normalizedModuleId] || DEFAULT_ROOT_COLOR_TOKEN,
   };
 };

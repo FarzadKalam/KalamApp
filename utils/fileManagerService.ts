@@ -2,6 +2,9 @@ import { supabase } from '../supabaseClient';
 import { FILE_STORAGE_BUCKET } from './storageClient';
 import { detectRecordFilesTable, extractStoragePathFromPublicUrl, isMissingRecordFilesError } from './recordFilesAvailability';
 import { getFileSystemModuleDefinition } from './fileManagerConfig';
+import { MODULES } from '../moduleRegistry';
+import { getRecordDisplayLabel } from './recordLabel';
+import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from './selectCompat';
 import type { FileAssetRow, FileEntryRow, FileFolderRow, FileVisibility } from './fileManagerTypes';
 
 const FILE_MANAGER_TABLES_KEY = 'erp_file_manager_tables_available';
@@ -96,9 +99,10 @@ export const buildModuleRootFolderDraft = (moduleId: string): Partial<FileFolder
 
 export const buildRecordFolderDraft = (moduleId: string, recordId: string, recordTitle: string): Partial<FileFolderRow> => {
   const definition = getFileSystemModuleDefinition(moduleId);
+  const nextName = String(recordTitle || '').trim() || 'رکورد بدون عنوان';
   return {
-    name: String(recordTitle || recordId || 'رکورد').trim() || 'رکورد',
-    slug: slugify(recordTitle || recordId),
+    name: nextName,
+    slug: slugify(nextName),
     folder_type: 'system_record',
     module_id: moduleId,
     record_id: recordId,
@@ -116,35 +120,49 @@ export const buildRecordFolderDraft = (moduleId: string, recordId: string, recor
   };
 };
 
-export const buildRecordSubfolderDraft = (
+const normalizeRecordFolderLabel = (row: any, moduleId: string) => {
+  const display = String(getRecordDisplayLabel(row, moduleId, { fallback: '' }) || '').trim();
+  if (display) return display;
+  const systemCode = String(row?.system_code || '').trim();
+  if (systemCode) return systemCode;
+  const manualCode = String(row?.manual_code || '').trim();
+  if (manualCode) return manualCode;
+  return 'رکورد بدون عنوان';
+};
+
+export const resolveRecordFolderLabel = async (
   moduleId: string,
   recordId: string,
-  subfolderKey: string,
-): Partial<FileFolderRow> => {
-  const definition = getFileSystemModuleDefinition(moduleId);
-  const subfolder = (definition.recordSubfolders || []).find((item) => item.key === subfolderKey)
-    || definition.recordSubfolders?.[0]
-    || { key: subfolderKey, title: subfolderKey };
+  fallback?: string | null,
+): Promise<string> => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  const normalizedFallback = String(fallback || '').trim();
+  if (!normalizedModuleId || !normalizedRecordId) {
+    return normalizedFallback || 'رکورد بدون عنوان';
+  }
 
-  return {
-    name: subfolder.title,
-    slug: slugify(subfolder.title),
-    folder_type: 'system_subrecord',
-    module_id: moduleId,
-    record_id: recordId,
-    source_scope: 'record_subfolder',
-    source_key: buildSourceKey('record_subfolder', moduleId, recordId, subfolder.key),
-    visibility: 'private',
-    is_system: true,
-    color_token: subfolder.colorToken || 'system-default',
-    icon_token: subfolder.iconToken || 'folder',
-    metadata: {
-      module_id: moduleId,
-      record_id: recordId,
-      subfolder_key: subfolder.key,
-      auto_created: true,
-    },
-  };
+  const table = MODULES[normalizedModuleId]?.table || normalizedModuleId;
+  if (!table) return normalizedFallback || 'رکورد بدون عنوان';
+
+  try {
+    const result = await runSelectWithCompatibleColumns<any>({
+      cacheKey: `file-manager-folder-label:${normalizedModuleId}`,
+      columns: buildRecordTitleSelectColumns(normalizedModuleId),
+      execute: (selectExpr) =>
+        supabase
+          .from(table)
+          .select(selectExpr)
+          .eq('id', normalizedRecordId)
+          .maybeSingle(),
+    });
+    if (result.error) throw result.error;
+    if (result.data) return normalizeRecordFolderLabel(result.data, normalizedModuleId);
+  } catch (error) {
+    console.warn('Could not resolve record folder label', error);
+  }
+
+  return normalizedFallback || 'رکورد بدون عنوان';
 };
 
 export const ensureFolder = async (draft: Partial<FileFolderRow>, parentId?: string | null): Promise<FileFolderRow | null> => {
@@ -200,17 +218,10 @@ export const ensureSystemFoldersForRecord = async (
   const hasTables = await detectFileManagerTables(supabase, false);
   if (!hasTables) return { moduleFolder: null, recordFolder: null, subfolders: [] };
 
-  const definition = getFileSystemModuleDefinition(moduleId);
+  const nextRecordTitle = await resolveRecordFolderLabel(moduleId, recordId, recordTitle);
   const moduleFolder = await ensureFolder(buildModuleRootFolderDraft(moduleId));
-  const recordFolder = await ensureFolder(buildRecordFolderDraft(moduleId, recordId, recordTitle), moduleFolder?.id || null);
-
-  const subfolders: FileFolderRow[] = [];
-  for (const subfolder of definition.recordSubfolders || []) {
-    const ensured = await ensureFolder(buildRecordSubfolderDraft(moduleId, recordId, subfolder.key), recordFolder?.id || null);
-    if (ensured) subfolders.push(ensured);
-  }
-
-  return { moduleFolder, recordFolder, subfolders };
+  const recordFolder = await ensureFolder(buildRecordFolderDraft(moduleId, recordId, nextRecordTitle), moduleFolder?.id || null);
+  return { moduleFolder, recordFolder, subfolders: [] };
 };
 
 export const createManualFileFolder = async (input: {
@@ -415,12 +426,9 @@ export const ensureOriginEntryForLegacyRecordFile = async (
   const moduleId = String(recordFile.module_id || '').trim();
   const recordId = String(recordFile.record_id || '').trim();
   const bundle = moduleId && recordId
-    ? await ensureSystemFoldersForRecord(moduleId, recordId, String(options?.recordTitle || recordId))
+    ? await ensureSystemFoldersForRecord(moduleId, recordId, String(options?.recordTitle || '').trim() || 'رکورد بدون عنوان')
     : { moduleFolder: null, recordFolder: null, subfolders: [] as FileFolderRow[] };
-
-  const targetFolder = String(options?.subfolderKey || '').trim()
-    ? bundle.subfolders.find((item) => String(item?.metadata?.subfolder_key || '').trim() === String(options?.subfolderKey || '').trim())
-    : bundle.recordFolder;
+  const targetFolder = bundle.recordFolder;
 
   const existingEntryId = String(recordFile.file_entry_id || '').trim();
   if (existingEntryId) {
@@ -482,15 +490,6 @@ const normalizeFileAssetType = (value?: string | null): FileAssetRow['file_type'
   return 'file';
 };
 
-const resolveTargetFolder = (
-  bundle: { recordFolder: FileFolderRow | null; subfolders: FileFolderRow[] },
-  subfolderKey?: string | null,
-) => {
-  const normalizedKey = String(subfolderKey || '').trim();
-  if (!normalizedKey) return bundle.recordFolder;
-  return bundle.subfolders.find((item) => String(item?.metadata?.subfolder_key || '').trim() === normalizedKey) || bundle.recordFolder;
-};
-
 export const createFileManagerOriginForUpload = async (input: {
   moduleId: string;
   recordId: string;
@@ -503,6 +502,7 @@ export const createFileManagerOriginForUpload = async (input: {
   folderId?: string | null;
   sortOrder?: number | null;
   visibility?: FileVisibility;
+  tags?: Array<{ id: string; title: string; color?: string | null }>;
 }) => {
   const hasTables = await detectFileManagerTables(supabase, false);
   if (!hasTables) return null;
@@ -517,10 +517,9 @@ export const createFileManagerOriginForUpload = async (input: {
   const bundle = await ensureSystemFoldersForRecord(
     moduleId,
     recordId,
-    String(input.recordTitle || recordId).trim() || recordId,
+    String(input.recordTitle || '').trim() || 'رکورد بدون عنوان',
   );
-  const targetFolder = resolveTargetFolder(bundle, input.subfolderKey);
-  const targetFolderId = String(input.folderId || '').trim() || targetFolder?.id || bundle.recordFolder?.id || null;
+  const targetFolderId = String(input.folderId || '').trim() || bundle.recordFolder?.id || null;
   const storagePath = extractStoragePathFromPublicUrl(fileUrl, FILE_STORAGE_BUCKET) || fileUrl;
   const displayName = String(input.fileName || '').trim() || String(storagePath.split('/').pop() || 'file').trim() || 'file';
 
@@ -546,6 +545,9 @@ export const createFileManagerOriginForUpload = async (input: {
           fileType: normalizeFileAssetType(input.fileType),
         }),
         origin_folder_id: targetFolderId,
+        metadata: {
+          tags: Array.isArray(input.tags) ? input.tags : [],
+        },
       })
       .select('*')
       .single();
@@ -576,7 +578,9 @@ export const createFileManagerOriginForUpload = async (input: {
           module_id: moduleId,
           record_id: recordId,
           sort_order: Number.isFinite(input.sortOrder as number) ? input.sortOrder : 0,
-          metadata: {},
+          metadata: {
+            tags: Array.isArray(input.tags) ? input.tags : [],
+          },
         })
         .select('*')
         .single();
@@ -641,6 +645,7 @@ export const createFileManagerShortcut = async (input: {
   subfolderKey?: string | null;
   folderId?: string | null;
   sortOrder?: number | null;
+  tags?: Array<{ id: string; title: string; color?: string | null }>;
 }) => {
   const hasTables = await detectFileManagerTables(supabase, false);
   if (!hasTables) return null;
@@ -670,10 +675,9 @@ export const createFileManagerShortcut = async (input: {
   const bundle = await ensureSystemFoldersForRecord(
     targetModuleId,
     targetRecordId,
-    String(input.targetRecordTitle || targetRecordId).trim() || targetRecordId,
+    String(input.targetRecordTitle || '').trim() || 'رکورد بدون عنوان',
   );
-  const targetFolder = resolveTargetFolder(bundle, input.subfolderKey);
-  const targetFolderId = String(input.folderId || '').trim() || targetFolder?.id || bundle.recordFolder?.id || null;
+  const targetFolderId = String(input.folderId || '').trim() || bundle.recordFolder?.id || null;
 
   let existingEntryQuery = supabase
     .from('file_entries')
@@ -705,7 +709,9 @@ export const createFileManagerShortcut = async (input: {
           source_record_id: String(input.sourceRecordId || '').trim() || null,
           source_record_title: String(input.sourceRecordTitle || '').trim() || null,
           sort_order: Number.isFinite(input.sortOrder as number) ? input.sortOrder : 0,
-          metadata: {},
+          metadata: {
+            tags: Array.isArray(input.tags) ? input.tags : [],
+          },
         })
         .select('*')
         .single();

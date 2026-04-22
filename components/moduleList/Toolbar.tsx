@@ -1,5 +1,5 @@
 ﻿import React from "react";
-import { Input, Segmented } from "antd";
+import { Button, Input, Segmented } from "antd";
 import {
   AppstoreOutlined,
   CalendarOutlined,
@@ -9,7 +9,10 @@ import {
 } from "@ant-design/icons";
 import { ViewMode } from "../../types";
 
+type ToolbarRenderMode = "desktop" | "mobile-compact";
+
 interface ToolbarProps {
+  renderMode?: ToolbarRenderMode;
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
   searchTerm: string;
@@ -24,9 +27,13 @@ interface ToolbarProps {
   calendarDateField: string | null;
   calendarDateFieldOptions: { label: string; value: string }[];
   onCalendarDateFieldChange: (value: string) => void;
+  onViewModeLauncherClick?: () => void;
+  viewModeLauncherLabel?: string;
+  mobileTrailingContent?: React.ReactNode;
 }
 
 const Toolbar: React.FC<ToolbarProps> = ({
+  renderMode = "desktop",
   viewMode,
   setViewMode,
   searchTerm,
@@ -41,7 +48,35 @@ const Toolbar: React.FC<ToolbarProps> = ({
   calendarDateField,
   calendarDateFieldOptions,
   onCalendarDateFieldChange,
+  onViewModeLauncherClick,
+  viewModeLauncherLabel = "حالت‌های نمایش",
+  mobileTrailingContent,
 }) => {
+  if (renderMode === "mobile-compact") {
+    return (
+      <div className="module-list-toolbar module-list-toolbar--compact flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <Input.Search
+            placeholder="جستجو..."
+            value={searchTerm}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="module-list-toolbar__search module-list-toolbar__compact-search"
+            allowClear
+          />
+        </div>
+        <Button
+          type="default"
+          icon={<AppstoreOutlined />}
+          className="module-list-toolbar__compact-icon"
+          aria-label={viewModeLauncherLabel}
+          title={viewModeLauncherLabel}
+          onClick={onViewModeLauncherClick}
+        />
+        {mobileTrailingContent}
+      </div>
+    );
+  }
+
   return (
     <div className="module-list-toolbar flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
       <div className="flex items-center gap-2 flex-1">
@@ -49,7 +84,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
           placeholder="جستجو..."
           value={searchTerm}
           onChange={(e) => onSearchChange(e.target.value)}
-          className="max-w-md"
+          className="module-list-toolbar__search max-w-md"
           allowClear
         />
       </div>

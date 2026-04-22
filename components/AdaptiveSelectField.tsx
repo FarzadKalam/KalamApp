@@ -187,6 +187,9 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
       return;
     }
     setDraftValue(option.value);
+    onChange?.(option.value);
+    setMobileOpen(false);
+    onOpenChange?.(false);
   };
 
   if (!mobileSheetMode) {
@@ -261,7 +264,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
           setMobileOpen(false);
           onOpenChange?.(false);
         }}
-        onConfirm={commitValue}
+        onConfirm={isMulti ? commitValue : undefined}
         onClear={allowClear ? clearValue : undefined}
         confirmLabel={isMulti ? 'ثبت انتخاب‌ها' : 'تایید'}
       >

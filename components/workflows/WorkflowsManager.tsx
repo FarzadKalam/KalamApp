@@ -7,6 +7,7 @@ import WorkflowEditorModal from './WorkflowEditorModal';
 import { WorkflowRecord } from '../../utils/workflowTypes';
 import { WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { resolveSelectPopupContainer } from '../../utils/popupContainer';
 
 type WorkflowsManagerProps = {
   inline?: boolean;
@@ -254,6 +255,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
             className="min-w-[220px]"
             showSearch
             optionFilterProp="label"
+            getPopupContainer={resolveSelectPopupContainer}
           />
           <Button icon={<ReloadOutlined />} onClick={fetchRecords} />
         </Space>

@@ -27,27 +27,38 @@ import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { ModuleField, SavedView, ViewConfig } from '../types';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
+import AdaptivePickerSurface from './AdaptivePickerSurface';
 import { getDefaultWorkflowOperator, getWorkflowOperatorOptions, workflowOperatorNeedsValue } from '../utils/filterUtils';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../utils/workflowHelpers';
 import { createWorkflowId } from '../utils/workflowTypes';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 
+type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
+
 interface ViewManagerProps {
   moduleId: string;
   currentView: SavedView | null;
   onViewChange: (view: SavedView | null, config: ViewConfig | null) => void;
   onRefresh: () => void;
+  renderMode?: ViewManagerRenderMode;
 }
 
 const savedViewsCache = new Map<string, SavedView[]>();
 const savedViewsPromiseCache = new Map<string, Promise<SavedView[]>>();
 
-const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onViewChange, onRefresh: _onRefresh }) => {
+const ViewManager: React.FC<ViewManagerProps> = ({
+  moduleId,
+  currentView,
+  onViewChange,
+  onRefresh: _onRefresh,
+  renderMode = 'inline',
+}) => {
   const { message } = App.useApp();
   const [views, setViews] = useState<SavedView[]>([]);
   const [loadingViews, setLoadingViews] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
   const [viewName, setViewName] = useState('');
   const [editingViewId, setEditingViewId] = useState<string | null>(null);
   const [config, setConfig] = useState<ViewConfig>({ columns: [], filters: [] });
@@ -204,6 +215,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
     setIsModalOpen(true);
   };
 
+  const handleOpenNewViewFromSheet = () => {
+    setIsMobileSheetOpen(false);
+    handleOpenNewView();
+  };
+
   const handleEditView = (view: SavedView, e: React.MouseEvent) => {
     e.stopPropagation();
     const rawConfig = (view.config as any) || {};
@@ -224,6 +240,28 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
       setViewName(view.name);
       setEditingViewId(view.id);
     }
+    setIsModalOpen(true);
+  };
+
+  const handleEditViewFromSheet = (view: SavedView) => {
+    const rawConfig = (view.config as any) || {};
+    const safeConfig: ViewConfig = {
+      columns:
+        Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
+          ? rawConfig.columns
+          : moduleConfig.fields.map((f) => f.key),
+      filters: normalizeViewFilters(rawConfig.filters),
+      sort: rawConfig.sort,
+    };
+    setConfig(safeConfig);
+    if (view.is_default || view.id.startsWith('default_')) {
+      setViewName(`${view.name} (کپی)`);
+      setEditingViewId(null);
+    } else {
+      setViewName(view.name);
+      setEditingViewId(view.id);
+    }
+    setIsMobileSheetOpen(false);
     setIsModalOpen(true);
   };
 
@@ -325,35 +363,51 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
     });
   };
 
-  return (
-    <>
-      <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm animate-fadeIn overflow-hidden">
-        <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
-          {loadingViews ? (
-            <>
-              {Array.from({ length: 4 }).map((_, idx) => (
-                <Skeleton.Button
-                  key={idx}
-                  active
-                  size="small"
-                  style={{ width: idx === 0 ? 96 : 80, height: 26, borderRadius: 8 }}
-                />
-              ))}
-            </>
-          ) : (
-            views.map((view) => (
-              <div
-                key={view.id}
-                onClick={() => onViewChange(view, (view.config as any))}
-                className={`group px-2.5 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-1.5 select-none border ${
-                  currentView?.id === view.id
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
-                    : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
-                }`}
-              >
-                <span className="leading-none">{view.name}</span>
-                {currentView?.id === view.id && (
-                  <div className="mr-0 flex shrink-0 items-center gap-0.5">
+  const handleDeleteView = async (view: SavedView) => {
+    await supabase.from('saved_views').delete().eq('id', view.id);
+    setViews((prev) => {
+      const nextViews = prev.filter((item) => item.id !== view.id);
+      savedViewsCache.set(moduleId, nextViews);
+      return nextViews;
+    });
+    if (currentView?.id === view.id) onViewChange(null, null);
+  };
+
+  const handleViewSelect = (view: SavedView) => {
+    onViewChange(view, (view.config as any));
+    if (renderMode === 'mobile-sheet') {
+      setIsMobileSheetOpen(false);
+    }
+  };
+
+  const renderInlineStrip = () => (
+    <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm animate-fadeIn overflow-hidden">
+      <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
+        {loadingViews ? (
+          <>
+            {Array.from({ length: 4 }).map((_, idx) => (
+              <Skeleton.Button
+                key={idx}
+                active
+                size="small"
+                style={{ width: idx === 0 ? 96 : 80, height: 26, borderRadius: 8 }}
+              />
+            ))}
+          </>
+        ) : (
+          views.map((view) => (
+            <div
+              key={view.id}
+              onClick={() => handleViewSelect(view)}
+              className={`group px-2.5 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-1.5 select-none border ${
+                currentView?.id === view.id
+                  ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
+                  : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
+              }`}
+            >
+              <span className="leading-none">{view.name}</span>
+              {currentView?.id === view.id && (
+                <div className="mr-0 flex shrink-0 items-center gap-0.5">
                   <Tooltip
                     title="ویرایش"
                     placement="bottom"
@@ -375,13 +429,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                       title="حذف نما؟"
                       onConfirm={async (e) => {
                         e?.stopPropagation();
-                        await supabase.from('saved_views').delete().eq('id', view.id);
-                        setViews((prev) => {
-                          const nextViews = prev.filter((item) => item.id !== view.id);
-                          savedViewsCache.set(moduleId, nextViews);
-                          return nextViews;
-                        });
-                        if (currentView?.id === view.id) onViewChange(null, null);
+                        await handleDeleteView(view);
                       }}
                       onCancel={(e) => e?.stopPropagation()}
                     >
@@ -390,28 +438,125 @@ const ViewManager: React.FC<ViewManagerProps> = ({ moduleId, currentView, onView
                       </span>
                     </Popconfirm>
                   )}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-
-        <div className="w-[1px] h-5 bg-gray-200 dark:bg-gray-700 mx-1 shrink-0" />
-
-        <div className="flex items-center gap-1 px-2 shrink-0">
-          <Tooltip title="ایجاد نمای جدید">
-            <button
-              type="button"
-              onClick={handleOpenNewView}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
-            >
-              <PlusOutlined className="text-[11px]" />
-              <span className="hidden md:inline leading-none">لیست جدید</span>
-            </button>
-          </Tooltip>
-        </div>
+                </div>
+              )}
+            </div>
+          ))
+        )}
       </div>
+
+      <div className="w-[1px] h-5 bg-gray-200 dark:bg-gray-700 mx-1 shrink-0" />
+
+      <div className="flex items-center gap-1 px-2 shrink-0">
+        <Tooltip title="ایجاد نمای جدید">
+          <button
+            type="button"
+            onClick={handleOpenNewView}
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-gray-600 transition hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+          >
+            <PlusOutlined className="text-[11px]" />
+            <span className="hidden md:inline leading-none">لیست جدید</span>
+          </button>
+        </Tooltip>
+      </div>
+    </div>
+  );
+
+  const renderMobileSheet = () => (
+    <>
+      <Button
+        type="default"
+        icon={<FilterOutlined />}
+        className="module-list-toolbar__compact-icon"
+        aria-label="لیست‌های نمایش"
+        title="لیست‌های نمایش"
+        onClick={() => setIsMobileSheetOpen(true)}
+      />
+      <AdaptivePickerSurface
+        open={isMobileSheetOpen}
+        title="لیست‌های نمایش"
+        subtitle="نمای ذخیره‌شده را انتخاب یا مدیریت کنید"
+        zIndex={1060}
+        onClose={() => setIsMobileSheetOpen(false)}
+      >
+        <div className="space-y-3">
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            className="!w-full !rounded-2xl bg-leather-600 hover:!bg-leather-500"
+            onClick={handleOpenNewViewFromSheet}
+          >
+            ایجاد نمای جدید
+          </Button>
+
+          <div className="space-y-2">
+            {loadingViews ? (
+              Array.from({ length: 4 }).map((_, idx) => (
+                <Skeleton.Button
+                  key={idx}
+                  active
+                  block
+                  style={{ height: 52, borderRadius: 16 }}
+                />
+              ))
+            ) : (
+              views.map((view) => {
+                const isActive = currentView?.id === view.id;
+                const canDelete = !view.is_default && !view.id.startsWith('default_');
+                return (
+                  <div
+                    key={view.id}
+                    className={`rounded-2xl border px-3 py-3 transition ${
+                      isActive
+                        ? 'border-leather-500 bg-[rgba(var(--brand-50-rgb),0.72)] dark:border-leather-500 dark:bg-white/10'
+                        : 'border-gray-200 bg-white dark:border-white/10 dark:bg-[#171717]'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 text-right"
+                      onClick={() => handleViewSelect(view)}
+                    >
+                      <span className="min-w-0 flex-1 truncate text-sm font-bold text-gray-800 dark:text-gray-100">{view.name}</span>
+                      {isActive ? (
+                        <span className="shrink-0 rounded-full bg-leather-600 px-2 py-0.5 text-[10px] font-bold text-white">فعال</span>
+                      ) : null}
+                    </button>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="small"
+                        icon={<EditOutlined />}
+                        className="!rounded-xl"
+                        onClick={() => handleEditViewFromSheet(view)}
+                      >
+                        ویرایش
+                      </Button>
+                      {canDelete ? (
+                        <Popconfirm
+                          title="حذف نما؟"
+                          onConfirm={async () => {
+                            await handleDeleteView(view);
+                          }}
+                        >
+                          <Button size="small" danger icon={<DeleteOutlined />} className="!rounded-xl">
+                            حذف
+                          </Button>
+                        </Popconfirm>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </AdaptivePickerSurface>
+    </>
+  );
+
+  return (
+    <>
+      {renderMode === 'mobile-sheet' ? renderMobileSheet() : renderInlineStrip()}
 
       {isModalOpen && (
       <Modal

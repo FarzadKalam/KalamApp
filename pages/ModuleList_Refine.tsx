@@ -9,7 +9,8 @@ import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMod
 import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
-import { AppstoreAddOutlined, BranchesOutlined, EllipsisOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TagsOutlined } from "@ant-design/icons";
+import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TableOutlined, TagsOutlined } from "@ant-design/icons";
+import AdaptivePickerSurface from "../components/AdaptivePickerSurface";
 import ViewManager from "../components/ViewManager";
 import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
@@ -516,6 +517,11 @@ export const ModuleListRefine: React.FC<{
   const tagViewFilterIdsCacheRef = useRef<{ signature: string; ids: string[] } | null>(null);
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
   const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 768;
+  });
+  const [isMobileViewModeSheetOpen, setIsMobileViewModeSheetOpen] = useState(false);
   const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
   const moduleListLiveInvalidationEnabled = useMemo(
     () => isModuleListLiveInvalidationEnabled(resolvedModuleId),
@@ -618,6 +624,19 @@ export const ModuleListRefine: React.FC<{
     setTagViewFilterTotal(0);
     setTagViewFilterLoading(false);
   }, [resolvedModuleId, viewMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const updateViewport = () => setIsMobileViewport(window.innerWidth < 768);
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
+  }, []);
+
+  useEffect(() => {
+    if (isMobileViewport) return;
+    setIsMobileViewModeSheetOpen(false);
+  }, [isMobileViewport]);
 
   useEffect(() => {
     if (!resolvedModuleId) return;
@@ -1289,6 +1308,28 @@ export const ModuleListRefine: React.FC<{
     if (!moduleConfig) return false;
     return moduleConfig.fields.some((field) => field.type === FieldType.LOCATION || field.key === "location");
   }, [moduleConfig]);
+
+  const kanbanGroupOptions = useMemo(
+    () => availableGroupFields.map((f) => ({ label: f.labels.fa, value: f.key })),
+    [availableGroupFields]
+  );
+  const calendarDateFieldOptions = useMemo(
+    () => availableCalendarFields.map((field) => ({
+      label: getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: field.key }),
+      value: field.key,
+    })),
+    [availableCalendarFields, resolvedModuleId]
+  );
+  const mobileViewModeOptions = useMemo(
+    () => [
+      { label: "جدول", value: ViewMode.LIST, icon: <TableOutlined /> },
+      { label: "گرید", value: ViewMode.GRID, icon: <AppstoreOutlined /> },
+      ...(mapEnabled ? [{ label: "نقشه", value: ViewMode.MAP, icon: <EnvironmentOutlined /> }] : []),
+      ...(availableCalendarFields.length > 0 ? [{ label: "تقویم", value: ViewMode.CALENDAR, icon: <CalendarOutlined /> }] : []),
+      ...(availableGroupFields.length > 0 ? [{ label: "کانبان", value: ViewMode.KANBAN, icon: <ColumnWidthOutlined /> }] : []),
+    ],
+    [availableCalendarFields.length, availableGroupFields.length, mapEnabled]
+  );
 
   const activeFilterBubbles = useMemo(() => {
     if (!moduleConfig) return [];
@@ -2262,6 +2303,13 @@ export const ModuleListRefine: React.FC<{
     setViewMode(nextMode);
   }, [current, pageSize, setCurrent, setPageSize, viewMode]);
 
+  const handleMobileViewModeSelect = useCallback((nextMode: ViewMode) => {
+    handleViewModeChange(nextMode);
+    if (nextMode !== ViewMode.KANBAN && nextMode !== ViewMode.CALENDAR) {
+      setIsMobileViewModeSheetOpen(false);
+    }
+  }, [handleViewModeChange]);
+
   // ✅ FIX: سرچ فقط فیلتر سرچ را اضافه/حذف می‌کند و به فیلترهای View دست نمی‌زند
   useEffect(() => {
     if (!searchSyncInitializedRef.current) {
@@ -3113,8 +3161,8 @@ export const ModuleListRefine: React.FC<{
   }
 
   return (
-    <div className="module-list-page box-border p-3 md:p-6 max-w-[1800px] mx-auto pb-28 md:pb-8 h-full min-h-0 flex flex-col overflow-hidden">
-        <div className="flex flex-col gap-0 mb-1 md:mb-2 shrink-0">
+    <div className="module-list-page box-border p-3 md:p-5 max-w-[1800px] mx-auto pb-20 md:pb-5 h-full min-h-0 flex flex-col overflow-hidden">
+        <div className="flex flex-col gap-0 mb-0.5 md:mb-1 shrink-0">
           {/* ردیف ۱: عنوان + شمارنده + دکمه افزودن */}
         <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 shrink-0">
@@ -3277,6 +3325,7 @@ export const ModuleListRefine: React.FC<{
         </div>
 
         <Toolbar
+          renderMode={isMobileViewport ? "mobile-compact" : "desktop"}
           viewMode={viewMode}
           setViewMode={handleViewModeChange}
           searchTerm={searchTerm}
@@ -3286,15 +3335,115 @@ export const ModuleListRefine: React.FC<{
           calendarEnabled={availableCalendarFields.length > 0}
           mapEnabled={mapEnabled}
           kanbanGroupBy={kanbanGroupBy}
-          kanbanGroupOptions={availableGroupFields.map((f) => ({ label: f.labels.fa, value: f.key }))}
+          kanbanGroupOptions={kanbanGroupOptions}
           onKanbanGroupChange={setKanbanGroupBy}
           calendarDateField={calendarDateField}
-          calendarDateFieldOptions={availableCalendarFields.map((field) => ({ label: getFieldLabelFa(field, { moduleId: resolvedModuleId, fallback: field.key }), value: field.key }))}
+          calendarDateFieldOptions={calendarDateFieldOptions}
           onCalendarDateFieldChange={setCalendarDateField}
+          onViewModeLauncherClick={() => setIsMobileViewModeSheetOpen(true)}
+          mobileTrailingContent={
+            isMobileViewport ? (
+              <ViewManager
+                moduleId={resolvedModuleId}
+                currentView={currentView}
+                onViewChange={handleViewChange}
+                onRefresh={handleRefresh}
+                renderMode="mobile-sheet"
+              />
+            ) : null
+          }
         />
 
+        <AdaptivePickerSurface
+          open={isMobileViewModeSheetOpen}
+          title="حالت‌های نمایش"
+          subtitle="نحوه نمایش رکوردها را انتخاب کنید"
+          zIndex={1055}
+          onClose={() => setIsMobileViewModeSheetOpen(false)}
+        >
+          <div className="space-y-3">
+            <div className="space-y-2">
+              {mobileViewModeOptions.map((option) => {
+                const isActive = viewMode === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-3 rounded-2xl border px-3 py-3 text-right transition ${
+                      isActive
+                        ? "border-leather-500 bg-[rgba(var(--brand-50-rgb),0.72)] dark:border-leather-500 dark:bg-white/10"
+                        : "border-gray-200 bg-white dark:border-white/10 dark:bg-[#171717]"
+                    }`}
+                    onClick={() => handleMobileViewModeSelect(option.value as ViewMode)}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-gray-100">
+                      {option.icon}
+                      {option.label}
+                    </span>
+                    {isActive ? (
+                      <span className="shrink-0 rounded-full bg-leather-600 px-2 py-0.5 text-[10px] font-bold text-white">فعال</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+
+            {viewMode === ViewMode.KANBAN && kanbanGroupOptions.length > 0 ? (
+              <div className="rounded-2xl border border-gray-200 bg-white px-3 py-3 dark:border-white/10 dark:bg-[#171717]">
+                <div className="mb-2 text-xs font-bold text-gray-500 dark:text-gray-400">گروه‌بندی کانبان</div>
+                <div className="space-y-2">
+                  {kanbanGroupOptions.map((option) => {
+                    const isActive = (kanbanGroupBy || kanbanGroupOptions[0]?.value) === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition ${
+                          isActive
+                            ? "bg-[rgba(var(--brand-50-rgb),0.72)] text-[rgb(var(--brand-700-rgb))] dark:bg-white/10 dark:text-white"
+                            : "bg-gray-50 text-gray-700 dark:bg-white/5 dark:text-gray-200"
+                        }`}
+                        onClick={() => setKanbanGroupBy(option.value)}
+                      >
+                        <span>{option.label}</span>
+                        {isActive ? <span className="text-[10px] font-bold">انتخاب شده</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {viewMode === ViewMode.CALENDAR && calendarDateFieldOptions.length > 0 ? (
+              <div className="rounded-2xl border border-gray-200 bg-white px-3 py-3 dark:border-white/10 dark:bg-[#171717]">
+                <div className="mb-2 text-xs font-bold text-gray-500 dark:text-gray-400">فیلد تاریخ تقویم</div>
+                <div className="space-y-2">
+                  {calendarDateFieldOptions.map((option) => {
+                    const isActive = (calendarDateField || calendarDateFieldOptions[0]?.value) === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition ${
+                          isActive
+                            ? "bg-[rgba(var(--brand-50-rgb),0.72)] text-[rgb(var(--brand-700-rgb))] dark:bg-white/10 dark:text-white"
+                            : "bg-gray-50 text-gray-700 dark:bg-white/5 dark:text-gray-200"
+                        }`}
+                        onClick={() => setCalendarDateField(option.value)}
+                      >
+                        <span>{option.label}</span>
+                        {isActive ? <span className="text-[10px] font-bold">انتخاب شده</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </AdaptivePickerSurface>
+
         {hasListFilterBubbles ? (
-        <div className="h-7 shrink-0">
+        <div className="h-6 shrink-0">
           <div className="flex h-full items-center gap-1 overflow-x-auto px-0.5 no-scrollbar">
             {allListFilterBubbles.map((bubble) => (
               <span
@@ -3323,14 +3472,17 @@ export const ModuleListRefine: React.FC<{
         ) : null}
         </div>
 
-         <div className="mb-2 md:mb-3 shrink-0">
-           <ViewManager 
-             moduleId={resolvedModuleId} 
-             currentView={currentView} 
-             onViewChange={handleViewChange} 
-             onRefresh={handleRefresh}
-           />
-         </div>
+         {!isMobileViewport ? (
+           <div className="mb-1 shrink-0">
+             <ViewManager
+               moduleId={resolvedModuleId}
+               currentView={currentView}
+               onViewChange={handleViewChange}
+               onRefresh={handleRefresh}
+               renderMode="inline"
+             />
+           </div>
+         ) : null}
 
          <ViewWrapper isFullscreen={false}>
          <div className="flex-1 min-h-0 overflow-hidden relative rounded-[1.5rem]">
@@ -3350,7 +3502,6 @@ export const ModuleListRefine: React.FC<{
                      loading={queryPending}
                      deferredDataLoading={deferredListDataLoading}
                      tableLayout="fixed"
-                     singleScrollContainer
                      visibleColumns={visibleColumns.length > 0 ? visibleColumns : undefined}
                      pagination={effectiveTablePagination}
                      onChange={handleTableChange}
@@ -3386,7 +3537,7 @@ export const ModuleListRefine: React.FC<{
                  </div>
                 )}
                   {viewMode === ViewMode.GRID && (
-                <div className="h-full overflow-y-auto p-1 custom-scrollbar flex flex-col">
+                <div className="h-full overflow-y-auto px-1 pb-1 custom-scrollbar flex flex-col">
                             <GridView
                               data={gridData}
                               moduleId={resolvedModuleId}
@@ -3406,7 +3557,7 @@ export const ModuleListRefine: React.FC<{
                             
                     {/* Load More Button */}
                     {gridPageSize < enrichedData.length && (
-                      <div className="mt-4 flex justify-center items-center py-5 border-t border-gray-200 dark:border-gray-800">
+                      <div className="mt-3 flex justify-center items-center py-3 border-t border-gray-200 dark:border-gray-800">
                       <Button 
                         size="large"
                         onClick={() => setGridPageSize((prev) => Math.min(prev + gridLoadStep, enrichedData.length))}
@@ -3442,7 +3593,7 @@ export const ModuleListRefine: React.FC<{
                 </div>
                 )}
                 {viewMode === ViewMode.KANBAN && (
-                <div className="flex items-start gap-5 md:gap-6 h-full overflow-x-auto pb-4 px-2">
+                <div className="flex items-start gap-4 md:gap-5 h-full overflow-x-auto pb-2 px-1">
                   {moduleConfig.fields.find(f => f.key === kanbanGroupBy)?.options?.map((col: any) => {
                     const columnKey = String(col?.value ?? '');
                     const columnItems = enrichedData.filter((d: any) => d[kanbanGroupBy] === col.value);

@@ -93,7 +93,7 @@ describe('WorkflowConditionsGroup', () => {
     expect(screen.getAllByRole('combobox')).toHaveLength(3);
   });
 
-  it('uses mobile sheet mode for workflow condition values on small screens', async () => {
+  it('uses mobile sheet mode for workflow condition values on small screens and commits single-select immediately', async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
     const user = userEvent.setup();
@@ -133,9 +133,9 @@ describe('WorkflowConditionsGroup', () => {
     await user.click(screen.getAllByRole('button', { name: /انتخاب مقدار|وضعیت/i })[0]);
     const dialog = (await screen.findAllByRole('dialog')).at(-1)!;
     await user.click(within(dialog).getByText('باز'));
-    await user.click(within(dialog).getByRole('button', { name: 'تایید' }));
 
     expect(onChange).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'تایید' })).not.toBeInTheDocument();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
   });
 });
