@@ -178,11 +178,12 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     }
 
     const options = getFieldOptions(field, dynamicOptions, relationOptions);
+    const expectsListValue = condition.operator === 'in' || condition.operator === 'not_in';
 
     if (field.dynamicOptionsCategory) {
       return (
         <DynamicSelectField
-          value={condition.value}
+          value={expectsListValue ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : [])) : condition.value}
           onChange={(nextVal) =>
             updateCondition(condition.id, {
               value: normalizeWorkflowValueByFieldType(field, nextVal),
@@ -194,6 +195,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           className="w-full"
           allowClear
           showSearch
+          mode={expectsListValue ? 'multiple' : undefined}
           getPopupContainer={popupContainer as any}
           onOptionsUpdate={dynamicFieldProps[field.dynamicOptionsCategory]?.onOptionsUpdate}
           protectedValues={dynamicFieldProps[field.dynamicOptionsCategory]?.protectedValues}
@@ -210,8 +212,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       return (
         <Select
           {...commonSelectProps}
+          mode={expectsListValue ? 'multiple' : undefined}
           options={options}
-          value={condition.value}
+          value={expectsListValue ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : [])) : condition.value}
           disabled={disabled || isLocked}
           onChange={(nextVal) =>
             updateCondition(condition.id, {

@@ -28,6 +28,8 @@ import {
   getReportableFields,
   getSecondaryModuleOptions,
   getSummableReportFields,
+  isReportTableFieldKey,
+  isReportTableRelationFieldKey,
   normalizeReportConfig,
   type ReportDefinitionRecord,
   type ReportGroupingDefinition,
@@ -67,14 +69,15 @@ const ReportBuilderPage: React.FC = () => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mainModuleId, setMainModuleId] = useState('');
-  const [secondaryModuleId, setSecondaryModuleId] = useState<string | undefined>(undefined);
+  const [secondaryModuleIds, setSecondaryModuleIds] = useState<string[]>([]);
   const [rowLimit, setRowLimit] = useState(200);
   const [columns, setColumns] = useState<string[]>([]);
   const [conditionsAll, setConditionsAll] = useState<any[]>([]);
   const [conditionsAny, setConditionsAny] = useState<any[]>([]);
   const [groupBys, setGroupBys] = useState<ReportGroupingDefinition[]>([]);
-  const [metricType, setMetricType] = useState<'count' | 'sum'>('count');
+  const [metricType, setMetricType] = useState<'count' | 'sum' | 'avg'>('count');
   const [metricFields, setMetricFields] = useState<string[]>([]);
+  const [chartDimensionField, setChartDimensionField] = useState<string | null>(null);
   const [defaultView, setDefaultView] = useState<'table' | 'table_and_chart'>('table_and_chart');
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleIntervalValue, setScheduleIntervalValue] = useState(1);
@@ -89,29 +92,29 @@ const ReportBuilderPage: React.FC = () => {
   const moduleOptions = useMemo(() => getReportModuleOptions(permissions), [permissions]);
   const secondaryModuleOptions = useMemo(() => getSecondaryModuleOptions(mainModuleId, permissions), [mainModuleId, permissions]);
   const reportableFields = useMemo(
-    () => getReportableFields(mainModuleId, secondaryModuleId),
-    [mainModuleId, secondaryModuleId]
+    () => getReportableFields(mainModuleId, secondaryModuleIds),
+    [mainModuleId, secondaryModuleIds]
   );
   const conditionFields = useMemo(
-    () => getReportConditionFields(mainModuleId, secondaryModuleId),
-    [mainModuleId, secondaryModuleId]
+    () => getReportConditionFields(mainModuleId, secondaryModuleIds),
+    [mainModuleId, secondaryModuleIds]
   );
   const groupableFields = useMemo(
-    () => getGroupableReportFields(mainModuleId, secondaryModuleId),
-    [mainModuleId, secondaryModuleId]
+    () => getGroupableReportFields(mainModuleId, secondaryModuleIds),
+    [mainModuleId, secondaryModuleIds]
   );
   const summableFields = useMemo(
-    () => getSummableReportFields(mainModuleId, secondaryModuleId),
-    [mainModuleId, secondaryModuleId]
+    () => getSummableReportFields(mainModuleId, secondaryModuleIds),
+    [mainModuleId, secondaryModuleIds]
   );
 
   const resetSecondarySelections = useCallback(() => {
-    setSecondaryModuleId(undefined);
-    setColumns((current) => current.filter((key) => !String(key || '').includes('__related__')));
-    setConditionsAll((current) => current.filter((item) => !String(item?.field || '').includes('__related__')));
-    setConditionsAny((current) => current.filter((item) => !String(item?.field || '').includes('__related__')));
-    setGroupBys((current) => current.filter((item) => !String(item?.field || '').includes('__related__')));
-    setMetricFields((current) => current.filter((key) => !String(key || '').includes('__related__')));
+    setSecondaryModuleIds([]);
+    setColumns((current) => current.filter((key) => !String(key || '').includes('__related__') && !isReportTableFieldKey(key) && !isReportTableRelationFieldKey(key)));
+    setConditionsAll((current) => current.filter((item) => !String(item?.field || '').includes('__related__') && !isReportTableFieldKey(item?.field) && !isReportTableRelationFieldKey(item?.field)));
+    setConditionsAny((current) => current.filter((item) => !String(item?.field || '').includes('__related__') && !isReportTableFieldKey(item?.field) && !isReportTableRelationFieldKey(item?.field)));
+    setGroupBys((current) => current.filter((item) => !String(item?.field || '').includes('__related__') && !isReportTableFieldKey(item?.field) && !isReportTableRelationFieldKey(item?.field)));
+    setMetricFields((current) => current.filter((key) => !String(key || '').includes('__related__') && !isReportTableFieldKey(key) && !isReportTableRelationFieldKey(key)));
   }, []);
 
   useEffect(() => {
@@ -208,7 +211,7 @@ const ReportBuilderPage: React.FC = () => {
       setName(String(report.name || ''));
       setDescription(String(report.description || ''));
       setMainModuleId(String(report.module_id || ''));
-      setSecondaryModuleId(config.secondary_module_id || undefined);
+      setSecondaryModuleIds(config.secondary_module_ids);
       setRowLimit(config.row_limit);
       setColumns(config.columns);
       setConditionsAll(config.conditions_all);
@@ -216,6 +219,7 @@ const ReportBuilderPage: React.FC = () => {
       setGroupBys(config.group_bys);
       setMetricType(config.metric_type);
       setMetricFields(config.metric_fields);
+      setChartDimensionField(config.chart_dimension_field);
       setDefaultView(config.default_view);
       setScheduleEnabled(config.schedule.enabled);
       setScheduleIntervalValue(config.schedule.interval_value);
@@ -269,8 +273,8 @@ const ReportBuilderPage: React.FC = () => {
           message.error('همه‌ی گروه‌بندی‌ها باید فیلد معتبر داشته باشند.');
           return false;
         }
-        if (metricType === 'sum' && metricFields.length === 0) {
-          message.error('برای معیار آماری جمع، حداقل یک فیلد عددی انتخاب کنید.');
+        if ((metricType === 'sum' || metricType === 'avg') && metricFields.length === 0) {
+          message.error('برای معیار آماری انتخاب‌شده، حداقل یک فیلد عددی انتخاب کنید.');
           return false;
         }
       }
@@ -287,14 +291,16 @@ const ReportBuilderPage: React.FC = () => {
       const userId = authData?.user?.id || null;
       const config = {
         ...createDefaultReportConfig(),
-        secondary_module_id: secondaryModuleId || null,
+        secondary_module_id: secondaryModuleIds[0] || null,
+        secondary_module_ids: secondaryModuleIds,
         columns,
         conditions_all: conditionsAll,
         conditions_any: conditionsAny,
         row_limit: clampReportRowLimit(rowLimit),
         group_bys: groupBys.slice(0, 3),
         metric_type: metricType,
-        metric_fields: metricType === 'sum' ? metricFields.slice(0, 4) : [],
+        metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+        chart_dimension_field: chartDimensionField || groupBys[0]?.field || null,
         default_view: defaultView,
         schedule: {
           enabled: scheduleEnabled,
@@ -408,15 +414,15 @@ const ReportBuilderPage: React.FC = () => {
               </div>
               <div>
                 <div className="mb-2 font-bold">ماژول اصلی</div>
-                <Select showSearch optionFilterProp="label" value={mainModuleId || undefined} options={moduleOptions} placeholder="انتخاب ماژول اصلی" onChange={(value) => {
+                <Select className="w-full" showSearch optionFilterProp="label" value={mainModuleId || undefined} options={moduleOptions} placeholder="انتخاب ماژول اصلی" onChange={(value) => {
                   setMainModuleId(String(value || ''));
                   resetSecondarySelections();
                 }} />
               </div>
               <div>
                 <div className="mb-2 font-bold">ماژول فرعی</div>
-                <Select allowClear showSearch optionFilterProp="label" value={secondaryModuleId} options={secondaryModuleOptions} placeholder="در صورت نیاز انتخاب کنید" onChange={(value) => {
-                  setSecondaryModuleId(value ? String(value) : undefined);
+                <Select className="w-full" mode="multiple" allowClear showSearch optionFilterProp="label" value={secondaryModuleIds} options={secondaryModuleOptions} placeholder="در صورت نیاز انتخاب کنید" onChange={(value) => {
+                  setSecondaryModuleIds((value || []).map((item) => String(item)));
                   setColumns([]);
                   setConditionsAll([]);
                   setConditionsAny([]);
@@ -447,11 +453,12 @@ const ReportBuilderPage: React.FC = () => {
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3">
                     <InputNumber min={1} className="w-full persian-number" value={scheduleIntervalValue} onChange={(value) => setScheduleIntervalValue(Math.max(1, Number(value || 1)))} />
-                    <Select value={scheduleIntervalUnit} onChange={(value) => setScheduleIntervalUnit(value as ReportScheduleUnit)} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} />
+                    <Select className="w-full" value={scheduleIntervalUnit} onChange={(value) => setScheduleIntervalUnit(value as ReportScheduleUnit)} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} />
                   </div>
                   <Checkbox.Group value={scheduleChannels} onChange={(value) => setScheduleChannels(value as ReportScheduleChannel[])} options={[{ label: 'یادداشت داخلی', value: 'note' }, { label: 'ایمیل', value: 'email' }]} />
                   <div className="md:col-span-2">
                     <Select
+                      className="w-full"
                       mode="multiple"
                       showSearch
                       optionFilterProp="label"
@@ -483,6 +490,7 @@ const ReportBuilderPage: React.FC = () => {
               </div>
             </div>
             <Select
+              className="w-full"
               mode="multiple"
               showSearch
               optionFilterProp="label"
@@ -534,6 +542,7 @@ const ReportBuilderPage: React.FC = () => {
                 {groupBys.map((item, index) => (
                   <div key={`${item.field}-${index}`} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px_56px]">
                     <Select
+                      className="w-full"
                       showSearch
                       optionFilterProp="label"
                       value={item.field || undefined}
@@ -543,6 +552,7 @@ const ReportBuilderPage: React.FC = () => {
                       onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, field: String(value || '') } : group))}
                     />
                     <Select
+                      className="w-full"
                       value={item.direction}
                       options={[{ label: 'صعودی', value: 'asc' }, { label: 'نزولی', value: 'desc' }]}
                       onChange={(value) => setGroupBys((current) => current.map((group, groupIndex) => groupIndex === index ? { ...group, direction: value as 'asc' | 'desc' } : group))}
@@ -556,12 +566,13 @@ const ReportBuilderPage: React.FC = () => {
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
               <div className="mb-4 font-black text-gray-800 dark:text-gray-100">معیار آماری</div>
               <div className="space-y-4">
-                <Select value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی', value: 'sum' }]} onChange={(value) => {
-                  setMetricType(value as 'count' | 'sum');
-                  if (value !== 'sum') setMetricFields([]);
+                <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی', value: 'sum' }, { label: 'میانگین فیلدهای عددی', value: 'avg' }]} onChange={(value) => {
+                  setMetricType(value as 'count' | 'sum' | 'avg');
+                  if (value !== 'sum' && value !== 'avg') setMetricFields([]);
                 }} />
-                {metricType === 'sum' && (
+                {(metricType === 'sum' || metricType === 'avg') && (
                   <Select
+                    className="w-full"
                     mode="multiple"
                     showSearch
                     optionFilterProp="label"
@@ -576,7 +587,21 @@ const ReportBuilderPage: React.FC = () => {
 
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
               <div className="mb-4 font-black text-gray-800 dark:text-gray-100">نوع نمایش پیش‌فرض</div>
-              <Select value={defaultView} options={[{ label: 'فقط جدول', value: 'table' }, { label: 'جدول + نمودار', value: 'table_and_chart' }]} onChange={(value) => setDefaultView(value as 'table' | 'table_and_chart')} />
+              <div className="space-y-4">
+                <Select className="w-full" value={defaultView} options={[{ label: 'فقط جدول', value: 'table' }, { label: 'جدول + نمودار', value: 'table_and_chart' }]} onChange={(value) => setDefaultView(value as 'table' | 'table_and_chart')} />
+                {defaultView === 'table_and_chart' && (
+                  <Select
+                    className="w-full"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    value={chartDimensionField || undefined}
+                    options={groupableFields.map((field) => ({ label: field.labels?.fa || field.key, value: field.key }))}
+                    placeholder="معیار/عنوان نمودار؛ اگر خالی باشد گروه اول استفاده می‌شود"
+                    onChange={(value) => setChartDimensionField(value ? String(value) : null)}
+                  />
+                )}
+              </div>
             </div>
           </div>
         )}

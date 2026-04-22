@@ -4,6 +4,7 @@ import { FieldType, type ModuleField } from '../types';
 import { supportsGlobalRoleAssignee } from './assigneeSupport';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from './referenceData';
 import { doesProcessTemplateSupportModule } from './processTargets';
+import { fetchRelationOptionsForField } from './relationOptions';
 import { getRelationOptionSelectVariants, getPreferredRelationTargetField } from './relationTargetField';
 import { supportsSystemCode } from './systemCode';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
@@ -107,6 +108,10 @@ export const loadWorkflowFieldOptions = async (
   const targetModule = String(field?.relationConfig?.targetModule || '').trim();
   if (!targetModule || !MODULES[targetModule]) {
     return [];
+  }
+
+  if (Array.isArray(field?.relationConfig?.sourceModules) && field.relationConfig.sourceModules.length > 0) {
+    return fetchRelationOptionsForField(supabase, field, { limit: 300 });
   }
 
   if (targetModule === 'process_templates') {

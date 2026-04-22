@@ -8,6 +8,7 @@ import {
   getWebFormTargetFields,
   normalizeWebFormConfig,
   normalizeWebFormFieldRecord,
+  isWebFormCurrentEmployeeDefaultField,
   parseWebFormOptionsText,
   resolveWebFormFieldType,
 } from './webForms';
@@ -151,5 +152,36 @@ describe('web form utilities', () => {
         { targetModuleId: 'attendance_logs' },
       ).field_type,
     ).toBe('datetime');
+  });
+
+  it('recognizes current employee defaults only for internal employee relations', () => {
+    const field = normalizeWebFormFieldRecord(
+      {
+        field_key: 'employee_id',
+        target_field_key: 'employee_id',
+        field_type: 'relation',
+        label: 'کارمند مرتبط',
+        config: { default_to_current_employee: true },
+      },
+      0,
+      { targetModuleId: 'leave_requests' },
+    );
+
+    expect(isWebFormCurrentEmployeeDefaultField(field, 'leave_requests', 'internal')).toBe(true);
+    expect(isWebFormCurrentEmployeeDefaultField(field, 'leave_requests', 'public')).toBe(false);
+
+    const customerField = normalizeWebFormFieldRecord(
+      {
+        field_key: 'customer_id',
+        target_field_key: 'customer_id',
+        field_type: 'relation',
+        label: 'مشتری',
+        config: { default_to_current_employee: true },
+      },
+      0,
+      { targetModuleId: 'invoices' },
+    );
+
+    expect(isWebFormCurrentEmployeeDefaultField(customerField, 'invoices', 'internal')).toBe(false);
   });
 });

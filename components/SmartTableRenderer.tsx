@@ -37,6 +37,7 @@ interface SmartTableRendererProps {
   scrollX?: string | number;
   tableLayout?: 'auto' | 'fixed';
   disableScroll?: boolean;
+  singleScrollContainer?: boolean;
   tagsMap?: Record<string, any[]>;
   dynamicOptions?: Record<string, any[]>;  // ✅ گزینه‌های dynamic برای نمایش برچسب‌های فارسی
   relationOptions?: Record<string, any[]>;  // ✅ گزینه‌های relation برای نمایش برچسب‌های فارسی
@@ -148,6 +149,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   scrollX,
   tableLayout,
   disableScroll,
+  singleScrollContainer = false,
   tagsMap = {},
   dynamicOptions = {},  // ✅ اضافه شد
   relationOptions = {},   // ✅ اضافه شد
@@ -169,7 +171,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const tagFilterTriggerRef = useRef<HTMLButtonElement>(null);
   const tagFilterPopoverRef = useRef<HTMLDivElement>(null);
   const lastVisibleRowSignatureRef = useRef('');
-  const [scrollHeight, setScrollHeight] = useState<number>(440);
+  const [scrollHeight, setScrollHeight] = useState<number>(520);
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return window.innerWidth < 768;
@@ -1141,13 +1143,18 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                 {visibleValues.map((val: any, idx: number) => {
                   const label = getSingleOptionLabel(effectiveField, val, dynamicOptions, relationOptions);
                   return (
-                    <Tag key={idx} color="default" style={{fontSize: '9px', marginRight: 0, backgroundColor: '#fef3c7', borderColor: '#d97706', color: '#92400e', maxWidth: 120}} className="truncate font-medium">
+                    <Tag
+                      key={idx}
+                      color="default"
+                      style={{ fontSize: '9px', marginRight: 0, maxWidth: 120 }}
+                      className="kalam-multi-value-tag truncate rounded-md font-medium"
+                    >
                       {label}
                     </Tag>
                   );
                 })}
                 {hiddenCount > 0 && (
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+                  <span className="kalam-multi-value-more rounded-md px-1.5 py-0.5 text-[9px] font-medium">
                     +{hiddenCount}
                   </span>
                 )}
@@ -1440,7 +1447,9 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const parentHeight = root.parentElement?.clientHeight || 0;
     const mobileFooterReserve = nextIsMobileViewport ? 96 : 0;
     const viewportAvailableHeight = Math.max(0, viewportHeight - rootRect.top - mobileFooterReserve);
-    const containerHeight = Math.max(root.clientHeight, parentHeight, viewportAvailableHeight);
+    const containerHeight = singleScrollContainer
+      ? Math.max(parentHeight, viewportAvailableHeight, root.clientHeight)
+      : (root.clientHeight || parentHeight || viewportAvailableHeight);
     if (!containerHeight) return;
 
     const filterBarHeight = filterBarRef.current?.offsetHeight || 0;
@@ -1449,9 +1458,11 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const paginationHeight = pagination === false ? 0 : (paginationEl?.offsetHeight || (nextIsMobileViewport ? 60 : 52));
     const headerHeight = headerEl?.offsetHeight || 44;
     const tableBodyEl = root.querySelector('.ant-table-body') as HTMLElement | null;
-    const horizontalScrollbarHeight = tableBodyEl
-      ? Math.max(0, tableBodyEl.offsetHeight - tableBodyEl.clientHeight)
-      : 0;
+    const horizontalScrollbarHeight = singleScrollContainer
+      ? 0
+      : tableBodyEl
+        ? Math.max(0, tableBodyEl.offsetHeight - tableBodyEl.clientHeight)
+        : 0;
     const desktopPaginationReserve = pagination === false || nextIsMobileViewport
       ? 0
       : Math.max(24, horizontalScrollbarHeight + 28);
@@ -1463,7 +1474,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     );
 
     setScrollHeight((prev) => (Math.abs(prev - nextHeight) > 1 ? nextHeight : prev));
-  }, [disableScroll, pagination]);
+  }, [disableScroll, pagination, singleScrollContainer]);
 
   useEffect(() => {
     if (!onVisibleDataChange) return;
@@ -1497,26 +1508,35 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
     if (root && resizeObserver) {
       resizeObserver.observe(root);
-      const tableHeader = root.querySelector('.ant-table-thead') as HTMLElement | null;
-      const paginationEl = root.querySelector('.ant-pagination') as HTMLElement | null;
-      if (tableHeader) resizeObserver.observe(tableHeader);
-      if (paginationEl) resizeObserver.observe(paginationEl);
     }
 
     window.addEventListener('resize', scheduleMeasure);
+    window.visualViewport?.addEventListener('resize', scheduleMeasure);
     return () => {
       cancelAnimationFrame(frameA);
       resizeObserver?.disconnect();
       window.removeEventListener('resize', scheduleMeasure);
+      window.visualViewport?.removeEventListener('resize', scheduleMeasure);
     };
-  }, [disableScroll, updateScrollHeight, filteredData.length, mergedFilterBubbles.length, columns.length, pagination]);
+  }, [disableScroll, updateScrollHeight]);
 
   const tablePagination = buildSmartTablePagination(pagination, isMobileViewport);
+  const tableScroll = disableScroll
+    ? undefined
+    : singleScrollContainer
+      ? { x: scrollX ?? 'max-content', scrollToFirstRowOnChange: false }
+      : { x: scrollX ?? 'max-content', y: scrollHeight, scrollToFirstRowOnChange: false };
 
   return (
     <div
       ref={rootRef}
-      className={["custom-erp-table", "smarttable-shell relative h-full min-h-0 flex flex-col overflow-hidden", containerClassName].filter(Boolean).join(' ')}
+      className={[
+        "custom-erp-table",
+        "smarttable-shell relative h-full min-h-0 flex flex-col overflow-hidden",
+        singleScrollContainer ? "smarttable-single-scroll" : "",
+        containerClassName,
+      ].filter(Boolean).join(' ')}
+      style={{ ['--smarttable-body-height' as any]: `${scrollHeight}px` }}
     >
       {showFilterBar ? (
         <div ref={filterBarRef} className="smarttable-filter-bubbles mb-2 min-h-[42px] px-1">
@@ -1562,7 +1582,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           tableLayout={tableLayout}
           pagination={tablePagination} 
           onChange={handleTableChange}
-          scroll={disableScroll ? undefined : { x: scrollX ?? 'max-content', y: scrollHeight, scrollToFirstRowOnChange: false }}
+          scroll={tableScroll}
           // 🔥 اتصال انتخاب گروهی
           rowSelection={rowSelection ? {
               type: 'checkbox',

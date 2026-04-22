@@ -12,22 +12,10 @@ import {
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRolePermissions, resolveFilesAccessPermissions } from '../utils/permissions';
 import { detectFileManagerTables } from '../utils/fileManagerService';
-import { loadGalleryFileItems, type FileManagerListItem } from '../utils/fileManagerQueries';
+import { buildFileManagerTree, type FileManagerListItem, type FileManagerTreeResult } from '../utils/fileManagerQueries';
 import FileManagerBrowser from '../components/files/FileManagerBrowser';
 
 type GalleryFileItem = FileManagerListItem;
-
-const getDisplayFileName = (item: Pick<GalleryFileItem, 'file_name' | 'file_url'>): string => {
-  const direct = String(item.file_name || '').trim();
-  if (direct) return direct;
-  const raw = String(item.file_url || '').split('?')[0].split('/').pop() || '';
-  if (!raw) return 'فایل';
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-};
 
 let recordFilesTableExistsCache: boolean | null = getRecordFilesTableAvailabilityCache();
 
@@ -45,10 +33,14 @@ const FilesGalleryPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [items, setItems] = useState<GalleryFileItem[]>([]);
+  const [tree, setTree] = useState<FileManagerTreeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [moduleFilter, setModuleFilter] = useState<string>('all');
+  const [activeFolderKey, setActiveFolderKey] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'image' | 'video' | 'file'>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(60);
   const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
   const [recordFilesEnabled, setRecordFilesEnabled] = useState<boolean>(recordFilesTableExistsCache !== false);
   const [permissionsLoading, setPermissionsLoading] = useState(true);
@@ -65,8 +57,19 @@ const FilesGalleryPage: React.FC = () => {
       recordFilesTableExistsCache = tableExists;
       setRecordFilesEnabled(tableExists);
 
-      const nextItems = await loadGalleryFileItems();
-      setItems(nextItems);
+      const nextTree = await buildFileManagerTree({
+        page,
+        pageSize,
+        folderKey: activeFolderKey,
+        initialModuleId: moduleFilter === 'all' ? null : moduleFilter,
+        search: searchTerm,
+        fileTypes: typeFilter === 'all' ? undefined : [typeFilter],
+        recordTitleMap,
+        moduleTitleMap,
+      });
+      setTree(nextTree);
+      setItems(nextTree.allItems);
+      if (nextTree.activeFolderKey !== activeFolderKey) setActiveFolderKey(nextTree.activeFolderKey);
 
       if (tableExists) {
         recordFilesTableExistsCache = true;
@@ -102,6 +105,11 @@ const FilesGalleryPage: React.FC = () => {
     if (permissionsLoading || !canViewGallery) return;
     void loadFiles(false);
   }, [permissionsLoading, canViewGallery]);
+
+  useEffect(() => {
+    if (permissionsLoading || !canViewGallery) return;
+    void loadFiles(false);
+  }, [activeFolderKey, page, pageSize, searchTerm, typeFilter, moduleFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,22 +157,6 @@ const FilesGalleryPage: React.FC = () => {
     ];
   }, [items]);
 
-  const filtered = useMemo(() => {
-    const query = searchTerm.trim().toLowerCase();
-    return items.filter((item) => {
-      if (moduleFilter !== 'all' && item.module_id !== moduleFilter) return false;
-      if (typeFilter !== 'all' && item.file_type !== typeFilter) return false;
-      if (query) {
-        const moduleTitle = MODULES[item.module_id]?.titles?.fa || item.module_id;
-        const recordTitle = recordTitleMap[`${item.module_id}:${item.record_id}`] || item.record_id;
-        const displayFileName = getDisplayFileName(item);
-        const haystack = `${displayFileName} ${item.file_name || ''} ${item.mime_type || ''} ${moduleTitle} ${recordTitle}`.toLowerCase();
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-  }, [items, moduleFilter, typeFilter, searchTerm, recordTitleMap]);
-
   const openRecordGallery = (item: { module_id?: string; record_id?: string; id: string }) => {
     if (!item.module_id || !item.record_id) return;
     if (canViewRecordFilesManager) {
@@ -180,25 +172,6 @@ const FilesGalleryPage: React.FC = () => {
       return acc;
     }, {});
   }, []);
-
-  const browserFolders = useMemo(() => {
-    const grouped = new Map<string, number>();
-    filtered.forEach((item) => {
-      const normalizedModuleId = String(item.module_id || '').trim();
-      if (!normalizedModuleId) return;
-      grouped.set(normalizedModuleId, (grouped.get(normalizedModuleId) || 0) + 1);
-    });
-    return [
-      { key: 'all', label: 'همه فایل‌ها', count: filtered.length, isSystem: true },
-      ...Array.from(grouped.entries()).map(([moduleId, count]) => ({
-        key: moduleId,
-        parentKey: 'all',
-        label: moduleTitleMap[moduleId] || moduleId,
-        count,
-        isSystem: true,
-      })),
-    ];
-  }, [filtered, moduleTitleMap]);
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
@@ -227,7 +200,7 @@ const FilesGalleryPage: React.FC = () => {
               <span className="truncate">مدیریت فایل‌ها</span>
             </h1>
             <Badge
-              count={filtered.length}
+              count={tree?.allItems.length || items.length}
               overflowCount={9999}
               style={{ backgroundColor: '#f0f0f0', color: '#666', boxShadow: 'none' }}
             />
@@ -237,18 +210,34 @@ const FilesGalleryPage: React.FC = () => {
 
         <div className="rounded-[2rem] border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a] md:p-4">
           <div className="flex flex-wrap gap-3 items-center">
-            <Select className="min-w-[220px]" options={moduleOptions} value={moduleFilter} onChange={(value) => setModuleFilter(String(value))} />
+            <Select
+              className="min-w-[220px]"
+              options={moduleOptions}
+              value={moduleFilter}
+              onChange={(value) => {
+                const nextModule = String(value);
+                setModuleFilter(nextModule);
+                setActiveFolderKey(nextModule === 'all' ? 'all' : `module:${nextModule}`);
+                setPage(1);
+              }}
+            />
             <Input
               className="min-w-[240px] max-w-[360px]"
               allowClear
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setPage(1);
+              }}
               placeholder="جستجو در نام فایل، محصول یا بخش..."
               prefix={<SearchOutlined className="text-gray-400" />}
             />
             <Segmented
               value={typeFilter}
-              onChange={(value) => setTypeFilter(value as 'all' | 'image' | 'video' | 'file')}
+              onChange={(value) => {
+                setTypeFilter(value as 'all' | 'image' | 'video' | 'file');
+                setPage(1);
+              }}
               options={[
                 { label: 'همه', value: 'all' },
                 { label: 'عکس', value: 'image' },
@@ -264,21 +253,34 @@ const FilesGalleryPage: React.FC = () => {
         <div className="rounded-[2rem] border border-gray-200 bg-white p-10 text-center dark:border-gray-800 dark:bg-[#1a1a1a]">
           <Spin />
         </div>
-      ) : filtered.length === 0 ? (
+      ) : (tree?.totalItems || 0) === 0 && (tree?.folders.length || 0) <= 1 ? (
         <div className="rounded-[2rem] border border-gray-200 bg-white p-10 dark:border-gray-800 dark:bg-[#1a1a1a]">
           <Empty description="فایلی ثبت نشده است" />
         </div>
       ) : (
         <FileManagerBrowser
           title="فایل‌ها"
-          items={filtered}
-          folders={browserFolders}
-          activeFolderKey={moduleFilter}
-          onFolderChange={(key) => setModuleFilter(String(key))}
+          items={tree?.items || []}
+          folders={tree?.folders || []}
+          activeFolderKey={activeFolderKey}
+          onFolderChange={(key) => {
+            setActiveFolderKey(String(key));
+            const moduleId = String(key).startsWith('module:') ? String(key).slice('module:'.length) : 'all';
+            if (moduleId === 'all' || MODULES[moduleId]) setModuleFilter(moduleId);
+            setPage(1);
+          }}
           onOpenItem={openRecordGallery}
           onRefresh={() => void loadFiles(true)}
-          recordTitleMap={recordTitleMap}
+          recordTitleMap={{ ...recordTitleMap, ...(tree?.recordTitleMap || {}) }}
           moduleTitleMap={moduleTitleMap}
+          selectionItems={tree?.allItems || []}
+          page={page}
+          pageSize={pageSize}
+          totalItems={tree?.totalItems || 0}
+          onPageChange={(nextPage, nextPageSize) => {
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+          }}
           highlightItemId={null}
           canDelete={false}
           canShare={false}

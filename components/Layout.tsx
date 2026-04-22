@@ -812,7 +812,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           zIndex: 1200,
           pointerEvents: 'auto',
           touchAction: 'manipulation',
-          display: (isMobile && collapsed) ? 'none' : 'block' 
+          display: (isMobile && collapsed) ? 'none' : 'block',
+          backgroundColor: isDarkMode ? 'rgb(var(--app-dark-surface-rgb))' : undefined,
         }}
         theme={isDarkMode ? 'dark' : 'light'}
         width={260}

@@ -59,8 +59,8 @@ export const attendanceLogsModule: ModuleDefinition = {
     },
     {
       key: "actual_check_in_time",
-      labels: { fa: "ساعت ورود واقعی", en: "Actual Check In Time" },
-      type: FieldType.TIME,
+      labels: { fa: "زمان ورود واقعی", en: "Actual Check In Time" },
+      type: FieldType.DATETIME,
       location: FieldLocation.BLOCK,
       blockId: "base",
       order: 1,
@@ -70,8 +70,8 @@ export const attendanceLogsModule: ModuleDefinition = {
     },
     {
       key: "actual_check_out_time",
-      labels: { fa: "ساعت خروج واقعی", en: "Actual Check Out Time" },
-      type: FieldType.TIME,
+      labels: { fa: "زمان خروج واقعی", en: "Actual Check Out Time" },
+      type: FieldType.DATETIME,
       location: FieldLocation.BLOCK,
       blockId: "base",
       order: 2,

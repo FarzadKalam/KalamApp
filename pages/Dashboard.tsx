@@ -111,12 +111,18 @@ const dashboardOrderableColumnsCache = new Map<string, string[]>();
 
 const getTodayPersianDate = () => {
   try {
+    const today = new Date();
     const dateObj = new DateObject({
-      date: new Date(),
+      date: today,
       calendar: gregorian,
       locale: gregorian_en,
     }).convert(persian, persian_fa);
-    return dateObj.format('dddd، DD MMMM YYYY');
+    const gregorianDate = new DateObject({
+      date: today,
+      calendar: gregorian,
+      locale: gregorian_en,
+    }).format('YYYY/MM/DD');
+    return `${dateObj.format('dddd، DD MMMM YYYY')} | میلادی: ${toPersianNumber(gregorianDate)}`;
   } catch {
     return 'تاریخ امروز';
   }

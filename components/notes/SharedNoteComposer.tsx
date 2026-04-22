@@ -195,10 +195,10 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
   return (
     <>
-      <div className="border-t border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)] bg-white/90 dark:bg-[rgba(var(--app-dark-surface-rgb),0.92)] px-3 py-2.5">
-        {header ? <div className="mb-2">{header}</div> : null}
+      <div className="border-t border-slate-200/45 bg-white/82 px-2.5 py-2 dark:border-white/[0.07] dark:bg-[#1a1518]/95">
+        {header ? <div className="mb-1.5">{header}</div> : null}
 
-        <div className="rounded-[1.05rem] border border-[rgba(var(--brand-200-rgb),0.62)] bg-white/95 p-2.5 shadow-[0_4px_14px_rgba(15,23,42,0.06)] dark:border-[rgba(var(--brand-300-rgb),0.24)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.8)] dark:shadow-[0_4px_14px_rgba(0,0,0,0.22)]">
+        <div className="rounded-[0.95rem] border border-slate-200/60 bg-white/90 p-2 shadow-[0_4px_14px_rgba(15,23,42,0.045)] dark:border-white/[0.09] dark:bg-white/[0.035] dark:shadow-[0_4px_14px_rgba(0,0,0,0.18)]">
           <Input.TextArea
             placeholder={placeholder}
             value={draftValue}
@@ -227,12 +227,12 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               event.preventDefault();
               handleFilesPicked(imageFiles);
             }}
-            autoSize={{ minRows: 2, maxRows: 5 }}
+            autoSize={{ minRows: 1, maxRows: 4 }}
             className="!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none"
           />
 
           {allowMentions && mentionPickerOpen ? (
-            <div className="mt-3">
+            <div className="mt-2">
               <Select
                 mode="multiple"
                 allowClear
@@ -251,7 +251,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
           ) : null}
 
           {attachmentLabel.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-2 flex flex-wrap gap-1.5">
               {attachmentLabel.map((file) => (
                 <Tag
                   key={file.key}
@@ -264,7 +264,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                       onRemoveAttachment(file.removeKey);
                     }
                   }}
-                  className="!m-0 !rounded-full !px-2 !py-1"
+                  className="!m-0 !rounded-full !px-2 !py-0.5 !text-[11px]"
                 >
                   {file.name}{file.meta ? ` (${file.meta})` : ''}
                 </Tag>
@@ -273,15 +273,15 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
           ) : null}
 
           {replyActive ? (
-            <div className="mt-3 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+            <div className="mt-2 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
               <EnterOutlined />
               <span>پاسخ به یادداشت انتخاب شده</span>
               <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClearReply} />
             </div>
           ) : null}
 
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1">
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
               {allowMentions ? (
                 <Button
                   type={mentionPickerOpen || mentionValues.length > 0 ? 'primary' : 'text'}
@@ -303,7 +303,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                 <Checkbox
                   checked={smsNotificationEnabled}
                   onChange={(event) => onSmsNotificationChange(event.target.checked)}
-                  className="mr-2 text-[11px]"
+                  className="mr-2 whitespace-nowrap text-[11px]"
                 >
                   اطلاع‌رسانی پیامکی
                 </Checkbox>
@@ -317,6 +317,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               loading={submitLoading}
               disabled={submitDisabled}
               size="small"
+              className="shrink-0"
             >
               {submitText}
             </Button>

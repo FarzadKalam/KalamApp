@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio } from 'antd';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Avatar } from 'antd';
 import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
@@ -1845,7 +1845,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const fetchAssignees = async () => {
     try {
-      const { data: users } = await supabase.from('profiles').select('id, full_name, email, mobile_1');
+      const { data: users } = await supabase.from('profiles').select('id, full_name, email, mobile_1, avatar_url');
       const { data: roles } = await supabase.from('org_roles').select('*');
       const normalizedUsers = (users || []).map((user: any) => ({
         ...user,
@@ -2076,6 +2076,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         assignee_id: stage?.assignee_id || null,
         assignee_role_id: stage?.assignee_role_id || null,
         assignee_type: stage?.assignee_type || null,
+        task_id: stage?.task_id || null,
+        isProcessRunStagePreview: true,
       }));
       map.set(processLineId, pseudoTasks);
       return map;
@@ -3967,6 +3969,70 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (raw.length <= 2) return raw;
     return raw.slice(0, 2);
   }, []);
+
+  const getTaskAssigneeVisual = useCallback((task: any) => {
+    const roleId = String(task?.assignee_role_id || '').trim();
+    const userId = String(task?.assignee_id || '').trim();
+    const assigneeType = String(task?.assignee_type || '').trim().toLowerCase();
+
+    if (roleId || assigneeType === 'role') {
+      const resolvedRoleId = roleId || userId;
+      const role = assignees.roles.find((item: any) => String(item?.id || '') === resolvedRoleId);
+      const label = String(role?.title || role?.name || task?.assigned_role?.title || 'نقش').trim();
+      return {
+        type: 'role' as const,
+        label,
+        avatarUrl: String(role?.avatar_url || '').trim() || null,
+      };
+    }
+
+    if (!userId) return null;
+
+    const joinedUser = task?.assignee && typeof task.assignee === 'object' ? task.assignee : {};
+    const directoryUser = assignees.users.find((item: any) => String(item?.id || '') === userId) || {};
+    const label = String(
+      joinedUser?.display_name ||
+      joinedUser?.full_name ||
+      directoryUser?.display_name ||
+      directoryUser?.full_name ||
+      joinedUser?.email ||
+      directoryUser?.email ||
+      joinedUser?.mobile_1 ||
+      directoryUser?.mobile_1 ||
+      'کاربر'
+    ).trim();
+
+    return {
+      type: 'user' as const,
+      label,
+      avatarUrl: String(joinedUser?.avatar_url || directoryUser?.avatar_url || '').trim() || null,
+    };
+  }, [assignees.roles, assignees.users]);
+
+  const renderTaskAssigneeAvatar = useCallback((task: any, displayMode: ProcessBarDisplayMode) => {
+    const hasCreatedTask = Boolean(task?.task_id || (!task?.isProcessRunStagePreview && task?.id));
+    if (!hasCreatedTask) return null;
+
+    const visual = getTaskAssigneeVisual(task);
+    if (!visual) return null;
+
+    const avatarSize = displayMode === 'dense' ? 14 : 16;
+    const iconClassName = displayMode === 'dense' ? 'text-[9px]' : 'text-[10px]';
+    const avatarSrc = visual.avatarUrl ? (
+      <img src={visual.avatarUrl} alt="" loading="lazy" decoding="async" />
+    ) : undefined;
+
+    return (
+      <span className="inline-flex shrink-0" title={visual.label}>
+      <Avatar
+        size={avatarSize}
+        src={avatarSrc}
+        icon={visual.type === 'role' ? <TeamOutlined className={iconClassName} /> : <UserOutlined className={iconClassName} />}
+        className="shrink-0 border border-white/70 bg-white/20 text-white shadow-sm"
+      />
+      </span>
+    );
+  }, [getTaskAssigneeVisual]);
 
   const getSegmentProgressState = useCallback((segment: any) => {
     if (!segment || segment.type !== 'task') return 'draft' as const;
@@ -7018,6 +7084,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               >
                 <div className="flex min-w-0 flex-col items-center justify-center gap-1 overflow-hidden">
                   <span className={`inline-flex max-w-full items-center justify-center gap-1.5 truncate text-white drop-shadow-md ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')} font-semibold`}>
+                    {renderTaskAssigneeAvatar(segment, displayMode)}
                     {normalizedStatus === 'canceled' ? <CloseOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} /> : (
                       PROCESS_BAR_DONE_STATUSES.has(normalizedStatus)
                         ? <CheckOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />

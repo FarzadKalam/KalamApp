@@ -124,6 +124,42 @@ const buildLargeModule = () => ({
   ],
 });
 
+const buildBulkProductModule = () => ({
+  id: 'products',
+  table: 'products',
+  titles: { fa: 'Products', faSingular: 'Product' },
+  fields: [
+    {
+      key: 'status',
+      type: FieldType.STATUS,
+      labels: { fa: 'Status' },
+      location: FieldLocation.HEADER,
+      order: 1,
+      options: [
+        { label: 'Active', value: 'active' },
+        { label: 'Draft', value: 'draft' },
+      ],
+    },
+    {
+      key: 'auto_name_enabled',
+      type: FieldType.CHECKBOX,
+      labels: { fa: 'Auto name' },
+      location: FieldLocation.BLOCK,
+      blockId: 'main',
+      order: 2,
+      defaultValue: false,
+    },
+  ],
+  blocks: [
+    {
+      id: 'main',
+      type: BlockType.FIELD_GROUP,
+      titles: { fa: 'Main' },
+      order: 1,
+    },
+  ],
+});
+
 const renderSmartForm = (initialValues: Record<string, any> = {
   field_0: 'مقدار اولیه',
   field_5: 'متن فارسی',
@@ -201,5 +237,37 @@ describe('SmartForm critical render', () => {
     );
 
     expect(screen.getByLabelText('فیلد فارسی 0')).toHaveValue('مقدار تایپ شده');
+  });
+
+  it('submits a bulk-edited product status from SmartFieldRenderer state', async () => {
+    const onSave = vi.fn();
+    const { container } = render(
+      <ConfigProvider direction="rtl">
+        <App>
+          <SmartForm
+            module={buildBulkProductModule() as any}
+            visible
+            onCancel={vi.fn()}
+            onSave={onSave}
+            displayMode="embedded"
+            isBulkEdit
+          />
+        </App>
+      </ConfigProvider>
+    );
+
+    const statusField = await screen.findByLabelText('Status');
+    fireEvent.change(statusField, { target: { value: 'active' } });
+
+    const submitButton = container.querySelector('button.ant-btn-primary');
+    expect(submitButton).not.toBeNull();
+    fireEvent.click(submitButton as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'active' }),
+        expect.any(Object)
+      );
+    });
   });
 });

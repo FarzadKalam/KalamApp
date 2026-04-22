@@ -14,7 +14,13 @@ import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
 import { uploadFileWithProgress } from "../utils/uploadFileWithProgress";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
-import { normalizeWebFormConfig, normalizeWebFormFieldRecord, type WebFormAccessScope, type WebFormFieldRecord } from "../utils/webForms";
+import {
+  isWebFormCurrentEmployeeDefaultField,
+  normalizeWebFormConfig,
+  normalizeWebFormFieldRecord,
+  type WebFormAccessScope,
+  type WebFormFieldRecord,
+} from "../utils/webForms";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -316,6 +322,8 @@ const InquiryForm = () => {
     typeof document !== "undefined" ? document.documentElement.classList.contains("dark") : false
   );
   const [authUser, setAuthUser] = useState<any>(null);
+  const [currentEmployee, setCurrentEmployee] = useState<Record<string, any> | null>(null);
+  const [currentEmployeeLoaded, setCurrentEmployeeLoaded] = useState(false);
   const [uploadingFieldKeys, setUploadingFieldKeys] = useState<Record<string, boolean>>({});
   const [dynamicFieldOptions, setDynamicFieldOptions] = useState<Record<string, PublicChoiceOption[]>>({});
   const watchedFormValues = Form.useWatch([], form) || {};
@@ -343,12 +351,18 @@ const InquiryForm = () => {
   const initialFieldValues = useMemo(
     () =>
       (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
+        if (isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)) {
+          if (currentEmployee?.id) {
+            acc[field.field_key] = currentEmployee.id;
+          }
+          return acc;
+        }
         if (field.default_value !== undefined && field.default_value !== null) {
           acc[field.field_key] = field.default_value;
         }
         return acc;
       }, {}),
-    [publicForm?.fields]
+    [currentEmployee?.id, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
 
   useEffect(() => {
@@ -425,6 +439,48 @@ const InquiryForm = () => {
       subscription?.subscription?.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const needsCurrentEmployee = Boolean(
+      authUser?.id
+      && publicForm?.accessScope === "internal"
+      && (publicForm?.fields || []).some((field) =>
+        isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)
+      )
+    );
+
+    if (!needsCurrentEmployee) {
+      setCurrentEmployee(null);
+      setCurrentEmployeeLoaded(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setCurrentEmployeeLoaded(false);
+    const run = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("employees")
+          .select("id, full_name, related_profile_id")
+          .eq("related_profile_id", authUser.id)
+          .maybeSingle();
+        if (error) throw error;
+        if (!cancelled) setCurrentEmployee(data || null);
+      } catch (error) {
+        console.error("Current employee lookup failed", error);
+        if (!cancelled) setCurrentEmployee(null);
+      } finally {
+        if (!cancelled) setCurrentEmployeeLoaded(true);
+      }
+    };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.id, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -541,8 +597,12 @@ const InquiryForm = () => {
   ].filter((item) => item.value);
 
   const visibleFields = useMemo(
-    () => (publicForm?.fields || []).filter((field) => !field.is_hidden && !(field.field_type === "relation" && publicForm?.accessScope !== "internal")),
-    [publicForm?.accessScope, publicForm?.fields]
+    () => (publicForm?.fields || []).filter((field) =>
+      !field.is_hidden
+      && !(field.field_type === "relation" && publicForm?.accessScope !== "internal")
+      && !isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)
+    ),
+    [publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
   const isSlideMode = publicForm?.config.display_mode === "slide";
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
@@ -975,6 +1035,12 @@ const InquiryForm = () => {
 
   const buildSubmissionPayload = (values: Record<string, any>) =>
     (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
+      if (isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)) {
+        if (currentEmployee?.id) {
+          acc[field.field_key] = currentEmployee.id;
+        }
+        return acc;
+      }
       const value = normalizePublicFieldValue(field, values[field.field_key]);
       if (value !== undefined) {
         acc[field.field_key] = value;
@@ -1030,6 +1096,18 @@ const InquiryForm = () => {
 
     if (publicForm.accessScope === "internal" && !authUser) {
       navigate(loginRedirectUrl);
+      return;
+    }
+
+    const needsCurrentEmployee = (publicForm.fields || []).some((field) =>
+      isWebFormCurrentEmployeeDefaultField(field, publicForm.targetModuleId, publicForm.accessScope)
+    );
+    if (needsCurrentEmployee && !currentEmployeeLoaded) {
+      message.error("در حال بررسی کارمند مرتبط با حساب کاربری هستیم. چند لحظه بعد دوباره تلاش کنید.");
+      return;
+    }
+    if (needsCurrentEmployee && !currentEmployee?.id) {
+      message.error("حساب کاربری شما به هیچ کارمندی وصل نیست. ابتدا کاربر را در ماژول کارکنان به کارمند مرتبط کنید.");
       return;
     }
 

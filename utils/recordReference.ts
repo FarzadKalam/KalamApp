@@ -10,6 +10,8 @@ type RecordReferenceLike = {
 };
 
 const normalizeText = (value: unknown): string => String(value || '').trim();
+const RECORD_REFERENCE_LABEL_TTL_MS = 5 * 60_000;
+const recordReferenceLabelCache = new Map<string, { label: string; expiresAt: number }>();
 
 export const buildRecordReferenceKey = (moduleId?: string | null, recordId?: string | null) => {
   const normalizedModuleId = normalizeText(moduleId);
@@ -23,16 +25,22 @@ export const fetchRecordReferenceLabels = async (
   records: RecordReferenceLike[],
 ): Promise<Record<string, string>> => {
   const grouped = new Map<string, Set<string>>();
+  const now = Date.now();
+  const nextMap: Record<string, string> = {};
 
   (records || []).forEach((item) => {
     const moduleId = normalizeText(item?.module_id || item?.moduleId);
     const recordId = normalizeText(item?.record_id || item?.recordId);
     if (!moduleId || !recordId) return;
+    const referenceKey = buildRecordReferenceKey(moduleId, recordId);
+    const cached = recordReferenceLabelCache.get(referenceKey);
+    if (cached && cached.expiresAt > now) {
+      nextMap[referenceKey] = cached.label;
+      return;
+    }
     if (!grouped.has(moduleId)) grouped.set(moduleId, new Set<string>());
     grouped.get(moduleId)?.add(recordId);
   });
-
-  const nextMap: Record<string, string> = {};
 
   await Promise.all(
     Array.from(grouped.entries()).map(async ([moduleId, idSet]) => {
@@ -58,7 +66,12 @@ export const fetchRecordReferenceLabels = async (
       (result.data || []).forEach((row: any) => {
         const label = getRecordDisplayLabel(row, moduleId, { fallback: '' });
         if (!label) return;
-        nextMap[buildRecordReferenceKey(moduleId, row?.id)] = label;
+        const referenceKey = buildRecordReferenceKey(moduleId, row?.id);
+        nextMap[referenceKey] = label;
+        recordReferenceLabelCache.set(referenceKey, {
+          label,
+          expiresAt: Date.now() + RECORD_REFERENCE_LABEL_TTL_MS,
+        });
       });
     }),
   );

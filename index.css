@@ -16,9 +16,9 @@
   --brand-800-rgb: 25 23 63;
   --brand-900-rgb: 15 23 42;
   --brand-accent-pink-rgb: 219 39 119;
-  --app-dark-bg-rgb: 11 16 32;
-  --app-dark-surface-rgb: 23 28 48;
-  --app-dark-border-rgb: 42 51 80;
+  --app-dark-bg-rgb: 18 22 29;
+  --app-dark-surface-rgb: 29 35 45;
+  --app-dark-border-rgb: 55 65 81;
 }
 
 /* =========================================
@@ -167,6 +167,13 @@ body.kalam-app-shell-lock > .ant-picker-dropdown,
   max-width: min(320px, calc(100vw - 24px));
 }
 
+.dark .app-main-sider.ant-layout-sider,
+.dark .app-main-sider .ant-layout-sider-children,
+.dark .app-main-sider .ant-menu,
+.dark .app-main-sider-submenu-popup .ant-menu {
+  background: rgb(var(--app-dark-surface-rgb)) !important;
+}
+
 /* Ant body lock compensation can create white gutters on modal open. */
 body.ant-scrolling-effect {
   width: 100% !important;
@@ -199,6 +206,23 @@ body.ant-scrolling-effect {
 
 .ant-input-number-input {
   font-feature-settings: "ss01";
+}
+
+/* خوانایی دکمه‌های اصلی در حالت روز */
+html:not(.dark) .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(:disabled):not(.ant-btn-disabled),
+html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(:disabled):not(.ant-btn-disabled) {
+  background: rgb(var(--brand-500-rgb)) !important;
+  border-color: rgb(var(--brand-500-rgb)) !important;
+  color: #ffffff !important;
+}
+
+html:not(.dark) .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(:disabled):not(.ant-btn-disabled):hover,
+html:not(.dark) .ant-btn-primary:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(:disabled):not(.ant-btn-disabled):focus-visible,
+html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(:disabled):not(.ant-btn-disabled):hover,
+html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(:disabled):not(.ant-btn-disabled):focus-visible {
+  background: rgb(var(--brand-600-rgb)) !important;
+  border-color: rgb(var(--brand-600-rgb)) !important;
+  color: #ffffff !important;
 }
 
 /* =========================================

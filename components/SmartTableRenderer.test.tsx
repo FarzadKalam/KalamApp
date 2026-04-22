@@ -111,6 +111,21 @@ describe('SmartTableRenderer', () => {
     });
   });
 
+  it('enables the single scroll container mode without breaking pagination', () => {
+    const { container } = render(
+      <SmartTableRenderer
+        moduleConfig={testModule}
+        data={rows}
+        loading={false}
+        pagination={{ current: 1, pageSize: 5, total: rows.length }}
+        singleScrollContainer
+      />
+    );
+
+    expect(container.querySelector('.smarttable-single-scroll')).not.toBeNull();
+    expect(container.querySelector('.ant-pagination')).not.toBeNull();
+  });
+
   it('renders tags under any name or title text column using tagsMap data', () => {
     const titleLikeModule: ModuleDefinition = {
       ...testModule,

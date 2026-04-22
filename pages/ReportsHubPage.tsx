@@ -9,7 +9,7 @@ import {
   resolveReportsAccessPermissions,
   type PermissionMap,
 } from '../utils/permissions';
-import { normalizeReportConfig, type ReportDefinitionRecord } from '../utils/reporting';
+import { getSecondaryModuleOptions, normalizeReportConfig, type ReportDefinitionRecord } from '../utils/reporting';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 
 const { Title, Text } = Typography;
@@ -155,9 +155,10 @@ const ReportsHubPage: React.FC = () => {
               const config = normalizeReportConfig(report.config);
               const moduleTitle = MODULES[report.module_id]?.titles?.fa || report.module_id;
               const chartReady = config.group_bys.length > 0;
-              const secondaryModuleTitle = config.secondary_module_id
-                ? MODULES[config.secondary_module_id]?.titles?.fa || config.secondary_module_id
-                : null;
+              const secondaryModuleOptions = getSecondaryModuleOptions(report.module_id, permissions);
+              const secondaryModuleTitles = config.secondary_module_ids
+                .map((sourceId) => secondaryModuleOptions.find((option) => option.value === sourceId)?.label || MODULES[sourceId]?.titles?.fa || sourceId)
+                .filter(Boolean);
               return (
                 <Col xs={24} md={12} xl={8} key={report.id}>
                   <div className="flex h-full flex-col gap-4 rounded-[1.5rem] border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-700 dark:bg-white/5">
@@ -178,7 +179,7 @@ const ReportsHubPage: React.FC = () => {
 
                     <div className="flex flex-wrap gap-2 text-xs text-gray-500">
                       <Tag className="!m-0">ماژول: {moduleTitle}</Tag>
-                      {secondaryModuleTitle && <Tag className="!m-0">ماژول فرعی: {secondaryModuleTitle}</Tag>}
+                      {secondaryModuleTitles.length > 0 && <Tag className="!m-0">ماژول فرعی: {secondaryModuleTitles.join('، ')}</Tag>}
                       <Tag className="!m-0">ستون: {toPersianNumber(config.columns.length)}</Tag>
                       <Tag className="!m-0">حداکثر ردیف: {toPersianNumber(config.row_limit)}</Tag>
                     </div>
@@ -187,7 +188,7 @@ const ReportsHubPage: React.FC = () => {
                       <div className="mb-2 font-bold text-gray-700 dark:text-gray-100">خلاصه تعریف</div>
                       <div className="text-gray-500">
                         {config.group_bys.length > 0
-                          ? `گروه‌بندی روی ${toPersianNumber(config.group_bys.length)} معیار و ${config.metric_type === 'sum' ? `جمع ${toPersianNumber(config.metric_fields.length || 0)} فیلد عددی` : 'تعداد رکوردها'}`
+                          ? `گروه‌بندی روی ${toPersianNumber(config.group_bys.length)} معیار و ${config.metric_type === 'sum' || config.metric_type === 'avg' ? `${config.metric_type === 'avg' ? 'میانگین' : 'جمع'} ${toPersianNumber(config.metric_fields.length || 0)} فیلد عددی` : 'تعداد رکوردها'}`
                           : 'بدون گروه‌بندی؛ خروجی به‌صورت جدول عملیاتی'}
                       </div>
                     </div>

@@ -1336,6 +1336,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const handleFinish = async (values: any) => {
     setLoading(true);
     try {
+      if (isBulkEdit) {
+        values = { ...formData, ...values };
+      }
       if (module.id === 'production_orders' && !recordId) {
         values = { ...formData, ...values };
       }

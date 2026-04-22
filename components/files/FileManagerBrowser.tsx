@@ -6,6 +6,7 @@ import {
   Checkbox,
   Empty,
   Modal,
+  Pagination,
   Progress,
   Segmented,
   Select,
@@ -83,6 +84,7 @@ type FileManagerBrowserProps = {
   onRefresh?: () => void | Promise<void>;
   onDeleteItem?: (item: FileManagerBrowserItem) => void | Promise<void>;
   onCopyItems?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
+  copyItemsLabel?: string;
   onMoveItems?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
   onRenameItem?: (item: FileManagerBrowserItem) => void | Promise<void>;
   onCreateFolder?: (parentKey: string) => void | Promise<void>;
@@ -97,10 +99,17 @@ type FileManagerBrowserProps = {
   selectionMode?: boolean;
   selectionLabel?: string;
   onConfirmSelection?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
+  selectionItems?: FileManagerBrowserItem[];
+  clearSelectionOnFolderChange?: boolean;
   highlightItemId?: string | null;
   iconTileMinWidth?: number;
+  page?: number;
+  pageSize?: number;
+  totalItems?: number;
+  onPageChange?: (page: number, pageSize: number) => void;
   mainImageUrl?: string | null;
   canSetMainImage?: boolean;
+  setMainImageLabel?: string;
   onSetMainImages?: (items: FileManagerBrowserItem[]) => void | Promise<void>;
   directShareTargetOptions?: Array<{ label: string; value: string }>;
   onDirectShareItems?: (
@@ -150,7 +159,7 @@ const renderPreview = (item: FileManagerBrowserItem, compact = false) => {
     : 'w-full h-44 object-cover rounded-xl border border-gray-100';
 
   if (item.file_type === 'image') {
-    return <img src={buildImagePreviewUrl(item.file_url, compact ? 'thumb' : 'gallery')} alt={item.file_name || 'image'} className={mediaClass} />;
+    return <PreviewImage src={item.file_url} preset={compact ? 'thumb' : 'gallery'} alt={item.file_name || 'image'} className={mediaClass} />;
   }
 
   if (item.file_type === 'video') {
@@ -172,6 +181,32 @@ const formatDateTime = (value?: string | null) => {
   return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 };
 
+const PreviewImage: React.FC<{ src: string; alt: string; className: string; preset: 'thumb' | 'gallery' }> = ({
+  src,
+  alt,
+  className,
+  preset,
+}) => {
+  const [retry, setRetry] = useState(0);
+  const previewUrl = useMemo(() => {
+    const url = buildImagePreviewUrl(src, preset);
+    if (retry === 0) return url;
+    const joiner = url.includes('?') ? '&' : '?';
+    return `${url}${joiner}fm_retry=${retry}`;
+  }, [preset, retry, src]);
+
+  return (
+    <img
+      src={previewUrl}
+      alt={alt}
+      className={className}
+      onError={() => {
+        if (retry < 3) window.setTimeout(() => setRetry((value) => value + 1), 700 * (retry + 1));
+      }}
+    />
+  );
+};
+
 const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   title,
   items,
@@ -184,6 +219,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onRefresh,
   onDeleteItem,
   onCopyItems,
+  copyItemsLabel = 'کپی',
   onMoveItems,
   onRenameItem,
   onCreateFolder,
@@ -198,10 +234,17 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   selectionMode = false,
   selectionLabel = 'انتخاب فایل‌ها',
   onConfirmSelection,
+  selectionItems,
+  clearSelectionOnFolderChange = true,
   highlightItemId = null,
   iconTileMinWidth = 92,
+  page = 1,
+  pageSize = 60,
+  totalItems,
+  onPageChange,
   mainImageUrl = null,
   canSetMainImage = false,
+  setMainImageLabel = 'ستاره تصویر اصلی',
   onSetMainImages,
   directShareTargetOptions = [],
   onDirectShareItems,
@@ -228,15 +271,18 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   const [zipBuilding, setZipBuilding] = useState(false);
   const [zipAdding, setZipAdding] = useState(false);
   const [zipArchiveItem, setZipArchiveItem] = useState<FileManagerBrowserItem | null>(null);
+  const [internalPage, setInternalPage] = useState(1);
+  const [internalPageSize, setInternalPageSize] = useState(pageSize);
 
   useEffect(() => {
     setViewMode(defaultViewMode);
   }, [defaultViewMode]);
 
   useEffect(() => {
-    setSelectedIds([]);
+    if (clearSelectionOnFolderChange) setSelectedIds([]);
     setSelectedFolderKeys([]);
-  }, [activeFolderKey]);
+    setInternalPage(1);
+  }, [activeFolderKey, clearSelectionOnFolderChange]);
 
   useEffect(() => {
     const normalizedHighlightId = String(highlightItemId || '').trim();
@@ -246,9 +292,9 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   }, [highlightItemId, items]);
 
   const selectedItems = useMemo(() => {
-    const itemMap = new Map(items.map((item) => [item.id, item]));
+    const itemMap = new Map((selectionItems || items).map((item) => [item.id, item]));
     return selectedIds.map((id) => itemMap.get(id)).filter(Boolean) as FileManagerBrowserItem[];
-  }, [items, selectedIds]);
+  }, [items, selectedIds, selectionItems]);
 
   const folderMap = useMemo(() => {
     const next = new Map<string, FileManagerBrowserFolder>();
@@ -278,7 +324,20 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     return folders;
   }, [activeFolderKey, folders]);
 
-  const visibleEntryCount = visibleFolders.length + items.length;
+  const totalFileCount = Number.isFinite(totalItems as number) ? Number(totalItems) : items.length;
+  const visibleEntryCount = visibleFolders.length + totalFileCount;
+  const displayedItems = useMemo(() => {
+    if (onPageChange) return items;
+    if (!Number.isFinite(totalItems as number) && items.length > pageSize) {
+      const start = (Math.max(1, internalPage) - 1) * internalPageSize;
+      return items.slice(start, start + internalPageSize);
+    }
+    return items;
+  }, [internalPage, internalPageSize, items, onPageChange, pageSize, totalItems]);
+  const effectiveTotalItems = Number.isFinite(totalItems as number) ? Number(totalItems) : items.length;
+  const effectivePage = onPageChange ? page : internalPage;
+  const effectivePageSize = onPageChange ? pageSize : internalPageSize;
+  const showPagination = effectiveTotalItems > effectivePageSize;
   const selectedFolders = useMemo(() => {
     const selectedSet = new Set(selectedFolderKeys);
     return visibleFolders.filter((folder) => selectedSet.has(folder.key));
@@ -635,7 +694,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
       <div className="flex min-h-[96px] flex-col items-center justify-center gap-1.5 px-1.5 py-1 text-center">
         <div className="relative flex h-12 w-12 items-center justify-center">
           {item.file_type === 'image' ? (
-            <img src={buildImagePreviewUrl(item.file_url, 'thumb')} alt={displayFileName} className="h-11 w-11 rounded-md border border-gray-200 bg-gray-50 object-contain dark:border-gray-700 dark:bg-gray-900" />
+            <PreviewImage src={item.file_url} preset="thumb" alt={displayFileName} className="h-11 w-11 rounded-md border border-gray-200 bg-gray-50 object-contain dark:border-gray-700 dark:bg-gray-900" />
           ) : item.file_type === 'video' ? (
             <div className="flex h-11 w-11 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-lg text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
               <FileOutlined />
@@ -878,10 +937,10 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
                   disabled={!onSetMainImages || selectedImageItems.length === 0}
                   onClick={() => markAsMainImages(selectedImageItems)}
                 >
-                  ستاره تصویر اصلی
+                  {setMainImageLabel}
                 </Button>
               ) : null}
-              <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)}>کپی</Button>
+              <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)}>{copyItemsLabel}</Button>
               <Button icon={<RetweetOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)}>انتقال</Button>
               <Button
                 icon={<ShareAltOutlined />}
@@ -925,9 +984,29 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           style={viewMode === 'icon' ? { gridTemplateColumns: `repeat(auto-fill, minmax(${iconTileMinWidth}px, 1fr))` } : undefined}
         >
           {visibleFolders.map(renderFolderCard)}
-          {items.map(renderItemCard)}
+          {displayedItems.map(renderItemCard)}
         </div>
       )}
+
+      {showPagination ? (
+        <div className="flex justify-center pt-1">
+          <Pagination
+            current={effectivePage}
+            pageSize={effectivePageSize}
+            total={effectiveTotalItems}
+            showSizeChanger
+            pageSizeOptions={[24, 48, 60, 96, 120]}
+            onChange={(nextPage, nextPageSize) => {
+              if (onPageChange) {
+                onPageChange(nextPage, nextPageSize);
+                return;
+              }
+              setInternalPage(nextPage);
+              setInternalPageSize(nextPageSize);
+            }}
+          />
+        </div>
+      ) : null}
 
       <Modal
         title="جزئیات فایل"

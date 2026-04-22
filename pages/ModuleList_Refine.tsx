@@ -26,7 +26,7 @@ import BulkProductsCreateModal from "../components/products/BulkProductsCreateMo
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
-import { fetchTaskSourceRecordOptions, getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
+import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
 import ExcelImportWizard from "../components/moduleList/ExcelImportWizard";
 import PrintSection from "../components/moduleShow/PrintSection";
 import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
@@ -54,6 +54,7 @@ import MessageComposerModal from "../components/MessageComposerModal";
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
 import { getAssigneeLabel } from "../utils/assigneeLabel";
 import { syncDefaultPriceListItemsToProducts } from "../utils/priceListDefaults";
+import { buildRecordReferenceKey, fetchRecordReferenceLabels } from "../utils/recordReference";
 import {
   isModuleListLiveInvalidationEnabled,
   isModuleListLiveInvalidationSupportedView,
@@ -415,17 +416,22 @@ export const ModuleListRefine: React.FC<{
   const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(effectiveInitialViewFilters);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(persistedState?.columnFilters || {});
   const [visibleColumns, setVisibleColumns] = useState<string[]>(persistedState?.visibleColumns || []);  // ✅ ستون‌های انتخاب‌شده
-  const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});  // ✅ اضافه شد
-  const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});  // ✅ اضافه شد
-  const [optionsReady, setOptionsReady] = useState(false);
+  const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>(
+    () => cachedOptionSnapshot?.dynamicOptions || {}
+  );  // ✅ اضافه شد
+  const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>(
+    () => cachedOptionSnapshot?.relationOptions || {}
+  );  // ✅ اضافه شد
+  const [optionsReady, setOptionsReady] = useState(() => hasCachedModuleOptions);
   const [tagsMap, setTagsMap] = useState<Record<string, any[]>>({});  // ✅ Map of record id to tags
   const [tagsLoading, setTagsLoading] = useState(false);
+  const [loadedTagsRecordIdsSignature, setLoadedTagsRecordIdsSignature] = useState("");
   const [gridPageSize, setGridPageSize] = useState<number>(() => getDefaultGridPageSize()); // ✅ Grid pagination
   const [kanbanVisibleCounts, setKanbanVisibleCounts] = useState<Record<string, number>>({});
   const [kanbanDraggingRecordId, setKanbanDraggingRecordId] = useState<string | null>(null);
   const [kanbanDragOverColumn, setKanbanDragOverColumn] = useState<string | null>(null);
-  const [allUsers, setAllUsers] = useState<any[]>([]);
-  const [allRoles, setAllRoles] = useState<any[]>([]);
+  const [allUsers, setAllUsers] = useState<any[]>(() => cachedOptionSnapshot?.allUsers || []);
+  const [allRoles, setAllRoles] = useState<any[]>(() => cachedOptionSnapshot?.allRoles || []);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -452,6 +458,8 @@ export const ModuleListRefine: React.FC<{
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
+  const [taskRelationOptionsLoading, setTaskRelationOptionsLoading] = useState(false);
+  const [loadedTaskRelationOptionsSignature, setLoadedTaskRelationOptionsSignature] = useState("");
   const hasInitializedModuleStateRef = useRef(false);
   const searchSyncInitializedRef = useRef(false);
   const autoSortSyncDoneRef = useRef(false);
@@ -518,6 +526,7 @@ export const ModuleListRefine: React.FC<{
   );
   const showContentSkeleton = queryPending && !hasQueryResult;
   const bulkBuildSourceModule = getBulkBuildSourceModule(resolvedModuleId);
+  const isListPageSizeReady = viewMode !== ViewMode.LIST || Number(pageSize || 0) === DEFAULT_LIST_PAGE_SIZE;
   const totalFilteredRecordCount = useMemo(
     () => {
       const paginationConfig = tableProps?.pagination as { total?: number } | undefined;
@@ -596,6 +605,7 @@ export const ModuleListRefine: React.FC<{
     setOptionsReady(hasCachedModuleOptions);
     setTagsMap({});
     setTagsLoading(false);
+    setLoadedTagsRecordIdsSignature("");
     setEditRecordId(null);
     setIsBulkEditOpen(false);
     setIsBulkEditMode(false);
@@ -609,6 +619,9 @@ export const ModuleListRefine: React.FC<{
     setListPrintRows([]);
     setBulkBuildTarget(null);
     setPreviewRecordId(null);
+    setTaskRelationOptionsByField({});
+    setTaskRelationOptionsLoading(false);
+    setLoadedTaskRelationOptionsSignature("");
     setHasListInitialPaintCompleted(false);
     searchSyncInitializedRef.current = false;
     applyCombinedFilters(
@@ -854,7 +867,44 @@ export const ModuleListRefine: React.FC<{
       },
     }));
   }, [accessibleRecordIds, listVisibleRowKeys, resolvedModuleId, selectedRowKeys]);
-  const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (!optionsReady || (shouldLoadTags && tagsLoading));
+  const taskRelationLabelRequests = useMemo(() => {
+    if (resolvedModuleId !== "tasks" || !enrichedData.length) return [];
+    const requests = new Map<string, { fieldKey: string; moduleId: string; recordId: string }>();
+    enrichedData.forEach((task: any) => {
+      const sourceLink = resolveTaskSourceLink(task);
+      const relatedModuleId = String(sourceLink.moduleId || task?.related_to_module || "").trim();
+      const relatedRecordId = String(sourceLink.recordId || "").trim();
+      const fieldKey = getTaskRelationFieldKey(relatedModuleId);
+      if (!relatedModuleId || !relatedRecordId || !fieldKey) return;
+      requests.set(`${fieldKey}:${relatedModuleId}:${relatedRecordId}`, {
+        fieldKey,
+        moduleId: relatedModuleId,
+        recordId: relatedRecordId,
+      });
+    });
+    return Array.from(requests.values());
+  }, [enrichedData, resolvedModuleId]);
+  const taskRelationLabelRequestsSignature = useMemo(
+    () => taskRelationLabelRequests
+      .map((request) => `${request.fieldKey}:${request.moduleId}:${request.recordId}`)
+      .join("|"),
+    [taskRelationLabelRequests]
+  );
+  const shouldWaitForTags =
+    shouldLoadTags &&
+    accessibleRecordIdsSignature.length > 0 &&
+    loadedTagsRecordIdsSignature !== accessibleRecordIdsSignature;
+  const shouldWaitForTaskRelationLabels =
+    resolvedModuleId === "tasks" &&
+    taskRelationLabelRequestsSignature.length > 0 &&
+    loadedTaskRelationOptionsSignature !== taskRelationLabelRequestsSignature;
+  const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (
+    !optionsReady ||
+    tagsLoading ||
+    shouldWaitForTags ||
+    taskRelationOptionsLoading ||
+    shouldWaitForTaskRelationLabels
+  );
   const effectiveRelationOptions = useMemo(() => {
     if (resolvedModuleId !== "tasks") return relationOptions;
     const merged: Record<string, any[]> = { ...relationOptions };
@@ -899,71 +949,48 @@ export const ModuleListRefine: React.FC<{
   }, [enrichedData, selectedRowKeys]);
 
   useEffect(() => {
-    if (resolvedModuleId !== "tasks" || !enrichedData.length) {
+    if (resolvedModuleId !== "tasks" || !taskRelationLabelRequests.length) {
       setTaskRelationOptionsByField((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+      setTaskRelationOptionsLoading(false);
+      setLoadedTaskRelationOptionsSignature("");
       return;
     }
 
     let isActive = true;
 
     const loadTaskRelationLabels = async () => {
-      const requests = new Map<string, { fieldKey: string; moduleId: string; recordId: string }>();
-
-      enrichedData.forEach((task: any) => {
-        const sourceLink = resolveTaskSourceLink(task);
-        const relatedModuleId = String(sourceLink.moduleId || task?.related_to_module || "").trim();
-        const relatedRecordId = String(sourceLink.recordId || "").trim();
-        const fieldKey = getTaskRelationFieldKey(relatedModuleId);
-        if (!relatedModuleId || !relatedRecordId || !fieldKey) return;
-        requests.set(`${fieldKey}:${relatedModuleId}:${relatedRecordId}`, {
-          fieldKey,
-          moduleId: relatedModuleId,
-          recordId: relatedRecordId,
-        });
-      });
-
-      if (!requests.size) {
-        if (isActive) {
-          setTaskRelationOptionsByField((prev) => (Object.keys(prev).length > 0 ? {} : prev));
-        }
-        return;
+      let labelMap: Record<string, string> = {};
+      try {
+        setTaskRelationOptionsLoading(true);
+        labelMap = await fetchRecordReferenceLabels(
+          supabase,
+          taskRelationLabelRequests.map((request) => ({
+            moduleId: request.moduleId,
+            recordId: request.recordId,
+          }))
+        );
+      } catch (error) {
+        console.warn("Could not load task relation labels for module list", error);
       }
-
-      const loaded = await Promise.all(
-        Array.from(requests.values()).map(async (request) => {
-          try {
-            const options = await fetchTaskSourceRecordOptions(supabase, request.moduleId, {
-              exactId: request.recordId,
-              limit: 20,
-            });
-            const exactOption = (options || []).find((option: any) => String(option?.value || "") === request.recordId);
-            if (!exactOption) return null;
-            return {
-              fieldKey: request.fieldKey,
-              option: {
-                label: exactOption.label,
-                value: String(exactOption.value),
-              },
-            };
-          } catch (error) {
-            console.warn("Could not load exact task relation option for module list", request, error);
-            return null;
-          }
-        })
-      );
 
       if (!isActive) return;
 
       const next: Record<string, any[]> = {};
-      loaded.forEach((entry) => {
-        if (!entry) return;
-        const current = next[entry.fieldKey] || [];
-        if (!current.some((item: any) => String(item?.value || "") === String(entry.option.value))) {
-          current.push(entry.option);
+      taskRelationLabelRequests.forEach((request) => {
+        const label = String(labelMap[buildRecordReferenceKey(request.moduleId, request.recordId)] || "").trim();
+        if (!label) return;
+        const current = next[request.fieldKey] || [];
+        if (!current.some((item: any) => String(item?.value || "") === request.recordId)) {
+          current.push({
+            label,
+            value: request.recordId,
+          });
         }
-        next[entry.fieldKey] = current;
+        next[request.fieldKey] = current;
       });
       setTaskRelationOptionsByField(next);
+      setLoadedTaskRelationOptionsSignature(taskRelationLabelRequestsSignature);
+      setTaskRelationOptionsLoading(false);
     };
 
     void loadTaskRelationLabels();
@@ -971,11 +998,13 @@ export const ModuleListRefine: React.FC<{
     return () => {
       isActive = false;
     };
-  }, [enrichedData, resolvedModuleId]);
+  }, [resolvedModuleId, taskRelationLabelRequests, taskRelationLabelRequestsSignature]);
   const showListSkeleton =
     viewMode === ViewMode.LIST &&
-    !hasListInitialPaintCompleted &&
-    queryPending;
+    (
+      !isListPageSizeReady ||
+      (!hasListInitialPaintCompleted && (queryPending || deferredListDataLoading))
+    );
   const gridLoadStep = getGridLoadStep();
 
   // ✅ Grid view - paginated data
@@ -997,9 +1026,11 @@ export const ModuleListRefine: React.FC<{
 
   useEffect(() => {
     if (viewMode !== ViewMode.LIST) return;
+    if (!isListPageSizeReady) return;
     if (queryPending) return;
+    if (deferredListDataLoading) return;
     setHasListInitialPaintCompleted(true);
-  }, [queryPending, viewMode]);
+  }, [deferredListDataLoading, isListPageSizeReady, queryPending, viewMode]);
 
   useEffect(() => {
     if (!canShowGoalCards || selectedRowKeys.length > 0) return;
@@ -1130,6 +1161,7 @@ export const ModuleListRefine: React.FC<{
     if (!tagsField || !shouldLoadTags || !resolvedModuleId || accessibleRecordIds.length === 0) {
       setTagsMap((prev) => (Object.keys(prev).length > 0 ? {} : prev));
       setTagsLoading((prev) => (prev ? false : prev));
+      setLoadedTagsRecordIdsSignature("");
       return;
     }
 
@@ -1143,10 +1175,12 @@ export const ModuleListRefine: React.FC<{
         if (!isActive) return;
 
         setTagsMap(nextTagsMap);
+        setLoadedTagsRecordIdsSignature(accessibleRecordIdsSignature);
       } catch (err) {
         if (!isActive) return;
         console.error('Error fetching tags:', err);
         setTagsMap((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+        setLoadedTagsRecordIdsSignature(accessibleRecordIdsSignature);
       } finally {
         if (isActive) {
           setTagsLoading(false);
@@ -1975,6 +2009,31 @@ export const ModuleListRefine: React.FC<{
         setVisibleColumns([]);
     }
   }, [columnFilters, currentView, resolvedModuleId, searchTerm]);
+
+  const handleViewModeChange = useCallback((nextMode: ViewMode) => {
+    if (nextMode === viewMode) return;
+    lastRequestedPageSizeRef.current = null;
+    setSelectedRowKeys([]);
+    setSelectedRowsMap({});
+    setListVisibleRowKeys(null);
+
+    if (nextMode === ViewMode.LIST) {
+      setHasListInitialPaintCompleted(false);
+      if (current !== 1) {
+        setCurrent?.(1);
+      }
+      if (Number(pageSize || 0) !== DEFAULT_LIST_PAGE_SIZE) {
+        lastRequestedPageSizeRef.current = DEFAULT_LIST_PAGE_SIZE;
+        setPageSize(DEFAULT_LIST_PAGE_SIZE);
+      }
+    } else if (nextMode === ViewMode.GRID) {
+      setGridPageSize(getDefaultGridPageSize());
+    } else if (nextMode === ViewMode.KANBAN) {
+      setKanbanVisibleCounts({});
+    }
+
+    setViewMode(nextMode);
+  }, [current, pageSize, setCurrent, setPageSize, viewMode]);
 
   // ✅ FIX: سرچ فقط فیلتر سرچ را اضافه/حذف می‌کند و به فیلترهای View دست نمی‌زند
   useEffect(() => {
@@ -2992,7 +3051,7 @@ export const ModuleListRefine: React.FC<{
 
         <Toolbar
           viewMode={viewMode}
-          setViewMode={setViewMode}
+          setViewMode={handleViewModeChange}
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
           onRefresh={handleRefresh}
@@ -3064,6 +3123,7 @@ export const ModuleListRefine: React.FC<{
                      loading={queryPending}
                      deferredDataLoading={deferredListDataLoading}
                      tableLayout="fixed"
+                     singleScrollContainer
                      visibleColumns={visibleColumns.length > 0 ? visibleColumns : undefined}
                      pagination={tableProps.pagination}
                      onChange={handleTableChange}

@@ -799,6 +799,17 @@ html.dark .kalam-adaptive-picker__action.is-muted {
   z-index: 14000;
 }
 
+.ant-message,
+.ant-message .ant-message-notice-wrapper,
+.ant-message .ant-message-notice,
+.kalam-list-message {
+  pointer-events: none !important;
+}
+
+.ant-message .ant-message-notice-content {
+  pointer-events: auto !important;
+}
+
 .ant-message .ant-message-notice {
   padding: 6px 12px;
 }
@@ -952,6 +963,30 @@ html.dark .ant-modal-confirm .ant-modal-content {
   min-width: 0;
 }
 
+.kalam-multi-value-tag.ant-tag {
+  border-color: rgba(var(--brand-500-rgb), 0.2) !important;
+  background: rgba(var(--brand-50-rgb), 0.88) !important;
+  color: rgb(var(--brand-700-rgb)) !important;
+}
+
+html.dark .kalam-multi-value-tag.ant-tag {
+  border-color: rgba(var(--brand-300-rgb), 0.24) !important;
+  background: rgba(var(--brand-900-rgb), 0.28) !important;
+  color: rgb(var(--brand-100-rgb)) !important;
+}
+
+.kalam-multi-value-more {
+  border: 1px solid rgba(var(--brand-500-rgb), 0.14);
+  background: rgba(var(--brand-50-rgb), 0.72);
+  color: rgba(var(--brand-700-rgb), 0.82);
+}
+
+html.dark .kalam-multi-value-more {
+  border-color: rgba(var(--brand-300-rgb), 0.18);
+  background: rgba(var(--brand-900-rgb), 0.24);
+  color: rgba(var(--brand-100-rgb), 0.82);
+}
+
 .smarttable-shell .ant-spin-nested-loading,
 .smarttable-shell .ant-spin-container,
 .smarttable-shell .ant-table-wrapper,
@@ -983,6 +1018,63 @@ html.dark .ant-modal-confirm .ant-modal-content {
   backface-visibility: hidden;
   transform: none !important;
   will-change: auto;
+}
+
+.smarttable-shell.smarttable-single-scroll .ant-table {
+  flex: 1 1 auto;
+  height: var(--smarttable-body-height, 520px);
+  max-height: var(--smarttable-body-height, 520px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.smarttable-shell.smarttable-single-scroll .ant-table-container,
+.smarttable-shell.smarttable-single-scroll .ant-table-content {
+  display: block;
+  min-height: 0;
+}
+
+.smarttable-shell.smarttable-single-scroll .ant-table-content {
+  overflow: visible !important;
+}
+
+.smarttable-shell.smarttable-single-scroll .ant-table-thead > tr > th {
+  position: sticky !important;
+  top: 0;
+  z-index: 5;
+  background: #fff;
+}
+
+html.dark .smarttable-shell.smarttable-single-scroll .ant-table-thead > tr > th {
+  background: #1a1a1a;
+}
+
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-left,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-right {
+  position: static !important;
+  box-shadow: none !important;
+}
+
+.smarttable-shell.smarttable-single-scroll .ant-table-container::before,
+.smarttable-shell.smarttable-single-scroll .ant-table-container::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-ping-left:not(.ant-table-has-fix-left) .ant-table-container::before,
+.smarttable-shell.smarttable-single-scroll .ant-table-ping-right:not(.ant-table-has-fix-right) .ant-table-container::after,
+.smarttable-shell.smarttable-single-scroll.ant-table-ping-left:not(.ant-table-has-fix-left) .ant-table-container::before,
+.smarttable-shell.smarttable-single-scroll.ant-table-ping-right:not(.ant-table-has-fix-right) .ant-table-container::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-left-first::before,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-left-last::before,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-right-first::before,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-right-last::before,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-left-first::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-left-last::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-right-first::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-cell-fix-right-last::after,
+.smarttable-shell.smarttable-single-scroll.ant-table-ping-left .ant-table-cell-fix-left-last::after,
+.smarttable-shell.smarttable-single-scroll.ant-table-ping-right .ant-table-cell-fix-right-first::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-ping-left .ant-table-cell-fix-left-last::after,
+.smarttable-shell.smarttable-single-scroll .ant-table-ping-right .ant-table-cell-fix-right-first::after {
+  box-shadow: none !important;
+  display: none !important;
 }
 
 .smarttable-shell .ant-table-pagination.ant-pagination {

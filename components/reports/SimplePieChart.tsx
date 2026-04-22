@@ -11,16 +11,18 @@ export interface SimplePieChartItem {
 interface SimplePieChartProps {
   items: SimplePieChartItem[];
   valueLabel?: string;
+  valueFormatter?: (value: number) => React.ReactNode;
 }
 
 const PIE_COLORS = ['#b45309', '#d97706', '#f59e0b', '#fbbf24', '#92400e', '#78350f', '#fcd34d', '#fde68a'];
 
-const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'مقدار' }) => {
+const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'مقدار', valueFormatter }) => {
   const safeItems = useMemo(
     () => (Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) > 0).slice(0, 8) : []),
     [items]
   );
   const total = safeItems.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  const renderValue = valueFormatter || ((value: number) => formatPersianPrice(value));
 
   const gradient = useMemo(() => {
     if (total <= 0 || safeItems.length === 0) return '';
@@ -50,7 +52,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
           <div className="absolute inset-[22%] flex flex-col items-center justify-center rounded-full bg-white text-center dark:bg-[#1a1a1a]">
             <div className="text-xs text-gray-500">{valueLabel}</div>
             <div className="persian-number text-lg font-black text-gray-800 dark:text-gray-100">
-              {formatPersianPrice(total)}
+              {renderValue(total)}
             </div>
           </div>
         </div>
@@ -72,7 +74,7 @@ const SimplePieChart: React.FC<SimplePieChartProps> = ({ items, valueLabel = 'م
                 <div className="truncate font-bold text-gray-700 dark:text-gray-100">{item.label || '-'}</div>
               </div>
               <div className="flex shrink-0 items-center gap-3 text-xs text-gray-500">
-                <span className="persian-number font-black text-gray-700 dark:text-gray-100">{formatPersianPrice(item.value)}</span>
+                <span className="persian-number font-black text-gray-700 dark:text-gray-100">{renderValue(item.value)}</span>
                 <span className="persian-number">{toPersianNumber(ratio.toFixed(1))}%</span>
                 {typeof item.count === 'number' && (
                   <span>

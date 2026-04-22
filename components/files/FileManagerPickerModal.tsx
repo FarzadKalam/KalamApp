@@ -2,7 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Modal, Spin } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
-import { loadGalleryFileItems, loadRecordFileItems, type FileManagerListItem } from '../../utils/fileManagerQueries';
+import {
+  buildFileManagerTree,
+  type FileManagerListItem,
+  type FileManagerTreeResult,
+} from '../../utils/fileManagerQueries';
+import { createFileManagerShortcut } from '../../utils/fileManagerService';
 import type { NoteAttachment } from '../../utils/noteContent';
 import FileManagerBrowser from './FileManagerBrowser';
 
@@ -56,9 +61,11 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
 }) => {
   const { message } = App.useApp();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const [items, setItems] = useState<FileManagerListItem[]>([]);
+  const [tree, setTree] = useState<FileManagerTreeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeFolderKey, setActiveFolderKey] = useState('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(60);
 
   const normalizedModuleId = String(moduleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
@@ -67,14 +74,25 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   const loadFiles = async () => {
     setLoading(true);
     try {
-      const loaded = hasRecordScope
-        ? await loadRecordFileItems(normalizedModuleId, normalizedRecordId, normalizedRecordId)
-        : await loadGalleryFileItems();
-      setItems(loaded.filter((item) => String(item.file_url || '').trim()));
+      const loaded = await buildFileManagerTree({
+        page,
+        pageSize,
+        folderKey: activeFolderKey,
+        initialModuleId: normalizedModuleId,
+        initialRecordId: normalizedRecordId,
+        fileTypes,
+        moduleTitleMap,
+      });
+      setTree(loaded);
+      if (!activeFolderKey || activeFolderKey === 'all') {
+        setActiveFolderKey(loaded.initialFolderKey);
+      } else if (loaded.activeFolderKey !== activeFolderKey) {
+        setActiveFolderKey(loaded.activeFolderKey);
+      }
     } catch (error) {
       console.warn('Could not load files for picker', error);
       message.error('بارگذاری فایل‌ها ناموفق بود');
-      setItems([]);
+      setTree(null);
     } finally {
       setLoading(false);
     }
@@ -83,15 +101,9 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   useEffect(() => {
     if (!open) return;
     setActiveFolderKey('all');
+    setPage(1);
     void loadFiles();
   }, [open, normalizedModuleId, normalizedRecordId]);
-
-  const typeSet = useMemo(() => new Set(fileTypes || []), [fileTypes]);
-
-  const baseItems = useMemo(() => {
-    if (typeSet.size === 0) return items;
-    return items.filter((item) => typeSet.has(item.file_type));
-  }, [items, typeSet]);
 
   const moduleTitleMap = useMemo(() => {
     return Object.keys(MODULES).reduce<Record<string, string>>((acc, key) => {
@@ -100,45 +112,50 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
     }, {});
   }, []);
 
-  const folders = useMemo(() => {
-    if (hasRecordScope) {
-      const byType = new Map<string, number>();
-      baseItems.forEach((item) => byType.set(item.file_type, (byType.get(item.file_type) || 0) + 1));
-      return [
-        { key: 'all', label: 'همه فایل‌ها', count: baseItems.length, isSystem: true },
-        { key: 'image', parentKey: 'all', label: 'عکس‌ها', count: byType.get('image') || 0, isSystem: true },
-        { key: 'video', parentKey: 'all', label: 'فیلم‌ها', count: byType.get('video') || 0, isSystem: true },
-        { key: 'file', parentKey: 'all', label: 'فایل‌ها', count: byType.get('file') || 0, isSystem: true },
-      ];
-    }
+  useEffect(() => {
+    if (!open) return;
+    void loadFiles();
+  }, [activeFolderKey, page, pageSize, fileTypes?.join('|')]);
 
-    const byModule = new Map<string, number>();
-    baseItems.forEach((item) => {
-      const key = String(item.module_id || '').trim();
-      if (!key) return;
-      byModule.set(key, (byModule.get(key) || 0) + 1);
-    });
-    return [
-      { key: 'all', label: 'همه فایل‌ها', count: baseItems.length, isSystem: true },
-      ...Array.from(byModule.entries()).map(([key, count]) => ({
-        key,
-        parentKey: 'all',
-        label: moduleTitleMap[key] || key,
-        count,
-        isSystem: true,
-      })),
-    ];
-  }, [baseItems, hasRecordScope, moduleTitleMap]);
-
-  const visibleItems = useMemo(() => {
-    if (activeFolderKey === 'all') return baseItems;
-    if (hasRecordScope) return baseItems.filter((item) => item.file_type === activeFolderKey);
-    return baseItems.filter((item) => item.module_id === activeFolderKey);
-  }, [activeFolderKey, baseItems, hasRecordScope]);
-
-  const handleSelect = (selected: FileManagerListItem[]) => {
-    const attachments = selected
-      .slice(0, multiple ? undefined : 1)
+  const handleSelect = async (selected: FileManagerListItem[]) => {
+    const limited = selected.slice(0, multiple ? undefined : 1);
+    const resolvedItems = await Promise.all(limited.map(async (item) => {
+      const sourceModuleId = String(item.module_id || '').trim();
+      const sourceRecordId = String(item.record_id || '').trim();
+      const isForeign = hasRecordScope && (sourceModuleId !== normalizedModuleId || sourceRecordId !== normalizedRecordId);
+      if (!isForeign || !item.asset_id) return item;
+      try {
+        const created = await createFileManagerShortcut({
+          assetId: item.asset_id,
+          sourceEntryId: item.entry_id || null,
+          sourceModuleId,
+          sourceRecordId,
+          sourceRecordTitle: item.source_record_title || getDisplayFileName(item),
+          targetModuleId: normalizedModuleId,
+          targetRecordId: normalizedRecordId,
+          targetRecordTitle: normalizedRecordId,
+          fileUrl: item.file_url,
+          fileName: getDisplayFileName(item),
+          mimeType: item.mime_type || null,
+          fileType: item.file_type,
+        });
+        return {
+          ...item,
+          id: String(created?.recordFileId || created?.entry?.id || item.id),
+          entry_id: created?.entry?.id ? String(created.entry.id) : item.entry_id,
+          module_id: normalizedModuleId,
+          record_id: normalizedRecordId,
+          is_shortcut: true,
+          source_module_id: sourceModuleId,
+          source_record_id: sourceRecordId,
+        };
+      } catch (error) {
+        console.warn('Could not create shortcut for picked file', error);
+        message.warning('میانبر بعضی فایل‌ها ساخته نشد؛ فایل به عنوان لینک پیوست شد');
+        return item;
+      }
+    }));
+    const attachments = resolvedItems
       .map(itemToAttachment)
       .filter((item) => item.url);
     if (attachments.length === 0) return;
@@ -185,20 +202,32 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
       ) : (
         <FileManagerBrowser
           title="فایل‌ها"
-          items={visibleItems}
-          folders={folders}
+          items={tree?.items || []}
+          folders={tree?.folders || []}
           activeFolderKey={activeFolderKey}
-          onFolderChange={setActiveFolderKey}
+          onFolderChange={(key) => {
+            setPage(1);
+            setActiveFolderKey(key);
+          }}
           onRefresh={() => void loadFiles()}
-          recordTitleMap={hasRecordScope ? { [`${normalizedModuleId}:${normalizedRecordId}`]: normalizedRecordId } : {}}
+          recordTitleMap={tree?.recordTitleMap || (hasRecordScope ? { [`${normalizedModuleId}:${normalizedRecordId}`]: normalizedRecordId } : {})}
           moduleTitleMap={moduleTitleMap}
           canDelete={false}
           canEdit={false}
           canShare={false}
           iconTileMinWidth={112}
           selectionMode
+          selectionItems={tree?.allItems || []}
+          clearSelectionOnFolderChange={false}
+          page={page}
+          pageSize={pageSize}
+          totalItems={tree?.totalItems || 0}
+          onPageChange={(nextPage, nextPageSize) => {
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+          }}
           selectionLabel={multiple ? 'اتصال فایل‌های انتخابی' : 'اتصال فایل'}
-          onConfirmSelection={(selected) => handleSelect(selected as FileManagerListItem[])}
+          onConfirmSelection={(selected) => void handleSelect(selected as FileManagerListItem[])}
         />
       )}
     </Modal>

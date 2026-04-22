@@ -1,9 +1,9 @@
 import { MODULES } from '../moduleRegistry';
-import { FieldType, type ModuleField } from '../types';
+import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
 
-export type ReportMetricType = 'count' | 'sum';
+export type ReportMetricType = 'count' | 'sum' | 'avg';
 export type ReportDefaultView = 'table' | 'table_and_chart';
 export type ReportGroupDirection = 'asc' | 'desc';
 export type ReportScheduleUnit = 'hour' | 'day';
@@ -24,6 +24,7 @@ export interface ReportScheduleConfig {
 
 export interface ReportDefinitionConfig {
   secondary_module_id: string | null;
+  secondary_module_ids: string[];
   columns: string[];
   conditions_all: WorkflowCondition[];
   conditions_any: WorkflowCondition[];
@@ -31,6 +32,7 @@ export interface ReportDefinitionConfig {
   group_bys: ReportGroupingDefinition[];
   metric_type: ReportMetricType;
   metric_fields: string[];
+  chart_dimension_field: string | null;
   default_view: ReportDefaultView;
   schedule: ReportScheduleConfig;
 }
@@ -49,6 +51,55 @@ export interface ReportDefinitionRecord {
   created_by?: string | null;
   updated_by?: string | null;
 }
+
+export const REPORT_TABLE_SOURCE_PREFIX = '__report_table__';
+export const REPORT_TABLE_FIELD_PREFIX = '__report_table_field__';
+export const REPORT_TABLE_RELATION_FIELD_PREFIX = '__report_table_relation_field__';
+
+export const buildReportTableSourceId = (blockId: string) =>
+  `${REPORT_TABLE_SOURCE_PREFIX}${String(blockId || '').trim()}`;
+
+export const parseReportTableSourceId = (value?: string | null) => {
+  const normalized = String(value || '').trim();
+  if (!normalized.startsWith(REPORT_TABLE_SOURCE_PREFIX)) return null;
+  const blockId = normalized.slice(REPORT_TABLE_SOURCE_PREFIX.length).trim();
+  return blockId ? { blockId } : null;
+};
+
+export const isReportTableSourceId = (value?: string | null) => !!parseReportTableSourceId(value);
+
+export const buildReportTableFieldKey = (blockId: string, columnKey: string) =>
+  `${REPORT_TABLE_FIELD_PREFIX}${String(blockId || '').trim()}::${String(columnKey || '').trim()}`;
+
+export const parseReportTableFieldKey = (value?: string | null) => {
+  const normalized = String(value || '').trim();
+  if (!normalized.startsWith(REPORT_TABLE_FIELD_PREFIX)) return null;
+  const raw = normalized.slice(REPORT_TABLE_FIELD_PREFIX.length);
+  const [blockId, columnKey] = raw.split('::');
+  if (!blockId || !columnKey) return null;
+  return { blockId, columnKey };
+};
+
+export const isReportTableFieldKey = (value?: string | null) => !!parseReportTableFieldKey(value);
+
+export const buildReportTableRelationFieldKey = (
+  blockId: string,
+  relationColumnKey: string,
+  targetModuleId: string,
+  targetFieldKey: string
+) =>
+  `${REPORT_TABLE_RELATION_FIELD_PREFIX}${String(blockId || '').trim()}::${String(relationColumnKey || '').trim()}::${String(targetModuleId || '').trim()}::${String(targetFieldKey || '').trim()}`;
+
+export const parseReportTableRelationFieldKey = (value?: string | null) => {
+  const normalized = String(value || '').trim();
+  if (!normalized.startsWith(REPORT_TABLE_RELATION_FIELD_PREFIX)) return null;
+  const raw = normalized.slice(REPORT_TABLE_RELATION_FIELD_PREFIX.length);
+  const [blockId, relationColumnKey, targetModuleId, targetFieldKey] = raw.split('::');
+  if (!blockId || !relationColumnKey || !targetModuleId || !targetFieldKey) return null;
+  return { blockId, relationColumnKey, targetModuleId, targetFieldKey };
+};
+
+export const isReportTableRelationFieldKey = (value?: string | null) => !!parseReportTableRelationFieldKey(value);
 
 const REPORT_UNSUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.IMAGE,
@@ -101,6 +152,20 @@ const dedupeFields = (fields: ModuleField[]) => {
   return Array.from(map.values());
 };
 
+export const getReportTableBlocks = (moduleId?: string | null): BlockDefinition[] => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const blocks = MODULES[normalizedModuleId]?.blocks || [];
+  return blocks
+    .filter((block) => block?.type === BlockType.TABLE && Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
+    .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+};
+
+export const getReportTableBlock = (moduleId?: string | null, tableSourceId?: string | null) => {
+  const meta = parseReportTableSourceId(tableSourceId);
+  if (!meta) return null;
+  return getReportTableBlocks(moduleId).find((block) => String(block.id || '') === meta.blockId) || null;
+};
+
 export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({
   enabled: false,
   interval_value: 1,
@@ -111,6 +176,7 @@ export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({
 
 export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   secondary_module_id: null,
+  secondary_module_ids: [],
   columns: [],
   conditions_all: [],
   conditions_any: [],
@@ -118,6 +184,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   group_bys: [],
   metric_type: 'count',
   metric_fields: [],
+  chart_dimension_field: null,
   default_view: 'table_and_chart',
   schedule: createDefaultReportScheduleConfig(),
 });
@@ -166,7 +233,8 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
 
 export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | null | undefined): ReportDefinitionConfig => {
   const defaults = createDefaultReportConfig();
-  const metricType = value?.metric_type === 'sum' ? 'sum' : 'count';
+  const metricType: ReportMetricType =
+    value?.metric_type === 'sum' || value?.metric_type === 'avg' ? value.metric_type : 'count';
   const legacyGroupBy = value && (value as any).group_by ? String((value as any).group_by || '').trim() : '';
   const legacyMetricField = value && (value as any).metric_field ? String((value as any).metric_field || '').trim() : '';
 
@@ -176,23 +244,35 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
       ? [legacyMetricField]
       : [];
 
+  const secondaryModuleIds = Array.isArray((value as any)?.secondary_module_ids)
+    ? (value as any).secondary_module_ids.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : value?.secondary_module_id
+      ? [String(value.secondary_module_id).trim()].filter(Boolean)
+      : [];
+  const groupBys = clampGroupingDefinitions(
+    Array.isArray(value?.group_bys)
+      ? value?.group_bys
+      : legacyGroupBy
+        ? [{ field: legacyGroupBy, direction: 'asc' }]
+        : []
+  );
+  const chartDimensionField = String((value as any)?.chart_dimension_field || '').trim()
+    || groupBys[0]?.field
+    || null;
+
   return {
     ...defaults,
     ...value,
-    secondary_module_id: value?.secondary_module_id ? String(value.secondary_module_id).trim() : null,
+    secondary_module_id: secondaryModuleIds[0] || null,
+    secondary_module_ids: Array.from(new Set(secondaryModuleIds)),
     columns: Array.isArray(value?.columns) ? value!.columns.map((item) => String(item || '').trim()).filter(Boolean) : defaults.columns,
     conditions_all: Array.isArray(value?.conditions_all) ? value!.conditions_all : defaults.conditions_all,
     conditions_any: Array.isArray(value?.conditions_any) ? value!.conditions_any : defaults.conditions_any,
     row_limit: clampReportRowLimit(value?.row_limit),
-    group_bys: clampGroupingDefinitions(
-      Array.isArray(value?.group_bys)
-        ? value?.group_bys
-        : legacyGroupBy
-          ? [{ field: legacyGroupBy, direction: 'asc' }]
-          : []
-    ),
+    group_bys: groupBys,
     metric_type: metricType,
-    metric_fields: metricType === 'sum' ? metricFields.slice(0, 4) : [],
+    metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+    chart_dimension_field: chartDimensionField,
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',
     schedule: normalizeReportScheduleConfig((value as any)?.schedule),
   };
@@ -223,7 +303,7 @@ export const getSecondaryModuleOptions = (
   permissions?: Record<string, { view?: boolean }> | null
 ) => {
   const mainFields = MODULES[String(mainModuleId || '').trim()]?.fields || [];
-  return Array.from(
+  const relatedOptions = Array.from(
     new Map(
       mainFields
         .filter((field) => field.type === FieldType.RELATION && field.relationConfig?.targetModule)
@@ -239,45 +319,119 @@ export const getSecondaryModuleOptions = (
           },
         ] as const)
     ).values()
-  ).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+  );
+
+  const tableOptions = getReportTableBlocks(mainModuleId).map((block) => ({
+    label: `جدول فرعی: ${block.titles?.fa || block.id}`,
+    value: buildReportTableSourceId(String(block.id || '')),
+  }));
+
+  return [...relatedOptions, ...tableOptions].sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+};
+
+export const getTableReportableFields = (
+  mainModuleId?: string | null,
+  tableSourceId?: string | null
+) => {
+  const tableBlock = getReportTableBlock(mainModuleId, tableSourceId);
+  if (!tableBlock) return [];
+  const tableColumnFields = (tableBlock.tableColumns || []).map((column: any, index: number) => ({
+      key: buildReportTableFieldKey(String(tableBlock.id || ''), String(column?.key || '')),
+      labels: {
+        fa: `${tableBlock.titles?.fa || tableBlock.id} / ${String(column?.title || column?.label || column?.key || '')}`,
+        en: String(column?.title || column?.key || ''),
+      },
+      type: column?.type || FieldType.TEXT,
+      options: Array.isArray(column?.options) ? column.options : undefined,
+      dynamicOptionsCategory: column?.dynamicOptionsCategory,
+      relationConfig: column?.relationConfig,
+      order: Number.isFinite(Number(column?.order)) ? Number(column.order) : index,
+      nature: column?.nature,
+      readonly: column?.readonly,
+    } as ModuleField)).filter((field) => isReportableField(field));
+
+  const relatedRecordFields = (tableBlock.tableColumns || []).flatMap((column: any) => {
+    if (column?.type !== FieldType.RELATION || !column?.relationConfig) return [];
+    const relationColumnKey = String(column?.key || '').trim();
+    if (!relationColumnKey) return [];
+
+    const sources = Array.isArray(column.relationConfig?.sourceModules) && column.relationConfig.sourceModules.length > 0
+      ? column.relationConfig.sourceModules
+      : [column.relationConfig];
+
+    return sources.flatMap((source: any) => {
+      const targetModuleId = String(source?.targetModule || column.relationConfig?.targetModule || '').trim();
+      const targetModule = MODULES[targetModuleId];
+      if (!targetModule) return [];
+      const relationTitle = String(column?.title || column?.label || relationColumnKey);
+      const targetModuleTitle = targetModule.titles?.fa || targetModuleId;
+      return getMainReportableFields(targetModuleId).map((field) => ({
+        ...field,
+        key: buildReportTableRelationFieldKey(
+          String(tableBlock.id || ''),
+          relationColumnKey,
+          targetModuleId,
+          String(field.key || '')
+        ),
+        labels: {
+          fa: `${tableBlock.titles?.fa || tableBlock.id} / ${relationTitle} / ${targetModuleTitle} / ${field.labels?.fa || field.key}`,
+          en: `${relationTitle} / ${targetModule.titles?.en || targetModuleId} / ${field.labels?.en || field.key}`,
+        },
+        workflowOptionScopeModuleId: targetModuleId,
+      } as ModuleField));
+    });
+  }).filter((field) => isReportableField(field));
+
+  return dedupeFields([...tableColumnFields, ...relatedRecordFields]);
 };
 
 export const getSecondaryReportableFields = (
   mainModuleId?: string | null,
-  secondaryModuleId?: string | null
+  secondaryModuleId?: string | string[] | null
 ) => {
   const normalizedMain = String(mainModuleId || '').trim();
-  const normalizedSecondary = String(secondaryModuleId || '').trim();
-  if (!normalizedMain || !normalizedSecondary) return [];
+  const normalizedSecondaryIds = Array.from(
+    new Set(
+      (Array.isArray(secondaryModuleId) ? secondaryModuleId : [secondaryModuleId])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    )
+  );
+  if (!normalizedMain || normalizedSecondaryIds.length === 0) return [];
   return dedupeFields(
-    getWorkflowConditionFields(normalizedMain).filter((field) => {
-      const relatedMeta = parseWorkflowRelatedFieldKey(field.key);
-      if (!relatedMeta || relatedMeta.targetModuleId !== normalizedSecondary) return false;
-      return isReportableField(field) || relatedMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY;
+    normalizedSecondaryIds.flatMap((normalizedSecondary) => {
+      if (isReportTableSourceId(normalizedSecondary)) {
+        return getTableReportableFields(normalizedMain, normalizedSecondary);
+      }
+      return getWorkflowConditionFields(normalizedMain).filter((field) => {
+        const relatedMeta = parseWorkflowRelatedFieldKey(field.key);
+        if (!relatedMeta || relatedMeta.targetModuleId !== normalizedSecondary) return false;
+        return isReportableField(field) || relatedMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY;
+      });
     })
   );
 };
 
-export const getReportableFields = (mainModuleId?: string | null, secondaryModuleId?: string | null) =>
+export const getReportableFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
   dedupeFields([
     ...getMainReportableFields(mainModuleId),
     ...getSecondaryReportableFields(mainModuleId, secondaryModuleId),
   ]);
 
-export const getReportConditionFields = (mainModuleId?: string | null, secondaryModuleId?: string | null) =>
+export const getReportConditionFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
   getReportableFields(mainModuleId, secondaryModuleId);
 
-export const getReportableFieldMap = (mainModuleId?: string | null, secondaryModuleId?: string | null) => {
+export const getReportableFieldMap = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) => {
   return getReportableFields(mainModuleId, secondaryModuleId).reduce<Record<string, ModuleField>>((acc, field) => {
     acc[field.key] = field;
     return acc;
   }, {});
 };
 
-export const getGroupableReportFields = (mainModuleId?: string | null, secondaryModuleId?: string | null) =>
+export const getGroupableReportFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
   getReportableFields(mainModuleId, secondaryModuleId).filter((field) => isGroupableReportField(field));
 
-export const getSummableReportFields = (mainModuleId?: string | null, secondaryModuleId?: string | null) =>
+export const getSummableReportFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
   getReportableFields(mainModuleId, secondaryModuleId).filter((field) => isSummableReportField(field));
 
 export const getReportModuleOptions = (permissions?: Record<string, { view?: boolean }> | null) =>

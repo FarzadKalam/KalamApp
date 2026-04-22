@@ -34,10 +34,12 @@ import {
   isWebFormVirtualTargetField,
   normalizeWebFormConfig,
   normalizeWebFormFieldRecord,
+  isWebFormCurrentEmployeeDefaultField,
   type WebFormAccessScope,
   type WebFormDisplayMode,
   type WebFormDuplicateStrategy,
 } from "../utils/webForms";
+import { fetchRelationOptionsForField } from "../utils/relationOptions";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -45,6 +47,7 @@ type BuilderFieldValue = {
   label?: string;
   target_field_key?: string;
   default_value?: any;
+  default_to_current_employee?: boolean;
   help_text?: string;
   sort_order?: number;
   is_required?: boolean;
@@ -204,6 +207,7 @@ const WebFormBuilderPage: React.FC = () => {
   const [slugTouched, setSlugTouched] = useState(false);
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [dynamicTargetOptions, setDynamicTargetOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [relationTargetOptions, setRelationTargetOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const seededFieldsRef = useRef(false);
   const qrContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -254,6 +258,39 @@ const WebFormBuilderPage: React.FC = () => {
     };
   }, [targetFieldItems]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const relationItems = targetFieldItems.filter((item) => item.inferredType === "relation" && item.field?.relationConfig);
+      if (relationItems.length === 0) {
+        setRelationTargetOptions({});
+        return;
+      }
+
+      try {
+        const entries = await Promise.all(
+          relationItems.map(async (item) => {
+            const options = await fetchRelationOptionsForField(supabase, item.field, { limit: 80 });
+            return [
+              item.value,
+              (options || []).map((option: any) => ({
+                label: String(option?.label || option?.name || option?.value || "").trim(),
+                value: String(option?.value || "").trim(),
+              })).filter((option: any) => option.value),
+            ] as const;
+          })
+        );
+        if (!cancelled) setRelationTargetOptions(Object.fromEntries(entries));
+      } catch {
+        if (!cancelled) setRelationTargetOptions({});
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [targetFieldItems]);
+
   const resolveTargetOptions = useCallback(
     (targetFieldKey?: string) => {
       const item = targetFieldMap[String(targetFieldKey || "").trim()];
@@ -264,10 +301,13 @@ const WebFormBuilderPage: React.FC = () => {
           value: String(option.value || option.label || "").trim(),
         })).filter((option) => option.value);
       }
+      if (item.inferredType === "relation") {
+        return relationTargetOptions[String(targetFieldKey || "").trim()] || [];
+      }
       const category = String((item.field as any)?.dynamicOptionsCategory || "").trim();
       return category ? (dynamicTargetOptions[category] || []) : [];
     },
-    [dynamicTargetOptions, targetFieldMap]
+    [dynamicTargetOptions, relationTargetOptions, targetFieldMap]
   );
 
   const loadRecentSubmissions = useCallback(async (webFormId: string) => {
@@ -325,6 +365,7 @@ const WebFormBuilderPage: React.FC = () => {
                 label: normalized.label,
                 target_field_key: normalized.target_field_key || undefined,
                 default_value: normalized.default_value ?? undefined,
+                default_to_current_employee: normalized.config?.default_to_current_employee === true,
                 help_text: normalized.help_text ?? undefined,
                 sort_order: normalized.sort_order,
                 is_required: normalized.is_required !== false,
@@ -409,6 +450,10 @@ const WebFormBuilderPage: React.FC = () => {
       }
       seededFieldsRef.current = false;
     }
+    if (Object.prototype.hasOwnProperty.call(changedValues, "access_scope") && changedValues.access_scope !== "internal") {
+      const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
+      form.setFieldValue("fields", currentFields.map((field) => ({ ...field, default_to_current_employee: false })));
+    }
     if (Object.prototype.hasOwnProperty.call(changedValues, "duplicate_match_field")) {
       const nextDuplicateField = String(changedValues.duplicate_match_field || "").trim();
       if (!nextDuplicateField) {
@@ -484,6 +529,41 @@ const WebFormBuilderPage: React.FC = () => {
     const targetFieldItem = targetFieldMap[targetFieldKey];
     const fieldType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
     const options = resolveTargetOptions(targetFieldKey);
+    const canUseCurrentEmployeeDefault =
+      accessScope === "internal"
+      && fieldType === "relation"
+      && String(targetFieldItem?.field?.relationConfig?.targetModule || "").trim() === "employees";
+    const defaultToCurrentEmployee = watchedFields?.[fieldIndex]?.default_to_current_employee === true;
+
+    if (fieldType === "relation") {
+      return (
+        <div className="space-y-2">
+          <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+            <Select
+              allowClear
+              showSearch
+              disabled={defaultToCurrentEmployee}
+              optionFilterProp="label"
+              options={options}
+              placeholder={targetFieldItem?.label || "انتخاب مقدار پیش‌فرض"}
+            />
+          </Form.Item>
+          {canUseCurrentEmployeeDefault ? (
+            <Form.Item name={["fields", fieldIndex, "default_to_current_employee"]} valuePropName="checked" className="mb-0">
+              <Checkbox
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    form.setFieldValue(["fields", fieldIndex, "default_value"], undefined);
+                  }
+                }}
+              >
+                ثبت بنام تکمیل‌کننده فرم
+              </Checkbox>
+            </Form.Item>
+          ) : null}
+        </div>
+      );
+    }
 
     if (fieldType === "select") {
       return (
@@ -639,22 +719,33 @@ const WebFormBuilderPage: React.FC = () => {
           const label = String(item?.label || targetFieldItem.label || "").trim() || targetFieldItem.label;
           const resolvedOptions = resolveTargetOptions(targetFieldKey);
           const defaultValue = item?.default_value;
+          const fieldType = targetFieldItem.inferredType || inferWebFormFieldType(targetFieldItem.field);
+          const defaultToCurrentEmployee = isWebFormCurrentEmployeeDefaultField(
+            {
+              field_type: fieldType,
+              target_field_key: targetFieldKey,
+              config: { default_to_current_employee: item?.default_to_current_employee === true },
+            },
+            values.target_module_id,
+            values.access_scope,
+          );
 
           return {
             web_form_id: webFormId,
             field_key: targetFieldKey,
             label,
             target_field_key: targetFieldKey,
-            field_type: targetFieldItem.inferredType || inferWebFormFieldType(targetFieldItem.field),
+            field_type: fieldType,
             placeholder: (targetFieldItem.inferredType === "image"
               ? "آپلود تصویر"
               : targetFieldItem.inferredType === "file"
                 ? "آپلود فایل"
                 : label),
             help_text: String(item?.help_text || "").trim() || null,
-            default_value: defaultValue === "" ? null : defaultValue,
+            default_value: defaultToCurrentEmployee ? null : (defaultValue === "" ? null : defaultValue),
             config: {
               select_options: resolvedOptions,
+              default_to_current_employee: defaultToCurrentEmployee,
             },
             sort_order: Number(item?.sort_order || ((index + 1) * 10)),
             is_required: item?.is_required !== false,
@@ -877,6 +968,7 @@ const WebFormBuilderPage: React.FC = () => {
                                     form.setFieldValue(["fields", field.name, "label"], matched.label);
                                   }
                                   form.setFieldValue(["fields", field.name, "default_value"], undefined);
+                                  form.setFieldValue(["fields", field.name, "default_to_current_employee"], false);
                                 }}
                               />
                             </Form.Item>

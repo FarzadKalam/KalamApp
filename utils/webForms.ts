@@ -54,7 +54,13 @@ export type WebFormFieldRecord = {
   is_required?: boolean;
   is_hidden?: boolean;
   sort_order?: number;
-  config?: Record<string, any> | null;
+  config?: WebFormFieldConfig | null;
+};
+
+export type WebFormFieldConfig = {
+  select_options?: WebFormSelectOption[];
+  default_to_current_employee?: boolean;
+  [key: string]: any;
 };
 
 const WEB_FORM_EXCLUDED_MODULE_IDS = new Set<string>([
@@ -303,7 +309,7 @@ export const normalizeWebFormFieldRecord = (
           if (!label || !optionValue) return null;
           return { label, value: optionValue };
         })
-        .filter(Boolean)
+        .filter((item): item is WebFormSelectOption => Boolean(item))
     : [];
 
   return {
@@ -325,8 +331,21 @@ export const normalizeWebFormFieldRecord = (
     config: {
       ...config,
       select_options: selectOptions,
+      default_to_current_employee: config.default_to_current_employee === true,
     },
   };
+};
+
+export const isWebFormCurrentEmployeeDefaultField = (
+  field: Pick<WebFormFieldRecord, "field_type" | "target_field_key" | "config">,
+  targetModuleId?: string | null,
+  accessScope?: WebFormAccessScope | string | null,
+) => {
+  if (String(accessScope || "").trim() !== "internal") return false;
+  if (field?.field_type !== "relation") return false;
+  if (field?.config?.default_to_current_employee !== true) return false;
+  const targetField = getWebFormTargetField(targetModuleId, field.target_field_key);
+  return String(targetField?.relationConfig?.targetModule || "").trim() === "employees";
 };
 
 export const buildWebFormPublicPath = (slug?: string | null) => {

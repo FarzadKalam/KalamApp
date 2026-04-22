@@ -727,20 +727,22 @@ export const evaluateWorkflowCondition = async ({
   currentRecord,
   previousRecord = null,
   moduleId,
+  context,
 }: {
   condition: WorkflowCondition;
   currentRecord: Record<string, any>;
   previousRecord?: Record<string, any> | null | undefined;
   moduleId: string;
+  context?: WorkflowEvaluationContext;
 }) => {
-  const context = createWorkflowEvaluationContext(moduleId);
+  const resolvedContext = context || createWorkflowEvaluationContext(moduleId);
 
   return evaluateCondition(
     condition,
     currentRecord,
     previousRecord,
     moduleId,
-    context
+    resolvedContext
   );
 };
 
@@ -768,16 +770,18 @@ export const evaluateWorkflowConditions = async ({
   currentRecord,
   previousRecord = null,
   moduleId,
+  context,
 }: {
   conditionsAll?: WorkflowCondition[] | null;
   conditionsAny?: WorkflowCondition[] | null;
   currentRecord: Record<string, any>;
   previousRecord?: Record<string, any> | null | undefined;
   moduleId: string;
+  context?: WorkflowEvaluationContext;
 }) => {
   const all = Array.isArray(conditionsAll) ? conditionsAll : [];
   const any = Array.isArray(conditionsAny) ? conditionsAny : [];
-  const context = createWorkflowEvaluationContext(moduleId);
+  const resolvedContext = context || createWorkflowEvaluationContext(moduleId);
 
   for (const condition of all) {
     const passed = await evaluateCondition(
@@ -785,7 +789,7 @@ export const evaluateWorkflowConditions = async ({
       currentRecord,
       previousRecord,
       moduleId,
-      context
+      resolvedContext
     );
     if (!passed) return false;
   }
@@ -798,7 +802,7 @@ export const evaluateWorkflowConditions = async ({
       currentRecord,
       previousRecord,
       moduleId,
-      context
+      resolvedContext
     );
     if (passed) return true;
   }

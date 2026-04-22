@@ -11,11 +11,13 @@ export interface SimpleBarChartItem {
 interface SimpleBarChartProps {
   items: SimpleBarChartItem[];
   valueLabel?: string;
+  valueFormatter?: (value: number) => React.ReactNode;
 }
 
-const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'مقدار' }) => {
+const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'مقدار', valueFormatter }) => {
   const safeItems = Array.isArray(items) ? items.filter((item) => Number(item?.value || 0) > 0) : [];
   const maxValue = safeItems.reduce((max, item) => Math.max(max, Number(item.value || 0)), 0);
+  const renderValue = valueFormatter || ((value: number) => formatPersianPrice(value));
 
   if (!safeItems.length || maxValue <= 0) {
     return <Empty description="برای نمایش نمودار، داده آماری کافی وجود ندارد" />;
@@ -33,7 +35,7 @@ const SimpleBarChart: React.FC<SimpleBarChartProps> = ({ items, valueLabel = 'م
             <div className="mb-2 flex items-center justify-between gap-3 text-sm">
               <div className="truncate font-bold text-gray-700 dark:text-gray-100">{item.label || '-'}</div>
               <div className="shrink-0 text-xs text-gray-500">
-                {valueLabel}: <span className="persian-number font-black text-gray-700 dark:text-gray-100">{formatPersianPrice(item.value)}</span>
+                {valueLabel}: <span className="persian-number font-black text-gray-700 dark:text-gray-100">{renderValue(item.value)}</span>
                 {typeof item.count === 'number' && (
                   <span className="mr-2">
                     تعداد: <span className="persian-number font-bold">{toPersianNumber(item.count)}</span>

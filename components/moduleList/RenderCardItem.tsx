@@ -280,6 +280,38 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         return <span className="break-words text-gray-400">-</span>;
       }
 
+      if (field?.type === FieldType.MULTI_SELECT) {
+        const values = Array.isArray(value) ? value : [value];
+        const labels = values
+          .map((item: any) => {
+            const option = (field.options || []).find((opt: any) => String(opt?.value) === String(item));
+            return String(option?.label || item || '').trim();
+          })
+          .filter(Boolean);
+
+        if (labels.length === 0) return <span className="break-words text-gray-400">-</span>;
+
+        return (
+          <div className="flex min-w-0 flex-wrap gap-1">
+            {labels.slice(0, 2).map((fieldLabel: string, index: number) => (
+              <Tag
+                key={`${field.key}-${fieldLabel}-${index}`}
+                color="default"
+                className="kalam-multi-value-tag !m-0 max-w-[120px] truncate !rounded-md !px-2 !py-0.5 !text-[10px] !font-medium"
+                title={fieldLabel}
+              >
+                {fieldLabel}
+              </Tag>
+            ))}
+            {labels.length > 2 ? (
+              <span className="kalam-multi-value-more rounded-md px-2 py-0.5 text-[10px] font-medium">
+                +{labels.length - 2}
+              </span>
+            ) : null}
+          </div>
+        );
+      }
+
       if ((field?.type === FieldType.RELATION || field?.type === FieldType.USER) && relationOptions?.[field.key]?.length) {
         const matched = relationOptions[field.key].find((opt: any) => String(opt?.value) === String(value));
         if (matched?.label) {

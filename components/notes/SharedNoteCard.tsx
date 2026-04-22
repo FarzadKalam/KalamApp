@@ -9,6 +9,8 @@ import {
   EnterOutlined,
   EditOutlined,
   ForwardOutlined,
+  LikeFilled,
+  LikeOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
@@ -27,10 +29,16 @@ interface SharedNoteCardProps {
   mentionRoles?: string[];
   replyText?: string | null;
   replyAuthorName?: string | null;
+  replyAttachments?: NoteAttachment[];
+  onReplyPreviewClick?: () => void;
+  messageDomId?: string;
   isMine?: boolean;
   isEdited?: boolean;
   footer?: React.ReactNode;
   statusNode?: React.ReactNode;
+  unreadIndicator?: boolean;
+  likeCount?: number;
+  likedByMe?: boolean;
   isEditing?: boolean;
   editingValue?: string;
   onEditingChange?: (value: string) => void;
@@ -40,6 +48,7 @@ interface SharedNoteCardProps {
   onEdit?: () => void;
   onDelete?: () => void;
   onForward?: () => void;
+  onLike?: () => void;
   variant?: 'default' | 'ai';
   renderTemplateBold?: boolean;
   animateOnMount?: boolean;
@@ -105,10 +114,16 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   mentionRoles = [],
   replyText,
   replyAuthorName,
+  replyAttachments = [],
+  onReplyPreviewClick,
+  messageDomId,
   isMine = false,
   isEdited = false,
   footer,
   statusNode,
+  unreadIndicator = false,
+  likeCount = 0,
+  likedByMe = false,
   isEditing = false,
   editingValue = '',
   onEditingChange,
@@ -118,6 +133,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onEdit,
   onDelete,
   onForward,
+  onLike,
   variant = 'default',
   renderTemplateBold = false,
   animateOnMount = false,
@@ -234,23 +250,23 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
 
   const cardStyle: React.CSSProperties = variant === 'ai'
     ? {
-        background: token.colorInfoBg,
-        border: `1px solid ${token.colorInfoBorder}`,
+        background: token.colorFillSecondary,
+        border: `1px solid ${token.colorBorderSecondary}`,
         color: token.colorText,
-        boxShadow: token.boxShadowSecondary,
+        boxShadow: '0 6px 18px rgba(15, 23, 42, 0.06)',
       }
     : isMine
       ? {
-          background: token.colorPrimaryBg,
-          border: `1px solid ${token.colorPrimaryBorder}`,
-          color: token.colorText,
-          boxShadow: token.boxShadowSecondary,
-        }
-      : {
           background: token.colorBgElevated,
           border: `1px solid ${token.colorBorderSecondary}`,
           color: token.colorText,
-          boxShadow: token.boxShadowSecondary,
+          boxShadow: '0 6px 18px rgba(15, 23, 42, 0.055)',
+        }
+      : {
+          background: token.colorPrimaryBg,
+          border: `1px solid ${token.colorPrimaryBorder}`,
+          color: token.colorText,
+          boxShadow: '0 8px 22px rgba(15, 23, 42, 0.075)',
         };
 
   const subtleTextStyle: React.CSSProperties = {
@@ -268,7 +284,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   };
 
   const attachmentStyle: React.CSSProperties = {
-    borderColor: isMine ? token.colorPrimaryBorder : token.colorBorderSecondary,
+    borderColor: token.colorBorderSecondary,
     background: token.colorFillTertiary,
     color: token.colorTextSecondary,
   };
@@ -325,9 +341,35 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
     );
   };
 
+  const renderReplyAttachmentPreview = (attachment: NoteAttachment) => {
+    const label = getAttachmentLabel(attachment);
+    const isImage = isImageFileLike(attachment.url, label, attachment.mimeType);
+    if (isImage) {
+      return (
+        <span
+          key={`${attachment.url}-${label}`}
+          className="inline-flex h-9 w-9 overflow-hidden rounded-md border opacity-95"
+          style={{ borderColor: token.colorBorderSecondary }}
+        >
+          <img src={buildImagePreviewUrl(attachment.url, 'thumb')} alt={label} className="h-full w-full object-cover" />
+        </span>
+      );
+    }
+    return (
+      <span
+        key={`${attachment.url}-${label}`}
+        className="inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[9px] opacity-95"
+        style={{ borderColor: token.colorBorderSecondary, color: token.colorTextSecondary }}
+      >
+        <PaperClipOutlined />
+        <span className="truncate">{label}</span>
+      </span>
+    );
+  };
+
   return (
   <>
-  <div dir="ltr" className={`flex w-full ${isMine ? 'justify-end' : 'justify-start'}`}>
+  <div id={messageDomId} dir="ltr" className={`group/message flex w-full scroll-mt-24 ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
       <Avatar
         size={26}
@@ -336,9 +378,16 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       >
         {!avatarUrl && (variant === 'ai' ? <AiSparkleIcon className="h-4 w-4" /> : (avatarFallback || authorName || '?').slice(0, 1))}
       </Avatar>
+      <div className={`relative min-w-0 max-w-[calc(100%-2.3rem)] ${isMine ? 'pr-0' : 'pl-2'}`}>
+        {unreadIndicator ? (
+          <span
+            aria-label="پیام خوانده‌نشده"
+            className={`absolute top-3 h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_0_2px_rgba(255,255,255,0.95)] dark:shadow-[0_0_0_2px_rgba(15,23,42,0.95)] ${isMine ? '-right-1' : '-left-1'}`}
+          />
+        ) : null}
       <div
         dir="rtl"
-        className={`min-w-0 max-w-[calc(100%-2.3rem)] text-right rounded-[1.05rem] px-2.5 py-2 shadow-[0_3px_10px_rgba(15,23,42,0.08)] dark:shadow-[0_3px_10px_rgba(0,0,0,0.22)] transition-all duration-300 ease-out will-change-transform ${
+        className={`text-right rounded-[1rem] px-3 py-2 shadow-[0_4px_14px_rgba(15,23,42,0.045)] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-all duration-300 ease-out will-change-transform ${
           entered
             ? 'opacity-100 translate-x-0 translate-y-0 scale-100'
             : isMine
@@ -347,22 +396,51 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         } ${variant === 'ai' ? 'rounded-tl-sm' : isMine ? 'rounded-tr-sm' : 'rounded-tl-sm'}`}
         style={cardStyle}
       >
-          <div className="mb-1 flex items-center justify-between gap-2 text-[8px]" style={subtleTextStyle}>
-          <span className="truncate">{authorName}</span>
+          <div className="mb-1 flex items-center justify-between gap-2 text-[9px]" style={subtleTextStyle}>
+          <span className="truncate font-semibold" style={{ color: token.colorText }}>{authorName}</span>
           <span className="shrink-0 inline-flex items-center gap-1">
             {statusNode}
             <span>{createdAtLabel}</span>
           </span>
         </div>
 
-        {replyText ? (
-          <div className="mb-2 rounded-xl px-2 py-1.5 text-[10px]" style={replyStyle}>
+        {(replyText || replyAttachments.length > 0) ? (
+          <div
+            role={onReplyPreviewClick ? 'button' : undefined}
+            tabIndex={onReplyPreviewClick ? 0 : undefined}
+            className={`mb-2 block w-full rounded-lg px-2.5 py-1.5 text-right text-[10px] transition ${onReplyPreviewClick ? 'cursor-pointer hover:opacity-85' : 'cursor-default'}`}
+            style={replyStyle}
+            onClick={(event) => {
+              if (!onReplyPreviewClick) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onReplyPreviewClick();
+            }}
+            onKeyDown={(event) => {
+              if (!onReplyPreviewClick || (event.key !== 'Enter' && event.key !== ' ')) return;
+              event.preventDefault();
+              event.stopPropagation();
+              onReplyPreviewClick();
+            }}
+          >
             <span className="font-medium" style={{ color: token.colorText }}>
               پاسخ به یادداشت "{replyAuthorName || 'کاربر'}":
             </span>{' '}
-            <span className="whitespace-pre-wrap">
-              "{renderText(replyText)}"
-            </span>
+            {replyText ? (
+              <span className="line-clamp-2 whitespace-pre-wrap">
+                "{renderText(replyText)}"
+              </span>
+            ) : null}
+            {replyAttachments.length > 0 ? (
+              <span className="mt-1.5 flex flex-wrap gap-1.5">
+                {replyAttachments.slice(0, 3).map(renderReplyAttachmentPreview)}
+                {replyAttachments.length > 3 ? (
+                  <span className="rounded-full px-2 py-1 text-[9px]" style={{ background: token.colorFillTertiary, color: token.colorTextSecondary }}>
+                    +{replyAttachments.length - 3}
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
           </div>
         ) : null}
 
@@ -412,13 +490,25 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         {footer ? <div className="mt-2 text-[9px]" style={subtleTextStyle}>{footer}</div> : null}
         {isEdited ? <div className="mt-1.5 text-[9px]" style={subtleTextStyle}>ویرایش شده</div> : null}
 
-        <div className="mt-1.5 flex items-center gap-0.5">
+        <div className="mt-1.5 flex items-center gap-0.5 opacity-65 transition group-hover/message:opacity-100 focus-within:opacity-100">
           <Button type="text" size="small" icon={<CopyOutlined />} onClick={handleCopyText} disabled={!String(text || '').trim()} />
           {onForward ? <Button type="text" size="small" icon={<ForwardOutlined />} onClick={onForward} /> : null}
+          {onLike ? (
+            <Button
+              type="text"
+              size="small"
+              icon={likedByMe ? <LikeFilled /> : <LikeOutlined />}
+              onClick={onLike}
+              className={likedByMe ? '!text-rose-500' : ''}
+            >
+              {likeCount > 0 ? likeCount : null}
+            </Button>
+          ) : null}
           {onReply ? <Button type="text" size="small" icon={<EnterOutlined />} onClick={onReply} /> : null}
           {onEdit ? <Button type="text" size="small" icon={<EditOutlined />} onClick={onEdit} /> : null}
           {onDelete ? <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={onDelete} /> : null}
         </div>
+      </div>
       </div>
     </div>
   </div>

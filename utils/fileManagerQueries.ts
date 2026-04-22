@@ -6,6 +6,7 @@ import {
   syncLegacyRecordFilesBatchToFileManager,
   syncLegacyRecordFilesToFileManager,
 } from './fileManagerCompat';
+import type { FileFolderRow } from './fileManagerTypes';
 
 export type FileManagerListItem = {
   id: string;
@@ -27,6 +28,41 @@ export type FileManagerListItem = {
   source_record_id?: string | null;
   source_record_title?: string | null;
   visibility?: 'private' | 'org' | 'public' | null;
+};
+
+export type FileManagerTreeFolder = {
+  key: string;
+  label: string;
+  parentKey?: string | null;
+  count?: number;
+  isSystem?: boolean;
+  moduleId?: string | null;
+  recordId?: string | null;
+  folderId?: string | null;
+};
+
+export type FileManagerTreeOptions = {
+  page?: number;
+  pageSize?: number;
+  folderKey?: string;
+  initialModuleId?: string | null;
+  initialRecordId?: string | null;
+  search?: string | null;
+  fileTypes?: Array<'image' | 'video' | 'file'>;
+  recordTitleMap?: Record<string, string>;
+  moduleTitleMap?: Record<string, string>;
+};
+
+export type FileManagerTreeResult = {
+  folders: FileManagerTreeFolder[];
+  items: FileManagerListItem[];
+  allItems: FileManagerListItem[];
+  activeFolderKey: string;
+  initialFolderKey: string;
+  totalItems: number;
+  page: number;
+  pageSize: number;
+  recordTitleMap: Record<string, string>;
 };
 
 const guessTypeFromUrl = (url?: string | null): 'image' | 'video' | 'file' => {
@@ -129,6 +165,84 @@ const dedupeItems = (items: FileManagerListItem[]) => {
       byId.set(key, item);
     }
   });
+  return Array.from(byId.values());
+};
+
+const moduleFolderKey = (moduleId: string) => `module:${moduleId}`;
+const recordFolderKey = (moduleId: string, recordId: string) => `record:${moduleId}:${recordId}`;
+const physicalFolderKey = (folderId: string) => `folder:${folderId}`;
+
+const parseTreeFolderKey = (key?: string | null) => {
+  const value = String(key || '').trim();
+  if (!value || value === 'all') return { kind: 'all' as const };
+  if (value.startsWith('module:')) return { kind: 'module' as const, moduleId: value.slice('module:'.length) };
+  if (value.startsWith('record:')) {
+    const rest = value.slice('record:'.length);
+    const [moduleId, ...recordParts] = rest.split(':');
+    return { kind: 'record' as const, moduleId, recordId: recordParts.join(':') };
+  }
+  if (value.startsWith('folder:')) return { kind: 'folder' as const, folderId: value.slice('folder:'.length) };
+  return { kind: 'legacy' as const, value };
+};
+
+const matchesTreeSearch = (
+  item: FileManagerListItem,
+  search: string,
+  recordTitleMap: Record<string, string>,
+  moduleTitleMap: Record<string, string>,
+) => {
+  if (!search) return true;
+  const moduleTitle = moduleTitleMap[item.module_id] || item.module_id;
+  const recordTitle = recordTitleMap[`${item.module_id}:${item.record_id}`] || item.source_record_title || item.record_id;
+  const haystack = [
+    item.file_name,
+    item.file_url,
+    item.mime_type,
+    moduleTitle,
+    recordTitle,
+    item.source_record_title,
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+  return haystack.includes(search);
+};
+
+const loadFileFoldersByIds = async (
+  folderIds: string[],
+  options?: { moduleId?: string | null; recordId?: string | null },
+): Promise<FileFolderRow[]> => {
+  const ids = Array.from(new Set(folderIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  const hasTables = await detectFileManagerTables(supabase, false);
+  if (!hasTables) return [];
+  const byId = new Map<string, FileFolderRow>();
+
+  if (ids.length > 0) {
+    const { data, error } = await supabase
+      .from('file_folders')
+      .select('*')
+      .in('id', ids);
+    if (error) {
+      console.warn('Could not load file folders for tree', error);
+    } else {
+      (data || []).forEach((folder: FileFolderRow) => byId.set(String(folder.id), folder));
+    }
+  }
+
+  const moduleId = String(options?.moduleId || '').trim();
+  const recordId = String(options?.recordId || '').trim();
+  if (moduleId && recordId) {
+    const { data, error } = await supabase
+      .from('file_folders')
+      .select('*')
+      .eq('module_id', moduleId)
+      .eq('record_id', recordId)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.warn('Could not load scoped file folders for tree', error);
+    } else {
+      (data || []).forEach((folder: FileFolderRow) => byId.set(String(folder.id), folder));
+    }
+  }
+
   return Array.from(byId.values());
 };
 
@@ -285,4 +399,152 @@ export const loadRecordFileItems = async (
     throw error;
   }
   return (data || []).map(mapLegacyRecordFile).filter((item) => item.file_url);
+};
+
+export const buildFileManagerTree = async (
+  options: FileManagerTreeOptions = {},
+): Promise<FileManagerTreeResult> => {
+  const pageSize = Math.max(1, Math.min(200, Number(options.pageSize || 60)));
+  const page = Math.max(1, Number(options.page || 1));
+  const typeSet = new Set(options.fileTypes || []);
+  const search = String(options.search || '').trim().toLowerCase();
+  const recordTitleMap = { ...(options.recordTitleMap || {}) };
+  const moduleTitleMap = { ...(options.moduleTitleMap || {}) };
+
+  const loadedItems = await loadGalleryFileItems();
+  const baseItems = loadedItems.filter((item) => {
+    if (!String(item.file_url || '').trim()) return false;
+    if (typeSet.size > 0 && !typeSet.has(item.file_type)) return false;
+    return matchesTreeSearch(item, search, recordTitleMap, moduleTitleMap);
+  });
+
+  const folderRows = await loadFileFoldersByIds(baseItems.map((item) => item.folder_id || ''), {
+    moduleId: options.initialModuleId,
+    recordId: options.initialRecordId,
+  });
+  const folderMap = new Map(folderRows.map((folder) => [String(folder.id), folder]));
+
+  const countByModule = new Map<string, number>();
+  const countByRecord = new Map<string, number>();
+  const countByFolder = new Map<string, number>();
+  baseItems.forEach((item) => {
+    const moduleId = String(item.module_id || '').trim();
+    const recordId = String(item.record_id || '').trim();
+    if (moduleId) countByModule.set(moduleId, (countByModule.get(moduleId) || 0) + 1);
+    if (moduleId && recordId) {
+      const recordKey = `${moduleId}:${recordId}`;
+      countByRecord.set(recordKey, (countByRecord.get(recordKey) || 0) + 1);
+      if (!recordTitleMap[recordKey]) {
+        recordTitleMap[recordKey] = String(item.source_record_title || recordId);
+      }
+    }
+    const folderId = String(item.folder_id || '').trim();
+    if (folderId) countByFolder.set(folderId, (countByFolder.get(folderId) || 0) + 1);
+  });
+
+  const folders: FileManagerTreeFolder[] = [
+    { key: 'all', label: 'همه فایل‌ها', count: baseItems.length, isSystem: true },
+  ];
+
+  Array.from(countByModule.entries()).forEach(([moduleId, count]) => {
+    folders.push({
+      key: moduleFolderKey(moduleId),
+      parentKey: 'all',
+      label: moduleTitleMap[moduleId] || moduleId,
+      count,
+      isSystem: true,
+      moduleId,
+    });
+  });
+
+  Array.from(countByRecord.entries()).forEach(([recordKey, count]) => {
+    const [moduleId, ...recordParts] = recordKey.split(':');
+    const recordId = recordParts.join(':');
+    folders.push({
+      key: recordFolderKey(moduleId, recordId),
+      parentKey: moduleFolderKey(moduleId),
+      label: recordTitleMap[recordKey] || recordId,
+      count,
+      isSystem: true,
+      moduleId,
+      recordId,
+    });
+  });
+
+  folderRows.forEach((folder) => {
+    const folderId = String(folder.id || '').trim();
+    if (!folderId) return;
+    const moduleId = String(folder.module_id || '').trim();
+    const recordId = String(folder.record_id || '').trim();
+    const parentId = String(folder.parent_id || '').trim();
+    const parentKey = parentId && folderMap.has(parentId)
+      ? physicalFolderKey(parentId)
+      : moduleId && recordId
+        ? recordFolderKey(moduleId, recordId)
+        : 'all';
+    folders.push({
+      key: physicalFolderKey(folderId),
+      parentKey,
+      label: String(folder.name || folder.id),
+      count: countByFolder.get(folderId) || 0,
+      isSystem: folder.is_system === true,
+      moduleId,
+      recordId,
+      folderId,
+    });
+  });
+
+  const initialFolderKey = (() => {
+    const moduleId = String(options.initialModuleId || '').trim();
+    const recordId = String(options.initialRecordId || '').trim();
+    if (moduleId && recordId && countByRecord.has(`${moduleId}:${recordId}`)) return recordFolderKey(moduleId, recordId);
+    if (moduleId && countByModule.has(moduleId)) return moduleFolderKey(moduleId);
+    return 'all';
+  })();
+
+  const requestedFolderKey = String(options.folderKey || '').trim();
+  const activeFolderKey = requestedFolderKey && folders.some((folder) => folder.key === requestedFolderKey)
+    ? requestedFolderKey
+    : initialFolderKey;
+  const parsed = parseTreeFolderKey(activeFolderKey);
+  const folderRow = parsed.kind === 'folder' ? folderMap.get(parsed.folderId) : null;
+  const physicalFolderIdsUnderRecord = new Set(
+    folderRows
+      .filter((folder) => {
+        if (parsed.kind !== 'record') return false;
+        return String(folder.module_id || '') === parsed.moduleId && String(folder.record_id || '') === parsed.recordId;
+      })
+      .map((folder) => String(folder.id)),
+  );
+
+  const scopedItems = baseItems.filter((item) => {
+    if (parsed.kind === 'all') return false;
+    if (parsed.kind === 'module') return false;
+    if (parsed.kind === 'record') {
+      if (item.module_id !== parsed.moduleId || item.record_id !== parsed.recordId) return false;
+      const folderId = String(item.folder_id || '').trim();
+      return !folderId || !physicalFolderIdsUnderRecord.has(folderId);
+    }
+    if (parsed.kind === 'folder') {
+      const folderId = String(item.folder_id || '').trim();
+      if (folderId === parsed.folderId) return true;
+      if (!folderRow) return false;
+      return false;
+    }
+    if (parsed.kind === 'legacy') return item.module_id === parsed.value || item.file_type === parsed.value;
+    return false;
+  });
+
+  const start = (page - 1) * pageSize;
+  return {
+    folders,
+    items: scopedItems.slice(start, start + pageSize),
+    allItems: baseItems,
+    activeFolderKey,
+    initialFolderKey,
+    totalItems: scopedItems.length,
+    page,
+    pageSize,
+    recordTitleMap,
+  };
 };

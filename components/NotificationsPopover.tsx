@@ -291,6 +291,12 @@ type ReadReceiptEntry = {
   readAt: string | null;
 };
 
+type LikeReceiptEntry = {
+  userId: string;
+  userName: string;
+  likedAt: string | null;
+};
+
 type NotificationReadStateRow = {
   section: NotificationStateSectionKey;
   source_type: string;
@@ -387,6 +393,7 @@ const isUuidValue = (value: unknown) => UUID_REGEX.test(String(value || '').trim
 const formatBadgeCount = (count: number) => (count ? toPersianNumber(count) : 0);
 const ENTRY_ANIMATION_WINDOW_MS = 12_000;
 const READ_RECEIPTS_KEY = 'read_receipts';
+const LIKES_KEY = 'likes';
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
@@ -491,6 +498,41 @@ const hasReadReceiptForUser = (box: any, userId?: string | null) => {
   const normalizedUserId = String(userId || '').trim();
   if (!normalizedUserId) return false;
   return Boolean(readReceiptMapFromBox(box)[normalizedUserId]);
+};
+
+const getLikesSource = (box: any) => {
+  if (!isPlainRecord(box)) return null;
+  return box.likes || box.liked_by || box.likedBy || null;
+};
+
+const getLikeUserId = (value: any, fallback?: string) =>
+  String(value?.user_id || value?.userId || value?.id || fallback || '').trim();
+
+const getLikeUserName = (value: any) =>
+  String(value?.user_name || value?.userName || value?.name || value?.display_name || value?.displayName || '').trim();
+
+const getLikeAt = (value: any) =>
+  String(value?.liked_at || value?.likedAt || value?.created_at || value?.createdAt || value?.at || '').trim() || null;
+
+const likeReceiptMapFromBox = (box: any): Record<string, any> => {
+  const source = getLikesSource(box);
+  const map: Record<string, any> = {};
+  if (Array.isArray(source)) {
+    source.forEach((item) => {
+      const userId = getLikeUserId(item);
+      if (!userId) return;
+      map[userId] = item;
+    });
+    return map;
+  }
+  if (isPlainRecord(source)) {
+    Object.entries(source).forEach(([key, value]) => {
+      const userId = getLikeUserId(value, key);
+      if (!userId) return;
+      map[userId] = isPlainRecord(value) ? value : { liked_at: String(value || '').trim() || null };
+    });
+  }
+  return map;
 };
 
 const RESPONSIBILITY_REALTIME_TABLES = Array.from(
@@ -771,6 +813,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const initialTab = normalizeTabForVariant(variant, requestedTab);
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState<any[]>([]);
+  const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [responsibilities, setResponsibilities] = useState<any[]>([]);
   const [botGroups, setBotGroups] = useState<CounterpartyBotGroupRow[]>([]);
@@ -2153,6 +2196,10 @@ useEffect(() => {
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
     if (shouldLoadNotes) setNotes(notesData);
+    if (shouldLoadNotes) {
+      const inboxItems = await safeFetch(() => fetchNotificationInboxSection('notes', 200), 'notes', null as NotificationInboxItemRow[] | null);
+      setNoteLikeNotifications((inboxItems || []).filter((item) => String(item?.source_type || '') === 'note_like'));
+    }
     if (shouldLoadTasks) setTasks(tasksData);
     if (shouldLoadResponsibilities) setResponsibilities(responsibilitiesData);
     if (shouldLoadSmsMessages) setSmsMessages(smsData);
@@ -2329,6 +2376,18 @@ useEffect(() => {
         ...row,
         counterparty_label: key ? (counterpartyLabelMap[key] || null) : null,
       };
+    }).sort((a, b) => {
+      const left = Math.max(
+        new Date(a.last_inbound_at || '').getTime() || 0,
+        new Date(a.last_outbound_at || '').getTime() || 0,
+        new Date(a.updated_at || '').getTime() || 0,
+      );
+      const right = Math.max(
+        new Date(b.last_inbound_at || '').getTime() || 0,
+        new Date(b.last_outbound_at || '').getTime() || 0,
+        new Date(b.updated_at || '').getTime() || 0,
+      );
+      return right - left;
     });
     setBotGroups(enrichedRows);
     setSelectedBotGroupId((prev) => {
@@ -2803,7 +2862,9 @@ useEffect(() => {
       (!authorId || authorId !== String(profile.id || ''))
       && !isNotificationRead('notes', 'note', String(n?.id || ''), seenNoteIds.has(String(n?.id || '')))
     );
-  }).length;
+  }).length + noteLikeNotifications.filter((item) => (
+    !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
+  )).length;
   const tasksCount = tasks.filter((t: any) => (
     !isNotificationRead('tasks', 'task', String(t?.id || ''), seenTaskIds.has(String(t?.id || '')))
   )).length;
@@ -3197,6 +3258,23 @@ useEffect(() => {
       .sort((left, right) => new Date(right!.readAt || 0).getTime() - new Date(left!.readAt || 0).getTime()) as ReadReceiptEntry[];
   }, [currentUserDisplayName, directoryUserMap, profile.id]);
 
+  const normalizeLikeReceipts = useCallback((box: any): LikeReceiptEntry[] => {
+    const map = likeReceiptMapFromBox(box);
+    return Object.entries(map)
+      .map(([fallbackUserId, value]) => {
+        const userId = getLikeUserId(value, fallbackUserId);
+        if (!userId) return null;
+        const directoryUser = directoryUserMap[userId];
+        return {
+          userId,
+          userName: directoryUser?.display_name || getLikeUserName(value) || (userId === String(profile.id || '') ? currentUserDisplayName : userId),
+          likedAt: getLikeAt(value),
+        } as LikeReceiptEntry;
+      })
+      .filter(Boolean)
+      .sort((left, right) => new Date(right!.likedAt || 0).getTime() - new Date(left!.likedAt || 0).getTime()) as LikeReceiptEntry[];
+  }, [currentUserDisplayName, directoryUserMap, profile.id]);
+
   const buildReadReceiptBox = useCallback((box: any, readAt: string) => {
     const currentUserId = String(profile.id || '').trim();
     const base = isPlainRecord(box) ? { ...box } : {};
@@ -3211,13 +3289,48 @@ useEffect(() => {
     return base;
   }, [currentUserDisplayName, profile.id]);
 
-  const renderReadReceiptStatus = useCallback((receipts: ReadReceiptEntry[], isUnread: boolean) => {
+  const toggleNoteLike = useCallback(async (note: any) => {
+    const currentUserId = String(profile.id || '').trim();
+    if (!currentUserId || !note?.id) return;
+    const metadata = isPlainRecord(note?.metadata) ? { ...note.metadata } : {};
+    const likes = likeReceiptMapFromBox(metadata);
+    if (likes[currentUserId]) {
+      delete likes[currentUserId];
+    } else {
+      likes[currentUserId] = {
+        user_id: currentUserId,
+        user_name: currentUserDisplayName,
+        liked_at: new Date().toISOString(),
+      };
+    }
+    const nextMetadata = { ...metadata, [LIKES_KEY]: likes };
+    setNotes((prev) => prev.map((row: any) => (
+      String(row?.id || '') === String(note.id) ? { ...row, metadata: nextMetadata } : row
+    )));
+    setSelectedConversationNotes((prev) => prev
+      ? prev.map((row: any) => (String(row?.id || '') === String(note.id) ? { ...row, metadata: nextMetadata } : row))
+      : prev
+    );
+    const { error } = await supabase.from('notes').update({ metadata: nextMetadata }).eq('id', note.id);
+    if (error) {
+      setNotes((prev) => prev.map((row: any) => (
+        String(row?.id || '') === String(note.id) ? note : row
+      )));
+      setSelectedConversationNotes((prev) => prev
+        ? prev.map((row: any) => (String(row?.id || '') === String(note.id) ? note : row))
+        : prev
+      );
+      throw error;
+    }
+  }, [currentUserDisplayName, profile.id]);
+
+  const renderReadReceiptStatus = useCallback((receipts: ReadReceiptEntry[], likes: LikeReceiptEntry[] = []) => {
     const content = (
       <div className="w-[230px] max-w-[70vw]">
-        {receipts.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="هنوز خوانده نشده" />
-        ) : (
-          <div className="max-h-[240px] overflow-y-auto space-y-2 py-1">
+        <div className="mb-2 text-[11px] font-bold text-gray-600 dark:text-gray-300">دیده‌شده‌ها</div>
+        {receipts.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="هنوز خوانده نشده" /> : null}
+        {receipts.length > 0 ? (
+          <div className="max-h-[150px] overflow-y-auto space-y-2 py-1">
             {receipts.map((receipt) => (
               <div key={`${receipt.userId}-${receipt.readAt || 'read'}`} className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/5">
                 <span className="min-w-0 truncate font-medium">{receipt.userName}</span>
@@ -3225,17 +3338,24 @@ useEffect(() => {
               </div>
             ))}
           </div>
-        )}
+        ) : null}
+        <div className="mt-3 border-t border-gray-100 pt-2 text-[11px] font-bold text-gray-600 dark:border-white/10 dark:text-gray-300">پسندیده‌ها</div>
+        {likes.length === 0 ? <div className="py-2 text-xs text-gray-400">هنوز پسندیده نشده</div> : null}
+        {likes.length > 0 ? (
+          <div className="max-h-[150px] overflow-y-auto space-y-2 py-1">
+            {likes.map((like) => (
+              <div key={`${like.userId}-${like.likedAt || 'like'}`} className="flex items-start justify-between gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/5">
+                <span className="min-w-0 truncate font-medium">{like.userName}</span>
+                <span className="shrink-0 text-[11px] text-gray-500">{like.likedAt ? safeJalaliFormat(like.likedAt, 'YYYY/MM/DD HH:mm') : '-'}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
 
     return (
       <span className="inline-flex items-center gap-1">
-        {isUnread ? (
-          <span className="inline-flex h-4 items-center rounded-full bg-red-500 px-1.5 text-[9px] font-bold leading-none text-white">
-            جدید
-          </span>
-        ) : null}
         <Popover trigger="click" placement="top" content={content}>
           <button
             type="button"
@@ -3449,8 +3569,8 @@ useEffect(() => {
   const badgeColor = 'rgb(var(--brand-500-rgb))';
   const overlaySource = useMemo(() => `notifications:${variant}`, [variant]);
   const drawerHeaderStyle: React.CSSProperties = {
-    background: 'linear-gradient(135deg, rgb(var(--brand-700-rgb)) 0%, rgb(var(--brand-500-rgb)) 100%)',
-    borderBottom: '1px solid rgba(var(--brand-300-rgb), 0.35)',
+    background: 'rgb(var(--app-dark-surface-rgb))',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
     color: '#fff',
   };
   const desktopDrawerBodyStyle: React.CSSProperties = {
@@ -3498,6 +3618,18 @@ useEffect(() => {
       currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
     });
   }
+  const scrollMessageIntoView = useCallback((domId: string) => {
+    if (typeof document === 'undefined') return;
+    const normalizedId = String(domId || '').trim();
+    if (!normalizedId) return;
+    const target = document.getElementById(normalizedId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('ring-2', 'ring-red-400', 'rounded-2xl');
+    window.setTimeout(() => {
+      target.classList.remove('ring-2', 'ring-red-400', 'rounded-2xl');
+    }, 1400);
+  }, []);
   const persistNoteReadReceipts = useCallback(async (rows: any[], readAt: string) => {
     const currentUserId = String(profile.id || '').trim();
     if (!currentUserId) return;
@@ -3746,6 +3878,7 @@ useEffect(() => {
   }, [activeDrawerSection, botMessages, displayedChatNotes, displayedSmsMessages, displayedVoipCalls, markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, responsibilities, selectedBotGroupId, selectedNoteUserId, tasks, variant]);
 
   useEffect(() => {
+    setSelectedConversationNotes(null);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
     noteShouldStickToBottomRef.current = true;
@@ -3874,10 +4007,15 @@ useEffect(() => {
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
+    const unreadLikeEntries = noteLikeNotifications
+      .filter((item) => !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false))
+      .map((item) => ({ section: 'notes' as const, sourceType: 'note_like', sourceId: String(item.source_id || '') }))
+      .filter((item) => item.sourceId);
+    markNotificationEntriesRead(unreadLikeEntries);
     if (!selectedNoteUserId) return;
     if (!noteShouldStickToBottomRef.current) return;
     markNotesAsSeen(displayedChatNotes);
-  }, [activeDrawerSection, displayedChatNotes, markNotesAsSeen, open, selectedNoteUserId]);
+  }, [activeDrawerSection, displayedChatNotes, isNotificationRead, markNotificationEntriesRead, markNotesAsSeen, noteLikeNotifications, open, selectedNoteUserId]);
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
@@ -4894,10 +5032,10 @@ useEffect(() => {
       : `${toPersianNumber(String(myNoteStats.noteCount || 0))} یادداشت`;
 
     return (
-      <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+      <div dir="ltr" className="flex flex-1 min-h-0 bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
         {withUserSidebar ? (
-          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.18)] bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)]">
+          <div dir="rtl" className="order-last w-[208px] border-l border-slate-200/55 bg-white/72 dark:border-white/[0.07] dark:bg-white/[0.025]">
+            <div className="px-4 py-3 border-b border-slate-200/45 bg-white/55 dark:border-white/[0.07] dark:bg-white/[0.025]">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گفتگوها</div>
                 <Button
@@ -4931,8 +5069,8 @@ useEffect(() => {
                 }}
                 className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                   !selectedNoteUserId
-                    ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
-                    : 'hover:bg-white/80 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
+                    ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
+                    : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -4948,12 +5086,12 @@ useEffect(() => {
                 }}
                 className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                   selectedNoteUserId === SYSTEM_MESSAGES_USER_ID
-                    ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
-                    : 'hover:bg-white/80 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
+                    ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
+                    : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <Avatar size={36} className="!bg-[rgba(var(--brand-100-rgb),0.95)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-white/10 dark:!text-[rgb(var(--brand-300-rgb))]">
+                  <Avatar size={36} className="!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200">
                     <BellOutlined />
                   </Avatar>
                   <div className="min-w-0 flex-1">
@@ -4979,8 +5117,8 @@ useEffect(() => {
                   }}
                   className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                     selectedNoteUserId === item.id
-                      ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
-                      : 'hover:bg-white/80 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
+                      ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
+                      : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -5012,8 +5150,8 @@ useEffect(() => {
           </div>
         ) : null}
 
-        <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-          <div className="border-b border-[rgba(var(--brand-200-rgb),0.55)] bg-white px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+        <div className="flex flex-col flex-1 min-h-0 bg-white/82 dark:bg-[#1a1518]">
+          <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex items-center gap-3">
                 {selectedChatGroup || selectedNoteUser ? (
@@ -5100,7 +5238,7 @@ useEffect(() => {
           <div
             ref={notesScrollContainerRef}
             onScroll={handleNotesScroll}
-            className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-2.5 py-2.5' : 'px-2 py-2'} space-y-2.5`}
+            className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10]`}
           >
             {loadingNotes ? (
               <div className="space-y-3">
@@ -5119,6 +5257,7 @@ useEffect(() => {
                 const author = directoryUserMap[String(note.author_id || '')];
                 const authorName = isSystem ? 'پیام‌های سیستم' : (isMine ? 'شما' : (note.author_name || author?.display_name || authorNameMap[note.author_id] || 'کاربر سیستم'));
                 const replyTarget = note.reply_to ? noteMap.get(note.reply_to) : null;
+                const replyParsedContent = replyTarget ? parseNoteContent(replyTarget.content) : null;
                 const replyAuthorName = replyTarget
                   ? (
                     replyTarget.author_id && profile.id && replyTarget.author_id === profile.id
@@ -5135,8 +5274,10 @@ useEffect(() => {
                 const mentionUsers = (note.mention_user_ids || []).map((id: string) => directoryUserMap[String(id)]?.display_name || id);
                 const mentionRoles = (note.mention_role_ids || []).map((id: string) => roleLookup[String(id)] || id);
                 const noteReadReceipts = normalizeReadReceipts(note.metadata);
+                const noteLikeReceipts = normalizeLikeReceipts(note.metadata);
                 const noteId = String(note.id || '');
                 const isUnreadNote = !isMine && !isNotificationRead('notes', 'note', noteId, seenNoteIds.has(noteId));
+                const likedByMe = Boolean(likeReceiptMapFromBox(note.metadata)[String(profile.id || '').trim()]);
 
                 return (
                   <div key={note.id}>
@@ -5149,13 +5290,19 @@ useEffect(() => {
                       avatarFallback={authorName}
                       mentionUsers={mentionUsers}
                       mentionRoles={mentionRoles}
-                      replyText={replyTarget ? parseNoteContent(replyTarget.content).text : null}
+                      replyText={replyParsedContent?.text || null}
                       replyAuthorName={replyAuthorName}
+                      replyAttachments={replyParsedContent?.attachments || []}
+                      onReplyPreviewClick={replyTarget ? () => scrollMessageIntoView(`note-message-${String(replyTarget.id)}`) : undefined}
+                      messageDomId={`note-message-${String(note.id)}`}
                       isMine={Boolean(isMine)}
                       animateOnMount={shouldAnimateChatEntry(note.created_at)}
                       variant="default"
                       renderTemplateBold={isSystem}
-                      statusNode={renderReadReceiptStatus(noteReadReceipts, isUnreadNote)}
+                      statusNode={renderReadReceiptStatus(noteReadReceipts, noteLikeReceipts)}
+                      unreadIndicator={isUnreadNote}
+                      likeCount={noteLikeReceipts.length}
+                      likedByMe={likedByMe}
                       isEdited={Boolean(note.is_edited)}
                       isEditing={editingNoteId === note.id}
                       editingValue={editingNoteValue}
@@ -5178,6 +5325,12 @@ useEffect(() => {
                         setNoteRecordId(note.record_id || null);
                       }}
                       onForward={() => openForwardModal(note)}
+                      onLike={!isSystem ? () => {
+                        void toggleNoteLike(note).catch((error) => {
+                          console.warn('Could not toggle note like', error);
+                          message.error(toFaErrorMessage(error, 'ثبت پسندیدن پیام ناموفق بود.'));
+                        });
+                      } : undefined}
                       onEdit={isMine ? () => {
                         setEditingNoteId(note.id);
                         setEditingNoteValue(parsedContent.text || '');
@@ -5204,7 +5357,7 @@ useEffect(() => {
             <div className="pb-1 text-center">
               <button
                 type="button"
-                className="inline-flex items-center rounded-full border border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-100-rgb),0.95)] px-3 py-1 text-xs font-semibold text-[rgb(var(--brand-700-rgb))] shadow-sm transition hover:bg-[rgba(var(--brand-100-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.3)] dark:bg-[rgba(var(--brand-700-rgb),0.35)] dark:text-[rgb(var(--brand-300-rgb))]"
+                className="inline-flex items-center rounded-full border border-slate-300/45 bg-white/95 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-slate-200"
                 onClick={() => {
                   noteShouldStickToBottomRef.current = true;
                   noteForceScrollToBottomRef.current = true;
@@ -5329,8 +5482,8 @@ useEffect(() => {
           />
         </div>
         {withMobileUserRail ? (
-          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.55)] bg-white dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="flex h-full flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden px-1 py-2">
+          <div dir="rtl" className="w-[54px] shrink-0 overflow-hidden border-l border-slate-200/45 bg-white/60 dark:border-white/[0.07] dark:bg-white/[0.025]">
+            <div className="flex h-full flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden px-1 py-1.5">
               <div className="sticky top-0 z-10 flex w-full justify-center">
                 <Popover
                   trigger="click"
@@ -5377,12 +5530,12 @@ useEffect(() => {
               <button
                 type="button"
                 onClick={() => setSelectedNoteUserId(null)}
-                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/80 dark:hover:bg-white/5"
+                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
               >
                 <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border text-[10px] font-bold ${
                   !selectedNoteUserId
-                    ? 'border-[rgba(var(--brand-400-rgb),0.75)] bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
-                    : 'border-[rgba(var(--brand-200-rgb),0.7)] bg-white/90 text-gray-600 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-white/5 dark:text-gray-200'
+                    ? 'border-[rgba(var(--brand-500-rgb),0.24)] bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
+                    : 'border-slate-200/45 bg-white/70 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-gray-200'
                 }`}>
                   من
                 </div>
@@ -5392,15 +5545,15 @@ useEffect(() => {
               <button
                 type="button"
                 onClick={() => setSelectedNoteUserId((prev) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID))}
-                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/80 dark:hover:bg-white/5"
+                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
                 title="پیام‌های سیستم"
               >
                 <div className="relative">
                   <Badge count={systemNoteStats.unreadCount > 0 ? toPersianNumber(String(systemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
                     <Avatar
                       size={38}
-                      className={`!bg-[rgba(var(--brand-100-rgb),0.95)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-white/10 dark:!text-[rgb(var(--brand-300-rgb))] ${
-                        selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 ring-offset-white dark:ring-offset-[rgba(var(--app-dark-surface-rgb),1)]' : ''
+                      className={`!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200 ${
+                        selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''
                       }`}
                     >
                       <BellOutlined />
@@ -5417,7 +5570,7 @@ useEffect(() => {
                   key={item.id}
                   type="button"
                   onClick={() => setSelectedNoteUserId((prev) => (prev === item.id ? null : item.id))}
-                  className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/80 dark:hover:bg-white/5"
+                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
                   title={item.displayName}
                 >
                   <div className="relative">
@@ -5425,7 +5578,7 @@ useEffect(() => {
                       <Avatar
                         size={38}
                         src={!item.isGroup ? item.avatarUrl || undefined : undefined}
-                        className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 ring-offset-white dark:ring-offset-[rgba(var(--app-dark-surface-rgb),1)]' : ''} ${item.isGroup ? '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300' : ''}`}
+                        className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${item.isGroup ? '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300' : ''}`}
                       >
                         {item.isGroup ? <TeamOutlined /> : (!item.avatarUrl && String(item.displayName || '?').slice(0, 1))}
                       </Avatar>
@@ -5472,10 +5625,10 @@ useEffect(() => {
               return (
                 <div key={note.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
                   <div
-                    className={`w-[92%] rounded-2xl px-3 py-2 border shadow-sm ${
+                    className={`w-[92%] rounded-2xl px-3 py-2 border shadow-[0_6px_18px_rgba(15,23,42,0.05)] ${
                       isMine
-                        ? 'bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-600-rgb),0.2)] border-[rgba(var(--brand-300-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.35)] rounded-tr-sm'
-                      : 'bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.94)] border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-tl-sm'
+                        ? 'bg-[rgba(var(--brand-500-rgb),0.08)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] border-[rgba(var(--brand-500-rgb),0.18)] dark:border-[rgba(var(--brand-300-rgb),0.16)] rounded-tr-sm'
+                      : 'bg-white/85 dark:bg-[rgba(var(--app-dark-surface-rgb),0.86)] border-[rgba(var(--brand-200-rgb),0.24)] dark:border-[rgba(var(--brand-300-rgb),0.14)] rounded-tl-sm'
                     }`}
                   >
                     <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
@@ -5483,7 +5636,7 @@ useEffect(() => {
                       <span>{safeJalaliFormat(note.created_at, 'YYYY/MM/DD HH:mm')}</span>
                     </div>
                     {replyTarget && (
-                      <div className="text-[11px] text-gray-600 dark:text-gray-300 bg-[rgba(var(--brand-50-rgb),0.96)] dark:bg-[rgba(var(--brand-700-rgb),0.38)] rounded-lg p-2 mb-2">
+                      <div className="text-[11px] text-gray-600 dark:text-gray-300 bg-slate-100/80 dark:bg-white/[0.055] rounded-lg p-2 mb-2">
                         پاسخ به: {renderLinkifiedText(String(parseNoteContent(replyTarget.content).text || ''), `note-reply-${note.id}`)}
                       </div>
                     )}
@@ -5498,7 +5651,7 @@ useEffect(() => {
                             href={attachment.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-full border border-[rgba(var(--brand-300-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.9)] px-2.5 py-1 text-[11px] text-[rgb(var(--brand-700-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] dark:text-[rgb(var(--brand-300-rgb))]"
+                            className="inline-flex items-center gap-1 rounded-full border border-slate-300/40 bg-slate-100/70 px-2.5 py-1 text-[11px] text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.045] dark:text-slate-200"
                           >
                             <span className="max-w-[180px] truncate">{attachment.name}</span>
                           </a>
@@ -5583,7 +5736,7 @@ useEffect(() => {
             </Button>
           )}
         </div>
-      <div className="border-t border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)] bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))] px-4 py-3">
+      <div className="border-t border-[rgba(var(--brand-200-rgb),0.18)] dark:border-[rgba(var(--brand-300-rgb),0.12)] bg-white/90 dark:bg-white/[0.02] px-4 py-3">
           <div className="flex items-center gap-2 mb-2">
             <Select
               placeholder="ماژول"
@@ -5624,7 +5777,7 @@ useEffect(() => {
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
               autoSize={{ minRows: 2, maxRows: 4 }}
-              className="rounded-[0.9rem] !border-[rgba(var(--brand-200-rgb),0.72)] dark:!border-[rgba(var(--brand-300-rgb),0.26)]"
+              className="rounded-[0.9rem] !border-[rgba(var(--brand-200-rgb),0.28)] dark:!border-[rgba(var(--brand-300-rgb),0.16)]"
               disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
             />
             <Select
@@ -5778,7 +5931,7 @@ useEffect(() => {
     return (
       <div className="h-full min-h-0 flex flex-col overflow-hidden">
         <div className={`min-h-0 flex-1 ${isDesktop ? 'grid grid-cols-[260px_minmax(0,1fr)]' : 'flex flex-col'}`}>
-          <div className={`${isDesktop ? 'border-l' : 'border-b'} border-[rgba(var(--brand-200-rgb),0.6)] dark:border-white/10 bg-[rgba(var(--brand-50-rgb),0.45)] dark:bg-white/5 min-h-0`}>
+          <div className={`${isDesktop ? 'border-l' : 'border-b'} border-slate-200/45 dark:border-white/[0.07] bg-slate-50/65 dark:bg-white/[0.025] min-h-0`}>
             {loadingSmsMessages && smsThreads.length === 0 ? (
               <div className="p-3">
                 <Skeleton active paragraph={{ rows: 4 }} />
@@ -5799,8 +5952,8 @@ useEffect(() => {
                     }}
                     className={`w-full rounded-xl border px-3 py-2 text-right transition-colors ${
                       activeThread?.id === thread.id
-                        ? 'border-[rgba(var(--brand-400-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.95)] dark:border-[rgba(var(--brand-300-rgb),0.32)] dark:bg-[rgba(var(--brand-700-rgb),0.14)]'
-                        : 'border-transparent bg-white/75 hover:bg-white dark:bg-transparent dark:hover:bg-white/5'
+                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
+                        : 'border-transparent bg-white/60 hover:bg-white/90 dark:bg-transparent dark:hover:bg-white/[0.055]'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -5813,7 +5966,7 @@ useEffect(() => {
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         {thread.unreadCount > 0 ? (
-                          <span className="rounded-full bg-[rgb(var(--brand-500-rgb))] px-2 py-0.5 text-[10px] text-white">
+                          <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
                             {toPersianNumber(String(thread.unreadCount))}
                           </span>
                         ) : null}
@@ -5825,7 +5978,7 @@ useEffect(() => {
                 ))}
               </div>
             ) : (
-              <div className="flex gap-2 overflow-x-auto px-3 py-2">
+              <div className="flex max-h-[92px] gap-1.5 overflow-x-auto px-2 py-1.5">
                 {smsThreads.map((thread) => (
                   <button
                     key={thread.id}
@@ -5834,17 +5987,17 @@ useEffect(() => {
                       setSelectedSmsThreadKey(thread.id);
                       if (thread.phone) setSmsRecipient(thread.phone);
                     }}
-                    className={`min-w-[148px] rounded-xl border px-3 py-2 text-right ${
+                    className={`min-w-[132px] rounded-xl border px-2.5 py-1.5 text-right ${
                       activeThread?.id === thread.id
-                        ? 'border-[rgba(var(--brand-400-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.95)] dark:border-[rgba(var(--brand-300-rgb),0.32)] dark:bg-[rgba(var(--brand-700-rgb),0.14)]'
-                        : 'border-transparent bg-white/75 dark:bg-transparent'
+                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
+                        : 'border-transparent bg-white/60 dark:bg-transparent'
                     }`}
                   >
-                    <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
+                    <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <span className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</span>
                       {thread.unreadCount > 0 ? (
-                        <span className="rounded-full bg-[rgb(var(--brand-500-rgb))] px-2 py-0.5 text-[10px] text-white">
+                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
                           {toPersianNumber(String(thread.unreadCount))}
                         </span>
                       ) : null}
@@ -5858,7 +6011,7 @@ useEffect(() => {
             )}
           </div>
           <div className="min-h-0 flex flex-col overflow-hidden">
-            <div className="border-b border-gray-100 dark:border-white/10 px-3 py-3">
+            <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
@@ -5887,7 +6040,7 @@ useEffect(() => {
                 />
               </div>
             </div>
-            <div ref={smsMessagesScrollContainerRef} className="flex-1 overflow-y-auto px-3 py-3">
+            <div ref={smsMessagesScrollContainerRef} className="flex-1 overflow-y-auto bg-slate-100/45 px-3 py-3 dark:bg-black/[0.08]">
               {loadingSmsMessages && threadMessages.length === 0 && smsThreads.length === 0 ? (
                 <Skeleton active paragraph={{ rows: 5 }} />
               ) : threadMessages.length === 0 ? (
@@ -5970,7 +6123,7 @@ useEffect(() => {
     return (
       <div className="h-full min-h-0 flex flex-col overflow-hidden">
         <div className={`min-h-0 flex-1 ${isDesktop ? 'grid grid-cols-[250px_minmax(0,1fr)]' : 'flex flex-col'}`}>
-          <div className={`${isDesktop ? 'border-l' : 'border-b'} border-[rgba(var(--brand-200-rgb),0.6)] dark:border-white/10 bg-[rgba(var(--brand-50-rgb),0.45)] dark:bg-white/5 min-h-0`}>
+          <div className={`${isDesktop ? 'border-l' : 'border-b'} border-slate-200/45 dark:border-white/[0.07] bg-slate-50/65 dark:bg-white/[0.025] min-h-0`}>
             {voipThreads.length === 0 ? (
               <div className="p-3">
                 <Empty description="تماس ورودی جدیدی ندارید." />
@@ -5984,8 +6137,8 @@ useEffect(() => {
                     onClick={() => setSelectedVoipThreadKey(thread.id)}
                     className={`w-full rounded-xl border px-3 py-2 text-right transition-colors ${
                       activeThread?.id === thread.id
-                        ? 'border-[rgba(var(--brand-400-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.95)] dark:border-[rgba(var(--brand-300-rgb),0.32)] dark:bg-[rgba(var(--brand-700-rgb),0.14)]'
-                        : 'border-transparent bg-white/75 hover:bg-white dark:bg-transparent dark:hover:bg-white/5'
+                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
+                        : 'border-transparent bg-white/60 hover:bg-white/90 dark:bg-transparent dark:hover:bg-white/[0.055]'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -5998,7 +6151,7 @@ useEffect(() => {
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         {thread.unreadCount > 0 ? (
-                          <span className="rounded-full bg-[rgb(var(--brand-500-rgb))] px-2 py-0.5 text-[10px] text-white">
+                          <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
                             {toPersianNumber(String(thread.unreadCount))}
                           </span>
                         ) : null}
@@ -6009,23 +6162,23 @@ useEffect(() => {
                 ))}
               </div>
             ) : (
-              <div className="flex gap-2 overflow-x-auto px-3 py-2">
+              <div className="flex max-h-[92px] gap-1.5 overflow-x-auto px-2 py-1.5">
                 {voipThreads.map((thread) => (
                   <button
                     key={thread.id}
                     type="button"
                     onClick={() => setSelectedVoipThreadKey(thread.id)}
-                    className={`min-w-[148px] rounded-xl border px-3 py-2 text-right ${
+                    className={`min-w-[132px] rounded-xl border px-2.5 py-1.5 text-right ${
                       activeThread?.id === thread.id
-                        ? 'border-[rgba(var(--brand-400-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.95)] dark:border-[rgba(var(--brand-300-rgb),0.32)] dark:bg-[rgba(var(--brand-700-rgb),0.14)]'
-                        : 'border-transparent bg-white/75 dark:bg-transparent'
+                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
+                        : 'border-transparent bg-white/60 dark:bg-transparent'
                     }`}
                   >
-                    <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
+                    <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <span className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'شماره ثبت نشده'}</span>
                       {thread.unreadCount > 0 ? (
-                        <span className="rounded-full bg-[rgb(var(--brand-500-rgb))] px-2 py-0.5 text-[10px] text-white">
+                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
                           {toPersianNumber(String(thread.unreadCount))}
                         </span>
                       ) : null}
@@ -6039,7 +6192,7 @@ useEffect(() => {
             )}
           </div>
           <div className="min-h-0 flex flex-col overflow-hidden">
-            <div className="border-b border-gray-100 dark:border-white/10 px-3 py-3">
+            <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
@@ -6067,7 +6220,7 @@ useEffect(() => {
                 ) : null}
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto px-3 py-3">
+            <div className="flex-1 overflow-y-auto bg-slate-100/45 px-3 py-3 dark:bg-black/[0.08]">
               {calls.length === 0 ? (
                 <Empty description="برای این شماره تماسی ثبت نشده است." />
               ) : (
@@ -6085,7 +6238,7 @@ useEffect(() => {
                     return (
                       <div
                         key={String(row?.id || '')}
-                        className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-white/80 px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/[0.03]"
+                        className="rounded-xl border border-slate-200/55 bg-white/86 px-3 py-2.5 shadow-[0_5px_16px_rgba(15,23,42,0.04)] dark:border-white/[0.08] dark:bg-white/[0.035]"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -6101,7 +6254,7 @@ useEffect(() => {
                         </div>
                         <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
                           {statusLabel ? (
-                            <span className="rounded-full bg-[rgba(var(--brand-50-rgb),0.9)] px-2 py-0.5 text-gray-600 dark:bg-[rgba(var(--brand-700-rgb),0.22)] dark:text-gray-200">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
                               {statusLabel}
                             </span>
                           ) : null}
@@ -6111,12 +6264,12 @@ useEffect(() => {
                             </span>
                           ) : null}
                           {relatedLabel ? (
-                            <span className="rounded-full bg-[rgba(var(--brand-50-rgb),0.9)] px-2 py-0.5 text-gray-600 dark:bg-[rgba(var(--brand-700-rgb),0.22)] dark:text-gray-200">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
                               {relatedLabel}
                             </span>
                           ) : null}
                           {operatorLabel ? (
-                            <span className="rounded-full bg-[rgba(var(--brand-50-rgb),0.9)] px-2 py-0.5 text-gray-600 dark:bg-[rgba(var(--brand-700-rgb),0.22)] dark:text-gray-200">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
                               اپراتور: {operatorLabel}
                             </span>
                           ) : null}
@@ -6159,6 +6312,14 @@ useEffect(() => {
     const botMessageMap = new Map(botMessages.map((row) => [String(row.id), row]));
     const normalizedGroupSearch = String(botGroupSearch || '').trim().toLowerCase();
     const normalizedMessageSearch = String(botMessageSearch || '').trim().toLowerCase();
+    const botUnreadByGroup = botNotificationMessages.reduce<Record<string, number>>((acc, row) => {
+      const groupId = String(row?.bot_group_id || '').trim();
+      const id = String(row?.id || '').trim();
+      if (!groupId || !id || String(row?.direction || '').trim() !== 'inbound') return acc;
+      if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))) return acc;
+      acc[groupId] = (acc[groupId] || 0) + 1;
+      return acc;
+    }, {});
     const filteredBotGroups = botGroups.filter((row) => {
       if (!normalizedGroupSearch) return true;
       const title = String(row.group_title || '').trim().toLowerCase();
@@ -6379,10 +6540,10 @@ useEffect(() => {
     };
 
     return (
-      <div dir="ltr" className="flex flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+      <div dir="ltr" className="flex flex-1 min-h-0 bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
         {withDesktopSidebar ? (
-          <div dir="rtl" className="order-last w-[208px] border-l border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.18)] bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="px-4 py-3 border-b border-[rgba(var(--brand-200-rgb),0.55)] dark:border-[rgba(var(--brand-300-rgb),0.2)]">
+          <div dir="rtl" className="order-last w-[208px] border-l border-slate-200/55 bg-white/72 dark:border-white/[0.07] dark:bg-white/[0.025]">
+            <div className="px-4 py-3 border-b border-slate-200/45 bg-white/55 dark:border-white/[0.07] dark:bg-white/[0.025]">
               <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گروه‌های بات</div>
               <Input
                 size="small"
@@ -6402,14 +6563,15 @@ useEffect(() => {
                 const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '')] || String(row.channel_type || '');
                 const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه بدون عنوان';
                 const active = String(selectedBotGroupId || '') === String(row.id);
+                const unreadCount = botUnreadByGroup[String(row.id)] || 0;
                 return (
                   <button
                     type="button"
                     key={row.id}
                     className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                       active
-                        ? 'bg-[rgba(var(--brand-100-rgb),0.95)] text-[rgb(var(--brand-700-rgb))]'
-                        : 'hover:bg-white/80 dark:hover:bg-white/5 text-gray-700 dark:text-gray-200'
+                        ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
+                        : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
                     }`}
                     onClick={() => {
                       setMobileBotSearchOpen(false);
@@ -6424,6 +6586,11 @@ useEffect(() => {
                         <div className="truncate text-sm font-medium">{rowTitle}</div>
                         <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
                       </div>
+                      {unreadCount > 0 ? (
+                        <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
+                          {toPersianNumber(String(unreadCount))}
+                        </span>
+                      ) : null}
                     </div>
                   </button>
                 );
@@ -6432,8 +6599,8 @@ useEffect(() => {
           </div>
         ) : null}
 
-        <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-          <div className="border-b border-[rgba(var(--brand-200-rgb),0.55)] bg-white px-3 py-2.5 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+        <div className="flex flex-col flex-1 min-h-0 bg-white/82 dark:bg-[#1a1518]">
+          <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="flex items-center gap-3">
               <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
                 <RobotOutlined />
@@ -6465,7 +6632,7 @@ useEffect(() => {
               prefix={<SearchOutlined className="text-gray-400" />}
             />
             {!canSend ? (
-              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+              <div className="mt-2 rounded-lg border border-amber-200/50 bg-amber-50/75 px-2 py-1.5 text-xs text-amber-700">
                 برای فعال شدن بات، بعد از عضویت بات در گروه، یک پیام داخل همان گروه ارسال کنید.
               </div>
             ) : null}
@@ -6474,7 +6641,7 @@ useEffect(() => {
           <div
             ref={botMessagesScrollContainerRef}
             onScroll={handleBotMessagesScroll}
-            className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-2.5 py-2.5' : 'px-2 py-2'} space-y-2.5`}
+            className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10]`}
           >
             {loadingBotMessages ? (
               <div className="space-y-3">
@@ -6494,6 +6661,7 @@ useEffect(() => {
                 const replyToId = String(payload?.reply_to_message_id || '').trim();
                 const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
                 const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
+                const replyAttachments = replyTarget ? getBotMessageAttachments(replyTarget).map((item) => ({ name: item.name, url: item.url, mimeType: item.mimeType } as any)) : [];
                 const body = String(row.content_text || '').trim() || (row.file_name ? `فایل: ${row.file_name}` : 'پیام بدون متن');
                 const isEditing = editingBotMessageId === row.id;
                 const author = resolveBotMessageAuthor(row);
@@ -6514,9 +6682,13 @@ useEffect(() => {
                       mentionRoles={[]}
                       replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
                       replyAuthorName={replyAuthorName}
+                      replyAttachments={replyAttachments}
+                      onReplyPreviewClick={replyTarget ? () => scrollMessageIntoView(`bot-message-${String(replyTarget.id)}`) : undefined}
+                      messageDomId={`bot-message-${String(row.id)}`}
                       isMine={outgoing}
                       animateOnMount={shouldAnimateChatEntry(row.created_at)}
-                      statusNode={renderReadReceiptStatus(botReadReceipts, isUnreadBotMessage)}
+                      statusNode={renderReadReceiptStatus(botReadReceipts, [])}
+                      unreadIndicator={isUnreadBotMessage}
                       isEdited={Boolean(payload?.is_edited)}
                       isEditing={isEditing}
                       editingValue={editingBotMessageValue}
@@ -6568,7 +6740,7 @@ useEffect(() => {
             <div className="pb-1 text-center">
               <button
                 type="button"
-                className="inline-flex items-center rounded-full border border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-100-rgb),0.95)] px-3 py-1 text-xs font-semibold text-[rgb(var(--brand-700-rgb))] shadow-sm transition hover:bg-[rgba(var(--brand-100-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.3)] dark:bg-[rgba(var(--brand-700-rgb),0.35)] dark:text-[rgb(var(--brand-300-rgb))]"
+                className="inline-flex items-center rounded-full border border-slate-300/45 bg-white/95 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-slate-200"
                 onClick={() => {
                   botShouldStickToBottomRef.current = true;
                   botForceScrollToBottomRef.current = true;
@@ -6647,8 +6819,8 @@ useEffect(() => {
         </div>
 
         {withMobileUserRail ? (
-          <div dir="rtl" className="w-[64px] shrink-0 overflow-hidden border-l border-[rgba(var(--brand-200-rgb),0.55)] bg-white dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-            <div className="flex h-full flex-col items-center gap-1.5 overflow-y-auto overflow-x-hidden px-1 py-2">
+          <div dir="rtl" className="w-[54px] shrink-0 overflow-hidden border-l border-slate-200/45 bg-white/60 dark:border-white/[0.07] dark:bg-white/[0.025]">
+            <div className="flex h-full flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden px-1 py-1.5">
               <div className="sticky top-0 z-10 flex w-full justify-center">
                 <Popover
                   trigger="click"
@@ -6681,6 +6853,7 @@ useEffect(() => {
               {filteredBotGroups.map((row) => {
                 const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه';
                 const active = String(selectedBotGroupId || '') === String(row.id);
+                const unreadCount = botUnreadByGroup[String(row.id)] || 0;
                 return (
                   <button
                     key={`mobile-${row.id}`}
@@ -6689,17 +6862,19 @@ useEffect(() => {
                       setMobileBotSearchOpen(false);
                       setSelectedBotGroupId(String(row.id));
                     }}
-                    className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/80 dark:hover:bg-white/5"
+                    className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
                     title={rowTitle}
                   >
-                    <Avatar
-                      size={38}
-                      className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${
-                        active ? 'ring-2 ring-[rgb(var(--brand-500-rgb))] ring-offset-2 ring-offset-white dark:ring-offset-[rgba(var(--app-dark-surface-rgb),1)]' : ''
-                      }`}
-                    >
-                      <RobotOutlined />
-                    </Avatar>
+                    <Badge count={unreadCount > 0 ? toPersianNumber(String(unreadCount)) : 0} size="small" offset={[-2, 2]}>
+                      <Avatar
+                        size={38}
+                        className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${
+                          active ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''
+                        }`}
+                      >
+                        <RobotOutlined />
+                      </Avatar>
+                    </Badge>
                     <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
                       {rowTitle}
                     </span>
@@ -6760,7 +6935,7 @@ useEffect(() => {
 
     return (
       <div className="flex flex-col gap-3 h-full min-h-0">
-        <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm overflow-hidden">
+        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
           {renderCreatedAtSortControls(taskSortDirection, setTaskSortDirection)}
           <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
             {TASK_VIEW_PRESETS.map((view) => (
@@ -6772,8 +6947,8 @@ useEffect(() => {
                 }}
                 className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
                   taskViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
-                    : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
+                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
+                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
                 }`}
               >
                 {view.label}
@@ -6917,7 +7092,7 @@ useEffect(() => {
     const data = showMore.tasks ? filteredTasks : filteredTasks.slice(0, MAX_ITEMS);
     return (
       <div className="flex flex-col gap-3 h-full min-h-0">
-        <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm overflow-hidden">
+        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
           {renderCreatedAtSortControls(taskSortDirection, setTaskSortDirection)}
           <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
             {TASK_VIEW_PRESETS.map((view) => (
@@ -6929,8 +7104,8 @@ useEffect(() => {
                 }}
                 className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
                   taskViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
-                    : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
+                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
+                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
                 }`}
               >
                 {view.label}
@@ -7039,7 +7214,7 @@ useEffect(() => {
     return (
       <div className="flex flex-col gap-3 h-full min-h-0">
         {mode === 'grid' ? (
-          <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
             {renderCreatedAtSortControls(responsibilitySortDirection, setResponsibilitySortDirection)}
             <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
               {responsibilityViews.map((view) => (
@@ -7051,8 +7226,8 @@ useEffect(() => {
                   }}
                   className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
                     responsibilityViewKey === view.key
-                      ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
-                      : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
+                      ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
+                      : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
                   }`}
                 >
                   {view.label}
@@ -7124,19 +7299,19 @@ useEffect(() => {
               const createdByLabel = createdById ? (createdByNameMap[createdById] || createdById) : null;
               return (
                 <div className="mb-2">
-                  <div className="bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-xl p-3">
+                  <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
                     <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
                     <Link to={`/${item.module_id}/${item.id}`} className="text-sm text-gray-800 dark:text-gray-200" onClick={handleClose}>
                       {title}
                     </Link>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {categoryLabel ? (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                           {categoryLabel}
                         </span>
                       ) : null}
                       {statusLabel ? (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                           {statusLabel}
                         </span>
                       ) : null}
@@ -7173,7 +7348,7 @@ useEffect(() => {
     const data = showMore.responsibilities ? filteredResponsibilities : filteredResponsibilities.slice(0, MAX_ITEMS);
     return (
       <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2 bg-white dark:bg-[#1f1f1f] p-1 rounded-xl border border-gray-200 dark:border-gray-800 h-10 shadow-sm overflow-hidden">
+        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
           {renderCreatedAtSortControls(responsibilitySortDirection, setResponsibilitySortDirection)}
           <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
             {responsibilityViews.map((view) => (
@@ -7185,8 +7360,8 @@ useEffect(() => {
                 }}
                 className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
                   responsibilityViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-md font-bold'
-                    : 'bg-gray-50 dark:bg-white/5 border-transparent hover:bg-gray-100 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
+                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
+                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
                 }`}
               >
                 {view.label}
@@ -7219,19 +7394,19 @@ useEffect(() => {
               const createdByLabel = createdById ? (createdByNameMap[createdById] || createdById) : null;
               return (
                 <div className="mb-2">
-                  <div className="bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)] border border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)] rounded-xl p-3">
+                  <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
                     <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
                     <Link to={`/${item.module_id}/${item.id}`} className="text-sm text-gray-800 dark:text-gray-200" onClick={handleClose}>
                       {title}
                     </Link>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {categoryLabel && (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                           {categoryLabel}
                         </span>
                       )}
                       {statusLabel && (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
                           {statusLabel}
                         </span>
                       )}
@@ -7379,11 +7554,15 @@ useEffect(() => {
 
   const contentDesktopModern = (
     <div className="w-[780px] max-w-[88vw] h-[90vh] p-3">
-      <div className="h-full rounded-xl border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] overflow-hidden">
+      <div className={`h-full rounded-xl overflow-hidden shadow-[0_18px_44px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_44px_rgba(0,0,0,0.24)] ${
+        variant === 'chat'
+          ? 'border border-white/10 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]'
+          : 'border border-[rgba(var(--brand-300-rgb),0.16)] dark:border-[rgba(var(--brand-300-rgb),0.12)] bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)]'
+      }`}>
         <Tabs
           activeKey={desktopActiveKey}
           onChange={(key) => setDesktopActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
-          className="h-full [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
+          className="h-full [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-nav]:!px-3 [&_.ant-tabs-tab]:!py-3 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
           items={desktopModernItems}
         />
       </div>
@@ -7436,11 +7615,11 @@ useEffect(() => {
     ];
 
   const contentMobileModern = (
-    <div className="h-full min-h-0 flex flex-col bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
+    <div className={`h-full min-h-0 flex flex-col ${variant === 'chat' ? 'bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]' : 'bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]'}`}>
       <Tabs
         activeKey={mobileActiveKey}
         onChange={(key) => setMobileActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
-        className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
+        className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-nav]:!px-1 [&_.ant-tabs-nav]:!shrink-0 [&_.ant-tabs-nav-wrap]:!overflow-x-auto [&_.ant-tabs-nav-list]:!min-w-max [&_.ant-tabs-tab]:!px-2 [&_.ant-tabs-tab]:!py-2 [&_.ant-tabs-tab]:!text-xs [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
         items={mobileModernItems}
       />
     </div>
