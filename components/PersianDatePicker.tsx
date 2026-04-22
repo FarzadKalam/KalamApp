@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
-import { Modal } from "antd";
 import { Calendar } from "react-multi-date-picker";
 import DateObject from "react-date-object";
 import persian from "react-date-object/calendars/persian";
@@ -9,6 +8,8 @@ import gregorian from "react-date-object/calendars/gregorian";
 import gregorian_en from "react-date-object/locales/gregorian_en";
 import { safeJalaliFormat, toPersianNumber } from "../utils/persianNumberFormatter";
 import { getHolidaySummaryForDate } from "../utils/holidayCalendar";
+import AdaptivePickerSurface from "./AdaptivePickerSurface";
+import { AdaptivePickerMode, buildOverlayZIndexBase } from "../utils/popupContainer";
 
 type PickerType = "DATE" | "TIME" | "DATETIME";
 
@@ -27,6 +28,9 @@ interface PersianDatePickerProps {
   placeholder?: string;
   zIndex?: number;
   modalContainer?: (trigger?: HTMLElement | null) => HTMLElement;
+  overlayZIndexBase?: number;
+  adaptiveMode?: AdaptivePickerMode;
+  pickerTitle?: string;
 }
 
 const holidayMonthCache = new Map<string, Promise<Record<string, HolidayMarker>>>();
@@ -234,6 +238,8 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
   placeholder,
   zIndex = 10050,
   modalContainer,
+  overlayZIndexBase,
+  pickerTitle,
 }) => {
   const safeOnChange = onChange ?? (() => {});
   const fieldRef = useRef<HTMLDivElement | null>(null);
@@ -487,37 +493,12 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
     );
   };
 
-  const panelTitle = type === "DATE" ? "انتخاب تاریخ" : type === "TIME" ? "انتخاب زمان" : "انتخاب تاریخ و زمان";
+  const panelTitle = pickerTitle || (type === "DATE" ? "انتخاب تاریخ" : type === "TIME" ? "انتخاب زمان" : "انتخاب تاریخ و زمان");
   const triggerIcon = type === "TIME" ? <ClockCircleOutlined /> : <CalendarOutlined />;
   const panelSubtitle =
     draftDisplay || (placeholder && placeholder !== panelTitle ? placeholder : "");
   const panelContent = (
-    <div className="kalam-adaptive-picker">
-      <div className="kalam-adaptive-picker__header">
-        <div>
-          <div className="kalam-adaptive-picker__title">{panelTitle}</div>
-          {panelSubtitle ? <div className="kalam-adaptive-picker__subtitle">{panelSubtitle}</div> : null}
-        </div>
-        {type === "DATETIME" ? (
-          <div className="kalam-adaptive-picker__steps">
-            <button
-              type="button"
-              className={`kalam-adaptive-picker__step ${step === "date" ? "is-active" : ""}`}
-              onClick={() => setStep("date")}
-            >
-              تاریخ
-            </button>
-            <button
-              type="button"
-              className={`kalam-adaptive-picker__step ${step === "time" ? "is-active" : ""}`}
-              onClick={() => setStep("time")}
-            >
-              زمان
-            </button>
-          </div>
-        ) : null}
-      </div>
-
+    <>
       {(type === "DATE" || type === "DATETIME") && step === "date" ? (
         <>
           <div className="kalam-adaptive-picker__chips">
@@ -541,37 +522,9 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         </>
       )}
 
-      <div className="kalam-adaptive-picker__footer">
-        <button type="button" className="kalam-adaptive-picker__action is-muted" onClick={() => setOpen(false)}>
-          انصراف
-        </button>
-        {value ? (
-          <button type="button" className="kalam-adaptive-picker__action is-danger" onClick={clearValue}>
-            پاک کردن
-          </button>
-        ) : null}
-        {type === "DATETIME" && step === "date" ? (
-          <button
-            type="button"
-            className="kalam-adaptive-picker__action is-primary"
-            onClick={() => setStep("time")}
-          >
-            مرحله بعد
-          </button>
-        ) : (
-          <button type="button" className="kalam-adaptive-picker__action is-primary" onClick={applyValue}>
-            تایید
-          </button>
-        )}
-      </div>
-    </div>
+    </>
   );
-  const getModalContainer = modalContainer
-    ? () => {
-        const activeElement = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
-        return modalContainer(fieldRef.current || activeElement);
-      }
-    : undefined;
+  const zIndexBase = overlayZIndexBase ?? buildOverlayZIndexBase(zIndex - 40).base;
 
   return (
     <div ref={fieldRef} className={`kalam-adaptive-picker__field ${className || ""}`.trim()}>
@@ -588,50 +541,37 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
         </span>
       </button>
 
-      <Modal
+      <AdaptivePickerSurface
         open={open}
-        footer={null}
-        onCancel={() => setOpen(false)}
-        maskClosable
-        keyboard
-        destroyOnHidden={false}
-        centered
-        width="auto"
-        zIndex={zIndex}
-        className="kalam-adaptive-picker-modal"
-        rootClassName="kalam-adaptive-picker-modal-root"
-        getContainer={getModalContainer}
-        closeIcon={null}
-        style={{
-          maxWidth: "min(calc(100vw - 24px), 460px)",
-          margin: "0 auto",
-          paddingBottom: 0,
-        }}
-        styles={{
-          mask: { zIndex, backgroundColor: "rgba(15, 23, 42, 0.58)", backdropFilter: "blur(4px)" },
-          wrapper: {
-            zIndex: zIndex + 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 12,
-            overflow: "auto",
-          },
-          content: {
-            position: "relative",
-            zIndex: 1,
-            display: "flex",
-            flexDirection: "column",
-            maxHeight: "calc(100dvh - 24px)",
-            padding: 0,
-            background: "transparent",
-            boxShadow: "none",
-          },
-          body: { padding: 0, overflow: "visible" },
-        }}
+        title={panelTitle}
+        subtitle={panelSubtitle}
+        zIndex={overlayZIndexBase ? zIndexBase + 40 : zIndex}
+        onClose={() => setOpen(false)}
+        onConfirm={type === "DATETIME" && step === "date" ? () => setStep("time") : applyValue}
+        confirmLabel={type === "DATETIME" && step === "date" ? "مرحله بعد" : "تایید"}
+        onClear={value ? clearValue : undefined}
+        headerExtra={type === "DATETIME" ? (
+          <div className="kalam-adaptive-picker__steps">
+            <button
+              type="button"
+              className={`kalam-adaptive-picker__step ${step === "date" ? "is-active" : ""}`}
+              onClick={() => setStep("date")}
+            >
+              تاریخ
+            </button>
+            <button
+              type="button"
+              className={`kalam-adaptive-picker__step ${step === "time" ? "is-active" : ""}`}
+              onClick={() => setStep("time")}
+            >
+              زمان
+            </button>
+          </div>
+        ) : undefined}
+        modalContainer={modalContainer}
       >
-        <div className="kalam-adaptive-picker-modal__sheet">{panelContent}</div>
-      </Modal>
+        {panelContent}
+      </AdaptivePickerSurface>
     </div>
   );
 };

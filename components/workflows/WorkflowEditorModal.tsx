@@ -38,6 +38,7 @@ import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
+  resolveOverlayPopupContainer,
   resolveSelectPopupContainer,
 } from '../../utils/popupContainer';
 import PersianDatePicker from '../PersianDatePicker';
@@ -266,6 +267,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   canEdit = true,
   moduleOptions,
 }) => {
+  const overlayZIndexBase = 1200;
   const { message } = App.useApp();
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
@@ -417,7 +419,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Form.Item label="ماژول مرتبط" name="module_id" rules={[{ required: true }]}>
-              <Select
+                <Select
                 className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
                 showSearch
                 optionFilterProp="label"
@@ -474,13 +476,16 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                 name="interval_unit"
                 rules={[{ required: true, message: 'واحد بازه را انتخاب کنید.' }]}
               >
-                <Select options={intervalUnitOptions} />
+                <Select options={intervalUnitOptions} getPopupContainer={resolveSelectPopupContainer} />
               </Form.Item>
               <Form.Item label="در ساعت" name="interval_at">
                 <PersianDatePicker
                   type="TIME"
                   value={form.getFieldValue('interval_at') || null}
                   onChange={(nextVal) => form.setFieldValue('interval_at', nextVal)}
+                  overlayZIndexBase={overlayZIndexBase}
+                  modalContainer={resolveOverlayPopupContainer}
+                  pickerTitle="زمان اجرا"
                 />
               </Form.Item>
               <Form.Item label="چه تعداد رکورد بررسی شود؟" name="batch_size">
@@ -506,6 +511,8 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                     dynamicOptions={dynamicOptions}
                     relationOptions={relationOptions}
                     disabled={!canEdit}
+                    overlayZIndexBase={overlayZIndexBase}
+                    popupContainer={resolveSelectPopupContainer}
                   />
                 ),
               },
@@ -520,6 +527,8 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                     dynamicOptions={dynamicOptions}
                     relationOptions={relationOptions}
                     disabled={!canEdit}
+                    overlayZIndexBase={overlayZIndexBase}
+                    popupContainer={resolveSelectPopupContainer}
                   />
                 ),
               },

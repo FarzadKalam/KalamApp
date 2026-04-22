@@ -33,6 +33,7 @@ import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditio
 import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveModuleGoalAccessPermissions } from '../../utils/permissions';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import PersianDatePicker from '../PersianDatePicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
@@ -135,8 +136,8 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
     return GOAL_PERIOD_UNIT_OPTIONS.slice(0, selectedIndex + 1);
   }, [periodUnit]);
   const conditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
-  const popupContainer = (triggerNode: HTMLElement | null) =>
-    triggerNode?.parentElement || document.body;
+  const popupContainer = (triggerNode?: HTMLElement | null) =>
+    resolveOverlayPopupContainer(triggerNode);
   const rewardTriggerOptions = useMemo(
     () => levelsEnabled
       ? GOAL_REWARD_TRIGGER_OPTIONS
@@ -475,10 +476,10 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           </div>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item label="تاریخ شروع بازه اصلی" name="goal_start_date">
-              <PersianDatePicker type="DATE" placeholder="اختیاری" />
+              <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} />
             </Form.Item>
             <Form.Item label="تاریخ پایان بازه اصلی" name="goal_end_date">
-              <PersianDatePicker type="DATE" placeholder="اختیاری" />
+              <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} />
             </Form.Item>
           </div>
         </div>

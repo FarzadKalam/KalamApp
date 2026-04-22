@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Modal, Spin } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
+import { supabase } from '../../supabaseClient';
 import {
   buildFileManagerTree,
   type FileManagerListItem,
@@ -9,6 +10,7 @@ import {
 } from '../../utils/fileManagerQueries';
 import { createFileManagerShortcut } from '../../utils/fileManagerService';
 import type { NoteAttachment } from '../../utils/noteContent';
+import { fetchRecordReferenceLabels } from '../../utils/recordReference';
 import FileManagerBrowser from './FileManagerBrowser';
 
 type FileManagerPickerModalProps = {
@@ -119,21 +121,34 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
 
   const handleSelect = async (selected: FileManagerListItem[]) => {
     const limited = selected.slice(0, multiple ? undefined : 1);
+    const referenceLabels = hasRecordScope
+      ? await fetchRecordReferenceLabels(supabase, [
+        { moduleId: normalizedModuleId, recordId: normalizedRecordId },
+        ...limited.map((item) => ({
+          moduleId: String(item.module_id || '').trim(),
+          recordId: String(item.record_id || '').trim(),
+        })),
+      ])
+      : {};
+    const targetRecordTitle = referenceLabels[`${normalizedModuleId}:${normalizedRecordId}`] || normalizedRecordId;
     const resolvedItems = await Promise.all(limited.map(async (item) => {
       const sourceModuleId = String(item.module_id || '').trim();
       const sourceRecordId = String(item.record_id || '').trim();
       const isForeign = hasRecordScope && (sourceModuleId !== normalizedModuleId || sourceRecordId !== normalizedRecordId);
       if (!isForeign || !item.asset_id) return item;
+      const sourceRecordTitle = referenceLabels[`${sourceModuleId}:${sourceRecordId}`]
+        || item.source_record_title
+        || sourceRecordId;
       try {
         const created = await createFileManagerShortcut({
           assetId: item.asset_id,
           sourceEntryId: item.entry_id || null,
           sourceModuleId,
           sourceRecordId,
-          sourceRecordTitle: item.source_record_title || getDisplayFileName(item),
+          sourceRecordTitle,
           targetModuleId: normalizedModuleId,
           targetRecordId: normalizedRecordId,
-          targetRecordTitle: normalizedRecordId,
+          targetRecordTitle,
           fileUrl: item.file_url,
           fileName: getDisplayFileName(item),
           mimeType: item.mime_type || null,

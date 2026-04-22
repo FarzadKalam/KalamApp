@@ -26,6 +26,7 @@ import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/s
 import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
 
@@ -711,7 +712,7 @@ const UsersTab: React.FC = () => {
             options={roles.map((role) => ({ label: getRoleDisplayTitle(role), value: role.id }))}
             className="custom-select"
             disabled={!canEditRecord(record)}
-            getPopupContainer={(node) => node?.parentElement || document.body}
+            getPopupContainer={resolveOverlayPopupContainer}
           />
         ) : (
           <Tag>{record.role_id ? roles.find((role) => role.id === record.role_id)?.title || 'در انتظار تعیین' : 'در انتظار تعیین'}</Tag>
@@ -820,10 +821,10 @@ const UsersTab: React.FC = () => {
             <Input dir="ltr" placeholder="0912..." />
           </Form.Item>
           <Form.Item label="جایگاه سازمانی" name="role_id" rules={[{ required: true, message: 'جایگاه سازمانی الزامی است' }]}>
-            <Select placeholder="انتخاب کنید" options={roles.map((role) => ({ label: getRoleDisplayTitle(role), value: role.id }))} getPopupContainer={(node) => node?.parentElement || document.body} />
+            <Select placeholder="انتخاب کنید" options={roles.map((role) => ({ label: getRoleDisplayTitle(role), value: role.id }))} getPopupContainer={resolveOverlayPopupContainer} />
           </Form.Item>
           <Form.Item label="نقش سیستمی" name="role" rules={[{ required: true, message: 'نقش سیستمی الزامی است' }]}>
-            <Select placeholder="انتخاب نقش" options={SYSTEM_ROLE_OPTIONS} getPopupContainer={(node) => node?.parentElement || document.body} />
+            <Select placeholder="انتخاب نقش" options={SYSTEM_ROLE_OPTIONS} getPopupContainer={resolveOverlayPopupContainer} />
           </Form.Item>
           {!isEditingRealUser ? (
             <>
@@ -865,7 +866,7 @@ const UsersTab: React.FC = () => {
                 <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
               </Form.Item>
               <Form.Item label="حالت شماره‌گیری" name="voip_dial_mode" className="mb-0">
-                <Select options={VOIP_DIAL_MODE_OPTIONS} getPopupContainer={(node) => node?.parentElement || document.body} />
+                <Select options={VOIP_DIAL_MODE_OPTIONS} getPopupContainer={resolveOverlayPopupContainer} />
               </Form.Item>
               <Form.Item label="کد اپراتور تلفنچی" name="voip_operator_code" className="mb-0">
                 <Input placeholder="کد اپراتور" />

@@ -17,6 +17,7 @@ const INTERACTIVE_PORTAL_SELECTOR = [
 ].join(', ');
 
 export const KALAM_SELECT_FIELD_CLASSNAME = 'kalam-select-field';
+export type AdaptivePickerMode = 'auto' | 'desktop' | 'mobile-sheet';
 
 export const mergeClassNames = (...parts: Array<string | null | undefined | false>) =>
   parts.filter(Boolean).join(' ');
@@ -72,4 +73,23 @@ export const buildStandardSelectPopupRootStyle = ({
   ...(typeof zIndex === 'number' ? { zIndex } : {}),
   minWidth,
   maxWidth,
+});
+
+export const isMobileAdaptiveViewport = () =>
+  typeof window !== 'undefined' && window.innerWidth <= 768;
+
+export const resolveAdaptivePickerMode = (
+  adaptiveMode: AdaptivePickerMode = 'auto'
+): Exclude<AdaptivePickerMode, 'auto'> => {
+  if (adaptiveMode === 'desktop' || adaptiveMode === 'mobile-sheet') {
+    return adaptiveMode;
+  }
+  return isMobileAdaptiveViewport() ? 'mobile-sheet' : 'desktop';
+};
+
+export const buildOverlayZIndexBase = (base = 1400) => ({
+  base,
+  modal: base + 10,
+  popover: base + 20,
+  sheet: base + 40,
 });

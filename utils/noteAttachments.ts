@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from './storageClient';
 import type { NoteAttachment } from './noteContent';
 import { createFileManagerOriginForUpload, createFileManagerShortcut, detectFileManagerTables } from './fileManagerService';
+import { fetchRecordReferenceLabels } from './recordReference';
 import { uploadFileWithProgress } from './uploadFileWithProgress';
 
 const normalizeFileName = (file: File) => {
@@ -23,6 +24,10 @@ export const uploadNoteAttachments = async (
   const normalizedRecordId = String(recordId || '').trim();
   if (files.length === 0) return [];
   const hasRelatedRecord = Boolean(normalizedModuleId && normalizedRecordId);
+  const relatedRecordLabels = hasRelatedRecord
+    ? await fetchRecordReferenceLabels(supabase, [{ moduleId: normalizedModuleId, recordId: normalizedRecordId }])
+    : {};
+  const relatedRecordTitle = relatedRecordLabels[`${normalizedModuleId}:${normalizedRecordId}`] || normalizedRecordId;
 
   const uploaded: NoteAttachment[] = [];
 
@@ -55,7 +60,7 @@ export const uploadNoteAttachments = async (
           await createFileManagerOriginForUpload({
             moduleId: normalizedModuleId,
             recordId: normalizedRecordId,
-            recordTitle: normalizedRecordId,
+            recordTitle: relatedRecordTitle,
             fileUrl,
             fileName,
             mimeType: file.type || null,
@@ -108,12 +113,25 @@ export const ensureNoteAttachmentShortcuts = async (
   const hasFileManagerTables = await detectFileManagerTables(supabase, false);
   if (!hasFileManagerTables) return;
 
+  const referenceLabels = await fetchRecordReferenceLabels(supabase, [
+    { moduleId: normalizedModuleId, recordId: normalizedRecordId },
+    ...attachments.map((attachment) => ({
+      moduleId: String(attachment.moduleId || '').trim(),
+      recordId: String(attachment.recordId || '').trim(),
+    })),
+  ]);
+  const targetRecordTitle = referenceLabels[`${normalizedModuleId}:${normalizedRecordId}`] || normalizedRecordId;
+
   for (const attachment of attachments) {
     const url = String(attachment?.url || '').trim();
     if (!url) continue;
     const sourceModuleId = String(attachment.moduleId || '').trim();
     const sourceRecordId = String(attachment.recordId || '').trim();
     if (sourceModuleId === normalizedModuleId && sourceRecordId === normalizedRecordId) continue;
+    const sourceRecordTitle = referenceLabels[`${sourceModuleId}:${sourceRecordId}`]
+      || attachment.name
+      || sourceRecordId
+      || null;
 
     try {
       await createFileManagerShortcut({
@@ -121,10 +139,10 @@ export const ensureNoteAttachmentShortcuts = async (
         sourceEntryId: attachment.entryId || null,
         sourceModuleId: sourceModuleId || null,
         sourceRecordId: sourceRecordId || null,
-        sourceRecordTitle: attachment.name || null,
+        sourceRecordTitle,
         targetModuleId: normalizedModuleId,
         targetRecordId: normalizedRecordId,
-        targetRecordTitle: normalizedRecordId,
+        targetRecordTitle,
         fileUrl: url,
         fileName: attachment.name || null,
         mimeType: attachment.mimeType || null,

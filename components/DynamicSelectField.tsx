@@ -5,7 +5,9 @@ import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import { supabase } from '../supabaseClient';
 import { replaceDynamicOptionValueAcrossModules } from '../utils/dynamicOptionReplacement';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import AdaptiveSelectField from './AdaptiveSelectField';
 import {
+  AdaptivePickerMode,
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
@@ -29,6 +31,9 @@ interface DynamicSelectFieldProps {
   popupStyle?: React.CSSProperties;
   protectedValues?: string[];
   modalZIndex?: number;
+  overlayZIndexBase?: number;
+  adaptiveMode?: AdaptivePickerMode;
+  pickerTitle?: string;
 }
 
 const normalizeDynamicCompareValue = (value: string) =>
@@ -106,6 +111,9 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   popupStyle,
   protectedValues = [],
   modalZIndex = 1110,
+  overlayZIndexBase = 13080,
+  adaptiveMode = 'auto',
+  pickerTitle,
 }) => {
   const { message: msg } = App.useApp();
   const [newOptionValue, setNewOptionValue] = useState('');
@@ -134,7 +142,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
 
   const mergedDropdownStyle: React.CSSProperties = {
     ...buildStandardSelectPopupRootStyle({
-      zIndex: 13080,
+      zIndex: overlayZIndexBase,
       minWidth: isMobileViewport ? 180 : 280,
       maxWidth: isMobileViewport ? 'calc(100vw - 24px)' : 520,
     }),
@@ -555,7 +563,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         style={{ display: 'none' }}
       />
 
-      <Select
+      <AdaptiveSelectField
         mode={mode}
         value={mode === 'multiple' ? (Array.isArray(value) ? value : (value ? [value] : [])) : value}
         onChange={handleSelectChange as any}
@@ -573,7 +581,11 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         popupMatchSelectWidth={false}
         listHeight={isMobileViewport ? 192 : 320}
         notFoundContent={loading ? 'در حال بارگزاری...' : 'موردی وجود ندارد'}
-        styles={{ popup: { root: mergedDropdownStyle } }}
+        popupStyle={mergedDropdownStyle}
+        overlayZIndexBase={overlayZIndexBase}
+        adaptiveMode={adaptiveMode}
+        pickerTitle={pickerTitle || placeholder}
+        sheetSubtitle={category ? `دسته: ${category}` : undefined}
         optionRender={(option) => (
           <div
             style={{
@@ -604,6 +616,44 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
             />
           </div>
         )}
+        renderMobileOption={(option, selected) => {
+          const protectedOption = protectedValueSet.has(String(option?.value || '').trim());
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
+              <span>{String(option?.label || option?.value || '')}</span>
+              {!protectedOption ? (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openDeleteModal({
+                      label: String(option?.label || option?.value || ''),
+                      value: String(option?.value || ''),
+                    });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openDeleteModal({
+                      label: String(option?.label || option?.value || ''),
+                      value: String(option?.value || ''),
+                    });
+                  }}
+                  style={{
+                    color: selected ? 'rgb(var(--brand-700-rgb))' : '#dc2626',
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  حذف
+                </span>
+              ) : null}
+            </div>
+          );
+        }}
         popupRender={(menu) => (
           <>
             {menu}
@@ -659,6 +709,38 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
               </div>
             </div>
           </>
+        )}
+        sheetToolbar={(
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+            <Input
+              placeholder="افزودن گزینه جدید..."
+              value={newOptionValue}
+              onChange={(e) => setNewOptionValue(e.target.value)}
+              onPressEnter={handleAddOption}
+              disabled={loading}
+              className="w-full"
+              size={isMobileViewport ? 'middle' : undefined}
+            />
+            <div style={{ display: 'flex', gap: 8, flexDirection: isMobileViewport ? 'column' : 'row' }}>
+              <Button
+                icon={<UploadOutlined />}
+                onClick={openExcelPicker}
+                disabled={loading}
+                block={isMobileViewport}
+              >
+                افزودن از اکسل
+              </Button>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={handleAddOption}
+                loading={loading}
+                block={isMobileViewport}
+              >
+                افزودن
+              </Button>
+            </div>
+          </div>
         )}
       />
 

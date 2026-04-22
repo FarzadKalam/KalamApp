@@ -24,18 +24,20 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  ExportOutlined,
   FileOutlined,
+  FolderAddOutlined,
   FolderFilled,
+  FolderOpenOutlined,
   HomeOutlined,
   InfoCircleOutlined,
-  LoginOutlined,
-  PlusOutlined,
   ReloadOutlined,
   RetweetOutlined,
   RightOutlined,
   ShareAltOutlined,
   StarFilled,
   StarOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { buildImagePreviewUrl } from '../../utils/imagePreview';
 import { getOrCreateShortFileUrl } from '../../utils/fileShortLinks';
@@ -890,7 +892,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           {onCreateFolder ? (
             <Button
               className="rounded-xl"
-              icon={<PlusOutlined />}
+              icon={<FolderAddOutlined />}
               disabled={!canEdit || activeFolderKey === 'all'}
               onClick={() => onCreateFolder(activeFolderKey)}
             >
@@ -915,7 +917,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
             <div className="text-sm font-bold text-gray-700 dark:text-gray-100">{totalSelectedCount} مورد انتخاب شده</div>
             <Space wrap>
               <Button
-                icon={<LoginOutlined />}
+                icon={<FolderOpenOutlined />}
                 disabled={totalSelectedCount !== 1 || (selectedItems.length === 1 && !onOpenItem) || (selectedFolders.length === 1 && !onFolderChange)}
                 onClick={openSelectedEntry}
               >
@@ -941,7 +943,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
                 </Button>
               ) : null}
               <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)}>{copyItemsLabel}</Button>
-              <Button icon={<RetweetOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)}>انتقال</Button>
+              <Button icon={<SwapOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)}>انتقال</Button>
               <Button
                 icon={<ShareAltOutlined />}
                 disabled={!canShare || selectedItems.length === 0 || selectedFolders.length > 0}
@@ -950,6 +952,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
                 اشتراک
               </Button>
               <Button
+                icon={<EditOutlined />}
                 disabled={!canEdit || totalSelectedCount !== 1 || (selectedFolders.length === 1 ? !onRenameFolder || selectedFolders[0].isSystem : !onRenameItem)}
                 onClick={renameSelectedEntry}
               >
@@ -1208,12 +1211,12 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
                 </Button>
               ) : null}
               {onOpenItem ? (
-                <Button icon={<LoginOutlined />} onClick={() => onOpenItem(previewItem)}>
+                <Button icon={<FolderOpenOutlined />} onClick={() => onOpenItem(previewItem)}>
                   باز کردن رکورد
                 </Button>
               ) : null}
             </Space>
-            <Button href={previewItem.file_url} target="_blank" rel="noreferrer">
+            <Button icon={<ExportOutlined />} href={previewItem.file_url} target="_blank" rel="noreferrer">
               باز کردن لینک
             </Button>
           </div>

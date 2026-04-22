@@ -22,6 +22,7 @@ import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberForma
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import DynamicSelectField from './DynamicSelectField';
+import AdaptiveSelectField from './AdaptiveSelectField';
 import TagInput from './TagInput';
 import ProductionStagesField from './ProductionStagesField';
 import PersianDatePicker from './PersianDatePicker';
@@ -66,6 +67,7 @@ import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
+  resolveOverlayPopupContainer,
   resolveSelectPopupContainer,
 } from '../utils/popupContainer';
 
@@ -2196,15 +2198,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     protectedValues={getProtectedDynamicValues(field.dynamicOptionsCategory)}
                     placeholder={compactMode ? '' : "انتخاب کنید"}
                     onOptionsUpdate={onOptionsUpdate}
-                    disabled={!forceEditMode}
-                    getPopupContainer={selectPopupContainer}
-                    popupStyle={{ zIndex: selectPopupZIndex }}
-                    modalZIndex={modalOverlayZIndex}
-                />
+                     disabled={!forceEditMode}
+                     getPopupContainer={selectPopupContainer}
+                     popupStyle={{ zIndex: selectPopupZIndex }}
+                     modalZIndex={modalOverlayZIndex}
+                     overlayZIndexBase={selectPopupZIndex}
+                     pickerTitle={fieldLabel}
+                 />
             );
         }
         return (
-            <Select 
+            <AdaptiveSelectField
                 {...commonProps}
                 className={KALAM_SELECT_FIELD_CLASSNAME}
                 showSearch
@@ -2214,7 +2218,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 optionLabelProp="label"
                 getPopupContainer={selectPopupContainer}
                 placement={selectPlacement}
-                styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex }) } }}
+                overlayZIndexBase={selectPopupZIndex}
+                pickerTitle={fieldLabel}
             />
         );
 
@@ -2234,11 +2239,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     getPopupContainer={selectPopupContainer}
                     popupStyle={{ zIndex: selectPopupZIndex }}
                     modalZIndex={modalOverlayZIndex}
+                    overlayZIndexBase={selectPopupZIndex}
+                    pickerTitle={fieldLabel}
                 />
             );
         }
         return (
-            <Select 
+            <AdaptiveSelectField
                 {...commonProps}
                 className={KALAM_SELECT_FIELD_CLASSNAME}
                 mode="multiple"
@@ -2249,7 +2256,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 optionLabelProp="label"
                 getPopupContainer={selectPopupContainer}
                 placement={selectPlacement}
-                styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex }) } }}
+                overlayZIndexBase={selectPopupZIndex}
+                pickerTitle={fieldLabel}
             />
         );
 
@@ -2275,7 +2283,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           return (
             <div className="flex flex-col gap-1 w-full">
               <div className="flex gap-1 w-full min-w-0">
-                <Select 
+                <AdaptiveSelectField
                     {...commonProps}
                     style={{ ...((commonProps as any)?.style || {}), width: 'auto', flex: 1, minWidth: 0 }}
                     className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'min-w-0')}
@@ -2291,7 +2299,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     popupMatchSelectWidth={false}
                     virtual={false}
                     listHeight={isMobileViewport ? 224 : 320}
-                    styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' }) } }}
+                    popupStyle={buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' })}
+                    overlayZIndexBase={selectPopupZIndex + 20}
                     filterOption={false}
                     searchValue={relationSearchQuery}
                     onChange={(nextValue) => {
@@ -2332,6 +2341,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                           )}
                         </>
                     )}
+                    pickerTitle={fieldLabel}
+                    sheetSubtitle={resolvedRelationTargetModuleId
+                      ? `ماژول: ${MODULES[resolvedRelationTargetModuleId]?.titles?.fa || resolvedRelationTargetModuleId}`
+                      : undefined}
+                    mobileSearchPlaceholder="جستجوی رکورد مرتبط..."
+                    sheetToolbar={!compactMode && canQuickCreate ? (
+                      <Button
+                        icon={<PlusOutlined />}
+                        onClick={() => setQuickCreateOpen(true)}
+                        disabled={!forceEditMode || isReadonly}
+                      >
+                        افزودن مورد جدید
+                      </Button>
+                    ) : null}
                 />
                 <QrScanPopover
                   label=""
@@ -3051,12 +3074,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   const watchedQuickCreateValues = Form.useWatch([], effectiveForm) || {};
   const childOverlayZIndexBase = overlayZIndexBase + 100;
   const quickCreatePopupContainer = useCallback((triggerNode?: HTMLElement | null) => {
-    if (typeof document === 'undefined') {
-      return (triggerNode || {}) as HTMLElement;
-    }
-
-    const modalRoot = triggerNode?.closest?.('.ant-modal-root') as HTMLElement | null;
-    return modalRoot || triggerNode?.parentElement || document.body;
+    return resolveOverlayPopupContainer(triggerNode);
   }, []);
   const clearPendingAutoNameToggleWrite = useCallback(() => {
     if (pendingAutoNameToggleFrameRef.current !== null && typeof window !== 'undefined') {

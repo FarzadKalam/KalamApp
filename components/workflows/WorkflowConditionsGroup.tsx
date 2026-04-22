@@ -1,9 +1,11 @@
 import React, { useMemo } from 'react';
-import { Button, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
+import { Button, Empty, Input, InputNumber, Space, Switch } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
 import PersianDatePicker from '../PersianDatePicker';
+import AdaptiveSelectField from '../AdaptiveSelectField';
+import { AdaptivePickerMode, resolveSelectPopupContainer } from '../../utils/popupContainer';
 import {
   getDefaultWorkflowOperator,
   getWorkflowOperatorOptions,
@@ -29,6 +31,9 @@ interface WorkflowConditionsGroupProps {
   }>;
   getOperatorOptions?: (field?: ModuleField | null) => Array<{ label: string; value: string }>;
   getDefaultOperator?: (field?: ModuleField | null) => string;
+  overlayZIndexBase?: number;
+  popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
+  adaptiveMode?: AdaptivePickerMode;
 }
 
 const getFieldOptions = (
@@ -58,8 +63,6 @@ const getFieldOptions = (
   return [];
 };
 
-const popupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
-
 const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   value,
   onChange,
@@ -73,6 +76,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   dynamicFieldProps = {},
   getOperatorOptions,
   getDefaultOperator,
+  overlayZIndexBase = 1400,
+  popupContainer = resolveSelectPopupContainer,
+  adaptiveMode = 'auto',
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
@@ -148,6 +154,8 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 240,
     virtual: false,
+    overlayZIndexBase,
+    adaptiveMode,
   };
 
   const renderValueInput = (condition: WorkflowCondition, isLocked = false) => {
@@ -199,6 +207,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           getPopupContainer={popupContainer as any}
           onOptionsUpdate={dynamicFieldProps[field.dynamicOptionsCategory]?.onOptionsUpdate}
           protectedValues={dynamicFieldProps[field.dynamicOptionsCategory]?.protectedValues}
+          overlayZIndexBase={overlayZIndexBase}
+          adaptiveMode={adaptiveMode}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -210,7 +221,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       field.type === FieldType.USER
     ) {
       return (
-        <Select
+        <AdaptiveSelectField
           {...commonSelectProps}
           mode={expectsListValue ? 'multiple' : undefined}
           options={options}
@@ -227,7 +238,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
 
     if (field.type === FieldType.MULTI_SELECT || field.type === FieldType.TAGS) {
       return (
-        <Select
+        <AdaptiveSelectField
           {...commonSelectProps}
           mode="multiple"
           options={options}
@@ -283,6 +294,10 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
           disabled={disabled || isLocked}
           placeholder="تاریخ"
+          overlayZIndexBase={overlayZIndexBase}
+          modalContainer={popupContainer}
+          adaptiveMode={adaptiveMode}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -295,6 +310,10 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
           disabled={disabled || isLocked}
           placeholder="ساعت"
+          overlayZIndexBase={overlayZIndexBase}
+          modalContainer={popupContainer}
+          adaptiveMode={adaptiveMode}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -307,6 +326,10 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
           disabled={disabled || isLocked}
           placeholder="تاریخ و زمان"
+          overlayZIndexBase={overlayZIndexBase}
+          modalContainer={popupContainer}
+          adaptiveMode={adaptiveMode}
+          pickerTitle={field?.labels?.fa || field.key}
         />
       );
     }
@@ -341,7 +364,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
             >
               <div className="md:col-span-4">
                 <div className="flex items-center gap-1">
-                <Select
+                <AdaptiveSelectField
                   showSearch
                   optionFilterProp="label"
                   disabled={disabled || isLocked}
@@ -361,12 +384,15 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   }}
                   placeholder="فیلد"
                   className="w-full"
+                  overlayZIndexBase={overlayZIndexBase}
+                  adaptiveMode={adaptiveMode}
+                  pickerTitle="فیلد شرط"
                 />
                 {isRequired ? <span className="text-base font-semibold leading-none text-red-500">*</span> : null}
                 </div>
               </div>
               <div className="md:col-span-3">
-                <Select
+                <AdaptiveSelectField
                   disabled={disabled || isLocked}
                   options={getOperatorOptions?.(field) || getWorkflowOperatorOptions(field)}
                   getPopupContainer={popupContainer}
@@ -381,6 +407,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   }
                   placeholder="عملگر"
                   className="w-full"
+                  overlayZIndexBase={overlayZIndexBase}
+                  adaptiveMode={adaptiveMode}
+                  pickerTitle="عملگر شرط"
                 />
               </div>
               <div className="md:col-span-4">{renderValueInput(condition, isLocked)}</div>

@@ -354,6 +354,17 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
   overflow: auto;
 }
 
+.kalam-adaptive-picker--sheet {
+  display: flex;
+  flex-direction: column;
+}
+
+.kalam-adaptive-picker__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .kalam-adaptive-picker__header {
   display: flex;
   align-items: flex-start;
@@ -413,6 +424,166 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.kalam-adaptive-picker__search {
+  direction: rtl;
+}
+
+.kalam-adaptive-picker__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kalam-adaptive-picker__selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kalam-adaptive-picker__tag {
+  margin-inline-end: 0 !important;
+  border-radius: 999px;
+  padding-inline: 10px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.kalam-adaptive-picker__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: min(46dvh, 360px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.kalam-adaptive-picker__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid #ececec;
+  border-radius: 16px;
+  background: #fafafa;
+  color: rgba(15, 23, 42, 0.88);
+  padding: 12px 14px;
+  text-align: right;
+  transition: border-color 0.2s, background-color 0.2s, transform 0.2s;
+}
+
+.kalam-adaptive-picker__option:hover:not(:disabled) {
+  border-color: rgba(var(--brand-400-rgb), 0.7);
+  transform: translateY(-1px);
+}
+
+.kalam-adaptive-picker__option.is-selected {
+  border-color: rgba(var(--brand-500-rgb), 0.52);
+  background: rgba(var(--brand-50-rgb), 0.78);
+}
+
+.kalam-adaptive-picker__option:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.kalam-adaptive-picker__option-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.8;
+}
+
+.kalam-adaptive-picker__option-check {
+  flex: 0 0 auto;
+  color: rgb(var(--brand-700-rgb));
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.kalam-adaptive-picker__empty {
+  border: 1px dashed #e5e7eb;
+  border-radius: 14px;
+  background: #fafafa;
+  color: rgba(15, 23, 42, 0.58);
+  padding: 18px 14px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+html.dark .kalam-adaptive-picker {
+  border-color: rgba(var(--brand-300-rgb), 0.18);
+  background: rgba(var(--app-dark-surface-rgb), 0.98);
+  color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.38);
+}
+
+html.dark .kalam-adaptive-picker__title {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+html.dark .kalam-adaptive-picker__subtitle {
+  color: rgba(255, 255, 255, 0.58);
+}
+
+html.dark .kalam-adaptive-picker__steps {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .kalam-adaptive-picker__step {
+  color: rgba(255, 255, 255, 0.58);
+}
+
+html.dark .kalam-adaptive-picker__step.is-active {
+  background: rgba(var(--brand-500-rgb), 0.16);
+  color: rgba(255, 255, 255, 0.94);
+  box-shadow: none;
+}
+
+html.dark .kalam-adaptive-picker__chip {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(var(--brand-200-rgb), 0.96);
+}
+
+html.dark .kalam-adaptive-picker__chip:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html.dark .kalam-adaptive-picker__tag {
+  background: rgba(var(--brand-500-rgb), 0.18);
+  border-color: rgba(var(--brand-300-rgb), 0.22);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+html.dark .kalam-adaptive-picker__option {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+html.dark .kalam-adaptive-picker__option:hover:not(:disabled) {
+  border-color: rgba(var(--brand-300-rgb), 0.36);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.dark .kalam-adaptive-picker__option.is-selected {
+  border-color: rgba(var(--brand-300-rgb), 0.44);
+  background: rgba(var(--brand-500-rgb), 0.16);
+}
+
+html.dark .kalam-adaptive-picker__option-check {
+  color: rgba(var(--brand-200-rgb), 0.96);
+}
+
+html.dark .kalam-adaptive-picker__empty {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.62);
 }
 
 .kalam-adaptive-picker__chip {

@@ -10,6 +10,7 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import QrScanPopover from '../QrScanPopover';
 import { HARD_CODED_UNIT_OPTIONS } from '../../utils/unitConversions';
 import TaskActionButtons from '../tasks/TaskActionButtons';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 export type StageHandoverPiece = {
   key: string;
@@ -616,7 +617,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
                                 options={HARD_CODED_UNIT_OPTIONS as any}
                                 onChange={(nextValue) => onDeliveryRowFieldChange(groupIndex, String(record.key), 'mainUnit', nextValue)}
                                 className="w-full"
-                                getPopupContainer={(node) => node?.parentElement || document.body}
+                                getPopupContainer={resolveOverlayPopupContainer}
                                 disabled={locked}
                               />
                             ),
@@ -632,7 +633,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
                                 options={HARD_CODED_UNIT_OPTIONS as any}
                                 onChange={(nextValue) => onDeliveryRowFieldChange(groupIndex, String(record.key), 'subUnit', nextValue)}
                                 className="w-full"
-                                getPopupContainer={(node) => node?.parentElement || document.body}
+                                getPopupContainer={resolveOverlayPopupContainer}
                                 disabled={locked}
                               />
                             ),
@@ -716,7 +717,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
               optionFilterProp="label"
               placeholder="انتخاب قفسه مرحله"
               className="w-full"
-              getPopupContainer={(node) => node?.parentElement || document.body}
+              getPopupContainer={resolveOverlayPopupContainer}
               disabled={locked}
             />
             <QrScanPopover
@@ -830,7 +831,7 @@ const TaskHandoverModal: React.FC<TaskHandoverModalProps> = ({
             value={transferTargetGroupIndex}
             onChange={(val) => setTransferTargetGroupIndex(val)}
             options={transferTargets}
-            getPopupContainer={(node) => node?.parentElement || document.body}
+            getPopupContainer={resolveOverlayPopupContainer}
           />
         </div>
       </Modal>

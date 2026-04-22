@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient';
 import { detectFileManagerTables } from './fileManagerService';
 import { detectRecordFilesTable, isMissingRecordFilesError } from './recordFilesAvailability';
+import { fetchRecordReferenceLabels } from './recordReference';
 import {
   loadLegacyRecordFiles,
   syncLegacyRecordFilesBatchToFileManager,
@@ -418,15 +419,28 @@ export const buildFileManagerTree = async (
     return matchesTreeSearch(item, search, recordTitleMap, moduleTitleMap);
   });
 
+  const fetchedRecordLabels = await fetchRecordReferenceLabels(supabase, baseItems);
+  Object.entries(fetchedRecordLabels).forEach(([key, value]) => {
+    if (!String(key || '').trim() || !String(value || '').trim()) return;
+    recordTitleMap[key] = String(value).trim();
+  });
+
   const folderRows = await loadFileFoldersByIds(baseItems.map((item) => item.folder_id || ''), {
     moduleId: options.initialModuleId,
     recordId: options.initialRecordId,
   });
   const folderMap = new Map(folderRows.map((folder) => [String(folder.id), folder]));
+  const rootRecordFolderByRecordKey = new Map<string, FileFolderRow>();
 
   const countByModule = new Map<string, number>();
   const countByRecord = new Map<string, number>();
   const countByFolder = new Map<string, number>();
+  folderRows.forEach((folder) => {
+    if (String(folder.folder_type || '').trim() !== 'system_record') return;
+    const recordKey = `${String(folder.module_id || '').trim()}:${String(folder.record_id || '').trim()}`;
+    if (!recordKey || recordKey === ':') return;
+    rootRecordFolderByRecordKey.set(recordKey, folder);
+  });
   baseItems.forEach((item) => {
     const moduleId = String(item.module_id || '').trim();
     const recordId = String(item.record_id || '').trim();
@@ -434,9 +448,6 @@ export const buildFileManagerTree = async (
     if (moduleId && recordId) {
       const recordKey = `${moduleId}:${recordId}`;
       countByRecord.set(recordKey, (countByRecord.get(recordKey) || 0) + 1);
-      if (!recordTitleMap[recordKey]) {
-        recordTitleMap[recordKey] = String(item.source_record_title || recordId);
-      }
     }
     const folderId = String(item.folder_id || '').trim();
     if (folderId) countByFolder.set(folderId, (countByFolder.get(folderId) || 0) + 1);
@@ -460,10 +471,11 @@ export const buildFileManagerTree = async (
   Array.from(countByRecord.entries()).forEach(([recordKey, count]) => {
     const [moduleId, ...recordParts] = recordKey.split(':');
     const recordId = recordParts.join(':');
+    const recordFolder = rootRecordFolderByRecordKey.get(recordKey);
     folders.push({
       key: recordFolderKey(moduleId, recordId),
       parentKey: moduleFolderKey(moduleId),
-      label: recordTitleMap[recordKey] || recordId,
+      label: recordTitleMap[recordKey] || String(recordFolder?.name || '').trim() || recordId,
       count,
       isSystem: true,
       moduleId,
@@ -474,11 +486,15 @@ export const buildFileManagerTree = async (
   folderRows.forEach((folder) => {
     const folderId = String(folder.id || '').trim();
     if (!folderId) return;
+    if (String(folder.folder_type || '').trim() === 'system_record') return;
     const moduleId = String(folder.module_id || '').trim();
     const recordId = String(folder.record_id || '').trim();
     const parentId = String(folder.parent_id || '').trim();
+    const parentFolder = parentId ? folderMap.get(parentId) : null;
     const parentKey = parentId && folderMap.has(parentId)
-      ? physicalFolderKey(parentId)
+      ? String(parentFolder?.folder_type || '').trim() === 'system_record'
+        ? recordFolderKey(moduleId, recordId)
+        : physicalFolderKey(parentId)
       : moduleId && recordId
         ? recordFolderKey(moduleId, recordId)
         : 'all';
@@ -508,11 +524,16 @@ export const buildFileManagerTree = async (
     : initialFolderKey;
   const parsed = parseTreeFolderKey(activeFolderKey);
   const folderRow = parsed.kind === 'folder' ? folderMap.get(parsed.folderId) : null;
-  const physicalFolderIdsUnderRecord = new Set(
+  const rootRecordFolderId = parsed.kind === 'record'
+    ? String(rootRecordFolderByRecordKey.get(`${parsed.moduleId}:${parsed.recordId}`)?.id || '').trim()
+    : '';
+  const nestedFolderIdsUnderRecord = new Set(
     folderRows
       .filter((folder) => {
         if (parsed.kind !== 'record') return false;
-        return String(folder.module_id || '') === parsed.moduleId && String(folder.record_id || '') === parsed.recordId;
+        return String(folder.module_id || '') === parsed.moduleId
+          && String(folder.record_id || '') === parsed.recordId
+          && String(folder.id || '').trim() !== rootRecordFolderId;
       })
       .map((folder) => String(folder.id)),
   );
@@ -523,7 +544,9 @@ export const buildFileManagerTree = async (
     if (parsed.kind === 'record') {
       if (item.module_id !== parsed.moduleId || item.record_id !== parsed.recordId) return false;
       const folderId = String(item.folder_id || '').trim();
-      return !folderId || !physicalFolderIdsUnderRecord.has(folderId);
+      if (!folderId) return true;
+      if (rootRecordFolderId && folderId === rootRecordFolderId) return true;
+      return !nestedFolderIdsUnderRecord.has(folderId);
     }
     if (parsed.kind === 'folder') {
       const folderId = String(item.folder_id || '').trim();

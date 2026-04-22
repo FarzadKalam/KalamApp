@@ -26,6 +26,7 @@ import { sendSmsViaGateway } from '../utils/smsGateway';
 import { sendBotMessageViaGateway } from '../utils/botGateway';
 import PhoneDisplay from './PhoneDisplay';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 
 type ReadyTextRow = {
   id: string;
@@ -140,7 +141,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     return Array.from(optionsByToken.values());
   }, [moduleId, record, templateVariableOptions]);
 
-  const selectPopupContainer = (node?: HTMLElement | null) => node?.parentElement || document.body;
+  const selectPopupContainer = (node?: HTMLElement | null) => resolveOverlayPopupContainer(node);
   const commonSelectFilter = (input: string, option?: { label?: unknown; searchText?: unknown }) =>
     String(option?.searchText || option?.label || '')
       .toLowerCase()

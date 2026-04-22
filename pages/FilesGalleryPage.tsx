@@ -9,7 +9,6 @@ import {
   getRecordFilesTableAvailabilityCache,
   setRecordFilesTableAvailability,
 } from '../utils/recordFilesAvailability';
-import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRolePermissions, resolveFilesAccessPermissions } from '../utils/permissions';
 import { detectFileManagerTables } from '../utils/fileManagerService';
 import { buildFileManagerTree, type FileManagerListItem, type FileManagerTreeResult } from '../utils/fileManagerQueries';
@@ -18,16 +17,6 @@ import FileManagerBrowser from '../components/files/FileManagerBrowser';
 type GalleryFileItem = FileManagerListItem;
 
 let recordFilesTableExistsCache: boolean | null = getRecordFilesTableAvailabilityCache();
-
-const buildSelectFields = (moduleId: string): string => {
-  const moduleConfig = MODULES[moduleId];
-  const fieldKeys = (moduleConfig?.fields || []).map((f: any) => String(f.key || ''));
-  const preferred = ['name', 'title', 'system_code', 'manual_code', 'business_name', 'full_name'];
-  const keyField = (moduleConfig?.fields || []).find((f: any) => f.isKey)?.key;
-  const inferred = fieldKeys.filter((key) => /name|title|code|number|subject/i.test(key));
-  const keys = Array.from(new Set(['id', ...preferred, ...(keyField ? [String(keyField)] : []), ...inferred]));
-  return keys.filter((k) => fieldKeys.includes(k) || k === 'id').join(', ');
-};
 
 const FilesGalleryPage: React.FC = () => {
   const navigate = useNavigate();
@@ -41,7 +30,6 @@ const FilesGalleryPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(60);
-  const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
   const [recordFilesEnabled, setRecordFilesEnabled] = useState<boolean>(recordFilesTableExistsCache !== false);
   const [permissionsLoading, setPermissionsLoading] = useState(true);
   const [canViewGallery, setCanViewGallery] = useState(true);
@@ -64,7 +52,6 @@ const FilesGalleryPage: React.FC = () => {
         initialModuleId: moduleFilter === 'all' ? null : moduleFilter,
         search: searchTerm,
         fileTypes: typeFilter === 'all' ? undefined : [typeFilter],
-        recordTitleMap,
         moduleTitleMap,
       });
       setTree(nextTree);
@@ -110,44 +97,6 @@ const FilesGalleryPage: React.FC = () => {
     if (permissionsLoading || !canViewGallery) return;
     void loadFiles(false);
   }, [activeFolderKey, page, pageSize, searchTerm, typeFilter, moduleFilter]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadTitles = async () => {
-      const byModule = new Map<string, Set<string>>();
-
-      items.forEach((item) => {
-        if (!item.module_id || !item.record_id || !MODULES[item.module_id]) return;
-        if (!byModule.has(item.module_id)) byModule.set(item.module_id, new Set<string>());
-        byModule.get(item.module_id)?.add(item.record_id);
-      });
-
-      const nextMap: Record<string, string> = {};
-
-      for (const [moduleId, idsSet] of byModule.entries()) {
-        const ids = Array.from(idsSet);
-        if (!ids.length) continue;
-
-        const selectFields = buildSelectFields(moduleId);
-        if (!selectFields) continue;
-
-        const { data } = await supabase.from(moduleId).select(selectFields).in('id', ids);
-
-        (data || []).forEach((row: any) => {
-          nextMap[`${moduleId}:${String(row.id)}`] = getRecordTitle(row, MODULES[moduleId], { fallback: String(row.id || '-') });
-        });
-      }
-
-      if (!cancelled) setRecordTitleMap(nextMap);
-    };
-
-    void loadTitles();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [items]);
 
   const moduleOptions = useMemo(() => {
     const used = Array.from(new Set(items.map((item) => item.module_id))).filter(Boolean);
@@ -271,7 +220,7 @@ const FilesGalleryPage: React.FC = () => {
           }}
           onOpenItem={openRecordGallery}
           onRefresh={() => void loadFiles(true)}
-          recordTitleMap={{ ...recordTitleMap, ...(tree?.recordTitleMap || {}) }}
+          recordTitleMap={tree?.recordTitleMap || {}}
           moduleTitleMap={moduleTitleMap}
           selectionItems={tree?.allItems || []}
           page={page}

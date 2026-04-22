@@ -430,7 +430,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         const nextTree = await buildFileManagerTree({
           page: browserPage,
           pageSize: browserPageSize,
-          folderKey: browserFolderKey,
+          folderKey: browserFolderKey === 'all' ? undefined : browserFolderKey,
           initialModuleId: moduleId,
           initialRecordId: recordId,
           recordTitleMap: { [`${moduleId}:${recordId}`]: nextRecordTitle },
@@ -471,7 +471,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const nextTree = await buildFileManagerTree({
       page: browserPage,
       pageSize: browserPageSize,
-      folderKey: browserFolderKey,
+      folderKey: browserFolderKey === 'all' ? undefined : browserFolderKey,
       initialModuleId: moduleId,
       initialRecordId: recordId,
       recordTitleMap: { [`${moduleId}:${recordId}`]: recordDisplayTitle || String(recordId) },
@@ -722,7 +722,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!shouldShare || moduleId !== 'tasks' || !recordId) return 0;
     const targets = await resolveTaskRelatedTargets();
     if (targets.length === 0) return 0;
-    const sourceTitle = file.fileName || pendingFileName || 'فعالیت';
+    const sourceTitle = recordDisplayTitle || String(recordId);
 
     if (fileManagerEnabled && file.assetId) {
       let createdCount = 0;
@@ -868,7 +868,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             sourceEntryId: item.entry_id || null,
             sourceModuleId: item.module_id || moduleId,
             sourceRecordId: item.record_id || String(recordId),
-            sourceRecordTitle: getDisplayFileName(item),
+            sourceRecordTitle: recordDisplayTitle || String(recordId),
             targetModuleId: moduleId,
             targetRecordId: String(recordId),
             targetRecordTitle: recordDisplayTitle || String(recordId),

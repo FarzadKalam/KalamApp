@@ -4,6 +4,7 @@ import { CopyOutlined, DeleteOutlined, PlusOutlined, RightOutlined, SaveOutlined
 import QrScanPopover from '../QrScanPopover';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { HARD_CODED_UNIT_OPTIONS } from '../../utils/unitConversions';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 export type StartMaterialPiece = {
   key: string;
@@ -599,7 +600,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                                   options={HARD_CODED_UNIT_OPTIONS as any}
                                   onChange={(nextValue) => onDeliveryRowFieldChange(groupIndex, String(record.key), 'mainUnit', nextValue)}
                                   className="w-full"
-                                  getPopupContainer={(node) => node?.parentElement || document.body}
+                                  getPopupContainer={resolveOverlayPopupContainer}
                                 />
                               ),
                             },
@@ -614,7 +615,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                                   options={HARD_CODED_UNIT_OPTIONS as any}
                                   onChange={(nextValue) => onDeliveryRowFieldChange(groupIndex, String(record.key), 'subUnit', nextValue)}
                                   className="w-full"
-                                  getPopupContainer={(node) => node?.parentElement || document.body}
+                                  getPopupContainer={resolveOverlayPopupContainer}
                                 />
                               ),
                             },
@@ -688,7 +689,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                               showSearch
                               optionFilterProp="label"
                               className="w-full"
-                              getPopupContainer={(node) => node?.parentElement || document.body}
+                              getPopupContainer={resolveOverlayPopupContainer}
                             />
                             <QrScanPopover
                               label=""
@@ -710,7 +711,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
                               showSearch
                               optionFilterProp="label"
                               className="w-full"
-                              getPopupContainer={(node) => node?.parentElement || document.body}
+                              getPopupContainer={resolveOverlayPopupContainer}
                             />
                             <QrScanPopover
                               label=""
@@ -775,7 +776,7 @@ const StartProductionModal: React.FC<StartProductionModalProps> = ({
           value={transferTargetGroupIndex}
           onChange={(val) => setTransferTargetGroupIndex(val)}
           options={transferTargets}
-          getPopupContainer={(node) => node?.parentElement || document.body}
+          getPopupContainer={resolveOverlayPopupContainer}
         />
       </div>
     </Modal>
