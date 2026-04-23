@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Button, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { BarChartOutlined, EditOutlined, FileExcelOutlined, FilePdfOutlined, PieChartOutlined, PrinterOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import { BarChartOutlined, EditOutlined, EyeOutlined, FileExcelOutlined, FilePdfOutlined, PieChartOutlined, PrinterOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
+import PrintSection from '../components/moduleShow/PrintSection';
 import SimpleBarChart from '../components/reports/SimpleBarChart';
 import SimplePieChart from '../components/reports/SimplePieChart';
 import { MODULES } from '../moduleRegistry';
@@ -69,6 +70,12 @@ type GroupedDetailRow = ReportRow & {
 type ExportCell = {
   value: any;
   rowSpan?: number;
+};
+
+type ReportPrintFieldDefinition = {
+  key: string;
+  label: string;
+  type: 'column' | 'metric_card';
 };
 
 const isMissingReportsTableError = (error: any) => {
@@ -273,6 +280,9 @@ const ReportViewerPage: React.FC = () => {
   const [renderMode, setRenderMode] = useState<RenderMode>('table');
   const [activeMetricKey, setActiveMetricKey] = useState<string>('__count');
   const [printTemplate, setPrintTemplate] = useState<'landscape' | 'portrait'>('landscape');
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
+  const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
 
   const config = useMemo(() => normalizeReportConfig(report?.config), [report?.config]);
@@ -761,14 +771,68 @@ const ReportViewerPage: React.FC = () => {
       };
     });
   }, [config.group_bys.length, config.metric_type, fieldMap, groupedRows, metricFieldKeys, rows]);
-
+  const summaryCards = useMemo(
+    () => [
+      { key: '__report_card__rows', label: 'تعداد ردیف نتیجه', value: rows.length, fieldType: 'number' },
+      { key: '__report_card__groups', label: 'گروه‌ها', value: groupedRows.length, fieldType: 'number' },
+      {
+        key: '__report_card__active_metric',
+        label: metricOptions.find((item) => item.value === activeMetricKey)?.label || 'معیار',
+        value: totalMetricValue,
+        fieldType: String(fieldMap[activeMetricKey]?.type || '').toLowerCase(),
+      },
+      ...metricCardValues.map((metric) => ({
+        key: `__report_metric_card__${metric.key}`,
+        label: metric.label,
+        value: metric.value,
+        fieldType: metric.fieldType,
+      })),
+    ],
+    [activeMetricKey, fieldMap, groupedRows.length, metricCardValues, metricOptions, rows.length, totalMetricValue]
+  );
+  const reportPrintableFields = useMemo<ReportPrintFieldDefinition[]>(
+    () => [
+      ...summaryCards.map((card) => ({ key: card.key, label: card.label, type: 'metric_card' as const })),
+      ...visibleFields.map((field) => ({
+        key: String(field.key),
+        label: String(field.labels?.fa || field.key),
+        type: 'column' as const,
+      })),
+    ],
+    [summaryCards, visibleFields]
+  );
+  const activePrintFieldKeys = useMemo(
+    () => selectedPrintFields[printTemplate] || [],
+    [printTemplate, selectedPrintFields]
+  );
+  const selectedPrintFieldKeySet = useMemo(
+    () => new Set(activePrintFieldKeys.map((item) => String(item || '').trim()).filter(Boolean)),
+    [activePrintFieldKeys]
+  );
+  const hasExplicitPrintFieldSelection = activePrintFieldKeys.length > 0;
+  const selectedPrintCards = useMemo(
+    () => summaryCards.filter((card) => !hasExplicitPrintFieldSelection || selectedPrintFieldKeySet.has(card.key)),
+    [hasExplicitPrintFieldSelection, selectedPrintFieldKeySet, summaryCards]
+  );
+  const selectedPrintVisibleFields = useMemo(
+    () => visibleFields.filter((field) => !hasExplicitPrintFieldSelection || selectedPrintFieldKeySet.has(String(field.key))),
+    [hasExplicitPrintFieldSelection, selectedPrintFieldKeySet, visibleFields]
+  );
   const groupByFields = useMemo(
     () => config.group_bys.map((item) => fieldMap[item.field]).filter(Boolean),
     [config.group_bys, fieldMap]
   );
+  const selectedPrintGroupFields = useMemo(
+    () => groupByFields.filter((field) => !hasExplicitPrintFieldSelection || selectedPrintFieldKeySet.has(String(field.key))),
+    [groupByFields, hasExplicitPrintFieldSelection, selectedPrintFieldKeySet]
+  );
   const visibleDetailFields = useMemo(
     () => visibleFields.filter((field) => !config.group_bys.some((grouping) => grouping.field === field.key)),
     [config.group_bys, visibleFields]
+  );
+  const selectedPrintDetailFields = useMemo(
+    () => visibleDetailFields.filter((field) => !hasExplicitPrintFieldSelection || selectedPrintFieldKeySet.has(String(field.key))),
+    [hasExplicitPrintFieldSelection, selectedPrintFieldKeySet, visibleDetailFields]
   );
   const groupedDetailRows = useMemo<GroupedDetailRow[]>(() => {
     if (config.group_bys.length === 0) return [];
@@ -908,6 +972,10 @@ const ReportViewerPage: React.FC = () => {
     [exportCellRows]
   );
 
+  useEffect(() => {
+    setSelectedPrintFields(config.print_selected_field_keys || {});
+  }, [config.print_selected_field_keys]);
+
   const exportMergeRanges = useMemo(() => {
     if (config.group_bys.length === 0) return [];
     const ranges: Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> = [];
@@ -953,14 +1021,53 @@ const ReportViewerPage: React.FC = () => {
 
   const buildReportPrintHtml = (orientation: 'portrait' | 'landscape') => {
     const chartMax = Math.max(1, ...chartItems.map((item) => Number(item.value || 0)));
-    const printFontSize = exportHeaders.length > 14 ? (orientation === 'landscape' ? 6.5 : 5.8) : (orientation === 'landscape' ? 8 : 7);
-    const tableRowsHtml = exportCellRows.map((line) => `
+    const printHeaders = config.group_bys.length > 0
+      ? [
+          ...selectedPrintGroupFields.map((field) => field.labels?.fa || field.key),
+          ...selectedPrintDetailFields.map((field) => field.labels?.fa || field.key),
+        ]
+      : selectedPrintVisibleFields.map((field) => field.labels?.fa || field.key);
+    const printCellRows: ExportCell[][] = config.group_bys.length > 0
+      ? groupedDetailRows.map((row) => [
+          ...selectedPrintGroupFields.map((field) => ({
+            value: row.__group_labels[field.key] || '-',
+            rowSpan: row.__group_row_spans[field.key] || 0,
+          })),
+          ...selectedPrintDetailFields.map((field) => ({
+            value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+          })),
+        ])
+      : rows.map((row) => selectedPrintVisibleFields.map((field) => ({
+          value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+        })));
+    const effectiveHeaders = printHeaders.length > 0 ? printHeaders : exportHeaders;
+    const effectiveCellRows = printHeaders.length > 0
+      ? printCellRows
+      : exportCellRows;
+    const printFontSize = effectiveHeaders.length > 14 ? (orientation === 'landscape' ? 6.5 : 5.8) : (orientation === 'landscape' ? 8 : 7);
+    const tableRowsHtml = effectiveCellRows.map((line) => `
       <tr>${line.map((cell) => {
         if (cell.rowSpan === 0) return '';
         const rowSpanAttr = Number(cell.rowSpan || 0) > 1 ? ` rowspan="${Number(cell.rowSpan)}"` : '';
         return `<td${rowSpanAttr}>${escapePrintHtml(cell.value ?? '-')}</td>`;
       }).join('')}</tr>
     `).join('');
+    const cardsHtml = selectedPrintCards.length > 0 ? `
+      <section class="report-print-section">
+        <div class="report-print-cards">
+          ${selectedPrintCards.map((card) => `
+            <div class="report-print-card">
+              <div class="report-print-card-label">${escapePrintHtml(card.label)}</div>
+              <div class="report-print-card-value">${escapePrintHtml(
+                card.key === '__report_card__rows' || card.key === '__report_card__groups'
+                  ? toPersianNumber(card.value)
+                  : formatMetricValue(Number(card.value || 0), card.fieldType, currencyLabel)
+              )}</div>
+            </div>
+          `).join('')}
+        </div>
+      </section>
+    ` : '';
     const chartHtml = chartAvailable && chartItems.length > 0 ? `
       <section class="report-print-section">
         <h3>نمودار</h3>
@@ -985,6 +1092,10 @@ const ReportViewerPage: React.FC = () => {
           .report-print-title { font-size:18px; font-weight:900; }
           .report-print-meta { font-size:10px; color:#6b7280; text-align:left; }
           .report-print-section h3 { margin:10px 0 6px; font-size:13px; }
+          .report-print-cards { display:grid; grid-template-columns:repeat(${Math.max(1, Math.min(4, selectedPrintCards.length || 1))}, minmax(0, 1fr)); gap:8px; margin-bottom:8px; }
+          .report-print-card { border:1px solid #d1d5db; background:#f9fafb; padding:8px; min-height:58px; }
+          .report-print-card-label { font-size:9px; color:#6b7280; margin-bottom:4px; }
+          .report-print-card-value { font-size:13px; font-weight:800; color:#111827; line-height:1.8; }
           .report-print-table { width:100%; max-width:100%; border-collapse:collapse; table-layout:fixed; font-size:${printFontSize}px; }
           .report-print-table th, .report-print-table td { border:1px solid #d1d5db; padding:4px; text-align:right; vertical-align:middle; overflow-wrap:anywhere; word-break:break-word; line-height:1.7; }
           .report-print-table th { background:#f3f4f6; font-weight:800; }
@@ -1000,11 +1111,12 @@ const ReportViewerPage: React.FC = () => {
           </div>
           <div class="report-print-meta">${escapePrintHtml(new Date().toLocaleString('fa-IR'))}</div>
         </header>
+        ${cardsHtml}
         ${chartHtml}
         <section class="report-print-section">
           <h3>جدول گزارش</h3>
           <table class="report-print-table">
-            <thead><tr>${exportHeaders.map((header) => `<th>${escapePrintHtml(header)}</th>`).join('')}</tr></thead>
+            <thead><tr>${effectiveHeaders.map((header) => `<th>${escapePrintHtml(header)}</th>`).join('')}</tr></thead>
             <tbody>${tableRowsHtml}</tbody>
           </table>
         </section>
@@ -1033,6 +1145,53 @@ const ReportViewerPage: React.FC = () => {
       void printInIframe({ pageSize: `A4 ${orientation}`, sourceHtml: buildReportPrintHtml(orientation), title });
     });
   };
+  const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
+    setSelectedPrintFields((prev) => {
+      const current = prev[templateId] || [];
+      return current.includes(fieldName)
+        ? { ...prev, [templateId]: current.filter((item) => item !== fieldName) }
+        : { ...prev, [templateId]: [...current, fieldName] };
+    });
+  }, []);
+  const handleSavePrintFields = useCallback(async () => {
+    if (!reportId || !report) return false;
+    setSavingPrintFields(true);
+    try {
+      const nextConfig = {
+        ...config,
+        print_selected_field_keys: Object.fromEntries(
+          Object.entries(selectedPrintFields).map(([templateKey, fieldKeys]) => [
+            String(templateKey || '').trim(),
+            Array.from(new Set((Array.isArray(fieldKeys) ? fieldKeys : []).map((item) => String(item || '').trim()).filter(Boolean))),
+          ])
+        ),
+      };
+      const { error } = await supabase
+        .from('report_definitions')
+        .update({ config: nextConfig })
+        .eq('id', reportId);
+      if (error) throw error;
+      setReport((prev) => prev ? { ...prev, config: nextConfig } : prev);
+      message.success('تنظیمات چاپ گزارش ذخیره شد');
+      return true;
+    } catch (error) {
+      message.error(String((error as any)?.message || 'ذخیره تنظیمات چاپ گزارش انجام نشد'));
+      return false;
+    } finally {
+      setSavingPrintFields(false);
+    }
+  }, [config, message, report, reportId, selectedPrintFields]);
+  const reportPrintTemplates = useMemo(
+    () => [
+      { id: 'landscape', title: 'A4 افقی', description: 'مناسب گزارش‌های جدولی عریض', isSystem: true },
+      { id: 'portrait', title: 'A4 عمودی', description: 'مناسب گزارش‌های فشرده‌تر', isSystem: true },
+    ],
+    []
+  );
+  const renderPrintCard = useCallback(
+    () => <div dangerouslySetInnerHTML={{ __html: buildReportPrintHtml(printTemplate) }} />,
+    [printTemplate, buildReportPrintHtml]
+  );
 
   if (loading) {
     return <div className="flex h-[70vh] items-center justify-center"><Spin size="large" /></div>;
@@ -1066,6 +1225,7 @@ const ReportViewerPage: React.FC = () => {
               ]}
               onChange={(value) => setPrintTemplate(value)}
             />
+            <Button icon={<EyeOutlined />} onClick={() => setIsPrintModalOpen(true)}>تنظیم چاپ</Button>
             <Button icon={<PrinterOutlined />} onClick={() => handlePrint(printTemplate)}>چاپ</Button>
             <Button icon={<FilePdfOutlined />} onClick={() => handleExportPdf(printTemplate)}>PDF</Button>
             {canEditReport && <Button icon={<EditOutlined />} onClick={() => navigate(`/reports/${report?.id}/edit`)}>ویرایش</Button>}
@@ -1171,6 +1331,23 @@ const ReportViewerPage: React.FC = () => {
           )
         )}
       </div>
+      <PrintSection
+        isPrintModalOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        onPrint={() => handlePrint(printTemplate)}
+        printTemplates={reportPrintTemplates}
+        selectedTemplateId={printTemplate}
+        onSelectTemplate={(id) => setPrintTemplate(id as 'landscape' | 'portrait')}
+        renderPrintCard={renderPrintCard}
+        printMode={false}
+        printableFields={reportPrintableFields}
+        selectedPrintFields={selectedPrintFields}
+        onTogglePrintField={handleTogglePrintField}
+        onSavePrintFields={handleSavePrintFields}
+        savingPrintFields={savingPrintFields}
+        allowFieldSelectionTab
+        previewMeta={{ paperSize: 'A4', orientation: printTemplate }}
+      />
     </div>
   );
 };

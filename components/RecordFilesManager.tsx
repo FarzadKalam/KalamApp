@@ -37,6 +37,7 @@ import {
 import type { FileFolderRow } from '../utils/fileManagerTypes';
 import { sendCounterpartyBotGroupMessage } from '../utils/botGateway';
 import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
+import { logAndTouchRecord } from '../utils/recordActivity';
 import FileManagerBrowser, { type FileManagerBrowserItem } from './files/FileManagerBrowser';
 import TagInput from './TagInput';
 
@@ -1284,6 +1285,22 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
           },
         ]);
         if (!mainImage && onMainImageChange) onMainImageChange(url);
+        await logAndTouchRecord({
+          supabase,
+          moduleId,
+          recordId,
+          action: 'file_attached',
+          fieldName: 'record_files',
+          fieldLabel: 'فایل‌های رکورد',
+          oldValue: null,
+          newValue: desiredName,
+          metadata: {
+            changeKind: 'file_attached',
+            fileName: desiredName,
+            fileType: 'image',
+            summary: 'فایل به رکورد پیوست شد',
+          },
+        });
         msg.success('فایل اضافه شد');
         return {
           url,
@@ -1330,6 +1347,22 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         appendOptimisticItem(optimisticItem, browserFolderKey);
         void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
         if (!mainImage && onMainImageChange) onMainImageChange(url);
+        await logAndTouchRecord({
+          supabase,
+          moduleId,
+          recordId,
+          action: 'file_attached',
+          fieldName: 'record_files',
+          fieldLabel: 'فایل‌های رکورد',
+          oldValue: null,
+          newValue: desiredName,
+          metadata: {
+            changeKind: 'file_attached',
+            fileName: desiredName,
+            fileType: type,
+            summary: 'فایل به رکورد پیوست شد',
+          },
+        });
         msg.success('فایل اضافه شد');
         return {
           url,
@@ -1379,6 +1412,22 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       void loadVisibleTree({ keepItems: true, folderKey: browserFolderKey });
 
       if (!mainImage && onMainImageChange) onMainImageChange(url);
+      await logAndTouchRecord({
+        supabase,
+        moduleId,
+        recordId,
+        action: 'file_attached',
+        fieldName: 'record_files',
+        fieldLabel: 'فایل‌های رکورد',
+        oldValue: null,
+        newValue: desiredName,
+        metadata: {
+          changeKind: 'file_attached',
+          fileName: desiredName,
+          fileType: type,
+          summary: 'فایل به رکورد پیوست شد',
+        },
+      });
       msg.success('فایل اضافه شد');
         return {
           url,
@@ -1920,6 +1969,24 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       if (target?.file_url === mainImage) {
         const nextImage = nextItems.find((item) => item.file_type === 'image');
         onMainImageChange?.(nextImage?.file_url || null);
+      }
+      if (target) {
+        await logAndTouchRecord({
+          supabase,
+          moduleId,
+          recordId: String(recordId || ''),
+          action: 'file_removed',
+          fieldName: 'record_files',
+          fieldLabel: 'فایل‌های رکورد',
+          oldValue: target.file_name || target.file_url || 'فایل',
+          newValue: null,
+          metadata: {
+            changeKind: 'file_removed',
+            fileName: target.file_name || null,
+            fileType: target.file_type || null,
+            summary: 'فایل از رکورد حذف شد',
+          },
+        });
       }
       msg.success('فایل حذف شد');
     } catch (error: any) {

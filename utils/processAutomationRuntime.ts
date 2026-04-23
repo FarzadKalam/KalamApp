@@ -5,6 +5,7 @@ import { createProcessLinkedFieldKey, parseProcessLinkMap } from './processTarge
 import { resolveTaskSourceLink } from './taskMeta';
 import {
   evaluateWorkflowCondition,
+  evaluateWorkflowConditionCollection,
   executeWorkflowAction,
   resolveNoteAttachmentsFromFields,
 } from './workflowRuntime';
@@ -570,17 +571,11 @@ const evaluateProcessAutomationConditions = async ({
     });
   };
 
-  for (const condition of all) {
-    if (!await evaluateOne(condition as WorkflowCondition)) return false;
-  }
-
-  if (any.length === 0) return true;
-
-  for (const condition of any) {
-    if (await evaluateOne(condition as WorkflowCondition)) return true;
-  }
-
-  return false;
+  return evaluateWorkflowConditionCollection({
+    conditionsAll: all,
+    conditionsAny: any,
+    evaluate: evaluateOne,
+  });
 };
 
 const getRuleNoteText = (rule: ProcessAutomationRule) =>

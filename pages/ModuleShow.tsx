@@ -87,6 +87,7 @@ import { normalizeOperationalDocumentTotals } from '../utils/operationalDocument
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
+import { insertRecordActivity, logAndTouchRecord } from '../utils/recordActivity';
 
 const isStatementTimeoutError = (error: any) => {
   const code = String(error?.code || '').trim();
@@ -2206,25 +2207,22 @@ const ModuleShow: React.FC = () => {
         }));
 
         const authUser = await getCachedAuthUser(supabase);
-        const userId = authUser?.id || null;
-        const recordTitle = getRecordTitle(data, moduleConfig) || null;
-        await supabase.from('changelogs').insert([
-          {
-            module_id: moduleId,
-            record_id: id,
-            action: 'update',
-            field_name: 'assignee_id',
-            field_label: assigneeLabel,
-            old_value: oldLabel,
-            new_value: newLabel,
-            user_id: userId,
-            record_title: recordTitle,
-          },
-        ]);
+        await insertRecordActivity({
+          supabase,
+          moduleId,
+          recordId: String(id || ''),
+          action: 'update',
+          fieldName: 'assignee_id',
+          fieldLabel: assigneeLabel,
+          oldValue: oldLabel,
+          newValue: newLabel,
+          userId: authUser?.id || null,
+          recordTitle: getRecordTitle(data, moduleConfig) || null,
+        });
 
         msg.success(`${assigneeLabel} رکورد تغییر کرد`);
       } catch (e: any) { msg.error(toFaErrorMessage(e, 'ذخیره جدول ناموفق بود.')); }
-    }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
+    }, [assigneeLabel, data?.assignee_id, data?.assignee_type, data, id, moduleConfig, moduleConfig?.table, moduleId, msg, supportsAssignee, supportsRoleAssignee]);
 
   // تابع برای کپی اقلام BOM به جداول مواد اولیه (با تایید کاربر)
     const handleRelatedBomChange = useCallback(async (bomId: string) => {
@@ -2346,6 +2344,18 @@ const ModuleShow: React.FC = () => {
 
           setData((prev: any) => ({ ...(prev || {}), ...patch }));
           setAutoSyncedProcessTemplateId(templateId);
+          await insertChangelog({
+            action: 'process_template_applied',
+            fieldName: 'process_template_id',
+            fieldLabel: 'الگوی فرآیند',
+            oldValue: data?.process_template_id ?? null,
+            newValue: templateId,
+            metadata: {
+              changeKind: 'process_template_applied',
+              summary: 'الگوی فرآیند به رکورد افزوده شد',
+              blockLabel: 'فرآیند',
+            },
+          });
           msg.success('مراحل فرآیند بارگذاری شد');
         } catch (e: any) {
           msg.error('خطا در بارگذاری مراحل فرآیند: ' + (e?.message || e));
@@ -3105,6 +3115,21 @@ const ModuleShow: React.FC = () => {
         });
       }
 
+      if (moduleId && id) {
+        await insertChangelog({
+          action: 'project_auto_referred',
+          fieldName: 'project_id',
+          fieldLabel: 'پروژه',
+          oldValue: data?.project_id ?? null,
+          newValue: projectId,
+          metadata: {
+            changeKind: 'project_auto_referred',
+            summary: 'پروژه به رکورد فعلی متصل شد',
+          },
+          touchRecord: moduleId !== 'invoices' && moduleId !== 'purchase_invoices',
+        });
+      }
+
       setIsQuickProjectModalOpen(false);
       quickProjectForm.resetFields();
       msg.success('پروژه ایجاد شد');
@@ -3375,6 +3400,20 @@ const ModuleShow: React.FC = () => {
         }
       }
       setData((prev: any) => ({ ...prev, image_url: urlData.publicUrl }));
+      await insertChangelog({
+        action: 'file_attached',
+        fieldName: 'image_url',
+        fieldLabel: 'تصویر اصلی',
+        oldValue: data?.image_url ?? null,
+        newValue: file.name || 'تصویر',
+        metadata: {
+          changeKind: 'file_attached',
+          fileName: file.name || null,
+          fileType: 'image',
+          summary: 'تصویر به رکورد پیوست شد',
+        },
+        touchRecord: true,
+      });
       msg.success('تصویر بروزرسانی شد');
     } catch (e: any) {
       if (isUploadCanceledError(e)) return false;
@@ -3601,6 +3640,20 @@ const ModuleShow: React.FC = () => {
         if (error) throw error;
       }
       tracker.finalize({ status: 'saved_to_record', uploadedUrl: uploaded.url });
+      await insertChangelog({
+        action: 'file_attached',
+        fieldName: 'record_files',
+        fieldLabel: 'فایل‌های رکورد',
+        oldValue: null,
+        newValue: uploaded.name,
+        metadata: {
+          changeKind: 'file_attached',
+          fileName: uploaded.name || null,
+          fileType: 'file',
+          summary: 'فایل به رکورد پیوست شد',
+        },
+        touchRecord: true,
+      });
       msg.success({ key: messageKey, content: 'PDF در فایل‌های رکورد ذخیره شد.' });
     } catch (error) {
       tracker.finalize({
@@ -3832,32 +3885,56 @@ const ModuleShow: React.FC = () => {
   );
 
   const insertChangelog = useCallback(
-    async (payload: { action: string; fieldName?: string; fieldLabel?: string; oldValue?: any; newValue?: any }) => {
+    async (payload: {
+      action: string;
+      fieldName?: string;
+      fieldLabel?: string;
+      oldValue?: any;
+      newValue?: any;
+      metadata?: Record<string, any>;
+      touchRecord?: boolean;
+    }) => {
       try {
         if (!moduleId || !id) return;
         const authUser = await getCachedAuthUser(supabase);
         const userId = authUser?.id || null;
         const recordTitle = getRecordTitle(data, moduleConfig) || null;
 
-        const { error } = await supabase.from('changelogs').insert([
-          {
-            module_id: moduleId,
-            record_id: id,
+        if (payload.touchRecord) {
+          await logAndTouchRecord({
+            supabase,
+            moduleId,
+            recordId: id,
             action: payload.action,
-            field_name: payload.fieldName || null,
-            field_label: payload.fieldLabel || null,
-            old_value: payload.oldValue ?? null,
-            new_value: payload.newValue ?? null,
-            user_id: userId,
-            record_title: recordTitle,
-          },
-        ]);
-        if (error) throw error;
+            fieldName: payload.fieldName || null,
+            fieldLabel: payload.fieldLabel || null,
+            oldValue: payload.oldValue,
+            newValue: payload.newValue,
+            userId,
+            recordTitle,
+            metadata: payload.metadata,
+          });
+          return;
+        }
+
+        await insertRecordActivity({
+          supabase,
+          moduleId,
+          recordId: id,
+          action: payload.action,
+          fieldName: payload.fieldName || null,
+          fieldLabel: payload.fieldLabel || null,
+          oldValue: payload.oldValue,
+          newValue: payload.newValue,
+          userId,
+          recordTitle,
+          metadata: payload.metadata,
+        });
       } catch (err) {
         console.warn('Changelog insert failed:', err);
       }
     },
-    [moduleId, id, data]
+    [moduleId, id, data, moduleConfig]
   );
 
   const logFieldChange = useCallback(

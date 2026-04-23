@@ -9,7 +9,7 @@ import {
     CloseCircleOutlined, IdcardOutlined, SafetyCertificateOutlined, EditOutlined, UploadOutlined
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
-import { MODULES } from '../moduleRegistry';
+import { getActivityActionLabel, getActivityFieldLabel, getModuleFaTitle, sanitizeActivityText } from '../utils/recordActivity';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
@@ -132,29 +132,6 @@ const ProfilePage: React.FC = () => {
     };
 
     const buildActivityRows = (loginRows: any[], changelogRows: any[]) => {
-        const getModuleFaTitle = (moduleId: string) => {
-            const title = MODULES[moduleId]?.titles?.fa;
-            return title || 'ماژول';
-        };
-
-        const getFieldFaLabel = (moduleId: string, fieldName: string) => {
-            const module = MODULES[moduleId];
-            if (!module || !fieldName) return null;
-
-            const directField = (module.fields || []).find((field: any) => String(field?.key || '') === String(fieldName));
-            if (directField?.labels?.fa) return directField.labels.fa;
-
-            for (const block of module.blocks || []) {
-                if (String(block?.id || '') === String(fieldName) && block?.titles?.fa) {
-                    return block.titles.fa;
-                }
-                const tableColumn = (block?.tableColumns || []).find((col: any) => String(col?.key || '') === String(fieldName));
-                if (tableColumn?.title) return String(tableColumn.title);
-            }
-
-            return null;
-        };
-
         const loginItems = (loginRows || []).map((row: any) => ({
             id: `login:${row.id}`,
             type: 'login',
@@ -163,22 +140,15 @@ const ProfilePage: React.FC = () => {
             detail: row.login_method === 'otp' ? 'ورود با کد پیامکی' : 'ورود با رمز عبور',
         }));
 
-        const actionLabelMap: Record<string, string> = {
-            create: 'ایجاد',
-            update: 'ویرایش',
-            edit: 'ویرایش',
-            delete: 'حذف',
-            upload: 'آپلود',
-            assign: 'ارجاع',
-        };
-
         const changeItems = (changelogRows || []).map((row: any) => {
+            const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
             const moduleTitle = getModuleFaTitle(String(row.module_id || ''));
-            const actionLabel = actionLabelMap[String(row.action || '').toLowerCase()] || 'تغییر';
-            const fieldLabel = getFieldFaLabel(String(row.module_id || ''), String(row.field_name || ''));
+            const actionLabel = getActivityActionLabel(String(row.action || ''));
+            const fieldLabel = getActivityFieldLabel(String(row.module_id || ''), String(metadata?.columnKey || row.field_name || ''), String(row.field_label || ''));
             const detailParts = [
                 moduleTitle,
-                row.record_title ? `رکورد: ${row.record_title}` : '',
+                metadata?.summary ? sanitizeActivityText(metadata.summary, 'تغییر ثبت شد') : '',
+                row.record_title ? `رکورد: ${sanitizeActivityText(row.record_title, 'رکورد')}` : '',
                 fieldLabel ? `فیلد: ${fieldLabel}` : '',
             ];
             return {
@@ -212,7 +182,7 @@ const ProfilePage: React.FC = () => {
                     .limit(20),
                 supabase
                     .from('changelogs')
-                    .select('id, module_id, action, record_title, field_name, created_at')
+                    .select('id, module_id, action, record_title, field_name, field_label, metadata, created_at')
                     .eq('user_id', targetUserId)
                     .order('created_at', { ascending: false })
                     .limit(20),

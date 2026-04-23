@@ -38,6 +38,7 @@ import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceF
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { insertRecordActivity } from '../utils/recordActivity';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
 import {
   buildStandardSelectPopupRootStyle,
@@ -1784,8 +1785,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
           if (changes.length > 0) {
             try {
-              const { error } = await supabase.from('changelogs').insert(changes);
-              if (error) throw error;
+              for (const change of changes) {
+                await insertRecordActivity({
+                  supabase,
+                  moduleId: change.module_id,
+                  recordId: change.record_id,
+                  action: change.action,
+                  fieldName: change.field_name,
+                  fieldLabel: change.field_label,
+                  oldValue: change.old_value,
+                  newValue: change.new_value,
+                  userId: change.user_id,
+                  recordTitle: change.record_title,
+                });
+              }
             } catch (err) {
               console.warn('Changelog insert failed:', err);
             }
@@ -1835,16 +1848,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
               }
             }
             try {
-              const { error } = await supabase.from('changelogs').insert([
-                {
-                  module_id: module.id,
-                  record_id: inserted.id,
-                  action: 'create',
-                  user_id: userId,
-                  record_title: values?.name || values?.title || values?.system_code || null,
-                },
-              ]);
-              if (error) throw error;
+              await insertRecordActivity({
+                supabase,
+                moduleId: module.id,
+                recordId: inserted.id,
+                action: 'create',
+                userId,
+                recordTitle: values?.name || values?.title || values?.system_code || null,
+              });
             } catch (err) {
               console.warn('Changelog insert failed:', err);
             }

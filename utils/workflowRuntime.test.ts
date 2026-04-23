@@ -14,6 +14,11 @@ vi.mock('../supabaseClient', () => ({
   supabase: {
     from: mocks.from,
   },
+  supabaseSignUpClient: {
+    from: mocks.from,
+  },
+  SUPABASE_URL: 'https://example.supabase.co',
+  SUPABASE_ANON_KEY: 'anon-test-key',
 }));
 
 vi.mock('./noteDispatch', () => ({
@@ -25,7 +30,7 @@ vi.mock('./smsGateway', () => ({
   sendSmsViaGateway: mocks.sendSmsViaGateway,
 }));
 
-import { executeWorkflowAction } from './workflowRuntime';
+import { evaluateWorkflowConditions, executeWorkflowAction } from './workflowRuntime';
 
 const GROUP_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -137,5 +142,41 @@ describe('workflow action recipients', () => {
       to: ['09111111111', '09222222222'],
       title: 'ارسال پیامک خودکار',
     }));
+  });
+});
+
+describe('evaluateWorkflowConditions', () => {
+  it('requires all negative any-conditions on the same field to pass together', async () => {
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [{ id: 'all-1', field: 'is_overdue', operator: 'is_true' } as any],
+      conditionsAny: [
+        { id: 'any-1', field: 'status', operator: 'neq', value: 'done' } as any,
+        { id: 'any-2', field: 'status', operator: 'neq', value: 'canceled' } as any,
+      ],
+      currentRecord: { is_overdue: true, status: 'done' },
+      moduleId: 'tasks',
+    })).resolves.toBe(false);
+
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [{ id: 'all-1', field: 'is_overdue', operator: 'is_true' } as any],
+      conditionsAny: [
+        { id: 'any-1', field: 'status', operator: 'neq', value: 'done' } as any,
+        { id: 'any-2', field: 'status', operator: 'neq', value: 'canceled' } as any,
+      ],
+      currentRecord: { is_overdue: true, status: 'open' },
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+  });
+
+  it('keeps classic any-conditions as OR for non-negative groups', async () => {
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [],
+      conditionsAny: [
+        { id: 'any-1', field: 'status', operator: 'eq', value: 'open' } as any,
+        { id: 'any-2', field: 'priority', operator: 'eq', value: 'high' } as any,
+      ],
+      currentRecord: { status: 'closed', priority: 'high' },
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
   });
 });

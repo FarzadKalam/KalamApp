@@ -35,6 +35,7 @@ export interface ReportDefinitionConfig {
   chart_dimension_field: string | null;
   default_view: ReportDefaultView;
   schedule: ReportScheduleConfig;
+  print_selected_field_keys: Record<string, string[]>;
 }
 
 export interface ReportDefinitionRecord {
@@ -187,6 +188,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   chart_dimension_field: null,
   default_view: 'table_and_chart',
   schedule: createDefaultReportScheduleConfig(),
+  print_selected_field_keys: {},
 });
 
 export const clampReportRowLimit = (value: unknown) => {
@@ -259,6 +261,16 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
   const chartDimensionField = String((value as any)?.chart_dimension_field || '').trim()
     || groupBys[0]?.field
     || null;
+  const printSelectedFieldKeys = value && typeof (value as any)?.print_selected_field_keys === 'object'
+    ? Object.entries((value as any).print_selected_field_keys || {}).reduce<Record<string, string[]>>((acc, [templateKey, fieldKeys]) => {
+        const normalizedTemplateKey = String(templateKey || '').trim();
+        if (!normalizedTemplateKey) return acc;
+        acc[normalizedTemplateKey] = Array.isArray(fieldKeys)
+          ? fieldKeys.map((item) => String(item || '').trim()).filter(Boolean)
+          : [];
+        return acc;
+      }, {})
+    : defaults.print_selected_field_keys;
 
   return {
     ...defaults,
@@ -275,6 +287,7 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     chart_dimension_field: chartDimensionField,
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',
     schedule: normalizeReportScheduleConfig((value as any)?.schedule),
+    print_selected_field_keys: printSelectedFieldKeys,
   };
 };
 

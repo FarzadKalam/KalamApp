@@ -30,6 +30,12 @@ import {
 } from '../../utils/recordDisplayFormatter';
 import { NOTES_UPDATED_EVENT } from '../../utils/aiAssistantEvents';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../utils/noteDispatch';
+import {
+  getActivityActionLabel,
+  getActivityFieldLabel,
+  logAndTouchRecord,
+  sanitizeActivityText,
+} from '../../utils/recordActivity';
 
 interface ActivityPanelProps {
   moduleId: string;
@@ -105,13 +111,6 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
     }
   };
 
-  const getActionLabel = (action: string) => {
-    if (action === 'create') return 'ایجاد رکورد';
-    if (action === 'update') return 'ویرایش';
-    if (action === 'delete') return 'حذف';
-    return 'تغییر';
-  };
-
   const getActionColor = (action: string) => {
     if (action === 'create') return '#16a34a';
     if (action === 'update') return 'rgb(var(--brand-500-rgb))';
@@ -122,13 +121,9 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const formatValue = (value: unknown) => {
     if (value === null || value === undefined || value === '') return 'خالی';
     if (typeof value === 'object') {
-      try {
-        return JSON.stringify(value);
-      } catch {
-        return '[object]';
-      }
+      return 'جزئیات ثبت‌شده';
     }
-    return String(value);
+    return sanitizeActivityText(value, 'مقدار ثبت‌شده');
   };
 
   const parseMaybeJson = (value: any) => parseMaybeJsonValue(value);
@@ -136,6 +131,17 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const getFieldDef = (fieldKey?: string) => {
     if (!fieldKey) return null;
     return moduleConfig?.fields?.find((field: any) => field.key === fieldKey) || null;
+  };
+
+  const getTableDef = (blockId?: string) => (
+    moduleConfig?.blocks?.find((block: any) => String(block?.id || '') === String(blockId || ''))
+      || null
+  );
+
+  const getTableColumnDef = (blockId?: string, columnKey?: string) => {
+    const tableDef = getTableDef(blockId);
+    if (!tableDef?.tableColumns?.length) return null;
+    return tableDef.tableColumns.find((column: any) => String(column?.key || '') === String(columnKey || '')) || null;
   };
 
   const resolveOptionLabel = (value: any, fieldDef: any) => {
@@ -395,14 +401,17 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         const tableRows: any[] = [];
 
         items.forEach((log: any) => {
-          const fieldDef = getFieldDef(log.field_name);
+          const metadata = log?.metadata && typeof log.metadata === 'object' ? log.metadata : {};
+          const fieldDef = metadata?.columnKey
+            ? getTableColumnDef(log.field_name, metadata.columnKey)
+            : getFieldDef(log.field_name);
           if (fieldDef?.key) {
             directFields.push(fieldDef);
             directRows.push({ [fieldDef.key]: parseMaybeJson(log.old_value) });
             directRows.push({ [fieldDef.key]: parseMaybeJson(log.new_value) });
           }
 
-          const tableDef = moduleConfig?.blocks?.find((block: any) => String(block?.id || '') === String(log.field_name || ''));
+          const tableDef = getTableDef(log.field_name);
           if (!tableDef?.tableColumns?.length) return;
 
           tableFields.push(...tableDef.tableColumns);
@@ -655,6 +664,21 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
 
       const { error } = await supabase.from('tasks').insert([payload]);
       if (error) throw error;
+      await logAndTouchRecord({
+        supabase,
+        moduleId,
+        recordId,
+        action: 'task_created',
+        fieldName: 'tasks',
+        fieldLabel: 'فعالیت‌ها',
+        oldValue: null,
+        newValue: payload?.name || 'فعالیت جدید',
+        userId: currentUser.id,
+        metadata: {
+          changeKind: 'task_created',
+          summary: 'فعالیت جدیدی برای این رکورد ایجاد شد',
+        },
+      });
 
       message.success('فعالیت ثبت شد');
       setQuickTaskOpen(false);
@@ -833,6 +857,21 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                             ? { ...row, ...updatedTask }
                             : row
                         )));
+                        await logAndTouchRecord({
+                          supabase,
+                          moduleId,
+                          recordId,
+                          action: 'process_updated',
+                          fieldName: 'tasks',
+                          fieldLabel: 'فعالیت‌ها',
+                          oldValue: item?.status ?? null,
+                          newValue: updatedTask?.status ?? status,
+                          userId: currentUser.id,
+                          metadata: {
+                            changeKind: 'task_status_updated',
+                            summary: 'وضعیت یکی از فعالیت‌ها تغییر کرد',
+                          },
+                        });
                       } catch (error) {
                         if (previousTask) {
                           setItems((prev) => prev.map((row: any) => (
@@ -851,9 +890,39 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         .update({ produced_qty: nextProducedQty })
                         .eq('id', taskId);
                       if (error) throw error;
+                      await logAndTouchRecord({
+                        supabase,
+                        moduleId,
+                        recordId,
+                        action: 'process_updated',
+                        fieldName: 'tasks',
+                        fieldLabel: 'فعالیت‌ها',
+                        oldValue: null,
+                        newValue: `${toPersianNumber(nextProducedQty)} عدد`,
+                        userId: currentUser.id,
+                        metadata: {
+                          changeKind: 'task_updated',
+                          summary: 'مقدار تولید فعالیت بروزرسانی شد',
+                        },
+                      });
                       await fetchData();
                     }}
                     onTaskUpdated={async () => {
+                      await logAndTouchRecord({
+                        supabase,
+                        moduleId,
+                        recordId,
+                        action: 'process_updated',
+                        fieldName: 'tasks',
+                        fieldLabel: 'فعالیت‌ها',
+                        oldValue: null,
+                        newValue: null,
+                        userId: currentUser.id,
+                        metadata: {
+                          changeKind: 'task_updated',
+                          summary: 'جزئیات یکی از فعالیت‌ها بروزرسانی شد',
+                        },
+                      });
                       await fetchData();
                     }}
                     currentUser={{
@@ -869,11 +938,28 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
               <Timeline
                 items={items.map((log: any) => {
                   const action = String(log.action || 'update');
-                  const fieldTitle = log.field_label || log.field_name;
-                  const fieldDef = getFieldDef(log.field_name);
-                  const tableDef = moduleConfig?.blocks?.find((block: any) => block.id === log.field_name);
+                  const metadata = log?.metadata && typeof log.metadata === 'object' ? log.metadata : {};
+                  const tableDef = getTableDef(log.field_name);
+                  const columnDef = metadata?.columnKey ? getTableColumnDef(log.field_name, metadata.columnKey) : null;
+                  const fieldTitle = sanitizeActivityText(
+                    metadata?.columnLabel
+                    || log.field_label
+                    || getActivityFieldLabel(moduleId, log.field_name, log.field_label)
+                  , 'فیلد نامشخص');
+                  const fieldDef = columnDef || getFieldDef(log.field_name);
                   const actor = log.user_name || authorNameMap[log.user_id] || 'سیستم';
-                  const hasDiff = fieldTitle && (log.old_value !== null || log.new_value !== null);
+                  const summary = sanitizeActivityText(
+                    metadata?.summary
+                    || (tableDef
+                      ? `تغییری در جدول «${sanitizeActivityText(log.field_label || metadata?.blockLabel || 'جدول', 'جدول')}» ثبت شد`
+                      : `«${fieldTitle}» تغییر کرد`)
+                  , 'تغییر ثبت شد');
+                  const isTableRowAdded = action === 'table_row_added';
+                  const isTableRowRemoved = action === 'table_row_removed';
+                  const isTableCellUpdated = action === 'table_cell_updated';
+                  const isFileEvent = action === 'file_attached' || action === 'file_removed';
+                  const isSimpleSummaryEvent = ['process_template_applied', 'project_auto_referred', 'task_created', 'process_updated', 'tags_updated'].includes(action) || isFileEvent;
+                  const hasDiff = (log.old_value !== null || log.new_value !== null);
 
                   return {
                     color: getActionColor(action),
@@ -889,22 +975,48 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                                 color: getActionColor(action),
                               }}
                             >
-                              {getActionLabel(action)}
+                              {getActivityActionLabel(action)}
                             </Tag>
                             <span className="text-[10px] text-gray-400">{formatPersianDate(log.created_at, 'HH:mm - YYYY/MM/DD')}</span>
                           </div>
 
                           {log.record_title || recordName ? (
                             <div className="text-[11px] text-gray-500 mb-2 truncate">
-                              {log.record_title || recordName}
+                              {sanitizeActivityText(log.record_title || recordName, 'رکورد')}
                             </div>
                           ) : null}
 
-                          {hasDiff ? (
-                            <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-white/80 p-3 text-[12px] text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-200">
-                              <div className="mb-2">
-                                تغییر <b>{fieldTitle}</b>
+                          <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-white/80 p-3 text-[12px] text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-200">
+                            <div className="mb-2">
+                              {summary}
+                            </div>
+                            {isSimpleSummaryEvent && log.new_value ? (
+                              <div className="rounded-lg bg-emerald-50 px-2 py-1 font-bold text-emerald-700 whitespace-pre-wrap dark:bg-emerald-500/10 dark:text-emerald-300">
+                                {sanitizeActivityText(parseMaybeJson(log.new_value), 'جزئیات ثبت شد')}
                               </div>
+                            ) : null}
+                            {isTableRowAdded && tableDef ? (
+                              <div className="rounded-lg bg-emerald-50 px-2 py-1 font-bold text-emerald-700 whitespace-pre-wrap dark:bg-emerald-500/10 dark:text-emerald-300">
+                                {formatChangeTableRows([parseMaybeJson(log.new_value) || {}], tableDef)}
+                              </div>
+                            ) : null}
+                            {isTableRowRemoved && tableDef ? (
+                              <div className="rounded-lg bg-rose-50 px-2 py-1 text-rose-600 whitespace-pre-wrap dark:bg-rose-500/10 dark:text-rose-300">
+                                {formatChangeTableRows([parseMaybeJson(log.old_value) || {}], tableDef)}
+                              </div>
+                            ) : null}
+                            {isTableCellUpdated ? (
+                              <div className="space-y-1">
+                                <div className="rounded-lg bg-rose-50 px-2 py-1 text-rose-600 line-through whitespace-pre-wrap dark:bg-rose-500/10 dark:text-rose-300">
+                                  {formatChangeDisplayValue(log.old_value, fieldDef)}
+                                </div>
+                                <div className="text-center text-gray-400">↓</div>
+                                <div className="rounded-lg bg-emerald-50 px-2 py-1 font-bold text-emerald-700 whitespace-pre-wrap dark:bg-emerald-500/10 dark:text-emerald-300">
+                                  {formatChangeDisplayValue(log.new_value, fieldDef)}
+                                </div>
+                              </div>
+                            ) : null}
+                            {!isSimpleSummaryEvent && !isTableRowAdded && !isTableRowRemoved && !isTableCellUpdated && hasDiff ? (
                               <div className="space-y-1">
                                 <div className="rounded-lg bg-rose-50 px-2 py-1 text-rose-600 line-through whitespace-pre-wrap dark:bg-rose-500/10 dark:text-rose-300">
                                   {tableDef ? formatChangeTableRows(parseMaybeJson(log.old_value) || [], tableDef) : formatChangeDisplayValue(log.old_value, fieldDef)}
@@ -914,8 +1026,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                                   {tableDef ? formatChangeTableRows(parseMaybeJson(log.new_value) || [], tableDef) : formatChangeDisplayValue(log.new_value, fieldDef)}
                                 </div>
                               </div>
-                            </div>
-                          ) : null}
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     ),

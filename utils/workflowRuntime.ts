@@ -746,6 +746,70 @@ export const evaluateWorkflowCondition = async ({
   );
 };
 
+const NEGATIVE_ANY_GROUP_OPERATORS = new Set(['neq', 'not_in', 'not_contains']);
+
+const buildAnyConditionGroups = (conditions: WorkflowCondition[]) => {
+  const conditionsByField = new Map<string, WorkflowCondition[]>();
+  const groups: WorkflowCondition[][] = [];
+
+  for (const condition of conditions) {
+    const fieldKey = String(condition?.field || '').trim();
+    if (!fieldKey) {
+      groups.push([condition]);
+      continue;
+    }
+    const existing = conditionsByField.get(fieldKey) || [];
+    existing.push(condition);
+    conditionsByField.set(fieldKey, existing);
+  }
+
+  conditionsByField.forEach((fieldConditions) => {
+    const shouldMergeAsNegativeGroup = fieldConditions.length > 1
+      && fieldConditions.every((condition) => NEGATIVE_ANY_GROUP_OPERATORS.has(String(condition?.operator || '').trim()));
+
+    if (shouldMergeAsNegativeGroup) {
+      groups.push(fieldConditions);
+      return;
+    }
+
+    fieldConditions.forEach((condition) => groups.push([condition]));
+  });
+
+  return groups;
+};
+
+export const evaluateWorkflowConditionCollection = async ({
+  conditionsAll = [],
+  conditionsAny = [],
+  evaluate,
+}: {
+  conditionsAll?: WorkflowCondition[] | null;
+  conditionsAny?: WorkflowCondition[] | null;
+  evaluate: (condition: WorkflowCondition) => Promise<boolean>;
+}) => {
+  const all = Array.isArray(conditionsAll) ? conditionsAll : [];
+  const any = Array.isArray(conditionsAny) ? conditionsAny : [];
+
+  for (const condition of all) {
+    if (!await evaluate(condition as WorkflowCondition)) return false;
+  }
+
+  if (any.length === 0) return true;
+
+  for (const group of buildAnyConditionGroups(any as WorkflowCondition[])) {
+    let groupPassed = true;
+    for (const condition of group) {
+      if (!await evaluate(condition as WorkflowCondition)) {
+        groupPassed = false;
+        break;
+      }
+    }
+    if (groupPassed) return true;
+  }
+
+  return false;
+};
+
 const evaluateCondition = async (
   condition: WorkflowCondition,
   currentRecord: Record<string, any>,
@@ -779,35 +843,19 @@ export const evaluateWorkflowConditions = async ({
   moduleId: string;
   context?: WorkflowEvaluationContext;
 }) => {
-  const all = Array.isArray(conditionsAll) ? conditionsAll : [];
-  const any = Array.isArray(conditionsAny) ? conditionsAny : [];
   const resolvedContext = context || createWorkflowEvaluationContext(moduleId);
 
-  for (const condition of all) {
-    const passed = await evaluateCondition(
-      condition as WorkflowCondition,
+  return evaluateWorkflowConditionCollection({
+    conditionsAll,
+    conditionsAny,
+    evaluate: async (condition) => evaluateCondition(
+      condition,
       currentRecord,
       previousRecord,
       moduleId,
       resolvedContext
-    );
-    if (!passed) return false;
-  }
-
-  if (any.length === 0) return true;
-
-  for (const condition of any) {
-    const passed = await evaluateCondition(
-      condition as WorkflowCondition,
-      currentRecord,
-      previousRecord,
-      moduleId,
-      resolvedContext
-    );
-    if (passed) return true;
-  }
-
-  return false;
+    ),
+  });
 };
 
 export const resolveWorkflowFieldValue = async ({

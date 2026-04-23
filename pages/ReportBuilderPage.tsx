@@ -39,6 +39,7 @@ import {
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import type { PermissionMap } from '../utils/permissions';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 
 const { Title, Text } = Typography;
 
@@ -88,6 +89,7 @@ const ReportBuilderPage: React.FC = () => {
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleOptions = useMemo(() => getReportModuleOptions(permissions), [permissions]);
   const secondaryModuleOptions = useMemo(() => getSecondaryModuleOptions(mainModuleId, permissions), [mainModuleId, permissions]);
@@ -512,6 +514,8 @@ const ReportBuilderPage: React.FC = () => {
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
+                overlayZIndexBase={1400}
+                popupContainer={popupContainer}
               />
             </div>
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
@@ -522,6 +526,8 @@ const ReportBuilderPage: React.FC = () => {
                 fields={conditionFields}
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
+                overlayZIndexBase={1400}
+                popupContainer={popupContainer}
               />
             </div>
           </div>

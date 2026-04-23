@@ -8544,6 +8544,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     },
                                   }}
                                   onBeforeAddCondition={guardDraftAutomationConditionAdd}
+                                  overlayZIndexBase={16040}
+                                  popupContainer={resolveOverlayPopupContainer}
                                 />
                               </div>
                               <div>
@@ -8565,6 +8567,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     },
                                   }}
                                   onBeforeAddCondition={guardDraftAutomationConditionAdd}
+                                  overlayZIndexBase={16040}
+                                  popupContainer={resolveOverlayPopupContainer}
                                 />
                               </div>
                             </div>

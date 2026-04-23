@@ -219,8 +219,11 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         allowClear={allowClear}
         showSearch={showSearch}
         getPopupContainer={(trigger) => {
-          const resolved = getPopupContainer(trigger) || trigger;
-          return resolveSelectPopupContainer(resolved === document.body ? trigger : resolved);
+          const resolved = getPopupContainer(trigger);
+          if (resolved && resolved !== document.body) {
+            return resolved;
+          }
+          return resolveSelectPopupContainer(trigger);
         }}
         optionFilterProp={optionFilterProp}
         optionLabelProp={optionLabelProp}

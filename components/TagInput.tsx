@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Tag, Input, Dropdown, Button, ColorPicker } from 'antd';
 import { PlusOutlined, TagOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
+import { syncRecordTags } from '../utils/recordTags';
 
 interface TagItem {
   id: string;
@@ -49,28 +50,6 @@ const TagInput: React.FC<TagInputProps> = ({
     if (data) setAllTags(data);
   };
 
-  const insertChangelog = async (prevTags: TagItem[], nextTags: TagItem[]) => {
-    if (!recordId) return;
-    try {
-      const { data: authData } = await supabase.auth.getUser();
-      const userId = authData?.user?.id || null;
-      await supabase.from('changelogs').insert([
-        {
-          module_id: moduleId,
-          record_id: recordId,
-          action: 'update',
-          field_name: 'tags',
-          field_label: 'برچسب‌ها',
-          old_value: JSON.stringify(prevTags.map((t) => t.title)),
-          new_value: JSON.stringify(nextTags.map((t) => t.title)),
-          user_id: userId,
-        },
-      ]);
-    } catch (err) {
-      console.warn('Changelog insert failed (tags):', err);
-    }
-  };
-
   const handleClose = async (removedTagId: string) => {
     const newTags = tags.filter((tag) => tag.id !== removedTagId);
 
@@ -80,15 +59,12 @@ const TagInput: React.FC<TagInputProps> = ({
       return;
     }
 
-    const { error } = await supabase
-      .from('record_tags')
-      .delete()
-      .match({ record_id: recordId, tag_id: removedTagId });
-
-    if (!error) {
+    try {
+      await syncRecordTags(supabase, moduleId, recordId, newTags);
       setTags(newTags);
-      await insertChangelog(tags, newTags);
       onChange?.(newTags);
+    } catch (error) {
+      console.warn('Tag remove failed:', error);
     }
   };
 
@@ -104,20 +80,14 @@ const TagInput: React.FC<TagInputProps> = ({
       return;
     }
 
-    const { error } = await supabase.from('record_tags').insert([
-      {
-        record_id: recordId,
-        tag_id: tag.id,
-        module_id: moduleId,
-      },
-    ]);
-
-    if (!error) {
+    try {
+      await syncRecordTags(supabase, moduleId, recordId, nextTags);
       setTags(nextTags);
       setInputVisible(false);
       setInputValue('');
-      await insertChangelog(tags, nextTags);
       onChange?.(nextTags);
+    } catch (error) {
+      console.warn('Tag select failed:', error);
     }
   };
 

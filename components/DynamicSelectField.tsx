@@ -154,8 +154,11 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
 
   const resolvedPopupContainer = useMemo(
     () => (trigger: HTMLElement) => {
-      const container = getPopupContainer(trigger) || document.body;
-      return resolveSelectPopupContainer(container === document.body ? trigger : container);
+      const container = getPopupContainer(trigger);
+      if (container && container !== document.body) {
+        return container;
+      }
+      return resolveSelectPopupContainer(trigger);
     },
     [getPopupContainer]
   );

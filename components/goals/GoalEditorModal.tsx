@@ -138,6 +138,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const conditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
   const popupContainer = (triggerNode?: HTMLElement | null) =>
     resolveOverlayPopupContainer(triggerNode);
+  const overlayZIndexBase = 1400;
   const rewardTriggerOptions = useMemo(
     () => levelsEnabled
       ? GOAL_REWARD_TRIGGER_OPTIONS
@@ -548,6 +549,8 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
                 disabled={!canEdit}
+                overlayZIndexBase={overlayZIndexBase}
+                popupContainer={popupContainer}
               />
             </div>
             <div>
@@ -559,6 +562,8 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                 dynamicOptions={dynamicOptions}
                 relationOptions={relationOptions}
                 disabled={!canEdit}
+                overlayZIndexBase={overlayZIndexBase}
+                popupContainer={popupContainer}
               />
             </div>
           </div>

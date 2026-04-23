@@ -512,7 +512,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                     relationOptions={relationOptions}
                     disabled={!canEdit}
                     overlayZIndexBase={overlayZIndexBase}
-                    popupContainer={resolveSelectPopupContainer}
+                    popupContainer={resolveOverlayPopupContainer}
                   />
                 ),
               },
@@ -528,7 +528,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                     relationOptions={relationOptions}
                     disabled={!canEdit}
                     overlayZIndexBase={overlayZIndexBase}
-                    popupContainer={resolveSelectPopupContainer}
+                    popupContainer={resolveOverlayPopupContainer}
                   />
                 ),
               },

@@ -34,6 +34,7 @@ import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOp
 import { getWorkflowConditionFields } from '../utils/workflowHelpers';
 import { createWorkflowId } from '../utils/workflowTypes';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 
 type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
@@ -65,6 +66,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const [config, setConfig] = useState<ViewConfig>({ columns: [], filters: [] });
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleConfig = MODULES[moduleId];
   const viewConditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
@@ -749,6 +751,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                       relationOptions={relationOptions}
                       getOperatorOptions={getViewFilterOperatorOptions}
                       getDefaultOperator={getViewFilterDefaultOperator}
+                      overlayZIndexBase={1400}
+                      popupContainer={popupContainer}
                     />
                   </div>
                 ),

@@ -1,0 +1,270 @@
+import { MODULES } from '../moduleRegistry';
+import { getFieldLabelFa } from './fieldLabel';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type RecordActivityAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'table_row_added'
+  | 'table_row_removed'
+  | 'table_cell_updated'
+  | 'file_attached'
+  | 'file_removed'
+  | 'process_template_applied'
+  | 'project_auto_referred'
+  | 'task_created'
+  | 'process_updated'
+  | 'tags_updated';
+
+export type RecordActivityMetadata = Record<string, any>;
+
+type InsertRecordActivityInput = {
+  supabase: any;
+  moduleId: string;
+  recordId: string;
+  action: RecordActivityAction | string;
+  fieldName?: string | null;
+  fieldLabel?: string | null;
+  oldValue?: any;
+  newValue?: any;
+  userId?: string | null;
+  recordTitle?: string | null;
+  metadata?: RecordActivityMetadata | null;
+};
+
+type TouchParentRecordInput = {
+  supabase: any;
+  moduleId: string;
+  recordId: string;
+  userId?: string | null;
+  patch?: Record<string, any> | null;
+};
+
+type LogAndTouchRecordInput = InsertRecordActivityInput & {
+  touchPatch?: Record<string, any> | null;
+};
+
+const serializeActivityValue = (value: any): string | null => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const isMissingColumnLikeError = (error: any, columnNames: string[]) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  if (code === '42703' || code === 'PGRST204' || code === 'PGRST200') return true;
+  return columnNames.some((column) => text.includes(String(column || '').toLowerCase()));
+};
+
+export const sanitizeActivityText = (value: unknown, fallback = 'مقدار ثبت‌شده'): string => {
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  if (UUID_REGEX.test(text)) return fallback;
+  return text;
+};
+
+export const getActivityActionLabel = (action: string) => {
+  switch (String(action || '').trim()) {
+    case 'create':
+      return 'ایجاد';
+    case 'update':
+      return 'ویرایش';
+    case 'delete':
+      return 'حذف';
+    case 'table_row_added':
+      return 'افزودن ردیف';
+    case 'table_row_removed':
+      return 'حذف ردیف';
+    case 'table_cell_updated':
+      return 'ویرایش جدول';
+    case 'file_attached':
+      return 'پیوست فایل';
+    case 'file_removed':
+      return 'حذف فایل';
+    case 'process_template_applied':
+      return 'افزودن الگوی فرآیند';
+    case 'project_auto_referred':
+      return 'ارجاع خودکار';
+    case 'task_created':
+      return 'ایجاد فعالیت';
+    case 'process_updated':
+      return 'تغییر فرآیند';
+    case 'tags_updated':
+      return 'ویرایش برچسب‌ها';
+    default:
+      return 'تغییر';
+  }
+};
+
+export const getModuleFaTitle = (moduleId?: string | null) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  return MODULES[normalizedModuleId]?.titles?.fa || 'رکورد';
+};
+
+export const getActivityFieldLabel = (
+  moduleId?: string | null,
+  fieldName?: string | null,
+  fallback?: string | null,
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedFieldName = String(fieldName || '').trim();
+  const module = MODULES[normalizedModuleId];
+  if (!module) return sanitizeActivityText(fallback || normalizedFieldName, 'فیلد نامشخص');
+
+  const directField = (module.fields || []).find((field: any) => String(field?.key || '').trim() === normalizedFieldName);
+  if (directField) {
+    return getFieldLabelFa(directField, { moduleId: normalizedModuleId, fallback: fallback || normalizedFieldName });
+  }
+
+  for (const block of module.blocks || []) {
+    if (String(block?.id || '').trim() === normalizedFieldName) {
+      return sanitizeActivityText(block?.titles?.fa || fallback || normalizedFieldName, 'فیلد نامشخص');
+    }
+    const tableColumn = (block?.tableColumns || []).find((column: any) => String(column?.key || '').trim() === normalizedFieldName);
+    if (tableColumn) {
+      return sanitizeActivityText(tableColumn?.title || fallback || normalizedFieldName, 'فیلد نامشخص');
+    }
+  }
+
+  return sanitizeActivityText(fallback || normalizedFieldName, 'فیلد نامشخص');
+};
+
+export const touchParentRecord = async ({
+  supabase,
+  moduleId,
+  recordId,
+  userId,
+  patch,
+}: TouchParentRecordInput) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!supabase || !normalizedModuleId || !normalizedRecordId) return;
+
+  const module = MODULES[normalizedModuleId];
+  const targetTable = module?.table || normalizedModuleId;
+  const nowIso = new Date().toISOString();
+  let payload: Record<string, any> = {
+    ...(patch || {}),
+    updated_at: nowIso,
+  };
+  if (userId) {
+    payload.updated_by = payload.updated_by ?? userId;
+  }
+
+  let result = await supabase.from(targetTable).update(payload).eq('id', normalizedRecordId);
+  if (!result.error) return;
+
+  if (isMissingColumnLikeError(result.error, ['updated_by'])) {
+    const { updated_by, ...withoutUser } = payload;
+    payload = withoutUser;
+    result = await supabase.from(targetTable).update(payload).eq('id', normalizedRecordId);
+    if (!result.error) return;
+  }
+
+  if (isMissingColumnLikeError(result.error, ['updated_at'])) {
+    const { updated_at, ...withoutUpdatedAt } = payload;
+    payload = Object.keys(withoutUpdatedAt).length > 0 ? withoutUpdatedAt : { id: normalizedRecordId };
+    if (payload.id === normalizedRecordId) {
+      delete payload.id;
+    }
+    if (Object.keys(payload).length === 0) return;
+    result = await supabase.from(targetTable).update(payload).eq('id', normalizedRecordId);
+  }
+
+  if (result.error) {
+    console.warn('Touch parent record failed:', result.error);
+  }
+};
+
+export const insertRecordActivity = async ({
+  supabase,
+  moduleId,
+  recordId,
+  action,
+  fieldName,
+  fieldLabel,
+  oldValue,
+  newValue,
+  userId,
+  recordTitle,
+  metadata,
+}: InsertRecordActivityInput) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!supabase || !normalizedModuleId || !normalizedRecordId) return;
+
+  const payload: Record<string, any> = {
+    module_id: normalizedModuleId,
+    record_id: normalizedRecordId,
+    action: String(action || 'update').trim() || 'update',
+    field_name: fieldName || null,
+    field_label: fieldLabel || null,
+    old_value: serializeActivityValue(oldValue),
+    new_value: serializeActivityValue(newValue),
+    user_id: userId || null,
+    record_title: recordTitle || null,
+    metadata: metadata || null,
+  };
+
+  let result = await supabase.from('changelogs').insert([payload]);
+  if (!result.error) return;
+
+  if (isMissingColumnLikeError(result.error, ['metadata'])) {
+    const { metadata: ignoredMetadata, ...legacyPayload } = payload;
+    result = await supabase.from('changelogs').insert([legacyPayload]);
+  }
+
+  if (result.error) {
+    throw result.error;
+  }
+};
+
+export const logAndTouchRecord = async ({
+  supabase,
+  moduleId,
+  recordId,
+  action,
+  fieldName,
+  fieldLabel,
+  oldValue,
+  newValue,
+  userId,
+  recordTitle,
+  metadata,
+  touchPatch,
+}: LogAndTouchRecordInput) => {
+  await Promise.all([
+    insertRecordActivity({
+      supabase,
+      moduleId,
+      recordId,
+      action,
+      fieldName,
+      fieldLabel,
+      oldValue,
+      newValue,
+      userId,
+      recordTitle,
+      metadata,
+    }).catch((error) => {
+      console.warn('Record activity insert failed:', error);
+    }),
+    touchParentRecord({
+      supabase,
+      moduleId,
+      recordId,
+      userId,
+      patch: touchPatch,
+    }).catch((error) => {
+      console.warn('Record activity touch failed:', error);
+    }),
+  ]);
+};

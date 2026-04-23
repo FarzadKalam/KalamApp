@@ -182,6 +182,7 @@ export const formatRecordDisplayValue = (
   const fieldType = normalizeFieldType(field);
   const fieldKey = String(field?.key || '').trim();
   const rawString = String(value);
+  if (UUID_REGEX.test(rawString)) return 'مقدار ثبت‌شده';
   const optionLabel = resolveOptionLabel(value, field);
   if (optionLabel) return optionLabel;
 

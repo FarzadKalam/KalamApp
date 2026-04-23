@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { supportsSystemCode } from '../../utils/systemCode';
+import { insertRecordActivity, touchParentRecord } from '../../utils/recordActivity';
 
 const parseMaybeJson = (value: any) => {
   if (typeof value !== 'string') return value;
@@ -245,18 +246,165 @@ export const insertChangelog = async (
       newPayload = await humanizeTableRows(supabase, block, newPayload);
     }
 
-    await supabase.from('changelogs').insert([
-      {
-        module_id: moduleId,
-        record_id: recordId,
+    const blockId = String(block?.id || '').trim();
+    const blockLabel = String(block?.titles?.fa || blockId || 'جدول').trim() || 'جدول';
+    const columns = Array.isArray(block?.tableColumns) ? block.tableColumns : [];
+
+    const normalizeRow = (row: any) => {
+      if (!row || typeof row !== 'object') return row;
+      const next: Record<string, any> = {};
+      Object.entries(row).forEach(([key, value]) => {
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey || normalizedKey === 'key' || normalizedKey.startsWith('_')) return;
+        next[normalizedKey] = value;
+      });
+      return next;
+    };
+
+    const stableStringify = (value: any): string => {
+      if (value === null || value === undefined) return 'null';
+      if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+      if (typeof value === 'object') {
+        return `{${Object.keys(value).sort().map((key) => `${key}:${stableStringify(value[key])}`).join(',')}}`;
+      }
+      return JSON.stringify(value);
+    };
+
+    const buildRowKey = (row: any, index: number) => {
+      const normalizedRow = normalizeRow(row);
+      const explicitId = String(normalizedRow?.id || normalizedRow?.row_id || '').trim();
+      if (explicitId) return `id:${explicitId}`;
+      return `idx:${index}:${stableStringify(normalizedRow)}`;
+    };
+
+    const buildRowSummary = (row: any) => {
+      const normalizedRow = normalizeRow(row);
+      const summary = columns
+        .map((column: any) => {
+          const key = String(column?.key || '').trim();
+          if (!key) return null;
+          const value = normalizedRow?.[key];
+          if (value === undefined || value === null || value === '') return null;
+          return `${String(column?.title || 'فیلد').trim() || 'فیلد'}: ${serializeValue(value)}`;
+        })
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(' | ');
+      return summary || 'جزئیات ردیف ثبت شد';
+    };
+
+    const createColumnEvents = (oldRow: any, newRow: any, rowKey: string) => {
+      const normalizedOldRow = normalizeRow(oldRow);
+      const normalizedNewRow = normalizeRow(newRow);
+      const compareKeys = Array.from(new Set([
+        ...Object.keys(normalizedOldRow || {}),
+        ...Object.keys(normalizedNewRow || {}),
+      ]));
+      return compareKeys
+        .map((columnKey) => {
+          const column = columns.find((item: any) => String(item?.key || '').trim() === String(columnKey));
+          const previousValue = normalizedOldRow?.[columnKey];
+          const nextValue = normalizedNewRow?.[columnKey];
+          if (stableStringify(previousValue) === stableStringify(nextValue)) return null;
+          const columnLabel = String(column?.title || columnKey || 'فیلد').trim() || 'فیلد';
+          return {
+            action: 'table_cell_updated',
+            field_name: blockId || null,
+            field_label: blockLabel,
+            old_value: previousValue,
+            new_value: nextValue,
+            metadata: {
+              blockId,
+              blockLabel,
+              rowKey,
+              columnKey,
+              columnLabel,
+              changeKind: 'cell_updated',
+              summary: `«${columnLabel}» در جدول «${blockLabel}» تغییر کرد`,
+            },
+          };
+        })
+        .filter(Boolean) as any[];
+    };
+
+    const oldRows = Array.isArray(oldPayload) ? oldPayload.map(normalizeRow) : [];
+    const newRows = Array.isArray(newPayload) ? newPayload.map(normalizeRow) : [];
+    const oldMap = new Map(oldRows.map((row, index) => [buildRowKey(row, index), row]));
+    const newMap = new Map(newRows.map((row, index) => [buildRowKey(row, index), row]));
+    const events: Array<{ action: string; field_name: string | null; field_label: string; old_value: any; new_value: any; metadata: Record<string, any> }> = [];
+
+    oldMap.forEach((oldRow, rowKey) => {
+      if (!newMap.has(rowKey)) {
+        events.push({
+          action: 'table_row_removed',
+          field_name: blockId || null,
+          field_label: blockLabel,
+          old_value: oldRow,
+          new_value: null,
+          metadata: {
+            blockId,
+            blockLabel,
+            rowKey,
+            changeKind: 'row_removed',
+            rowSummary: buildRowSummary(oldRow),
+            summary: `ردیفی از جدول «${blockLabel}» حذف شد`,
+          },
+        });
+        return;
+      }
+      events.push(...createColumnEvents(oldRow, newMap.get(rowKey), rowKey));
+    });
+
+    newMap.forEach((newRow, rowKey) => {
+      if (oldMap.has(rowKey)) return;
+      events.push({
+        action: 'table_row_added',
+        field_name: blockId || null,
+        field_label: blockLabel,
+        old_value: null,
+        new_value: newRow,
+        metadata: {
+          blockId,
+          blockLabel,
+          rowKey,
+          changeKind: 'row_added',
+          rowSummary: buildRowSummary(newRow),
+          summary: `ردیف جدیدی به جدول «${blockLabel}» اضافه شد`,
+        },
+      });
+    });
+
+    if (events.length === 0 && serializeValue(oldPayload) !== serializeValue(newPayload)) {
+      events.push({
         action: 'update',
-        field_name: block?.id || null,
-        field_label: block?.titles?.fa || null,
-        old_value: serializeValue(oldPayload),
-        new_value: serializeValue(newPayload),
-        user_id: userId,
-      },
-    ]);
+        field_name: blockId || null,
+        field_label: blockLabel,
+        old_value: oldPayload,
+        new_value: newPayload,
+        metadata: {
+          blockId,
+          blockLabel,
+          changeKind: 'table_updated',
+          summary: `جدول «${blockLabel}» بروزرسانی شد`,
+        },
+      });
+    }
+
+    for (const event of events) {
+      await insertRecordActivity({
+        supabase,
+        moduleId,
+        recordId,
+        action: event.action,
+        fieldName: event.field_name,
+        fieldLabel: event.field_label,
+        oldValue: event.old_value,
+        newValue: event.new_value,
+        userId,
+        metadata: event.metadata,
+      });
+    }
+    await touchParentRecord({ supabase, moduleId, recordId, userId });
   } catch (err) {
     console.warn('Changelog insert failed:', err);
   }
