@@ -135,6 +135,13 @@ describe('web form utilities', () => {
       log_type: 'check_in',
       source_type: 'web_form',
     });
+
+    const leaveTargets = getWebFormTargetFields('leave_requests');
+    const leaveStatusField = leaveTargets.find((item) => item.value === 'status');
+    expect(leaveStatusField?.moduleDefaultValue).toBe('review');
+    expect(getWebFormModuleDefaultValues('leave_requests')).toMatchObject({
+      status: 'review',
+    });
   });
 
   it('resolves field type from the current target module instead of stale saved metadata', () => {

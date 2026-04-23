@@ -130,6 +130,10 @@ const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: stri
   };
 };
 
+const isManagedHiddenPublicWebFormField = (field: WebFormFieldRecord, targetModuleId?: string | null) =>
+  String(targetModuleId || "").trim() === "leave_requests"
+  && String(field.target_field_key || field.field_key || "").trim() === "status";
+
 const getSlideFieldHeightClass = (field: WebFormFieldRecord) =>
   field.field_type === "long_text" ? "min-h-[180px]" : "min-h-[64px]";
 
@@ -599,6 +603,7 @@ const InquiryForm = () => {
   const visibleFields = useMemo(
     () => (publicForm?.fields || []).filter((field) =>
       !field.is_hidden
+      && !isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId)
       && !(field.field_type === "relation" && publicForm?.accessScope !== "internal")
       && !isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)
     ),
@@ -991,7 +996,7 @@ const InquiryForm = () => {
   };
 
   const renderField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
-    if (field.is_hidden) return null;
+    if (field.is_hidden || isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId)) return null;
     if (field.field_type === "relation" && publicForm?.accessScope !== "internal") return null;
     if (field.field_type === "image" || field.field_type === "file") {
       return renderAttachmentField(field, options);

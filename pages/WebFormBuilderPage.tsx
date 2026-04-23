@@ -89,6 +89,9 @@ const slugify = (value: string) =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
+const isHiddenManagedWebFormField = (targetModuleId?: string | null, targetFieldKey?: string | null) =>
+  String(targetModuleId || "").trim() === "leave_requests" && String(targetFieldKey || "").trim() === "status";
+
 const formatDateTime = (value?: string | null) => {
   if (!value) return "-";
   try {
@@ -135,7 +138,7 @@ const buildSuggestedFields = (
         default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
         sort_order: (index + 1) * 10,
         is_required: item.field?.validation?.required === true,
-        is_hidden: false,
+        is_hidden: isHiddenManagedWebFormField(normalizedTargetModuleId, item.value),
       };
     })
     .filter(Boolean) as BuilderFieldValue[];
@@ -174,7 +177,7 @@ const mergeManagedFields = (
         default_value: targetField.hasModuleDefault ? targetField.moduleDefaultValue : undefined,
         sort_order: nextSortOrder,
         is_required: targetField.isModuleRequired,
-        is_hidden: false,
+        is_hidden: isHiddenManagedWebFormField(targetModuleId, targetField.value),
       });
       return;
     }
@@ -188,6 +191,7 @@ const mergeManagedFields = (
           ? existingField.default_value
           : (targetField.hasModuleDefault ? targetField.moduleDefaultValue : existingField.default_value),
       is_required: existingField.is_required === true || targetField.isModuleRequired,
+      is_hidden: existingField.is_hidden === true || isHiddenManagedWebFormField(targetModuleId, targetField.value),
     };
   });
 

@@ -44,7 +44,6 @@ import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
-  resolveSelectPopupContainer,
 } from '../utils/popupContainer';
 
 interface SmartFormProps {
@@ -214,6 +213,11 @@ const clearSmartFormDraft = (key: string) => {
   } catch {
     // Ignore storage errors.
   }
+};
+
+const resolveSmartFormPopupContainer = (trigger?: HTMLElement | null) => {
+  if (typeof document === 'undefined') return (trigger || {}) as HTMLElement;
+  return document.body;
 };
 
 const SmartForm: React.FC<SmartFormProps> = ({ 
@@ -2373,7 +2377,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                               </Space>
                             )}
                             disabled={!canEditModule}
-                            getPopupContainer={resolveSelectPopupContainer}
+                            getPopupContainer={resolveSmartFormPopupContainer}
                             onChange={(val) => {
                               const { assignee_id, assignee_type } = parseAssigneeCombo(String(val));
                               const normalizedType = String(assignee_type || 'user');
@@ -2419,6 +2423,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             moduleId={module.id}
                             recordId={recordId}
                             allValues={currentValues}
+                            popupContainer={resolveSmartFormPopupContainer}
                           />
                         </div>
                       </div>
@@ -2461,6 +2466,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             moduleId={module.id}
                             recordId={recordId}
                             allValues={currentValues}
+                            popupContainer={resolveSmartFormPopupContainer}
                           />
                         </div>
                      );
@@ -2579,6 +2585,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   onOptionsUpdate={loadDynamicOptions}
                                   moduleId={module.id}
                                   allValues={currentValues}
+                                  popupContainer={resolveSmartFormPopupContainer}
                                 />
                              </div>
                            );
@@ -2628,6 +2635,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   onOptionsUpdate={loadDynamicOptions}
                                   moduleId={module.id}
                                   allValues={currentValues}
+                                  popupContainer={resolveSmartFormPopupContainer}
                                 />
                               </div>
                             ))}

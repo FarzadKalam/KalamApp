@@ -177,6 +177,11 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
     onOpenChange?.(false);
   };
 
+  const handleDesktopChange = (nextValue: any) => {
+    setDisplayValue(nextValue);
+    onChange?.(nextValue);
+  };
+
   const clearValue = () => {
     const nextValue = isMulti ? [] : undefined;
     setDraftValue(nextValue);
@@ -208,8 +213,8 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   if (!mobileSheetMode) {
     return (
       <Select
-        value={value}
-        onChange={onChange}
+        value={displayValue}
+        onChange={handleDesktopChange}
         options={normalizedOptions as any}
         mode={mode}
         className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, className)}

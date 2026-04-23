@@ -47,7 +47,9 @@ export const leaveRequestsModule: ModuleDefinition = {
       options: [
         { label: 'پیش‌نویس', value: 'draft', color: 'default' },
         { label: 'در انتظار', value: 'pending', color: 'orange' },
+        { label: 'بازبینی', value: 'review', color: 'gold' },
         { label: 'تایید شده', value: 'approved', color: 'green' },
+        { label: 'تکمیل شده', value: 'completed', color: 'green' },
         { label: 'رد شده', value: 'rejected', color: 'red' },
         { label: 'لغو شده', value: 'canceled', color: 'default' },
       ],
