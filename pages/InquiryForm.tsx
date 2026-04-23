@@ -671,6 +671,10 @@ const InquiryForm = () => {
     }
   };
 
+  const setPublicFormFieldValue = (fieldKey: string, nextValue: any) => {
+    form.setFields([{ name: fieldKey, value: nextValue, touched: true }]);
+  };
+
   const removePublicAttachment = (fieldKey: string, assetUrl: string) => {
     const currentList = normalizePublicFieldValue(
       { field_key: fieldKey, label: "", field_type: "file" } as WebFormFieldRecord,
@@ -679,7 +683,7 @@ const InquiryForm = () => {
     const nextList = Array.isArray(currentList)
       ? currentList.filter((item) => String((item as any)?.url || "") !== assetUrl)
       : [];
-    form.setFieldValue(fieldKey, nextList);
+    setPublicFormFieldValue(fieldKey, nextList);
   };
 
   const getChoiceOptions = (field: WebFormFieldRecord) => {
@@ -744,10 +748,10 @@ const InquiryForm = () => {
                       const nextValues = isSelected
                         ? normalizedValues.filter((item) => item !== String(option.value))
                         : [...normalizedValues, String(option.value)];
-                      form.setFieldValue(field.field_key, nextValues);
+                      setPublicFormFieldValue(field.field_key, nextValues);
                       return;
                     }
-                    form.setFieldValue(field.field_key, option.value);
+                    setPublicFormFieldValue(field.field_key, option.value);
                   }}
                   className="group relative overflow-hidden rounded-[24px] border px-4 py-4 text-right transition duration-200"
                   style={{
@@ -907,7 +911,7 @@ const InquiryForm = () => {
                 const uploaded = await uploadPublicAttachment(field, file);
                 if (!uploaded) return;
                 const nextList = [...assetList, uploaded];
-                form.setFieldValue(field.field_key, nextList);
+                setPublicFormFieldValue(field.field_key, nextList);
               })();
               return false;
             }}
@@ -1022,7 +1026,7 @@ const InquiryForm = () => {
         <SmartFieldRenderer
           field={moduleField}
           value={form.getFieldValue(field.field_key)}
-          onChange={(nextValue) => form.setFieldValue(field.field_key, nextValue)}
+          onChange={(nextValue) => setPublicFormFieldValue(field.field_key, nextValue)}
           forceEditMode
           compactMode
           moduleId={publicForm?.targetModuleId || undefined}
@@ -1093,6 +1097,10 @@ const InquiryForm = () => {
 
   const handleSubmit = async (values: Record<string, any>) => {
     if (!publicForm) return;
+    const completeValues = {
+      ...form.getFieldsValue(true),
+      ...values,
+    };
 
     if (publicForm.accessScope === "internal" && !authUser) {
       navigate(loginRedirectUrl);
@@ -1114,14 +1122,14 @@ const InquiryForm = () => {
     setSubmitting(true);
     try {
       if (publicForm.mode === "legacy") {
-        await submitLegacyInquiry(values);
+        await submitLegacyInquiry(completeValues);
         message.success(publicForm.config.success_message || "درخواست شما ثبت شد.");
         form.resetFields();
         form.setFieldsValue(initialFieldValues);
         return;
       }
 
-      const submissionPayload = buildSubmissionPayload(values);
+      const submissionPayload = buildSubmissionPayload(completeValues);
       const { data, error } = await supabase.rpc("submit_public_web_form", {
         p_slug: publicForm.slug,
         p_submission: submissionPayload,

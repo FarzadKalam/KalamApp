@@ -125,31 +125,16 @@ const loadWorkflowFieldOptions = async (
   }
 
   if (field.type === FieldType.USER) {
-    const selectVariants = [
-      'id, full_name, first_name, last_name',
-      'id, first_name, last_name',
-      'id',
-    ];
-
-    let rows: any[] = [];
-    for (const selectColumns of selectVariants) {
-      const result = await supabase.from('profiles').select(selectColumns).limit(300);
-      if (!result.error) {
-        rows = result.data || [];
-        break;
-      }
-      const errorCode = String((result.error as any)?.code || '').toUpperCase();
-      const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
-      const isMissingColumn =
-        errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-      if (!isMissingColumn) throw result.error;
-    }
+    const { data, error } = await supabase.from('profiles').select('*').limit(300);
+    if (error) throw error;
+    const rows = data || [];
 
     return (rows || []).map((row: any) => {
       const fullName = String(row?.full_name || '').trim();
       const composedName = `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim();
+      const contactLabel = String(row?.email || row?.mobile_1 || row?.mobile || '').trim();
       return {
-        label: fullName || composedName || String(row?.id || ''),
+        label: fullName || composedName || contactLabel || String(row?.id || ''),
         value: String(row?.id || ''),
       };
     }).filter((item) => item.value);
@@ -249,7 +234,7 @@ const loadDynamicAndRelationOptions = async (
       field.type === FieldType.TAGS
   );
 
-  await Promise.all(
+  await Promise.allSettled(
     optionFields.map(async (field) => {
       relationOptions[field.key] = await loadWorkflowFieldOptions(field, moduleId);
     })
@@ -267,7 +252,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   canEdit = true,
   moduleOptions,
 }) => {
-  const overlayZIndexBase = 1200;
+  const overlayZIndexBase = 1500;
   const { message } = App.useApp();
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
@@ -290,6 +275,15 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const conditionFields: ModuleField[] = useMemo(
     () => getWorkflowConditionFields(moduleId),
     [moduleId]
+  );
+  const conditionFieldKeySet = useMemo(
+    () =>
+      new Set(
+        conditionFields
+          .map((field) => String(field?.key || '').trim())
+          .filter(Boolean)
+      ),
+    [conditionFields]
   );
 
   const isEditMode = !!record?.id;
@@ -321,7 +315,10 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     let cancelled = false;
 
     const run = async () => {
-      const loaded = await loadDynamicAndRelationOptions(moduleId, conditionFields);
+      const loaded = await loadDynamicAndRelationOptions(moduleId, conditionFields).catch(() => ({
+        dynamicOptions: {},
+        relationOptions: {},
+      }));
       if (cancelled) return;
       setDynamicOptions(loaded.dynamicOptions);
       setRelationOptions(loaded.relationOptions);
@@ -332,6 +329,28 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       cancelled = true;
     };
   }, [open, moduleId, conditionFields]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const pruneInvalidConditions = (items: WorkflowCondition[]) => {
+      if (conditionFieldKeySet.size === 0) {
+        return items.length > 0 ? [] : items;
+      }
+      return items.filter((condition) =>
+        conditionFieldKeySet.has(String(condition?.field || '').trim())
+      );
+    };
+
+    setConditionsAll((prev) => {
+      const next = pruneInvalidConditions(prev);
+      return next.length === prev.length ? prev : next;
+    });
+    setConditionsAny((prev) => {
+      const next = pruneInvalidConditions(prev);
+      return next.length === prev.length ? prev : next;
+    });
+  }, [conditionFieldKeySet, open]);
 
   const handleSubmit = async () => {
     if (!canEdit) return;
@@ -398,6 +417,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       onCancel={onClose}
       title={isEditMode ? 'ویرایش گردش کار' : 'ایجاد گردش کار جدید'}
       width={1120}
+      zIndex={1401}
       destroyOnHidden
       footer={[
         <Button key="cancel" onClick={onClose}>
@@ -481,8 +501,6 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
               <Form.Item label="در ساعت" name="interval_at">
                 <PersianDatePicker
                   type="TIME"
-                  value={form.getFieldValue('interval_at') || null}
-                  onChange={(nextVal) => form.setFieldValue('interval_at', nextVal)}
                   overlayZIndexBase={overlayZIndexBase}
                   modalContainer={resolveOverlayPopupContainer}
                   pickerTitle="زمان اجرا"
@@ -513,6 +531,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                     disabled={!canEdit}
                     overlayZIndexBase={overlayZIndexBase}
                     popupContainer={resolveOverlayPopupContainer}
+                    adaptiveMode="desktop"
                   />
                 ),
               },
@@ -529,6 +548,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                     disabled={!canEdit}
                     overlayZIndexBase={overlayZIndexBase}
                     popupContainer={resolveOverlayPopupContainer}
+                    adaptiveMode="desktop"
                   />
                 ),
               },

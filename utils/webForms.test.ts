@@ -121,16 +121,19 @@ describe('web form utilities', () => {
 
   it('exposes module-required and module-default metadata for managed web form fields', () => {
     const attendanceTargets = getWebFormTargetFields('attendance_logs');
+    const internalAttendanceTargets = getWebFormTargetFields('attendance_logs', { accessScope: 'internal' });
     const logTypeField = attendanceTargets.find((item) => item.value === 'log_type');
     const sourceTypeField = attendanceTargets.find((item) => item.value === 'source_type');
+    const employeeField = internalAttendanceTargets.find((item) => item.value === 'employee_id');
 
     expect(logTypeField?.isManaged).toBe(true);
     expect(logTypeField?.hasModuleDefault).toBe(true);
     expect(logTypeField?.moduleDefaultValue).toBe('check_in');
-    expect(sourceTypeField?.moduleDefaultValue).toBe('manual');
+    expect(sourceTypeField?.moduleDefaultValue).toBe('web_form');
+    expect(employeeField?.inferredType).toBe('relation');
     expect(getWebFormModuleDefaultValues('attendance_logs')).toMatchObject({
       log_type: 'check_in',
-      source_type: 'manual',
+      source_type: 'web_form',
     });
   });
 

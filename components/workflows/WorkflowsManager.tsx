@@ -70,6 +70,12 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
     context === 'settings'
       ? permissions.fields?.settings_tab !== false
       : permissions.fields?.module_list_button !== false;
+  const editorInitialModuleId = useMemo(() => {
+    if (editingRecord?.module_id) return editingRecord.module_id;
+    if (defaultModuleId) return defaultModuleId;
+    if (moduleFilter !== 'all') return moduleFilter;
+    return null;
+  }, [defaultModuleId, editingRecord?.module_id, moduleFilter]);
 
   const fetchPermissions = useCallback(async () => {
     try {
@@ -297,7 +303,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
           open={editorOpen}
           onClose={() => setEditorOpen(false)}
           onSaved={() => fetchRecords()}
-          initialModuleId={defaultModuleId}
+          initialModuleId={editorInitialModuleId}
           record={editingRecord}
           canEdit={canEdit}
           moduleOptions={moduleOptions}

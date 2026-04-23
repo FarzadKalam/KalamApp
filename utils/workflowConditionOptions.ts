@@ -74,31 +74,17 @@ export const loadWorkflowFieldOptions = async (
   }
 
   if (field.type === FieldType.USER) {
-    const selectVariants = [
-      'id, full_name, first_name, last_name',
-      'id, first_name, last_name',
-      'id',
-    ];
-
-    let rows: any[] = [];
-    for (const selectColumns of selectVariants) {
-      const result = await supabase.from('profiles').select(selectColumns).limit(300);
-      if (!result.error) {
-        rows = result.data || [];
-        break;
-      }
-      const errorCode = String((result.error as any)?.code || '').toUpperCase();
-      const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
-      const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-      if (!isMissingColumn) throw result.error;
-    }
+    const { data, error } = await supabase.from('profiles').select('*').limit(300);
+    if (error) throw error;
+    const rows = data || [];
 
     return (rows || [])
       .map((row: any) => {
         const fullName = String(row?.full_name || '').trim();
         const composedName = `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim();
+        const contactLabel = String(row?.email || row?.mobile_1 || row?.mobile || '').trim();
         return {
-          label: fullName || composedName || String(row?.id || ''),
+          label: fullName || composedName || contactLabel || String(row?.id || ''),
           value: String(row?.id || ''),
         };
       })
@@ -184,7 +170,7 @@ export const loadWorkflowConditionEditorOptions = async (
       field.type === FieldType.TAGS
   );
 
-  await Promise.all(
+  await Promise.allSettled(
     optionFields.map(async (field) => {
       relationOptions[field.key] = await loadWorkflowFieldOptions(field, moduleId);
     })

@@ -31,6 +31,16 @@ export const attendanceLogsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
+      key: "employee_id",
+      labels: { fa: "نام کارمند", en: "Employee Name" },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 0.5,
+      relationConfig: { targetModule: "employees", targetField: "full_name" },
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
       key: "occurred_at",
       labels: { fa: "زمان ثبت سیستمی", en: "System Recorded At" },
       type: FieldType.DATETIME,

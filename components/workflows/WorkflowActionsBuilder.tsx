@@ -27,7 +27,10 @@ import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
-import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import {
+  buildStandardSelectPopupRootStyle,
+  resolveSelectPopupContainer,
+} from '../../utils/popupContainer';
 
 interface WorkflowActionsBuilderProps {
   value: WorkflowAction[];
@@ -164,7 +167,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
-  const popupContainer = (node?: HTMLElement | null) => resolveOverlayPopupContainer(node);
+  const popupContainer = (node?: HTMLElement | null) => resolveSelectPopupContainer(node);
 
   const commonSelectProps = {
     showSearch: true,
@@ -173,7 +176,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 260,
     virtual: false,
-    overlayZIndexBase: 1400,
+    styles: {
+      popup: {
+        root: buildStandardSelectPopupRootStyle({ zIndex: 1500, minWidth: 220 }),
+      },
+    },
   };
 
   const updatableFieldOptions = useMemo(

@@ -67,8 +67,12 @@ const normalizeUsers = (rows: any[]) =>
     role_id: user?.role_id ? String(user.role_id) : null,
     display_name:
       String(user?.full_name || '').trim() ||
+      [user?.first_name, user?.last_name].map((part) => String(part || '').trim()).filter(Boolean).join(' ') ||
+      String(user?.name || '').trim() ||
+      String(user?.display_name || '').trim() ||
       String(user?.email || '').trim() ||
       String(user?.mobile_1 || '').trim() ||
+      String(user?.mobile || '').trim() ||
       `کاربر ${String(user?.id || '').slice(0, 8)}`,
   }));
 
@@ -210,7 +214,7 @@ export const fetchAssigneeDirectory = async (
     const snapshot = await fetchSessionBootstrap(supabaseClient, options);
     const orgId = String(snapshot.orgId || '').trim();
 
-    let usersQuery = supabaseClient.from('profiles').select('id, full_name, email, mobile_1, avatar_url, role_id');
+    let usersQuery = supabaseClient.from('profiles').select('*').limit(300);
     const preferTreeSchema = assigneeDirectoryCache.supportsRoleTreeSchema !== false;
 
     if (orgId) {
