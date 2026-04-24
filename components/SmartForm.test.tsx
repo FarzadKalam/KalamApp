@@ -35,6 +35,8 @@ vi.mock('../supabaseClient', () => ({
       getUser: vi.fn(async () => ({ data: { user: { id: 'current-user' } }, error: null })),
     },
   },
+  SUPABASE_URL: 'https://example.supabase.co',
+  SUPABASE_ANON_KEY: 'test-anon-key',
 }));
 
 vi.mock('../utils/permissions', () => ({

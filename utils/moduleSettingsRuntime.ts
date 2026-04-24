@@ -2,6 +2,8 @@ import { MODULES } from '../moduleRegistry';
 import { BlockDefinition, ModuleDefinition, ModuleField } from '../types';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE, type ModuleSettingsConfig, type ModuleSettingsStore } from '../pages/Settings/moduleSettingsTypes';
 import { fetchSessionBootstrap } from './sessionCache';
+import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
+import { type ConditionalFieldSettings, normalizeConditionalFieldSettings } from './conditionalFieldRules';
 
 export const MODULE_SETTINGS_APPLIED_EVENT = 'kalam:module-settings-applied';
 export const MODULE_SETTINGS_UPDATED_EVENT = 'kalam:module-settings-updated';
@@ -36,6 +38,8 @@ const baseModuleRegistrySnapshot: Record<string, Pick<ModuleDefinition, 'fields'
     },
   ])
 );
+
+const moduleConditionalDisplaySnapshot: Record<string, ConditionalFieldSettings> = {};
 
 const normalizeFields = (fields: ModuleField[]) =>
   [...(fields || [])]
@@ -78,17 +82,41 @@ export const applyModuleSettingsStoreToRegistry = (
     const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
     const resolvedFields = mergeRequiredTagsField(baseFields, incomingFields);
 
-    moduleDef.fields = normalizeFields(
-      resolvedFields
-    );
-    moduleDef.blocks = normalizeBlocks(
-      cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[])
+    moduleDef.fields = normalizeFields(resolvedFields);
+    moduleDef.blocks = normalizeBlocks(cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[]));
+    moduleConditionalDisplaySnapshot[moduleId] = buildResolvedConditionalFieldSettings(
+      { id: moduleId, fields: moduleDef.fields } as Pick<ModuleDefinition, 'id' | 'fields'>,
+      incoming?.conditionalDisplay
     );
   });
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_APPLIED_EVENT));
   }
+};
+
+export const getResolvedModuleConditionalDisplay = (moduleId?: string | null) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId) return normalizeConditionalFieldSettings();
+  return moduleConditionalDisplaySnapshot[normalizedModuleId] || normalizeConditionalFieldSettings();
+};
+
+export const getBaseModuleSchemaSnapshot = (moduleId?: string | null) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId) return null;
+  const base = baseModuleRegistrySnapshot[normalizedModuleId];
+  if (!base) return null;
+  return {
+    fields: cloneDeep((base.fields || []) as ModuleField[]),
+    blocks: cloneDeep((base.blocks || []) as BlockDefinition[]),
+  };
+};
+
+export const getBaseModuleFieldDefinition = (moduleId?: string | null, fieldKey?: string | null) => {
+  const baseSchema = getBaseModuleSchemaSnapshot(moduleId);
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  if (!baseSchema || !normalizedFieldKey) return null;
+  return baseSchema.fields.find((field) => String(field?.key || '').trim() === normalizedFieldKey) || null;
 };
 
 export const loadModuleSettingsStore = async (supabaseClient: any): Promise<ModuleSettingsStore | null> => {

@@ -4,7 +4,7 @@ import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
-import { BrowserRouter, Route, Routes, Outlet, useParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams } from "react-router-dom";
 import { ConfigProvider, App as AntdApp, theme as antdTheme } from "antd";
 import faIR from "antd/locale/fa_IR";
 import { JalaliLocaleListener } from "antd-jalali";
@@ -22,7 +22,6 @@ import {
   resolveSmartThemeMode,
   type BrandingConfig,
 } from "./theme/brandTheme";
-import { isAccountingMinimalModule } from "./utils/accountingModules";
 import {
   applyBrandingRuntime,
   clearRuntimeBrandingCache,
@@ -56,7 +55,6 @@ const loadAccountingReportViewerPage = () => import("./pages/AccountingReportVie
 const loadAccountingSettingsPage = () => import("./pages/AccountingSettingsPage");
 const loadChartOfAccountsTreePage = () => import("./pages/ChartOfAccountsTreePage");
 const loadAccountingRecordPage = () => import("./pages/AccountingRecordPage");
-const loadCashBankPage = () => import("./pages/CashBankPage");
 const loadJournalEntryCreatePage = () => import("./pages/JournalEntryCreatePage");
 const loadJournalEntryShowPage = () => import("./pages/JournalEntryShowPage");
 const loadInquiryForm = () => import("./pages/InquiryForm");
@@ -71,7 +69,6 @@ const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
 const loadReportViewerPage = () => import("./pages/ReportViewerPage");
 const loadPublicSite = () => import("./pages/PublicSite");
 const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
-const loadHrQuickRequestPage = () => import("./pages/HrQuickRequestPage");
 const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
@@ -91,7 +88,6 @@ const AccountingReportViewerPage = lazy(loadAccountingReportViewerPage);
 const AccountingSettingsPage = lazy(loadAccountingSettingsPage);
 const ChartOfAccountsTreePage = lazy(loadChartOfAccountsTreePage);
 const AccountingRecordPage = lazy(loadAccountingRecordPage);
-const CashBankPage = lazy(loadCashBankPage);
 const JournalEntryCreatePage = lazy(loadJournalEntryCreatePage);
 const JournalEntryShowPage = lazy(loadJournalEntryShowPage);
 const InquiryForm = lazy(loadInquiryForm);
@@ -106,7 +102,6 @@ const ReportBuilderPage = lazy(loadReportBuilderPage);
 const ReportViewerPage = lazy(loadReportViewerPage);
 const PublicSite = lazy(loadPublicSite);
 const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
-const HrQuickRequestPage = lazy(loadHrQuickRequestPage);
 const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
@@ -127,7 +122,6 @@ const routePreloaders = [
   loadAccountingSettingsPage,
   loadChartOfAccountsTreePage,
   loadAccountingRecordPage,
-  loadCashBankPage,
   loadJournalEntryCreatePage,
   loadJournalEntryShowPage,
   loadInquiryForm,
@@ -142,7 +136,6 @@ const routePreloaders = [
   loadReportViewerPage,
   loadPublicSite,
   loadWorkSchedulesPage,
-  loadHrQuickRequestPage,
   loadRecycleBinPage,
   loadShareTargetPage,
   loadFileShortLinkRedirectPage,
@@ -456,13 +449,10 @@ function App() {
     if (routeModuleId === "work_schedules") {
       return <WorkSchedulesPage />;
     }
-    if (routeModuleId === "leave_requests" || routeModuleId === "overtime_requests" || routeModuleId === "mission_requests") {
-      return <HrQuickRequestPage />;
-    }
     if (routeModuleId === "journal_entries") {
       return <JournalEntryCreatePage />;
     }
-    if (isAccountingMinimalModule(routeModuleId)) {
+    if (routeModuleId === "chart_of_accounts" || routeModuleId === "cheques") {
       return <AccountingRecordPage />;
     }
     return <ModuleCreate />;
@@ -476,13 +466,10 @@ function App() {
     if (routeModuleId === "work_schedules") {
       return <WorkSchedulesPage />;
     }
-    if (routeModuleId === "leave_requests" || routeModuleId === "overtime_requests" || routeModuleId === "mission_requests") {
-      return <HrQuickRequestPage />;
-    }
     if (routeModuleId === "journal_entries") {
       return <JournalEntryShowPage />;
     }
-    if (isAccountingMinimalModule(routeModuleId)) {
+    if (routeModuleId === "chart_of_accounts" || routeModuleId === "cheques") {
       return <AccountingRecordPage />;
     }
     return <ModuleShow />;
@@ -551,7 +538,7 @@ function App() {
             <Route path="/accounting" element={<AccountingPage />} />
             <Route path="/accounting/reports" element={<AccountingReportsPage />} />
             <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />
-            <Route path="/cash_bank" element={<CashBankPage />} />
+            <Route path="/cash_bank" element={<Navigate to="/cash_bank_operations" replace />} />
             <Route path="/accounting/account-review" element={<AccountingAccountReviewPage />} />
             <Route path="/accounting/settings" element={<AccountingSettingsPage />} />
             <Route path="/chart_of_accounts" element={<ChartOfAccountsTreePage />} />

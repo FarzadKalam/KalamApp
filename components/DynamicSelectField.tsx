@@ -27,6 +27,7 @@ interface DynamicSelectFieldProps {
   mode?: 'multiple' | 'tags';
   onOptionsUpdate?: () => void;
   getPopupContainer?: (trigger: HTMLElement) => HTMLElement;
+  modalContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   dropdownStyle?: React.CSSProperties;
   popupStyle?: React.CSSProperties;
   protectedValues?: string[];
@@ -107,6 +108,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   mode = undefined,
   onOptionsUpdate,
   getPopupContainer = () => document.body,
+  modalContainer,
   dropdownStyle,
   popupStyle,
   protectedValues = [],
@@ -579,6 +581,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         optionFilterProp="label"
         optionLabelProp="label"
         getPopupContainer={resolvedPopupContainer}
+        modalContainer={modalContainer}
         options={normalizedOptions}
         placement={isMobileViewport ? 'bottomLeft' : 'bottomRight'}
         popupMatchSelectWidth={false}

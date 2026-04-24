@@ -3,12 +3,14 @@ const GLOBAL_ASSIGNEE_MODULE_IDS = [
   'products',
   'product_bundles',
   'production_orders',
+  'projects',
   'invoices',
   'purchase_invoices',
   'secretariat_documents',
   'delivery_forms',
   'stock_transfers',
   'expense_documents',
+  'cash_bank_operations',
   'employee_advances',
   'payroll_slips',
   'employee_contracts',
@@ -27,12 +29,14 @@ const GLOBAL_ROLE_ASSIGNEE_MODULE_IDS = [
   'products',
   'product_bundles',
   'production_orders',
+  'projects',
   'invoices',
   'purchase_invoices',
   'secretariat_documents',
   'delivery_forms',
   'stock_transfers',
   'expense_documents',
+  'cash_bank_operations',
   'employee_advances',
   'payroll_slips',
   'employee_contracts',
@@ -49,6 +53,12 @@ const GLOBAL_ROLE_ASSIGNEE_MODULE_IDS = [
 export const GLOBAL_ASSIGNEE_MODULES = new Set<string>(GLOBAL_ASSIGNEE_MODULE_IDS);
 export const GLOBAL_ASSIGNEE_TYPE_MODULES = new Set<string>(GLOBAL_ASSIGNEE_MODULE_IDS);
 export const GLOBAL_ROLE_ASSIGNEE_MODULES = new Set<string>(GLOBAL_ROLE_ASSIGNEE_MODULE_IDS);
+export const GLOBAL_ASSIGNEE_UI_FIELD_KEYS = new Set<string>([
+  'assignee_id',
+  'assignee_type',
+  'assignee_role_id',
+  'assignee_combo',
+]);
 
 export const supportsGlobalAssignee = (moduleId: string) => GLOBAL_ASSIGNEE_MODULES.has(String(moduleId || '').trim());
 export const supportsGlobalAssigneeType = (moduleId: string) => GLOBAL_ASSIGNEE_TYPE_MODULES.has(String(moduleId || '').trim());
@@ -87,3 +97,15 @@ export const supportsModuleAssigneeType = (moduleConfig: any) =>
 
 export const supportsModuleRoleAssignee = (moduleConfig: any) =>
   getModuleLookupKeys(moduleConfig).some((key) => supportsGlobalRoleAssignee(key));
+
+export const shouldHideManagedAssigneeField = (
+  moduleIdOrConfig: string | { id?: string; table?: string } | null | undefined,
+  fieldKey: string | null | undefined
+) => {
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  if (!GLOBAL_ASSIGNEE_UI_FIELD_KEYS.has(normalizedFieldKey)) return false;
+  if (typeof moduleIdOrConfig === 'string') {
+    return supportsGlobalAssignee(moduleIdOrConfig);
+  }
+  return supportsModuleAssignee(moduleIdOrConfig);
+};

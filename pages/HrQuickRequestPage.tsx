@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Form, Input, InputNumber, Modal, Result, Select, Spin, Switch } from 'antd';
+import { App, Button, Form, Input, InputNumber, Modal, Result, Spin, Switch } from 'antd';
 import {
   ClockCircleOutlined,
   CloseOutlined,
@@ -13,9 +13,11 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleDefinition, ModuleField } from '../types';
 import { supabase } from '../supabaseClient';
 import PersianDatePicker from '../components/PersianDatePicker';
+import AdaptiveSelectField from '../components/AdaptiveSelectField';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { safeJalaliFormat } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 
 type QuickModuleId = 'leave_requests' | 'overtime_requests' | 'mission_requests';
 
@@ -199,7 +201,17 @@ const HrQuickRequestPage: React.FC = () => {
         return <InputNumber className="w-full" controls={false} disabled={disabled} />;
       case FieldType.SELECT:
       case FieldType.STATUS:
-        return <Select disabled={disabled} options={field.options || []} optionFilterProp="label" showSearch />;
+        return (
+          <AdaptiveSelectField
+            disabled={disabled}
+            options={field.options || []}
+            optionFilterProp="label"
+            showSearch
+            getPopupContainer={resolveOverlayPopupContainer}
+            modalContainer={resolveOverlayPopupContainer}
+            overlayZIndexBase={12000}
+          />
+        );
       case FieldType.DATE:
         return <PersianDatePicker type="DATE" disabled={disabled} placeholder={field.labels.fa} />;
       case FieldType.TIME:
@@ -286,7 +298,7 @@ const HrQuickRequestPage: React.FC = () => {
           <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-[#17191f]">
             <Form form={form} layout="vertical" onValuesChange={handleValuesChange}>
               <Form.Item name="employee_id" label={assigneeLabel} rules={[{ required: true, message: 'انتخاب کارمند الزامی است' }]}>
-                <Select
+                <AdaptiveSelectField
                   showSearch
                   optionFilterProp="label"
                   disabled={isView}
@@ -302,6 +314,9 @@ const HrQuickRequestPage: React.FC = () => {
                       </div>
                     );
                   }}
+                  getPopupContainer={resolveOverlayPopupContainer}
+                  modalContainer={resolveOverlayPopupContainer}
+                  overlayZIndexBase={12000}
                 />
               </Form.Item>
 

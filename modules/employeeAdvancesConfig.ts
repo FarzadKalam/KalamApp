@@ -1,4 +1,9 @@
 import { BlockType, FieldLocation, FieldNature, FieldType, ModuleDefinition, ModuleNature, RowCalculationType, SummaryCalculationType, ViewMode } from '../types';
+import {
+  CASH_BANK_OPERATION_STATUS_OPTIONS,
+  CASH_BANK_PAYMENT_TYPE_OPTIONS,
+  CASH_BANK_RESPONSIBLE_LABEL_FA,
+} from '../utils/cashBankFieldCatalog';
 import { getTodayLocalDateValue } from '../utils/defaultValues';
 
 export const employeeAdvancesConfig: ModuleDefinition = {
@@ -53,7 +58,17 @@ export const employeeAdvancesConfig: ModuleDefinition = {
       order: 2,
       rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
       tableColumns: [
-        { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [{ label: 'نقد', value: 'cash' }, { label: 'بانک', value: 'bank' }, { label: 'کارت', value: 'card' }, { label: 'چک', value: 'cheque' }] },
+        { key: 'attachment', title: 'پیوست', type: FieldType.IMAGE, width: 96 },
+        { key: 'tags', title: 'برچسب‌ها', type: FieldType.TAGS, width: 150 },
+        { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [...CASH_BANK_PAYMENT_TYPE_OPTIONS] },
+        {
+          key: 'status',
+          title: 'وضعیت',
+          type: FieldType.SELECT,
+          width: 120,
+          defaultValue: 'received',
+          options: [...CASH_BANK_OPERATION_STATUS_OPTIONS],
+        },
         {
           key: 'source_account',
           title: 'حساب پرداخت',
@@ -70,6 +85,7 @@ export const employeeAdvancesConfig: ModuleDefinition = {
             ],
           },
         },
+        { key: 'responsible_id', title: CASH_BANK_RESPONSIBLE_LABEL_FA, type: FieldType.RELATION, width: 150, relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
         { key: 'date', title: 'تاریخ', type: FieldType.DATE, width: 130 },
         { key: 'amount', title: 'مبلغ', type: FieldType.PRICE, width: 160, showTotal: true },
         { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },

@@ -2,8 +2,13 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { getFileSystemModuleDefinition } from './fileManagerConfig';
 import {
+  FILE_MANAGER_CACHE_PREFIXES,
+  getOrSetTimedFileManagerCache,
+  getTimedFileManagerCache,
+  setTimedFileManagerCache,
+} from './fileManagerQueryCache';
+import {
   detectFileManagerTables,
-  ensureSystemFoldersForRecord,
   resolveRecordFolderLabel,
 } from './fileManagerService';
 import { loadLegacyRecordFiles } from './fileManagerCompat';
@@ -38,6 +43,7 @@ export type FileManagerListItem = {
   source_record_id?: string | null;
   source_record_title?: string | null;
   visibility?: 'private' | 'org' | 'public' | null;
+  source_kind?: 'entry' | 'legacy' | 'synthetic' | 'note_attachment';
   tags?: Array<{ id: string; title: string; color?: string | null }>;
 };
 
@@ -47,6 +53,7 @@ export type FileManagerTreeFolder = {
   parentKey?: string | null;
   count?: number;
   isSystem?: boolean;
+  isDeletedRecord?: boolean;
   moduleId?: string | null;
   recordId?: string | null;
   folderId?: string | null;
@@ -66,6 +73,7 @@ export type FileManagerTreeOptions = {
   initialRecordId?: string | null;
   search?: string | null;
   fileTypes?: Array<'image' | 'video' | 'file'>;
+  loadMode?: 'primary' | 'full';
   recordTitleMap?: Record<string, string>;
   moduleTitleMap?: Record<string, string>;
 };
@@ -82,40 +90,9 @@ export type FileManagerTreeResult = {
   recordTitleMap: Record<string, string>;
 };
 
+export { invalidateFileManagerFolderCaches, invalidateFileManagerQueryCache } from './fileManagerQueryCache';
+
 const ROOT_FOLDER_KEY = 'all';
-const FILE_MANAGER_QUERY_TTL_MS = 10_000;
-
-type TimedCacheEntry<T> = {
-  expiresAt: number;
-  value: T;
-};
-
-const timedCache = new Map<string, TimedCacheEntry<any>>();
-
-const getTimedCache = <T,>(key: string): T | null => {
-  const hit = timedCache.get(key);
-  if (!hit) return null;
-  if (hit.expiresAt <= Date.now()) {
-    timedCache.delete(key);
-    return null;
-  }
-  return hit.value as T;
-};
-
-const setTimedCache = <T,>(key: string, value: T, ttlMs = FILE_MANAGER_QUERY_TTL_MS) => {
-  timedCache.set(key, {
-    value,
-    expiresAt: Date.now() + ttlMs,
-  });
-  return value;
-};
-
-const getOrSetTimedCache = async <T,>(key: string, loader: () => Promise<T>, ttlMs = FILE_MANAGER_QUERY_TTL_MS) => {
-  const cached = getTimedCache<T>(key);
-  if (cached !== null) return cached;
-  const value = await loader();
-  return setTimedCache(key, value, ttlMs);
-};
 
 const moduleFolderKey = (moduleId: string) => `module:${moduleId}`;
 const recordFolderKey = (moduleId: string, recordId: string) => `record:${moduleId}:${recordId}`;
@@ -138,6 +115,62 @@ const normalizeType = (rawType: unknown, mimeType?: string | null, fileUrl?: str
 };
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+
+const getRecordFolderDisplayMeta = (
+  recordId: string,
+  resolvedLabel?: string | null,
+  fallbackFolderLabel?: string | null,
+) => {
+  const normalizedRecordId = normalizeText(recordId);
+  const normalizedResolvedLabel = normalizeText(resolvedLabel);
+  if (normalizedResolvedLabel && normalizedResolvedLabel !== normalizedRecordId) {
+    return { label: normalizedResolvedLabel, isDeletedRecord: false };
+  }
+  const normalizedFallbackFolderLabel = normalizeText(fallbackFolderLabel);
+  if (normalizedFallbackFolderLabel && normalizedFallbackFolderLabel !== normalizedRecordId) {
+    return { label: normalizedFallbackFolderLabel, isDeletedRecord: false };
+  }
+  return { label: 'رکورد حذف شده', isDeletedRecord: true };
+};
+
+const buildRecursiveRecordFolderCounts = (
+  manualFolders: Array<Pick<FileFolderRow, 'id' | 'parent_id'>>,
+  items: Array<Pick<FileManagerListItem, 'folder_id'>>,
+  legacySubfolders?: Set<string>,
+) => {
+  const ROOT_KEY = '__record_root__';
+  const normalizedManualFolderIds = new Set(manualFolders.map((folder) => normalizeText(folder.id)).filter(Boolean));
+  const directItemCount = new Map<string, number>();
+  const childFolderIdsByParent = new Map<string, string[]>();
+
+  items.forEach((item) => {
+    const nextFolderId = normalizeText(item.folder_id);
+    const targetKey = nextFolderId && !legacySubfolders?.has(nextFolderId) ? nextFolderId : ROOT_KEY;
+    directItemCount.set(targetKey, (directItemCount.get(targetKey) || 0) + 1);
+  });
+
+  manualFolders.forEach((folder) => {
+    const folderId = normalizeText(folder.id);
+    if (!folderId) return;
+    const parentId = normalizeText(folder.parent_id);
+    const parentKey = parentId && normalizedManualFolderIds.has(parentId) ? parentId : ROOT_KEY;
+    childFolderIdsByParent.set(parentKey, [...(childFolderIdsByParent.get(parentKey) || []), folderId]);
+  });
+
+  const recursiveCounts = new Map<string, number>();
+  const countDescendants = (folderKey: string): number => {
+    if (recursiveCounts.has(folderKey)) return recursiveCounts.get(folderKey) || 0;
+    const childFolderIds = childFolderIdsByParent.get(folderKey) || [];
+    const total = (directItemCount.get(folderKey) || 0)
+      + childFolderIds.length
+      + childFolderIds.reduce((sum, childId) => sum + countDescendants(childId), 0);
+    recursiveCounts.set(folderKey, total);
+    return total;
+  };
+
+  countDescendants(ROOT_KEY);
+  return { ROOT_KEY, recursiveCounts };
+};
 
 const getModuleRecordScope = (permissions: PermissionMap | null | undefined, moduleId: string) => {
   const modulePerm = permissions?.[moduleId] || {};
@@ -189,6 +222,7 @@ const mapLegacyRecordFile = (row: any): FileManagerListItem => ({
   source_record_id: row.source_record_id ? String(row.source_record_id) : null,
   source_record_title: row.source_record_title ? String(row.source_record_title) : null,
   visibility: null,
+  source_kind: 'legacy',
   tags: [],
 });
 
@@ -217,23 +251,53 @@ const mapFileEntryRow = (row: any): FileManagerListItem => {
     source_record_id: row?.source_record_id ? String(row.source_record_id) : null,
     source_record_title: row?.source_record_title ? String(row.source_record_title) : null,
     visibility: asset?.visibility ? String(asset.visibility) as any : null,
+    source_kind: 'entry',
     tags,
   };
+};
+
+const getItemDedupKey = (item: FileManagerListItem) => {
+  const moduleId = normalizeText(item.module_id);
+  const recordId = normalizeText(item.record_id);
+  const assetId = normalizeText(item.asset_id);
+  const fileUrl = normalizeText(item.file_url);
+  const entryType = normalizeText(item.entry_type || 'origin');
+  const folderId = normalizeText(item.folder_id) || '__root__';
+  const sourceModuleId = normalizeText(item.source_module_id);
+  const sourceRecordId = normalizeText(item.source_record_id);
+
+  if (entryType === 'shortcut') {
+    if (assetId) {
+      return ['shortcut-asset', moduleId, recordId, assetId, folderId, sourceModuleId, sourceRecordId].join(':');
+    }
+    return ['shortcut-url', moduleId, recordId, fileUrl, folderId, sourceModuleId, sourceRecordId].join(':');
+  }
+
+  if (assetId) {
+    return ['origin-asset', moduleId, recordId, assetId].join(':');
+  }
+  return ['origin-url', moduleId, recordId, fileUrl].join(':');
+};
+
+const getItemDedupScore = (item: FileManagerListItem) => {
+  let score = 0;
+  if (normalizeText(item.entry_id)) score += 8;
+  if (normalizeText(item.asset_id)) score += 4;
+  if (normalizeText(item.folder_id)) score += 2;
+  if (normalizeText(item.file_name)) score += 1;
+  if (item.source_kind === 'entry') score += 8;
+  if (item.source_kind === 'legacy') score += 4;
+  if (item.source_kind === 'note_attachment') score += 2;
+  return score;
 };
 
 const dedupeItems = (items: FileManagerListItem[]) => {
   const byId = new Map<string, FileManagerListItem>();
   items.forEach((item) => {
-    const key = [
-      normalizeText(item.module_id),
-      normalizeText(item.record_id),
-      normalizeText(item.file_url),
-      normalizeText(item.entry_type),
-      normalizeText(item.folder_id),
-    ].join(':');
+    const key = getItemDedupKey(item);
     if (!key) return;
     const existing = byId.get(key);
-    if (!existing || (item.entry_id && !existing.entry_id)) {
+    if (!existing || getItemDedupScore(item) > getItemDedupScore(existing)) {
       byId.set(key, item);
     }
   });
@@ -295,6 +359,7 @@ const mapSyntheticAttachment = (
   is_shortcut: false,
   source_record_title: options?.sourceTitle ? String(options.sourceTitle) : null,
   visibility: null,
+  source_kind: 'synthetic',
 });
 
 const fetchRecordRow = async (moduleId: string, recordId: string) => {
@@ -327,8 +392,8 @@ const selectAccessibleRecordRows = async (
 ): Promise<any[]> => {
   const uniqueRecordIds = Array.from(new Set((recordIds || []).map((value) => normalizeText(value)).filter(Boolean)));
   if (uniqueRecordIds.length === 0) return [];
-  const cacheKey = `file-manager:accessible-rows:${moduleId}:${uniqueRecordIds.slice().sort().join(',')}`;
-  const cached = getTimedCache<any[]>(cacheKey);
+  const cacheKey = `${FILE_MANAGER_CACHE_PREFIXES.accessibleRows}${moduleId}:${uniqueRecordIds.slice().sort().join(',')}`;
+  const cached = getTimedFileManagerCache<any[]>(cacheKey);
   if (cached) return cached;
   const table = MODULES[moduleId]?.table || moduleId;
   if (!table) return [];
@@ -346,7 +411,7 @@ const selectAccessibleRecordRows = async (
     console.warn('Could not load scoped file manager records', result.error);
     return [];
   }
-  return setTimedCache(cacheKey, result.data || []);
+  return setTimedFileManagerCache(cacheKey, result.data || []);
 };
 
 const getAccessibleRecordIds = async (
@@ -425,8 +490,8 @@ const loadSyntheticRecordAttachments = async (
 };
 
 const loadRecordEntries = async (moduleId: string, recordId: string) => {
-  const cacheKey = `file-manager:record-entries:${moduleId}:${recordId}`;
-  const cached = getTimedCache<FileManagerListItem[]>(cacheKey);
+  const cacheKey = `${FILE_MANAGER_CACHE_PREFIXES.recordEntries}${moduleId}:${recordId}`;
+  const cached = getTimedFileManagerCache<FileManagerListItem[]>(cacheKey);
   if (cached) return cached;
   const hasFileManagerTables = await detectFileManagerTables(supabase, false);
   if (!hasFileManagerTables) return [] as FileManagerListItem[];
@@ -441,28 +506,29 @@ const loadRecordEntries = async (moduleId: string, recordId: string) => {
     console.warn('Could not load file manager record entries', error);
     return [];
   }
-  return setTimedCache(cacheKey, (data || []).map(mapFileEntryRow).filter((item) => item.file_url));
+  return setTimedFileManagerCache(cacheKey, (data || []).map(mapFileEntryRow).filter((item) => item.file_url));
 };
 
 export const loadRecordFileItems = async (
   moduleId: string,
   recordId: string,
   recordTitle?: string | null,
+  loadMode: 'primary' | 'full' = 'full',
 ): Promise<FileManagerListItem[]> => {
-  const cacheKey = `file-manager:record-items:${moduleId}:${recordId}:${normalizeText(recordTitle)}`;
-  const cached = getTimedCache<FileManagerListItem[]>(cacheKey);
+  const cacheKey = `${FILE_MANAGER_CACHE_PREFIXES.recordItems}${moduleId}:${recordId}:${normalizeText(recordTitle)}:${loadMode}`;
+  const cached = getTimedFileManagerCache<FileManagerListItem[]>(cacheKey);
   if (cached) return cached;
   const [entryItems, syntheticItems, hasRecordFilesTable] = await Promise.all([
     loadRecordEntries(moduleId, recordId),
-    loadSyntheticRecordAttachments(moduleId, recordId, recordTitle),
+    loadMode === 'full' ? loadSyntheticRecordAttachments(moduleId, recordId, recordTitle) : Promise.resolve([] as FileManagerListItem[]),
     detectRecordFilesTable(supabase, false),
   ]);
 
-  const legacyItems = hasRecordFilesTable
+  const legacyItems = loadMode === 'full' && hasRecordFilesTable
     ? (await loadLegacyRecordFiles({ moduleId, recordId })).map(mapLegacyRecordFile).filter((item) => item.file_url)
     : [];
 
-  return setTimedCache(
+  return setTimedFileManagerCache(
     cacheKey,
     dedupeItems([...entryItems, ...legacyItems, ...syntheticItems])
       .sort((left, right) => String(left.created_at || '').localeCompare(String(right.created_at || ''))),
@@ -472,8 +538,8 @@ export const loadRecordFileItems = async (
 const loadRecordTagsMap = async (moduleId: string, recordIds: string[]) => {
   const normalizedRecordIds = Array.from(new Set(recordIds.map((item) => normalizeText(item)).filter(Boolean)));
   if (!moduleId || normalizedRecordIds.length === 0) return {} as Record<string, Array<{ id: string; title: string; color?: string | null }>>;
-  const cacheKey = `file-manager:record-tags:${moduleId}:${normalizedRecordIds.slice().sort().join(',')}`;
-  const cached = getTimedCache<Record<string, Array<{ id: string; title: string; color?: string | null }>>>(cacheKey);
+  const cacheKey = `${FILE_MANAGER_CACHE_PREFIXES.recordTags}${moduleId}:${normalizedRecordIds.slice().sort().join(',')}`;
+  const cached = getTimedFileManagerCache<Record<string, Array<{ id: string; title: string; color?: string | null }>>>(cacheKey);
   if (cached) return cached;
   const { data, error } = await supabase
     .from('record_tags')
@@ -484,7 +550,7 @@ const loadRecordTagsMap = async (moduleId: string, recordIds: string[]) => {
     console.warn('Could not load record tags for file manager', error);
     return {};
   }
-  return setTimedCache(cacheKey, (data || []).reduce<Record<string, Array<{ id: string; title: string; color?: string | null }>>>((acc, item: any) => {
+  return setTimedFileManagerCache(cacheKey, (data || []).reduce<Record<string, Array<{ id: string; title: string; color?: string | null }>>>((acc, item: any) => {
     const nextRecordId = normalizeText(item?.record_id);
     if (!nextRecordId || !item?.tags) return acc;
     if (!acc[nextRecordId]) acc[nextRecordId] = [];
@@ -523,7 +589,7 @@ const matchesFolderSearch = (folder: FileManagerTreeFolder, search: string) => {
 };
 
 const loadModuleSystemFolders = async () => {
-  return getOrSetTimedCache('file-manager:module-folders', async () => {
+  return getOrSetTimedFileManagerCache(FILE_MANAGER_CACHE_PREFIXES.moduleFolders, async () => {
     const hasTables = await detectFileManagerTables(supabase, false);
     if (!hasTables) return [] as FileFolderRow[];
     const { data, error } = await supabase
@@ -540,7 +606,7 @@ const loadModuleSystemFolders = async () => {
 };
 
 const loadRecordFoldersForModule = async (moduleId: string) => {
-  return getOrSetTimedCache(`file-manager:record-folders:${moduleId}`, async () => {
+  return getOrSetTimedFileManagerCache(`${FILE_MANAGER_CACHE_PREFIXES.recordFolders}${moduleId}`, async () => {
     const hasTables = await detectFileManagerTables(supabase, false);
     if (!hasTables) return [] as FileFolderRow[];
     const { data, error } = await supabase
@@ -558,7 +624,7 @@ const loadRecordFoldersForModule = async (moduleId: string) => {
 };
 
 const loadScopedRecordFolders = async (moduleId: string, recordId: string) => {
-  return getOrSetTimedCache(`file-manager:scoped-folders:${moduleId}:${recordId}`, async () => {
+  return getOrSetTimedFileManagerCache(`${FILE_MANAGER_CACHE_PREFIXES.scopedFolders}${moduleId}:${recordId}`, async () => {
     const hasTables = await detectFileManagerTables(supabase, false);
     if (!hasTables) return [] as FileFolderRow[];
     const { data, error } = await supabase
@@ -605,6 +671,7 @@ export const buildFileManagerTree = async (
   const page = Math.max(1, Number(options.page || 1));
   const search = normalizeText(options.search).toLowerCase();
   const typeSet = new Set(options.fileTypes || []);
+  const loadMode = options.loadMode || 'full';
   const recordTitleMap = { ...(options.recordTitleMap || {}) };
   const moduleTitleMap = { ...(options.moduleTitleMap || {}) };
   const scope = getTreeScope(options);
@@ -705,7 +772,7 @@ export const buildFileManagerTree = async (
         recordTitleMap,
       };
     }
-    const [moduleFolders, recordFolders, moduleEntries] = await Promise.all([
+    const [moduleFolders, recordFolders, moduleEntries, manualRecordFolders] = await Promise.all([
       loadModuleSystemFolders(),
       loadRecordFoldersForModule(moduleId),
       detectFileManagerTables(supabase, false)
@@ -719,6 +786,21 @@ export const buildFileManagerTree = async (
             .limit(5000);
           if (error) {
             console.warn('Could not load module entry counts', error);
+            return [];
+          }
+          return data || [];
+        }),
+      detectFileManagerTables(supabase, false)
+        .then(async (hasTables) => {
+          if (!hasTables) return [] as any[];
+          const { data, error } = await supabase
+            .from('file_folders')
+            .select('record_id')
+            .eq('module_id', moduleId)
+            .eq('folder_type', 'manual')
+            .limit(5000);
+          if (error) {
+            console.warn('Could not load module manual folder counts', error);
             return [];
           }
           return data || [];
@@ -752,6 +834,12 @@ export const buildFileManagerTree = async (
       if (!nextRecordId || !accessibleRecordIds.has(nextRecordId)) return;
       countByRecord.set(nextRecordId, (countByRecord.get(nextRecordId) || 0) + 1);
     });
+    const folderCountByRecord = new Map<string, number>();
+    manualRecordFolders.forEach((row: any) => {
+      const nextRecordId = normalizeText(row?.record_id);
+      if (!nextRecordId || !accessibleRecordIds.has(nextRecordId)) return;
+      folderCountByRecord.set(nextRecordId, (folderCountByRecord.get(nextRecordId) || 0) + 1);
+    });
 
     const fetchedLabels = await fetchRecordReferenceLabels(supabase, accessibleRecordFolders.map((folder) => ({
       moduleId,
@@ -762,12 +850,18 @@ export const buildFileManagerTree = async (
     accessibleRecordFolders.forEach((folder) => {
       const nextRecordId = normalizeText(folder.record_id);
       const recordKey = `${moduleId}:${nextRecordId}`;
+      const recordDisplayMeta = getRecordFolderDisplayMeta(
+        nextRecordId,
+        recordTitleMap[recordKey],
+        normalizeText(folder.name),
+      );
       folders.push({
         key: recordFolderKey(moduleId, nextRecordId),
-        label: recordTitleMap[recordKey] || normalizeText(folder.name) || 'رکورد بدون عنوان',
+        label: recordDisplayMeta.label,
         parentKey: moduleFolderKey(moduleId),
-        count: countByRecord.get(nextRecordId) || 0,
+        count: (countByRecord.get(nextRecordId) || 0) + (folderCountByRecord.get(nextRecordId) || 0),
         isSystem: true,
+        isDeletedRecord: recordDisplayMeta.isDeletedRecord,
         moduleId,
         recordId: nextRecordId,
         folderId: folder.id,
@@ -821,11 +915,10 @@ export const buildFileManagerTree = async (
         recordTitleMap,
       };
     }
-    await ensureSystemFoldersForRecord(moduleId, recordId, normalizeText(recordTitleMap[`${moduleId}:${recordId}`]));
     const [moduleFolders, scopedFolders, recordItems, recordTagsMap] = await Promise.all([
       loadModuleSystemFolders(),
       loadScopedRecordFolders(moduleId, recordId),
-      loadRecordFileItems(moduleId, recordId, recordTitleMap[`${moduleId}:${recordId}`]),
+      loadRecordFileItems(moduleId, recordId, recordTitleMap[`${moduleId}:${recordId}`], loadMode),
       loadRecordTagsMap(moduleId, [recordId]),
     ]);
     allItems = recordItems;
@@ -837,6 +930,12 @@ export const buildFileManagerTree = async (
 
     const moduleFolder = moduleFolders.find((folder) => normalizeText(folder.module_id) === moduleId) || null;
     const recordFolderRow = scopedFolders.find((folder) => normalizeText(folder.folder_type) === 'system_record') || null;
+    const recordDisplayMeta = getRecordFolderDisplayMeta(
+      recordId,
+      recordTitleMap[`${moduleId}:${recordId}`],
+      normalizeText(recordFolderRow?.name),
+    );
+    recordTitleMap[`${moduleId}:${recordId}`] = recordDisplayMeta.label;
     const manualFolders = scopedFolders.filter((folder) => {
       const type = normalizeText(folder.folder_type);
       return type === 'manual';
@@ -860,10 +959,11 @@ export const buildFileManagerTree = async (
     });
     folders.push({
       key: recordFolderKey(moduleId, recordId),
-      label: recordTitleMap[`${moduleId}:${recordId}`],
+      label: recordDisplayMeta.label,
       parentKey: moduleFolderKey(moduleId),
       count: 0,
       isSystem: true,
+      isDeletedRecord: recordDisplayMeta.isDeletedRecord,
       moduleId,
       recordId,
       folderId: recordFolderRow?.id || null,
@@ -872,15 +972,14 @@ export const buildFileManagerTree = async (
       tags: recordTagsMap[recordId] || [],
     });
 
-    const countByFolderId = new Map<string, number>();
     const rootRecordFolderId = normalizeText(recordFolderRow?.id);
-    allItems.forEach((item) => {
-      const nextFolderId = normalizeText(item.folder_id);
-      const counterKey = nextFolderId && !legacySubfolders.has(nextFolderId) ? nextFolderId : '__record_root__';
-      countByFolderId.set(counterKey, (countByFolderId.get(counterKey) || 0) + 1);
-    });
+    const { ROOT_KEY: rootCounterKey, recursiveCounts } = buildRecursiveRecordFolderCounts(
+      manualFolders,
+      allItems,
+      legacySubfolders,
+    );
 
-    folders[folders.length - 1].count = countByFolderId.get('__record_root__') || 0;
+    folders[folders.length - 1].count = recursiveCounts.get(rootCounterKey) || 0;
     manualFolders.forEach((folder) => {
       const parentId = normalizeText(folder.parent_id);
       const parentKey = parentId && manualFolders.some((candidate) => normalizeText(candidate.id) === parentId)
@@ -890,7 +989,7 @@ export const buildFileManagerTree = async (
         key: physicalFolderKey(folder.id),
         label: normalizeText(folder.name) || 'پوشه',
         parentKey,
-        count: countByFolderId.get(normalizeText(folder.id)) || 0,
+        count: recursiveCounts.get(normalizeText(folder.id)) || 0,
         isSystem: false,
         moduleId,
         recordId,

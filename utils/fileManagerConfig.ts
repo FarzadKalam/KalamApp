@@ -19,6 +19,7 @@ const MODULE_ROOT_COLOR_TOKENS: Record<string, string> = {
   purchase_invoices: 'system-purchase',
   expense_documents: 'system-expense',
   employee_advances: 'system-finance',
+  payroll_slips: 'system-finance',
   tasks: 'system-task',
   customers: 'system-customer',
   suppliers: 'system-supplier',
@@ -70,6 +71,37 @@ export const FILE_SYSTEM_MODULE_DEFINITIONS: Record<string, FileSystemModuleDefi
     moduleId: 'expense_documents',
     rootTitle: 'هزینه‌ها',
     rootColorToken: 'system-expense',
+    relatedAttachmentSources: [
+      {
+        moduleId: 'cash_bank_operations',
+        foreignKey: 'expense_document_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
+    ],
+  },
+  employee_advances: {
+    moduleId: 'employee_advances',
+    rootTitle: 'مساعده‌ها',
+    rootColorToken: 'system-finance',
+    relatedAttachmentSources: [
+      {
+        moduleId: 'cash_bank_operations',
+        foreignKey: 'employee_advance_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
+    ],
+  },
+  payroll_slips: {
+    moduleId: 'payroll_slips',
+    rootTitle: 'فیش‌های حقوقی',
+    rootColorToken: 'system-finance',
+    relatedAttachmentSources: [
+      {
+        moduleId: 'cash_bank_operations',
+        foreignKey: 'payroll_slip_id',
+        attachmentFieldKeys: ['attachment_url'],
+      },
+    ],
   },
   tasks: {
     moduleId: 'tasks',

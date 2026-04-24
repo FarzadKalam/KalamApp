@@ -20,10 +20,12 @@ import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling'
 import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
 import { useCurrencyConfig } from '../utils/currency';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { normalizeCashBankPaymentType } from '../utils/cashBankPaymentType';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
 import { getCachedAuthUser } from '../utils/sessionCache';
+import { syncRecordTags } from '../utils/recordTags';
 import {
   buildSalesPackageDescription,
   calculateSalesPackageTotal,
@@ -63,6 +65,23 @@ const toSafeNumber = (raw: any): number => {
   if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return 0;
   const parsed = parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeRowTags = (value: any) => {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+      } catch {
+        return [];
+      }
+    }
+  }
+  return [];
 };
 
 const roundMoney = (value: number) => {
@@ -113,6 +132,7 @@ interface EditableTableProps {
   canViewField?: (fieldKey: string) => boolean;
   isMobile?: boolean;
   readOnly?: boolean;
+  focusRowKey?: string | null;
 }
 
 const EditableTable: React.FC<EditableTableProps> = ({
@@ -130,6 +150,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   canEditModule,
   canViewField,
   readOnly,
+  focusRowKey,
 }) => {
   const { message: msg } = App.useApp();
   const isReadOnly = block?.readonly === true || readOnly === true || canEditModule === false;
@@ -145,8 +166,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isPurchaseInvoicePayments = moduleId === 'purchase_invoices' && block?.id === 'payments';
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
+  const isEmployeeAdvancePayments = moduleId === 'employee_advances' && block?.id === 'payments';
+  const isPayrollPayments = moduleId === 'payroll_slips' && block?.id === 'payments';
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
   const isAnyDocumentPayments = isAnyInvoicePayments || isExpensePayments;
+  const isOperationalPayments = isAnyDocumentPayments || isEmployeeAdvancePayments || isPayrollPayments;
   const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
   const isPriceListItems = moduleId === 'price_lists' && block?.id === 'items';
@@ -155,7 +179,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isCatalogProductItems = isPriceListItems || isSalesPackageItems;
 
   const [isEditing, setIsEditing] = useState(mode === 'local' && !isReadOnly);
-  const [data, setData] = useState<any[]>(initialData || []);
+  const [data, setData] = useState<any[]>(() => (Array.isArray(initialData) ? initialData : []));
   const [tempData, setTempData] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
@@ -174,13 +198,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [calendarPopoverRowKey, setCalendarPopoverRowKey] = useState<string | null>(null);
   const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
   const shelfAutoLoadRef = useRef<Record<string, string>>({});
-  const dataRef = useRef<any[]>(initialData || []);
+  const dataRef = useRef<any[]>(Array.isArray(initialData) ? initialData : []);
   const tempDataRef = useRef<any[]>([]);
   const [isMobileViewport, setIsMobileViewport] = useState(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
   const [currentProductUnits, setCurrentProductUnits] = useState<{ mainUnit: string | null; subUnit: string | null }>({ mainUnit: null, subUnit: null });
   const [currentProductStock, setCurrentProductStock] = useState<number>(0);
+  const [highlightedFocusRowKey, setHighlightedFocusRowKey] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const empty = !Array.isArray(initialData) || initialData.length === 0;
     if (isAnyInvoiceItems || isShelfInventoryBlock || isProductStockMovements) return false;
@@ -222,6 +247,33 @@ const EditableTable: React.FC<EditableTableProps> = ({
     fitting_colors: 'colors',
     lining_width: 'lining_dims',
   };
+  const createLocalRowKey = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `row_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  };
+  const ensurePaymentRowKey = (row: any) => {
+    const existingKey = String(
+      row?.row_key
+      || row?._cash_bank_operation_id
+      || row?._barter_allocation_key
+      || ''
+    ).trim();
+    if (existingKey) return existingKey;
+    return createLocalRowKey();
+  };
+  const normalizePaymentRows = (rows: any[]) => (
+    (Array.isArray(rows) ? rows : []).map((row: any) => {
+      if (!row || typeof row !== 'object' || !isOperationalPayments) return row;
+      const rowKey = ensurePaymentRowKey(row);
+      if (String(row?.row_key || '').trim() === rowKey) return row;
+      return {
+        ...row,
+        row_key: rowKey,
+      };
+    })
+  );
   const mergeOptionsByValue = (primary: any[] = [], extra: any[] = []) => {
     const map = new Map<string, any>();
     [...primary, ...extra].forEach((item: any) => {
@@ -483,10 +535,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
   // --- مقداردهی اولیه ---
   useEffect(() => {
     if (mode !== 'external_view' && !populateSource?.recordId && !isProductInventory && !isShelfInventory && !isProductStockMovements) {
-      const safeData = Array.isArray(initialData) ? initialData : [];
+      const safeData = normalizePaymentRows(Array.isArray(initialData) ? initialData : []);
       const dataWithKey = safeData.map((item, index) => ({
         ...item,
-        key: item.key || item.id || `${String(block?.id || 'row')}_${index}`,
+        key: item.key || item.row_key || item.id || `${String(block?.id || 'row')}_${index}`,
       }));
       const lockedData = isProductionOrder && isBomItemBlock
         ? dataWithKey.map((row: any) => {
@@ -505,6 +557,37 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (mode === 'local') setTempData(lockedData);
     }
   }, [initialData, mode, isProductInventory, isShelfInventory, isProductStockMovements, populateSource?.recordId]);
+
+  useEffect(() => {
+    const resolvedFocusRowKey = String(focusRowKey || '').trim();
+    if (!resolvedFocusRowKey) return;
+
+    const source = isEditing ? tempData : data;
+    const rowExists = source.some((row: any) => String(row?.row_key || row?.key || row?.id || '').trim() === resolvedFocusRowKey);
+    if (!rowExists) return;
+
+    if (isCollapsed) {
+      setIsCollapsed(false);
+      setUserToggledCollapse(false);
+    }
+    setHighlightedFocusRowKey(resolvedFocusRowKey);
+
+    const scrollTimer = window.setTimeout(() => {
+      const selector = `[data-row-key="${escapeSelectorValue(resolvedFocusRowKey)}"]`;
+      const element = document.querySelector(selector) as HTMLElement | null;
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      }
+    }, 180);
+    const clearTimer = window.setTimeout(() => {
+      setHighlightedFocusRowKey((current) => (current === resolvedFocusRowKey ? null : current));
+    }, 3200);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [focusRowKey, data, tempData, isEditing, isCollapsed]);
 
   // --- دریافت موجودی از جدول product_inventory ---
   useEffect(() => {
@@ -854,7 +937,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (['length', 'width'].includes(key) && !hasDimensionValues(row)) return false;
     }
     if (isAnyInvoicePayments) {
-      const paymentType = String(row?.payment_type || '').trim();
+      const paymentType = normalizeCashBankPaymentType(row?.payment_type) || '';
       if (key === 'spent_cheque_id' && (paymentType !== 'cheque' || !row?.use_existing_received_cheque)) return false;
       if (key === 'use_existing_received_cheque' && paymentType !== 'cheque') return false;
       if ((key === 'cheque_id' || key === 'cheque_status') && paymentType !== 'cheque') return false;
@@ -900,16 +983,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const getActiveRowsSnapshot = () => (isEditing ? tempDataRef.current : dataRef.current);
+  const escapeSelectorValue = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
   const applyRowUpdate = (nextRows: any[]) => {
+    const normalizedRows = normalizePaymentRows(nextRows);
     if (isEditing) {
-      tempDataRef.current = nextRows;
-      setTempData(nextRows);
+      tempDataRef.current = normalizedRows;
+      setTempData(normalizedRows);
     } else {
-      dataRef.current = nextRows;
-      setData(nextRows);
+      dataRef.current = normalizedRows;
+      setData(normalizedRows);
     }
-    if (mode === 'local' && onChange) onChange(nextRows);
+    if (mode === 'local' && onChange) onChange(normalizedRows);
   };
 
   const updateInvoiceDimensions = (
@@ -989,7 +1074,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     }
 
-    if (isAnyDocumentPayments && key === 'payment_type') {
+    if (isOperationalPayments && key === 'payment_type') {
       const paymentType = String(value || '').trim();
       const accountField = isInvoicePayments ? 'target_account' : 'source_account';
       newData[index][accountField] = null;
@@ -1221,7 +1306,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       return;
     }
 
-    if (isAnyDocumentPayments && key === 'responsible_id') {
+    if (isOperationalPayments && key === 'responsible_id') {
       return;
     }
 
@@ -1555,7 +1640,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       newRow.sub_quantity = parseFloat(newRow.sub_quantity) || 0;
     }
 
-    if (isAnyDocumentPayments) {
+    if (isOperationalPayments) {
       newRow.date = newRow.date || getTodayLocalDateValue();
       if (!newRow.status) {
         const statusColumn = visibleColumns.find((col: any) => String(col?.key || '') === 'status');
@@ -1589,9 +1674,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
           }
         }
       }
+      newRow.row_key = ensurePaymentRowKey(newRow);
     }
 
-    const newData = [...tempData, newRow];
+    const newData = normalizePaymentRows([...tempData, newRow]);
     setTempData(newData);
     if (mode === 'local' && onChange) onChange(newData);
   };
@@ -1599,7 +1685,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const removeRow = (index: number) => {
     if (isReadOnly) return;
     if (isProductStockMovements && tempData[index]?._readonly) return;
-    const newData = [...tempData];
+    const newData = normalizePaymentRows([...tempData]);
     newData.splice(index, 1);
     setTempData(newData);
     if (mode === 'local' && onChange) onChange(newData);
@@ -1610,7 +1696,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const source = isEditing ? tempData : data;
     const toIndex = direction === 'up' ? fromIndex - 1 : fromIndex + 1;
     if (fromIndex < 0 || toIndex < 0 || toIndex >= source.length) return;
-    const nextRows = [...source];
+    const nextRows = normalizePaymentRows([...source]);
     const [movedRow] = nextRows.splice(fromIndex, 1);
     nextRows.splice(toIndex, 0, movedRow);
     if (isEditing) setTempData(nextRows);
@@ -1629,11 +1715,17 @@ const EditableTable: React.FC<EditableTableProps> = ({
       ...sourceRow,
       key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     };
+    if (isOperationalPayments) {
+      copiedRow.row_key = createLocalRowKey();
+      copiedRow._cash_bank_operation_id = null;
+      copiedRow._barter_allocation_key = null;
+    }
     const newData = [...source];
     newData.splice(index + 1, 0, copiedRow);
-    if (isEditing) setTempData(newData);
-    else setData(newData);
-    if (mode === 'local' && onChange) onChange(newData);
+    const normalizedRows = normalizePaymentRows(newData);
+    if (isEditing) setTempData(normalizedRows);
+    else setData(normalizedRows);
+    if (mode === 'local' && onChange) onChange(normalizedRows);
   };
 
   const normalizeRowForEdit = (row: any) => {
@@ -1788,7 +1880,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
   );
 
   const getPaymentBlockDefaultAmount = async (currentRows: any[]) => {
-    if (!moduleId || !recordId || !isAnyDocumentPayments) return 0;
+    if (!moduleId || !recordId || !isOperationalPayments) return 0;
+
+    const paidAmount = currentRows.reduce((sum, paymentRow) => (
+      PAYMENT_INCLUDED_STATUSES.has(normalizePaymentStatus(paymentRow?.status))
+        ? sum + toSafeNumber(paymentRow?.amount)
+        : sum
+    ), 0);
 
     if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
       const { data: row, error } = await supabase
@@ -1798,11 +1896,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
         .maybeSingle();
       if (error) throw error;
       const totalAmount = toSafeNumber(row?.total_invoice_amount);
-      const paidAmount = currentRows.reduce((sum, paymentRow) => (
-        PAYMENT_INCLUDED_STATUSES.has(normalizePaymentStatus(paymentRow?.status))
-          ? sum + toSafeNumber(paymentRow?.amount)
-          : sum
-      ), 0);
       return Math.max(0, roundMoney(totalAmount - paidAmount));
     }
 
@@ -1814,33 +1907,61 @@ const EditableTable: React.FC<EditableTableProps> = ({
         .maybeSingle();
       if (error) throw error;
       const totalAmount = toSafeNumber(row?.total_amount);
-      const paidAmount = currentRows.reduce((sum, paymentRow) => (
-        PAYMENT_INCLUDED_STATUSES.has(normalizePaymentStatus(paymentRow?.status))
-          ? sum + toSafeNumber(paymentRow?.amount)
-          : sum
-      ), 0);
+      return Math.max(0, roundMoney(totalAmount - paidAmount));
+    }
+
+    if (moduleId === 'employee_advances') {
+      const { data: row, error } = await supabase
+        .from('employee_advances')
+        .select('amount')
+        .eq('id', recordId)
+        .maybeSingle();
+      if (error) throw error;
+      const totalAmount = toSafeNumber(row?.amount);
+      return Math.max(0, roundMoney(totalAmount - paidAmount));
+    }
+
+    if (moduleId === 'payroll_slips') {
+      const { data: row, error } = await supabase
+        .from('payroll_slips')
+        .select('net_amount')
+        .eq('id', recordId)
+        .maybeSingle();
+      if (error) throw error;
+      const totalAmount = toSafeNumber(row?.net_amount);
       return Math.max(0, roundMoney(totalAmount - paidAmount));
     }
 
     return 0;
   };
 
-  const syncPaymentRowsWithCheques = async (rows: any[]) => {
-    if (!isAnyInvoicePayments || !moduleId || !recordId) return rows;
+  const syncPaymentRowsWithCheques = async (rows: any[], previousRows: any[] = []) => {
+    if (!isOperationalPayments || !moduleId || !recordId) return normalizePaymentRows(rows);
 
-    const partyField = isInvoicePayments ? 'customer_id' : 'supplier_id';
+    const normalizedRows = normalizePaymentRows(rows);
+    const normalizedPreviousRows = normalizePaymentRows(previousRows);
     const accountField = isInvoicePayments ? 'target_account' : 'source_account';
+    const operationType = isInvoicePayments ? 'receipt' : 'payment';
+    const sourceDateField =
+      moduleId === 'expense_documents' ? 'expense_date'
+      : moduleId === 'employee_advances' ? 'request_date'
+      : moduleId === 'payroll_slips' ? 'period_end'
+      : 'invoice_date';
 
     const { data: sourceHeader, error: sourceError } = await supabase
       .from(moduleId)
-      .select(`${partyField}, name, system_code, invoice_date`)
+      .select('*')
       .eq('id', recordId)
       .maybeSingle();
     if (sourceError) throw sourceError;
 
     const sourceHeaderRecord = sourceHeader as Record<string, any> | null;
-    const partyId = sourceHeaderRecord?.[partyField] ? String(sourceHeaderRecord[partyField]) : null;
+    const customerId = sourceHeaderRecord?.customer_id ? String(sourceHeaderRecord.customer_id) : null;
+    const supplierId = sourceHeaderRecord?.supplier_id ? String(sourceHeaderRecord.supplier_id) : null;
+    const defaultAssigneeId = sourceHeaderRecord?.assignee_id ? String(sourceHeaderRecord.assignee_id) : null;
+    const partyId = isInvoicePayments ? customerId : isPurchaseInvoicePayments ? supplierId : null;
     const partyType = isInvoicePayments ? 'customer' : 'supplier';
+    const sourceOperationDate = sourceHeaderRecord?.[sourceDateField] || getTodayLocalDateValue();
     const nowIso = new Date().toISOString();
     let partyBusinessName = '';
     if (partyId) {
@@ -1865,7 +1986,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const bankIds = Array.from(
       new Set(
-        rows
+        normalizedRows
           .map((row: any) => String(row?.[accountField] || '').trim())
           .filter(Boolean)
       )
@@ -1889,9 +2010,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
 
     const selectedChequeIds = Array.from(
-      new Set(
-        rows
-          .filter((row: any) => String(row?.payment_type || '') === 'cheque')
+        new Set(
+          normalizedRows
+          .filter((row: any) => normalizeCashBankPaymentType(row?.payment_type) === 'cheque')
           .flatMap((row: any) => {
             const directChequeId = String(row?.cheque_id || '').trim();
             const spentChequeId = String(row?.spent_cheque_id || '').trim();
@@ -1914,7 +2035,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const selectedBarterIds = Array.from(
       new Set(
-        rows
+        normalizedRows
           .flatMap((row: any) => {
             const directBarterId = String(row?.barter_id || '').trim();
             const syncedBarterId = String(row?._barter_synced_id || '').trim();
@@ -2008,7 +2129,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         const allocationRow = {
           ...(existingIndex >= 0 ? nextAllocations[existingIndex] : {}),
           id: args.allocationKey,
-          date: args.rowDate || sourceHeaderRecord?.invoice_date || new Date().toISOString().slice(0, 10),
+          date: args.rowDate || sourceOperationDate || new Date().toISOString().slice(0, 10),
           operation_type: args.operationType,
           status: args.rowStatus || 'pending',
           customer_id: args.customerId || null,
@@ -2050,7 +2171,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const selectedCashOperationIds = Array.from(
       new Set(
-        rows
+        [...normalizedRows, ...normalizedPreviousRows]
           .map((row: any) => String(row?._cash_bank_operation_id || '').trim())
           .filter(Boolean)
       )
@@ -2067,11 +2188,131 @@ const EditableTable: React.FC<EditableTableProps> = ({
       });
     }
 
+    const getSourceLinkPayload = () => ({
+      sales_invoice_id: isInvoicePayments ? recordId : null,
+      purchase_invoice_id: isPurchaseInvoicePayments ? recordId : null,
+      expense_document_id: isExpensePayments ? recordId : null,
+      employee_advance_id: isEmployeeAdvancePayments ? recordId : null,
+      payroll_slip_id: isPayrollPayments ? recordId : null,
+    });
+
+    const buildCashOperationMetadata = (rowKey: string, baseMetadata?: any, extraMetadata?: Record<string, any>) => ({
+      ...((baseMetadata && typeof baseMetadata === 'object') ? baseMetadata : {}),
+      ...(extraMetadata || {}),
+      source_table: moduleId,
+      source_record_id: recordId,
+      source_block_id: block?.id,
+      source_row_key: rowKey,
+      is_auto_generated: true,
+    });
+
+    const syncCashBankOperation = async (args: {
+      row: any;
+      nextRow: any;
+      rowKey: string;
+      paymentType: string;
+      amount: number;
+      rowStatus: string;
+      accountId: string | null;
+      issueDate: string | null;
+      attachmentUrl?: string | null;
+      barterId?: string | null;
+      chequeId?: string | null;
+      assigneeId?: string | null;
+      cancel?: boolean;
+    }) => {
+      const {
+        row,
+        nextRow,
+        rowKey,
+        paymentType,
+        amount,
+        rowStatus,
+        accountId,
+        issueDate,
+        attachmentUrl,
+        barterId,
+        chequeId,
+        assigneeId,
+        cancel = false,
+      } = args;
+      const existingCashOperationId = String(nextRow?._cash_bank_operation_id || row?._cash_bank_operation_id || '').trim();
+      const existingMetadata = selectedCashOperationById.get(existingCashOperationId)?.metadata;
+      const rowTags = normalizeRowTags(nextRow?.tags ?? row?.tags);
+
+      if (cancel || !paymentType || amount <= 0) {
+        if (existingCashOperationId) {
+          const { error: cancelOperationError } = await supabase
+            .from('cash_bank_operations')
+            .update({
+              status: 'canceled',
+              metadata: buildCashOperationMetadata(rowKey, existingMetadata),
+              updated_at: nowIso,
+            })
+            .eq('id', existingCashOperationId);
+          if (cancelOperationError) throw cancelOperationError;
+        }
+        nextRow._cash_bank_operation_id = existingCashOperationId || null;
+        return;
+      }
+
+      const operationPayload = {
+        operation_type: operationType,
+        payment_type: paymentType,
+        status: rowStatus,
+        operation_date: issueDate || sourceOperationDate || getTodayLocalDateValue(),
+        amount,
+        bank_account_id: accountId,
+        customer_id: customerId,
+        supplier_id: supplierId,
+        assignee_id: assigneeId || null,
+        assignee_type: assigneeId ? 'user' : null,
+        assignee_role_id: null,
+        employee_id: assigneeId || null,
+        description: row?.description || null,
+        image_url: attachmentUrl || null,
+        attachment_url: attachmentUrl || null,
+        tags: rowTags,
+        barter_id: barterId ? String(barterId) : null,
+        cheque_id: chequeId ? String(chequeId) : null,
+        metadata: buildCashOperationMetadata(rowKey, existingMetadata),
+        updated_at: nowIso,
+        ...getSourceLinkPayload(),
+      };
+
+      if (existingCashOperationId) {
+        const { error: updateOperationError } = await supabase
+          .from('cash_bank_operations')
+          .update(operationPayload)
+          .eq('id', existingCashOperationId);
+        if (updateOperationError) throw updateOperationError;
+        await syncRecordTags(supabase, 'cash_bank_operations', existingCashOperationId, rowTags);
+        nextRow._cash_bank_operation_id = existingCashOperationId;
+        return;
+      }
+
+      const { data: insertedOperation, error: insertOperationError } = await supabase
+        .from('cash_bank_operations')
+        .insert(operationPayload)
+        .select('id, metadata')
+        .single();
+      if (insertOperationError) throw insertOperationError;
+      const insertedOperationId = String(insertedOperation?.id || '').trim() || null;
+      nextRow._cash_bank_operation_id = insertedOperationId;
+      if (insertedOperationId) {
+        await syncRecordTags(supabase, 'cash_bank_operations', insertedOperationId, rowTags);
+        selectedCashOperationById.set(insertedOperationId, insertedOperation);
+      }
+    };
+
     const nextRows: any[] = [];
-    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-      const row = rows[rowIndex];
+    for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+      const row = normalizedRows[rowIndex];
       const nextRow = { ...row };
-      const paymentType = String(row?.payment_type || '').trim();
+      const paymentType = normalizeCashBankPaymentType(row?.payment_type) || '';
+      if (paymentType && String(nextRow?.payment_type || '').trim() !== paymentType) {
+        nextRow.payment_type = paymentType;
+      }
       const rowStatusRaw = String(row?.status || '').trim();
       const rowStatus = ['pending', 'received', 'returned', 'canceled'].includes(rowStatusRaw) ? rowStatusRaw : 'pending';
       const accountId = String(row?.[accountField] || '').trim() || null;
@@ -2083,45 +2324,57 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const syncedBarterAmount = Math.abs(toSafeNumber(row?._barter_synced_amount || 0));
       const existingCashOperationId = String(row?._cash_bank_operation_id || '').trim();
       const existingAllocationKey = String(row?._barter_allocation_key || '').trim();
-      const allocationKey = existingAllocationKey || `${String(recordId)}_${String(block?.id || 'payments')}_${rowIndex}`;
+      const rowKey = String(nextRow?.row_key || row?.row_key || '').trim() || ensurePaymentRowKey(row);
+      nextRow.row_key = rowKey;
+      const allocationKey = existingAllocationKey || rowKey;
 
       const syncCashBankBarterOperation = async (linkedBarterId?: string | null) => {
         if (paymentType !== 'barter' || amount <= 0) {
-          if (existingCashOperationId) {
-            const { error: cancelOperationError } = await supabase
-              .from('cash_bank_operations')
-              .update({
-                status: 'canceled',
-                updated_at: nowIso,
-              })
-              .eq('id', existingCashOperationId);
-            if (cancelOperationError) throw cancelOperationError;
-          }
-          nextRow._cash_bank_operation_id = null;
+          await syncCashBankOperation({
+            row,
+            nextRow,
+            rowKey,
+            paymentType: 'barter',
+            amount,
+            rowStatus,
+            accountId,
+            issueDate,
+            attachmentUrl: row?.attachment || null,
+            barterId: linkedBarterId || null,
+            assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+            cancel: true,
+          });
           return;
         }
 
         const operationPayload = {
-          operation_type: isInvoicePayments ? 'receipt' : 'payment',
+          operation_type: operationType,
           payment_type: 'barter',
           barter_id: linkedBarterId ? String(linkedBarterId) : null,
           status: rowStatus,
-          operation_date: issueDate || sourceHeaderRecord?.invoice_date || new Date().toISOString().slice(0, 10),
+          operation_date: issueDate || sourceOperationDate || new Date().toISOString().slice(0, 10),
           amount,
-          sales_invoice_id: isInvoicePayments ? recordId : null,
-          purchase_invoice_id: isPurchaseInvoicePayments ? recordId : null,
-          customer_id: isInvoicePayments ? partyId : null,
-          supplier_id: isPurchaseInvoicePayments ? partyId : null,
+          customer_id: customerId,
+          supplier_id: supplierId,
+          assignee_id: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+          assignee_type: String(row?.responsible_id || defaultAssigneeId || '').trim() ? 'user' : null,
+          assignee_role_id: null,
+          employee_id: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
           description: row?.description || null,
+          image_url: row?.attachment || null,
           attachment_url: row?.attachment || null,
+          tags: normalizeRowTags(nextRow?.tags ?? row?.tags),
+          bank_account_id: accountId,
           metadata: {
             ...(selectedCashOperationById.get(existingCashOperationId)?.metadata || {}),
             source_table: moduleId,
             source_record_id: recordId,
             source_block_id: block?.id,
-            source_row_key: allocationKey,
+            source_row_key: rowKey,
+            is_auto_generated: true,
           },
           updated_at: nowIso,
+          ...getSourceLinkPayload(),
         };
 
         if (existingCashOperationId) {
@@ -2130,6 +2383,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             .update(operationPayload)
             .eq('id', existingCashOperationId);
           if (updateOperationError) throw updateOperationError;
+          await syncRecordTags(supabase, 'cash_bank_operations', existingCashOperationId, normalizeRowTags(nextRow?.tags ?? row?.tags));
           nextRow._cash_bank_operation_id = existingCashOperationId;
           return;
         }
@@ -2141,6 +2395,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
           .single();
         if (insertOperationError) throw insertOperationError;
         nextRow._cash_bank_operation_id = String(insertedOperation?.id || '').trim() || null;
+        if (nextRow._cash_bank_operation_id) {
+          await syncRecordTags(supabase, 'cash_bank_operations', nextRow._cash_bank_operation_id, normalizeRowTags(nextRow?.tags ?? row?.tags));
+        }
       };
 
       if (isPurchaseInvoicePayments && paymentType !== 'barter' && syncedBarterId && syncedBarterAmount > 0) {
@@ -2475,6 +2732,23 @@ const EditableTable: React.FC<EditableTableProps> = ({
         continue;
       }
 
+      if (!isAnyInvoicePayments) {
+        await syncCashBankOperation({
+          row,
+          nextRow,
+          rowKey,
+          paymentType,
+          amount,
+          rowStatus,
+          accountId,
+          issueDate,
+          attachmentUrl: String(nextRow?.attachment || row?.attachment || '').trim() || null,
+          assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+        });
+        nextRows.push(nextRow);
+        continue;
+      }
+
       if (paymentType !== 'cheque') {
         nextRow.use_existing_received_cheque = false;
         nextRow.spent_cheque_id = null;
@@ -2487,6 +2761,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
         nextRow.cheque_bank_name = null;
         nextRow.cheque_image_url = null;
         nextRow._auto_cheque = false;
+        await syncCashBankOperation({
+          row,
+          nextRow,
+          rowKey,
+          paymentType,
+          amount,
+          rowStatus,
+          accountId,
+          issueDate,
+          attachmentUrl: String(nextRow?.attachment || row?.attachment || '').trim() || null,
+          assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+        });
         nextRows.push(nextRow);
         continue;
       }
@@ -2544,6 +2830,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
           nextRow.attachment = selectedCheque.image_url;
         }
         nextRow._auto_cheque = false;
+        await syncCashBankOperation({
+          row,
+          nextRow,
+          rowKey,
+          paymentType,
+          amount: Math.abs(toSafeNumber(nextRow?.amount)),
+          rowStatus,
+          accountId,
+          issueDate,
+          attachmentUrl: String(nextRow?.attachment || selectedCheque?.image_url || '').trim() || null,
+          chequeId: selectedChequeId,
+          assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+        });
         nextRows.push(nextRow);
         continue;
       }
@@ -2592,6 +2891,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
           nextRow.attachment = spendCheque.image_url;
         }
         nextRow._auto_cheque = false;
+        await syncCashBankOperation({
+          row,
+          nextRow,
+          rowKey,
+          paymentType,
+          amount: Math.abs(toSafeNumber(nextRow?.amount)),
+          rowStatus,
+          accountId,
+          issueDate,
+          attachmentUrl: String(nextRow?.attachment || spendCheque?.image_url || '').trim() || null,
+          chequeId: spendChequeId,
+          assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+        });
         nextRows.push(nextRow);
         continue;
       }
@@ -2644,10 +2956,56 @@ const EditableTable: React.FC<EditableTableProps> = ({
       nextRow.cheque_due_date = dueDate;
       nextRow.cheque_bank_name = bankMeta?.bank_name || null;
       nextRow._auto_cheque = true;
+      await syncCashBankOperation({
+        row,
+        nextRow,
+        rowKey,
+        paymentType,
+        amount: Math.abs(toSafeNumber(nextRow?.amount)),
+        rowStatus,
+        accountId,
+        issueDate,
+        attachmentUrl: String(nextRow?.attachment || '').trim() || null,
+        chequeId: linkedChequeId,
+        assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+      });
       nextRows.push(nextRow);
     }
 
-    return nextRows;
+    const nextRowKeys = new Set(nextRows.map((row: any) => String(row?.row_key || row?.key || row?.id || '').trim()).filter(Boolean));
+    for (const previousRow of normalizedPreviousRows) {
+      const previousRowKey = String(previousRow?.row_key || previousRow?.key || previousRow?.id || '').trim();
+      if (!previousRowKey || nextRowKeys.has(previousRowKey)) continue;
+      const previousCashOperationId = String(previousRow?._cash_bank_operation_id || '').trim();
+      if (previousCashOperationId) {
+        const existingMetadata = selectedCashOperationById.get(previousCashOperationId)?.metadata;
+        const { error: cancelOperationError } = await supabase
+          .from('cash_bank_operations')
+          .update({
+            status: 'canceled',
+            metadata: buildCashOperationMetadata(previousRowKey, existingMetadata),
+            updated_at: nowIso,
+          })
+          .eq('id', previousCashOperationId);
+        if (cancelOperationError) throw cancelOperationError;
+      }
+      if (isAnyInvoicePayments && normalizeCashBankPaymentType(previousRow?.payment_type) === 'barter') {
+        const previousBarterId = String(previousRow?._barter_synced_id || previousRow?.barter_id || '').trim();
+        if (previousBarterId) {
+          await syncBarterAllocation({
+            barterId: previousBarterId,
+            allocationKey: String(previousRow?._barter_allocation_key || previousRowKey).trim(),
+            active: false,
+            operationType,
+            amount: Math.abs(toSafeNumber(previousRow?.amount)),
+            rowStatus: String(previousRow?.status || '').trim() || 'pending',
+            rowDate: previousRow?.date || sourceOperationDate || null,
+          });
+        }
+      }
+    }
+
+    return normalizePaymentRows(nextRows);
   };
 
   const handleSave = async () => {
@@ -2909,7 +3267,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         total_price: calculateRow(rest, block.rowCalculationType),
       }));
 
-      if (isAnyDocumentPayments) {
+      if (isOperationalPayments) {
         dataToSave.forEach((row: any, rowIndex: number) => {
           const amount = Math.abs(toSafeNumber(row?.amount));
           if (!String(row?.payment_type || '').trim()) {
@@ -2927,8 +3285,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
         });
       }
 
-      if (isAnyInvoicePayments) {
-        dataToSave = await syncPaymentRowsWithCheques(dataToSave);
+      if (isOperationalPayments) {
+        dataToSave = await syncPaymentRowsWithCheques(dataToSave, data);
       }
 
       const updatePayload: any = { [block.id]: dataToSave };
@@ -2963,6 +3321,24 @@ const EditableTable: React.FC<EditableTableProps> = ({
         const nextExpenseItems = isExpenseItems ? dataToSave : currentExpenseItems;
         const nextExpensePayments = isExpensePayments ? dataToSave : currentExpensePayments;
         Object.assign(updatePayload, calculateExpenseFinancialFields(nextExpenseItems, nextExpensePayments));
+      }
+      if (isEmployeeAdvancePayments && recordId) {
+        const { data: fetchedAdvanceRow, error: summarySourceError } = await supabase
+          .from('employee_advances')
+          .select('amount')
+          .eq('id', recordId)
+          .maybeSingle();
+        if (summarySourceError) throw summarySourceError;
+        const paidAmount = dataToSave.reduce((sum: number, row: any) => {
+          const normalizedStatus = normalizePaymentStatus(row?.status);
+          if (normalizedStatus && !PAYMENT_INCLUDED_STATUSES.has(normalizedStatus)) return sum;
+          return sum + Math.abs(toSafeNumber(row?.amount));
+        }, 0);
+        const totalAmount = toSafeNumber(fetchedAdvanceRow?.amount);
+        Object.assign(updatePayload, {
+          paid_amount: paidAmount,
+          remaining_amount: Math.max(0, roundMoney(totalAmount - paidAmount)),
+        });
       }
       const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
       if (error) throw error;
@@ -3014,8 +3390,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       await insertChangelog(supabase, moduleId, recordId, block, oldValue, dataToSave);
 
       msg.success('ذخیره شد');
-      setData(dataToSave);
-      if (onSaveSuccess) onSaveSuccess(dataToSave);
+      const normalizedSavedRows = normalizePaymentRows(dataToSave);
+      setData(normalizedSavedRows);
+      if (onSaveSuccess) onSaveSuccess(normalizedSavedRows);
       try {
         await syncInvoiceCustomerStats();
       } catch (syncErr) {
@@ -3040,10 +3417,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return 160;
   };
 
-  const getRowKey = (row: any) => String(row.key || row.id || '');
+  const getRowKey = (row: any) => String(row?.row_key || row?.key || row?.id || '');
   const resolveRowIndex = (rowKey: React.Key) => {
     const source = isEditing ? tempData : data;
-    return source.findIndex((row: any) => String(row.key || row.id || '') === String(rowKey));
+    return source.findIndex((row: any) => getRowKey(row) === String(rowKey));
   };
 
 
@@ -3609,8 +3986,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
           && String((record as any)?.payment_type || '').trim() === 'barter'
         ));
 
-    const isInvoicePaymentAccountColumn = isAnyDocumentPayments
-      && ((isInvoicePayments && col.key === 'target_account') || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account'));
+    const isInvoicePaymentAccountColumn = isOperationalPayments
+      && ((isInvoicePayments && col.key === 'target_account') || (!isInvoicePayments && col.key === 'source_account'));
     const relationConfig =
       (isAnyInvoiceItems || isCatalogProductItems) && col.key === 'product_id' && col.relationConfig
         ? {
@@ -3746,7 +4123,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const endDateValue = record?.end_date || null;
     const hasCalendarValue = Boolean(startDateValue || endDateValue);
     const dateDiffDays = calculateDateDiffDays(startDateValue, endDateValue);
-    const isPaymentAttachment = isAnyDocumentPayments && col.key === 'attachment';
+    const isPaymentAttachment = isOperationalPayments && col.key === 'attachment';
     const attachmentUrl = String(value || '').trim();
     const showBulkPriceUnit = isBulkProductsTable && col.type === FieldType.PRICE;
     const bulkPriceUnitLabel = String(currencyLabel || '').trim();
@@ -4234,7 +4611,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
   const renderChequeMetaCard = (row: any) => {
     if (!isAnyInvoicePayments) return null;
-    if (String(row?.payment_type || '') !== 'cheque') return null;
+    if (normalizeCashBankPaymentType(row?.payment_type) !== 'cheque') return null;
     if (!row?.cheque_id && !row?.spent_cheque_id) return null;
 
     const serialNo = String(row?.cheque_serial_no || '').trim();
@@ -4417,8 +4794,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
             ) : (
               sourceRows.map((row: any, rowIndex: number) => (
                 <div
-                  key={row.key || row.id || `${block.id}_${rowIndex}`}
-                  className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-gradient-to-r from-white to-gray-50 dark:from-[#1c1c1c] dark:to-[#181818] p-3"
+                  key={getRowKey(row) || `${block.id}_${rowIndex}`}
+                  data-row-key={getRowKey(row)}
+                  className={`rounded-2xl border bg-gradient-to-r from-white to-gray-50 dark:from-[#1c1c1c] dark:to-[#181818] p-3 transition-colors ${
+                    highlightedFocusRowKey && highlightedFocusRowKey === getRowKey(row)
+                      ? 'border-[rgb(var(--brand-500-rgb))] ring-2 ring-[rgba(var(--brand-500-rgb),0.18)]'
+                      : 'border-gray-200 dark:border-gray-700'
+                  }`}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <Text className="text-xs text-gray-500 dark:text-gray-300">ردیف {toPersianNumber(rowIndex + 1)}</Text>
@@ -4463,11 +4845,16 @@ const EditableTable: React.FC<EditableTableProps> = ({
           columns={columns}
           pagination={false}
           size="middle"
-          rowKey={(record: any, index?: number) => record.key || record.id || `${block.id || 'row'}_${index ?? 0}`}
+          rowKey={(record: any, index?: number) => getRowKey(record) || `${block.id || 'row'}_${index ?? 0}`}
           locale={{ emptyText: <Empty description="لیست خالی است" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
           className="custom-erp-table font-medium editable-table-main"
           tableLayout="auto"
           scroll={{ x: 'max-content' }}
+          rowClassName={(record: any) => (
+            highlightedFocusRowKey && highlightedFocusRowKey === getRowKey(record)
+              ? 'bg-[rgba(var(--brand-50-rgb),0.75)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]'
+              : ''
+          )}
           expandable={tableExpandable as any}
           footer={(isEditing || mode === 'local') && !isReadOnly ? () => (
             <Button type="dashed" block icon={<PlusOutlined />} onClick={addRow}>افزودن ردیف جدید</Button>

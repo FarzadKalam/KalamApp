@@ -48,8 +48,13 @@ import {
   SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
 } from './moduleSettingsTypes';
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
-import { MODULE_SETTINGS_UPDATED_EVENT } from '../../utils/moduleSettingsRuntime';
+import { getBaseModuleFieldDefinition, MODULE_SETTINGS_UPDATED_EVENT } from '../../utils/moduleSettingsRuntime';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import ConditionalFieldRulesEditor from '../../components/settings/ConditionalFieldRulesEditor';
+import SettingsCollapsiblePanel from '../../components/settings/SettingsCollapsiblePanel';
+import SettingsFieldValueInput from '../../components/settings/SettingsFieldValueInput';
+import { normalizeConditionalFieldValueForField } from '../../utils/conditionalFieldRules';
+import { getImplicitCreateDefaultValue } from '../../utils/defaultValues';
 
 const cloneDeep = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -125,6 +130,9 @@ const buildDefaultModuleSettings = (moduleDef: ModuleDefinition): ModuleSettings
       fields: cloneDeep(moduleDef.fields || []),
       blocks: cloneDeep(moduleDef.blocks || []),
     }),
+    conditionalDisplay: {
+      rules: [],
+    },
   };
 };
 
@@ -202,6 +210,9 @@ const mergeModuleSettings = (
       blocks: cloneDeep(incomingSchema.blocks || base.schema.blocks),
       fields: cloneDeep(incomingSchema.fields || base.schema.fields),
     }),
+    conditionalDisplay: {
+      rules: cloneDeep(incoming.conditionalDisplay?.rules || base.conditionalDisplay?.rules || []),
+    },
   };
 };
 
@@ -255,6 +266,48 @@ const blockTypeLabels: Record<BlockType, string> = {
   [BlockType.TABLE]: 'جدول',
   [BlockType.GRID_TABLE]: 'جدول شبکه‌ای',
   [BlockType.STAGES]: 'فرآیند مرحله‌ای',
+};
+
+const formatFieldDefaultSummary = (field: ModuleField | null | undefined, value: any) => {
+  if (value === undefined) return 'بدون مقدار پیش‌فرض';
+  if (value === null) return 'خالی';
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 'خالی';
+    const options = field?.options || [];
+    return value.map((item) => {
+      const matched = options.find((option) => String(option?.value) === String(item));
+      return String(matched?.label || item);
+    }).join('، ');
+  }
+  if (typeof value === 'boolean') return value ? 'فعال' : 'غیرفعال';
+  if (field?.options?.length) {
+    const matched = field.options.find((option) => String(option?.value) === String(value));
+    if (matched?.label) return String(matched.label);
+  }
+  return String(value);
+};
+
+const areFieldDefaultValuesEqual = (
+  field: ModuleField | null | undefined,
+  leftValue: any,
+  rightValue: any
+) => {
+  if (leftValue === undefined && rightValue === undefined) return true;
+  if (leftValue === undefined || rightValue === undefined) return false;
+  return JSON.stringify(normalizeConditionalFieldValueForField(field || undefined, leftValue))
+    === JSON.stringify(normalizeConditionalFieldValueForField(field || undefined, rightValue));
+};
+
+const getFieldDefaultEditorMode = (
+  field: ModuleField | null | undefined,
+  systemDefaultValue: any
+): 'none' | 'system' | 'custom' => {
+  const currentDefaultValue = field?.defaultValue;
+  if (currentDefaultValue === undefined) return 'none';
+  if (systemDefaultValue !== undefined && areFieldDefaultValuesEqual(field, currentDefaultValue, systemDefaultValue)) {
+    return 'system';
+  }
+  return 'custom';
 };
 
 const criticalFieldKeysByModule: Record<string, string[]> = {
@@ -524,6 +577,55 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     if (!currentConfig) return [];
     return [...currentConfig.schema.blocks].sort((a, b) => (a.order || 0) - (b.order || 0));
   }, [currentConfig]);
+
+  const fieldSections = useMemo(() => {
+    const sections: Array<{
+      key: string;
+      title: string;
+      hint?: string;
+      fields: ModuleField[];
+    }> = [];
+
+    const headerFields = sortedFields.filter((field) => {
+      const destination = String(field.blockId || '').trim();
+      return !destination || destination === HEADER_DESTINATION || field.location === 'header';
+    });
+
+    sections.push({
+      key: HEADER_DESTINATION,
+      title: 'سربرگ',
+      hint: 'فیلدهای بخش هیرو و اطلاعات اصلی رکورد',
+      fields: headerFields,
+    });
+
+    sortedBlocks.forEach((block) => {
+      const blockFields = sortedFields.filter((field) => String(field.blockId || '').trim() === String(block.id || '').trim());
+      sections.push({
+        key: String(block.id || ''),
+        title: block.titles?.fa || block.id,
+        hint: blockTypeLabels[block.type] || block.type,
+        fields: blockFields,
+      });
+    });
+
+    const assignedFieldKeys = new Set(sections.flatMap((section) => section.fields.map((field) => field.key)));
+    const uncategorizedFields = sortedFields.filter((field) => !assignedFieldKeys.has(field.key));
+    if (uncategorizedFields.length > 0) {
+      sections.push({
+        key: '__uncategorized__',
+        title: 'فیلدهای بدون بخش',
+        hint: 'فیلدهایی که هنوز به سربرگ یا بلاک مشخصی متصل نشده‌اند',
+        fields: uncategorizedFields,
+      });
+    }
+
+    return sections.filter((section) => section.fields.length > 0);
+  }, [sortedBlocks, sortedFields]);
+
+  const defaultListColumnsCount = useMemo(
+    () => sortedFields.filter((field) => field.isTableColumn === true).length,
+    [sortedFields]
+  );
 
   const blockDestinationOptions = useMemo(
     () => [
@@ -998,6 +1100,24 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
               },
               {
                 key: 'schema',
+                label: 'نمایش شرطی فیلدها',
+                children: (
+                  <ConditionalFieldRulesEditor
+                    moduleId={selectedModuleId || ''}
+                    fields={currentConfig.schema.fields}
+                    value={currentConfig.conditionalDisplay}
+                    disabled={!selectedModuleEditable}
+                    onChange={(nextValue) =>
+                      updateCurrentConfig((prev) => ({
+                        ...prev,
+                        conditionalDisplay: nextValue,
+                      }))
+                    }
+                  />
+                ),
+              },
+              {
+                key: 'schema_editor',
                 label: 'ویرایش فیلدها و بلاک‌ها',
                 children: (
                   <div className="space-y-4">
@@ -1072,42 +1192,98 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                         {sortedFields.length === 0 ? (
                           <Empty description="فیلدی وجود ندارد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                         ) : (
-                          sortedFields.map((field, index) => {
-                            const protectedField = isProtectedField(field);
-                            const relationTargetModule = field.relationConfig?.targetModule;
-                            const relationTargetModuleConfig = relationTargetModule
-                              ? MODULES[relationTargetModule]
-                              : null;
-                            const relationTargetFieldOptions = (relationTargetModuleConfig?.fields || []).map((f) => ({
-                              value: f.key,
-                              label: f.labels?.fa || f.key,
-                            }));
-
-                            return (
-                              <div
-                                key={field.key}
-                                className="border border-gray-200 dark:border-gray-700 rounded-xl p-3 space-y-3 bg-white dark:bg-[#181818]"
+                          <>
+                            <Alert
+                              type="info"
+                              showIcon
+                              message={
+                                defaultListColumnsCount > 0
+                                  ? `در حال حاضر ${defaultListColumnsCount} فیلد به‌عنوان ستون پیش‌فرض لیست فعال است. این تنظیم فقط روی نمای اصلی لیست همین ماژول اثر می‌گذارد و تنظیمات View Manager را تغییر نمی‌دهد.`
+                                  : 'در حال حاضر هیچ ستون پیش‌فرضی برای لیست فعال نیست؛ در این حالت لیست به fallback عمومی پروژه برمی‌گردد. این تنظیم فقط روی نمای اصلی لیست همین ماژول اثر می‌گذارد و تنظیمات View Manager را تغییر نمی‌دهد.'
+                              }
+                            />
+                            {fieldSections.map((section) => (
+                              <Card
+                                key={section.key}
+                                size="small"
+                                title={section.title}
+                                extra={
+                                  section.hint ? (
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      {section.hint}
+                                    </Typography.Text>
+                                  ) : null
+                                }
+                                className="border-gray-200 dark:!bg-[#181818] dark:!border-gray-700"
                               >
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <div className="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+                                <Space direction="vertical" className="w-full">
+                                  {section.fields.map((field) => {
+                                    const globalIndex = sortedFields.findIndex((candidate) => candidate.key === field.key);
+                                    const protectedField = isProtectedField(field);
+                                    const relationTargetModule = field.relationConfig?.targetModule;
+                                    const relationTargetModuleConfig = relationTargetModule
+                                      ? MODULES[relationTargetModule]
+                                      : null;
+                                    const relationTargetFieldOptions = (relationTargetModuleConfig?.fields || []).map((f) => ({
+                                      value: f.key,
+                                      label: f.labels?.fa || f.key,
+                                    }));
+                                    const baseField = getBaseModuleFieldDefinition(selectedModuleId, field.key);
+                                    const systemDefaultValue = getImplicitCreateDefaultValue(baseField || field);
+                                    const defaultEditorMode = getFieldDefaultEditorMode(field, systemDefaultValue);
+                                    const normalizedFieldDefaultValue = normalizeConditionalFieldValueForField(
+                                      field,
+                                      field.defaultValue
+                                    );
+                                    const normalizedSystemDefaultValue = normalizeConditionalFieldValueForField(
+                                      field,
+                                      systemDefaultValue
+                                    );
+                                    const defaultSourceOptions = [
+                                      ...(systemDefaultValue !== undefined
+                                        ? [{ value: 'system', label: 'سیستمی' }]
+                                        : []),
+                                      { value: 'custom', label: 'اختصاصی' },
+                                      { value: 'none', label: 'بدون مقدار پیش‌فرض' },
+                                    ];
+
+                                    return (
+                              <SettingsCollapsiblePanel
+                                key={field.key}
+                                defaultExpanded
+                                className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#181818]"
+                                bodyClassName="mt-3 space-y-3"
+                                header={(
+                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <div className="rounded bg-gray-100 px-2 py-1 font-mono text-xs dark:bg-gray-800">
                                       {field.key}
                                     </div>
-                                    <Tag color="default">{fieldTypeLabels[field.type] || field.type}</Tag>
+                                            <Tag color="default">{fieldTypeLabels[field.type] || field.type}</Tag>
+                                            {field.isTableColumn === true && <Tag color="blue">ستون لیست</Tag>}
+                                            <Typography.Text className="text-sm">
+                                              {field.labels?.fa || 'بدون عنوان'}
+                                            </Typography.Text>
+                                    {field.defaultValue !== undefined && (
+                                      <Tag color="gold">
+                                        پیش‌فرض: {formatFieldDefaultSummary(field, field.defaultValue)}
+                                      </Tag>
+                                    )}
                                     {protectedField && <Tag color="red">سیستمی/ضروری</Tag>}
                                   </div>
+                                )}
+                                extra={(
                                   <Space>
                                     <Button
                                       size="small"
                                       icon={<ArrowUpOutlined />}
-                                      disabled={index === 0 || protectedField}
-                                      onClick={() => moveField(index, 'up')}
+                                      disabled={globalIndex <= 0 || protectedField}
+                                      onClick={() => moveField(globalIndex, 'up')}
                                     />
                                     <Button
                                       size="small"
                                       icon={<ArrowDownOutlined />}
-                                      disabled={index === sortedFields.length - 1 || protectedField}
-                                      onClick={() => moveField(index, 'down')}
+                                      disabled={globalIndex === sortedFields.length - 1 || protectedField}
+                                      onClick={() => moveField(globalIndex, 'down')}
                                     />
                                     {supportsOptionEditor(field) && !protectedField && (
                                       <Button size="small" onClick={() => openOptionsEditor(field)}>
@@ -1132,8 +1308,8 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       </Popconfirm>
                                     </Tooltip>
                                   </Space>
-                                </div>
-
+                                )}
+                              >
                                 <Row gutter={[12, 12]}>
                                   <Col xs={24} md={8}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
@@ -1158,20 +1334,29 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       value={field.type}
                                       disabled={protectedField}
                                       onChange={(value: FieldType) =>
-                                        updateField(field.key, (prev) => ({
-                                          ...prev,
-                                          type: value,
-                                          options: optionEditableTypes.has(value) ? prev.options || [] : undefined,
-                                          dynamicOptionsCategory: supportsDynamicCategory(value)
-                                            ? prev.dynamicOptionsCategory
-                                            : undefined,
-                                          relationConfig:
-                                            value === FieldType.RELATION
-                                              ? prev.relationConfig || {
-                                                  targetModule: selectedModuleId || allModuleOptions[0]?.value || '',
-                                                }
+                                        updateField(field.key, (prev) => {
+                                          const nextField: ModuleField = {
+                                            ...prev,
+                                            type: value,
+                                            options: optionEditableTypes.has(value) ? prev.options || [] : undefined,
+                                            dynamicOptionsCategory: supportsDynamicCategory(value)
+                                              ? prev.dynamicOptionsCategory
                                               : undefined,
-                                        }))
+                                            relationConfig:
+                                              value === FieldType.RELATION
+                                                ? prev.relationConfig || {
+                                                    targetModule: selectedModuleId || allModuleOptions[0]?.value || '',
+                                                  }
+                                                : undefined,
+                                          };
+                                          return {
+                                            ...nextField,
+                                            defaultValue:
+                                              prev.defaultValue === undefined
+                                                ? undefined
+                                                : normalizeConditionalFieldValueForField(nextField, prev.defaultValue),
+                                          };
+                                        })
                                       }
                                       options={fieldTypeOptions}
                                     />
@@ -1213,14 +1398,14 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                   </Col>
                                   <Col xs={12} md={2}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
-                                      ستون جدول
+                                      ستون پیش‌فرض لیست
                                     </Typography.Text>
                                     <div>
-                                      <Switch
-                                        checked={field.isTableColumn !== false}
-                                        disabled={protectedField}
-                                        onChange={(checked) =>
-                                          updateField(field.key, (prev) => ({
+                                              <Switch
+                                                checked={field.isTableColumn === true}
+                                                disabled={protectedField}
+                                                onChange={(checked) =>
+                                                  updateField(field.key, (prev) => ({
                                             ...prev,
                                             isTableColumn: checked,
                                           }))
@@ -1228,6 +1413,82 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                       />
                                     </div>
                                   </Col>
+                                </Row>
+
+                                <Row gutter={[12, 12]}>
+                                  <Col xs={24} md={7}>
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      منطق مقدار پیش‌فرض
+                                    </Typography.Text>
+                                    <Select
+                                      className="w-full"
+                                      value={defaultEditorMode}
+                                      disabled={protectedField}
+                                      options={defaultSourceOptions}
+                                      onChange={(nextMode: 'none' | 'system' | 'custom') =>
+                                        updateField(field.key, (prev) => {
+                                          if (nextMode === 'none') {
+                                            return {
+                                              ...prev,
+                                              defaultValue: undefined,
+                                            };
+                                          }
+                                          if (nextMode === 'system') {
+                                            return {
+                                              ...prev,
+                                              defaultValue: normalizeConditionalFieldValueForField(
+                                                prev,
+                                                systemDefaultValue
+                                              ),
+                                            };
+                                          }
+                                          return {
+                                            ...prev,
+                                            defaultValue: normalizeConditionalFieldValueForField(
+                                              prev,
+                                              prev.defaultValue !== undefined ? prev.defaultValue : systemDefaultValue
+                                            ),
+                                          };
+                                        })
+                                      }
+                                    />
+                                  </Col>
+                                  <Col xs={24} md={17}>
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      مقدار پیش‌فرض
+                                    </Typography.Text>
+                                    {defaultEditorMode === 'custom' ? (
+                                      <SettingsFieldValueInput
+                                        field={field}
+                                        value={normalizedFieldDefaultValue}
+                                        disabled={protectedField}
+                                        moduleId={selectedModuleId || undefined}
+                                        onChange={(nextValue) =>
+                                          updateField(field.key, (prev) => ({
+                                            ...prev,
+                                            defaultValue: normalizeConditionalFieldValueForField(prev, nextValue),
+                                          }))
+                                        }
+                                      />
+                                    ) : (
+                                      <Alert
+                                        type={defaultEditorMode === 'system' ? 'info' : 'warning'}
+                                        showIcon
+                                        message={
+                                          defaultEditorMode === 'system'
+                                            ? `مقدار سیستمی: ${formatFieldDefaultSummary(field, normalizedSystemDefaultValue)}`
+                                            : 'برای این فیلد مقدار پیش‌فرضی تعریف نشده است.'
+                                        }
+                                      />
+                                    )}
+                                  </Col>
+                                  {systemDefaultValue !== undefined && (
+                                    <Col xs={24}>
+                                      <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                        پیش‌فرض سیستمی این فیلد: {formatFieldDefaultSummary(field, systemDefaultValue)}
+                                      </Typography.Text>
+                                    </Col>
+                                  )}
                                 </Row>
 
                                 {(field.type === FieldType.RELATION || supportsDynamicCategory(field.type)) && (
@@ -1314,9 +1575,13 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                     برای فیلدهای سیستمی/ضروری فقط تغییر عنوان فارسی مجاز است.
                                   </Typography.Text>
                                 )}
-                              </div>
-                            );
-                          })
+                              </SettingsCollapsiblePanel>
+                                    );
+                                  })}
+                                </Space>
+                              </Card>
+                            ))}
+                          </>
                         )}
                       </Space>
                     </Card>

@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient';
 import { FILE_STORAGE_BUCKET } from './storageClient';
 import { detectRecordFilesTable, extractStoragePathFromPublicUrl, isMissingRecordFilesError } from './recordFilesAvailability';
 import { getFileSystemModuleDefinition } from './fileManagerConfig';
+import { invalidateFileManagerFolderCaches, invalidateFileManagerQueryCache } from './fileManagerQueryCache';
 import { MODULES } from '../moduleRegistry';
 import { getRecordDisplayLabel } from './recordLabel';
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from './selectCompat';
@@ -51,6 +52,15 @@ const slugify = (value: string) =>
 
 const buildSourceKey = (...parts: Array<string | null | undefined>) =>
   parts.map((part) => String(part || '').trim()).filter(Boolean).join(':');
+
+const invalidateFileManagerFolderScope = (moduleId?: string | null, recordId?: string | null) => {
+  invalidateFileManagerFolderCaches(moduleId, recordId);
+};
+
+const invalidateFileManagerRecordScope = (moduleId?: string | null, recordId?: string | null) => {
+  invalidateFileManagerFolderScope(moduleId, recordId);
+  invalidateFileManagerQueryCache();
+};
 
 export const getFileManagerTablesAvailabilityCache = () => fileManagerTablesAvailableCache;
 
@@ -193,6 +203,7 @@ export const ensureFolder = async (draft: Partial<FileFolderRow>, parentId?: str
         .select('*')
         .single();
       if (updateError) throw updateError;
+      invalidateFileManagerFolderScope(updated?.module_id || existing.module_id, updated?.record_id || existing.record_id);
       return updated as FileFolderRow;
     }
     return existing as FileFolderRow;
@@ -207,6 +218,7 @@ export const ensureFolder = async (draft: Partial<FileFolderRow>, parentId?: str
     .select('*')
     .single();
   if (error) throw error;
+  invalidateFileManagerFolderScope(data?.module_id, data?.record_id);
   return data as FileFolderRow;
 };
 
@@ -218,7 +230,10 @@ export const ensureSystemFoldersForRecord = async (
   const hasTables = await detectFileManagerTables(supabase, false);
   if (!hasTables) return { moduleFolder: null, recordFolder: null, subfolders: [] };
 
-  const nextRecordTitle = await resolveRecordFolderLabel(moduleId, recordId, recordTitle);
+  const providedTitle = String(recordTitle || '').trim();
+  const nextRecordTitle = providedTitle && providedTitle !== String(recordId || '').trim() && providedTitle !== 'رکورد بدون عنوان'
+    ? providedTitle
+    : await resolveRecordFolderLabel(moduleId, recordId, recordTitle);
   const moduleFolder = await ensureFolder(buildModuleRootFolderDraft(moduleId));
   const recordFolder = await ensureFolder(buildRecordFolderDraft(moduleId, recordId, nextRecordTitle), moduleFolder?.id || null);
   return { moduleFolder, recordFolder, subfolders: [] };
@@ -255,6 +270,7 @@ export const createManualFileFolder = async (input: {
     .select('*')
     .single();
   if (error) throw error;
+  invalidateFileManagerFolderScope(data?.module_id, data?.record_id);
   return data as FileFolderRow;
 };
 
@@ -265,7 +281,7 @@ export const renameFileFolder = async (folderId: string, name: string) => {
 
   const { data: folder, error: folderError } = await supabase
     .from('file_folders')
-    .select('id, is_system')
+    .select('id, is_system, module_id, record_id')
     .eq('id', normalizedFolderId)
     .maybeSingle();
   if (folderError) throw folderError;
@@ -282,6 +298,7 @@ export const renameFileFolder = async (folderId: string, name: string) => {
     .select('*')
     .single();
   if (error) throw error;
+  invalidateFileManagerFolderScope(data?.module_id, data?.record_id);
   return data as FileFolderRow;
 };
 
@@ -315,6 +332,7 @@ export const deleteManualFileFolder = async (folderId: string) => {
 
   const { error } = await supabase.from('file_folders').delete().eq('id', normalizedFolderId);
   if (error) throw error;
+  invalidateFileManagerFolderScope((folder as any)?.module_id, (folder as any)?.record_id);
 };
 
 export const buildAssetDraftFromLegacyUrl = (
@@ -479,6 +497,7 @@ export const ensureOriginEntryForLegacyRecordFile = async (
       .eq('id', recordFile.id);
   }
 
+  invalidateFileManagerRecordScope(moduleId, recordId);
   return data as FileEntryRow;
 };
 
@@ -626,6 +645,7 @@ export const createFileManagerOriginForUpload = async (input: {
     }
   }
 
+  invalidateFileManagerRecordScope(moduleId, recordId);
   return { asset, entry, recordFileId };
 };
 
@@ -759,6 +779,7 @@ export const createFileManagerShortcut = async (input: {
     }
   }
 
+  invalidateFileManagerRecordScope(targetModuleId, targetRecordId);
   return { entry, recordFileId };
 };
 
@@ -770,14 +791,20 @@ export const deleteFileManagerEntry = async (input: {
   if (!entryId) {
     const recordFileId = String(input.recordFileId || '').trim();
     if (!recordFileId) return;
+    const { data: recordFile } = await supabase
+      .from('record_files')
+      .select('module_id, record_id')
+      .eq('id', recordFileId)
+      .maybeSingle();
     const { error } = await supabase.from('record_files').delete().eq('id', recordFileId);
     if (error && !isMissingRecordFilesError(error)) throw error;
+    invalidateFileManagerRecordScope((recordFile as any)?.module_id, (recordFile as any)?.record_id);
     return;
   }
 
   const { data: entry, error: entryError } = await supabase
     .from('file_entries')
-    .select('id, asset_id, entry_type')
+    .select('id, asset_id, entry_type, module_id, record_id')
     .eq('id', entryId)
     .maybeSingle();
   if (entryError) throw entryError;
@@ -809,6 +836,7 @@ export const deleteFileManagerEntry = async (input: {
   if (recordFileId) {
     const { error: deleteRecordFileError } = await supabase.from('record_files').delete().eq('id', recordFileId);
     if (deleteRecordFileError && !isMissingRecordFilesError(deleteRecordFileError)) throw deleteRecordFileError;
+    invalidateFileManagerRecordScope((entry as any)?.module_id, (entry as any)?.record_id);
     return;
   }
 
@@ -817,4 +845,5 @@ export const deleteFileManagerEntry = async (input: {
     const { error: deleteRecordFileError } = await supabase.from('record_files').delete().eq('file_entry_id', entryId);
     if (deleteRecordFileError && !isMissingRecordFilesError(deleteRecordFileError)) throw deleteRecordFileError;
   }
+  invalidateFileManagerRecordScope((entry as any)?.module_id, (entry as any)?.record_id);
 };

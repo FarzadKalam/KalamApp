@@ -1,4 +1,5 @@
 import { BlockDefinition, FieldType, ModuleField } from '../../types';
+import { ConditionalFieldSettings } from '../../utils/conditionalFieldRules';
 
 export type SystemCodeNamingSettings = {
   prefix: string;
@@ -30,6 +31,7 @@ export type ModuleSettingsConfig = {
   general: ModuleGeneralSettings;
   specific: ModuleSpecificSettings;
   schema: EditableModuleSchema;
+  conditionalDisplay?: ConditionalFieldSettings;
 };
 
 export type ModuleSettingsStore = {

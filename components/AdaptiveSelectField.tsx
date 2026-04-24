@@ -30,6 +30,7 @@ interface AdaptiveSelectFieldProps {
   allowClear?: boolean;
   showSearch?: boolean;
   getPopupContainer?: (trigger: HTMLElement) => HTMLElement;
+  modalContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   popupStyle?: React.CSSProperties;
   overlayZIndexBase?: number;
   adaptiveMode?: AdaptivePickerMode;
@@ -78,6 +79,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   allowClear = true,
   showSearch = true,
   getPopupContainer = resolveSelectPopupContainer,
+  modalContainer,
   popupStyle,
   overlayZIndexBase = 1400,
   adaptiveMode = 'auto',
@@ -169,6 +171,9 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
       .filter(Boolean);
     return labels.join('، ');
   }, [optionDisplayFallback, optionMap, placeholder, selectedValues]);
+  const comfortableMobileTrigger = mobileSheetMode
+    && selectedValues.length > 0
+    && (selectedValues.length > 1 || String(displayText || '').trim().length >= 18);
 
   const commitValue = () => {
     setDisplayValue(draftValue);
@@ -206,6 +211,13 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   };
 
   if (!mobileSheetMode) {
+    const resolvePopupHost = (trigger: HTMLElement) => {
+      const resolved = getPopupContainer(trigger);
+      if (resolved && resolved !== document.body) {
+        return resolved;
+      }
+      return resolveSelectPopupContainer(trigger);
+    };
     return (
       <Select
         value={value}
@@ -218,13 +230,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         placeholder={placeholder}
         allowClear={allowClear}
         showSearch={showSearch}
-        getPopupContainer={(trigger) => {
-          const resolved = getPopupContainer(trigger);
-          if (resolved && resolved !== document.body) {
-            return resolved;
-          }
-          return resolveSelectPopupContainer(trigger);
-        }}
+        getPopupContainer={resolvePopupHost}
         optionFilterProp={optionFilterProp}
         optionLabelProp={optionLabelProp}
         filterOption={filterOption}
@@ -256,7 +262,11 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
     <>
       <button
         type="button"
-        className={mergeClassNames('kalam-adaptive-picker__trigger', className)}
+        className={mergeClassNames(
+          'kalam-adaptive-picker__trigger',
+          comfortableMobileTrigger && 'kalam-adaptive-picker__trigger--comfortable',
+          className
+        )}
         disabled={disabled}
         aria-label={pickerTitle || placeholder}
         onClick={() => {
@@ -265,7 +275,15 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
           onOpenChange?.(true);
         }}
       >
-        <span className={`kalam-adaptive-picker__trigger-text ${selectedValues.length > 0 ? 'is-filled' : ''}`}>{displayText}</span>
+        <span
+          className={mergeClassNames(
+            'kalam-adaptive-picker__trigger-text',
+            selectedValues.length > 0 && 'is-filled',
+            comfortableMobileTrigger && 'is-comfortable'
+          )}
+        >
+          {displayText}
+        </span>
         <span className="kalam-adaptive-picker__trigger-icon">
           <DownOutlined />
         </span>
@@ -276,6 +294,15 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         title={pickerTitle || placeholder}
         subtitle={sheetSubtitle}
         zIndex={overlayZIndexBase + 40}
+        modalContainer={modalContainer || ((trigger) => {
+          if (trigger) {
+            const resolved = getPopupContainer(trigger);
+            if (resolved && resolved !== document.body) {
+              return resolved;
+            }
+          }
+          return resolveSelectPopupContainer(trigger || undefined);
+        })}
         onClose={() => {
           setMobileOpen(false);
           onOpenChange?.(false);

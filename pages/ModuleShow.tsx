@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button, App, Avatar, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
 import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import { FieldType, BlockType, LogicOperator, FieldLocation, FieldNature } from '../types';
+import { FieldType, BlockType, FieldLocation, FieldNature } from '../types';
 import SmartForm from '../components/SmartForm';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
@@ -18,6 +18,7 @@ import HeroSection from '../components/moduleShow/HeroSection';
 import FieldGroupsTabs from '../components/moduleShow/FieldGroupsTabs';
 import TablesSection from '../components/moduleShow/TablesSection';
 import PrintSection from '../components/moduleShow/PrintSection';
+import RecordImageBox from '../components/RecordImageBox';
 import CustomerFinancialOverviewPanel from '../components/accounting/CustomerFinancialOverviewPanel';
 import AccountLedgerPanel from '../components/accounting/AccountLedgerPanel';
 import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece, type StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
@@ -53,7 +54,7 @@ import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { getCachedAuthUser } from '../utils/sessionCache';
-import { supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
+import { shouldHideManagedAssigneeField, supportsModuleAssignee, supportsModuleRoleAssignee } from '../utils/assigneeSupport';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { syncRecordTags } from '../utils/recordTags';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
@@ -78,6 +79,9 @@ import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
 import CounterpartyBotStatusModal from '../components/bot/CounterpartyBotStatusModal';
 import MessageComposerModal from '../components/MessageComposerModal';
 import { serializeNoteContent } from '../utils/noteContent';
+import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
+import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
+import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
@@ -299,9 +303,18 @@ type BotStatusModalContext = {
 const ModuleShow: React.FC = () => {
   const { moduleId = 'products', id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { message: msg, modal } = App.useApp();
   const { label: currencyLabel } = useCurrencyConfig();
   const baseModuleConfig = MODULES[moduleId];
+  const focusBlockId = useMemo(
+    () => String((location.state as any)?.focusBlockId || '').trim() || null,
+    [location.state]
+  );
+  const focusRowKey = useMemo(
+    () => String((location.state as any)?.focusRowKey || '').trim() || null,
+    [location.state]
+  );
   const supportsAssignee = supportsModuleAssignee(baseModuleConfig);
   const supportsRoleAssignee = supportsModuleRoleAssignee(baseModuleConfig);
 
@@ -339,6 +352,11 @@ const ModuleShow: React.FC = () => {
       ],
     };
   }, [baseModuleConfig, moduleId, taskProcessCustomFields]);
+  const displayData = useMemo(
+    () => normalizeModuleFormValues(moduleId, data || {}),
+    [data, moduleId]
+  );
+  const conditionalFieldRuntime = useConditionalFieldRuntime(moduleConfig || null, displayData || {});
   
   const [, setLinkedBomData] = useState<any>(null);
   const [currentTags, setCurrentTags] = useState<any[]>([]); // استیت تگ‌ها
@@ -400,9 +418,21 @@ const ModuleShow: React.FC = () => {
   const [quickProjectLinkedRecords, setQuickProjectLinkedRecords] = useState<Record<string, string | null>>({});
   const [quickProjectRelationOptions, setQuickProjectRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [quickProjectRelationLoading, setQuickProjectRelationLoading] = useState<Record<string, boolean>>({});
+  const quickProjectSubmitLockRef = useRef(false);
   const [quickProjectForm] = Form.useForm();
+  const quickProjectName = Form.useWatch('name', quickProjectForm);
   const quickProjectTemplateId = Form.useWatch('process_template_id', quickProjectForm);
   const quickProjectCustomerId = Form.useWatch('customer_id', quickProjectForm);
+  const quickProjectAlignment = Form.useWatch('project_alignment', quickProjectForm);
+  const quickProjectNameField = useMemo(() => {
+    const projectNameField = (MODULES.projects?.fields || []).find((field: any) => String(field?.key || '') === 'name');
+    return (projectNameField || {
+      key: 'name',
+      labels: { fa: 'عنوان پروژه', en: 'Project Name' },
+      type: FieldType.TEXT,
+      validation: { required: true },
+    }) as any;
+  }, []);
   const quickProjectCustomerField = useMemo(() => {
     const projectCustomerField = (MODULES.projects?.fields || []).find((field: any) => String(field?.key || '') === 'customer_id');
     return {
@@ -418,6 +448,15 @@ const ModuleShow: React.FC = () => {
         disableQuickCreate: true,
       },
     } as any;
+  }, []);
+  const quickProjectAlignmentField = useMemo(() => {
+    const projectAlignmentField = (MODULES.projects?.fields || []).find((field: any) => String(field?.key || '') === 'project_alignment');
+    return (projectAlignmentField || {
+      key: 'project_alignment',
+      labels: { fa: 'دپارتمان‌ها', en: 'Departments' },
+      type: FieldType.MULTI_SELECT,
+      dynamicOptionsCategory: 'project_alignment',
+    }) as any;
   }, []);
   const quickProjectTemplateField = useMemo(() => {
     const projectTemplateField = (MODULES.projects?.fields || []).find((field: any) => String(field?.key || '') === 'process_template_id');
@@ -446,6 +485,15 @@ const ModuleShow: React.FC = () => {
       },
     } as any;
   }, []);
+  const quickProjectModalFields = useMemo(
+    () => [
+      quickProjectNameField,
+      quickProjectCustomerField,
+      quickProjectAlignmentField,
+      quickProjectTemplateField,
+    ].filter(Boolean),
+    [quickProjectAlignmentField, quickProjectCustomerField, quickProjectNameField, quickProjectTemplateField]
+  );
   const quickProjectDisplayModuleIds = useMemo(
     () => Array.from(new Set([
       ...quickProjectTargetModuleIds,
@@ -1208,7 +1256,7 @@ const ModuleShow: React.FC = () => {
           return;
         }
 
-        let nextRecord: any = record;
+        let nextRecord: any = normalizeModuleFormValues(moduleId, record);
         if (moduleId === 'products') {
           const mainUnit = nextRecord?.main_unit;
           const subUnit = nextRecord?.sub_unit;
@@ -1741,9 +1789,12 @@ const ModuleShow: React.FC = () => {
       });
 
       const relOpts: Record<string, any[]> = {};
-      const normalizedRecordData = moduleId === 'tasks'
-        ? normalizeTaskSourceValues(recordData || {})
-        : (recordData || {});
+      const normalizedRecordData = normalizeModuleFormValues(
+        moduleId,
+        moduleId === 'tasks'
+          ? normalizeTaskSourceValues(recordData || {})
+          : (recordData || {})
+      );
       const relationFieldsWithValue = moduleConfig.fields.filter((field) => {
         if (field.type !== FieldType.RELATION || !field.relationConfig) return false;
         const rawValue = normalizedRecordData?.[field.key];
@@ -2915,6 +2966,7 @@ const ModuleShow: React.FC = () => {
     quickProjectForm.setFieldsValue({
       name: suggestedName,
       customer_id: suggestedCustomerId,
+      project_alignment: [],
       process_template_id: suggestedTemplateId,
     });
     setQuickProjectTargetModuleIds([]);
@@ -3007,6 +3059,8 @@ const ModuleShow: React.FC = () => {
 
   const handleQuickProjectCreate = useCallback(async (values: any) => {
     if (!id) return;
+    if (quickProjectSubmitLockRef.current) return;
+    quickProjectSubmitLockRef.current = true;
     setQuickProjectLoading(true);
     try {
       const selectedTemplateId = String(values?.process_template_id || '').trim() || null;
@@ -3058,6 +3112,7 @@ const ModuleShow: React.FC = () => {
         name: String(values?.name || '').trim(),
         status: 'draft',
         customer_id: values?.customer_id || quickProjectLinkedRecords.customers || null,
+        project_alignment: Array.isArray(values?.project_alignment) ? values.project_alignment : [],
         process_template_id: selectedTemplateId,
         execution_process_draft: executionDraft,
         source_invoice_id: moduleId === 'invoices' ? id : (quickProjectLinkedRecords.invoices || null),
@@ -3137,6 +3192,7 @@ const ModuleShow: React.FC = () => {
     } catch (error: any) {
       msg.error(`ایجاد پروژه ناموفق بود: ${error?.message || error}`);
     } finally {
+      quickProjectSubmitLockRef.current = false;
       setQuickProjectLoading(false);
     }
   }, [id, moduleId, msg, navigate, quickProjectLinkedRecords, quickProjectTargetModuleIds, quickProjectForm, quickProjectTemplateOptions]);
@@ -3359,9 +3415,13 @@ const ModuleShow: React.FC = () => {
         detail: 'تصویر اصلی رکورد',
       });
       const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+      const imageUpdatePayload =
+        moduleId === 'cash_bank_operations'
+          ? { image_url: urlData.publicUrl, attachment_url: urlData.publicUrl }
+          : { image_url: urlData.publicUrl };
       const { error: updateError } = await supabase
         .from(moduleId)
-        .update({ image_url: urlData.publicUrl })
+        .update(imageUpdatePayload)
         .eq('id', id);
       if (updateError) throw updateError;
 
@@ -3399,7 +3459,11 @@ const ModuleShow: React.FC = () => {
           console.warn('Could not append uploaded image to record_files', fileInsertError);
         }
       }
-      setData((prev: any) => ({ ...prev, image_url: urlData.publicUrl }));
+      setData((prev: any) => ({
+        ...prev,
+        image_url: urlData.publicUrl,
+        ...(moduleId === 'cash_bank_operations' ? { attachment_url: urlData.publicUrl } : {}),
+      }));
       await insertChangelog({
         action: 'file_attached',
         fieldName: 'image_url',
@@ -3953,9 +4017,16 @@ const ModuleShow: React.FC = () => {
   const handleMainImageChange = useCallback(async (url: string | null) => {
     if (!canEditModule) return;
     try {
-      const { error } = await supabase.from(moduleId).update({ image_url: url }).eq('id', id);
+      const updatePayload = moduleId === 'cash_bank_operations'
+        ? { image_url: url, attachment_url: url }
+        : { image_url: url };
+      const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', id);
       if (error) throw error;
-      setData((prev: any) => ({ ...prev, image_url: url }));
+      setData((prev: any) => ({
+        ...prev,
+        image_url: url,
+        ...(moduleId === 'cash_bank_operations' ? { attachment_url: url } : {}),
+      }));
       await insertChangelog({
         action: 'update',
         fieldName: 'image_url',
@@ -4091,9 +4162,57 @@ const ModuleShow: React.FC = () => {
         setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
         return;
       }
-      const updatePayload = moduleId === 'tasks' && taskSourceEditKeys.has(key)
+      const isCashBankAccountEdit =
+        moduleId === 'cash_bank_operations'
+        && ['operation_type', 'payment_account_id', 'receipt_account_id', 'assignee_id', 'assignee_type', 'assignee_role_id', 'image_url', 'attachment_url'].includes(String(key));
+      let updatePayload = moduleId === 'tasks' && taskSourceEditKeys.has(key)
         ? buildTaskSourcePatch({ ...(data || {}), ...tempValues, [key]: newValue })
         : { [key]: newValue };
+      if (isCashBankAccountEdit) {
+        const nextCashBankValues = normalizeModuleFormValues(moduleId, {
+          ...(data || {}),
+          ...tempValues,
+          [key]: newValue,
+        });
+        if (key !== 'operation_type') {
+          const validationError = validateModuleFormValues(moduleId, nextCashBankValues, relationOptions);
+          if (validationError) {
+            throw new Error(validationError);
+          }
+        }
+        const transformedCashBankValues = transformModulePayloadForSave(moduleId, nextCashBankValues, relationOptions);
+        updatePayload = {
+          operation_type: transformedCashBankValues.operation_type || null,
+          assignee_id: transformedCashBankValues.assignee_id ?? null,
+          assignee_type: transformedCashBankValues.assignee_type ?? null,
+          assignee_role_id: transformedCashBankValues.assignee_role_id ?? null,
+          image_url: transformedCashBankValues.image_url ?? null,
+          attachment_url: transformedCashBankValues.attachment_url ?? null,
+          employee_id: transformedCashBankValues.employee_id ?? null,
+          bank_account_id: transformedCashBankValues.bank_account_id ?? null,
+          cash_box_id: transformedCashBankValues.cash_box_id ?? null,
+          petty_fund_id: transformedCashBankValues.petty_fund_id ?? null,
+          payment_bank_account_id: transformedCashBankValues.payment_bank_account_id ?? null,
+          payment_cash_box_id: transformedCashBankValues.payment_cash_box_id ?? null,
+          payment_petty_fund_id: transformedCashBankValues.payment_petty_fund_id ?? null,
+          receipt_bank_account_id: transformedCashBankValues.receipt_bank_account_id ?? null,
+          receipt_cash_box_id: transformedCashBankValues.receipt_cash_box_id ?? null,
+          receipt_petty_fund_id: transformedCashBankValues.receipt_petty_fund_id ?? null,
+        };
+        if (String(nextCashBankValues.operation_type || '').trim() === 'transfer') {
+          Object.assign(updatePayload, {
+            sales_invoice_id: null,
+            purchase_invoice_id: null,
+            expense_document_id: null,
+            employee_advance_id: null,
+            payroll_slip_id: null,
+            customer_id: null,
+            supplier_id: null,
+            cheque_id: null,
+            barter_id: null,
+          });
+        }
+      }
       const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', id);
       if (error) throw error;
       if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && key === 'status') {
@@ -4158,7 +4277,9 @@ const ModuleShow: React.FC = () => {
         previousRecord: (data || null) as Record<string, any> | null,
       });
       setData((prev: any) => (
-        moduleId === 'tasks' && taskSourceEditKeys.has(key)
+        isCashBankAccountEdit
+          ? { ...(prev || {}), ...updatePayload }
+          : moduleId === 'tasks' && taskSourceEditKeys.has(key)
           ? { ...(prev || {}), ...updatePayload }
           : { ...(prev || {}), [key]: newValue }
       ));
@@ -4465,22 +4586,13 @@ const ModuleShow: React.FC = () => {
   };
   const cancelEdit = (key: string) => { setEditingFields(prev => ({ ...prev, [key]: false })); };
 
-  const checkVisibility = (logicOrRule: any) => {
-    if (!logicOrRule) return true;
-    const rule = logicOrRule.visibleIf || logicOrRule;
-    if (!rule || !rule.field) return true;
-    const { field, operator, value } = rule;
-    const currentValue = data?.[field];
-    if (currentValue === undefined || currentValue === null) {
-      if (operator === LogicOperator.NOT_EQUALS) return false;
+  const checkVisibility = useCallback((target: any) => {
+    if (!target) return true;
+    if (target?.key) {
+      return conditionalFieldRuntime.isFieldVisible(target);
     }
-    if (operator === LogicOperator.EQUALS) return currentValue === value;
-    if (operator === LogicOperator.NOT_EQUALS) return currentValue !== value;
-    if (operator === LogicOperator.CONTAINS) return Array.isArray(currentValue) ? currentValue.includes(value) : false;
-    if (operator === LogicOperator.GREATER_THAN) return Number(currentValue) > Number(value);
-    if (operator === LogicOperator.LESS_THAN) return Number(currentValue) < Number(value);
-    return true;
-  };
+    return evaluateLegacyVisibilityRule(target, displayData || {});
+  }, [conditionalFieldRuntime, displayData]);
 
     const getOptionLabel = (field: any, value: any) => {
       if (!field) return getSafeOptionFallback(value);
@@ -4514,7 +4626,7 @@ const ModuleShow: React.FC = () => {
       }
       if (field.type === FieldType.RELATION) {
           for (const key in relationOptions) {
-              const found = relationOptions[key]?.find((o: any) => o.value === value);
+              const found = relationOptions[key]?.find((o: any) => String(o?.value) === String(value));
               if (found) return found.label;
           }
       }
@@ -4681,12 +4793,13 @@ const ModuleShow: React.FC = () => {
     };
     return moduleConfig.fields
       .filter(f => f.type !== FieldType.IMAGE && f.type !== FieldType.JSON && f.type !== FieldType.READONLY_LOOKUP)
-      .filter(f => !f.logic || checkVisibility(f.logic))
+      .filter(f => !shouldHideManagedAssigneeField(moduleId, f.key))
+      .filter(f => conditionalFieldRuntime.isFieldVisible(f))
       .filter(f => canViewField(f.key))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-      .map(f => ({ ...f, value: data[f.key] }))
+      .map(f => ({ ...f, value: displayData[f.key] }))
       .filter(f => hasValue(f.value));
-  }, [moduleConfig, data, dynamicOptions, relationOptions]);
+  }, [canViewField, conditionalFieldRuntime, data, displayData, moduleConfig]);
 
   // ✅ استفاده از custom hook برای مدیریت print
   const printManager = usePrintManager({
@@ -5418,7 +5531,7 @@ const ModuleShow: React.FC = () => {
   const renderSmartField = (field: any, isHeader = false) => {
     if (!canViewField(field.key)) return null;
     const isEditing = editingFields[field.key];
-    const value = data[field.key];
+    const value = displayData[field.key];
     const isProcessDraftField = (
       field.key === 'execution_process_draft' ||
       field.key === 'marketing_process_draft' ||
@@ -5463,7 +5576,7 @@ const ModuleShow: React.FC = () => {
             options={options}
             recordId={id}
             moduleId={moduleId}
-            allValues={data}
+            allValues={displayData}
           />
         </div>
       );
@@ -5485,13 +5598,18 @@ const ModuleShow: React.FC = () => {
       || (moduleId === 'process_runs' && field.key === 'module_id')
     ) options = getProcessTemplateModuleOptions();
     else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
-    else if (moduleId === 'tasks' && field.key === 'status') options = getTaskStatusOptions(data);
+      else if (moduleId === 'tasks' && field.key === 'status') options = getTaskStatusOptions(displayData);
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
     else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
     if (field.key === 'process_template_id' && processDraftFieldKey) {
       options = processTemplateFieldOptions;
     }
     const isProcessTemplateFieldLocked = field.key === 'process_template_id' && hasStartedProcessExecution;
+    const isCashBankAttachmentField =
+      moduleId === 'cash_bank_operations'
+      && !isHeader
+      && field.type === FieldType.IMAGE
+      && String(field.key || '').trim() === 'attachment_url';
 
     if (isEditing) {
       return (
@@ -5504,13 +5622,13 @@ const ModuleShow: React.FC = () => {
                 if (isProcessTemplateFieldLocked) return;
                 setTempValues(prev => ({ ...prev, [field.key]: val }));
                 const shouldHandleBom =
-                  (field.key === 'related_bom' && val && val !== data?.related_bom) ||
-                  (moduleId === 'production_orders' && field.key === 'bom_id' && val && val !== data?.bom_id);
+                  (field.key === 'related_bom' && val && val !== displayData?.related_bom) ||
+                  (moduleId === 'production_orders' && field.key === 'bom_id' && val && val !== displayData?.bom_id);
                 const shouldHandleProcessTemplate =
                   !!processDraftFieldKey &&
                   field.key === 'process_template_id' &&
                   val &&
-                  val !== data?.process_template_id;
+                  val !== displayData?.process_template_id;
                 if (shouldHandleBom) {
                   setTimeout(() => handleRelatedBomChange(val), 100);
                 }
@@ -5524,7 +5642,7 @@ const ModuleShow: React.FC = () => {
               onOptionsUpdate={fetchOptions}
               recordId={id}
               moduleId={moduleId}
-              allValues={data}
+                allValues={displayData}
             />
           </div>
           <Button
@@ -5546,6 +5664,24 @@ const ModuleShow: React.FC = () => {
       );
     }
 
+    if (isCashBankAttachmentField) {
+      const resolvedAttachmentUrl =
+        String(displayData?.attachment_url || displayData?.image_url || '').trim() || null;
+      return (
+        <div className="max-w-[240px]">
+          <RecordImageBox
+            moduleId={moduleId}
+            recordId={id}
+            imageUrl={resolvedAttachmentUrl}
+            compact
+            canEdit={canEditModule}
+            onImageUpdate={handleImageUpdate}
+            onMainImageChange={handleMainImageChange}
+          />
+        </div>
+      );
+    }
+
     const displayNode = (
       <SmartFieldRenderer
         field={field}
@@ -5556,7 +5692,7 @@ const ModuleShow: React.FC = () => {
         options={options}
         recordId={id}
         moduleId={moduleId}
-        allValues={data}
+        allValues={displayData}
       />
     );
 
@@ -5761,7 +5897,7 @@ const ModuleShow: React.FC = () => {
       />
 
       <HeroSection
-        data={{ ...data, id }}
+        data={{ ...displayData, id }}
         recordTitle={resolvedRecordTitle}
         moduleId={moduleId}
         moduleConfig={moduleConfig}
@@ -5779,6 +5915,7 @@ const ModuleShow: React.FC = () => {
         canViewField={canViewField}
         canEditModule={canEditModule}
         checkVisibility={checkVisibility}
+        isFieldVisible={conditionalFieldRuntime.isFieldVisible}
         recordTitleFieldKey={recordTitleField?.key || null}
         renderRecordTitle={renderEditableRecordTitle}
       />
@@ -5786,13 +5923,14 @@ const ModuleShow: React.FC = () => {
       <FieldGroupsTabs
         fieldGroups={fieldGroups}
         moduleConfig={moduleConfig}
-        data={data}
+        data={displayData}
         moduleId={moduleId}
         recordId={id!}
         relationOptions={relationOptions}
         dynamicOptions={dynamicOptions}
         renderSmartField={renderSmartField}
         checkVisibility={checkVisibility}
+        isFieldVisible={conditionalFieldRuntime.isFieldVisible}
         canViewField={canViewField}
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
@@ -5802,13 +5940,16 @@ const ModuleShow: React.FC = () => {
 
       <TablesSection
         module={moduleConfig}
-        data={data}
+        data={displayData}
         relationOptions={relationOptions}
         dynamicOptions={dynamicOptions}
         checkVisibility={checkVisibility}
+        isFieldVisible={conditionalFieldRuntime.isFieldVisible}
         canViewField={canViewField}
         canEditModule={canEditModule}
         onDataUpdate={handleRecordPatch}
+        focusBlockId={focusBlockId}
+        focusRowKey={focusRowKey}
       />
 
       {moduleId === 'chart_of_accounts' && id ? (
@@ -5878,71 +6019,67 @@ const ModuleShow: React.FC = () => {
         zIndex={12500}
         style={{ maxWidth: 'calc(100vw - 1rem)' }}
         onCancel={() => {
+          if (quickProjectLoading) return;
           setIsQuickProjectModalOpen(false);
           setQuickProjectTargetModuleIds([]);
           setQuickProjectLinkedRecords({});
           setQuickProjectRelationOptions({});
           setQuickProjectRelationLoading({});
+          quickProjectSubmitLockRef.current = false;
           quickProjectForm.resetFields();
         }}
         footer={null}
         destroyOnHidden
       >
         <Form form={quickProjectForm} layout="vertical" onFinish={handleQuickProjectCreate} className="pt-2">
-          <Form.Item
-            name="name"
-            label="نام پروژه"
-            rules={[{ required: true, message: 'نام پروژه الزامی است' }]}
-          >
-            <Input placeholder='مثال: پروژه "فاکتور فروش ۱۲۳"' />
-          </Form.Item>
-
-          <SmartFieldRenderer
-            field={quickProjectCustomerField}
-            value={quickProjectCustomerId}
-            onChange={(value) => {
-              quickProjectForm.setFieldValue('customer_id', value || null);
-            }}
-            forceEditMode={true}
-            options={quickProjectCustomerOptions}
-            onOptionsUpdate={() => {
-              void loadQuickProjectModalOptions({
-                customerId: quickProjectForm.getFieldValue('customer_id'),
-                templateId: quickProjectForm.getFieldValue('process_template_id'),
-              });
-            }}
-            moduleId="projects"
-            allValues={quickProjectForm.getFieldsValue(true)}
-            overlayZIndexBase={12600}
-          />
-
-          <SmartFieldRenderer
-            field={quickProjectTemplateField}
-            value={quickProjectTemplateId}
-            onChange={(value) => {
-              quickProjectForm.setFieldValue('process_template_id', value || null);
-            }}
-            forceEditMode={true}
-            options={quickProjectTemplateOptions}
-            onOptionsUpdate={() => {
-              void loadQuickProjectModalOptions({
-                customerId: quickProjectForm.getFieldValue('customer_id'),
-                templateId: quickProjectForm.getFieldValue('process_template_id'),
-              });
-            }}
-            moduleId="projects"
-            allValues={quickProjectForm.getFieldsValue(true)}
-            overlayZIndexBase={12600}
-          />
+          {quickProjectModalFields.map((field: any) => {
+            const fieldKey = String(field?.key || '').trim();
+            const fieldValue = fieldKey === 'name'
+              ? quickProjectName
+              : fieldKey === 'customer_id'
+                ? quickProjectCustomerId
+                : fieldKey === 'project_alignment'
+                  ? quickProjectAlignment
+                  : quickProjectTemplateId;
+            const fieldOptions = fieldKey === 'customer_id'
+              ? quickProjectCustomerOptions
+              : fieldKey === 'process_template_id'
+                ? quickProjectTemplateOptions
+                : field.options;
+            const handleOptionsUpdate = fieldKey === 'customer_id' || fieldKey === 'process_template_id'
+              ? () => {
+                  void loadQuickProjectModalOptions({
+                    customerId: quickProjectForm.getFieldValue('customer_id'),
+                    templateId: quickProjectForm.getFieldValue('process_template_id'),
+                  });
+                }
+              : undefined;
+            return (
+              <SmartFieldRenderer
+                key={fieldKey}
+                field={field}
+                value={fieldValue}
+                onChange={(value) => {
+                  quickProjectForm.setFieldValue(fieldKey, value ?? (field.type === FieldType.MULTI_SELECT ? [] : null));
+                }}
+                forceEditMode={true}
+                options={fieldOptions}
+                onOptionsUpdate={handleOptionsUpdate}
+                moduleId="projects"
+                allValues={quickProjectForm.getFieldsValue(true)}
+                overlayZIndexBase={12600}
+              />
+            );
+          })}
 
           {String(quickProjectTemplateId || '').trim() && quickProjectLinkedFields.length > 0 ? (
-            <div className="mb-4 rounded-xl border border-leather-200 bg-leather-50 px-3 py-3">
-              <div className="text-sm font-semibold text-leather-800">رکوردهای مرتبط فرآیند</div>
-              <div className="mt-1 text-xs text-leather-700">
+            <div className="mb-4 rounded-xl border border-leather-200 bg-leather-50 px-3 py-3 dark:border-white/10 dark:bg-white/5">
+              <div className="text-sm font-semibold text-leather-800 dark:text-gray-100">رکوردهای مرتبط فرآیند</div>
+              <div className="mt-1 text-xs text-leather-700 dark:text-gray-300">
                 رکوردهای شناخته‌شده به‌صورت خودکار پر شده‌اند. برای ماژول‌های دیگر در صورت نیاز رکورد انتخاب کنید.
               </div>
               {quickProjectRelationsLoading ? (
-                <div className="mt-1 text-xs text-leather-600">در حال بارگذاری گزینه‌های رکوردهای مرتبط...</div>
+                <div className="mt-1 text-xs text-leather-600 dark:text-gray-400">در حال بارگذاری گزینه‌های رکوردهای مرتبط...</div>
               ) : null}
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 {quickProjectLinkedFields.map(({ moduleId: targetModuleId, field }) => (
@@ -5968,20 +6105,21 @@ const ModuleShow: React.FC = () => {
           ) : null}
 
           {(moduleId === 'invoices' || moduleId === 'purchase_invoices') && (
-            <div className="rounded-xl border border-leather-200 bg-leather-50 px-3 py-2 text-xs text-leather-700">
+            <div className="rounded-xl border border-leather-200 bg-leather-50 px-3 py-2 text-xs text-leather-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-300">
               {moduleId === 'invoices'
                 ? 'این پروژه به‌صورت خودکار به فاکتور فروش جاری هم لینک می‌شود.'
                 : 'این پروژه به‌صورت خودکار به فاکتور خرید جاری هم لینک می‌شود.'}
             </div>
           )}
 
-          <div className="mt-4 flex justify-end gap-2 border-t pt-4">
-            <Button onClick={() => {
+          <div className="mt-4 flex justify-end gap-2 border-t border-gray-200 pt-4 dark:border-white/10">
+            <Button disabled={quickProjectLoading} onClick={() => {
               setIsQuickProjectModalOpen(false);
               setQuickProjectTargetModuleIds([]);
               setQuickProjectLinkedRecords({});
               setQuickProjectRelationOptions({});
               setQuickProjectRelationLoading({});
+              quickProjectSubmitLockRef.current = false;
               quickProjectForm.resetFields();
             }}>
               انصراف

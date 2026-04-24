@@ -61,6 +61,11 @@ import {
   isModuleListLiveInvalidationSupportedView,
   subscribeToModuleListLiveInvalidation,
 } from "../utils/moduleListLive";
+import { resolveCashBankSourceNavigation } from "../utils/cashBankNavigation";
+import { normalizeModuleFormValues } from "../utils/moduleFormRuntime";
+import { backfillOperationalCashBankOperations } from "../utils/cashBankBackfill";
+import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows";
+import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -143,6 +148,28 @@ const buildModuleListStateKey = (moduleId?: string | null, suffix?: string | nul
   return normalizedSuffix
     ? `module_list_state:${normalizedModuleId}:${normalizedSuffix}`
     : `module_list_state:${normalizedModuleId}`;
+};
+
+const sanitizeModuleVisibleColumns = (
+  moduleId: string | null | undefined,
+  moduleConfig: ModuleDefinition | null | undefined,
+  columns?: string[] | null,
+) => {
+  const allowedFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || "").trim()).filter(Boolean));
+  const seen = new Set<string>();
+  const sanitized = (Array.isArray(columns) ? columns : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((key) => {
+      if (moduleId === "cash_bank_operations" && CASH_BANK_LEGACY_ACCOUNT_KEYS.has(key)) return false;
+      if (!allowedFieldKeys.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  if (moduleId === "cash_bank_operations" && allowedFieldKeys.has("image_url")) {
+    return ["image_url", ...sanitized.filter((key) => key !== "image_url")];
+  }
+  return sanitized;
 };
 
 const readPersistedModuleListState = (moduleId?: string | null, suffix?: string | null): PersistedModuleListState | null => {
@@ -456,9 +483,13 @@ export const ModuleListRefine: React.FC<{
   const [isBulkEditMode, setIsBulkEditMode] = useState(false);
   const [kanbanGroupBy, setKanbanGroupBy] = useState<string>("");
   const [calendarDateField, setCalendarDateField] = useState<string>("");
+  const cashBankBackfillAttemptedRef = useRef(false);
+  const [cashBankFallbackRows, setCashBankFallbackRows] = useState<any[]>([]);
   const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(effectiveInitialViewFilters);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(persistedState?.columnFilters || {});
-  const [visibleColumns, setVisibleColumns] = useState<string[]>(persistedState?.visibleColumns || []);  // ✅ ستون‌های انتخاب‌شده
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(
+    () => sanitizeModuleVisibleColumns(resolvedModuleId, moduleConfig, persistedState?.visibleColumns || [])
+  );  // ✅ ستون‌های انتخاب‌شده
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>(
     () => cachedOptionSnapshot?.dynamicOptions || {}
   );  // ✅ اضافه شد
@@ -572,6 +603,12 @@ export const ModuleListRefine: React.FC<{
   const loading = hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading;
   const queryPending = hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending;
   const allData = hasActiveTagViewFilters ? tagViewFilterRows : baseAllData;
+  const effectiveAllData = useMemo(() => {
+    if (resolvedModuleId !== "cash_bank_operations" || cashBankFallbackRows.length === 0) return allData;
+    const existingIds = new Set((allData || []).map((row: any) => String(row?.id || "").trim()).filter(Boolean));
+    const fallbackRows = cashBankFallbackRows.filter((row: any) => !existingIds.has(String(row?.id || "").trim()));
+    return [...(allData || []), ...fallbackRows];
+  }, [allData, cashBankFallbackRows, resolvedModuleId]);
   const hasQueryResult = hasActiveTagViewFilters
     ? (!tagViewFilterLoading || tagViewFilterRows.length > 0)
     : baseHasQueryResult;
@@ -596,6 +633,9 @@ export const ModuleListRefine: React.FC<{
   const isListPageSizeReady = viewMode !== ViewMode.LIST || Number(pageSize || 0) === DEFAULT_LIST_PAGE_SIZE;
   const totalFilteredRecordCount = useMemo(
     () => {
+      if (resolvedModuleId === "cash_bank_operations" && cashBankFallbackRows.length > 0) {
+        return effectiveAllData.length;
+      }
       if (hasActiveTagViewFilters) {
         return Number(tagViewFilterTotal || 0);
       }
@@ -603,9 +643,17 @@ export const ModuleListRefine: React.FC<{
       const paginationTotal = Number(paginationConfig?.total || 0);
       return Number(paginationTotal || tableQueryResult.data?.total || 0);
     },
-    [hasActiveTagViewFilters, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
+    [cashBankFallbackRows.length, effectiveAllData.length, hasActiveTagViewFilters, resolvedModuleId, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
   );
   const effectiveTablePagination = useMemo(() => {
+    if (resolvedModuleId === "cash_bank_operations" && cashBankFallbackRows.length > 0) {
+      return {
+        ...(tableProps.pagination || {}),
+        total: effectiveAllData.length,
+        current: Math.max(1, Number(current || 1)),
+        pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
+      };
+    }
     if (!hasActiveTagViewFilters) return tableProps.pagination;
     return {
       ...(tableProps.pagination || {}),
@@ -613,17 +661,62 @@ export const ModuleListRefine: React.FC<{
       current: Math.max(1, Number(current || 1)),
       pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
     };
-  }, [current, hasActiveTagViewFilters, pageSize, tableProps.pagination, tagViewFilterTotal]);
+  }, [cashBankFallbackRows.length, current, effectiveAllData.length, hasActiveTagViewFilters, pageSize, resolvedModuleId, tableProps.pagination, tagViewFilterTotal]);
 
   useEffect(() => {
     autoSortSyncDoneRef.current = false;
     lastRequestedPageSizeRef.current = null;
     lastAppliedFiltersSignatureRef.current = null;
     tagViewFilterIdsCacheRef.current = null;
+    cashBankBackfillAttemptedRef.current = false;
+    setCashBankFallbackRows([]);
     setTagViewFilterRows([]);
     setTagViewFilterTotal(0);
     setTagViewFilterLoading(false);
   }, [resolvedModuleId, viewMode]);
+
+  useEffect(() => {
+    if (resolvedModuleId !== "cash_bank_operations" || queryPending || cashBankBackfillAttemptedRef.current) return;
+    cashBankBackfillAttemptedRef.current = true;
+    let cancelled = false;
+
+    const runBackfill = async () => {
+      const loadFallbackRows = async () => {
+        try {
+          const fallbackRows = await fetchMissingCashBankFallbackRows(supabase);
+          if (!cancelled) setCashBankFallbackRows(Array.isArray(fallbackRows) ? fallbackRows : []);
+        } catch (fallbackError) {
+          if (!cancelled) {
+            console.warn("cash bank fallback fetch failed", fallbackError);
+            setCashBankFallbackRows([]);
+          }
+        }
+      };
+
+      try {
+        const result = await backfillOperationalCashBankOperations(supabase);
+        if (cancelled) return;
+        if (result.inserted > 0 || result.updated > 0 || result.canceled > 0 || result.sourceRecordsUpdated > 0) {
+          showListMessage(
+            "success",
+            `نقد و بانک همگام شد: ${toPersianNumber(result.inserted)} جدید، ${toPersianNumber(result.updated)} بروزرسانی، ${toPersianNumber(result.canceled)} لغو.`,
+            5,
+          );
+          await tableQueryResult.refetch();
+        }
+        await loadFallbackRows();
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("cash bank backfill failed", error);
+        await loadFallbackRows();
+      }
+    };
+
+    void runBackfill();
+    return () => {
+      cancelled = true;
+    };
+  }, [queryPending, resolvedModuleId, showListMessage, tableQueryResult]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -684,7 +777,7 @@ export const ModuleListRefine: React.FC<{
     setSelectedRowKeys([]);
     setSelectedRowsMap({});
     setListVisibleRowKeys(null);
-    setVisibleColumns(restoredState?.visibleColumns || []);
+    setVisibleColumns(sanitizeModuleVisibleColumns(resolvedModuleId, moduleConfig, restoredState?.visibleColumns || []));
     setGridPageSize(getDefaultGridPageSize());
     setKanbanVisibleCounts({});
     setKanbanDraggingRecordId(null);
@@ -922,26 +1015,61 @@ export const ModuleListRefine: React.FC<{
   // ✅ Merge tags into allData
   const accessibleData = useMemo(() => {
     if (!canViewModule) return [];
-    return allData.filter((record: any) =>
-      canAccessAssignedRecord(record, currentUserId, currentUserRoleId, recordScope, {
-        currentOrgId,
-        allowedRoleIds,
-        allowedUserIds,
+    return effectiveAllData
+      .filter((record: any) => {
+        const normalizedRecord =
+          resolvedModuleId === "cash_bank_operations"
+            ? {
+                ...record,
+                assignee_id: record?.assignee_id || record?.employee_id || null,
+                assignee_type:
+                  (record?.assignee_id || record?.employee_id)
+                    ? (String(record?.assignee_type || "").trim() || "user")
+                    : record?.assignee_type,
+              }
+            : record;
+        return canAccessAssignedRecord(normalizedRecord, currentUserId, currentUserRoleId, recordScope, {
+          currentOrgId,
+          allowedRoleIds,
+          allowedUserIds,
+        });
       })
-    );
-  }, [allData, allowedRoleIds, allowedUserIds, canViewModule, currentOrgId, currentUserId, currentUserRoleId, recordScope]);
+      .filter((record: any) => {
+        if (resolvedModuleId !== "cash_bank_operations") return true;
+        if (String(record?.status || "").trim() !== "canceled") return true;
+        const rawMetadata = record?.metadata;
+        const metadata =
+          rawMetadata && typeof rawMetadata === "object"
+            ? rawMetadata
+            : typeof rawMetadata === "string"
+              ? (() => {
+                  try {
+                    return JSON.parse(rawMetadata);
+                  } catch {
+                    return null;
+                  }
+                })()
+              : null;
+        return metadata?.is_auto_generated !== true;
+      });
+  }, [allowedRoleIds, allowedUserIds, canViewModule, currentOrgId, currentUserId, currentUserRoleId, effectiveAllData, recordScope, resolvedModuleId]);
+
+  const normalizedAccessibleData = useMemo(() => {
+    if (resolvedModuleId !== "cash_bank_operations") return accessibleData;
+    return accessibleData.map((record: any) => normalizeModuleFormValues(resolvedModuleId, record));
+  }, [accessibleData, resolvedModuleId]);
 
   const enrichedData = useMemo(() => {
-    if (!tagsField) return accessibleData;
+    if (!tagsField) return normalizedAccessibleData;
     const tf: string = tagsField;
-    return accessibleData.map(record => ({
+    return normalizedAccessibleData.map(record => ({
       ...record,
-      [tf]: tagsMap[record.id as string] || []
+      [tf]: tagsMap[record.id as string] || (Array.isArray(record?.[tf]) ? record[tf] : [])
     }));
-  }, [accessibleData, tagsMap, tagsField]);
+  }, [normalizedAccessibleData, tagsMap, tagsField]);
   const accessibleRecordIds = useMemo(
-    () => accessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
-    [accessibleData]
+    () => normalizedAccessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
+    [normalizedAccessibleData]
   );
   const accessibleRecordIdsSignature = useMemo(
     () => accessibleRecordIds.join("|"),
@@ -1609,6 +1737,15 @@ export const ModuleListRefine: React.FC<{
   const openRecordFromList = useCallback((record: any) => {
     const recordId = String(record?.id || "").trim();
     if (!resolvedModuleId || !recordId) return;
+    if (resolvedModuleId === "cash_bank_operations") {
+      const sourceNavigation = resolveCashBankSourceNavigation(record);
+      if (sourceNavigation) {
+        navigate(`/${sourceNavigation.moduleId}/${sourceNavigation.recordId}`, {
+          state: sourceNavigation.state,
+        });
+        return;
+      }
+    }
     if (useQuickPreviewModal) {
       setPreviewRecordId(recordId);
       return;
@@ -1618,6 +1755,22 @@ export const ModuleListRefine: React.FC<{
 
   const moduleListNavigate = useCallback((path: string) => {
     const normalizedPath = String(path || "").trim();
+    if (resolvedModuleId === "cash_bank_operations") {
+      const moduleRecordPrefix = `/${resolvedModuleId}/`;
+      if (normalizedPath.startsWith(moduleRecordPrefix)) {
+        const recordId = normalizedPath.slice(moduleRecordPrefix.length).split("/")[0];
+        if (recordId && recordId !== "create") {
+          const cashBankRecord = enrichedData.find((item: any) => String(item?.id || "").trim() === recordId);
+          const sourceNavigation = resolveCashBankSourceNavigation(cashBankRecord);
+          if (sourceNavigation) {
+            navigate(`/${sourceNavigation.moduleId}/${sourceNavigation.recordId}`, {
+              state: sourceNavigation.state,
+            });
+            return;
+          }
+        }
+      }
+    }
     if (useQuickPreviewModal && resolvedModuleId) {
       const moduleRecordPrefix = `/${resolvedModuleId}/`;
       if (normalizedPath.startsWith(moduleRecordPrefix)) {
@@ -1629,7 +1782,7 @@ export const ModuleListRefine: React.FC<{
       }
     }
     navigate(normalizedPath);
-  }, [navigate, resolvedModuleId, useQuickPreviewModal]);
+  }, [enrichedData, navigate, resolvedModuleId, useQuickPreviewModal]);
 
   function buildColumnCrudFilters(nextColumnFilters: ColumnFiltersState): CrudFilters {
     if (!moduleConfig) return [];
@@ -2272,11 +2425,11 @@ export const ModuleListRefine: React.FC<{
 
     // ✅ اعمال ستون‌های انتخاب‌شده
     if (config && config.columns && Array.isArray(config.columns) && config.columns.length > 0) {
-        setVisibleColumns(config.columns);
+        setVisibleColumns(sanitizeModuleVisibleColumns(resolvedModuleId, moduleConfig, config.columns));
     } else {
         setVisibleColumns([]);
     }
-  }, [columnFilters, currentView, resolvedModuleId, searchTerm]);
+  }, [columnFilters, currentView, moduleConfig, resolvedModuleId, searchTerm]);
 
   const handleViewModeChange = useCallback((nextMode: ViewMode) => {
     if (nextMode === viewMode) return;

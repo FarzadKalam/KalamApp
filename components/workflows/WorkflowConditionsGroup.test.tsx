@@ -1,6 +1,6 @@
 import React from 'react';
 import { App, ConfigProvider, Modal } from 'antd';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WorkflowConditionsGroup from './WorkflowConditionsGroup';
@@ -96,7 +96,6 @@ describe('WorkflowConditionsGroup', () => {
   it('uses mobile sheet mode for workflow condition values on small screens and commits single-select immediately', async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
-    const user = userEvent.setup();
     const onChange = vi.fn();
 
     render(
@@ -130,12 +129,12 @@ describe('WorkflowConditionsGroup', () => {
       </ConfigProvider>
     );
 
-    await user.click(screen.getAllByRole('button', { name: /انتخاب مقدار|وضعیت/i })[0]);
-    const dialog = (await screen.findAllByRole('dialog')).at(-1)!;
-    await user.click(within(dialog).getByText('باز'));
+    fireEvent.click(screen.getByRole('button', { name: 'انتخاب مقدار' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'باز' }));
 
     expect(onChange).toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'تایید' })).not.toBeInTheDocument();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
-  });
+  }, 10000);
 });

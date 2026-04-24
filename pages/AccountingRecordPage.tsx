@@ -22,14 +22,17 @@ import {
   PlusOutlined,
   SafetyCertificateOutlined,
   SaveOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { MODULES } from '../moduleRegistry';
-import { FieldLocation, FieldNature, FieldType, ModuleField } from '../types';
+import { FieldLocation, FieldNature, FieldType, LogicOperator, ModuleField } from '../types';
 import PersianDatePicker from '../components/PersianDatePicker';
 import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
+import RecordImageBox from '../components/RecordImageBox';
+import TagInput from '../components/TagInput';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRolePermissions } from '../utils/permissions';
 import { isAccountingMinimalModule } from '../utils/accountingModules';
@@ -69,6 +72,65 @@ const CHEQUE_INLINE_FIELD_KEYS = new Set<string>([
   'account_holder_name',
 ]);
 const CHEQUE_DEFERRED_FIELD_KEYS = new Set<string>(['notes']);
+const ACCOUNTING_HERO_EXCLUDED_FIELD_KEYS = new Set<string>(['tags']);
+const CASH_BANK_TRANSFER_ONLY_FIELD_KEYS = new Set<string>([
+  'payment_account_id',
+  'receipt_account_id',
+]);
+const CASH_BANK_NON_TRANSFER_FIELD_KEYS = new Set<string>([
+  'bank_account_id',
+  'cash_box_id',
+  'sales_invoice_id',
+  'purchase_invoice_id',
+  'expense_document_id',
+  'employee_advance_id',
+  'payroll_slip_id',
+  'customer_id',
+  'supplier_id',
+  'cheque_id',
+  'barter_id',
+]);
+
+const checkFieldVisibility = (logicOrRule: any, values: Record<string, any>) => {
+  if (!logicOrRule) return true;
+  const rule = logicOrRule.visibleIf || logicOrRule;
+  if (!rule || typeof rule !== 'object') return true;
+
+  const field = String(rule.field || '').trim();
+  const operator = rule.operator;
+  const value = rule.value;
+  const currentValue = values?.[field];
+
+  if (currentValue === undefined || currentValue === null || currentValue === '') {
+    return operator === LogicOperator.NOT_EQUALS;
+  }
+
+  if (operator === LogicOperator.EQUALS) return currentValue === value;
+  if (operator === LogicOperator.NOT_EQUALS) return currentValue !== value;
+  if (operator === LogicOperator.CONTAINS) return Array.isArray(currentValue) ? currentValue.includes(value) : false;
+  if (operator === LogicOperator.GREATER_THAN) return Number(currentValue) > Number(value);
+  if (operator === LogicOperator.LESS_THAN) return Number(currentValue) < Number(value);
+  if (operator === LogicOperator.IS_TRUE) return Boolean(currentValue) === true;
+  if (operator === LogicOperator.IS_FALSE) return Boolean(currentValue) === false;
+  return true;
+};
+
+const getTransferAccountPatch = (
+  fieldKey: 'payment_account_id' | 'receipt_account_id',
+  value: any,
+  options: FieldOption[]
+) => {
+  const selectedId = String(value || '').trim();
+  const selectedOption = options.find((option) => String(option.value || '').trim() === selectedId);
+  const selectedModule = String(selectedOption?.module || '').trim();
+  const prefix = fieldKey === 'payment_account_id' ? 'payment' : 'receipt';
+
+  return {
+    [`${prefix}_bank_account_id`]: selectedModule === 'bank_accounts' && selectedId ? selectedId : null,
+    [`${prefix}_cash_box_id`]: selectedModule === 'cash_boxes' && selectedId ? selectedId : null,
+    [`${prefix}_petty_fund_id`]: selectedModule === 'petty_funds' && selectedId ? selectedId : null,
+  } as Record<string, string | null>;
+};
 
 const AccountingRecordPage: React.FC = () => {
   const { moduleId, id } = useParams();
@@ -94,6 +156,7 @@ const AccountingRecordPage: React.FC = () => {
   const [relationOptions, setRelationOptions] = useState<Record<string, FieldOption[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, FieldOption[]>>({});
   const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [currentTags, setCurrentTags] = useState<any[]>([]);
   const [chequeBankOptions, setChequeBankOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [chequeBankMetaById, setChequeBankMetaById] = useState<
     Record<
@@ -109,19 +172,25 @@ const AccountingRecordPage: React.FC = () => {
 
   const visibleFields = useMemo(() => {
     if (!moduleConfig) return [] as ModuleField[];
+    const currentValues = formData || {};
     return (moduleConfig.fields || [])
       .filter((f) => fieldPerms[f.key] !== false)
+      .filter((f) => !ACCOUNTING_HERO_EXCLUDED_FIELD_KEYS.has(f.key))
+      .filter((f) => !f.logic || checkFieldVisibility(f.logic, currentValues))
       .filter((f) => {
         if (moduleId === 'cash_bank_operations') {
+          const operationType = String(formData?.operation_type || '').trim();
           const paymentType = String(formData?.payment_type || '').trim();
-          if (f.key === 'cheque_id') return paymentType === 'cheque';
-          if (f.key === 'barter_id') return paymentType === 'barter';
+          if (f.key === 'cheque_id') return paymentType === 'cheque' && operationType !== 'transfer';
+          if (f.key === 'barter_id') return paymentType === 'barter' && operationType !== 'transfer';
           if (f.key === 'cash_box_id' || f.key === 'petty_fund_id') return false;
+          if (operationType === 'transfer' && CASH_BANK_NON_TRANSFER_FIELD_KEYS.has(f.key)) return false;
+          if (operationType !== 'transfer' && CASH_BANK_TRANSFER_ONLY_FIELD_KEYS.has(f.key)) return false;
         }
         return true;
       })
       .sort(sortByOrder);
-  }, [moduleConfig, fieldPerms, formData?.payment_type, moduleId]);
+  }, [moduleConfig, fieldPerms, formData, formData?.payment_type, moduleId]);
 
   const chequeInlineFields = useMemo(() => {
     if (!isChequeModule) return [] as ModuleField[];
@@ -130,14 +199,46 @@ const AccountingRecordPage: React.FC = () => {
 
   useEffect(() => {
     if (moduleId !== 'cash_bank_operations') return;
+    const operationType = String(formData?.operation_type || '').trim();
     const paymentType = String(formData?.payment_type || '').trim();
     const patch: Record<string, any> = {};
     if (paymentType !== 'cheque' && formData?.cheque_id) patch.cheque_id = null;
     if (paymentType !== 'barter' && formData?.barter_id) patch.barter_id = null;
+    if (operationType === 'transfer') {
+      [
+        'bank_account_id',
+        'cash_box_id',
+        'petty_fund_id',
+        'sales_invoice_id',
+        'purchase_invoice_id',
+        'expense_document_id',
+        'employee_advance_id',
+        'payroll_slip_id',
+        'customer_id',
+        'supplier_id',
+        'cheque_id',
+        'barter_id',
+      ].forEach((key) => {
+        if (formData?.[key]) patch[key] = null;
+      });
+    } else {
+      [
+        'payment_account_id',
+        'receipt_account_id',
+        'payment_bank_account_id',
+        'payment_cash_box_id',
+        'payment_petty_fund_id',
+        'receipt_bank_account_id',
+        'receipt_cash_box_id',
+        'receipt_petty_fund_id',
+      ].forEach((key) => {
+        if (formData?.[key]) patch[key] = null;
+      });
+    }
     if (!Object.keys(patch).length) return;
     setFormData((prev) => ({ ...prev, ...patch }));
     form.setFieldsValue(patch);
-  }, [form, formData?.barter_id, formData?.cheque_id, formData?.payment_type, moduleId]);
+  }, [form, formData, formData?.barter_id, formData?.cheque_id, formData?.operation_type, formData?.payment_type, moduleId]);
 
   const standardFields = useMemo(() => {
     if (!isChequeModule) return visibleFields;
@@ -151,28 +252,52 @@ const AccountingRecordPage: React.FC = () => {
     return visibleFields.find((field) => field.key === 'notes') || null;
   }, [isChequeModule, visibleFields]);
 
-  const headerFields = useMemo(
-    () => standardFields.filter((field) => field.location === FieldLocation.HEADER),
+  const imageField = useMemo(
+    () => standardFields.find((field) => field.type === FieldType.IMAGE) || null,
     [standardFields]
+  );
+
+  const statusField = useMemo(
+    () => standardFields.find((field) => field.key === 'status') || null,
+    [standardFields]
+  );
+
+  const assigneeField = useMemo(
+    () => standardFields.find((field) => field.key === 'employee_id' || field.key === 'assignee_id') || null,
+    [standardFields]
+  );
+
+  const headerSpecialFieldKeys = useMemo(() => {
+    return new Set(
+      [imageField?.key, statusField?.key, assigneeField?.key, 'tags']
+        .map((key) => String(key || '').trim())
+        .filter(Boolean)
+    );
+  }, [assigneeField?.key, imageField?.key, statusField?.key]);
+
+  const headerFields = useMemo(
+    () => standardFields.filter((field) => field.location === FieldLocation.HEADER && !headerSpecialFieldKeys.has(field.key)),
+    [headerSpecialFieldKeys, standardFields]
   );
 
   const fieldsByBlock = useMemo(() => {
     const map = new Map<string, ModuleField[]>();
     standardFields.forEach((field) => {
+      if (headerSpecialFieldKeys.has(field.key)) return;
       if (!field.blockId) return;
       if (!map.has(field.blockId)) map.set(field.blockId, []);
       map.get(field.blockId)!.push(field);
     });
     map.forEach((items) => items.sort(sortByOrder));
     return map;
-  }, [standardFields]);
+  }, [headerSpecialFieldKeys, standardFields]);
 
   const looseFields = useMemo(
     () =>
       standardFields.filter(
-        (field) => field.location !== FieldLocation.HEADER && !field.blockId
+        (field) => field.location !== FieldLocation.HEADER && !field.blockId && !headerSpecialFieldKeys.has(field.key)
       ),
-    [standardFields]
+    [headerSpecialFieldKeys, standardFields]
   );
 
   const getFieldOptions = useCallback(
@@ -195,6 +320,26 @@ const AccountingRecordPage: React.FC = () => {
     },
     [userNames]
   );
+
+  const currentRecordValues = isEditMode ? formData : (record || {});
+
+  const assigneeFieldOptions = useMemo(() => {
+    if (!assigneeField) return [] as FieldOption[];
+    return getFieldOptions(assigneeField);
+  }, [assigneeField, getFieldOptions]);
+
+  const statusFieldOptions = useMemo(() => {
+    if (!statusField) return [] as FieldOption[];
+    return getFieldOptions(statusField);
+  }, [getFieldOptions, statusField]);
+
+  const handleHeaderImageChange = useCallback((url: string | null) => {
+    if (!imageField) return;
+    const patch = { [imageField.key]: url };
+    setFormData((prev) => ({ ...prev, ...patch }));
+    setRecord((prev) => (prev ? { ...prev, ...patch } : prev));
+    form.setFieldsValue(patch);
+  }, [form, imageField]);
 
   const renderDateTime = useCallback((value?: string | null) => {
     if (!value) return '-';
@@ -453,6 +598,7 @@ const AccountingRecordPage: React.FC = () => {
         }
         setRecord(null);
         setFormData(createInitialValues);
+        setCurrentTags(Array.isArray(createInitialValues.tags) ? createInitialValues.tags : []);
         form.setFieldsValue(createInitialValues);
         return;
       }
@@ -468,6 +614,8 @@ const AccountingRecordPage: React.FC = () => {
           ? {
               ...row,
               bank_account_id: row.bank_account_id || row.cash_box_id || row.petty_fund_id || null,
+              payment_account_id: row.payment_bank_account_id || row.payment_cash_box_id || row.payment_petty_fund_id || null,
+              receipt_account_id: row.receipt_bank_account_id || row.receipt_cash_box_id || row.receipt_petty_fund_id || null,
             }
           : row;
       setRecord(normalizedRow);
@@ -476,7 +624,7 @@ const AccountingRecordPage: React.FC = () => {
 
       const userIds = Array.from(
         new Set(
-          [row.created_by, row.updated_by]
+          [row.created_by, row.updated_by, row.employee_id, row.assignee_id]
             .map((v) => String(v || '').trim())
             .filter(Boolean)
         )
@@ -491,6 +639,14 @@ const AccountingRecordPage: React.FC = () => {
         setUserNames(userMap);
       } else {
         setUserNames({});
+      }
+
+      if (id) {
+        const { data: tagsData } = await supabase
+          .from('record_tags')
+          .select('tags(id, title, color)')
+          .eq('record_id', id);
+        setCurrentTags(tagsData?.map((item: any) => item.tags).filter(Boolean) || []);
       }
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در دریافت اطلاعات'));
@@ -588,6 +744,51 @@ const AccountingRecordPage: React.FC = () => {
     [getFieldOptions, id, moduleId, record]
   );
 
+  const renderHeaderStatusField = useCallback(() => {
+    if (!statusField) return null;
+    if (isEditMode) {
+      return (
+        <Select
+          variant="borderless"
+          value={currentRecordValues?.[statusField.key]}
+          onChange={(value) => {
+            const patch = { [statusField.key]: value };
+            setFormData((prev) => ({ ...prev, ...patch }));
+            form.setFieldsValue(patch);
+          }}
+          options={statusFieldOptions}
+          className="min-w-[140px] font-semibold text-gray-700 dark:text-gray-300"
+          disabled={!canEdit}
+        />
+      );
+    }
+    return renderReadValue(statusField, record?.[statusField.key]);
+  }, [canEdit, currentRecordValues, form, isEditMode, record, renderReadValue, statusField, statusFieldOptions]);
+
+  const renderHeaderAssigneeField = useCallback(() => {
+    if (!assigneeField) return null;
+    if (isEditMode) {
+      return (
+        <Select
+          variant="borderless"
+          showSearch
+          optionFilterProp="label"
+          value={currentRecordValues?.[assigneeField.key] || undefined}
+          onChange={(value) => {
+            const patch = { [assigneeField.key]: value || null };
+            setFormData((prev) => ({ ...prev, ...patch }));
+            form.setFieldsValue(patch);
+          }}
+          options={assigneeFieldOptions}
+          className="min-w-[160px] font-semibold text-gray-700 dark:text-gray-300"
+          disabled={!canEdit}
+          allowClear
+        />
+      );
+    }
+    return renderReadValue(assigneeField, record?.[assigneeField.key]);
+  }, [assigneeField, assigneeFieldOptions, canEdit, currentRecordValues, form, isEditMode, record, renderReadValue]);
+
   const buildPayload = useCallback(
     (values: Record<string, any>) => {
       const payload: Record<string, any> = {};
@@ -622,14 +823,51 @@ const AccountingRecordPage: React.FC = () => {
       });
 
       if (moduleId === 'cash_bank_operations') {
-        const selectedAccountId = String(values.bank_account_id ?? formData.bank_account_id ?? '').trim();
-        const selectedOption = (relationOptions.bank_account_id || []).find(
-          (option) => String(option.value || '').trim() === selectedAccountId
-        );
-        const selectedModule = String(selectedOption?.module || '').trim();
-        payload.bank_account_id = selectedModule === 'bank_accounts' && selectedAccountId ? selectedAccountId : null;
-        payload.cash_box_id = selectedModule === 'cash_boxes' && selectedAccountId ? selectedAccountId : null;
-        payload.petty_fund_id = selectedModule === 'petty_funds' && selectedAccountId ? selectedAccountId : null;
+        const operationType = String(values.operation_type ?? formData.operation_type ?? '').trim();
+        if (operationType === 'transfer') {
+          Object.assign(
+            payload,
+            getTransferAccountPatch(
+              'payment_account_id',
+              values.payment_account_id ?? formData.payment_account_id ?? null,
+              relationOptions.payment_account_id || []
+            ),
+            getTransferAccountPatch(
+              'receipt_account_id',
+              values.receipt_account_id ?? formData.receipt_account_id ?? null,
+              relationOptions.receipt_account_id || []
+            )
+          );
+          payload.bank_account_id = null;
+          payload.cash_box_id = null;
+          payload.petty_fund_id = null;
+          payload.sales_invoice_id = null;
+          payload.purchase_invoice_id = null;
+          payload.expense_document_id = null;
+          payload.employee_advance_id = null;
+          payload.payroll_slip_id = null;
+          payload.customer_id = null;
+          payload.supplier_id = null;
+          payload.cheque_id = null;
+          payload.barter_id = null;
+        } else {
+          const selectedAccountId = String(values.bank_account_id ?? formData.bank_account_id ?? '').trim();
+          const selectedOption = (relationOptions.bank_account_id || []).find(
+            (option) => String(option.value || '').trim() === selectedAccountId
+          );
+          const selectedModule = String(selectedOption?.module || '').trim();
+          payload.bank_account_id = selectedModule === 'bank_accounts' && selectedAccountId ? selectedAccountId : null;
+          payload.cash_box_id = selectedModule === 'cash_boxes' && selectedAccountId ? selectedAccountId : null;
+          payload.petty_fund_id = selectedModule === 'petty_funds' && selectedAccountId ? selectedAccountId : null;
+          payload.payment_bank_account_id = null;
+          payload.payment_cash_box_id = null;
+          payload.payment_petty_fund_id = null;
+          payload.receipt_bank_account_id = null;
+          payload.receipt_cash_box_id = null;
+          payload.receipt_petty_fund_id = null;
+        }
+        delete payload.payment_account_id;
+        delete payload.receipt_account_id;
       }
 
       if (isChequeModule) {
@@ -663,7 +901,15 @@ const AccountingRecordPage: React.FC = () => {
 
       return payload;
     },
-    [formData, isChequeModule, moduleId, relationOptions.bank_account_id, visibleFields]
+    [
+      formData,
+      isChequeModule,
+      moduleId,
+      relationOptions.bank_account_id,
+      relationOptions.payment_account_id,
+      relationOptions.receipt_account_id,
+      visibleFields,
+    ]
   );
 
   const syncOperationalFinancePayload = useCallback(async (payload: Record<string, any>) => {
@@ -733,6 +979,28 @@ const AccountingRecordPage: React.FC = () => {
         const bankAccountId = String(mergedValues.bank_account_id || '').trim();
         if (!bankAccountId) {
           message.error('برای چک پرداختی انتخاب بانک الزامی است.');
+          return;
+        }
+      }
+
+      if (moduleId === 'cash_bank_operations' && String(mergedValues.operation_type || '') === 'transfer') {
+        const paymentAccountId = String(mergedValues.payment_account_id || '').trim();
+        const receiptAccountId = String(mergedValues.receipt_account_id || '').trim();
+        if (!paymentAccountId || !receiptAccountId) {
+          message.error('برای انتقال، انتخاب حساب پرداخت و حساب دریافت الزامی است.');
+          return;
+        }
+
+        const paymentOption = (relationOptions.payment_account_id || []).find(
+          (option) => String(option.value || '').trim() === paymentAccountId
+        );
+        const receiptOption = (relationOptions.receipt_account_id || []).find(
+          (option) => String(option.value || '').trim() === receiptAccountId
+        );
+        const paymentModule = String(paymentOption?.module || '').trim();
+        const receiptModule = String(receiptOption?.module || '').trim();
+        if (paymentAccountId === receiptAccountId && paymentModule === receiptModule) {
+          message.error('حساب پرداخت و حساب دریافت نمی‌توانند یکسان باشند.');
           return;
         }
       }
@@ -1056,6 +1324,79 @@ const AccountingRecordPage: React.FC = () => {
           </div>
         </div>
 
+        <div className="mb-6 rounded-[2rem] border border-gray-200 dark:border-gray-800 bg-white dark:bg-[#1a1a1a] p-5 shadow-sm">
+          <div className="flex flex-col-reverse gap-6 lg:flex-row lg:items-start">
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h2 className="m-0 text-2xl md:text-3xl font-black text-gray-800 dark:text-white">
+                    {recordTitle}
+                  </h2>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusField && (
+                    <div className="smartform-inline-status h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
+                      <span className="text-xs text-gray-400 shrink-0">{statusField.labels?.fa || 'وضعیت'}:</span>
+                      <div className="min-w-[120px]">{renderHeaderStatusField()}</div>
+                    </div>
+                  )}
+                  {assigneeField && (
+                    <div className="h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
+                      <span className="text-xs text-gray-400 shrink-0">{assigneeField.labels?.fa || 'مسئول'}:</span>
+                      <div className="min-w-[140px]">{renderHeaderAssigneeField()}</div>
+                      <div className="w-6 h-6 flex items-center justify-center text-gray-500">
+                        <UserOutlined />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {headerFields.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-6">
+                  {headerFields.map((field) => (
+                    <div
+                      key={field.key}
+                      className="rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
+                    >
+                      <div className="text-xs text-gray-500 mb-1">{field.labels?.fa || field.key}</div>
+                      <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                        {renderReadValue(field, currentRecordValues?.[field.key])}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="w-full lg:w-56 shrink-0 self-start">
+              <RecordImageBox
+                moduleId={String(moduleId || '')}
+                recordId={id || null}
+                imageUrl={imageField ? (currentRecordValues?.[imageField.key] || null) : null}
+                canEdit={!!canEdit && !!id}
+                canViewFilesManager={!!id}
+                canEditFilesManager={!!canEdit && !!id}
+                canDeleteFilesManager={!!canEdit && !!id}
+                onMainImageChange={handleHeaderImageChange}
+                filesButtonLabel="فایل ها"
+              />
+              {!isCreate && (
+                <div className="mt-3">
+                  <TagInput
+                    recordId={id}
+                    moduleId={String(moduleId || '')}
+                    initialTags={currentTags}
+                    onChange={(tags) => setCurrentTags(tags || [])}
+                    disabled={!canEdit}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {isEditMode ? (
           <Form
             form={form}
@@ -1171,22 +1512,6 @@ const AccountingRecordPage: React.FC = () => {
           </Form>
         ) : (
           <>
-            {headerFields.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-                {headerFields.map((field) => (
-                  <div
-                    key={field.key}
-                    className="rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2"
-                  >
-                    <div className="text-xs text-gray-500 mb-1">{field.labels?.fa || field.key}</div>
-                    <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">
-                      {renderReadValue(field, record?.[field.key])}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
             {sortedBlocks.map((block) => {
               const fields = fieldsByBlock.get(block.id) || [];
               if (!fields.length) return null;

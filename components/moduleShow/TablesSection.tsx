@@ -21,9 +21,12 @@ interface TablesSectionProps {
   relationOptions: Record<string, any[]>;
   dynamicOptions: Record<string, any[]>;
   checkVisibility: (logic: any) => boolean;
+  isFieldVisible?: (field: any) => boolean;
   canViewField?: (fieldKey: string) => boolean;
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
+  focusBlockId?: string | null;
+  focusRowKey?: string | null;
 }
 
 const shouldShowInvoiceSummary = (summaryConfig: any) =>
@@ -35,9 +38,12 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   relationOptions,
   dynamicOptions,
   checkVisibility,
+  isFieldVisible,
   canViewField,
   canEditModule = true,
   onDataUpdate,
+  focusBlockId,
+  focusRowKey,
 }) => {
   if (!module || !data) return null;
 
@@ -294,7 +300,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   const progressFields = (module.fields || [])
     .filter((f: any) => f.type === FieldType.PROGRESS_STAGES || processStageFieldKeys.has(String(f?.key || '')))
     .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
-    .filter((f: any) => (!f.logic || checkVisibility(f.logic)));
+    .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
 
   return (
     <div className="tables-section space-y-6 md:space-y-8">
@@ -464,6 +470,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 (canViewField ? canViewField(fieldKey) !== false : true)
               }
               onSaveSuccess={(newData) => handleBlockSaveSuccess(String(block.id), newData)}
+              focusRowKey={String(focusBlockId || '') === String(block.id || '') ? focusRowKey : null}
             />
           )}
         </div>

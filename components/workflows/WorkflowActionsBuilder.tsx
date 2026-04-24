@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Checkbox, Empty, Input, InputNumber, Select, Space, Switch } from 'antd';
+import { Alert, Button, Checkbox, Empty, Input, InputNumber, Space, Switch } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -28,6 +28,8 @@ import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelp
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+
+const Select = AdaptiveSelectField;
 
 interface WorkflowActionsBuilderProps {
   value: WorkflowAction[];
@@ -170,6 +172,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     showSearch: true,
     optionFilterProp: 'label' as const,
     getPopupContainer: popupContainer,
+    modalContainer: popupContainer,
     popupMatchSelectWidth: false,
     listHeight: 260,
     virtual: false,

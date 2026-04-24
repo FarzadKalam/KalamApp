@@ -1,13 +1,27 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature, LogicOperator } from '../types';
+import {
+  CASH_BANK_OPERATION_STATUS_OPTIONS,
+  CASH_BANK_PAYMENT_TYPE_OPTIONS,
+  CASH_BANK_RESPONSIBLE_LABEL_FA,
+} from '../utils/cashBankFieldCatalog';
 
 export const cashBankOperationsConfig: ModuleDefinition = {
   id: 'cash_bank_operations',
-  titles: { fa: 'عملیات نقد و بانک', en: 'Cash & Bank Operations' },
+  titles: { fa: 'نقد و بانک', faSingular: 'رکورد نقد و بانک', en: 'Cash & Bank Operations' },
   nature: ModuleNature.FINANCE,
   table: 'cash_bank_operations',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [
+    {
+      key: 'image_url',
+      labels: { fa: 'تصویر اصلی', en: 'Main Image' },
+      type: FieldType.IMAGE,
+      location: FieldLocation.HEADER,
+      order: 0,
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
     {
       key: 'operation_type',
       labels: { fa: 'نوع عملیات', en: 'Operation Type' },
@@ -18,6 +32,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       options: [
         { label: 'دریافت', value: 'receipt', color: 'green' },
         { label: 'پرداخت', value: 'payment', color: 'red' },
+        { label: 'انتقال', value: 'transfer', color: 'blue' },
       ],
       validation: { required: true },
       nature: FieldNature.PREDEFINED,
@@ -29,12 +44,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       location: FieldLocation.HEADER,
       order: 2,
       isTableColumn: true,
-      options: [
-        { label: 'در انتظار', value: 'pending', color: 'orange' },
-        { label: 'انجام شده', value: 'received', color: 'green' },
-        { label: 'برگشت', value: 'returned', color: 'red' },
-        { label: 'لغو شده', value: 'canceled', color: 'default' },
-      ],
+      options: [...CASH_BANK_OPERATION_STATUS_OPTIONS],
       validation: { required: true },
       nature: FieldNature.PREDEFINED,
     },
@@ -60,31 +70,24 @@ export const cashBankOperationsConfig: ModuleDefinition = {
     },
     {
       key: 'payment_type',
-      labels: { fa: 'روش', en: 'Method' },
+      labels: { fa: 'روش پرداخت', en: 'Payment Method' },
       type: FieldType.SELECT,
       location: FieldLocation.HEADER,
       order: 5,
       isTableColumn: true,
-      options: [
-        { label: 'نقد', value: 'cash' },
-        { label: 'کارت', value: 'card' },
-        { label: 'انتقال', value: 'transfer' },
-        { label: 'چک', value: 'cheque' },
-        { label: 'آنلاین', value: 'online' },
-        { label: 'تهاتر', value: 'barter' },
-      ],
+      options: [...CASH_BANK_PAYMENT_TYPE_OPTIONS],
       validation: { required: true },
       nature: FieldNature.PREDEFINED,
     },
     
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
-      key: 'bank_account_id',
-      labels: { fa: 'حساب دریافت/پرداخت', en: 'Treasury Account' },
+      key: 'payment_account_id',
+      labels: { fa: 'حساب پرداخت', en: 'Payment Account' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'relations',
-      order: 1,
+      order: 1.25,
       relationConfig: {
         targetModule: 'bank_accounts',
         targetField: 'bank_name',
@@ -96,16 +99,39 @@ export const cashBankOperationsConfig: ModuleDefinition = {
         ],
       },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'receipt',
+        },
+      },
     },
     {
-      key: 'cash_box_id',
-      labels: { fa: 'حساب دریافت/پرداخت', en: 'Treasury Account' },
+      key: 'receipt_account_id',
+      labels: { fa: 'حساب دریافت', en: 'Receipt Account' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'relations',
-      order: 1.5,
-      relationConfig: { targetModule: 'cash_boxes', targetField: 'name' },
+      order: 1.75,
+      relationConfig: {
+        targetModule: 'bank_accounts',
+        targetField: 'bank_name',
+        filter: { is_active: true },
+        sourceModules: [
+          { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+          { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+          { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+        ],
+      },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'payment',
+        },
+      },
     },
     {
       key: 'sales_invoice_id',
@@ -116,6 +142,13 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 2,
       relationConfig: { targetModule: 'invoices', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
       key: 'purchase_invoice_id',
@@ -126,6 +159,13 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 3,
       relationConfig: { targetModule: 'purchase_invoices', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
       key: 'customer_id',
@@ -136,6 +176,30 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 4,
       relationConfig: { targetModule: 'customers', targetField: 'business_name' },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
+    },
+    {
+      key: 'expense_document_id',
+      labels: { fa: 'هزینه مرتبط', en: 'Expense Document' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'relations',
+      order: 4.5,
+      relationConfig: { targetModule: 'expense_documents', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
       key: 'supplier_id',
@@ -146,16 +210,57 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 5,
       relationConfig: { targetModule: 'suppliers', targetField: 'business_name' },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
-      key: 'employee_id',
-      labels: { fa: 'مسئول عملیات', en: 'Assignee' },
+      key: 'employee_advance_id',
+      labels: { fa: 'مساعده مرتبط', en: 'Employee Advance' },
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'relations',
-      order: 6,
-      relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
+      order: 5.5,
+      relationConfig: { targetModule: 'employee_advances', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
+    },
+    {
+      key: 'assignee_id',
+      labels: { fa: CASH_BANK_RESPONSIBLE_LABEL_FA, en: 'Assignee' },
+      type: FieldType.USER,
+      location: FieldLocation.BLOCK,
+      blockId: 'relations',
+      order: 6,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'payroll_slip_id',
+      labels: { fa: 'فیش حقوقی مرتبط', en: 'Payroll Slip' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'relations',
+      order: 6.5,
+      relationConfig: { targetModule: 'payroll_slips', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
       key: 'cheque_id',
@@ -170,6 +275,13 @@ export const cashBankOperationsConfig: ModuleDefinition = {
         quickCreateFieldKeys: ['serial_no', 'sayad_id', 'issue_date', 'due_date', 'amount', 'payee_name', 'account_holder_name', 'bank_name', 'image_url'],
       },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
       key: 'barter_id',
@@ -180,6 +292,13 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 8,
       relationConfig: { targetModule: 'barters', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.NOT_EQUALS,
+          value: 'transfer',
+        },
+      },
     },
     {
       key: 'description',
@@ -193,7 +312,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
     {
       key: 'attachment_url',
       labels: { fa: 'پیوست', en: 'Attachment' },
-      type: FieldType.LINK,
+      type: FieldType.IMAGE,
       location: FieldLocation.BLOCK,
       blockId: 'relations',
       order: 10,

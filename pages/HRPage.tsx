@@ -44,6 +44,7 @@ import GoalsManager from '../components/goals/GoalsManager';
 import { ensureDefaultHrTaskGoals, executeGoalProgress, normalizeGoalRecord } from '../utils/goals';
 import FormulaEditorModal from '../components/formulas/FormulaEditorModal';
 import ActivityPerformanceRulesManager from '../components/hr/ActivityPerformanceRulesManager';
+import AdaptiveSelectField from '../components/AdaptiveSelectField';
 import { evaluateGoalRewardRules, type GoalRewardEntry, type GoalRewardFormula } from '../utils/goalRewardRuntime';
 import { syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
 import {
@@ -60,7 +61,7 @@ import {
 } from '../utils/activityPerformanceRuntime';
 import { buildCommissionPreviewRows, type CommissionBasis, type CommissionPreviewRow } from '../utils/commissionRuntime';
 import type { GoalRecord } from '../utils/goalTypes';
-import { resolveSelectPopupContainer } from '../utils/popupContainer';
+import { resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../utils/popupContainer';
 
 type TaskRecord = {
   id: string;
@@ -3034,12 +3035,15 @@ const HRPage: React.FC = () => {
                 label="نام کارمند"
                 rules={[{ required: true, message: 'انتخاب کارمند الزامی است' }]}
               >
-                <Select
+                <AdaptiveSelectField
                   showSearch
                   optionFilterProp="label"
                   options={attendanceEmployeeOptions}
                   disabled={attendanceModalMode === 'view'}
                   placeholder="نام کارمند"
+                  getPopupContainer={resolveOverlayPopupContainer}
+                  modalContainer={resolveOverlayPopupContainer}
+                  overlayZIndexBase={12000}
                 />
               </Form.Item>
 
@@ -3049,12 +3053,15 @@ const HRPage: React.FC = () => {
                   label="نوع ثبت"
                   rules={[{ required: true, message: 'نوع ثبت الزامی است' }]}
                 >
-                  <Select
+                  <AdaptiveSelectField
                     disabled={attendanceModalMode === 'view'}
                     options={[
                       { label: 'ورود', value: 'check_in' },
                       { label: 'خروج', value: 'check_out' },
                     ]}
+                    getPopupContainer={resolveOverlayPopupContainer}
+                    modalContainer={resolveOverlayPopupContainer}
+                    overlayZIndexBase={12000}
                   />
                 </Form.Item>
 
@@ -3063,7 +3070,7 @@ const HRPage: React.FC = () => {
                   label="منبع ثبت"
                   rules={[{ required: true, message: 'منبع ثبت الزامی است' }]}
                 >
-                  <Select
+                  <AdaptiveSelectField
                     disabled={attendanceModalMode === 'view'}
                     options={[
                       { label: 'دستی', value: 'manual' },
@@ -3071,6 +3078,9 @@ const HRPage: React.FC = () => {
                       { label: 'QR', value: 'qr' },
                       { label: 'سیستم', value: 'system' },
                     ]}
+                    getPopupContainer={resolveOverlayPopupContainer}
+                    modalContainer={resolveOverlayPopupContainer}
+                    overlayZIndexBase={12000}
                   />
                 </Form.Item>
 

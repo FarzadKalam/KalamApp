@@ -18,7 +18,7 @@ type RowKind = 'sales_payment' | 'purchase_payment' | 'cash_bank_operation' | 'c
 type RowItem = {
   key: string;
   kind: RowKind;
-  rowType: 'receipt' | 'payment' | 'cheque' | 'barter';
+  rowType: 'receipt' | 'payment' | 'transfer' | 'cheque' | 'barter';
   sourceLabel: string;
   sourceRecordId?: string;
   paymentType: string;
@@ -34,6 +34,7 @@ type RowItem = {
   invoiceRelation?: { moduleId: string; recordId: string } | null;
   personRelation?: { moduleId: string; recordId: string } | null;
   bankRelation?: { moduleId: string; recordId: string } | null;
+  bankRelations?: Array<{ moduleId: string; recordId: string; label: string }>;
   chequeRelation?: { moduleId: string; recordId: string } | null;
 };
 
@@ -70,6 +71,7 @@ const statusColor = (status?: string) =>
 const rowTag = (type: RowItem['rowType']) => {
   if (type === 'receipt') return { color: 'green', label: 'دریافت' };
   if (type === 'payment') return { color: 'red', label: 'پرداخت' };
+  if (type === 'transfer') return { color: 'blue', label: 'انتقال' };
   if (type === 'barter') return { color: 'purple', label: 'تهاتر' };
   return { color: 'blue', label: 'چک' };
 };
@@ -332,47 +334,83 @@ const CashBankPage: React.FC = () => {
     );
 
     const fromOps = (operations || []).map((op: any): RowItem => {
+      const operationType = String(op?.operation_type || '').trim();
       const accountId = String(op?.bank_account_id || op?.cash_box_id || op?.petty_fund_id || '').trim();
       const account = financialAccountById[accountId];
+      const paymentAccountId = String(op?.payment_bank_account_id || op?.payment_cash_box_id || op?.payment_petty_fund_id || '').trim();
+      const receiptAccountId = String(op?.receipt_bank_account_id || op?.receipt_cash_box_id || op?.receipt_petty_fund_id || '').trim();
+      const paymentAccount = financialAccountById[paymentAccountId];
+      const receiptAccount = financialAccountById[receiptAccountId];
+      const transferRelations = [
+        paymentAccountId
+          ? {
+              moduleId: paymentAccount?.moduleId || (op?.payment_cash_box_id ? 'cash_boxes' : op?.payment_petty_fund_id ? 'petty_funds' : 'bank_accounts'),
+              recordId: paymentAccountId,
+              label: paymentAccount?.label || 'حساب پرداخت',
+            }
+          : null,
+        receiptAccountId
+          ? {
+              moduleId: receiptAccount?.moduleId || (op?.receipt_cash_box_id ? 'cash_boxes' : op?.receipt_petty_fund_id ? 'petty_funds' : 'bank_accounts'),
+              recordId: receiptAccountId,
+              label: receiptAccount?.label || 'حساب دریافت',
+            }
+          : null,
+      ].filter(Boolean) as Array<{ moduleId: string; recordId: string; label: string }>;
       return ({
       key: `op_${op.id}`,
       kind: 'cash_bank_operation',
-      rowType: String(op?.operation_type || '') === 'payment' ? 'payment' : 'receipt',
-      sourceLabel: 'ثبت مستقیم نقد و بانک',
+      rowType: operationType === 'transfer' ? 'transfer' : operationType === 'payment' ? 'payment' : 'receipt',
+      sourceLabel: operationType === 'transfer' ? 'انتقال مستقیم نقد و بانک' : 'ثبت مستقیم نقد و بانک',
       sourceRecordId: String(op.id),
       paymentType: String(op?.payment_type || ''),
       status: String(op?.status || ''),
       date: op?.operation_date || null,
       amount: Number(op?.amount || 0),
-      invoiceLabel: op?.sales_invoice_id
+      invoiceLabel: operationType === 'transfer'
+        ? '-'
+        : op?.sales_invoice_id
         ? String(salesById[String(op.sales_invoice_id)]?.name || op.sales_invoice_id)
         : op?.purchase_invoice_id
           ? String(purchaseById[String(op.purchase_invoice_id)]?.name || op.purchase_invoice_id)
           : '-',
-      personLabel: op?.customer_id
+      personLabel: operationType === 'transfer'
+        ? '-'
+        : op?.customer_id
         ? resolvePartyLabel('customer', String(op.customer_id))
         : op?.supplier_id
           ? resolvePartyLabel('supplier', String(op.supplier_id))
           : op?.employee_id
             ? resolvePartyLabel('employee', String(op.employee_id))
             : '-',
-      bankLabel: account?.label || '-',
+      bankLabel: operationType === 'transfer'
+        ? `${paymentAccount?.label || '-'} ← ${receiptAccount?.label || '-'}`
+        : account?.label || '-',
       chequeLabel: chequeLabelById[String(op?.cheque_id || '')] || '-',
       description: String(op?.description || ''),
       createdAt: op?.created_at || null,
-      invoiceRelation: op?.sales_invoice_id
+      invoiceRelation: operationType === 'transfer'
+        ? null
+        : op?.sales_invoice_id
         ? { moduleId: 'invoices', recordId: String(op.sales_invoice_id) }
         : op?.purchase_invoice_id
           ? { moduleId: 'purchase_invoices', recordId: String(op.purchase_invoice_id) }
           : null,
-      personRelation: op?.customer_id
+      personRelation: operationType === 'transfer'
+        ? null
+        : op?.customer_id
         ? { moduleId: 'customers', recordId: String(op.customer_id) }
         : op?.supplier_id
           ? { moduleId: 'suppliers', recordId: String(op.supplier_id) }
           : op?.employee_id
             ? { moduleId: 'profiles', recordId: String(op.employee_id) }
             : null,
-      bankRelation: accountId ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : op?.petty_fund_id ? 'petty_funds' : 'bank_accounts'), recordId: accountId } : null,
+      bankRelation: operationType === 'transfer'
+        ? null
+        : accountId
+          ? { moduleId: account?.moduleId || (op?.cash_box_id ? 'cash_boxes' : op?.petty_fund_id ? 'petty_funds' : 'bank_accounts'), recordId: accountId }
+          : null,
+      bankRelations: operationType === 'transfer' ? transferRelations : [],
       chequeRelation: op?.cheque_id ? { moduleId: 'cheques', recordId: String(op.cheque_id) } : null,
     });
     });
@@ -467,12 +505,12 @@ const CashBankPage: React.FC = () => {
   ]);
 
   const goCreateOperation = useCallback(
-    (operationType: 'receipt' | 'payment') => {
+    (operationType: 'receipt' | 'payment' | 'transfer') => {
       navigate('/cash_bank_operations/create', {
         state: {
           initialValues: {
             operation_type: operationType,
-            payment_type: 'cash',
+            payment_type: operationType === 'transfer' ? 'transfer' : 'cash',
             status: 'received',
             operation_date: today(),
             amount: 0,
@@ -538,6 +576,7 @@ const CashBankPage: React.FC = () => {
         ...createChoiceFilter('نوع', [
           { label: 'دریافت', value: 'receipt' },
           { label: 'پرداخت', value: 'payment' },
+          { label: 'انتقال', value: 'transfer' },
           { label: 'چک', value: 'cheque' },
           { label: 'تهاتر', value: 'barter' },
         ], (record) => record.rowType),
@@ -631,6 +670,23 @@ const CashBankPage: React.FC = () => {
         width: 190,
         ...createTextFilter('جستجو در حساب بانکی', (record) => record.bankLabel),
         render: (_: string, record: RowItem) => {
+          if (Array.isArray(record.bankRelations) && record.bankRelations.length === 2) {
+            return (
+              <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 flex-wrap">
+                <RelatedRecordPopover
+                  moduleId={record.bankRelations[0].moduleId}
+                  recordId={record.bankRelations[0].recordId}
+                  label={record.bankRelations[0].label}
+                />
+                <span className="text-gray-400">←</span>
+                <RelatedRecordPopover
+                  moduleId={record.bankRelations[1].moduleId}
+                  recordId={record.bankRelations[1].recordId}
+                  label={record.bankRelations[1].label}
+                />
+              </div>
+            );
+          }
           if (!record.bankRelation?.moduleId || !record.bankRelation?.recordId) return record.bankLabel || '-';
           return (
             <div onClick={(e) => e.stopPropagation()}>
@@ -750,6 +806,11 @@ const CashBankPage: React.FC = () => {
             <Col xs={24} md={6}>
               <Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('payment')}>
                 ثبت پرداخت جدید
+              </Button>
+            </Col>
+            <Col xs={24} md={6}>
+              <Button block icon={<PlusOutlined />} onClick={() => goCreateOperation('transfer')}>
+                ثبت انتقال جدید
               </Button>
             </Col>
             <Col xs={24} md={6}>

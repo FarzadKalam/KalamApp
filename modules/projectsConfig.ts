@@ -56,7 +56,7 @@ export const projectsModule: ModuleDefinition = {
     },
     {
       key: 'project_alignment',
-      labels: { fa: 'منطبق بر پروژه', en: 'Project Alignment' },
+      labels: { fa: 'دپارتمان‌ها', en: 'Departments' },
       type: FieldType.MULTI_SELECT,
       location: FieldLocation.HEADER,
       order: 2.5,
@@ -107,7 +107,7 @@ export const projectsModule: ModuleDefinition = {
       type: FieldType.RELATION,
       location: FieldLocation.BLOCK,
       blockId: 'base_info',
-      order: 1,
+      order: 3.2,
       relationConfig: { targetModule: 'customers', targetField: 'full_name' },
       nature: FieldNature.STANDARD,
       isTableColumn: true,

@@ -1,4 +1,9 @@
 import { BlockType, FieldLocation, FieldNature, FieldType, ModuleDefinition, ModuleNature, RowCalculationType, SummaryCalculationType, ViewMode } from '../types';
+import {
+  CASH_BANK_OPERATION_STATUS_OPTIONS,
+  CASH_BANK_PAYMENT_TYPE_OPTIONS,
+  CASH_BANK_RESPONSIBLE_LABEL_FA,
+} from '../utils/cashBankFieldCatalog';
 import { getTodayLocalDateValue } from '../utils/defaultValues';
 
 export const expenseDocumentsConfig: ModuleDefinition = {
@@ -92,18 +97,15 @@ export const expenseDocumentsConfig: ModuleDefinition = {
       rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
       tableColumns: [
         { key: 'attachment', title: 'پیوست', type: FieldType.IMAGE, width: 96 },
-        { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [{ label: 'نقد', value: 'cash' }, { label: 'بانک', value: 'bank' }, { label: 'کارت', value: 'card' }, { label: 'چک', value: 'cheque' }] },
+        { key: 'tags', title: 'برچسب‌ها', type: FieldType.TAGS, width: 150 },
+        { key: 'payment_type', title: 'روش پرداخت', type: FieldType.SELECT, width: 140, options: [...CASH_BANK_PAYMENT_TYPE_OPTIONS] },
         {
           key: 'status',
           title: 'وضعیت',
           type: FieldType.SELECT,
           width: 120,
           defaultValue: 'received',
-          options: [
-            { label: 'در انتظار', value: 'pending', color: 'orange' },
-            { label: 'پرداخت شده', value: 'received', color: 'green' },
-            { label: 'برگشت خورده', value: 'returned', color: 'red' },
-          ],
+          options: [...CASH_BANK_OPERATION_STATUS_OPTIONS],
         },
         {
           key: 'source_account',
@@ -121,7 +123,7 @@ export const expenseDocumentsConfig: ModuleDefinition = {
             ],
           },
         },
-        { key: 'responsible_id', title: 'مسئول پرداخت', type: FieldType.RELATION, width: 150, relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
+        { key: 'responsible_id', title: CASH_BANK_RESPONSIBLE_LABEL_FA, type: FieldType.RELATION, width: 150, relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
         { key: 'date', title: 'تاریخ', type: FieldType.DATE, width: 130 },
         { key: 'amount', title: 'مبلغ', type: FieldType.PRICE, width: 160, showTotal: true },
         { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },

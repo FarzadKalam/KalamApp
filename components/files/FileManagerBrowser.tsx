@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   App,
   Button,
@@ -13,6 +13,7 @@ import {
   Space,
   Spin,
   Tag,
+  theme,
   Tooltip,
   Typography,
 } from 'antd';
@@ -24,6 +25,7 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  ExclamationCircleOutlined,
   ExportOutlined,
   FileOutlined,
   FolderAddOutlined,
@@ -52,6 +54,7 @@ export type FileManagerBrowserItem = {
   id: string;
   asset_id?: string | null;
   entry_id?: string | null;
+  folder_id?: string | null;
   module_id?: string;
   record_id?: string;
   file_url: string;
@@ -64,6 +67,7 @@ export type FileManagerBrowserItem = {
   source_record_id?: string | null;
   source_record_title?: string | null;
   visibility?: 'private' | 'org' | 'public' | null;
+  source_kind?: 'entry' | 'legacy' | 'synthetic' | 'note_attachment' | null;
   is_shortcut?: boolean;
   tags?: Array<{ id: string; title: string; color?: string | null }>;
 };
@@ -74,6 +78,7 @@ export type FileManagerBrowserFolder = {
   parentKey?: string | null;
   count?: number;
   isSystem?: boolean;
+  isDeletedRecord?: boolean;
   colorToken?: string | null;
   folderType?: string | null;
   tags?: Array<{ id: string; title: string; color?: string | null }>;
@@ -101,6 +106,7 @@ type FileManagerBrowserProps = {
   onDeleteFolder?: (folder: FileManagerBrowserFolder) => void | Promise<void>;
   recordTitleMap?: Record<string, string>;
   moduleTitleMap?: Record<string, string>;
+  showSourceBadges?: boolean;
   canDelete?: boolean;
   canShare?: boolean;
   canEdit?: boolean;
@@ -137,6 +143,23 @@ type FileManagerBrowserProps = {
 };
 
 type FileShareDeliveryMode = 'original' | 'preview' | 'compressed';
+
+const ICON_GRID_VIRTUALIZATION_THRESHOLD = 80;
+const ICON_GRID_ROW_HEIGHT = 134;
+
+const SOURCE_KIND_META: Record<
+  'entry' | 'legacy' | 'synthetic' | 'note_attachment',
+  { label: string; color: string }
+> = {
+  entry: { label: 'اصلی', color: 'success' },
+  legacy: { label: 'سازگاری', color: 'gold' },
+  synthetic: { label: 'سازگاری', color: 'gold' },
+  note_attachment: { label: 'پیوست یادداشت', color: 'purple' },
+};
+
+type IconGridEntry =
+  | { key: string; type: 'folder'; folder: FileManagerBrowserFolder }
+  | { key: string; type: 'item'; item: FileManagerBrowserItem };
 
 const FILE_SHARE_DELIVERY_OPTIONS: Array<{ label: string; value: FileShareDeliveryMode }> = [
   { label: 'فایل اصلی', value: 'original' },
@@ -176,7 +199,14 @@ const renderPreview = (item: FileManagerBrowserItem, compact = false) => {
   }
 
   if (item.file_type === 'video') {
-    return <video src={item.file_url} controls className={mediaClass} preload="metadata" />;
+    return (
+      <div className={`${compact ? 'h-20' : 'h-44'} flex items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300`}>
+        <div className="flex flex-col items-center gap-2">
+          <FileOutlined className={compact ? 'text-xl' : 'text-3xl'} />
+          <span className="text-[11px] font-semibold tracking-[0.18em]">VIDEO</span>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -201,6 +231,12 @@ const renderCompactTags = (tags?: Array<{ id: string; title: string; color?: str
   );
 };
 
+const getSourceKindMeta = (item: Pick<FileManagerBrowserItem, 'source_kind' | 'is_shortcut'>) => {
+  if (item.is_shortcut) return null;
+  const kind = item.source_kind || 'entry';
+  return SOURCE_KIND_META[kind] || null;
+};
+
 const formatDateTime = (value?: string | null) => {
   const raw = String(value || '').trim();
   if (!raw) return '-';
@@ -209,7 +245,7 @@ const formatDateTime = (value?: string | null) => {
   return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 };
 
-const PreviewImage: React.FC<{ src: string; alt: string; className: string; preset: 'thumb' | 'gallery' }> = ({
+const PreviewImage: React.FC<{ src: string; alt: string; className: string; preset: 'thumb' | 'gallery' }> = React.memo(({
   src,
   alt,
   className,
@@ -228,12 +264,95 @@ const PreviewImage: React.FC<{ src: string; alt: string; className: string; pres
       src={previewUrl}
       alt={alt}
       className={className}
+      loading="lazy"
+      decoding="async"
       onError={() => {
         if (retry < 3) window.setTimeout(() => setRetry((value) => value + 1), 700 * (retry + 1));
       }}
     />
   );
-};
+});
+
+const VirtualizedIconGrid: React.FC<{
+  entries: IconGridEntry[];
+  minTileWidth: number;
+  renderTile: (entry: IconGridEntry) => React.ReactNode;
+}> = React.memo(({
+  entries,
+  minTileWidth,
+  renderTile,
+}) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+
+    const syncSize = () => {
+      setContainerWidth(node.clientWidth);
+      setViewportHeight(node.clientHeight);
+    };
+
+    syncSize();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(syncSize);
+      observer.observe(node);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', syncSize);
+    return () => window.removeEventListener('resize', syncSize);
+  }, []);
+
+  const columnCount = Math.max(1, Math.floor((containerWidth || minTileWidth) / Math.max(1, minTileWidth)));
+  const rowCount = Math.max(1, Math.ceil(entries.length / columnCount));
+  const totalHeight = rowCount * ICON_GRID_ROW_HEIGHT;
+  const overscanRows = 3;
+  const startRow = Math.max(0, Math.floor(scrollTop / ICON_GRID_ROW_HEIGHT) - overscanRows);
+  const endRow = Math.min(
+    rowCount,
+    Math.ceil((scrollTop + Math.max(viewportHeight, ICON_GRID_ROW_HEIGHT)) / ICON_GRID_ROW_HEIGHT) + overscanRows,
+  );
+  const startIndex = startRow * columnCount;
+  const endIndex = Math.min(entries.length, endRow * columnCount);
+  const visibleEntries = entries.slice(startIndex, endIndex);
+  const tileWidth = containerWidth > 0 ? containerWidth / columnCount : minTileWidth;
+
+  return (
+    <div
+      ref={containerRef}
+      className="max-h-[62vh] overflow-y-auto"
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div className="relative" style={{ height: totalHeight }}>
+        {visibleEntries.map((entry, index) => {
+          const absoluteIndex = startIndex + index;
+          const rowIndex = Math.floor(absoluteIndex / columnCount);
+          const columnIndex = absoluteIndex % columnCount;
+          return (
+            <div
+              key={entry.key}
+              className="absolute"
+              style={{
+                top: rowIndex * ICON_GRID_ROW_HEIGHT,
+                left: columnIndex * tileWidth,
+                width: tileWidth,
+                height: ICON_GRID_ROW_HEIGHT,
+                padding: 4,
+              }}
+            >
+              {renderTile(entry)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
 
 const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   title,
@@ -248,6 +367,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onRefresh,
   onDeleteItem,
   onCopyItems,
+  onCreateShortcutsHere,
   copyItemsLabel = 'کپی',
   onMoveItems,
   onRenameItem,
@@ -256,6 +376,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onDeleteFolder,
   recordTitleMap = {},
   moduleTitleMap = {},
+  showSourceBadges = false,
   canDelete = true,
   canShare = true,
   canEdit = true,
@@ -280,7 +401,8 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onAddCompressedArchive,
   onUpdateItemTags,
 }) => {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
+  const { token } = theme.useToken();
   const [viewMode, setViewMode] = useState<'icon' | 'card'>(defaultViewMode);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedFolderKeys, setSelectedFolderKeys] = useState<string[]>([]);
@@ -323,6 +445,8 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     setSelectedIds([normalizedHighlightId]);
   }, [highlightItemId, items]);
 
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedFolderKeySet = useMemo(() => new Set(selectedFolderKeys), [selectedFolderKeys]);
   const selectedItems = useMemo(() => {
     const itemMap = new Map((selectionItems || items).map((item) => [item.id, item]));
     return selectedIds.map((id) => itemMap.get(id)).filter(Boolean) as FileManagerBrowserItem[];
@@ -371,16 +495,62 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   const effectivePage = onPageChange ? page : internalPage;
   const effectivePageSize = onPageChange ? pageSize : internalPageSize;
   const showPagination = effectiveTotalItems > effectivePageSize;
+  const deferredVisibleFolders = React.useDeferredValue(visibleFolders);
+  const deferredDisplayedItems = React.useDeferredValue(displayedItems);
+  const deferredGridEntries = useMemo<IconGridEntry[]>(
+    () => [
+      ...deferredVisibleFolders.map((folder) => ({ key: `folder:${folder.key}`, type: 'folder' as const, folder })),
+      ...deferredDisplayedItems.map((item) => ({ key: item.id, type: 'item' as const, item })),
+    ],
+    [deferredDisplayedItems, deferredVisibleFolders],
+  );
   const selectedFolders = useMemo(() => {
-    const selectedSet = new Set(selectedFolderKeys);
-    return visibleFolders.filter((folder) => selectedSet.has(folder.key));
-  }, [selectedFolderKeys, visibleFolders]);
+    return visibleFolders.filter((folder) => selectedFolderKeySet.has(folder.key));
+  }, [selectedFolderKeySet, visibleFolders]);
   const totalSelectedCount = selectedItems.length + selectedFolders.length;
   const selectedImageItems = useMemo(
     () => selectedItems.filter((item) => item.file_type === 'image'),
     [selectedItems],
   );
   const normalizedMainImageUrl = String(mainImageUrl || '').trim();
+  const getDeleteConfirmBody = (nextItems: FileManagerBrowserItem[], nextFolders: FileManagerBrowserFolder[]) => {
+    const previewLines = [
+      ...nextFolders.map((folder) => `پوشه: ${folder.label}`),
+      ...nextItems.map((item) => `فایل: ${getDisplayFileName(item)}`),
+    ].slice(0, 6);
+    const hiddenCount = Math.max(0, nextItems.length + nextFolders.length - previewLines.length);
+    return (
+      <div className="space-y-3 text-sm">
+        <div className="rounded-xl border px-3 py-2" style={{ borderColor: token.colorErrorBorder, background: token.colorErrorBg }}>
+          <div className="font-bold" style={{ color: token.colorError }}>
+            {nextFolders.length > 0 && nextItems.length > 0
+              ? `در حال حذف ${nextFolders.length} پوشه و ${nextItems.length} فایل هستید.`
+              : nextFolders.length > 0
+                ? `در حال حذف ${nextFolders.length} پوشه هستید.`
+                : `در حال حذف ${nextItems.length} فایل هستید.`}
+          </div>
+          <div className="mt-1" style={{ color: token.colorTextSecondary }}>
+            این عملیات بازگشت‌پذیر نیست و روی محتوای انتخاب‌شده اعمال می‌شود.
+          </div>
+        </div>
+        {previewLines.length > 0 ? (
+          <div className="rounded-xl border px-3 py-2" style={{ borderColor: token.colorBorder, background: token.colorFillAlter }}>
+            <div className="mb-2 font-bold" style={{ color: token.colorTextHeading }}>موارد انتخاب‌شده</div>
+            <div className="space-y-1">
+              {previewLines.map((line) => (
+                <div key={line} className="truncate" style={{ color: token.colorText }}>{line}</div>
+              ))}
+              {hiddenCount > 0 ? (
+                <div style={{ color: token.colorTextSecondary }}>
+                  و {hiddenCount} مورد دیگر...
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
   const shareDeliveryOptions = useMemo(() => {
     if (shareItems.length === 0) return FILE_SHARE_DELIVERY_OPTIONS;
     if (shareItems.length > 1) {
@@ -422,14 +592,34 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
 
   const deleteSelectedEntries = async () => {
     if (totalSelectedCount === 0) return;
-    for (const folder of selectedFolders) {
-      await onDeleteFolder?.(folder);
-    }
-    for (const item of selectedItems) {
-      await onDeleteItem?.(item);
-    }
-    setSelectedFolderKeys([]);
-    setSelectedIds([]);
+    const nextFolders = [...selectedFolders];
+    const nextItems = [...selectedItems];
+    modal.confirm({
+      title: 'حذف موارد انتخاب‌شده',
+      icon: <ExclamationCircleOutlined style={{ color: token.colorError }} />,
+      content: getDeleteConfirmBody(nextItems, nextFolders),
+      okText: 'حذف',
+      cancelText: 'انصراف',
+      centered: true,
+      okButtonProps: { danger: true },
+      zIndex: 14050,
+      styles: {
+        content: { background: token.colorBgElevated },
+        header: { background: token.colorBgElevated, color: token.colorTextHeading },
+        body: { color: token.colorText },
+        footer: { background: token.colorBgElevated },
+      },
+      onOk: async () => {
+        for (const folder of nextFolders) {
+          await onDeleteFolder?.(folder);
+        }
+        for (const item of nextItems) {
+          await onDeleteItem?.(item);
+        }
+        setSelectedFolderKeys([]);
+        setSelectedIds([]);
+      },
+    });
   };
 
   const navigateToParentFolder = () => {
@@ -439,6 +629,27 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
       return;
     }
     if (activeFolderKey !== 'all') onFolderChange?.('all');
+  };
+
+  const requestFolderDelete = (folder: FileManagerBrowserFolder) => {
+    if (!onDeleteFolder) return;
+    modal.confirm({
+      title: 'حذف پوشه',
+      icon: <ExclamationCircleOutlined style={{ color: token.colorError }} />,
+      content: getDeleteConfirmBody([], [folder]),
+      okText: 'حذف',
+      cancelText: 'انصراف',
+      centered: true,
+      okButtonProps: { danger: true },
+      zIndex: 14050,
+      styles: {
+        content: { background: token.colorBgElevated },
+        header: { background: token.colorBgElevated, color: token.colorTextHeading },
+        body: { color: token.colorText },
+        footer: { background: token.colorBgElevated },
+      },
+      onOk: () => onDeleteFolder(folder),
+    });
   };
 
   const openDetails = async (item: FileManagerBrowserItem) => {
@@ -651,11 +862,22 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     );
   };
 
+  const renderSourceKindTag = (item: FileManagerBrowserItem, compact = false) => {
+    if (!showSourceBadges) return null;
+    const meta = getSourceKindMeta(item);
+    if (!meta) return null;
+    return (
+      <Tag color={meta.color} className={compact ? 'm-0 rounded-full px-1.5 text-[10px]' : undefined}>
+        {meta.label}
+      </Tag>
+    );
+  };
+
   const renderItemCard = (item: FileManagerBrowserItem) => {
     const displayFileName = getDisplayFileName(item);
     const moduleTitle = moduleTitleMap[item.module_id || ''] || item.module_id || '-';
     const recordTitle = recordTitleMap[`${item.module_id}:${item.record_id}`] || item.record_id || '-';
-    const isSelected = selectedIds.includes(item.id);
+    const isSelected = selectedIdSet.has(item.id);
     const isMainImage = isMainImageItem(item);
     const visibilityTag = item.visibility === 'public'
       ? <Tag color="green">عمومی</Tag>
@@ -663,13 +885,14 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         ? <Tag color="blue">سازمانی</Tag>
         : <Tag>خصوصی</Tag>;
     const actions = (
-      <Space size={4} className={viewMode === 'icon' ? 'opacity-0 transition-opacity group-hover:opacity-100' : ''}>
+      <Space size={4}>
         {canSetMainImage && item.file_type === 'image' ? (
           <Tooltip title={isMainImage ? 'تصویر اصلی' : 'ستاره تصویر اصلی'}>
             <Button
               size="small"
               type={isMainImage ? 'primary' : 'default'}
               icon={isMainImage ? <StarFilled /> : <StarOutlined />}
+              disabled={!onSetMainImages}
               onClick={(event) => {
                 event.stopPropagation();
                 markAsMainImages([item]);
@@ -684,6 +907,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           <Button
             size="small"
             icon={<ShareAltOutlined />}
+            disabled={!canShare}
             onClick={(event) => {
               event.stopPropagation();
               openShareModal([item]);
@@ -710,6 +934,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           </Space>
           <span className="text-xs text-gray-500 dark:text-gray-400">{moduleTitle}</span>
         </div>
+        {showSourceBadges ? <div className="mt-1">{renderSourceKindTag(item)}</div> : null}
         <div className="mt-1 text-sm font-bold text-gray-700 truncate dark:text-gray-100">{recordTitle}</div>
         <div className="mt-1 text-xs text-gray-500 truncate dark:text-gray-400" title={displayFileName}>
           نام فایل: {displayFileName}
@@ -740,6 +965,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           {displayFileName}
         </div>
         {item.is_shortcut ? <span className="text-[10px] leading-3 text-blue-600">میانبر</span> : null}
+        {showSourceBadges ? renderSourceKindTag(item, true) : null}
         {renderCompactTags(item.tags, 1)}
       </div>
     );
@@ -791,19 +1017,20 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
 
   const renderFolderCard = (folder: FileManagerBrowserFolder) => {
     const canManageThisFolder = canEdit && !folder.isSystem;
-    const isSelected = selectedFolderKeys.includes(folder.key);
+    const isSelected = selectedFolderKeySet.has(folder.key);
     const folderToneClass = folder.isSystem
-      ? 'border-[rgba(var(--brand-300-rgb),0.28)] bg-[rgba(var(--brand-900-rgb),0.12)] text-[rgb(var(--brand-400-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-900-rgb),0.22)]'
-      : 'border-amber-100 bg-amber-50 text-amber-500 dark:border-amber-500/20 dark:bg-amber-500/10';
+      ? 'border-amber-200 bg-amber-50 text-amber-500 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300'
+      : 'border-sky-200 bg-sky-50 text-sky-500 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300';
     const folderIconClass = folder.isSystem
-      ? 'text-[rgb(var(--brand-400-rgb))]'
-      : 'text-amber-500';
-    const folderActions = canManageThisFolder ? (
-      <Space size={4} className={viewMode === 'icon' ? 'opacity-0 transition-opacity group-hover:opacity-100' : ''}>
+      ? 'text-amber-500 dark:text-amber-300'
+      : 'text-sky-500 dark:text-sky-300';
+    const folderActions = (
+      <Space size={4}>
         <Tooltip title="تغییر نام پوشه">
           <Button
             size="small"
             icon={<EditOutlined />}
+            disabled={!canManageThisFolder}
             onClick={(event) => {
               event.stopPropagation();
               onRenameFolder?.(folder);
@@ -815,21 +1042,25 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
             size="small"
             danger
             icon={<DeleteOutlined />}
+            disabled={!canManageThisFolder}
             onClick={(event) => {
               event.stopPropagation();
-              onDeleteFolder?.(folder);
+              requestFolderDelete(folder);
             }}
           />
         </Tooltip>
       </Space>
-    ) : null;
+    );
     const body = viewMode === 'card' ? (
       <>
         <div className={`flex h-44 w-full items-center justify-center rounded-xl border text-6xl ${folderToneClass}`}>
           <FolderFilled />
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          <Tag color={folder.isSystem ? 'gold' : 'default'}>{folder.isSystem ? 'سیستمی' : 'پوشه'}</Tag>
+          <Space size={4} wrap>
+            <Tag color={folder.isSystem ? 'gold' : 'blue'}>{folder.isSystem ? 'سیستمی' : 'پوشه'}</Tag>
+            {folder.isDeletedRecord ? <Tag color="red">حذف شده</Tag> : null}
+          </Space>
           <span className="text-xs text-gray-500 dark:text-gray-400">{folder.count || 0} مورد</span>
         </div>
         <div className="mt-1 truncate text-sm font-bold text-gray-700 dark:text-gray-100">{folder.label}</div>
@@ -873,7 +1104,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
                 onClick={(event) => event.stopPropagation()}
                 onChange={() => toggleFolderSelection(folder.key)}
               />
-              <span className="text-xs font-bold text-amber-600">پوشه</span>
+              <span className={`text-xs font-bold ${folder.isSystem ? 'text-amber-600 dark:text-amber-300' : 'text-sky-600 dark:text-sky-300'}`}>پوشه</span>
               {folderActions}
             </div>
             {body}
@@ -882,6 +1113,10 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
       </Card>
     );
   };
+
+  const renderGridEntry = (entry: IconGridEntry) => (
+    entry.type === 'folder' ? renderFolderCard(entry.folder) : renderItemCard(entry.item)
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -949,66 +1184,71 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         </Space>
       </div>
 
-      <div className={`min-h-[72px] rounded-2xl border px-4 py-3 transition-colors ${totalSelectedCount > 0 ? 'border-leather-200 bg-leather-50 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-900-rgb),0.18)]' : 'border-transparent bg-transparent'}`}>
-        {totalSelectedCount > 0 ? (
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm font-bold text-gray-700 dark:text-gray-100">{totalSelectedCount} مورد انتخاب شده</div>
-            <Space wrap>
-              {selectionMode ? (
-                <Button
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  disabled={!onConfirmSelection || selectedItems.length === 0}
-                  onClick={() => onConfirmSelection?.(selectedItems)}
-                >
-                  {selectionLabel}
-                </Button>
-              ) : null}
-              {canSetMainImage ? (
-                <Tooltip title={setMainImageLabel}>
-                  <Button
-                    icon={<StarOutlined />}
-                    disabled={!onSetMainImages || selectedImageItems.length === 0}
-                    onClick={() => markAsMainImages(selectedImageItems)}
-                  />
-                </Tooltip>
-              ) : null}
-              <Tooltip title={copyItemsLabel}>
-                <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)} />
-              </Tooltip>
-              <Tooltip title="انتقال">
-                <Button icon={<SwapOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)} />
-              </Tooltip>
-              <Tooltip title="اشتراک">
-                <Button
-                  icon={<ShareAltOutlined />}
-                  disabled={!canShare || selectedItems.length === 0 || selectedFolders.length > 0}
-                  onClick={() => openShareModal(selectedItems)}
-                />
-              </Tooltip>
-              <Tooltip title="تغییر نام">
-                <Button
-                  icon={<EditOutlined />}
-                  disabled={!canEdit || totalSelectedCount !== 1 || (selectedFolders.length === 1 ? !onRenameFolder || selectedFolders[0].isSystem : !onRenameItem)}
-                  onClick={renameSelectedEntry}
-                />
-              </Tooltip>
-              <Tooltip title="حذف">
-                <Button
-                  icon={<DeleteOutlined />}
-                  danger
-                  disabled={!canDelete || totalSelectedCount === 0 || selectedFolders.some((folder) => folder.isSystem) || (selectedItems.length > 0 && !onDeleteItem) || (selectedFolders.length > 0 && !onDeleteFolder)}
-                  onClick={() => void deleteSelectedEntries()}
-                />
-              </Tooltip>
-              <Tooltip title="جزئیات">
-                <Button icon={<InfoCircleOutlined />} disabled={selectedItems.length !== 1 || selectedFolders.length > 0} onClick={() => selectedItems[0] && void openDetails(selectedItems[0])} />
-              </Tooltip>
-            </Space>
+      <div className={`min-h-[72px] rounded-2xl border px-4 py-3 transition-colors ${totalSelectedCount > 0 ? 'border-leather-200 bg-leather-50 dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--brand-900-rgb),0.18)]' : 'border-gray-200 bg-white dark:border-gray-800 dark:bg-[#1a1a1a]'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-bold text-gray-700 dark:text-gray-100">
+            {totalSelectedCount > 0 ? `${totalSelectedCount} مورد انتخاب شده` : 'برای انجام عملیات، فایل یا پوشه انتخاب کنید'}
           </div>
-        ) : (
-          <div className="h-full" />
-        )}
+          <Space wrap>
+            {selectionMode ? (
+              <Button
+                type="primary"
+                icon={<CheckOutlined />}
+                disabled={!onConfirmSelection || selectedItems.length === 0}
+                onClick={() => onConfirmSelection?.(selectedItems)}
+              >
+                {selectionLabel}
+              </Button>
+            ) : null}
+            {canSetMainImage ? (
+              <Tooltip title={setMainImageLabel}>
+                <Button
+                  icon={<StarOutlined />}
+                  disabled={!onSetMainImages || selectedImageItems.length === 0}
+                  onClick={() => markAsMainImages(selectedImageItems)}
+                />
+              </Tooltip>
+            ) : null}
+            <Tooltip title={copyItemsLabel}>
+              <Button icon={<CopyOutlined />} disabled={!canEdit || !onCopyItems || selectedItems.length === 0} onClick={() => onCopyItems?.(selectedItems)} />
+            </Tooltip>
+            <Tooltip title="ایجاد میانبر">
+              <Button
+                icon={<RetweetOutlined />}
+                disabled={!canEdit || !onCreateShortcutsHere || selectedItems.length === 0}
+                onClick={() => onCreateShortcutsHere?.(selectedItems)}
+              />
+            </Tooltip>
+            <Tooltip title="انتقال">
+              <Button icon={<SwapOutlined />} disabled={!canEdit || !onMoveItems || selectedItems.length === 0} onClick={() => onMoveItems?.(selectedItems)} />
+            </Tooltip>
+            <Tooltip title="اشتراک">
+              <Button
+                icon={<ShareAltOutlined />}
+                disabled={!canShare || selectedItems.length === 0 || selectedFolders.length > 0}
+                onClick={() => openShareModal(selectedItems)}
+              />
+            </Tooltip>
+            <Tooltip title="تغییر نام">
+              <Button
+                icon={<EditOutlined />}
+                disabled={!canEdit || totalSelectedCount !== 1 || (selectedFolders.length === 1 ? !onRenameFolder || selectedFolders[0].isSystem : !onRenameItem)}
+                onClick={renameSelectedEntry}
+              />
+            </Tooltip>
+            <Tooltip title="حذف">
+              <Button
+                icon={<DeleteOutlined />}
+                danger
+                disabled={!canDelete || totalSelectedCount === 0 || selectedFolders.some((folder) => folder.isSystem) || (selectedItems.length > 0 && !onDeleteItem) || (selectedFolders.length > 0 && !onDeleteFolder)}
+                onClick={() => void deleteSelectedEntries()}
+              />
+            </Tooltip>
+            <Tooltip title="جزئیات">
+              <Button icon={<InfoCircleOutlined />} disabled={selectedItems.length !== 1 || selectedFolders.length > 0} onClick={() => selectedItems[0] && void openDetails(selectedItems[0])} />
+            </Tooltip>
+          </Space>
+        </div>
       </div>
 
       {loading ? (
@@ -1029,14 +1269,28 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
               <Empty description={emptyDescription} />
             </div>
           ) : (
-            <div className={viewMode === 'icon'
-              ? 'grid gap-2'
-              : 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'}
-              style={viewMode === 'icon' ? { gridTemplateColumns: `repeat(auto-fill, minmax(${iconTileMinWidth}px, 1fr))` } : undefined}
-            >
-              {visibleFolders.map(renderFolderCard)}
-              {displayedItems.map(renderItemCard)}
-            </div>
+            viewMode === 'icon' && deferredGridEntries.length >= ICON_GRID_VIRTUALIZATION_THRESHOLD ? (
+              <VirtualizedIconGrid
+                entries={deferredGridEntries}
+                minTileWidth={iconTileMinWidth}
+                renderTile={renderGridEntry}
+              />
+            ) : (
+              <div className={viewMode === 'icon'
+                ? 'grid gap-2'
+                : 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'}
+                style={viewMode === 'icon' ? { gridTemplateColumns: `repeat(auto-fill, minmax(${iconTileMinWidth}px, 1fr))` } : undefined}
+              >
+                {viewMode === 'icon'
+                  ? deferredGridEntries.map(renderGridEntry)
+                  : (
+                    <>
+                      {deferredVisibleFolders.map(renderFolderCard)}
+                      {deferredDisplayedItems.map(renderItemCard)}
+                    </>
+                  )}
+              </div>
+            )
           )}
         </div>
       )}

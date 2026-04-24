@@ -183,7 +183,7 @@ const AccountingPage: React.FC = () => {
         key: 'cash_bank',
         title: 'نقد و بانک',
         icon: <BankOutlined />,
-        path: '/cash_bank',
+        path: '/cash_bank_operations',
       },
       {
         key: 'barters',

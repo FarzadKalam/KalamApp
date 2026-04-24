@@ -63,6 +63,8 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
 }) => {
   const { message } = App.useApp();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const loadRequestIdRef = useRef(0);
+  const resetOnOpenRef = useRef(false);
   const [tree, setTree] = useState<FileManagerTreeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeFolderKey, setActiveFolderKey] = useState('all');
@@ -88,40 +90,51 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
     return { scope: 'global' as const, moduleId: null, recordId: null };
   };
 
-  const loadFiles = async () => {
+  const loadFiles = async (params?: { folderKey?: string; page?: number; pageSize?: number }) => {
+    const nextFolderKey = String(params?.folderKey ?? activeFolderKey).trim() || 'all';
+    const nextPage = Number(params?.page ?? page) || 1;
+    const nextPageSize = Number(params?.pageSize ?? pageSize) || 60;
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     setLoading(true);
     try {
-      const resolvedScope = resolveScope(activeFolderKey);
+      const resolvedScope = resolveScope(nextFolderKey);
       const loaded = await buildFileManagerTree({
         scope: resolvedScope.scope,
-        page,
-        pageSize,
-        folderKey: activeFolderKey,
+        page: nextPage,
+        pageSize: nextPageSize,
+        folderKey: nextFolderKey,
         moduleId: resolvedScope.moduleId,
         recordId: resolvedScope.recordId,
         fileTypes,
         moduleTitleMap,
       });
+      if (loadRequestIdRef.current !== requestId) return;
       setTree(loaded);
-      if (!activeFolderKey || activeFolderKey === 'all') {
+      if (!nextFolderKey || nextFolderKey === 'all') {
         setActiveFolderKey(loaded.initialFolderKey);
-      } else if (loaded.activeFolderKey !== activeFolderKey) {
+      } else if (loaded.activeFolderKey !== nextFolderKey) {
         setActiveFolderKey(loaded.activeFolderKey);
       }
     } catch (error) {
       console.warn('Could not load files for picker', error);
       message.error('بارگذاری فایل‌ها ناموفق بود');
-      setTree(null);
+      if (loadRequestIdRef.current === requestId) {
+        setTree(null);
+      }
     } finally {
-      setLoading(false);
+      if (loadRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     if (!open) return;
+    resetOnOpenRef.current = true;
     setActiveFolderKey('all');
     setPage(1);
-    void loadFiles();
+    setPageSize(60);
   }, [open, normalizedModuleId, normalizedRecordId]);
 
   const moduleTitleMap = useMemo(() => {
@@ -130,11 +143,24 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
       return acc;
     }, {});
   }, []);
+  const pickerRecordTitleMap = useMemo(
+    () => tree?.recordTitleMap || (hasRecordScope ? { [`${normalizedModuleId}:${normalizedRecordId}`]: normalizedRecordId } : {}),
+    [tree?.recordTitleMap, hasRecordScope, normalizedModuleId, normalizedRecordId],
+  );
 
   useEffect(() => {
     if (!open) return;
-    void loadFiles();
-  }, [activeFolderKey, page, pageSize, fileTypes?.join('|')]);
+    if (resetOnOpenRef.current) {
+      const isResetState = activeFolderKey === 'all' && page === 1 && pageSize === 60;
+      if (!isResetState) return;
+      resetOnOpenRef.current = false;
+    }
+    void loadFiles({
+      folderKey: activeFolderKey,
+      page,
+      pageSize,
+    });
+  }, [open, activeFolderKey, page, pageSize, fileTypes?.join('|')]);
 
   const handleSelect = async (selected: FileManagerListItem[]) => {
     const limited = selected.slice(0, multiple ? undefined : 1);
@@ -211,7 +237,6 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
       footer={null}
       width={980}
       zIndex={zIndex}
-      destroyOnHidden
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-gray-500">فایل‌های موجود را انتخاب کنید یا از همین‌جا فایل جدید اضافه کنید.</div>
@@ -227,7 +252,7 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
         />
       </div>
 
-      {loading ? (
+      {!tree && loading ? (
         <div className="flex h-56 items-center justify-center">
           <Spin />
         </div>
@@ -241,8 +266,10 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
             setPage(1);
             setActiveFolderKey(key);
           }}
-          onRefresh={() => void loadFiles()}
-          recordTitleMap={tree?.recordTitleMap || (hasRecordScope ? { [`${normalizedModuleId}:${normalizedRecordId}`]: normalizedRecordId } : {})}
+          loading={!tree && loading}
+          refreshing={Boolean(tree) && loading}
+          onRefresh={() => void loadFiles({ folderKey: activeFolderKey, page, pageSize })}
+          recordTitleMap={pickerRecordTitleMap}
           moduleTitleMap={moduleTitleMap}
           canDelete={false}
           canEdit={false}

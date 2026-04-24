@@ -16,6 +16,7 @@ import ProductionStagesField from './ProductionStagesField';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { getFieldLabelFa } from '../utils/fieldLabel';
+import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from '../utils/cashBankLegacyAccountKeys';
 import PhoneActionsPopover from './PhoneActionsPopover';
 import PersianDatePicker from './PersianDatePicker';
 import { useCurrencyConfig } from '../utils/currency';
@@ -601,6 +602,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   let tableFields = moduleConfig.fields
     .filter(f => f.isTableColumn)
     .filter(f => (canViewField ? canViewField(f.key) !== false : true))
+    .filter(f => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
   // اگر visibleColumns مشخص است، از آن استفاده کن
@@ -608,6 +610,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       tableFields = visibleColumns
         .map(colKey => moduleConfig.fields.find(f => f.key === colKey))
         .filter(f => f !== undefined)
+        .filter(f => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String((f as any)?.key || '').trim()))
         .filter(f => (canViewField ? canViewField((f as any).key) !== false : true)) as any[];
   }
   // Fallback: اگر هیچ visibleColumns یا isTableColumn نیست

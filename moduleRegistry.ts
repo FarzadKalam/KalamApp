@@ -49,6 +49,8 @@ import { employeeContractsConfig } from './modules/employeeContractsConfig';
 import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
 import { surveysModule } from './modules/surveysConfig';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
+import { supportsGlobalAssignee } from './utils/assigneeSupport';
+import { getAssigneeLabel } from './utils/assigneeLabel';
 
 const TAGS_FIELD_KEY = 'tags';
 
@@ -87,6 +89,53 @@ const withStandardTagsField = (module: ModuleDefinition): ModuleDefinition => {
     fields: existingTagsField
       ? fields.map((field) => (field.key === TAGS_FIELD_KEY ? normalizedTagsField : field))
       : [...fields, normalizedTagsField],
+  };
+};
+
+const resolveAssigneeOrder = (module: ModuleDefinition) => {
+  const headerFields = (module.fields || [])
+    .filter((field) => field.key !== 'assignee_id')
+    .filter((field) => field.key !== TAGS_FIELD_KEY)
+    .filter((field) => field.location === FieldLocation.HEADER)
+    .filter((field) => field.type !== FieldType.IMAGE);
+  const statusField = headerFields.find((field) => String(field.key || '').trim() === 'status');
+  const anchorField = statusField
+    || headerFields.reduce<typeof headerFields[number] | null>((latest, field) => {
+      const currentOrder = Number(field?.order);
+      const latestOrder = Number(latest?.order);
+      if (!Number.isFinite(currentOrder)) return latest;
+      if (!latest || !Number.isFinite(latestOrder) || currentOrder > latestOrder) return field;
+      return latest;
+    }, null);
+  const anchorOrder = Number(anchorField?.order);
+  return Number.isFinite(anchorOrder) ? anchorOrder + 0.05 : 1.1;
+};
+
+const withStandardAssigneeField = (module: ModuleDefinition): ModuleDefinition => {
+  const moduleId = String(module.id || module.table || '').trim();
+  if (!supportsGlobalAssignee(moduleId)) return module;
+
+  const fields = module.fields || [];
+  const existingAssigneeField = fields.find((field) => String(field?.key || '').trim() === 'assignee_id');
+  const assigneeField = {
+    ...(existingAssigneeField || {}),
+    key: 'assignee_id',
+    labels: {
+      fa: getAssigneeLabel(moduleId),
+      en: existingAssigneeField?.labels?.en || 'Assignee',
+    },
+    type: FieldType.USER,
+    location: FieldLocation.HEADER,
+    order: Number(existingAssigneeField?.order) || resolveAssigneeOrder(module),
+    nature: FieldNature.STANDARD,
+    isTableColumn: existingAssigneeField?.isTableColumn !== false,
+  };
+
+  return {
+    ...module,
+    fields: existingAssigneeField
+      ? fields.map((field) => (String(field?.key || '').trim() === 'assignee_id' ? assigneeField : field))
+      : [...fields, assigneeField],
   };
 };
 
@@ -144,5 +193,8 @@ const BASE_MODULES: Record<string, ModuleDefinition> = {
 };
 
 export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(
-  Object.entries(BASE_MODULES).map(([moduleId, module]) => [moduleId, withStandardTagsField(withProcessModuleSupport(module))])
+  Object.entries(BASE_MODULES).map(([moduleId, module]) => [
+    moduleId,
+    withStandardTagsField(withStandardAssigneeField(withProcessModuleSupport(module))),
+  ])
 );

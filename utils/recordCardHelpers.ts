@@ -1,5 +1,7 @@
 import { FieldType, ModuleDefinition, ModuleField } from '../types';
 import { getTaskStatusOption } from './processTaskStatusOptions';
+import { buildConditionalFieldStateMap } from './conditionalFieldRules';
+import { getResolvedModuleConditionalDisplay } from './moduleSettingsRuntime';
 
 const STATUS_HINT_KEYS = new Set([
   'status',
@@ -212,7 +214,13 @@ export const getRecordCardSummaryFields = (
   limit = 4,
 ) => {
   const candidateFields = getModuleCardSummaryFields(moduleConfig, excludedKeys, Math.max(limit * 3, limit + 4));
+  const visibleFieldStateMap = buildConditionalFieldStateMap(
+    Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [],
+    item || {},
+    moduleConfig?.id ? getResolvedModuleConditionalDisplay(moduleConfig.id) : undefined,
+  );
   return candidateFields
+    .filter((field) => visibleFieldStateMap[field.key]?.visible !== false)
     .filter((field) => field?.key && !isEmptyValue(item?.[field.key]))
     .slice(0, limit);
 };

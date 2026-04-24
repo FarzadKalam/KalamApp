@@ -9,7 +9,6 @@ import {
   InputNumber,
   Modal,
   Radio,
-  Select,
   Switch,
 } from 'antd';
 import { FieldType, ModuleField } from '../../types';
@@ -35,12 +34,9 @@ import {
 } from '../../utils/workflowTypes';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import {
-  buildStandardSelectPopupRootStyle,
-  KALAM_SELECT_FIELD_CLASSNAME,
-  mergeClassNames,
   resolveOverlayPopupContainer,
-  resolveSelectPopupContainer,
 } from '../../utils/popupContainer';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 import PersianDatePicker from '../PersianDatePicker';
 import WorkflowActionsBuilder from './WorkflowActionsBuilder';
 import WorkflowConditionsGroup from './WorkflowConditionsGroup';
@@ -419,14 +415,15 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
         <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Form.Item label="ماژول مرتبط" name="module_id" rules={[{ required: true }]}>
-                <Select
-                className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
+              <AdaptiveSelectField
+                className="w-full"
                 showSearch
                 optionFilterProp="label"
                 optionLabelProp="label"
                 options={moduleOptions}
-                getPopupContainer={resolveSelectPopupContainer}
-                styles={{ popup: { root: buildStandardSelectPopupRootStyle() } }}
+                getPopupContainer={resolveOverlayPopupContainer}
+                modalContainer={resolveOverlayPopupContainer}
+                overlayZIndexBase={overlayZIndexBase}
                 onChange={(nextVal) => setModuleId(String(nextVal || ''))}
                 placeholder="انتخاب ماژول"
               />
@@ -476,7 +473,12 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
                 name="interval_unit"
                 rules={[{ required: true, message: 'واحد بازه را انتخاب کنید.' }]}
               >
-                <Select options={intervalUnitOptions} getPopupContainer={resolveSelectPopupContainer} />
+                <AdaptiveSelectField
+                  options={intervalUnitOptions}
+                  getPopupContainer={resolveOverlayPopupContainer}
+                  modalContainer={resolveOverlayPopupContainer}
+                  overlayZIndexBase={overlayZIndexBase}
+                />
               </Form.Item>
               <Form.Item label="در ساعت" name="interval_at">
                 <PersianDatePicker

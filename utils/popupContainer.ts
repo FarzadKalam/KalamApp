@@ -1,8 +1,12 @@
-const OVERLAY_HOST_SELECTOR = [
+const OVERLAY_ROOT_SELECTOR = [
   '.ant-modal-root',
+  '.ant-drawer-root',
+].join(', ');
+
+const OVERLAY_HOST_SELECTOR = [
+  OVERLAY_ROOT_SELECTOR,
   '.ant-modal-wrap',
   '.ant-modal',
-  '.ant-drawer-root',
   '.ant-drawer-content-wrapper',
   '.ant-drawer-content',
   '.ant-drawer',
@@ -43,6 +47,22 @@ export const resolveOverlayPopupContainer = (triggerNode?: HTMLElement | null) =
 
   const stableOverlayHost = triggerNode.closest(OVERLAY_HOST_SELECTOR) as HTMLElement | null;
   return stableOverlayHost || getKalamPopupRoot();
+};
+
+export const resolveStableOverlayRoot = (hostNode?: HTMLElement | null) => {
+  if (typeof document === 'undefined') {
+    return (hostNode || {}) as HTMLElement;
+  }
+
+  if (!hostNode) return getKalamPopupRoot();
+  if (hostNode === document.body) return hostNode;
+
+  if (hostNode.matches(OVERLAY_ROOT_SELECTOR)) {
+    return hostNode;
+  }
+
+  const stableRoot = hostNode.closest(OVERLAY_ROOT_SELECTOR) as HTMLElement | null;
+  return stableRoot || hostNode;
 };
 
 export const resolveSelectPopupContainer = (triggerNode?: HTMLElement | null) => {

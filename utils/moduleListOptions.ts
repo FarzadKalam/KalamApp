@@ -3,6 +3,7 @@ import { MODULES } from '../moduleRegistry';
 import { buildCustomerRelationSearchText } from './customerRelation';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { supportsSystemCode } from './systemCode';
+import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from './cashBankLegacyAccountKeys';
 
 type ModuleFieldLike = {
   key: string;
@@ -28,7 +29,6 @@ const RELATION_MAX_PAGES = 40;
 const RELATION_OPTIONS_TTL_MS = 5 * 60_000;
 const relationTargetOptionsCache = new Map<string, { data: any[]; expiresAt: number }>();
 const relationTargetPromiseCache = new Map<string, Promise<any[]>>();
-
 const normalizeFilter = (value: Record<string, any> | undefined) => {
   if (!value || typeof value !== 'object') return {};
   return Object.keys(value)
@@ -53,6 +53,7 @@ const buildRelationTargetCacheKey = (
 const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const tableFields = (moduleConfig.fields || [])
     .filter((field) => field.isTableColumn)
+    .filter((field) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(field?.key || '').trim()))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
   if (tableFields.length > 0) {
@@ -64,6 +65,17 @@ const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[]
   );
 };
 
+const prependCashBankImageField = (
+  moduleConfig: ModuleDefinition,
+  fields: ModuleFieldLike[]
+) => {
+  if (moduleConfig.id !== 'cash_bank_operations') return fields;
+  const imageField = moduleConfig.fields.find((field) => String(field?.key || '').trim() === 'image_url');
+  if (!imageField) return fields;
+  const withoutImage = fields.filter((field) => String(field?.key || '').trim() !== 'image_url');
+  return [imageField, ...withoutImage];
+};
+
 export const getModuleListVisibleFields = (
   moduleConfig: ModuleDefinition | null | undefined,
   visibleColumns?: string[]
@@ -71,12 +83,13 @@ export const getModuleListVisibleFields = (
   if (!moduleConfig) return [];
 
   if (Array.isArray(visibleColumns) && visibleColumns.length > 0) {
-    return visibleColumns
+    return prependCashBankImageField(moduleConfig, visibleColumns
+      .filter((fieldKey) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(fieldKey || '').trim()))
       .map((fieldKey) => moduleConfig.fields.find((field) => field.key === fieldKey))
-      .filter(Boolean) as ModuleFieldLike[];
+      .filter(Boolean) as ModuleFieldLike[]);
   }
 
-  return getDefaultListFields(moduleConfig);
+  return prependCashBankImageField(moduleConfig, getDefaultListFields(moduleConfig));
 };
 
 const collectFullDynamicOptionFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {

@@ -17,6 +17,7 @@ import { FieldLocation, FieldType } from '../../types';
 import RecordImageBox from '../RecordImageBox';
 import TagInput from '../TagInput';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
+import { shouldHideManagedAssigneeField } from '../../utils/assigneeSupport';
 import { buildResolvedAssigneeCombo } from '../../utils/assigneeValue';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
@@ -39,6 +40,7 @@ interface HeroSectionProps {
   canManageAssignee?: boolean;
   canEditModule?: boolean;
   checkVisibility?: (logic: any) => boolean;
+  isFieldVisible?: (field: any) => boolean;
   canViewFilesManager?: boolean;
   canEditFilesManager?: boolean;
   canDeleteFilesManager?: boolean;
@@ -65,6 +67,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   canManageAssignee = true,
   canEditModule = true,
   checkVisibility,
+  isFieldVisible,
   canViewFilesManager = true,
   canEditFilesManager = true,
   canDeleteFilesManager = true,
@@ -73,8 +76,33 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const imageField = moduleConfig?.fields?.find((f: any) => f.type === FieldType.IMAGE);
-  const canShowImage = !!imageField && (canViewField ? canViewField(imageField.key) !== false : true);
+  const visibleImageFields = useMemo(
+    () => (moduleConfig?.fields || [])
+      .filter((field: any) => field.type === FieldType.IMAGE)
+      .filter((field: any) => (canViewField ? canViewField(field.key) !== false : true)),
+    [canViewField, moduleConfig?.fields]
+  );
+  const imageField = useMemo(() => {
+    if (visibleImageFields.length === 0) return null;
+    if (moduleId === 'cash_bank_operations') {
+      const preferredOrder = ['image_url', 'attachment_url'];
+      for (const fieldKey of preferredOrder) {
+        const matched = visibleImageFields.find((field: any) => String(field?.key || '').trim() === fieldKey);
+        if (matched) return matched;
+      }
+    }
+    return visibleImageFields[0];
+  }, [moduleId, visibleImageFields]);
+  const canShowImage = !!imageField;
+  const heroImageUrl = useMemo(() => {
+    if (!imageField) return null;
+    const directValue = String(data?.[imageField.key] || '').trim();
+    if (directValue) return directValue;
+    if (moduleId === 'cash_bank_operations') {
+      return String(data?.image_url || data?.attachment_url || '').trim() || null;
+    }
+    return null;
+  }, [data, imageField, moduleId]);
   const assigneeLabel = getAssigneeLabel(moduleId);
 
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -141,7 +169,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
             <RecordImageBox
               moduleId={moduleId}
               recordId={String(data?.id || '')}
-              imageUrl={data?.image_url || null}
+              imageUrl={heroImageUrl}
               canEdit={!!canEditModule}
               canViewFilesManager={!!canViewFilesManager}
               canEditFilesManager={!!canEditFilesManager && !!canEditModule}
@@ -219,8 +247,9 @@ const HeroSection: React.FC<HeroSectionProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mt-6">
               {moduleConfig.fields
                 .filter((f: any) => f.location === FieldLocation.HEADER && !['name', recordTitleFieldKey, 'image_url', 'system_code', 'tags'].filter(Boolean).includes(f.key))
+                .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
                 .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
-                .filter((f: any) => (!f.logic || (checkVisibility ? checkVisibility(f.logic) : true)))
+                .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || (checkVisibility ? checkVisibility(f.logic) : true))))
                 .map((f: any) => (
                   <div
                     key={f.key}

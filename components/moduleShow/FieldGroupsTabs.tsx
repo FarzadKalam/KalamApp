@@ -5,6 +5,7 @@ import { FieldType } from '../../types';
 import ProductStockMovementsPanel from '../products/ProductStockMovementsPanel';
 import ShelfInventoryPanel from '../shelves/ShelfInventoryPanel';
 import ShelfStockMovementsPanel from '../shelves/ShelfStockMovementsPanel';
+import { shouldHideManagedAssigneeField } from '../../utils/assigneeSupport';
 import { isTaskLegacySourceField } from '../../utils/taskMeta';
 
 interface FieldGroupsTabsProps {
@@ -17,6 +18,7 @@ interface FieldGroupsTabsProps {
   dynamicOptions: Record<string, any[]>;
   renderSmartField: (field: any) => React.ReactNode;
   checkVisibility: (logic: any) => boolean;
+  isFieldVisible?: (field: any) => boolean;
   canViewField?: (fieldKey: string) => boolean;
   canEditModule?: boolean;
   onDataUpdate?: (patch: Record<string, any>) => void;
@@ -34,6 +36,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
   dynamicOptions,
   renderSmartField,
   checkVisibility,
+  isFieldVisible,
   canViewField,
   canEditModule = true,
   onDataUpdate,
@@ -70,8 +73,9 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
             return !hasProcessBarsInSameBlock;
           })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
           .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
-          .some((f: any) => (!f.logic || checkVisibility(f.logic)));
+          .some((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
 
         const hasBlockTable =
           !!block.tableColumns
@@ -120,8 +124,9 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
             return !hasProcessBarsInSameBlock;
           })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
           .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
-          .map((f: any) => (!f.logic || checkVisibility(f.logic)) && (
+          .map((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))) && (
             <div
               key={f.key}
               className={f.type === FieldType.SUPER_LONG_TEXT ? 'flex flex-col gap-1 md:col-span-2 lg:col-span-3' : 'flex flex-col gap-1'}

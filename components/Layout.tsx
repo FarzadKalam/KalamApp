@@ -413,7 +413,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'حسابداری',
         children: [
           { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
-          { key: '/cash_bank', label: 'نقد و بانک' },
+          { key: '/cash_bank_operations', label: 'نقد و بانک' },
           { key: '/employee_advances', label: 'مساعده‌ها', disabled: !canViewModule('employee_advances') },
           { key: '/payroll_slips', label: 'فیش‌های حقوقی', disabled: !canViewModule('payroll_slips') },
           { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
@@ -500,6 +500,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/accounting':
           return canViewAccountingDashboard;
         case '/cash_bank':
+        case '/cash_bank_operations':
           return canViewCashBank;
         case '/accounting/settings':
           return canViewAccountingSettings;

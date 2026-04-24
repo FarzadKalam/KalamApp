@@ -9,8 +9,9 @@ import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
 import SmartTableRenderer from './SmartTableRenderer';
 import SummaryCard from './SummaryCard';
+import RecordImageBox from './RecordImageBox';
 import { calculateSummary } from '../utils/calculations';
-import { ModuleDefinition, FieldLocation, BlockType, LogicOperator, FieldType, SummaryCalculationType } from '../types';
+import { ModuleDefinition, FieldLocation, BlockType, FieldType, SummaryCalculationType } from '../types';
 import { convertArea } from '../utils/unitConversions';
 import { PRODUCTION_MESSAGES } from '../utils/productionMessages';
 import ProductionStagesField from './ProductionStagesField';
@@ -26,7 +27,7 @@ import { fetchCurrentUserRoleContext } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getCachedAuthUser } from '../utils/sessionCache';
-import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
+import { shouldHideManagedAssigneeField, supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { syncRecordTags } from '../utils/recordTags';
@@ -46,6 +47,9 @@ import {
   mergeClassNames,
   resolveSelectPopupContainer,
 } from '../utils/popupContainer';
+import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
+import { evaluateLegacyVisibilityRule, isConditionalFieldValueEmpty } from '../utils/conditionalFieldRules';
+import { buildModuleOnChangePatch, normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -239,10 +243,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const baselineFormDataSignatureRef = useRef<string | null>(null);
   const suppressDraftPersistRef = useRef(false);
   const watchedValues = Form.useWatch([], form);
+  const previousConditionalVisibilityRef = useRef<Record<string, boolean>>({});
   const getLiveFormValues = () => {
     const liveValues = form.getFieldsValue(true);
     return { ...formData, ...(watchedValues || {}), ...(liveValues || {}) };
   };
+  const currentValues = watchedValues && Object.keys(watchedValues).length > 0
+    ? watchedValues
+    : formData;
   
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
@@ -273,6 +281,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const supportsRoleAssignee = supportsGlobalRoleAssignee(module.id);
   const assigneeLabel = getAssigneeLabel(module.id);
   const hasAutoNameToggle = module.fields.some((field) => field.key === 'auto_name_enabled');
+  const conditionalFieldRuntime = useConditionalFieldRuntime(module, currentValues || {});
 
   const buildAssigneeCombo = (assigneeType?: string | null, assigneeId?: string | null) => {
     if (!assigneeType || !assigneeId) return null;
@@ -340,9 +349,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
         // --- حالت ویرایش ---
         const hasInitialProps = initialValues && Object.keys(initialValues).length > 0;
         if (hasInitialProps) {
-          const assigneeCombo = buildResolvedAssigneeCombo(initialValues);
+          const normalizedInitialValues = normalizeModuleFormValues(module.id, initialValues);
+          const assigneeCombo = buildResolvedAssigneeCombo(normalizedInitialValues);
           const prefetchedValues = {
-            ...initialValues,
+            ...normalizedInitialValues,
             assignee_combo: assigneeCombo,
             ...(hasAutoNameToggle ? { auto_name_enabled: false } : {}),
           };
@@ -376,7 +386,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             }
           });
 
-          const initialProps = initialValues || {};
+          const initialProps = normalizeModuleFormValues(module.id, initialValues || {});
           const assigneeCombo = buildResolvedAssigneeCombo(initialProps);
           let finalValues: Record<string, any> = { ...defaults, ...initialProps, assignee_combo: assigneeCombo };
           Object.entries(defaults).forEach(([key, value]) => {
@@ -877,8 +887,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
     try {
       const { data, error } = await supabase.from(module.table).select('*').eq('id', recordId).single();
       if (error) throw error;
-      if (data) {
-        let nextValues: any = { ...data };
+          if (data) {
+        let nextValues: any = normalizeModuleFormValues(module.id, data);
         if (module.id === 'process_templates') {
           nextValues = syncProcessTemplateTargetModules(nextValues);
           const { data: templateStages } = await supabase
@@ -925,7 +935,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             task_id: stage.task_id || null,
           }));
         }
-        const assigneeCombo = buildResolvedAssigneeCombo(data);
+        const assigneeCombo = buildResolvedAssigneeCombo(nextValues);
         nextValues = { ...nextValues, assignee_combo: assigneeCombo };
         if (module.id === 'tasks') {
           nextValues = normalizeTaskSourceValues(nextValues);
@@ -1584,6 +1594,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
       if (module.id === 'process_templates') {
         values = syncProcessTemplateTargetModules(values);
       }
+      const moduleValidationError = validateModuleFormValues(module.id, values, relationOptions);
+      if (moduleValidationError) {
+        messageApi.error(moduleValidationError);
+        return;
+      }
+      values = transformModulePayloadForSave(module.id, values, relationOptions);
 
       if (onSave) {
         await onSave(values, {
@@ -1912,6 +1928,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
       form.setFieldsValue({ module_ids: syncedValues.module_ids, module_id: syncedValues.module_id });
       allValues = { ...allValues, module_ids: syncedValues.module_ids, module_id: syncedValues.module_id };
     }
+    const modulePatch = buildModuleOnChangePatch(module.id, allValues || {}, relationOptions);
+    if (modulePatch && Object.keys(modulePatch).length > 0) {
+      form.setFieldsValue(modulePatch);
+      allValues = { ...allValues, ...modulePatch };
+    }
     let cleanedValues = Object.fromEntries(
       Object.entries(allValues || {}).filter(([, value]) => value !== undefined)
     );
@@ -1961,44 +1982,6 @@ const SmartForm: React.FC<SmartFormProps> = ({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [draftKey, form, formData, initialValuesSignature, visible]);
 
-  const checkVisibility = (logicOrRule: any, values?: any) => {
-    if (!logicOrRule) return true;
-    
-    // پشتیبانی هم از آبجکت logic (که visibleIf دارد) و هم از خود قانون شرط
-    const rule = logicOrRule.visibleIf || logicOrRule;
-    
-    // اگر قانون معتبری نبود، نمایش بده
-    if (!rule || !rule.field) return true;
-
-    const { field, operator, value } = rule;
-    const resolvedValues = values || watchedValues || formData;
-    const fieldValue = resolvedValues?.[field];
-
-    // اگر فیلد مرجع هنوز مقدار نگرفته، برای شرط‌های "مخالف" آن را مخفی کن
-    if (fieldValue === undefined || fieldValue === null) {
-         if (operator === LogicOperator.NOT_EQUALS) return false;
-    }
-
-    switch (operator) {
-      case LogicOperator.EQUALS:
-        return fieldValue === value;
-      case LogicOperator.NOT_EQUALS:
-        return fieldValue !== value;
-      case LogicOperator.CONTAINS:
-        return Array.isArray(fieldValue) ? fieldValue.includes(value) : false;
-      case LogicOperator.IS_TRUE:
-        return fieldValue === true;
-      case LogicOperator.IS_FALSE:
-        return fieldValue === false;
-      case LogicOperator.GREATER_THAN:
-        return Number(fieldValue) > Number(value);
-      case LogicOperator.LESS_THAN:
-        return Number(fieldValue) < Number(value);
-      default:
-        return true;
-    }
-  };
-
   const canEditModule = modulePermissions.edit !== false;
   const visibleSystemFieldKeys = new Set(
     module.id === 'products'
@@ -2027,7 +2010,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       .filter(f => f.location === FieldLocation.HEADER)
       .filter((f) => recordId || f.hideInCreateForm !== true)
       .filter(f => canViewField(f.key))
-      .filter(f => f.key !== 'assignee_id' && f.key !== 'assignee_type')
+      .filter((f) => !shouldHideManagedAssigneeField(module.id, f.key))
       .filter((f) => f.key !== 'auto_name_enabled')
       .filter(f => f.nature !== 'system' || visibleSystemFieldKeys.has(f.key)) // بعضی فیلدهای سیستمی باید در فرم قابل ویرایش باشند
       .sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -2039,7 +2022,42 @@ const SmartForm: React.FC<SmartFormProps> = ({
     ? [...baseHeaderFields, productTypeFieldFallback].sort((a, b) => (a.order || 0) - (b.order || 0))
     : baseHeaderFields;
   const statusField = headerFields.find((f) => f.key === 'status');
-  const headerFieldsWithoutStatus = headerFields.filter((f) => f.key !== 'status');
+  const runtimeStatusField = statusField ? conditionalFieldRuntime.getRuntimeField(statusField) : null;
+  const preferredMediaField = useMemo(() => {
+    const visibleImageFields = (module.fields || [])
+      .filter((field) => field.type === FieldType.IMAGE)
+      .filter((field) => recordId || field.hideInCreateForm !== true)
+      .filter((field) => canViewField(field.key))
+      .filter((field) => field.nature !== 'system' || visibleSystemFieldKeys.has(field.key));
+    if (visibleImageFields.length === 0) return null;
+    if (module.id === 'cash_bank_operations') {
+      return visibleImageFields.find((field) => field.key === 'image_url')
+        || visibleImageFields.find((field) => field.key === 'attachment_url')
+        || visibleImageFields[0];
+    }
+    return visibleImageFields[0];
+  }, [canViewField, module.fields, module.id, recordId, visibleSystemFieldKeys]);
+  const showTopMediaBox = module.id === 'cash_bank_operations' && !!recordId && !!preferredMediaField;
+  const mediaPreviewValue = useMemo(() => {
+    if (!preferredMediaField) return null;
+    const directValue = String((currentValues as any)?.[preferredMediaField.key] || '').trim();
+    if (directValue) return directValue;
+    if (module.id === 'cash_bank_operations') {
+      return String((currentValues as any)?.image_url || (currentValues as any)?.attachment_url || '').trim() || null;
+    }
+    return null;
+  }, [currentValues, module.id, preferredMediaField]);
+  const handleTopMediaChange = useCallback((url: string | null) => {
+    if (!preferredMediaField) return;
+    const patch = module.id === 'cash_bank_operations'
+      ? { image_url: url, attachment_url: url }
+      : { [preferredMediaField.key]: url };
+    form.setFieldsValue(patch);
+    setFormData((prev: any) => ({ ...prev, ...patch }));
+  }, [form, module.id, preferredMediaField]);
+  const headerFieldsWithoutStatus = headerFields.filter((f) =>
+    f.key !== 'status' && !(showTopMediaBox && preferredMediaField && f.key === preferredMediaField.key)
+  );
   const getResolvedOptions = (field: any, relationKey?: string) => {
     if (
       (module.id === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
@@ -2074,10 +2092,6 @@ const SmartForm: React.FC<SmartFormProps> = ({
     }
     return field.options;
   };
-  // محاسبه دیتا برای نمایش در لحظه (رندر)
-  const currentValues = watchedValues && Object.keys(watchedValues).length > 0
-    ? watchedValues
-    : formData;
   const isMarketingLeadFromExistingCustomer =
     module.id === 'marketing_leads'
     && String((currentValues as any)?.lead_type || '').trim() === 'existing_customer'
@@ -2166,7 +2180,31 @@ const SmartForm: React.FC<SmartFormProps> = ({
   }, [currentValues, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm]);
   const currentSummaryData = getSummaryData(currentValues);
   const summaryConfigObj = module.blocks?.find(b => b.summaryConfig)?.summaryConfig;
-  const isFieldRequired = (field?: any) => !isBulkEdit && field?.validation?.required === true;
+  useEffect(() => {
+    const nextVisibilityMap = Object.fromEntries(
+      (module.fields || []).map((field) => [field.key, conditionalFieldRuntime.isFieldVisible(field)])
+    ) as Record<string, boolean>;
+    const patch: Record<string, any> = {};
+
+    (module.fields || []).forEach((field) => {
+      const nextValue = conditionalFieldRuntime.getDefaultPatchForReveal(
+        field,
+        previousConditionalVisibilityRef.current[field.key] === true,
+        !recordId,
+        currentValues?.[field.key]
+      );
+      if (nextValue !== undefined && isConditionalFieldValueEmpty(currentValues?.[field.key])) {
+        patch[field.key] = nextValue;
+      }
+    });
+
+    previousConditionalVisibilityRef.current = nextVisibilityMap;
+    if (!Object.keys(patch).length) return;
+    form.setFieldsValue(patch);
+    setFormData((prev: any) => ({ ...prev, ...patch }));
+  }, [conditionalFieldRuntime, currentValues, form, module.fields, recordId]);
+
+  const isFieldRequired = (field?: any) => !isBulkEdit && conditionalFieldRuntime.getFieldRequired(field);
   const renderInlineFieldLabel = (labelText: string, required?: boolean) => (
     <span className="inline-flex items-center gap-1">
       <span>{labelText}</span>
@@ -2260,7 +2298,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     messageApi.info('این عملیات هنوز پیاده‌سازی نشده است');
   };
   const showAutoNameToggle = !!autoNameToggleField
-    && (!autoNameToggleField.logic || checkVisibility(autoNameToggleField.logic, currentValues));
+    && conditionalFieldRuntime.isFieldVisible(autoNameToggleField);
 
   if (!visible) return null;
 
@@ -2395,7 +2433,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       </div>
                     </div>
                   )}
-                  {statusField && (!statusField.logic || checkVisibility(statusField.logic, currentValues)) && (
+                  {runtimeStatusField && conditionalFieldRuntime.isFieldVisible(runtimeStatusField) && (
                     <div className="w-full lg:flex-1 lg:max-w-[320px]">
                       <div className="smartform-inline-status h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
                         <span className="text-xs text-gray-400 shrink-0">
@@ -2403,18 +2441,18 @@ const SmartForm: React.FC<SmartFormProps> = ({
                         </span>
                         <div className="flex-1 min-w-0">
                           <SmartFieldRenderer
-                            field={statusField}
-                            value={(currentValues as any)?.[statusField.key]}
+                            field={runtimeStatusField}
+                            value={(currentValues as any)?.[runtimeStatusField.key]}
                             onChange={(val) => {
-                              form.setFieldValue(statusField.key, val);
+                              form.setFieldValue(runtimeStatusField.key, val);
                               setFormData((prev: any) => ({
                                 ...prev,
-                                [statusField.key]: val,
+                                [runtimeStatusField.key]: val,
                               }));
                             }}
                             forceEditMode={true}
                             compactMode={true}
-                            options={getResolvedOptions(statusField)}
+                            options={getResolvedOptions(runtimeStatusField)}
                             disableRequired={isBulkEdit}
                             moduleId={module.id}
                             recordId={recordId}
@@ -2427,12 +2465,29 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 </div>
               )}
 
+              {showTopMediaBox && preferredMediaField && (
+                <div className="mb-6">
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/5">
+                    <div className="mb-3 text-xs text-gray-400">{preferredMediaField.labels?.fa || 'تصویر / فایل اصلی'}</div>
+                    <div className="max-w-[240px]">
+                      <RecordImageBox
+                        moduleId={module.id}
+                        recordId={recordId}
+                        imageUrl={mediaPreviewValue}
+                        canEdit={modulePermissions.edit !== false}
+                        onMainImageChange={handleTopMediaChange}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Header Fields */}
               {headerFieldsWithoutStatus.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-5 bg-gray-50 dark:bg-white/5 p-3 md:p-4 rounded-2xl border border-gray-100 dark:border-gray-800">
                   {headerFieldsWithoutStatus.map(field => {
-                     const preparedField = getPreparedField(field);
-                     if (preparedField.logic && !checkVisibility(preparedField.logic, currentValues)) return null;
+                     const preparedField = conditionalFieldRuntime.getRuntimeField(getPreparedField(field));
+                     if (!preparedField || !conditionalFieldRuntime.isFieldVisible(preparedField)) return null;
                      const options = getResolvedOptions(preparedField);
                      return (
                          <div
@@ -2494,7 +2549,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
               {/* Blocks */}
               {sortedBlocks.map(block => {
-                if (block.visibleIf && !checkVisibility(block.visibleIf, currentValues)) return null;
+                if (block.visibleIf && !evaluateLegacyVisibilityRule(block.visibleIf, currentValues)) return null;
                 if (canViewField(String(block.id)) === false) return null;
                 if (module.id === 'products' && block.id === 'product_stock_movements') return null;
                 if (module.id === 'products' && block.id === 'product_inventory' && !!recordId) return null;
@@ -2526,7 +2581,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       || module.id === 'purchase_invoices') || f.key !== 'process_template_id')
                     .filter(f => canViewField(f.key))
                     .filter((f) => !(module.id === 'tasks' && isTaskLegacySourceField(f.key)))
-                    .filter(f => f.key !== 'assignee_id' && f.key !== 'assignee_type')
+                    .filter((f) => !shouldHideManagedAssigneeField(module.id, f.key))
                     .filter((f) => f.key !== 'auto_name_enabled')
                     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
@@ -2542,8 +2597,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       </Divider>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {blockFields.map(field => {
-                            const preparedField = getPreparedField(field);
-                            if (preparedField.logic && !checkVisibility(preparedField.logic, currentValues)) return null;
+                            const preparedField = conditionalFieldRuntime.getRuntimeField(getPreparedField(field));
+                            if (!preparedField || !conditionalFieldRuntime.isFieldVisible(preparedField)) return null;
                              let fieldValue = (currentValues as any)?.[preparedField.key];
                             let isReadOnly = false;
                             // فیلدهای خلاصه اگر محاسبه شده باشند

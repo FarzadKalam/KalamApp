@@ -9,6 +9,11 @@ import {
   RowCalculationType,
   SummaryCalculationType,
 } from '../types';
+import {
+  CASH_BANK_OPERATION_STATUS_OPTIONS,
+  CASH_BANK_PAYMENT_TYPE_OPTIONS,
+  CASH_BANK_RESPONSIBLE_LABEL_FA,
+} from '../utils/cashBankFieldCatalog';
 import { HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
 import { getTodayLocalDateValue } from '../utils/defaultValues';
 
@@ -105,21 +110,13 @@ const BLOCKS = {
     rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
     tableColumns: [
       { key: 'attachment', title: 'پیوست', type: FieldType.IMAGE, width: 96 },
+      { key: 'tags', title: 'برچسب‌ها', type: FieldType.TAGS, width: 150 },
       {
         key: 'payment_type',
-        title: 'نوع پرداخت',
+        title: 'روش پرداخت',
         type: FieldType.SELECT,
         width: 140,
-        options: [
-          { label: 'نقد', value: 'cash' },
-          { label: 'کارت‌خوان', value: 'pos' },
-          { label: 'کارت به کارت', value: 'card' },
-          { label: 'انتقال حساب', value: 'transfer' },
-          { label: 'چک', value: 'cheque' },
-          { label: 'آنلاین', value: 'online' },
-          { label: 'تهاتر', value: 'barter' },
-          { label: 'اعتباری', value: 'credit' },
-        ],
+        options: [...CASH_BANK_PAYMENT_TYPE_OPTIONS],
       },
       {
         key: 'cheque_id',
@@ -148,11 +145,7 @@ const BLOCKS = {
         title: 'وضعیت',
         type: FieldType.SELECT,
         width: 120,
-        options: [
-          { label: 'در انتظار', value: 'pending', color: 'orange' },
-          { label: 'پرداخت شده', value: 'received', color: 'green' },
-          { label: 'برگشت خورده', value: 'returned', color: 'red' },
-        ],
+        options: [...CASH_BANK_OPERATION_STATUS_OPTIONS],
       },
       {
         key: 'cheque_status',
@@ -170,7 +163,7 @@ const BLOCKS = {
       },
       {
         key: 'source_account',
-        title: 'حساب مبدا',
+        title: 'حساب پرداخت',
         type: FieldType.RELATION,
         width: 220,
         relationConfig: {
@@ -194,7 +187,7 @@ const BLOCKS = {
       },
       {
         key: 'responsible_id',
-        title: 'مسئول پرداخت',
+        title: CASH_BANK_RESPONSIBLE_LABEL_FA,
         type: FieldType.RELATION,
         width: 150,
         relationConfig: { targetModule: 'profiles', targetField: 'full_name' },

@@ -1,5 +1,6 @@
 import React, { useMemo, useRef } from 'react';
 import { Modal } from 'antd';
+import { resolveStableOverlayRoot } from '../utils/popupContainer';
 
 interface AdaptivePickerSurfaceProps {
   open: boolean;
@@ -44,7 +45,9 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
             const activeElement = typeof document !== 'undefined'
               ? (document.activeElement as HTMLElement | null)
               : null;
-            return modalContainer(anchorRef.current || activeElement);
+            return resolveStableOverlayRoot(
+              modalContainer(anchorRef.current || activeElement)
+            );
           }
         : undefined,
     [modalContainer]

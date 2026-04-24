@@ -5,6 +5,7 @@ import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, Ar
 import { supabase } from '../supabaseClient';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
+import AdaptiveSelectField from './AdaptiveSelectField';
 import DynamicSelectField from './DynamicSelectField';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
@@ -630,19 +631,35 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       window.removeEventListener('popstate', handlePopState);
     };
   }, [handoverEditorOpen, handoverTask?.id]);
-  const modalSelectProps = useMemo(
+  const adaptiveModalSelectProps = useMemo(
     () => ({
       allowClear: true,
       showSearch: true,
       optionFilterProp: 'label' as const,
-      getPopupContainer: resolveSelectPopupContainer,
+      getPopupContainer: resolveOverlayPopupContainer,
+      modalContainer: resolveOverlayPopupContainer,
       placement: 'bottomRight' as const,
       popupMatchSelectWidth: false,
       listHeight: 260,
+      overlayZIndexBase: 13080,
       virtual: false,
-      styles: { popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 13080, maxWidth: 'calc(100vw - 1rem)' }) } },
     }),
     []
+  );
+  const assigneeComboOptions = useMemo(
+    () => ([
+      ...assignees.users.map((user) => ({
+        value: `user:${user.id}`,
+        label: user.display_name || user.full_name || user.email || user.mobile_1 || `کاربر ${user.id}`,
+        searchText: [user.display_name, user.full_name, user.email, user.mobile_1, 'کاربر'].filter(Boolean).join(' '),
+      })),
+      ...assignees.roles.map((role) => ({
+        value: `role:${role.id}`,
+        label: role.title || `تیم ${role.id}`,
+        searchText: [role.title, 'تیم'].filter(Boolean).join(' '),
+      })),
+    ]),
+    [assignees.roles, assignees.users]
   );
   const filesAccess = useMemo(
     () => resolveFilesAccessPermissions(rolePermissions),
@@ -4216,8 +4233,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           className="w-full"
           allowClear
           showSearch
-          getPopupContainer={resolveSelectPopupContainer}
+          getPopupContainer={resolveOverlayPopupContainer}
           popupStyle={buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' })}
+          modalContainer={resolveOverlayPopupContainer}
           onOptionsUpdate={() => { void loadTaskCustomFieldOptions([field]); }}
           protectedValues={field.dynamicOptionsCategory === 'task_type' ? getTaskTypeProtectedValues() : undefined}
         />
@@ -4305,7 +4323,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     if (field.type === FieldType.MULTI_SELECT) {
       return (
-        <Select
+        <AdaptiveSelectField
           mode="multiple"
           value={Array.isArray(value) ? value : []}
           disabled={disabled}
@@ -4314,8 +4332,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           optionFilterProp="label"
           showSearch
           maxTagCount="responsive"
-          getPopupContainer={resolveSelectPopupContainer}
-          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' }) } }}
+          getPopupContainer={resolveOverlayPopupContainer}
+          modalContainer={resolveOverlayPopupContainer}
+          overlayZIndexBase={12640}
           onChange={(nextValue) => onValueChange(nextValue)}
         />
       );
@@ -4323,7 +4342,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     if (field.type === FieldType.TAGS) {
       return (
-        <Select
+        <AdaptiveSelectField
           mode="tags"
           value={Array.isArray(value) ? value : []}
           disabled={disabled}
@@ -4331,8 +4350,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           className="w-full"
           tokenSeparators={[',']}
           maxTagCount="responsive"
-          getPopupContainer={resolveSelectPopupContainer}
-          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' }) } }}
+          getPopupContainer={resolveOverlayPopupContainer}
+          modalContainer={resolveOverlayPopupContainer}
+          overlayZIndexBase={12640}
           onChange={(nextValue) => onValueChange(nextValue)}
         />
       );
@@ -4345,7 +4365,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       || field.type === FieldType.USER
     ) {
       return (
-        <Select
+        <AdaptiveSelectField
           allowClear
           value={value ?? undefined}
           disabled={disabled}
@@ -4353,8 +4373,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           className="w-full"
           showSearch
           optionFilterProp="label"
-          getPopupContainer={resolveSelectPopupContainer}
-          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' }) } }}
+          getPopupContainer={resolveOverlayPopupContainer}
+          modalContainer={resolveOverlayPopupContainer}
+          overlayZIndexBase={12640}
           onChange={(nextValue) => onValueChange(nextValue)}
         />
       );
@@ -7369,8 +7390,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             <div className="min-w-[220px] flex-1 max-w-[360px]">
                               <div className="flex flex-col gap-1">
                                 <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
-                                <Select
-                                  {...modalSelectProps}
+                                <AdaptiveSelectField
+                                  {...adaptiveModalSelectProps}
                                   allowClear={false}
                                   value={group?.templateId || undefined}
                                   onChange={(val) => {
@@ -7660,8 +7681,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </Button>
           <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.55)] p-3">
             <div className="mb-2 text-sm font-medium text-[rgba(var(--brand-800-rgb),1)]">کپی از دیگر الگوهای فرآیند</div>
-            <Select
-              {...modalSelectProps}
+            <AdaptiveSelectField
+              {...adaptiveModalSelectProps}
               value={draftSourceTemplateId || undefined}
               placeholder="انتخاب الگوی فرآیند"
               loading={draftSourceTemplateLoading}
@@ -7761,22 +7782,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             <div className="col-span-12">
               <Form.Item name="assignee_combo" label="مسئول انجام">
-                <Select placeholder="انتخاب کنید..." {...modalSelectProps}>
-                  <Select.OptGroup label="کاربران">
-                    {assignees.users.map(u => (
-                      <Select.Option key={`user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
-                        <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
-                      </Select.Option>
-                    ))}
-                  </Select.OptGroup>
-                  <Select.OptGroup label="تیم‌ها">
-                    {assignees.roles.map(r => (
-                      <Select.Option key={`role-${r.id}`} value={`role:${r.id}`} label={r.title}>
-                        <Space><TeamOutlined /> {r.title}</Space>
-                      </Select.Option>
-                    ))}
-                  </Select.OptGroup>
-                </Select>
+                <AdaptiveSelectField
+                  {...adaptiveModalSelectProps}
+                  placeholder="انتخاب کنید..."
+                  options={assigneeComboOptions}
+                />
               </Form.Item>
             </div>
 
@@ -7818,8 +7828,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 </div>
                 <div className="col-span-5">
                   <Form.Item name="duration_from" label="بعد از">
-                    <Select
-                      {...modalSelectProps}
+                    <AdaptiveSelectField
+                      {...adaptiveModalSelectProps}
                       options={[
                         { label: 'شروع پروژه', value: 'project_start' },
                         { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
@@ -7834,8 +7844,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 </div>
                 <div className="col-span-3">
                   <Form.Item name="duration_unit" label="واحد">
-                    <Select
-                      {...modalSelectProps}
+                    <AdaptiveSelectField
+                      {...adaptiveModalSelectProps}
                       options={[
                         { label: 'روز', value: 'day' },
                         { label: 'ساعت', value: 'hour' },
@@ -8001,22 +8011,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         </div>
                         <div className="col-span-12">
                           <Form.Item name="default_assignee_combo" label="مسئول انجام پیش‌فرض">
-                            <Select placeholder="انتخاب کنید..." {...modalSelectProps}>
-                              <Select.OptGroup label="کاربران">
-                                {assignees.users.map(u => (
-                                  <Select.Option key={`draft-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
-                                    <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
-                                  </Select.Option>
-                                ))}
-                              </Select.OptGroup>
-                              <Select.OptGroup label="تیم‌ها">
-                                {assignees.roles.map(r => (
-                                  <Select.Option key={`draft-role-${r.id}`} value={`role:${r.id}`} label={r.title}>
-                                    <Space><TeamOutlined /> {r.title}</Space>
-                                  </Select.Option>
-                                ))}
-                              </Select.OptGroup>
-                            </Select>
+                            <AdaptiveSelectField
+                              {...adaptiveModalSelectProps}
+                              placeholder="انتخاب کنید..."
+                              options={assigneeComboOptions}
+                            />
                           </Form.Item>
                         </div>
                         <div className="col-span-12">
@@ -8024,8 +8023,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         </div>
                         <div className="col-span-5">
                           <Form.Item name="duration_from" label="بعد از">
-                            <Select
-                              {...modalSelectProps}
+                            <AdaptiveSelectField
+                              {...adaptiveModalSelectProps}
                               options={[
                                 { label: 'شروع پروژه', value: 'project_start' },
                                 { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
@@ -8040,8 +8039,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         </div>
                         <div className="col-span-3">
                           <Form.Item name="duration_unit" label="واحد">
-                            <Select
-                              {...modalSelectProps}
+                            <AdaptiveSelectField
+                              {...adaptiveModalSelectProps}
                               options={[
                                 { label: 'روز', value: 'day' },
                                 { label: 'ساعت', value: 'hour' },
@@ -8148,8 +8147,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       rules={[{ required: true, message: 'رنگ را انتخاب کنید' }]}
                                       className="mb-0"
                                     >
-                                      <Select
-                                        {...modalSelectProps}
+                                      <AdaptiveSelectField
+                                        {...adaptiveModalSelectProps}
                                         options={PROCESS_TASK_STATUS_COLOR_OPTIONS}
                                         placeholder="رنگ"
                                       />
@@ -8477,8 +8476,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   </div>
                                   <div className="col-span-12 md:col-span-3">
                                     <div className="mb-1 text-xs text-gray-500">واحد زمان</div>
-                                    <Select
-                                      {...modalSelectProps}
+                                    <AdaptiveSelectField
+                                      {...adaptiveModalSelectProps}
                                       value={rule.interval_unit || 'day'}
                                       options={intervalUnitOptions}
                                       onChange={(value) => updateDraftAutomationRule(rule.id, {
@@ -8718,7 +8717,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <Input placeholder="مثال: لینک جلسه" />
           </Form.Item>
           <Form.Item label="نوع فیلد" name="type" rules={[{ required: true, message: 'نوع فیلد را انتخاب کنید.' }]}>
-            <Select {...modalSelectProps} allowClear={false} options={processTaskCustomFieldTypeOptions} />
+            <AdaptiveSelectField {...adaptiveModalSelectProps} allowClear={false} options={processTaskCustomFieldTypeOptions} />
           </Form.Item>
 
           {draftCustomFieldType === FieldType.RELATION && (
@@ -8728,11 +8727,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 name="relationTargetModule"
                 rules={[{ required: true, message: 'ماژول مرتبط را انتخاب کنید.' }]}
               >
-                <Select {...modalSelectProps} options={workflowModuleOptions} />
+                <AdaptiveSelectField {...adaptiveModalSelectProps} options={workflowModuleOptions} />
               </Form.Item>
               <Form.Item label="فیلد نمایشی مقصد" name="relationTargetField">
-                <Select
-                  {...modalSelectProps}
+                <AdaptiveSelectField
+                  {...adaptiveModalSelectProps}
                   allowClear
                   options={(MODULES[String(draftCustomFieldRelationTargetModule || '')]?.fields || []).map((field) => ({
                     value: field.key,
@@ -8856,11 +8855,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-xs text-gray-400">الگوی فرآیند اجرا</span>
-            <Select
-              {...modalSelectProps}
+            <AdaptiveSelectField
+              {...adaptiveModalSelectProps}
               placement="topRight"
-              getPopupContainer={resolveSelectPopupContainer}
-              styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: 16020, maxWidth: 'calc(100vw - 1rem)' }) } }}
               labelInValue
               value={appendProcessTemplateSelectValue}
               onChange={handleAppendProcessTemplateSelectChange}
@@ -8919,7 +8916,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       moduleId={moduleId}
                       recordId={recordId}
                       overlayZIndexBase={16040}
-                      popupContainer={resolveSelectPopupContainer}
+                      popupContainer={resolveOverlayPopupContainer}
                     />
                   </div>
                 ))}

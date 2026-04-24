@@ -23,11 +23,13 @@ const FilesGalleryPage: React.FC = () => {
 
   const [items, setItems] = useState<GalleryFileItem[]>([]);
   const [tree, setTree] = useState<FileManagerTreeResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [moduleFilter, setModuleFilter] = useState<string>('all');
   const [activeFolderKey, setActiveFolderKey] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'image' | 'video' | 'file'>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(60);
   const [recordFilesEnabled, setRecordFilesEnabled] = useState<boolean>(recordFilesTableExistsCache !== false);
@@ -35,6 +37,7 @@ const FilesGalleryPage: React.FC = () => {
   const [canViewGallery, setCanViewGallery] = useState(true);
   const [canViewRecordFilesManager, setCanViewRecordFilesManager] = useState(true);
   const [fileManagerEnabled, setFileManagerEnabled] = useState<boolean>(false);
+  const loadRequestIdRef = React.useRef(0);
 
   const resolveScopeFromFolderKey = (folderKey: string) => {
     const normalized = String(folderKey || '').trim();
@@ -54,11 +57,19 @@ const FilesGalleryPage: React.FC = () => {
   };
 
   const loadFiles = async (forceCheck = false) => {
-    setLoading(true);
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
+    if (tree || items.length > 0) {
+      setRefreshing(true);
+    } else {
+      setInitialLoading(true);
+    }
     try {
       const fileManagerTablesExist = await detectFileManagerTables(supabase, forceCheck);
+      if (loadRequestIdRef.current !== requestId) return;
       setFileManagerEnabled(fileManagerTablesExist);
       const tableExists = await detectRecordFilesTable(supabase, forceCheck);
+      if (loadRequestIdRef.current !== requestId) return;
       recordFilesTableExistsCache = tableExists;
       setRecordFilesEnabled(tableExists);
       const resolvedScope = resolveScopeFromFolderKey(activeFolderKey);
@@ -70,10 +81,11 @@ const FilesGalleryPage: React.FC = () => {
         folderKey: activeFolderKey,
         moduleId: resolvedScope.moduleId,
         recordId: resolvedScope.recordId,
-        search: searchTerm,
+        search: debouncedSearchTerm,
         fileTypes: typeFilter === 'all' ? undefined : [typeFilter],
         moduleTitleMap,
       });
+      if (loadRequestIdRef.current !== requestId) return;
       setTree(nextTree);
       setItems(nextTree.allItems);
       if (nextTree.activeFolderKey !== activeFolderKey) setActiveFolderKey(nextTree.activeFolderKey);
@@ -85,9 +97,14 @@ const FilesGalleryPage: React.FC = () => {
       }
     } catch (error: any) {
       console.warn('Could not load gallery files', error);
-      setItems([]);
+      if (loadRequestIdRef.current === requestId) {
+        setItems([]);
+      }
     } finally {
-      setLoading(false);
+      if (loadRequestIdRef.current === requestId) {
+        setRefreshing(false);
+        setInitialLoading(false);
+      }
     }
   };
 
@@ -109,14 +126,16 @@ const FilesGalleryPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (permissionsLoading || !canViewGallery) return;
-    void loadFiles(false);
-  }, [permissionsLoading, canViewGallery]);
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [searchTerm]);
 
   useEffect(() => {
     if (permissionsLoading || !canViewGallery) return;
     void loadFiles(false);
-  }, [activeFolderKey, page, pageSize, searchTerm, typeFilter, moduleFilter]);
+  }, [permissionsLoading, canViewGallery, activeFolderKey, page, pageSize, debouncedSearchTerm, typeFilter, moduleFilter]);
 
   const moduleOptions = useMemo(() => {
     const used = Array.from(new Set(
@@ -178,7 +197,7 @@ const FilesGalleryPage: React.FC = () => {
               style={{ backgroundColor: '#f0f0f0', color: '#666', boxShadow: 'none' }}
             />
           </div>
-          <Button className="rounded-xl" onClick={() => void loadFiles(true)} loading={loading}>بروزرسانی</Button>
+          <Button className="rounded-xl" onClick={() => void loadFiles(true)} loading={refreshing}>بروزرسانی</Button>
         </div>
 
         <div className="rounded-[2rem] border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-[#1a1a1a] md:p-4">
@@ -222,7 +241,7 @@ const FilesGalleryPage: React.FC = () => {
         </div>
       </div>
 
-      {loading ? (
+      {initialLoading && !tree ? (
         <div className="rounded-[2rem] border border-gray-200 bg-white p-10 text-center dark:border-gray-800 dark:bg-[#1a1a1a]">
           <Spin />
         </div>
@@ -251,6 +270,8 @@ const FilesGalleryPage: React.FC = () => {
           }}
           onOpenItem={openRecordGallery}
           onRefresh={() => void loadFiles(true)}
+          loading={initialLoading && !tree}
+          refreshing={refreshing || (initialLoading && Boolean(tree))}
           recordTitleMap={tree?.recordTitleMap || {}}
           moduleTitleMap={moduleTitleMap}
           selectionItems={tree?.allItems || []}

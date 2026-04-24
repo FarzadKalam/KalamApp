@@ -3223,6 +3223,17 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       }] : []),
     ];
   }, [assignees.roles, assignees.users, currentAssigneePlaceholder, supportsRoleAssignee]);
+  const assigneeSelectOptions = useMemo(
+    () => assigneeOptions.flatMap((group: any) =>
+      Array.isArray(group?.options)
+        ? group.options.map((option: any) => ({
+            ...option,
+            searchText: [group?.label, option?.label, option?.value].filter(Boolean).join(' '),
+          }))
+        : []
+    ),
+    [assigneeOptions]
+  );
   const baseVisibleFields = useMemo(
     () => (supportsAssignee
       ? fields.filter((field) => !['assignee_id', 'assignee_type', 'assignee_role_id', 'assignee_combo'].includes(String(field?.key || '')))
@@ -3430,18 +3441,16 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
               <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
                 <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
                 <Form.Item name="assignee_combo" noStyle>
-                  <Select
-                    variant="borderless"
+                  <AdaptiveSelectField
                     placeholder="جستجو یا انتخاب مسئول / نقش"
                     className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full max-w-full font-semibold text-gray-700 dark:text-gray-300')}
-                    styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: childOverlayZIndexBase }) } }}
                     loading={assigneesLoading}
-                    options={assigneeOptions}
+                    options={assigneeSelectOptions}
                     showSearch
-                    optionFilterProp="label"
+                    optionFilterProp="searchText"
                     optionLabelProp="label"
                     filterOption={(input, option) =>
-                      String(option?.label || '').toLowerCase().includes(String(input || '').trim().toLowerCase())
+                      String(option?.searchText || option?.label || '').toLowerCase().includes(String(input || '').trim().toLowerCase())
                     }
                     optionRender={(option) => (
                       <Space>
@@ -3450,6 +3459,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                       </Space>
                     )}
                     getPopupContainer={quickCreatePopupContainer}
+                    modalContainer={quickCreatePopupContainer}
+                    overlayZIndexBase={childOverlayZIndexBase}
                     onChange={(value) => {
                       const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
                       const normalizedType = String(assignee_type || 'user');
