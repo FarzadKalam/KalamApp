@@ -34,6 +34,7 @@ import {
   resolveTaskSourceLink,
 } from '../utils/taskMeta';
 import { TASK_AUTOMATION_SELECT, updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
+import { syncProjectStatusWithProcessState } from '../utils/projectProcessStatus';
 import {
   createDefaultProcessAutomationRule,
   getProcessAutomationRuleSummary,
@@ -1740,6 +1741,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             previousTask: null,
             currentUser: null,
           });
+        }
+        const linkedProjectIds = Array.from(new Set(
+          insertedRows
+            .map((task: any) => String(task?.project_id || '').trim())
+            .filter(Boolean)
+        ));
+        for (const projectId of linkedProjectIds) {
+          await syncProjectStatusWithProcessState(projectId);
         }
         return insertedRows;
       }
@@ -3581,6 +3590,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       if (nextDrafts) {
         await saveDraftStages(nextDrafts);
       }
+      if (moduleId === 'projects' && recordId) {
+        await syncProjectStatusWithProcessState(recordId, {
+          draftStages: nextDrafts ?? draftLocalRef.current,
+        });
+      }
       await fetchTasks();
     } catch (error: any) {
       const debugText = String(error?.message || error?.details || error?.hint || '').trim();
@@ -4934,7 +4948,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (moduleId === 'production_boms' && recordId) {
       await supabase.from('production_boms').update({ production_stages_draft: nextStages }).eq('id', recordId);
     }
-  }, [moduleId, onDraftStagesChange, recordId]);
+    if (moduleId === 'projects' && recordId) {
+      await syncProjectStatusWithProcessState(recordId, {
+        draftStages: nextStages,
+        tasks,
+      });
+    }
+  }, [moduleId, onDraftStagesChange, recordId, tasks]);
 
   const loadProcessTemplateOptions = useCallback(async () => {
     if (!moduleId || !isProcessRecordModule) {
@@ -8604,7 +8624,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   ]}
                                   dynamicOptions={automationDynamicOptions}
                                   relationOptions={automationRelationOptions}
-                                />
+                                  overlayZIndexBase={16040}
+                                  popupContainer={resolveOverlayPopupContainer}
+                                  />
                               </div>
                             </div>
                           </div>

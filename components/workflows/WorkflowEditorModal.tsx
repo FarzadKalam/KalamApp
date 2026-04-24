@@ -263,7 +263,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   canEdit = true,
   moduleOptions,
 }) => {
-  const overlayZIndexBase = 1200;
+  const overlayZIndexBase = 13080;
   const { message } = App.useApp();
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
@@ -394,6 +394,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       onCancel={onClose}
       title={isEditMode ? 'ویرایش گردش کار' : 'ایجاد گردش کار جدید'}
       width={1120}
+      zIndex={13000}
       destroyOnHidden
       footer={[
         <Button key="cancel" onClick={onClose}>
@@ -550,6 +551,8 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
             dynamicOptions={dynamicOptions}
             relationOptions={relationOptions}
             disabled={!canEdit}
+            overlayZIndexBase={overlayZIndexBase}
+            popupContainer={resolveOverlayPopupContainer}
           />
         </div>
       </Form>

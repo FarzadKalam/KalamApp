@@ -308,12 +308,30 @@ export const deleteManualFileFolder = async (folderId: string) => {
 
   const { data: folder, error: folderError } = await supabase
     .from('file_folders')
-    .select('id, is_system')
+    .select('id, is_system, folder_type, module_id, record_id')
     .eq('id', normalizedFolderId)
     .maybeSingle();
   if (folderError) throw folderError;
   if (!folder) return;
-  if (folder.is_system) throw new Error('system_folder_locked');
+  let allowSystemDelete = false;
+  if (folder.is_system) {
+    const folderType = String((folder as any)?.folder_type || '').trim();
+    const moduleId = String((folder as any)?.module_id || '').trim();
+    const recordId = String((folder as any)?.record_id || '').trim();
+    if (folderType === 'system_record' && moduleId && recordId) {
+      const recordTable = String(MODULES[moduleId]?.table || moduleId).trim();
+      if (recordTable) {
+        const { data: recordRow, error: recordError } = await supabase
+          .from(recordTable)
+          .select('id')
+          .eq('id', recordId)
+          .maybeSingle();
+        if (recordError) throw recordError;
+        allowSystemDelete = !recordRow;
+      }
+    }
+    if (!allowSystemDelete) throw new Error('system_folder_locked');
+  }
 
   const { count: childCount, error: childError } = await supabase
     .from('file_folders')

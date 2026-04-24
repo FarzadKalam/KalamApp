@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Empty, Segmented, Select, Tag } from "antd";
 import {
   CalendarOutlined,
@@ -157,6 +157,9 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     return today;
   });
   const [holidaySummaries, setHolidaySummaries] = useState<Record<string, HolidayDaySummary | null>>({});
+  const [expandedDayKeys, setExpandedDayKeys] = useState<string[]>([]);
+  const [scrollToTodayTick, setScrollToTodayTick] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDateField = useMemo(
     () => dateFields.find((field) => field.key === dateFieldKey) || dateFields[0] || null,
@@ -174,6 +177,10 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   const days = useMemo(
     () => (calendarMode === "week" ? buildWeekDays(anchorDate) : buildMonthDays(anchorDate)),
     [anchorDate, calendarMode]
+  );
+  const currentMonthDays = useMemo(
+    () => days.filter((day) => day.isCurrentMonth),
+    [days]
   );
   const persianAnchorLabel = useMemo(() => {
     const persianAnchor = toPersianDateObject(anchorDate);
@@ -227,6 +234,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     () => Array.from(eventsByDay.values()).reduce((sum, items) => sum + items.length, 0),
     [eventsByDay]
   );
+  const expandedDayKeySet = useMemo(() => new Set(expandedDayKeys), [expandedDayKeys]);
 
   useEffect(() => {
     let isActive = true;
@@ -247,6 +255,26 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     };
   }, [days]);
 
+  useEffect(() => {
+    setExpandedDayKeys([]);
+  }, [anchorDate, calendarMode, selectedFieldKey]);
+
+  useEffect(() => {
+    const todayIsVisible = days.some((day) => day.isToday);
+    if (!todayIsVisible || !scrollContainerRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const visibleTodayElement = Array.from(
+        scrollContainerRef.current?.querySelectorAll<HTMLElement>('[data-calendar-today="true"]') || [],
+      ).find((element) => element.offsetParent !== null);
+      visibleTodayElement?.scrollIntoView({
+        block: "center",
+        inline: "center",
+        behavior: "auto",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [days, scrollToTodayTick]);
+
   const moveAnchor = (amount: number) => {
     if (calendarMode === "week") {
       setAnchorDate((prev) => addDays(prev, amount * 7));
@@ -265,19 +293,31 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     const today = new Date();
     today.setHours(12, 0, 0, 0);
     setAnchorDate(today);
+    setScrollToTodayTick((value) => value + 1);
   };
 
-  const renderEvent = (event: CalendarEvent, compact: boolean) => (
+  const toggleDayExpansion = (dayKey: string) => {
+    setExpandedDayKeys((prev) => (
+      prev.includes(dayKey) ? prev.filter((key) => key !== dayKey) : [...prev, dayKey]
+    ));
+  };
+
+  const renderEvent = (event: CalendarEvent, variant: "compact" | "comfortable") => (
     <button
       key={event.key}
       type="button"
-      className="w-full min-w-0 rounded-lg border border-gray-200 bg-white/90 px-2 py-1 text-right text-[10px] leading-4 shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] hover:bg-[rgba(var(--brand-50-rgb),0.9)] dark:border-white/10 dark:bg-[#1d1d1d] dark:hover:bg-white/10 sm:text-[11px]"
+      className={[
+        "w-full min-w-0 rounded-lg border border-gray-200 bg-white/90 text-right shadow-sm transition hover:border-[rgba(var(--brand-400-rgb),0.9)] hover:bg-[rgba(var(--brand-50-rgb),0.9)] dark:border-white/10 dark:bg-[#1d1d1d] dark:hover:bg-white/10",
+        variant === "compact"
+          ? "px-2 py-1 text-[10px] leading-4 sm:text-[11px]"
+          : "px-3 py-2 text-xs leading-5",
+      ].join(" ")}
       style={{ borderRight: `3px solid ${event.statusColor || selectedFieldColor}` }}
       onClick={() => navigate(`/${moduleId}/${event.item.id}`)}
       title={event.title}
     >
       {event.timeLabel ? (
-        <span className="block min-w-0 truncate text-[9px] font-semibold leading-4 text-gray-500 dark:text-gray-400 sm:text-[10px]">
+        <span className={`block min-w-0 truncate font-semibold text-gray-500 dark:text-gray-400 ${variant === "compact" ? "text-[9px] leading-4 sm:text-[10px]" : "text-[11px] leading-5"}`}>
           {event.timeLabel}
         </span>
       ) : null}
@@ -286,43 +326,52 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
           className="mt-1 h-2 w-2 shrink-0 rounded-full"
           style={{ backgroundColor: event.statusColor || selectedFieldColor }}
         />
-        <span className="block min-w-0 line-clamp-2 break-words text-[9px] font-bold leading-4 text-gray-700 dark:text-gray-100 sm:text-[10px]">
+        <span className={`block min-w-0 break-words font-bold text-gray-700 dark:text-gray-100 ${variant === "compact" ? "line-clamp-2 text-[9px] leading-4 sm:text-[10px]" : "line-clamp-3 text-[11px] leading-5"}`}>
           {event.title}
         </span>
       </span>
-      {!compact && event.statusLabel ? (
-        <span className="mt-0.5 block min-w-0 truncate text-[10px] text-gray-500 dark:text-gray-400">
+      {variant !== "compact" && event.statusLabel ? (
+        <span className="mt-1 block min-w-0 truncate text-[11px] text-gray-500 dark:text-gray-400">
           {event.statusLabel}
         </span>
       ) : null}
     </button>
   );
 
-  const renderDay = (day: CalendarDay) => {
+  const renderDay = (day: CalendarDay, layout: "grid" | "list" = "grid") => {
+    const isListLayout = layout === "list";
     const summary = holidaySummaries[day.key];
     const events = eventsByDay.get(day.key) || [];
     const isHoliday = !!summary?.isOfficialHoliday || day.date.getDay() === 5;
-    const visibleEvents = calendarMode === "month" ? events.slice(0, 3) : events;
+    const isExpandableMonthDay = calendarMode === "month";
+    const isExpanded = expandedDayKeySet.has(day.key);
+    const collapsedLimit = isListLayout ? 4 : 3;
+    const visibleEvents = isExpandableMonthDay && !isExpanded ? events.slice(0, collapsedLimit) : events;
     const hiddenCount = events.length - visibleEvents.length;
 
     return (
       <div
         key={day.key}
+        data-calendar-today={day.isToday ? "true" : undefined}
         className={[
-          "min-w-0 overflow-hidden border border-gray-100 p-1.5 transition-colors dark:border-white/10 sm:p-2",
-          calendarMode === "week" ? "min-h-[132px] rounded-xl" : "min-h-[92px] sm:min-h-[132px]",
+          "min-w-0 overflow-hidden border border-gray-100 transition-colors dark:border-white/10",
+          isListLayout
+            ? "rounded-2xl p-3"
+            : calendarMode === "week"
+              ? "min-h-[132px] rounded-xl p-1.5 sm:p-2"
+              : "min-h-[92px] rounded-xl p-1.5 sm:min-h-[132px] sm:p-2",
           isHoliday ? "bg-rose-50/80 dark:bg-rose-950/20" : "bg-white dark:bg-[#151515]",
-          day.isCurrentMonth ? "" : "opacity-55",
+          day.isCurrentMonth || isListLayout ? "" : "opacity-55",
           day.isToday ? "ring-1 ring-[rgba(var(--brand-500-rgb),0.7)]" : "",
         ].join(" ")}
       >
-        <div className="mb-1.5 flex min-w-0 items-start justify-between gap-1">
+        <div className={`mb-1.5 flex min-w-0 items-start justify-between gap-2 ${isListLayout ? "sm:items-center" : ""}`}>
           <div className="min-w-0">
-            <div className={`text-xs font-black ${isHoliday ? "text-rose-700 dark:text-rose-300" : "text-gray-700 dark:text-gray-200"}`}>
+            <div className={`${isListLayout ? "text-sm" : "text-xs"} font-black ${isHoliday ? "text-rose-700 dark:text-rose-300" : "text-gray-700 dark:text-gray-200"}`}>
               {day.dayLabel}
             </div>
-            {calendarMode === "week" ? (
-              <div className={`mt-0.5 truncate text-[10px] ${isHoliday ? "text-rose-600 dark:text-rose-300" : "text-gray-500 dark:text-gray-400"}`}>
+            {calendarMode === "week" || isListLayout ? (
+              <div className={`mt-0.5 truncate ${isListLayout ? "text-xs" : "text-[10px]"} ${isHoliday ? "text-rose-600 dark:text-rose-300" : "text-gray-500 dark:text-gray-400"}`}>
                 {day.weekdayLabel}
               </div>
             ) : null}
@@ -334,17 +383,27 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         </div>
 
         {isHoliday && summary?.occasions?.length ? (
-          <div className="mb-1 truncate text-[9px] font-medium text-rose-600 dark:text-rose-300" title={summary.occasions.map((item) => item.title).join("، ")}>
+          <div className={`mb-1 truncate font-medium text-rose-600 dark:text-rose-300 ${isListLayout ? "text-[11px]" : "text-[9px]"}`} title={summary.occasions.map((item) => item.title).join("، ")}>
             {summary.occasions[0]?.title}
           </div>
         ) : null}
 
-        <div className="space-y-1">
-          {visibleEvents.map((event) => renderEvent(event, calendarMode === "month"))}
-          {hiddenCount > 0 ? (
-            <div className="rounded-lg bg-gray-100 px-2 py-1 text-[10px] text-gray-500 dark:bg-white/10 dark:text-gray-300">
-              +{toPersianNumber(hiddenCount)} مورد دیگر
-            </div>
+        <div className={isListLayout ? "space-y-2" : "space-y-1"}>
+          {visibleEvents.length > 0 ? visibleEvents.map((event) => renderEvent(event, isListLayout ? "comfortable" : calendarMode === "month" ? "compact" : "comfortable")) : (
+            isListLayout ? (
+              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-400 dark:border-white/10 dark:bg-white/5 dark:text-gray-500">
+                رکوردی در این روز ثبت نشده است.
+              </div>
+            ) : null
+          )}
+          {isExpandableMonthDay && events.length > collapsedLimit ? (
+            <button
+              type="button"
+              className="w-full rounded-lg border border-dashed border-[rgba(var(--brand-400-rgb),0.28)] bg-[rgba(var(--brand-50-rgb),0.75)] px-2 py-1.5 text-[11px] font-bold text-[rgba(var(--brand-700-rgb),1)] transition hover:bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-900-rgb),0.22)] dark:text-[rgb(var(--brand-200-rgb))]"
+              onClick={() => toggleDayExpansion(day.key)}
+            >
+              {isExpanded ? "بستن" : `+${toPersianNumber(hiddenCount)} مورد دیگر`}
+            </button>
           ) : null}
         </div>
       </div>
@@ -393,7 +452,10 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
                 { label: "ماهانه", value: "month" },
                 { label: "هفتگی", value: "week" },
               ]}
-              onChange={(value) => setCalendarMode(value as ModuleCalendarMode)}
+              onChange={(value) => {
+                setCalendarMode(value as ModuleCalendarMode);
+                setScrollToTodayTick((tick) => tick + 1);
+              }}
             />
             <div className="flex items-center gap-1">
               <Button size="small" icon={<RightOutlined />} onClick={() => moveAnchor(-1)} />
@@ -405,7 +467,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
       </div>
 
       {calendarMode === "month" ? (
-        <div className="grid shrink-0 grid-cols-7 border-b border-gray-200 bg-gray-50 text-center text-[10px] font-bold text-gray-500 dark:border-gray-800 dark:bg-white/5 dark:text-gray-300">
+        <div className="hidden shrink-0 grid-cols-7 border-b border-gray-200 bg-gray-50 text-center text-[10px] font-bold text-gray-500 dark:border-gray-800 dark:bg-white/5 dark:text-gray-300 sm:grid">
           {days.slice(0, 7).map((day) => (
             <div key={`weekday_${day.key}`} className="px-1 py-2">
               <span className="hidden sm:inline">{day.weekdayLabel}</span>
@@ -415,14 +477,19 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar sm:p-3">
+      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto p-2 custom-scrollbar sm:p-3">
         {calendarMode === "month" ? (
-          <div className="grid grid-cols-7 gap-1 sm:gap-2">
-            {days.map(renderDay)}
-          </div>
+          <>
+            <div className="space-y-2 sm:hidden">
+              {currentMonthDays.map((day) => renderDay(day, "list"))}
+            </div>
+            <div className="hidden grid-cols-7 gap-1 sm:grid sm:gap-2">
+              {days.map((day) => renderDay(day, "grid"))}
+            </div>
+          </>
         ) : (
           <div className="grid grid-cols-1 gap-2 md:grid-cols-7">
-            {days.map(renderDay)}
+            {days.map((day) => renderDay(day, "grid"))}
           </div>
         )}
       </div>

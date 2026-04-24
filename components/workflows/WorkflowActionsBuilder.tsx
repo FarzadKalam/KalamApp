@@ -27,7 +27,7 @@ import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
-import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import { AdaptivePickerMode, resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 const Select = AdaptiveSelectField;
 
@@ -44,6 +44,9 @@ interface WorkflowActionsBuilderProps {
   additionalRecipientFieldOptions?: Array<{ label: string; value: string }>;
   actionOptions?: Array<{ label: string; value: WorkflowActionType }>;
   disabled?: boolean;
+  overlayZIndexBase?: number;
+  popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
+  adaptiveMode?: AdaptivePickerMode;
 }
 
 type CreateRelatedFieldMapping = {
@@ -163,10 +166,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   additionalRecipientFieldOptions,
   actionOptions,
   disabled = false,
+  overlayZIndexBase = 1400,
+  popupContainer: popupContainerProp,
+  adaptiveMode = 'auto',
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
-  const popupContainer = (node?: HTMLElement | null) => resolveOverlayPopupContainer(node);
+  const popupContainer = useCallback(
+    (node?: HTMLElement | null) => popupContainerProp?.(node) || resolveOverlayPopupContainer(node),
+    [popupContainerProp]
+  );
 
   const commonSelectProps = {
     showSearch: true,
@@ -176,7 +185,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 260,
     virtual: false,
-    overlayZIndexBase: 1400,
+    overlayZIndexBase,
+    adaptiveMode,
   };
 
   const updatableFieldOptions = useMemo(
@@ -535,7 +545,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           className="w-full"
           disabled={disabled}
           getPopupContainer={popupContainer as any}
-          overlayZIndexBase={1400}
+          overlayZIndexBase={overlayZIndexBase}
+          adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
       );
@@ -595,7 +606,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           disabled={disabled}
           placeholder="تاریخ"
           modalContainer={popupContainer}
-          overlayZIndexBase={1400}
+          overlayZIndexBase={overlayZIndexBase}
+          adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
       );
@@ -610,7 +622,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           disabled={disabled}
           placeholder="ساعت"
           modalContainer={popupContainer}
-          overlayZIndexBase={1400}
+          overlayZIndexBase={overlayZIndexBase}
+          adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
       );
@@ -625,7 +638,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           disabled={disabled}
           placeholder="تاریخ و زمان"
           modalContainer={popupContainer}
-          overlayZIndexBase={1400}
+          overlayZIndexBase={overlayZIndexBase}
+          adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
       );

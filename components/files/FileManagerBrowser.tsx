@@ -1016,7 +1016,8 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   };
 
   const renderFolderCard = (folder: FileManagerBrowserFolder) => {
-    const canManageThisFolder = canEdit && !folder.isSystem;
+    const canRenameThisFolder = canEdit && !folder.isSystem;
+    const canDeleteThisFolder = canEdit && (!folder.isSystem || folder.isDeletedRecord);
     const isSelected = selectedFolderKeySet.has(folder.key);
     const folderToneClass = folder.isSystem
       ? 'border-amber-200 bg-amber-50 text-amber-500 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300'
@@ -1030,7 +1031,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
           <Button
             size="small"
             icon={<EditOutlined />}
-            disabled={!canManageThisFolder}
+            disabled={!canRenameThisFolder}
             onClick={(event) => {
               event.stopPropagation();
               onRenameFolder?.(folder);
@@ -1042,7 +1043,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
             size="small"
             danger
             icon={<DeleteOutlined />}
-            disabled={!canManageThisFolder}
+            disabled={!canDeleteThisFolder}
             onClick={(event) => {
               event.stopPropagation();
               requestFolderDelete(folder);
@@ -1240,7 +1241,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
               <Button
                 icon={<DeleteOutlined />}
                 danger
-                disabled={!canDelete || totalSelectedCount === 0 || selectedFolders.some((folder) => folder.isSystem) || (selectedItems.length > 0 && !onDeleteItem) || (selectedFolders.length > 0 && !onDeleteFolder)}
+                disabled={!canDelete || totalSelectedCount === 0 || selectedFolders.some((folder) => folder.isSystem && !folder.isDeletedRecord) || (selectedItems.length > 0 && !onDeleteItem) || (selectedFolders.length > 0 && !onDeleteFolder)}
                 onClick={() => void deleteSelectedEntries()}
               />
             </Tooltip>
