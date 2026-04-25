@@ -158,7 +158,6 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
   });
   const [holidaySummaries, setHolidaySummaries] = useState<Record<string, HolidayDaySummary | null>>({});
   const [expandedDayKeys, setExpandedDayKeys] = useState<string[]>([]);
-  const [scrollToTodayTick, setScrollToTodayTick] = useState(0);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDateField = useMemo(
@@ -267,22 +266,6 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     setExpandedDayKeys([]);
   }, [anchorDate, calendarMode, selectedFieldKey]);
 
-  useEffect(() => {
-    const todayIsVisible = days.some((day) => day.isToday);
-    if (!todayIsVisible || !scrollContainerRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      const visibleTodayElement = Array.from(
-        scrollContainerRef.current?.querySelectorAll<HTMLElement>('[data-calendar-today="true"]') || [],
-      ).find((element) => element.offsetParent !== null);
-      visibleTodayElement?.scrollIntoView({
-        block: "center",
-        inline: "center",
-        behavior: "auto",
-      });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [days, scrollToTodayTick]);
-
   const moveAnchor = (amount: number) => {
     if (calendarMode === "week") {
       setAnchorDate((prev) => addDays(prev, amount * 7));
@@ -301,7 +284,6 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     const today = new Date();
     today.setHours(12, 0, 0, 0);
     setAnchorDate(today);
-    setScrollToTodayTick((value) => value + 1);
   };
 
   const toggleDayExpansion = (dayKey: string) => {
@@ -462,7 +444,6 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
               ]}
               onChange={(value) => {
                 setCalendarMode(value as ModuleCalendarMode);
-                setScrollToTodayTick((tick) => tick + 1);
               }}
             />
             <div className="flex items-center gap-1">

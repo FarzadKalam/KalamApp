@@ -698,9 +698,6 @@ const buildResponsibilitySelectColumns = (moduleId?: string | null) => {
       'id',
       'created_at',
       'updated_at',
-      'assignee_id',
-      'assignee_role_id',
-      'assignee_type',
       ...moduleAwareColumns,
     ])
   );

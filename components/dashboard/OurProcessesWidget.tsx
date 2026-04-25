@@ -360,7 +360,7 @@ const OurProcessesWidget: React.FC = () => {
             supabase
               .from(module.table)
               .select(selectExpr)
-              .order('updated_at', { ascending: false })
+              .order('created_at', { ascending: false })
               .limit(processRecordLimit),
         });
         if (result.error) return;

@@ -40,6 +40,10 @@ const SAFE_FALLBACK_TITLE_COLUMNS = [
   'code',
 ];
 
+const RECORD_TITLE_COLUMN_OVERRIDES: Record<string, string[]> = {
+  purchase_invoices: ['id', 'system_code'],
+};
+
 const normalizeColumns = (columns: readonly string[]) =>
   Array.from(
     new Set(
@@ -202,6 +206,10 @@ export type CompatBatchResult<T> = {
 
 export const buildRecordTitleSelectColumns = (moduleId?: string | null): string[] => {
   const normalizedModuleId = String(moduleId || '').trim();
+  const override = RECORD_TITLE_COLUMN_OVERRIDES[normalizedModuleId];
+  if (override?.length) {
+    return normalizeColumns(override);
+  }
   const moduleConfig = MODULES[normalizedModuleId];
   return normalizeColumns(['id', ...getRecordTitleCandidateColumns(normalizedModuleId, moduleConfig)]);
 };
