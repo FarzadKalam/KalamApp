@@ -1041,9 +1041,16 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (targetIds.length === 0) return;
     const scope = normalizeNoteScope(moduleId, recordId);
     const snapshot = await fetchSessionBootstrap(supabase);
+    const currentUserId = String(snapshot.user?.id || '').trim() || null;
+    const currentScope = scope.hasLinkedRecord
+      ? scope
+      : {
+          module_id: currentUserId ? 'profiles' : scope.module_id,
+          record_id: currentUserId || scope.record_id,
+        };
     const payload = {
-      module_id: scope.module_id,
-      record_id: scope.record_id,
+      module_id: currentScope.module_id,
+      record_id: currentScope.record_id,
       content: serializeNoteContent('', [{
         name: file.fileName,
         url: file.url,
@@ -1052,11 +1059,11 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       reply_to: null,
       mention_user_ids: targetIds,
       mention_role_ids: [],
-      author_id: snapshot.user?.id || null,
+      author_id: currentUserId,
       author_name: snapshot.profile?.full_name || null,
+      metadata: { source_type: 'file_manager_share' },
     };
-    const { error } = await supabase.from('notes').insert([payload]);
-    if (error) throw error;
+    await insertNotesWithFallback([payload]);
   };
 
   const shareUploadedFileWithRelatedRecords = async (file: UploadedFileResult, shouldShare = shareInRelatedRecords) => {

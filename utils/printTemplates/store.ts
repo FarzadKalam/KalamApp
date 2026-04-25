@@ -362,7 +362,7 @@ export const buildDefaultFooterTemplateForModule = (moduleId = '') => {
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   const invoiceConfig = getInvoiceTemplateConfig(moduleId);
 
-  if (isInvoiceModule(moduleId) && blockId === 'invoiceItems') {
+  if (blockId === 'invoiceItems') {
     return `
 <table data-print-block="invoiceItems" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.8px;">
   <thead>
@@ -397,7 +397,7 @@ const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
 `;
   }
 
-  if (isInvoiceModule(moduleId) && blockId === 'payments') {
+  if (blockId === 'payments') {
     const paymentSummaryTitle = invoiceConfig.isSales ? 'جمع دریافت‌شده' : 'جمع پرداخت‌شده';
     return `
 <table data-print-block="payments" style="width:100%; max-width:100%; table-layout:fixed; border-collapse:collapse; direction:rtl; color:#111827; font-size:9.6px;">
@@ -1127,6 +1127,75 @@ const buildListA4DefaultTemplate = (
     createdAt: now,
     updatedAt: now,
   };
+};
+
+export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string) => {
+  const rawHtml = String(html || '').trim();
+  if (typeof window === 'undefined' || !rawHtml || !/<table/i.test(rawHtml)) return rawHtml;
+
+  try {
+    const detectDynamicBlockId = (table: HTMLTableElement): string => {
+      const explicit = String(table.getAttribute('data-print-block') || '').trim();
+      if (explicit) return explicit;
+
+      const tableHtml = String(table.innerHTML || '');
+      const hasInvoiceItemsShape =
+        tableHtml.includes('{{row.__row_index__}}') &&
+        tableHtml.includes('{{row.product_id}}') &&
+        tableHtml.includes('{{row.quantity}}') &&
+        tableHtml.includes('{{row.main_unit}}') &&
+        tableHtml.includes('{{row.unit_price}}') &&
+        tableHtml.includes('{{row.total_price}}');
+      if (hasInvoiceItemsShape) return 'invoiceItems';
+
+      const hasPaymentsShape =
+        tableHtml.includes('{{row.__row_index__}}') &&
+        tableHtml.includes('{{row.payment_type}}') &&
+        tableHtml.includes('{{row.amount}}') &&
+        tableHtml.includes('{{row.cheque_status}}');
+      if (hasPaymentsShape) return 'payments';
+
+      return '';
+    };
+
+    const parser = new window.DOMParser();
+    const doc = parser.parseFromString(`<div id="print-block-normalize-root">${rawHtml}</div>`, 'text/html');
+    const root = doc.getElementById('print-block-normalize-root');
+    if (!root) return rawHtml;
+
+    root.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+      const blockId = detectDynamicBlockId(table);
+      if (!blockId) return;
+
+      const canonicalHtml = buildBlockSnippetTemplate(moduleId, blockId);
+      if (!canonicalHtml) return;
+
+      const canonicalDoc = parser.parseFromString(`<div id="print-block-canonical-root">${canonicalHtml}</div>`, 'text/html');
+      const canonicalTable = canonicalDoc.querySelector('table[data-print-block]') as HTMLTableElement | null;
+      if (!canonicalTable) return;
+
+      const borderColor =
+        table.getAttribute('data-border-color') ||
+        table.style.getPropertyValue('--table-border-color') ||
+        table.style.borderColor ||
+        '';
+
+      if (borderColor) {
+        canonicalTable.setAttribute('data-border-color', borderColor);
+        const baseStyle = String(canonicalTable.getAttribute('style') || '').trim();
+        canonicalTable.setAttribute(
+          'style',
+          `${baseStyle}${baseStyle ? ';' : ''}--table-border-color:${borderColor};border-color:${borderColor};`
+        );
+      }
+
+      table.replaceWith(canonicalTable);
+    });
+
+    return root.innerHTML;
+  } catch {
+    return rawHtml;
+  }
 };
 
 const buildListCatalogA4PortraitDefaultTemplate = (

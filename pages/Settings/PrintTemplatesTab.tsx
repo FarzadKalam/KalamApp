@@ -43,6 +43,7 @@ import {
   loadPrintTemplatesStore,
   materializeSystemTemplateForCopy,
   mergeTemplatesWithDefaults,
+  normalizeDynamicBlockTablesHtml,
   savePrintTemplatesStore,
   type PrintTemplateVariableOption,
   type StoredPrintTemplate,
@@ -78,6 +79,64 @@ const getPageFrame = (paperSize: 'A4' | 'A5' | 'A6' = 'A4', orientation: 'portra
     minHeight: `${height}mm`,
     label: `${paperSize} - ${orientation === 'landscape' ? 'افقی' : 'عمودی'}`,
   };
+};
+
+const getPersistedEditorHtml = (editorInstance: any): string | null => {
+  const editorRoot = editorInstance?.view?.dom as HTMLElement | undefined;
+  if (!editorRoot || typeof window === 'undefined') {
+    return String(editorInstance?.getHTML?.() || '').trim() || null;
+  }
+
+  const clone = editorRoot.cloneNode(true) as HTMLElement;
+
+  clone.querySelectorAll('.print-editor-image-handle').forEach((node) => node.remove());
+  clone.querySelectorAll('br.ProseMirror-trailingBreak').forEach((node) => node.remove());
+  clone
+    .querySelectorAll('.ProseMirror-widget,.column-resize-handle,.grip-column,.grip-row,.grip-table,.grip-cell,.tableGripColumn,.tableGripRow,.tableGripTable,.column-grip,.row-grip,.table-grip')
+    .forEach((node) => node.remove());
+
+  clone.querySelectorAll<HTMLElement>('.print-editor-image-node').forEach((node) => {
+    const image = document.createElement('img');
+    const innerImage = node.querySelector('img');
+    const width = node.style.width || innerImage?.style.width || '';
+    const height = node.style.height || innerImage?.style.height || '';
+    const variableToken = String(node.getAttribute('data-variable-token') || '').trim();
+
+    image.setAttribute('src', variableToken ? `{{${variableToken}}}` : String(innerImage?.getAttribute('src') || '').trim());
+    image.setAttribute('alt', String(innerImage?.getAttribute('alt') || (variableToken ? variableToken : 'image')));
+
+    const title = String(innerImage?.getAttribute('title') || '').trim();
+    if (title) image.setAttribute('title', title);
+
+    const styleParts = [
+      'display:block',
+      width ? `width:${width}` : '',
+      width ? `max-width:${width}` : 'max-width:100%',
+      height && height !== 'auto' ? `height:${height}` : 'height:auto',
+      height && height !== 'auto' ? `max-height:${height}` : '',
+      innerImage?.style.objectFit ? `object-fit:${innerImage.style.objectFit}` : 'object-fit:contain',
+      innerImage?.style.borderRadius ? `border-radius:${innerImage.style.borderRadius}` : 'border-radius:10px',
+    ].filter(Boolean);
+
+    image.setAttribute('style', styleParts.join(';'));
+    if (width.endsWith('px')) image.setAttribute('width', width.replace(/px$/i, '').trim());
+    if (height.endsWith('px')) image.setAttribute('height', height.replace(/px$/i, '').trim());
+    if (width.endsWith('px')) image.setAttribute('data-width', width.replace(/px$/i, '').trim());
+    if (height.endsWith('px')) image.setAttribute('data-height', height.replace(/px$/i, '').trim());
+
+    node.replaceWith(image);
+  });
+
+  clone.querySelectorAll<HTMLElement>('*').forEach((node) => {
+    node.classList.remove('ProseMirror-selectednode', 'selected', 'resize-cursor', 'column-resize-cursor', 'row-resize-cursor');
+    if (!node.className) node.removeAttribute('class');
+    node.removeAttribute('contenteditable');
+    node.removeAttribute('draggable');
+    node.removeAttribute('data-node-view-wrapper');
+    node.removeAttribute('data-node-view-content');
+  });
+
+  return clone.innerHTML.trim() || null;
 };
 
 const PrintTemplatesTab: React.FC = () => {
@@ -438,6 +497,10 @@ const PrintTemplatesTab: React.FC = () => {
   const saveEditorChanges = async () => {
     if (!editingTemplate) return;
 
+    const liveHeaderHtml = getPersistedEditorHtml(headerEditor);
+    const liveBodyHtml = getPersistedEditorHtml(bodyEditor);
+    const liveFooterHtml = getPersistedEditorHtml(footerEditor);
+
     const current = templatesByModule[selectedModuleId] || [];
     const normalizedTitle = String(editingTemplate.title || '')
       .trim()
@@ -462,9 +525,21 @@ const PrintTemplatesTab: React.FC = () => {
       updatedAt: nowIso(),
       createdAt: editingTemplate.createdAt || nowIso(),
       title: normalizedTitle || 'قالب بدون عنوان',
-      headerHtml: String(editingTemplate.headerHtml || '').trim() || buildDefaultHeaderTemplateForModule(selectedModuleId),
-      contentHtml: String(editingTemplate.contentHtml || '').trim() || buildDefaultTemplateForModule(selectedModuleId),
-      footerHtml: String(editingTemplate.footerHtml || '').trim() || buildDefaultFooterTemplateForModule(selectedModuleId),
+      headerHtml:
+        normalizeDynamicBlockTablesHtml(
+          selectedModuleId,
+          String(liveHeaderHtml ?? editingTemplate.headerHtml ?? '').trim()
+        ) || buildDefaultHeaderTemplateForModule(selectedModuleId),
+      contentHtml:
+        normalizeDynamicBlockTablesHtml(
+          selectedModuleId,
+          String(liveBodyHtml ?? editingTemplate.contentHtml ?? '').trim()
+        ) || buildDefaultTemplateForModule(selectedModuleId),
+      footerHtml:
+        normalizeDynamicBlockTablesHtml(
+          selectedModuleId,
+          String(liveFooterHtml ?? editingTemplate.footerHtml ?? '').trim()
+        ) || buildDefaultFooterTemplateForModule(selectedModuleId),
       orientation: editingTemplate.orientation || 'portrait',
       isSystem: editingTemplate.isSystem === true,
       showHeader: editingTemplate.showHeader !== false,

@@ -23,11 +23,13 @@ import {
   getSystemTemplateFieldOptions,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
+  normalizeDynamicBlockTablesHtml,
   savePrintTemplatesStore,
   type StoredPrintTemplate,
 } from './store';
 import { buildPrintOutputName } from './outputName';
 import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import { normalizeRenderedImages } from './normalizeRenderedImages';
 import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
@@ -1872,58 +1874,6 @@ export const usePrintManager = ({
     return root.innerHTML;
   }, []);
 
-  const normalizeRenderedImages = useCallback((html: string) => {
-    if (typeof window === 'undefined' || !html) return html;
-    const parser = new window.DOMParser();
-    const doc = parser.parseFromString(`<div id="print-image-root">${html}</div>`, 'text/html');
-    const root = doc.getElementById('print-image-root');
-    if (!root) return html;
-
-    root.querySelectorAll('img').forEach((img) => {
-      const src = String(img.getAttribute('src') || '').trim();
-      if (!src) {
-        const parent = img.parentElement;
-        img.remove();
-        if (parent && !String(parent.textContent || '').trim() && parent.children.length === 0) {
-          parent.remove();
-        }
-        return;
-      }
-      const widthAttr = String(img.getAttribute('width') || '').trim();
-      const heightAttr = String(img.getAttribute('height') || '').trim();
-      const style = img.getAttribute('style') || '';
-      const widthStyle = style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
-      const maxWidthStyle = style.match(/(?:^|;)\s*max-width\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
-      const heightStyle = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
-      const maxHeightStyle = style.match(/(?:^|;)\s*max-height\s*:\s*([^;]+)/i)?.[1]?.trim() || '';
-
-      const widthValue = widthStyle || (widthAttr ? `${widthAttr}px` : '') || maxWidthStyle;
-      const heightValue = heightStyle || (heightAttr ? `${heightAttr}px` : '') || maxHeightStyle;
-      const preservedStyle = style
-        .split(';')
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .filter((part) => !/^(width|max-width|height|max-height|display|object-fit)\s*:/i.test(part));
-      const nextStyleParts = [
-        ...preservedStyle,
-        'display:block',
-        'object-fit:contain',
-        widthValue ? `width:${widthValue}` : 'width:auto',
-        widthValue ? `max-width:${widthValue === '100%' ? '100%' : widthValue}` : 'max-width:100%',
-        heightValue ? `height:${heightValue}` : 'height:auto',
-        heightValue && heightValue !== 'auto' ? `max-height:${heightValue}` : '',
-      ].filter(Boolean);
-
-      const numericWidth = widthValue.match(/^(\d+(?:\.\d+)?)px$/i)?.[1];
-      const numericHeight = heightValue.match(/^(\d+(?:\.\d+)?)px$/i)?.[1];
-      if (numericWidth) img.setAttribute('width', `${Math.round(Number(numericWidth))}`);
-      if (numericHeight) img.setAttribute('height', `${Math.round(Number(numericHeight))}`);
-      img.setAttribute('style', Array.from(new Set(nextStyleParts)).join(';'));
-    });
-
-    return root.innerHTML;
-  }, []);
-
   const refreshTemplates = useCallback(async () => {
     await loadTemplates(true);
   }, [loadTemplates]);
@@ -1966,12 +1916,16 @@ export const usePrintManager = ({
   const renderedCustomTemplate = useMemo(() => {
     if (!selectedStoredTemplate) return null;
 
+    const normalizedHeaderHtml = normalizeDynamicBlockTablesHtml(moduleId, selectedStoredTemplate.headerHtml);
+    const normalizedContentHtml = normalizeDynamicBlockTablesHtml(moduleId, selectedStoredTemplate.contentHtml);
+    const normalizedFooterHtml = normalizeDynamicBlockTablesHtml(moduleId, selectedStoredTemplate.footerHtml);
+
     return {
-      headerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.headerHtml)))),
-      contentHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.contentHtml)))),
-      footerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(selectedStoredTemplate.footerHtml)))),
+      headerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedHeaderHtml)))),
+      contentHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedContentHtml)))),
+      footerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedFooterHtml)))),
     };
-  }, [fillTemplateHtml, localizeHtmlNumbers, normalizeRenderedImages, renderBlockTemplateHtml, selectedStoredTemplate]);
+  }, [fillTemplateHtml, localizeHtmlNumbers, moduleId, normalizeRenderedImages, renderBlockTemplateHtml, selectedStoredTemplate]);
 
   useEffect(() => {
     if (!selectedStoredTemplate) {

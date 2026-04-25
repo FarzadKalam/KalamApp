@@ -15,6 +15,7 @@ import {
 import type { PrintTemplate } from './index';
 import { buildPrintOutputName } from './outputName';
 import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
+import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 
 const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
@@ -250,10 +251,10 @@ export const useListPrintManager = ({
     const filled = String(html || '').replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
       return resolveValue(key, pageIndex, pageCount, pageRows, rowOffset);
     });
-    return DOMPurify.sanitize(filled, {
+    return normalizeRenderedImages(DOMPurify.sanitize(filled, {
       ADD_TAGS: ['colgroup', 'col'],
       ADD_ATTR: ['style', 'width', 'height', 'colspan', 'rowspan', 'src', 'alt'],
-    });
+    }));
   }, [resolveValue]);
 
   const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {

@@ -89,6 +89,24 @@ const normalizeTableMarkup = (html: string) => {
   }
 
   try {
+    const isEmptyTableSpacer = (element: Element | null) => {
+      if (!element) return false;
+      const tagName = String(element.tagName || '').toLowerCase();
+      if (tagName !== 'p' && tagName !== 'div') return false;
+      const text = String(element.textContent || '')
+        .replace(/[\u200c\u200d\u200e\u200f\u00a0\s]+/g, '')
+        .trim();
+      const hasOnlyBreaks = Array.from(element.childNodes).every((node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+          return !String(node.textContent || '').replace(/[\u200c\u200d\u200e\u200f\u00a0\s]+/g, '');
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return false;
+        const childTag = String((node as Element).tagName || '').toLowerCase();
+        return childTag === 'br';
+      });
+      return !text && hasOnlyBreaks;
+    };
+
     const parser = new window.DOMParser();
     const doc = parser.parseFromString(`<div id="print-editor-root">${html}</div>`, 'text/html');
     const root = doc.getElementById('print-editor-root');
@@ -136,6 +154,22 @@ const normalizeTableMarkup = (html: string) => {
           cell.setAttribute('data-colwidth', pxWidth);
         }
       });
+    });
+
+    root.querySelectorAll('table').forEach((table) => {
+      let previous = table.previousElementSibling;
+      while (isEmptyTableSpacer(previous)) {
+        const target = previous;
+        previous = previous?.previousElementSibling || null;
+        target?.remove();
+      }
+
+      let next = table.nextElementSibling;
+      while (isEmptyTableSpacer(next)) {
+        const target = next;
+        next = next?.nextElementSibling || null;
+        target?.remove();
+      }
     });
 
     return root.innerHTML;
@@ -205,11 +239,23 @@ const PrintImageNodeView: React.FC<any> = ({ node, selected, updateAttributes, e
   }>(null);
 
   const commitResize = (nextWidth: number, nextHeight: number | null) => {
-    updateAttributes({
+    const nextAttrs = {
+      ...attrs,
       width: `${Math.max(32, Math.round(nextWidth))}px`,
       height: nextHeight && nextHeight > 0 ? `${Math.max(32, Math.round(nextHeight))}px` : 'auto',
       inlineStyle: buildImageInlineStyle(nextWidth, nextHeight),
-    });
+    };
+
+    if (editor && typeof getPos === 'function') {
+      const pos = getPos();
+      if (typeof pos === 'number') {
+        const tr = editor.state.tr.setNodeMarkup(pos, undefined, nextAttrs);
+        editor.view.dispatch(tr);
+        return;
+      }
+    }
+
+    updateAttributes(nextAttrs);
   };
 
   const startResize = (event: React.MouseEvent, horizontal: -1 | 1, vertical: -1 | 1) => {
@@ -466,6 +512,7 @@ const CustomImage = Image.extend({
       width: {
         default: null,
         parseHTML: (element) =>
+          element.getAttribute('data-width') ||
           element.getAttribute('width') ||
           element.style.width ||
           element.style.maxWidth ||
@@ -476,6 +523,7 @@ const CustomImage = Image.extend({
       height: {
         default: null,
         parseHTML: (element) =>
+          element.getAttribute('data-height') ||
           element.getAttribute('height') ||
           element.style.height ||
           element.style.maxHeight ||
@@ -506,8 +554,16 @@ const CustomImage = Image.extend({
       alt: HTMLAttributes.alt,
       title: HTMLAttributes.title,
     };
-    if (width && /px$/i.test(width)) attrs.width = width.replace(/px$/i, '').trim();
-    if (height && /px$/i.test(height)) attrs.height = height.replace(/px$/i, '').trim();
+    if (width && /px$/i.test(width)) {
+      const normalizedWidth = width.replace(/px$/i, '').trim();
+      attrs.width = normalizedWidth;
+      attrs['data-width'] = normalizedWidth;
+    }
+    if (height && /px$/i.test(height)) {
+      const normalizedHeight = height.replace(/px$/i, '').trim();
+      attrs.height = normalizedHeight;
+      attrs['data-height'] = normalizedHeight;
+    }
     if (style) attrs.style = style;
     return ['img', attrs];
   },
@@ -614,6 +670,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     [tableBorderColor]
   );
   const lastEmittedContentRef = useRef(value || '');
+  const pendingLocalContentRef = useRef<string | null>(null);
   const normalizedValue = useMemo(() => {
     const rawValue = value || '';
     return rawValue === lastEmittedContentRef.current ? rawValue : normalizeTableMarkup(rawValue);
@@ -948,6 +1005,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     onUpdate: ({ editor: currentEditor }) => {
       const nextHtml = currentEditor.getHTML();
       lastEmittedContentRef.current = nextHtml;
+      pendingLocalContentRef.current = nextHtml;
       onChange(nextHtml);
     },
     editorProps: {
@@ -1133,8 +1191,19 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
   useEffect(() => {
     if (!editor) return;
     const currentHtml = editor.getHTML();
-    const isOwnUpdate = normalizedValue === lastEmittedContentRef.current;
-    if (!isOwnUpdate && normalizedValue !== currentHtml) {
+
+    if (pendingLocalContentRef.current) {
+      if (normalizedValue === pendingLocalContentRef.current) {
+        pendingLocalContentRef.current = null;
+        return;
+      }
+      if (currentHtml === pendingLocalContentRef.current) {
+        return;
+      }
+      pendingLocalContentRef.current = null;
+    }
+
+    if (normalizedValue !== currentHtml) {
       editor.commands.setContent(normalizedValue || '', { emitUpdate: false });
       lastEmittedContentRef.current = normalizedValue || '';
     }

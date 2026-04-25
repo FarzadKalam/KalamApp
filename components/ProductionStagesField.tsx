@@ -490,8 +490,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [showCompletedProcessGroups, setShowCompletedProcessGroups] = useState(false);
   const [processOriginTitleMap, setProcessOriginTitleMap] = useState<Record<string, string>>({});
   const [openDraftSegmentPopoverKey, setOpenDraftSegmentPopoverKey] = useState<string | null>(null);
-  const [draftTemplatePickerSearch, setDraftTemplatePickerSearch] = useState('');
   const [draftTemplatePickerOpenKey, setDraftTemplatePickerOpenKey] = useState<string | null>(null);
+  const [draftTemplatePickerValueMap, setDraftTemplatePickerValueMap] = useState<Record<string, string | undefined>>({});
   const [activeProcessGroupMeta, setActiveProcessGroupMeta] = useState<{
     id: string;
     label: string | null;
@@ -1008,6 +1008,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     })).filter((item) => item.key && item.label),
     [automationActionVariableFields]
   );
+  const stageTemplateVariableOptionMap = useMemo(
+    () => new Map(stageTemplateVariableOptions.map((item) => [item.key, item] as const)),
+    [stageTemplateVariableOptions]
+  );
   const getTaskProcessGroupMeta = useCallback((task: any) => {
     const rawRecurrence = task?.recurrence_info;
     let recurrence: any = {};
@@ -1279,7 +1283,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handleDraftTemplateTokenPick = useCallback((targetKey: string, token: string) => {
     insertDraftTemplateToken(targetKey, token);
     setDraftTemplatePickerOpenKey(null);
-    setDraftTemplatePickerSearch('');
     void copyDraftTemplateTokenToClipboard(token);
   }, [copyDraftTemplateTokenToClipboard, insertDraftTemplateToken]);
 
@@ -4405,99 +4408,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     );
   }, [getProcessTaskFieldOptions, loadTaskCustomFieldOptions, savingTaskCustomFields, updateTaskCustomFieldDraft]);
 
-  const filteredStageTemplateVariableOptions = useMemo(() => {
-    const needle = String(draftTemplatePickerSearch || '').trim().toLowerCase();
-    if (!needle) return stageTemplateVariableOptions;
-    return stageTemplateVariableOptions.filter((item) => (
-      String(item?.label || '').toLowerCase().includes(needle)
-      || String(item?.token || '').toLowerCase().includes(needle)
-      || String(item?.key || '').toLowerCase().includes(needle)
-    ));
-  }, [draftTemplatePickerSearch, stageTemplateVariableOptions]);
-
   const renderDraftTemplatePicker = useCallback((targetKey: string) => (
-    <Popover
-      trigger={[]}
-      placement="bottomRight"
-      getPopupContainer={resolveOverlayPopupContainer}
-      zIndex={13050}
-      overlayStyle={{ zIndex: 13050, maxWidth: 'calc(100vw - 1rem)' }}
-      styles={{ root: { zIndex: 13050 } }}
-      open={draftTemplatePickerOpenKey === targetKey}
-      onOpenChange={(open) => {
-        setDraftTemplatePickerOpenKey(open ? targetKey : null);
-        if (!open) setDraftTemplatePickerSearch('');
-      }}
-      content={(
-        <div
-          className="w-[min(88vw,24rem)] space-y-2 select-text"
-          style={{ userSelect: 'text' }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <Input
-            value={draftTemplatePickerSearch}
-            onChange={(event) => setDraftTemplatePickerSearch(event.target.value)}
-            allowClear
-            size="small"
-            placeholder="جستجو در متغیرها"
-          />
-          <div
-            className="space-y-1 pr-1"
-            style={{ maxHeight: '18rem', overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}
-          >
-          {filteredStageTemplateVariableOptions.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-gray-500">متغیری در دسترس نیست.</div>
-          ) : filteredStageTemplateVariableOptions.map((item) => (
-            <div
-              key={`${targetKey}-${item.key}`}
-              className="w-full rounded-lg border border-transparent px-2 py-2 text-right transition-colors hover:border-[rgba(var(--brand-200-rgb),0.75)] hover:bg-[rgba(var(--brand-50-rgb),0.55)] select-text"
-              role="button"
-              tabIndex={0}
-              onClick={() => handleDraftTemplateTokenPick(targetKey, item.token)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                handleDraftTemplateTokenPick(targetKey, item.token);
-              }}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div
-                  className="min-w-0 flex-1 cursor-pointer"
-                >
-                  <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.label}</div>
-                  <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 break-all" dir="ltr">{item.token}</div>
-                </div>
-                <Space size={4}>
-                  <Tooltip title="درج متغیر">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<SnippetsOutlined />}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDraftTemplateTokenPick(targetKey, item.token);
-                      }}
-                    />
-                  </Tooltip>
-                  <Tooltip title="کپی متغیر">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CopyOutlined />}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void copyDraftTemplateTokenToClipboard(item.token);
-                      }}
-                    />
-                  </Tooltip>
-                </Space>
-              </div>
-            </div>
-          ))}
-          </div>
-        </div>
-      )}
-    >
+    <>
       <span
         role="button"
         tabIndex={0}
@@ -4511,21 +4423,96 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setDraftTemplatePickerOpenKey((prev) => (prev === targetKey ? null : targetKey));
-          setDraftTemplatePickerSearch('');
+          setDraftTemplatePickerOpenKey(targetKey);
         }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return;
           event.preventDefault();
           event.stopPropagation();
-          setDraftTemplatePickerOpenKey((prev) => (prev === targetKey ? null : targetKey));
-          setDraftTemplatePickerSearch('');
+          setDraftTemplatePickerOpenKey(targetKey);
         }}
       >
         <CopyOutlined />
       </span>
-    </Popover>
-  ), [copyDraftTemplateTokenToClipboard, draftTemplatePickerOpenKey, draftTemplatePickerSearch, filteredStageTemplateVariableOptions, handleDraftTemplateTokenPick]);
+      <Modal
+        open={draftTemplatePickerOpenKey === targetKey}
+        onCancel={() => setDraftTemplatePickerOpenKey(null)}
+        footer={null}
+        width={560}
+        centered
+        destroyOnHidden={false}
+        title="انتخاب متغیر مرحله"
+        styles={{ body: { paddingTop: 12 } }}
+      >
+        <div className="space-y-3">
+          <AdaptiveSelectField
+            {...adaptiveModalSelectProps}
+            allowClear
+            showSearch
+            value={draftTemplatePickerValueMap[targetKey]}
+            options={stageTemplateVariableOptions.map((item) => ({
+              value: item.key,
+              label: item.label,
+              token: item.token,
+              searchText: `${item.label} ${item.token} ${item.key}`,
+            }))}
+            placeholder="جستجو و انتخاب متغیر"
+            pickerTitle="انتخاب متغیر"
+            optionFilterProp="searchText"
+            popupStyle={buildStandardSelectPopupRootStyle({ zIndex: 13120, maxWidth: 'calc(100vw - 1rem)' })}
+            optionRender={(option) => {
+              const data = option?.data ?? option;
+              return (
+                <div className="min-w-0 py-1 text-right">
+                  <div className="text-xs font-semibold text-gray-800 dark:text-gray-100">{String(data?.label || '')}</div>
+                  <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 break-all" dir="ltr">
+                    {String(data?.token || '')}
+                  </div>
+                </div>
+              );
+            }}
+            onChange={(nextValue) => {
+              setDraftTemplatePickerValueMap((prev) => ({
+                ...prev,
+                [targetKey]: String(nextValue || '').trim() || undefined,
+              }));
+            }}
+            notFoundContent="متغیری در دسترس نیست."
+          />
+          <div className="rounded-md border border-dashed border-gray-200 px-3 py-2 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400" dir="ltr">
+            {stageTemplateVariableOptionMap.get(String(draftTemplatePickerValueMap[targetKey] || ''))?.token || '{{...}}'}
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              size="middle"
+              icon={<CopyOutlined />}
+              disabled={!stageTemplateVariableOptionMap.get(String(draftTemplatePickerValueMap[targetKey] || ''))}
+              onClick={() => {
+                const selected = stageTemplateVariableOptionMap.get(String(draftTemplatePickerValueMap[targetKey] || ''));
+                if (!selected) return;
+                void copyDraftTemplateTokenToClipboard(selected.token);
+              }}
+            >
+              کپی
+            </Button>
+            <Button
+              type="primary"
+              size="middle"
+              icon={<SnippetsOutlined />}
+              disabled={!stageTemplateVariableOptionMap.get(String(draftTemplatePickerValueMap[targetKey] || ''))}
+              onClick={() => {
+                const selected = stageTemplateVariableOptionMap.get(String(draftTemplatePickerValueMap[targetKey] || ''));
+                if (!selected) return;
+                handleDraftTemplateTokenPick(targetKey, selected.token);
+              }}
+            >
+              درج در فیلد
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  ), [adaptiveModalSelectProps, copyDraftTemplateTokenToClipboard, draftTemplatePickerOpenKey, draftTemplatePickerValueMap, handleDraftTemplateTokenPick, stageTemplateVariableOptionMap, stageTemplateVariableOptions]);
 
   const renderPopupContent = (task: any) => {
     const canEditTaskStatus = !readOnly || isTaskAssignedToCurrentUser(task);
@@ -6083,6 +6070,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const resetDraftStageEditorState = useCallback(() => {
     setEditingDraft(null);
     draftEditorStageIdRef.current = null;
+    setDraftTemplatePickerOpenKey(null);
     setDraftModalTabKey('stage');
     setDraftAutomationRules([]);
     setExpandedDraftAutomationRuleIds([]);
@@ -6124,6 +6112,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const openDraftStageModal = useCallback((stage?: any | null, tab: DraftModalTabKey = 'stage') => {
     setOpenDraftSegmentPopoverKey(null);
+    setDraftTemplatePickerOpenKey(null);
     const nextEditingDraft = stage ? normalizeDraftStageForEditor(stage, 0) : null;
     draftEditorStageIdRef.current = nextEditingDraft?.id ?? null;
     setEditingDraft(nextEditingDraft);

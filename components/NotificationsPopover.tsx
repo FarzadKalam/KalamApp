@@ -218,6 +218,7 @@ SmsDrawerComposer.displayName = 'SmsDrawerComposer';
 
 const MAX_ITEMS = 10;
 const NOTIFICATIONS_CACHE_TTL_MS = 45_000;
+const ASSIGNED_NOTE_PAIRS_TTL_MS = 3 * 60 * 1000;
 const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
 const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
@@ -1006,6 +1007,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const refreshSectionInFlightRef = useRef<Partial<Record<NotificationSectionKey, boolean>>>({});
   const refreshSectionPendingRef = useRef<Partial<Record<NotificationSectionKey, { force?: boolean }>>>({});
   const notificationSoundWindowRef = useRef<{ startedAt: number; plays: number }>({ startedAt: 0, plays: 0 });
+  const audioInteractionUnlockedRef = useRef(false);
+  const assignedRecordPairsCacheRef = useRef<{
+    loadedAt: number;
+    userId: string;
+    roleId: string;
+    pairs: { module_id: string; record_id: string }[];
+  }>({ loadedAt: 0, userId: '', roleId: '', pairs: [] });
   const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const botShouldStickToBottomRef = useRef(true);
   const botForceScrollToBottomRef = useRef(false);
@@ -1705,8 +1713,16 @@ useEffect(() => {
 
   const getAssignedRecordPairs = async () => {
     if (!profile.id) return [] as { module_id: string; record_id: string }[];
-    const userId = profile.id;
-    const roleId = profile.role_id;
+    const userId = String(profile.id || '').trim();
+    const roleId = String(profile.role_id || '').trim();
+    const cached = assignedRecordPairsCacheRef.current;
+    if (
+      cached.userId === userId
+      && cached.roleId === roleId
+      && Date.now() - cached.loadedAt < ASSIGNED_NOTE_PAIRS_TTL_MS
+    ) {
+      return cached.pairs;
+    }
 
     const modules = Object.values(MODULES)
       .filter((mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id))
@@ -1720,6 +1736,12 @@ useEffect(() => {
         pairs.push({ module_id: mod.id, record_id: row.id });
       });
     }
+    assignedRecordPairsCacheRef.current = {
+      loadedAt: Date.now(),
+      userId,
+      roleId,
+      pairs,
+    };
     return pairs;
   };
 
@@ -1804,7 +1826,10 @@ useEffect(() => {
       }
     };
 
-    const assignedPairs = await withTimeout(getAssignedRecordPairs(), [] as { module_id: string; record_id: string }[]);
+    const shouldLoadAssignedNotes = open && activeDrawerSection === 'notes';
+    const assignedPairs = shouldLoadAssignedNotes
+      ? await withTimeout(getAssignedRecordPairs(), [] as { module_id: string; record_id: string }[])
+      : [];
     const grouped: Record<string, string[]> = {};
     assignedPairs.forEach((item) => {
       if (!item.module_id || !item.record_id) return;
@@ -2193,6 +2218,21 @@ useEffect(() => {
       }
     }
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const unlockAudio = () => {
+      audioInteractionUnlockedRef.current = true;
+    };
+    window.addEventListener('pointerdown', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio);
+    window.addEventListener('touchstart', unlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
 
   useEffect(() => {
     if (variant !== 'chat') return;
@@ -2745,8 +2785,8 @@ useEffect(() => {
     const interval = setInterval(() => {
       if (open) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void refreshAll(true, { force: true });
-    }, 20000);
+      void refreshAll(true);
+    }, 30000);
     return () => clearInterval(interval);
   }, [open, profile.id, profile.role_id, variant]);
 
@@ -4233,6 +4273,7 @@ useEffect(() => {
 
   const playNotificationChime = useCallback(() => {
     if (typeof window === 'undefined') return;
+    if (!audioInteractionUnlockedRef.current) return;
     const now = Date.now();
     const soundWindow = notificationSoundWindowRef.current;
     if (now - soundWindow.startedAt > 12000) {
