@@ -26,6 +26,8 @@ import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
 import { getCachedAuthUser } from '../utils/sessionCache';
 import { syncRecordTags } from '../utils/recordTags';
+import { runWriteWithCompatiblePayload } from '../utils/writeCompat';
+import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
 import {
   buildSalesPackageDescription,
   calculateSalesPackageTotal,
@@ -2043,6 +2045,38 @@ const EditableTable: React.FC<EditableTableProps> = ({
       };
     };
 
+    const buildCompatibleCashOperationPayload = (
+      basePayload: Record<string, any>,
+      currentOperationType: 'receipt' | 'payment' | 'transfer',
+      accountId: string | null
+    ) => {
+      const normalizedAccountId = String(accountId || '').trim();
+      const accountModule = normalizedAccountId ? accountModuleById.get(normalizedAccountId) : null;
+      if (normalizedAccountId && !accountModule) {
+        throw new Error('حساب مالی انتخاب‌شده معتبر نیست یا در ماژول نقد و بانک پیدا نشد.');
+      }
+
+      return transformModulePayloadForSave(
+        'cash_bank_operations',
+        {
+          ...basePayload,
+          ...buildTreasuryAccountPatch(accountId),
+          payment_account_id: currentOperationType === 'payment' ? normalizedAccountId : null,
+          receipt_account_id: currentOperationType === 'receipt' ? normalizedAccountId : null,
+        },
+        {
+          payment_account_id:
+            currentOperationType === 'payment' && normalizedAccountId && accountModule
+              ? [{ value: normalizedAccountId, module: accountModule }]
+              : [],
+          receipt_account_id:
+            currentOperationType === 'receipt' && normalizedAccountId && accountModule
+              ? [{ value: normalizedAccountId, module: accountModule }]
+              : [],
+        }
+      );
+    };
+
     const selectedChequeIds = Array.from(
         new Set(
           normalizedRows
@@ -2290,7 +2324,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         return;
       }
 
-      const operationPayload = {
+      const operationPayload = buildCompatibleCashOperationPayload({
         operation_type: operationType,
         payment_type: paymentType,
         status: rowStatus,
@@ -2310,32 +2344,45 @@ const EditableTable: React.FC<EditableTableProps> = ({
         cheque_id: chequeId ? String(chequeId) : null,
         metadata: buildCashOperationMetadata(rowKey, existingMetadata),
         updated_at: nowIso,
-        ...buildTreasuryAccountPatch(accountId),
         ...getSourceLinkPayload(),
-      };
+      }, operationType as 'receipt' | 'payment' | 'transfer', accountId);
 
       if (existingCashOperationId) {
-        const { error: updateOperationError } = await supabase
-          .from('cash_bank_operations')
-          .update(operationPayload)
-          .eq('id', existingCashOperationId);
-        if (updateOperationError) throw updateOperationError;
+        const updateOperationResult = await runWriteWithCompatiblePayload<null>({
+          cacheKey: 'cash-bank-operations:update:auto',
+          payload: operationPayload,
+          execute: (compatiblePayload) =>
+            supabase
+              .from('cash_bank_operations')
+              .update(compatiblePayload)
+              .eq('id', existingCashOperationId),
+        });
+        if (updateOperationResult.error) throw updateOperationResult.error;
         await syncRecordTags(supabase, 'cash_bank_operations', existingCashOperationId, rowTags);
         nextRow._cash_bank_operation_id = existingCashOperationId;
         return;
       }
 
-      const { data: insertedOperation, error: insertOperationError } = await supabase
-        .from('cash_bank_operations')
-        .insert(operationPayload)
-        .select('id, metadata')
-        .single();
-      if (insertOperationError) throw insertOperationError;
+      const insertOperationResult = await runWriteWithCompatiblePayload<any>({
+        cacheKey: 'cash-bank-operations:insert:auto',
+        payload: operationPayload,
+        execute: (compatiblePayload) =>
+          supabase
+            .from('cash_bank_operations')
+            .insert(compatiblePayload)
+            .select('id')
+            .single(),
+      });
+      if (insertOperationResult.error) throw insertOperationResult.error;
+      const insertedOperation = insertOperationResult.data;
       const insertedOperationId = String(insertedOperation?.id || '').trim() || null;
       nextRow._cash_bank_operation_id = insertedOperationId;
       if (insertedOperationId) {
         await syncRecordTags(supabase, 'cash_bank_operations', insertedOperationId, rowTags);
-        selectedCashOperationById.set(insertedOperationId, insertedOperation);
+        selectedCashOperationById.set(insertedOperationId, {
+          id: insertedOperationId,
+          metadata: operationPayload.metadata || {},
+        });
       }
     };
 
@@ -2381,7 +2428,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           return;
         }
 
-        const operationPayload = {
+        const operationPayload = buildCompatibleCashOperationPayload({
           operation_type: operationType,
           payment_type: 'barter',
           barter_id: linkedBarterId ? String(linkedBarterId) : null,
@@ -2407,27 +2454,37 @@ const EditableTable: React.FC<EditableTableProps> = ({
             is_auto_generated: true,
           },
           updated_at: nowIso,
-          ...buildTreasuryAccountPatch(accountId),
           ...getSourceLinkPayload(),
-        };
+        }, operationType as 'receipt' | 'payment' | 'transfer', accountId);
 
         if (existingCashOperationId) {
-          const { error: updateOperationError } = await supabase
-            .from('cash_bank_operations')
-            .update(operationPayload)
-            .eq('id', existingCashOperationId);
-          if (updateOperationError) throw updateOperationError;
+          const updateOperationResult = await runWriteWithCompatiblePayload<null>({
+            cacheKey: 'cash-bank-operations:update:barter',
+            payload: operationPayload,
+            execute: (compatiblePayload) =>
+              supabase
+                .from('cash_bank_operations')
+                .update(compatiblePayload)
+                .eq('id', existingCashOperationId),
+          });
+          if (updateOperationResult.error) throw updateOperationResult.error;
           await syncRecordTags(supabase, 'cash_bank_operations', existingCashOperationId, normalizeRowTags(nextRow?.tags ?? row?.tags));
           nextRow._cash_bank_operation_id = existingCashOperationId;
           return;
         }
 
-        const { data: insertedOperation, error: insertOperationError } = await supabase
-          .from('cash_bank_operations')
-          .insert(operationPayload)
-          .select('id')
-          .single();
-        if (insertOperationError) throw insertOperationError;
+        const insertOperationResult = await runWriteWithCompatiblePayload<any>({
+          cacheKey: 'cash-bank-operations:insert:barter',
+          payload: operationPayload,
+          execute: (compatiblePayload) =>
+            supabase
+              .from('cash_bank_operations')
+              .insert(compatiblePayload)
+              .select('id')
+              .single(),
+        });
+        if (insertOperationResult.error) throw insertOperationResult.error;
+        const insertedOperation = insertOperationResult.data;
         nextRow._cash_bank_operation_id = String(insertedOperation?.id || '').trim() || null;
         if (nextRow._cash_bank_operation_id) {
           await syncRecordTags(supabase, 'cash_bank_operations', nextRow._cash_bank_operation_id, normalizeRowTags(nextRow?.tags ?? row?.tags));

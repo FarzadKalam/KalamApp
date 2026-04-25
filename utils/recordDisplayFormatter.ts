@@ -4,6 +4,7 @@ import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persian
 import { getRelationDisplayFields } from './relationDisplay';
 import { getRecordDisplayLabel } from './recordLabel';
 import { getPreferredRelationTargetField } from './relationTargetField';
+import { selectByIdsWithCompatibleColumns } from './selectCompat';
 import { supportsSystemCode } from './systemCode';
 
 export type RelationValueMap = Record<string, Record<string, string>>;
@@ -113,21 +114,36 @@ export const buildRelationValueMap = async (
       const targetTable = targetModuleConfig?.table || targetModule;
       const selectFields = getRelationDisplayFields(targetModule, targetField);
 
-      const relationRowsQuery = await supabase
-        .from(targetTable)
-        .select(selectFields.join(', '))
-        .in('id', ids);
+      const fallbackFields = Array.from(new Set([
+        'id',
+        targetField,
+        ...(supportsSystemCode(targetModule) ? ['system_code'] : []),
+      ]));
+      const batchSize = targetTable === 'customers' || targetTable === 'suppliers' ? 25 : 80;
+      const relationRowsQuery = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: `relation-values:${targetModule}:${fieldKey}`,
+        columns: selectFields,
+        ids,
+        batchSize,
+        execute: (selectExpr, idBatch) =>
+          supabase
+            .from(targetTable)
+            .select(selectExpr)
+            .in('id', idBatch),
+      });
 
       if (relationRowsQuery.error) {
-        const fallbackFields = Array.from(new Set([
-          'id',
-          targetField,
-          ...(supportsSystemCode(targetModule) ? ['system_code'] : []),
-        ]));
-        const fallbackQuery = await supabase
-          .from(targetTable)
-          .select(fallbackFields.join(', '))
-          .in('id', ids);
+        const fallbackQuery = await selectByIdsWithCompatibleColumns<any>({
+          cacheKey: `relation-values-fallback:${targetModule}:${fieldKey}`,
+          columns: fallbackFields,
+          ids,
+          batchSize,
+          execute: (selectExpr, idBatch) =>
+            supabase
+              .from(targetTable)
+              .select(selectExpr)
+              .in('id', idBatch),
+        });
         if (fallbackQuery.error) {
           return [fieldKey, {}] as const;
         }

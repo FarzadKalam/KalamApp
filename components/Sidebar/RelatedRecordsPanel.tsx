@@ -17,6 +17,7 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getTaskStatusOption } from '../../utils/processTaskStatusOptions';
 import { getModuleCardSummaryFields } from '../../utils/recordCardHelpers';
 import { getRecordDisplayLabel } from '../../utils/recordLabel';
+import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
@@ -41,7 +42,7 @@ const PAYMENT_VISIBLE_KEYS = [
   'amount',
   'description',
 ];
-const RELATION_BATCH_SIZE = 100;
+const RELATION_BATCH_SIZE = 25;
 
 const chunkValues = <T,>(items: T[], size: number) => {
   const chunks: T[][] = [];
@@ -111,7 +112,7 @@ const buildPaymentRows = (invoices: any[], relationLabel: string) => (
     (invoice.payments || []).map((payment: any, index: number) => ({
       id: `${invoice.id}_${index}`,
       invoice_id: invoice.id,
-      invoice_name: invoice.name,
+      invoice_name: invoice.name || getRecordDisplayLabel(invoice, String(invoice.__moduleId || 'invoices'), { fallback: String(invoice.id || '') }),
       __moduleId: invoice.__moduleId || 'invoices',
       __relationLabel: relationLabel,
       ...payment,
@@ -331,11 +332,18 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         }
 
         if (tab.relationType === 'supplier_payments') {
-          const { data: invoices } = await supabase
-            .from('purchase_invoices')
-            .select('id, name, payments, created_at')
-            .eq('supplier_id', currentRecordId)
-            .order('created_at', { ascending: false });
+          const purchasePaymentResult = await runSelectWithCompatibleColumns<any[]>({
+            cacheKey: 'related-panel:purchase-invoices:payments',
+            columns: [...buildRecordTitleSelectColumns('purchase_invoices'), 'payments', 'created_at'],
+            execute: (selectExpr) =>
+              supabase
+                .from('purchase_invoices')
+                .select(selectExpr)
+                .eq('supplier_id', currentRecordId)
+                .order('created_at', { ascending: false }),
+          });
+          if (purchasePaymentResult.error) throw purchasePaymentResult.error;
+          const invoices = purchasePaymentResult.data || [];
 
           setItems(buildPaymentRows((invoices || []).map((row: any) => ({ ...row, __moduleId: 'purchase_invoices' })), 'پرداخت مرتبط'));
           return;
@@ -354,12 +362,19 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         }
 
         if (tab.relationType === 'supplier_products') {
-          const { data: invoices } = await supabase
-            .from('purchase_invoices')
-            .select('id, name, status, invoiceItems, created_at')
-            .eq('supplier_id', currentRecordId)
-            .in('status', Array.from(PURCHASE_PRODUCT_STATUSES))
-            .order('created_at', { ascending: false });
+          const purchaseProductsResult = await runSelectWithCompatibleColumns<any[]>({
+            cacheKey: 'related-panel:purchase-invoices:products',
+            columns: [...buildRecordTitleSelectColumns('purchase_invoices'), 'status', 'invoiceItems', 'created_at'],
+            execute: (selectExpr) =>
+              supabase
+                .from('purchase_invoices')
+                .select(selectExpr)
+                .eq('supplier_id', currentRecordId)
+                .in('status', Array.from(PURCHASE_PRODUCT_STATUSES))
+                .order('created_at', { ascending: false }),
+          });
+          if (purchaseProductsResult.error) throw purchaseProductsResult.error;
+          const invoices = purchaseProductsResult.data || [];
 
           setItems(await aggregatePurchaseProducts(invoices || []));
           return;

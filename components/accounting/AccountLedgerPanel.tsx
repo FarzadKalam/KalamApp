@@ -9,6 +9,7 @@ import RelatedRecordPopover from '../RelatedRecordPopover';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRolePermissions } from '../../utils/permissions';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { selectByIdsWithCompatibleColumns } from '../../utils/selectCompat';
 
 const { Text } = Typography;
 
@@ -210,9 +211,36 @@ const AccountLedgerPanel: React.FC<AccountLedgerPanelProps> = ({ accountId, acco
       const employeeIds = Array.from(new Set(normalized.filter((row) => row.party_type === 'employee' && row.party_id).map((row) => row.party_id)));
 
       const [customersRes, suppliersRes, employeesRes] = await Promise.all([
-        customerIds.length ? supabase.from('customers').select('id, first_name, last_name, business_name').in('id', customerIds) : Promise.resolve({ data: [], error: null } as any),
-        supplierIds.length ? supabase.from('suppliers').select('id, business_name').in('id', supplierIds) : Promise.resolve({ data: [], error: null } as any),
-        employeeIds.length ? supabase.from('profiles').select('id, full_name').in('id', employeeIds) : Promise.resolve({ data: [], error: null } as any),
+        customerIds.length
+          ? selectByIdsWithCompatibleColumns<any>({
+              cacheKey: 'account-ledger:customers',
+              columns: ['id', 'first_name', 'last_name', 'business_name', 'full_name', 'system_code'],
+              ids: customerIds,
+            batchSize: 25,
+              execute: (selectExpr, idBatch) =>
+                supabase.from('customers').select(selectExpr).in('id', idBatch),
+            })
+          : Promise.resolve({ data: [], error: null, selectedColumns: [] } as any),
+        supplierIds.length
+          ? selectByIdsWithCompatibleColumns<any>({
+              cacheKey: 'account-ledger:suppliers',
+              columns: ['id', 'business_name', 'full_name', 'system_code'],
+              ids: supplierIds,
+            batchSize: 25,
+              execute: (selectExpr, idBatch) =>
+                supabase.from('suppliers').select(selectExpr).in('id', idBatch),
+            })
+          : Promise.resolve({ data: [], error: null, selectedColumns: [] } as any),
+        employeeIds.length
+          ? selectByIdsWithCompatibleColumns<any>({
+              cacheKey: 'account-ledger:profiles',
+              columns: ['id', 'full_name'],
+              ids: employeeIds,
+              batchSize: 80,
+              execute: (selectExpr, idBatch) =>
+                supabase.from('profiles').select(selectExpr).in('id', idBatch),
+            })
+          : Promise.resolve({ data: [], error: null, selectedColumns: [] } as any),
       ]);
       if (customersRes.error || suppliersRes.error || employeesRes.error) throw customersRes.error || suppliersRes.error || employeesRes.error;
 

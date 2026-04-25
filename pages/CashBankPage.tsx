@@ -10,6 +10,8 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { useCurrencyConfig } from '../utils/currency';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
+import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../utils/selectCompat';
+import { getRecordDisplayLabel } from '../utils/recordLabel';
 
 const { Title, Text } = Typography;
 
@@ -209,19 +211,36 @@ const CashBankPage: React.FC = () => {
           .from('cheques')
           .select('id, cheque_type, status, amount, issue_date, due_date, party_type, party_id, serial_no, sayad_id, bank_account_id, notes, metadata, created_at')
           .limit(3000),
-        supabase.from('invoices').select('id, name, system_code, invoice_date, customer_id, payments, created_at').limit(3000),
-        supabase
-          .from('purchase_invoices')
-          .select('id, name, system_code, invoice_date, supplier_id, payments, created_at')
-          .limit(3000),
+        runSelectWithCompatibleColumns<any[]>({
+          cacheKey: 'cash-bank-page:invoices',
+          columns: [...buildRecordTitleSelectColumns('invoices'), 'invoice_date', 'customer_id', 'payments', 'created_at'],
+          execute: (selectExpr) => supabase.from('invoices').select(selectExpr).limit(3000),
+        }),
+        runSelectWithCompatibleColumns<any[]>({
+          cacheKey: 'cash-bank-page:purchase-invoices',
+          columns: [...buildRecordTitleSelectColumns('purchase_invoices'), 'invoice_date', 'supplier_id', 'payments', 'created_at'],
+          execute: (selectExpr) => supabase.from('purchase_invoices').select(selectExpr).limit(3000),
+        }),
         supabase.from('cash_bank_operations').select('*').limit(3000),
         supabase
           .from('barters')
           .select('id, name, system_code, status, barter_type, barter_date, initial_amount, remaining_amount, customer_id, supplier_id, employee_id, source_invoice_id, source_purchase_invoice_id, notes, created_at')
           .limit(3000),
-        supabase.from('customers').select('id, first_name, last_name, business_name').limit(3000),
-        supabase.from('suppliers').select('id, business_name').limit(3000),
-        supabase.from('profiles').select('id, full_name').limit(3000),
+        runSelectWithCompatibleColumns<any[]>({
+          cacheKey: 'cash-bank-page:customers',
+          columns: ['id', 'full_name', 'business_name', 'system_code', 'first_name', 'last_name', 'legal_name', 'notes'],
+          execute: (selectExpr) => supabase.from('customers').select(selectExpr).limit(3000),
+        }),
+        runSelectWithCompatibleColumns<any[]>({
+          cacheKey: 'cash-bank-page:suppliers',
+          columns: ['id', 'business_name', 'full_name', 'system_code', 'first_name', 'last_name', 'legal_name', 'notes'],
+          execute: (selectExpr) => supabase.from('suppliers').select(selectExpr).limit(3000),
+        }),
+        runSelectWithCompatibleColumns<any[]>({
+          cacheKey: 'cash-bank-page:profiles',
+          columns: ['id', 'full_name', 'first_name', 'last_name'],
+          execute: (selectExpr) => supabase.from('profiles').select(selectExpr).limit(3000),
+        }),
       ]);
 
       const hasError =
@@ -370,9 +389,15 @@ const CashBankPage: React.FC = () => {
       invoiceLabel: operationType === 'transfer'
         ? '-'
         : op?.sales_invoice_id
-        ? String(salesById[String(op.sales_invoice_id)]?.name || op.sales_invoice_id)
+        ? String(
+            salesById[String(op.sales_invoice_id)]?.name
+            || getRecordDisplayLabel(salesById[String(op.sales_invoice_id)] || {}, 'invoices', { fallback: String(op.sales_invoice_id) })
+          )
         : op?.purchase_invoice_id
-          ? String(purchaseById[String(op.purchase_invoice_id)]?.name || op.purchase_invoice_id)
+          ? String(
+              purchaseById[String(op.purchase_invoice_id)]?.name
+              || getRecordDisplayLabel(purchaseById[String(op.purchase_invoice_id)] || {}, 'purchase_invoices', { fallback: String(op.purchase_invoice_id) })
+            )
           : '-',
       personLabel: operationType === 'transfer'
         ? '-'

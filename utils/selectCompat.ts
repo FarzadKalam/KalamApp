@@ -194,6 +194,12 @@ type CompatResult<T> = {
   selectedColumns: string[];
 };
 
+export type CompatBatchResult<T> = {
+  data: T[];
+  error: any;
+  selectedColumns: string[];
+};
+
 export const buildRecordTitleSelectColumns = (moduleId?: string | null): string[] => {
   const normalizedModuleId = String(moduleId || '').trim();
   const moduleConfig = MODULES[normalizedModuleId];
@@ -263,5 +269,60 @@ export const runSelectWithCompatibleColumns = async <T>({
     data: lastData,
     error: lastError,
     selectedColumns: cachedColumns.length > 0 ? cachedColumns : normalizedColumns,
+  };
+};
+
+export const selectByIdsWithCompatibleColumns = async <T>({
+  cacheKey,
+  columns,
+  ids,
+  batchSize = 80,
+  execute,
+}: {
+  cacheKey: string;
+  columns: readonly string[];
+  ids: readonly string[];
+  batchSize?: number;
+  execute: (selectExpr: string, idBatch: string[]) => PromiseLike<{ data: T[] | null; error: any }>;
+}): Promise<CompatBatchResult<T>> => {
+  const normalizedIds = Array.from(
+    new Set(
+      (ids || [])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    )
+  );
+  if (!normalizedIds.length) {
+    return {
+      data: [],
+      error: null,
+      selectedColumns: normalizeColumns(columns),
+    };
+  }
+
+  const rows: T[] = [];
+  let lastSelectedColumns = normalizeColumns(columns);
+  for (let index = 0; index < normalizedIds.length; index += Math.max(1, batchSize)) {
+    const idBatch = normalizedIds.slice(index, index + Math.max(1, batchSize));
+    const result = await runSelectWithCompatibleColumns<T[]>({
+      cacheKey,
+      columns,
+      execute: (selectExpr) => execute(selectExpr, idBatch),
+    });
+    lastSelectedColumns = result.selectedColumns;
+    if (result.error) {
+      return {
+        data: rows,
+        error: result.error,
+        selectedColumns: lastSelectedColumns,
+      };
+    }
+    rows.push(...(result.data || []));
+  }
+
+  return {
+    data: rows,
+    error: null,
+    selectedColumns: lastSelectedColumns,
   };
 };

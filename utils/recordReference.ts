@@ -1,6 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { getRecordDisplayLabel } from './recordLabel';
-import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from './selectCompat';
+import { buildRecordTitleSelectColumns, selectByIdsWithCompatibleColumns } from './selectCompat';
 
 type RecordReferenceLike = {
   module_id?: string | null;
@@ -51,14 +51,17 @@ export const fetchRecordReferenceLabels = async (
       const table = moduleConfig?.table || moduleId;
       if (!table) return;
 
-      const result = await runSelectWithCompatibleColumns<any[]>({
+      const batchSize = table === 'customers' || table === 'suppliers' ? 25 : 80;
+      const result = await selectByIdsWithCompatibleColumns<any>({
         cacheKey: `record-reference:${moduleId}`,
         columns: buildRecordTitleSelectColumns(moduleId),
-        execute: (selectExpr) =>
+        ids,
+        batchSize,
+        execute: (selectExpr, idBatch) =>
           supabaseClient
             .from(table)
             .select(selectExpr)
-            .in('id', ids),
+            .in('id', idBatch),
       });
 
       if (result.error || !Array.isArray(result.data)) return;

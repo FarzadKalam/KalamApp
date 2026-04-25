@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Empty, Input, Modal, Select, Tag } from 'antd';
+import { App, Button, Empty, Input, Modal, Tag } from 'antd';
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -24,6 +24,7 @@ import {
 } from '../utils/recordMessaging';
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { sendBotMessageViaGateway } from '../utils/botGateway';
+import AdaptiveSelectField from './AdaptiveSelectField';
 import PhoneDisplay from './PhoneDisplay';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
@@ -146,6 +147,17 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     String(option?.searchText || option?.label || '')
       .toLowerCase()
       .includes(String(input || '').toLowerCase());
+  const commonSelectProps = {
+    showSearch: true,
+    optionFilterProp: 'searchText' as const,
+    filterOption: commonSelectFilter as any,
+    getPopupContainer: selectPopupContainer,
+    modalContainer: selectPopupContainer,
+    popupMatchSelectWidth: false,
+    listHeight: 240,
+    virtual: false,
+    overlayZIndexBase: 12600,
+  };
 
   const renderedPreview = useMemo(
     () => renderRecordTemplate(messageText, record || {}, moduleId),
@@ -537,35 +549,25 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
               <div className="mb-3">
                 <div className="mb-1 text-xs text-gray-500">{isBulkSmsMode ? 'شماره‌های مقصد' : 'شماره مقصد'}</div>
                 {isBulkSmsMode ? (
-                  <Select
+                  <AdaptiveSelectField
+                    {...commonSelectProps}
                     mode="multiple"
                     value={selectedPhones}
-                    onChange={(values) => setSelectedPhones((values || []).map((value) => String(value)))}
+                    onChange={(values) =>
+                      setSelectedPhones(((values as Array<string | number> | undefined) || []).map((value: string | number) => String(value)))
+                    }
                     className="w-full"
                     options={phoneOptions}
-                    optionFilterProp="searchText"
-                    filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').toLowerCase())}
-                    getPopupContainer={selectPopupContainer}
-                    popupMatchSelectWidth={false}
-                    listHeight={240}
-                    virtual={false}
-                    styles={{ popup: { root: { zIndex: 12600 } } }}
                     placeholder="شماره‌ای برای ارسال پیدا نشد"
                     maxTagCount="responsive"
                   />
                 ) : (
-                  <Select
+                  <AdaptiveSelectField
+                    {...commonSelectProps}
                     value={selectedPhone || undefined}
                     onChange={setSelectedPhone}
                     className="w-full"
                     options={phoneOptions}
-                    optionFilterProp="searchText"
-                    filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').toLowerCase())}
-                    getPopupContainer={selectPopupContainer}
-                    popupMatchSelectWidth={false}
-                    listHeight={240}
-                    virtual={false}
-                    styles={{ popup: { root: { zIndex: 12600 } } }}
                     placeholder="شماره‌ای برای ارسال پیدا نشد"
                   />
                 )}
@@ -574,40 +576,28 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
             {!isTemplateMode && mode === 'bot' ? (
               <div className="mb-3">
                 <div className="mb-1 text-xs text-gray-500">بات مقصد</div>
-                <Select
+                <AdaptiveSelectField
+                  {...commonSelectProps}
                   value={selectedBotChannel}
                   onChange={(value) => setSelectedBotChannel(value as NotificationBotChannel)}
                   className="w-full"
                   loading={activeBotsLoading}
                   options={availableBotOptions}
-                  showSearch
-                  optionFilterProp="searchText"
-                  filterOption={commonSelectFilter as any}
-                  getPopupContainer={selectPopupContainer}
-                  popupMatchSelectWidth={false}
-                  listHeight={240}
-                  virtual={false}
-                  styles={{ popup: { root: { zIndex: 12600 } } }}
                   placeholder={activeBotsLoading ? 'در حال دریافت بات‌های فعال...' : 'بات فعالی برای این رکورد موجود نیست'}
                 />
               </div>
             ) : null}
 
             <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_120px]">
-              <Select
-                showSearch
+              <AdaptiveSelectField
+                {...commonSelectProps}
                 allowClear
                 value={selectedVariable}
                 onChange={(value) => setSelectedVariable(value)}
                 options={variableOptions}
+                pickerTitle="انتخاب متغیر"
                 placeholder="انتخاب متغیر ماژول"
-                optionFilterProp="searchText"
-                filterOption={commonSelectFilter as any}
-                getPopupContainer={selectPopupContainer}
-                popupMatchSelectWidth={false}
                 listHeight={260}
-                virtual={false}
-                styles={{ popup: { root: { zIndex: 12600 } } }}
               />
               <Button
                 onClick={() => {

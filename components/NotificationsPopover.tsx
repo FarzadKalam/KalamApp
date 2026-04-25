@@ -35,7 +35,7 @@ import MessageComposerModal from './MessageComposerModal';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
-import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../utils/selectCompat';
+import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns, selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import {
@@ -2407,23 +2407,40 @@ useEffect(() => {
 
     const counterpartyLabelMap: Record<string, string> = {};
     if (customerIds.length > 0) {
-      const { data: customers } = await supabase
-        .from('customers')
-        .select('id,full_name,business_name,legal_name,system_code')
-        .in('id', customerIds);
+      const customerResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:customers',
+        columns: ['id', 'full_name', 'business_name', 'legal_name', 'system_code', 'first_name', 'last_name'],
+        ids: customerIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) =>
+          supabase
+            .from('customers')
+            .select(selectExpr)
+            .in('id', idBatch),
+      });
+      const customers = customerResult.data || [];
       (customers || []).forEach((item: any) => {
         const id = String(item?.id || '').trim();
         if (!id) return;
+        const personName = `${String(item?.first_name || '').trim()} ${String(item?.last_name || '').trim()}`.trim();
         counterpartyLabelMap[`customers:${id}`] = String(
-          item?.full_name || item?.business_name || item?.legal_name || item?.system_code || id
+          item?.full_name || item?.business_name || item?.legal_name || personName || item?.system_code || id
         ).trim();
       });
     }
     if (supplierIds.length > 0) {
-      const { data: suppliers } = await supabase
-        .from('suppliers')
-        .select('id,business_name,full_name,system_code')
-        .in('id', supplierIds);
+      const supplierResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:suppliers',
+        columns: ['id', 'business_name', 'full_name', 'system_code'],
+        ids: supplierIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) =>
+          supabase
+            .from('suppliers')
+            .select(selectExpr)
+            .in('id', idBatch),
+      });
+      const suppliers = supplierResult.data || [];
       (suppliers || []).forEach((item: any) => {
         const id = String(item?.id || '').trim();
         if (!id) return;

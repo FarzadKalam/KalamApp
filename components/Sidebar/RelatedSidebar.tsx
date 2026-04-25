@@ -13,6 +13,7 @@ import { ModuleDefinition, RelatedTabConfig, RelatedTabFilterConfig } from '../.
 import { supabase } from '../../supabaseClient';
 import { applyTaskSourceRecordFilter } from '../../utils/taskMeta';
 import { MODULES } from '../../moduleRegistry';
+import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 
 // نقشه آیکون‌ها: نام متنی را به کامپوننت واقعی وصل می‌کند
 const iconMap: Record<string, React.ReactNode> = {
@@ -235,22 +236,30 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 }
 
                 if ((tab as RelatedTabConfig).relationType === 'supplier_payments') {
-                    const { data } = await supabase
-                        .from('purchase_invoices')
-                        .select('created_at')
-                        .eq('supplier_id', recordId)
-                        .order('created_at', { ascending: false })
-                        .limit(1);
+                    const { data } = await runSelectWithCompatibleColumns<any[]>({
+                        cacheKey: 'related-sidebar:supplier-payments:last-created-at',
+                        columns: ['id', 'created_at'],
+                        execute: (selectExpr) => supabase
+                            .from('purchase_invoices')
+                            .select(selectExpr)
+                            .eq('supplier_id', recordId)
+                            .order('created_at', { ascending: false })
+                            .limit(1),
+                    });
                     return data?.[0]?.created_at || null;
                 }
 
                 if ((tab as RelatedTabConfig).relationType === 'supplier_products') {
-                    const { data } = await supabase
-                        .from('purchase_invoices')
-                        .select('created_at')
-                        .eq('supplier_id', recordId)
-                        .order('created_at', { ascending: false })
-                        .limit(1);
+                    const { data } = await runSelectWithCompatibleColumns<any[]>({
+                        cacheKey: 'related-sidebar:supplier-products:last-created-at',
+                        columns: ['id', 'created_at'],
+                        execute: (selectExpr) => supabase
+                            .from('purchase_invoices')
+                            .select(selectExpr)
+                            .eq('supplier_id', recordId)
+                            .order('created_at', { ascending: false })
+                            .limit(1),
+                    });
                     return data?.[0]?.created_at || null;
                 }
 
