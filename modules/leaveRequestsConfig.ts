@@ -46,7 +46,7 @@ export const leaveRequestsModule: ModuleDefinition = {
       isTableColumn: true,
       options: [
         { label: 'پیش‌نویس', value: 'draft', color: 'default' },
-        { label: 'در انتظار', value: 'pending', color: 'orange' },
+        { label: 'در انتظار تایید', value: 'pending', color: 'orange' },
         { label: 'بازبینی', value: 'review', color: 'gold' },
         { label: 'تایید شده', value: 'approved', color: 'green' },
         { label: 'تکمیل شده', value: 'completed', color: 'green' },

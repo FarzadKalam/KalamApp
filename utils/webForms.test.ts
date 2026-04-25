@@ -138,9 +138,9 @@ describe('web form utilities', () => {
 
     const leaveTargets = getWebFormTargetFields('leave_requests');
     const leaveStatusField = leaveTargets.find((item) => item.value === 'status');
-    expect(leaveStatusField?.moduleDefaultValue).toBe('review');
+    expect(leaveStatusField?.moduleDefaultValue).toBe('pending');
     expect(getWebFormModuleDefaultValues('leave_requests')).toMatchObject({
-      status: 'review',
+      status: 'pending',
     });
   });
 

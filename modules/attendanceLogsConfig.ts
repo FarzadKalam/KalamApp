@@ -13,6 +13,9 @@ export const attendanceLogsModule: ModuleDefinition = {
   titles: { fa: "تردد", faSingular: "رکورد تردد", en: "Attendance Logs" },
   nature: ModuleNature.STANDARD,
   table: "attendance_logs",
+  dashboard: {
+    recentListFields: ["employee_id", "log_type", "occurred_at", "source_type"],
+  },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   fields: [

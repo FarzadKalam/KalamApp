@@ -217,7 +217,7 @@ export const getWebFormTargetFields = (
         normalized === "attendance_logs" && field.key === "source_type"
           ? "web_form"
           : normalized === "leave_requests" && field.key === "status"
-            ? "review"
+            ? "pending"
             : rawModuleDefaultValue;
       const isModuleRequired = field.validation?.required === true;
       const hasModuleDefault = hasMeaningfulDefaultValue(moduleDefaultValue);
@@ -249,7 +249,7 @@ export const getWebFormModuleDefaultValues = (
       normalizedModuleId === "attendance_logs" && item.value === "source_type"
         ? "web_form"
         : normalizedModuleId === "leave_requests" && item.value === "status"
-          ? "review"
+          ? "pending"
           : item.moduleDefaultValue;
     return acc;
   }, {});

@@ -1,6 +1,6 @@
 -- =====================================================
 -- KalamApp - Phase 125
--- Leave web forms: hidden review status
+-- Leave web forms: hidden pending status
 -- =====================================================
 
 begin;
@@ -30,14 +30,14 @@ update public.web_forms wf
 set config = jsonb_set(
   coalesce(wf.config, '{}'::jsonb),
   '{default_record_values}',
-  coalesce(wf.config->'default_record_values', '{}'::jsonb) || jsonb_build_object('status', 'review'),
+  coalesce(wf.config->'default_record_values', '{}'::jsonb) || jsonb_build_object('status', 'pending'),
   true
 )
 where wf.target_module_id = 'leave_requests';
 
 update public.web_form_fields wff
 set
-  default_value = '"review"'::jsonb,
+  default_value = '"pending"'::jsonb,
   is_hidden = true,
   config = coalesce(wff.config, '{}'::jsonb) || jsonb_build_object('select_options', '[]'::jsonb)
 from public.web_forms wf
@@ -60,13 +60,13 @@ begin
 
   update public.leave_requests lr
   set
-    status = 'review',
+    status = 'pending',
     updated_at = coalesce(new.created_at, now())
   where lr.id = new.target_record_id
     and (new.org_id is null or lr.org_id = new.org_id);
 
   new.record_payload := coalesce(new.record_payload, '{}'::jsonb)
-    || jsonb_build_object('status', 'review');
+    || jsonb_build_object('status', 'pending');
 
   return new;
 end;
@@ -79,12 +79,12 @@ for each row
 execute function public.apply_web_form_leave_review_status();
 
 update public.leave_requests lr
-set status = 'review'
+set status = 'pending'
 from public.web_form_submissions wfs
 where wfs.target_module_id = 'leave_requests'
   and wfs.status = 'submitted'
   and wfs.target_record_id = lr.id
-  and coalesce(lr.status, '') in ('', 'draft', 'pending');
+  and coalesce(lr.status, '') in ('', 'draft', 'review');
 
 notify pgrst, 'reload schema';
 

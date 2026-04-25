@@ -34,6 +34,8 @@ import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { readCurrencyConfig, useCurrencyConfig } from '../utils/currency';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
+import { fetchModuleListRelationOptions } from '../utils/moduleListOptions';
+import { getOptionLabel } from '../utils/optionHelpers';
 import PhoneDisplay from '../components/PhoneDisplay';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import OccasionsWidget from '../components/dashboard/OccasionsWidget';
@@ -208,7 +210,12 @@ const getFieldMeta = (module: ModuleDefinition, fieldKey: string) => {
   );
 };
 
-const renderFieldValue = (module: ModuleDefinition, fieldKey: string, value: any) => {
+const renderFieldValue = (
+  module: ModuleDefinition,
+  fieldKey: string,
+  value: any,
+  relationOptions: Record<string, any[]> = {}
+) => {
   const field = getFieldMeta(module, fieldKey);
 
   if (value === null || value === undefined || value === '') return '-';
@@ -220,6 +227,9 @@ const renderFieldValue = (module: ModuleDefinition, fieldKey: string, value: any
       const text = option?.label || String(value);
       return field.type === FieldType.STATUS ? <Tag color={option?.color || 'default'}>{text}</Tag> : text;
     }
+    case FieldType.RELATION:
+    case FieldType.USER:
+      return getOptionLabel({ ...field, type: FieldType.RELATION }, value, {}, relationOptions);
     case FieldType.PRICE:
       return `${formatPersianPrice(Number(value || 0), true)} ${readCurrencyConfig().label}`;
     case FieldType.NUMBER:
@@ -581,12 +591,19 @@ const loadRecentSection = async (
     limit: RECENT_RECORDS_LIMIT * 5,
   });
 
+  const recentFields = getRecentFieldKeys(module)
+    .map((fieldKey) => getFieldMeta(module, fieldKey))
+    .filter(Boolean);
+  const relationOptions = recentFields.some((field: any) => field?.type === FieldType.RELATION || field?.type === FieldType.USER)
+    ? await fetchModuleListRelationOptions(supabase, recentFields as any[], { users: [], roles: [] })
+    : {};
+
   const columns = getRecentFieldKeys(module).map((fieldKey) => ({
     title: getFieldMeta(module, fieldKey)?.labels?.fa || fieldKey,
     dataIndex: fieldKey,
     key: fieldKey,
     ellipsis: true,
-    render: (value: any) => renderFieldValue(module, fieldKey, value),
+    render: (value: any) => renderFieldValue(module, fieldKey, value, relationOptions),
   }));
 
   return {

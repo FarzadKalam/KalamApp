@@ -180,6 +180,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   const [isTagFilterPopoverOpen, setIsTagFilterPopoverOpen] = useState(false);
   const [internalColumnFilters, setInternalColumnFilters] = useState<Record<string, FilterValue | null>>({});
   const assigneeLabel = getAssigneeLabel(moduleConfig?.id);
+  const shouldAppendManagedAssigneeColumn = useMemo(() => {
+    const normalizedModuleId = String(moduleConfig?.id || moduleConfig?.table || '').trim();
+    return normalizedModuleId !== 'attendance_logs';
+  }, [moduleConfig?.id, moduleConfig?.table]);
   const getFieldLabel = useCallback(
     (field: any, fallback?: string) => getFieldLabelFa(field, { moduleId: moduleConfig?.id, fallback }),
     [moduleConfig?.id]
@@ -1241,7 +1245,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   });
 
   // ✅ اضافه کردن ستون assignee به انتهای تمام جداول
-  if (!canViewField || canViewField('assignee_id') !== false) {
+  if (shouldAppendManagedAssigneeColumn && (!canViewField || canViewField('assignee_id') !== false)) {
     const assigneeFilterOptions = [
       ...allUsers.map((user: any) => ({ text: user.full_name || user.display_name || user.id, value: user.id })),
       ...allRoles
@@ -1333,7 +1337,11 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     if (tagsField && !fieldsMap.has(tagsField.key)) {
       fieldsMap.set(tagsField.key, tagsField);
     }
-    if (!fieldsMap.has('assignee_id') && (!canViewField || canViewField('assignee_id') !== false)) {
+    if (
+      shouldAppendManagedAssigneeColumn
+      && !fieldsMap.has('assignee_id')
+      && (!canViewField || canViewField('assignee_id') !== false)
+    ) {
       fieldsMap.set('assignee_id', {
         key: 'assignee_id',
         labels: { fa: assigneeLabel },
