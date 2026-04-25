@@ -235,6 +235,14 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
     [eventsByDay]
   );
   const expandedDayKeySet = useMemo(() => new Set(expandedDayKeys), [expandedDayKeys]);
+  const mobileMonthDays = useMemo(() => {
+    const prioritized = currentMonthDays.filter((day) => {
+      const hasEvents = (eventsByDay.get(day.key) || []).length > 0;
+      const isHoliday = !!holidaySummaries[day.key]?.isOfficialHoliday || day.date.getDay() === 5;
+      return hasEvents || day.isToday || isHoliday;
+    });
+    return prioritized.length > 0 ? prioritized : currentMonthDays;
+  }, [currentMonthDays, eventsByDay, holidaySummaries]);
 
   useEffect(() => {
     let isActive = true;
@@ -481,7 +489,7 @@ const ModuleCalendarView: React.FC<CalendarViewProps> = ({
         {calendarMode === "month" ? (
           <>
             <div className="space-y-2 sm:hidden">
-              {currentMonthDays.map((day) => renderDay(day, "list"))}
+              {mobileMonthDays.map((day) => renderDay(day, "list"))}
             </div>
             <div className="hidden grid-cols-7 gap-1 sm:grid sm:gap-2">
               {days.map((day) => renderDay(day, "grid"))}
