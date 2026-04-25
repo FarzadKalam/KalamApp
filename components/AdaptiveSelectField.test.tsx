@@ -89,4 +89,33 @@ describe('AdaptiveSelectField', () => {
     expect(trigger.classList.contains('kalam-adaptive-picker__trigger--comfortable')).toBe(true);
     expect(text?.classList.contains('is-comfortable')).toBe(true);
   });
+
+  it('keeps desktop select popups out of the local overlay container by default', async () => {
+    const host = document.createElement('div');
+    host.innerHTML = '<div class="ant-modal"><div class="mount"></div></div>';
+    document.body.appendChild(host);
+
+    const modalNode = host.querySelector('.ant-modal') as HTMLElement;
+    const mountNode = host.querySelector('.mount') as HTMLElement;
+
+    render(
+      <AdaptiveSelectField
+        adaptiveMode="desktop"
+        value={undefined}
+        options={[
+          { label: 'ایجاد شده', value: 'created' },
+          { label: 'تایید شده', value: 'confirmed' },
+        ]}
+        getPopupContainer={() => modalNode}
+      />,
+      { container: mountNode }
+    );
+
+    fireEvent.mouseDown(within(mountNode).getByRole('combobox'));
+
+    const dropdown = await screen.findByRole('listbox');
+    expect(modalNode.contains(dropdown)).toBe(false);
+
+    host.remove();
+  });
 });

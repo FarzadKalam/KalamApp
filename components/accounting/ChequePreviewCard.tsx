@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { Input, InputNumber, Select } from 'antd';
+import { Input, InputNumber } from 'antd';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 import PersianDatePicker from '../PersianDatePicker';
 import { amountToPersianRialWords, jalaliDateToPersianWords } from '../../utils/persianWords';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -10,6 +11,7 @@ import {
   preventNonNumericPaste,
 } from '../../utils/persianNumericInput';
 import { useCurrencyConfig } from '../../utils/currency';
+import { resolveSelectPopupContainer } from '../../utils/popupContainer';
 
 type ChequeValues = Record<string, unknown>;
 
@@ -213,7 +215,7 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
           <div className="text-[11px] text-slate-700 dark:text-slate-300">بانک</div>
 
           {editable && isIssuedCheque ? (
-            <Select
+            <AdaptiveSelectField
               className="mt-1 text-right"
               value={selectedBankAccountId || undefined}
               onChange={(value) => handleFieldChange('bank_account_id', value || null)}
@@ -223,7 +225,7 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
               options={bankOptions}
               allowClear
               placeholder="انتخاب حساب بانکی ثبت‌شده"
-              getPopupContainer={(node) => node?.parentElement || document.body}
+              getPopupContainer={resolveSelectPopupContainer}
             />
           ) : editable ? (
             <Input

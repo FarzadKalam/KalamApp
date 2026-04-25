@@ -9,7 +9,6 @@ import {
   Input,
   InputNumber,
   Popconfirm,
-  Select,
   Spin,
   Tag,
 } from 'antd';
@@ -31,6 +30,7 @@ import PersianDatePicker from '../components/PersianDatePicker';
 import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
+import AdaptiveSelectField from '../components/AdaptiveSelectField';
 import RecordImageBox from '../components/RecordImageBox';
 import TagInput from '../components/TagInput';
 import { supabase } from '../supabaseClient';
@@ -49,6 +49,7 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
+import { resolveSelectPopupContainer } from '../utils/popupContainer';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
 type FieldOption = { value: string; label: string; color?: string; module?: string };
@@ -732,7 +733,7 @@ const AccountingRecordPage: React.FC = () => {
     if (!statusField) return null;
     if (isEditMode) {
       return (
-        <Select
+        <AdaptiveSelectField
           variant="borderless"
           value={currentRecordValues?.[statusField.key]}
           onChange={(value) => {
@@ -743,6 +744,7 @@ const AccountingRecordPage: React.FC = () => {
           options={statusFieldOptions}
           className="min-w-[140px] font-semibold text-gray-700 dark:text-gray-300"
           disabled={!canEdit}
+          getPopupContainer={resolveSelectPopupContainer}
         />
       );
     }
@@ -753,7 +755,7 @@ const AccountingRecordPage: React.FC = () => {
     if (!assigneeField) return null;
     if (isEditMode) {
       return (
-        <Select
+        <AdaptiveSelectField
           variant="borderless"
           showSearch
           optionFilterProp="label"
@@ -767,6 +769,7 @@ const AccountingRecordPage: React.FC = () => {
           className="min-w-[160px] font-semibold text-gray-700 dark:text-gray-300"
           disabled={!canEdit}
           allowClear
+          getPopupContainer={resolveSelectPopupContainer}
         />
       );
     }
@@ -1039,12 +1042,13 @@ const AccountingRecordPage: React.FC = () => {
       case FieldType.SELECT:
       case FieldType.STATUS:
         return (
-          <Select
+          <AdaptiveSelectField
             showSearch
             optionFilterProp="label"
             allowClear
             disabled={disabled}
             options={options}
+            getPopupContainer={resolveSelectPopupContainer}
           />
         );
       case FieldType.RELATION:

@@ -54,6 +54,7 @@ interface AdaptiveSelectFieldProps {
   optionDisplayFallback?: (option: OptionLike) => string;
   closeMobileOnToolbarClick?: boolean;
   styles?: any;
+  preferLocalPopupContainer?: boolean;
   [key: string]: any;
 }
 
@@ -103,6 +104,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   optionDisplayFallback = defaultOptionLabel,
   closeMobileOnToolbarClick = false,
   styles,
+  preferLocalPopupContainer = false,
   ...restProps
 }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -217,9 +219,11 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
 
   if (!mobileSheetMode) {
     const resolvePopupHost = (trigger: HTMLElement) => {
-      const resolved = getPopupContainer(trigger);
-      if (resolved && resolved !== document.body) {
-        return resolved;
+      if (preferLocalPopupContainer) {
+        const resolved = getPopupContainer(trigger);
+        if (resolved && resolved !== document.body) {
+          return resolved;
+        }
       }
       return resolveSelectPopupContainer(trigger);
     };
