@@ -196,7 +196,12 @@ const CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS = new Set([
   "acquaintance_days",
   "cooperation_days",
 ]);
+const ATTENDANCE_IMPORTABLE_READONLY_FIELD_KEYS = new Set([
+  "created_at",
+  "updated_at",
+]);
 const DUPLICATE_FIELD_CANDIDATES_BY_MODULE: Record<string, string[]> = {
+  attendance_logs: ["employee_id", "attendance_date", "log_type", "check_in_time", "check_out_time"],
   customers: ["legacy_contact_code", "mobile_1", "national_code", "national_id", "accounting_code", "email", "phone", "full_name"],
   suppliers: ["system_code", "accounting_code", "mobile_1", "email", "business_name"],
   invoices: ["legacy_invoice_number", "system_code", "name"],
@@ -291,12 +296,31 @@ const GENERIC_IMPORT_FIELD_ALIASES: Record<string, string> = {
   [normalizeKey("مسئول")]: "assignee_id",
   [normalizeKey("نام بازاریاب")]: "assignee_id",
   [normalizeKey("بازاریاب")]: "assignee_id",
+  [normalizeKey("نوع تردد")]: "log_type",
+  [normalizeKey("تاریخ")]: "attendance_date",
+  [normalizeKey("ساعت ورود")]: "check_in_time",
+  [normalizeKey("ساعت خروج")]: "check_out_time",
+  [normalizeKey("مجموع حضور (دقیقه)")]: "presence_minutes",
+  [normalizeKey("مجموع حضور (ساعت)")]: "presence_hours",
+  [normalizeKey("تایید مدیر")]: "manager_approved",
+  [normalizeKey("شماره تردد")]: "system_code",
+  [normalizeKey("کارمند مرتبط")]: "related_employee_label",
+  [normalizeKey("ورود مرتبط")]: "linked_check_in_label",
+  [normalizeKey("جدول حقوق مرتبط")]: "payroll_reference_label",
+  [normalizeKey("آخرین ویرایش انجام شده به وسیله")]: "updated_by_label",
+  [normalizeKey("زمان ویرایش")]: "updated_at",
+  [normalizeKey("ارجاع به")]: "reference_label",
+  [normalizeKey("ایجاد کننده")]: "created_by_label",
+  [normalizeKey("زمان ایجاد")]: "created_at",
+  [normalizeKey("منبع")]: "source_type",
+  [normalizeKey("وضعیت بسته")]: "closure_status",
 };
 
 const supportsAssigneeField = (moduleId: string): boolean => supportsGlobalAssignee(moduleId);
 const supportsAssigneeTypeField = (moduleId: string): boolean => supportsGlobalAssigneeType(moduleId);
 const isExplicitlyImportableReadonlyField = (moduleId: string, fieldKey: string): boolean =>
-  moduleId === "customers" && CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey);
+  (moduleId === "customers" && CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey))
+  || (moduleId === "attendance_logs" && ATTENDANCE_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey));
 const isPersistableImportField = (moduleId: string, fieldKey: string): boolean =>
   !NON_PERSISTED_IMPORT_FIELD_KEYS[moduleId]?.has(fieldKey);
 
@@ -976,6 +1000,37 @@ const isMissingColumnError = (error: unknown): boolean => {
   const code = String((error as any)?.code || "").toUpperCase();
   const text = String((error as any)?.message || (error as any)?.details || "").toLowerCase();
   return code === "42703" || code === "PGRST204" || text.includes("column");
+};
+
+const extractMissingColumnNames = (error: unknown): string[] => {
+  const text = String((error as any)?.message || (error as any)?.details || (error as any)?.hint || "").toLowerCase();
+  if (!text) return [];
+
+  const patterns = [
+    /column\s+"([^"]+)"/gi,
+    /column\s+'([^']+)'/gi,
+    /could not find the\s+'([^']+)'\s+column/gi,
+    /([a-z0-9_]+)\s+does not exist/gi,
+  ];
+
+  return Array.from(
+    new Set(
+      patterns.flatMap((pattern) =>
+        Array.from(text.matchAll(pattern))
+          .map((match) => String(match?.[1] || "").trim().toLowerCase())
+          .filter(Boolean)
+      )
+    )
+  );
+};
+
+const omitColumns = (payload: Record<string, unknown>, columns: string[]) => {
+  if (!columns.length) return payload;
+  const nextPayload = { ...payload };
+  columns.forEach((column) => {
+    delete nextPayload[column];
+  });
+  return nextPayload;
 };
 
 const isIntegerOutOfRangeError = (error: unknown): boolean => {
@@ -2329,12 +2384,20 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       }
 
       let firstError: unknown = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
         const result = await insertOnce(nextPayload, attempt === 0 ? label : `${label} با کد سیستمی جدید`);
         if (!result.error) {
           return { error: null, payload: nextPayload, retriedWithSystemCode: generatedSystemCode && attempt > 0 };
         }
         if (!firstError) firstError = result.error;
+        if (isMissingColumnError(result.error)) {
+          const removableColumns = extractMissingColumnNames(result.error)
+            .filter((column) => Object.prototype.hasOwnProperty.call(nextPayload, column));
+          if (removableColumns.length > 0) {
+            nextPayload = omitColumns(nextPayload, removableColumns);
+            continue;
+          }
+        }
         if (!generatedSystemCode || !isSystemCodeDuplicateError(result.error)) {
           return {
             error:
@@ -2392,10 +2455,18 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       }
 
       let firstError: unknown = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
         const result = await insertOnce(nextPayload, attempt === 0 ? label : `${label} با کد سیستمی جدید`);
         if (!result.error) return { ...result, retriedWithSystemCode: generatedSystemCode && attempt > 0 };
         if (!firstError) firstError = result.error;
+        if (isMissingColumnError(result.error)) {
+          const removableColumns = extractMissingColumnNames(result.error)
+            .filter((column) => Object.prototype.hasOwnProperty.call(nextPayload, column));
+          if (removableColumns.length > 0) {
+            nextPayload = omitColumns(nextPayload, removableColumns);
+            continue;
+          }
+        }
         if (!generatedSystemCode || !isSystemCodeDuplicateError(result.error)) {
           return {
             ...result,
@@ -3346,25 +3417,41 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
       if (Object.keys(duplicateFilter).length !== effectiveDuplicateFields.length) return null;
 
-      const selectExpr = supportsGroupedInvoiceImport && importMode === "grouped_invoice" ? "*" : "id";
-      let query: any = supabase.from(moduleConfig.table).select(selectExpr).limit(2);
-      Object.entries(duplicateFilter).forEach(([key, value]) => {
-        const field = headerFieldByKey.get(key);
-        const matchValues = buildFieldMatchValues(key, value, field?.type);
-        if (matchValues.length > 1) {
-          query = query.in(key, matchValues as never);
-          return;
+      let activeFilter = { ...duplicateFilter };
+      for (;;) {
+        if (Object.keys(activeFilter).length === 0) return null;
+
+        const selectExpr = supportsGroupedInvoiceImport && importMode === "grouped_invoice" ? "*" : "id";
+        let query: any = supabase.from(moduleConfig.table).select(selectExpr).limit(2);
+        Object.entries(activeFilter).forEach(([key, value]) => {
+          const field = headerFieldByKey.get(key);
+          const matchValues = buildFieldMatchValues(key, value, field?.type);
+          if (matchValues.length > 1) {
+            query = query.in(key, matchValues as never);
+            return;
+          }
+          query = query.eq(key, (matchValues[0] ?? value) as never);
+        });
+
+        const result = await withTimeout(Promise.resolve(query), 20000, label);
+        if (result?.error) {
+          if (!isMissingColumnError(result.error)) throw result.error;
+          const removableColumns = extractMissingColumnNames(result.error)
+            .filter((column) => Object.prototype.hasOwnProperty.call(activeFilter, column));
+          if (!removableColumns.length) throw result.error;
+          activeFilter = omitColumns(activeFilter, removableColumns);
+          continue;
         }
-        query = query.eq(key, (matchValues[0] ?? value) as never);
-      });
-      const { data } = await withTimeout(Promise.resolve(query), 20000, label);
-      if ((data || []).length > 1) {
-        const duplicateLabels = effectiveDuplicateFields
-          .map((fieldKey) => headerFieldByKey.get(fieldKey)?.labels.fa || fieldKey)
+
+        const data = result?.data as Record<string, unknown>[] | null | undefined;
+        if ((data || []).length > 1) {
+          const duplicateLabels = Object.keys(activeFilter)
+            .map((fieldKey) => headerFieldByKey.get(fieldKey)?.labels.fa || fieldKey)
           .join("، ");
-        throw new Error(`بیش از یک رکورد با فیلدهای تطبیق «${duplicateLabels}» پیدا شد. تطبیق مبهم است.`);
+          throw new Error(`بیش از یک رکورد با فیلدهای تطبیق «${duplicateLabels}» پیدا شد. تطبیق مبهم است.`);
+        }
+        return data && data[0] ? (data[0] as Record<string, unknown>) : null;
       }
-      return data && data[0] ? (data[0] as Record<string, unknown>) : null;
     },
     [effectiveDuplicateFields, headerFieldByKey, importMode, moduleConfig.table, supportsGroupedInvoiceImport]
   );

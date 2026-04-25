@@ -1,6 +1,7 @@
 import { fetchSessionBootstrap } from './sessionCache';
 
 const MODULES_WITH_SYSTEM_CODE = new Set([
+  'attendance_logs',
   'barters',
   'billboards',
   'customers',
