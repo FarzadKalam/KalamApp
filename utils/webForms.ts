@@ -212,7 +212,13 @@ export const getWebFormTargetFields = (
       return WEB_FORM_SUPPORTED_FIELD_TYPES.has(field.type);
     })
     .map((field) => {
-      const moduleDefaultValue = resolveModuleFieldDefaultValue(field);
+      const rawModuleDefaultValue = resolveModuleFieldDefaultValue(field);
+      const moduleDefaultValue =
+        normalized === "attendance_logs" && field.key === "source_type"
+          ? "web_form"
+          : normalized === "leave_requests" && field.key === "status"
+            ? "review"
+            : rawModuleDefaultValue;
       const isModuleRequired = field.validation?.required === true;
       const hasModuleDefault = hasMeaningfulDefaultValue(moduleDefaultValue);
       return {
@@ -238,7 +244,13 @@ export const getWebFormModuleDefaultValues = (
 ) =>
   getWebFormTargetFields(moduleId, options).reduce<Record<string, any>>((acc, item) => {
     if (item.isVirtual || !item.hasModuleDefault) return acc;
-    acc[item.value] = item.moduleDefaultValue;
+    const normalizedModuleId = String(moduleId || "").trim();
+    acc[item.value] =
+      normalizedModuleId === "attendance_logs" && item.value === "source_type"
+        ? "web_form"
+        : normalizedModuleId === "leave_requests" && item.value === "status"
+          ? "review"
+          : item.moduleDefaultValue;
     return acc;
   }, {});
 

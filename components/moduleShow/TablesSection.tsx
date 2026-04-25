@@ -156,7 +156,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
         return;
       }
       const rowsById = new Map<string, any>();
-      const selectColumns = 'id,name,title,status,task_type,assignee_id,assignee_role_id,assignee_type,sort_order,source_stage_sort_order,source_template_id,source_module_id,source_record_id,related_to_module,process_group_id,recurrence_info,due_date,start_date,completed_at';
+      const selectColumns = 'id,name,status,task_type,assignee_id,assignee_role_id,assignee_type,sort_order,source_stage_sort_order,source_template_id,source_module_id,source_record_id,related_to_module,process_group_id,recurrence_info,due_date,start_date,completed_at';
       try {
         const { data: sourceRows, error: sourceError } = await supabase
           .from('tasks')

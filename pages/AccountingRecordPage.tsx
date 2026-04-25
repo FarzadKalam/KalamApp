@@ -48,6 +48,7 @@ import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
+import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
 type FieldOption = { value: string; label: string; color?: string; module?: string };
@@ -113,23 +114,6 @@ const checkFieldVisibility = (logicOrRule: any, values: Record<string, any>) => 
   if (operator === LogicOperator.IS_TRUE) return Boolean(currentValue) === true;
   if (operator === LogicOperator.IS_FALSE) return Boolean(currentValue) === false;
   return true;
-};
-
-const getTransferAccountPatch = (
-  fieldKey: 'payment_account_id' | 'receipt_account_id',
-  value: any,
-  options: FieldOption[]
-) => {
-  const selectedId = String(value || '').trim();
-  const selectedOption = options.find((option) => String(option.value || '').trim() === selectedId);
-  const selectedModule = String(selectedOption?.module || '').trim();
-  const prefix = fieldKey === 'payment_account_id' ? 'payment' : 'receipt';
-
-  return {
-    [`${prefix}_bank_account_id`]: selectedModule === 'bank_accounts' && selectedId ? selectedId : null,
-    [`${prefix}_cash_box_id`]: selectedModule === 'cash_boxes' && selectedId ? selectedId : null,
-    [`${prefix}_petty_fund_id`]: selectedModule === 'petty_funds' && selectedId ? selectedId : null,
-  } as Record<string, string | null>;
 };
 
 const AccountingRecordPage: React.FC = () => {
@@ -822,54 +806,6 @@ const AccountingRecordPage: React.FC = () => {
         payload[field.key] = raw;
       });
 
-      if (moduleId === 'cash_bank_operations') {
-        const operationType = String(values.operation_type ?? formData.operation_type ?? '').trim();
-        if (operationType === 'transfer') {
-          Object.assign(
-            payload,
-            getTransferAccountPatch(
-              'payment_account_id',
-              values.payment_account_id ?? formData.payment_account_id ?? null,
-              relationOptions.payment_account_id || []
-            ),
-            getTransferAccountPatch(
-              'receipt_account_id',
-              values.receipt_account_id ?? formData.receipt_account_id ?? null,
-              relationOptions.receipt_account_id || []
-            )
-          );
-          payload.bank_account_id = null;
-          payload.cash_box_id = null;
-          payload.petty_fund_id = null;
-          payload.sales_invoice_id = null;
-          payload.purchase_invoice_id = null;
-          payload.expense_document_id = null;
-          payload.employee_advance_id = null;
-          payload.payroll_slip_id = null;
-          payload.customer_id = null;
-          payload.supplier_id = null;
-          payload.cheque_id = null;
-          payload.barter_id = null;
-        } else {
-          const selectedAccountId = String(values.bank_account_id ?? formData.bank_account_id ?? '').trim();
-          const selectedOption = (relationOptions.bank_account_id || []).find(
-            (option) => String(option.value || '').trim() === selectedAccountId
-          );
-          const selectedModule = String(selectedOption?.module || '').trim();
-          payload.bank_account_id = selectedModule === 'bank_accounts' && selectedAccountId ? selectedAccountId : null;
-          payload.cash_box_id = selectedModule === 'cash_boxes' && selectedAccountId ? selectedAccountId : null;
-          payload.petty_fund_id = selectedModule === 'petty_funds' && selectedAccountId ? selectedAccountId : null;
-          payload.payment_bank_account_id = null;
-          payload.payment_cash_box_id = null;
-          payload.payment_petty_fund_id = null;
-          payload.receipt_bank_account_id = null;
-          payload.receipt_cash_box_id = null;
-          payload.receipt_petty_fund_id = null;
-        }
-        delete payload.payment_account_id;
-        delete payload.receipt_account_id;
-      }
-
       if (isChequeModule) {
         const issueDate =
           values.issue_date ??
@@ -899,7 +835,9 @@ const AccountingRecordPage: React.FC = () => {
         }
       }
 
-      return payload;
+      return moduleId === 'cash_bank_operations'
+        ? transformModulePayloadForSave(moduleId, payload, relationOptions)
+        : payload;
     },
     [
       formData,

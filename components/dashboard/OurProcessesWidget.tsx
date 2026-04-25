@@ -67,9 +67,6 @@ const PROCESS_RECORD_COLUMNS = [
   'execution_process_draft',
   'updated_at',
   'created_at',
-  'assignee_id',
-  'assignee_role_id',
-  'assignee_type',
 ] as const;
 
 const LINKED_RECORD_COLUMNS = [

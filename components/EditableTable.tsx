@@ -1993,6 +1993,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     );
 
     const bankMetaById = new Map<string, { bank_name: string | null; branch_name: string | null }>();
+    const accountModuleById = new Map<string, 'bank_accounts' | 'cash_boxes' | 'petty_funds'>();
     if (bankIds.length > 0) {
       const { data: banks, error: banksError } = await supabase
         .from('bank_accounts')
@@ -2002,12 +2003,45 @@ const EditableTable: React.FC<EditableTableProps> = ({
       (banks || []).forEach((bank: any) => {
         const id = String(bank?.id || '').trim();
         if (!id) return;
+        accountModuleById.set(id, 'bank_accounts');
         bankMetaById.set(id, {
           bank_name: bank?.bank_name ? String(bank.bank_name) : null,
           branch_name: bank?.branch_name ? String(bank.branch_name) : null,
         });
       });
+
+      const { data: cashBoxes, error: cashBoxesError } = await supabase
+        .from('cash_boxes')
+        .select('id')
+        .in('id', bankIds);
+      if (cashBoxesError) throw cashBoxesError;
+      (cashBoxes || []).forEach((cashBox: any) => {
+        const id = String(cashBox?.id || '').trim();
+        if (!id || accountModuleById.has(id)) return;
+        accountModuleById.set(id, 'cash_boxes');
+      });
+
+      const { data: pettyFunds, error: pettyFundsError } = await supabase
+        .from('petty_funds')
+        .select('id')
+        .in('id', bankIds);
+      if (pettyFundsError) throw pettyFundsError;
+      (pettyFunds || []).forEach((pettyFund: any) => {
+        const id = String(pettyFund?.id || '').trim();
+        if (!id || accountModuleById.has(id)) return;
+        accountModuleById.set(id, 'petty_funds');
+      });
     }
+
+    const buildTreasuryAccountPatch = (accountId: string | null) => {
+      const normalizedAccountId = String(accountId || '').trim();
+      const accountModule = normalizedAccountId ? accountModuleById.get(normalizedAccountId) : null;
+      return {
+        bank_account_id: accountModule === 'bank_accounts' ? normalizedAccountId : null,
+        cash_box_id: accountModule === 'cash_boxes' ? normalizedAccountId : null,
+        petty_fund_id: accountModule === 'petty_funds' ? normalizedAccountId : null,
+      };
+    };
 
     const selectedChequeIds = Array.from(
         new Set(
@@ -2262,7 +2296,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
         status: rowStatus,
         operation_date: issueDate || sourceOperationDate || getTodayLocalDateValue(),
         amount,
-        bank_account_id: accountId,
         customer_id: customerId,
         supplier_id: supplierId,
         assignee_id: assigneeId || null,
@@ -2277,6 +2310,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         cheque_id: chequeId ? String(chequeId) : null,
         metadata: buildCashOperationMetadata(rowKey, existingMetadata),
         updated_at: nowIso,
+        ...buildTreasuryAccountPatch(accountId),
         ...getSourceLinkPayload(),
       };
 
@@ -2364,7 +2398,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
           image_url: row?.attachment || null,
           attachment_url: row?.attachment || null,
           tags: normalizeRowTags(nextRow?.tags ?? row?.tags),
-          bank_account_id: accountId,
           metadata: {
             ...(selectedCashOperationById.get(existingCashOperationId)?.metadata || {}),
             source_table: moduleId,
@@ -2374,6 +2407,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             is_auto_generated: true,
           },
           updated_at: nowIso,
+          ...buildTreasuryAccountPatch(accountId),
           ...getSourceLinkPayload(),
         };
 

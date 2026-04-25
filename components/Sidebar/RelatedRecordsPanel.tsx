@@ -41,6 +41,15 @@ const PAYMENT_VISIBLE_KEYS = [
   'amount',
   'description',
 ];
+const RELATION_BATCH_SIZE = 100;
+
+const chunkValues = <T,>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
 
 const getModuleTableName = (moduleId?: string | null) => {
   const normalized = String(moduleId || '').trim();
@@ -369,9 +378,14 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
             setItems([]);
             return;
           }
-          const { data } = await supabase.from('customers').select('*').in('id', customerIds);
-          setItems(data || []);
-          await fetchProfileNames(data || []);
+          const customerRows: any[] = [];
+          for (const idBatch of chunkValues(customerIds, RELATION_BATCH_SIZE)) {
+            const { data, error } = await supabase.from('customers').select('*').in('id', idBatch);
+            if (error) throw error;
+            customerRows.push(...(data || []));
+          }
+          setItems(customerRows);
+          await fetchProfileNames(customerRows);
           return;
         }
 
