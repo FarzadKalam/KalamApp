@@ -18,6 +18,7 @@ import { buildProductFilters, runProductsQuery } from './editableTable/productio
 import { MODULES } from '../moduleRegistry';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { syncInvoiceAccountingEntries } from '../utils/accountingAutoPosting';
+import { hasIssuedInvoiceAccountingEntries, shouldAutoSyncInvoiceAccounting } from '../utils/invoiceAccountingPolicy';
 import { useCurrencyConfig } from '../utils/currency';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { normalizeCashBankPaymentType } from '../utils/cashBankPaymentType';
@@ -1940,6 +1941,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const syncPaymentRowsWithCheques = async (rows: any[], previousRows: any[] = []) => {
     if (!isOperationalPayments || !moduleId || !recordId) return normalizePaymentRows(rows);
 
+    if (
+      isAnyInvoicePayments
+      && !(await hasIssuedInvoiceAccountingEntries({ supabase, moduleId, recordId }))
+    ) {
+      return normalizePaymentRows(rows);
+    }
+
     const normalizedRows = normalizePaymentRows(rows);
     const normalizedPreviousRows = normalizePaymentRows(previousRows);
     const accountField = isInvoicePayments ? 'target_account' : 'source_account';
@@ -3460,14 +3468,16 @@ const EditableTable: React.FC<EditableTableProps> = ({
           ...updatePayload,
           id: recordId,
         } as Record<string, any>;
-        const accountingSync = await syncInvoiceAccountingEntries({
+        if (shouldAutoSyncInvoiceAccounting(moduleId)) {
+          const accountingSync = await syncInvoiceAccountingEntries({
           supabase: supabase as any,
           moduleId,
           recordId,
           includePayments: block?.id === 'payments',
         });
-        if (accountingSync.errors.length > 0) {
+          if (accountingSync.errors.length > 0) {
           console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
+          }
         }
         await runWorkflowsForEvent({
           moduleId,

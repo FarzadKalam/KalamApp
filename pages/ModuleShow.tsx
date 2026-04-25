@@ -40,6 +40,7 @@ import {
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
 import { applyStockTransferInventory } from '../utils/stockTransferInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
+import { shouldAutoSyncInvoiceAccounting } from '../utils/invoiceAccountingPolicy';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, type RecordScope } from '../utils/permissions';
 import { normalizeAutoNameEnabled } from '../utils/autoName';
@@ -4227,7 +4228,8 @@ const ModuleShow: React.FC = () => {
           invoiceItems: data?.invoiceItems || [],
           userId,
         });
-        const accountingSync = await syncInvoiceAccountingEntries({
+        if (shouldAutoSyncInvoiceAccounting(moduleId)) {
+          const accountingSync = await syncInvoiceAccountingEntries({
           supabase: supabase as any,
           moduleId,
           recordId: id || '',
@@ -4237,9 +4239,10 @@ const ModuleShow: React.FC = () => {
           },
           includePayments: true,
         });
-        if (accountingSync.errors.length > 0) {
+          if (accountingSync.errors.length > 0) {
           console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
+          }
         }
       }
       if (moduleId === 'stock_transfers' && key === 'status') {
@@ -4453,7 +4456,8 @@ const ModuleShow: React.FC = () => {
           invoiceItems: values?.invoiceItems ?? previous?.invoiceItems ?? [],
           userId: authUserId,
         });
-        const accountingSync = await syncInvoiceAccountingEntries({
+        if (shouldAutoSyncInvoiceAccounting(moduleId)) {
+          const accountingSync = await syncInvoiceAccountingEntries({
           supabase: supabase as any,
           moduleId,
           recordId: id,
@@ -4463,9 +4467,10 @@ const ModuleShow: React.FC = () => {
           },
           includePayments: true,
         });
-        if (accountingSync.errors.length > 0) {
+          if (accountingSync.errors.length > 0) {
           console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
           msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
+          }
         }
       }
       if (moduleId === 'invoices') {

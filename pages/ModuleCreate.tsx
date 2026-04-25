@@ -18,6 +18,7 @@ import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/syst
 import { syncRecordTags } from "../utils/recordTags";
 import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
 import { normalizeOperationalDocumentTotals } from "../utils/operationalDocumentTotals";
+import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolicy";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -286,15 +287,17 @@ export const ModuleCreate = () => {
                   invoiceItems: values?.invoiceItems ?? [],
                   userId,
                 });
-                const accountingSync = await syncInvoiceAccountingEntries({
+                if (shouldAutoSyncInvoiceAccounting(moduleId)) {
+                  const accountingSync = await syncInvoiceAccountingEntries({
                   supabase: supabase as any,
                   moduleId,
                   recordId: inserted.id,
                   recordData: inserted,
                   includePayments: true,
                 });
-                if (accountingSync.errors.length > 0) {
+                  if (accountingSync.errors.length > 0) {
                   console.warn("هشدارهای همگام‌سازی سند حسابداری فاکتور:", accountingSync.errors);
+                  }
                 }
                 if (moduleId === "invoices") {
                   await syncCustomerLevelsByInvoiceCustomers({
