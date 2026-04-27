@@ -49,6 +49,13 @@ import {
   type StoredPrintTemplate,
 } from '../../utils/printTemplates/store';
 import { buildListPrintableFields } from '../../utils/listPrintExport';
+import { supabase } from '../../supabaseClient';
+import { fetchCurrentUserRolePermissions } from '../../utils/permissions';
+import {
+  filterPrintTemplateVariableOptions,
+  filterSystemTemplateFieldOptions,
+  sanitizeSelectedPrintFieldKeys,
+} from '../../utils/printTemplates/fieldAccess';
 
 const createTemplateId = () => `tpl_${Math.random().toString(36).slice(2, 10)}`;
 const nowIso = () => new Date().toISOString();
@@ -158,6 +165,8 @@ const PrintTemplatesTab: React.FC = () => {
   const [bodyEditor, setBodyEditor] = useState<any | null>(null);
   const [footerEditor, setFooterEditor] = useState<any | null>(null);
   const [toolbarVisible, setToolbarVisible] = useState(true);
+  const [rolePermissions, setRolePermissions] = useState<Record<string, any> | null>(null);
+  const [loadingRolePermissions, setLoadingRolePermissions] = useState(true);
 
   const moduleOptions = useMemo(
     () =>
@@ -170,22 +179,43 @@ const PrintTemplatesTab: React.FC = () => {
 
   const selectedTemplates = templatesByModule[selectedModuleId] || [];
   const currentScope = systemFieldsEditingTemplate?.scope || editingTemplate?.scope || 'record';
+  const canViewSelectedModuleField = (fieldKey: string) => {
+    if (loadingRolePermissions || rolePermissions === null) return false;
+    const modulePermission = rolePermissions?.[selectedModuleId] || {};
+    if (modulePermission.view === false) return false;
+    const fields = modulePermission.fields || {};
+    if (Object.prototype.hasOwnProperty.call(fields, fieldKey)) {
+      return fields[fieldKey] !== false;
+    }
+    return true;
+  };
   const variableOptions: PrintTemplateVariableOption[] = useMemo(
-    () => getPrintTemplateVariables(selectedModuleId),
-    [selectedModuleId]
+    () =>
+      loadingRolePermissions
+        ? []
+        : filterPrintTemplateVariableOptions(
+            getPrintTemplateVariables(selectedModuleId),
+            canViewSelectedModuleField
+          ),
+    [loadingRolePermissions, rolePermissions, selectedModuleId]
   );
   const systemFieldOptions = useMemo(
     () =>
-      currentScope === 'list'
-        ? buildListPrintableFields(MODULES[selectedModuleId])
+      loadingRolePermissions
+        ? []
+        : currentScope === 'list'
+        ? buildListPrintableFields(MODULES[selectedModuleId], canViewSelectedModuleField)
             .map((field) => ({
               key: field.key,
               label: field.label,
               group: 'ستون‌های لیست',
               kind: 'record' as const,
             }))
-        : getSystemTemplateFieldOptions(selectedModuleId),
-    [currentScope, selectedModuleId]
+        : filterSystemTemplateFieldOptions(
+            getSystemTemplateFieldOptions(selectedModuleId),
+            canViewSelectedModuleField
+          ),
+    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId]
   );
   const filteredSystemFieldOptions = useMemo(() => {
     const q = systemFieldsSearch.trim().toLowerCase();
@@ -305,8 +335,19 @@ const PrintTemplatesTab: React.FC = () => {
     }
   };
 
+  const fetchRolePermissions = async () => {
+    setLoadingRolePermissions(true);
+    try {
+      const loadedPermissions = await fetchCurrentUserRolePermissions(supabase);
+      setRolePermissions(loadedPermissions);
+    } finally {
+      setLoadingRolePermissions(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    fetchRolePermissions();
   }, []);
 
   const persistTemplates = async (nextState: Record<string, StoredPrintTemplate[]>) => {
@@ -400,7 +441,7 @@ const PrintTemplatesTab: React.FC = () => {
     const allKeys = systemFieldOptions.map((item) => item.key);
     const selectedKeys =
       Array.isArray(template.selectedFieldKeys) && template.selectedFieldKeys.length > 0
-        ? template.selectedFieldKeys
+        ? sanitizeSelectedPrintFieldKeys(template.selectedFieldKeys, allKeys)
         : allKeys;
     setSystemFieldsEditingTemplate(template);
     setSystemFieldKeysDraft(selectedKeys);
@@ -410,12 +451,13 @@ const PrintTemplatesTab: React.FC = () => {
 
   const saveSystemFieldsEditor = async () => {
     if (!systemFieldsEditingTemplate) return;
+    const allowedKeys = systemFieldOptions.map((item) => item.key);
     const current = templatesByModule[selectedModuleId] || [];
     const nextModuleTemplates = current.map((template) =>
       template.id === systemFieldsEditingTemplate.id
         ? {
             ...template,
-            selectedFieldKeys: Array.from(new Set(systemFieldKeysDraft.map((value) => String(value || '').trim()).filter(Boolean))),
+            selectedFieldKeys: sanitizeSelectedPrintFieldKeys(systemFieldKeysDraft, allowedKeys),
             updatedAt: nowIso(),
           }
         : template

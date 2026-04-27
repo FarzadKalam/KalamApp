@@ -17,6 +17,7 @@ import { buildPrintOutputName } from './outputName';
 import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } from './printAsPdf';
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
+import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
 
 const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 
@@ -164,6 +165,11 @@ export const useListPrintManager = ({
 
   useEffect(() => {
     if (!selectedTemplateId) return;
+    const allowedKeySet = new Set(
+      printableFieldsForTemplate
+        .map((field) => String(field?.key || '').trim())
+        .filter(Boolean)
+    );
     const rawDefaultKeys =
       (Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
         ? selectedStoredTemplate.selectedFieldKeys
@@ -171,17 +177,18 @@ export const useListPrintManager = ({
 
     const defaultKeys = isCatalogTemplate
       ? (() => {
+          const sanitizedKeys = sanitizeSelectedPrintFieldKeys(rawDefaultKeys, allowedKeySet);
           const imageKeys = printableFieldsForTemplate
-            .filter((field) => String(field?.type || '').toLowerCase() === 'image' && rawDefaultKeys.includes(field.key))
+            .filter((field) => String(field?.type || '').toLowerCase() === 'image' && sanitizedKeys.includes(field.key))
             .map((field) => field.key)
             .slice(0, 1);
           const contentKeys = printableFieldsForTemplate
-            .filter((field) => String(field?.type || '').toLowerCase() !== 'image' && rawDefaultKeys.includes(field.key))
+            .filter((field) => String(field?.type || '').toLowerCase() !== 'image' && sanitizedKeys.includes(field.key))
             .map((field) => field.key)
             .slice(0, 5);
           return [...imageKeys, ...contentKeys];
         })()
-      : rawDefaultKeys;
+      : sanitizeSelectedPrintFieldKeys(rawDefaultKeys, allowedKeySet);
 
     if (!defaultKeys.length) return;
 
@@ -283,8 +290,14 @@ export const useListPrintManager = ({
     if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;
     setSavingPrintFields(true);
     try {
-      const selectedKeys = Array.from(
-        new Set((selectedPrintFields[selectedTemplateId] || []).map((item) => String(item || '').trim()).filter(Boolean))
+      const allowedKeySet = new Set(
+        printableFieldsForTemplate
+          .map((field) => String(field?.key || '').trim())
+          .filter(Boolean)
+      );
+      const selectedKeys = sanitizeSelectedPrintFieldKeys(
+        selectedPrintFields[selectedTemplateId] || [],
+        allowedKeySet
       );
       const mergedTemplates = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || []);
       const nextModuleTemplates = mergedTemplates.map((template) =>
@@ -318,7 +331,7 @@ export const useListPrintManager = ({
     } finally {
       setSavingPrintFields(false);
     }
-  }, [moduleId, selectedPrintFields, selectedStoredTemplate, selectedTemplateId, templatesByModuleStore, templatesStoreMeta.provider, templatesStoreMeta.rowId]);
+  }, [moduleId, printableFieldsForTemplate, selectedPrintFields, selectedStoredTemplate, selectedTemplateId, templatesByModuleStore, templatesStoreMeta.provider, templatesStoreMeta.rowId]);
 
   const getPrintOutputName = useCallback(
     () =>

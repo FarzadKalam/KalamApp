@@ -33,6 +33,11 @@ import { normalizeRenderedImages } from './normalizeRenderedImages';
 import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
+import {
+  canViewPrintTemplateFieldPath,
+  filterSystemTemplateFieldOptions,
+  sanitizeSelectedPrintFieldKeys,
+} from './fieldAccess';
 
 interface UsePrintManagerProps {
   moduleId: string;
@@ -569,18 +574,15 @@ export const usePrintManager = ({
       ) || null
     );
   }, [canViewField, moduleConfig?.fields]);
+  const canViewPrintFieldPath = useCallback(
+    (fieldPath: string) => canViewPrintTemplateFieldPath(fieldPath, canViewField),
+    [canViewField]
+  );
   const systemTemplateFieldOptions = useMemo(() => {
-    const baseOptions = getSystemTemplateFieldOptions(moduleId)
-      .filter((item) => {
-        if (item.key.startsWith('record.')) {
-          const rawKey = item.key.replace(/^record\./, '');
-          return canViewField ? canViewField(rawKey) : true;
-        }
-        if (item.key.startsWith('block.') && item.columnKey) {
-          return canViewField ? canViewField(item.columnKey) : true;
-        }
-        return true;
-      })
+    const baseOptions = filterSystemTemplateFieldOptions(
+      getSystemTemplateFieldOptions(moduleId),
+      canViewField
+    )
       .map((item) => ({
         key: item.key,
         labels: { fa: item.label },
@@ -705,12 +707,20 @@ export const usePrintManager = ({
   );
   const isSystemFieldVisible = useCallback(
     (fieldPath: string) => {
+      if (!canViewPrintFieldPath(fieldPath)) return false;
       if (!isSelectedTemplateSystem || !isSystemRecordTemplate) return true;
       if (!hasTemplateSelectionState) return true;
       if (!knownSystemFieldKeys.has(fieldPath)) return true;
       return templateSelectedKeySet.has(fieldPath);
     },
-    [hasTemplateSelectionState, isSelectedTemplateSystem, isSystemRecordTemplate, knownSystemFieldKeys, templateSelectedKeySet]
+    [
+      canViewPrintFieldPath,
+      hasTemplateSelectionState,
+      isSelectedTemplateSystem,
+      isSystemRecordTemplate,
+      knownSystemFieldKeys,
+      templateSelectedKeySet,
+    ]
   );
   const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
   const printQrValue = pageUrl;
@@ -929,13 +939,24 @@ export const usePrintManager = ({
 
   useEffect(() => {
     if (!selectedTemplateId) return;
+    const allowedKeySet = new Set(
+      (printableFieldsForTemplate || [])
+        .map((field: any) => String(field?.key || '').trim())
+        .filter(Boolean)
+    );
     const defaultKeys = isSelectedTemplateSystem
       ? (
-          (Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate?.selectedFieldKeys.length > 0
-            ? selectedStoredTemplate.selectedFieldKeys
-            : printableFieldsForTemplate.map((field: any) => field.key)) || []
+          sanitizeSelectedPrintFieldKeys(
+            Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate?.selectedFieldKeys.length > 0
+              ? selectedStoredTemplate.selectedFieldKeys
+              : printableFieldsForTemplate.map((field: any) => field.key),
+            allowedKeySet
+          ) || []
         )
-      : (printableFieldsForTemplate || []).map((field: any) => field.key);
+      : sanitizeSelectedPrintFieldKeys(
+          (printableFieldsForTemplate || []).map((field: any) => field.key),
+          allowedKeySet
+        );
 
     if (!defaultKeys.length) return;
 
@@ -967,8 +988,14 @@ export const usePrintManager = ({
     if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;
     setSavingPrintFields(true);
     try {
-      const selectedKeys = Array.from(
-        new Set((selectedPrintFields[selectedTemplateId] || []).map((item) => String(item || '').trim()).filter(Boolean))
+      const allowedKeySet = new Set(
+        (printableFieldsForTemplate || [])
+          .map((field: any) => String(field?.key || '').trim())
+          .filter(Boolean)
+      );
+      const selectedKeys = sanitizeSelectedPrintFieldKeys(
+        selectedPrintFields[selectedTemplateId] || [],
+        allowedKeySet
       );
       const mergedTemplates = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || []);
       const nextModuleTemplates = mergedTemplates.map((template) =>
@@ -1004,6 +1031,7 @@ export const usePrintManager = ({
     }
   }, [
     moduleId,
+    printableFieldsForTemplate,
     selectedPrintFields,
     selectedStoredTemplate,
     selectedTemplateId,
@@ -1668,6 +1696,12 @@ export const usePrintManager = ({
       };
 
       const now = new Date();
+      if (
+        (path.startsWith('record.') || path.startsWith('block.') || path === 'responsible.name') &&
+        !canViewPrintFieldPath(path)
+      ) {
+        return '';
+      }
       if (path === 'system.today_date') return toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'));
       if (path === 'system.today_datetime') return `${toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'))} ${now.toLocaleTimeString('fa-IR')}`;
       if (path === 'system.letter_sender_display') {
@@ -1851,6 +1885,7 @@ export const usePrintManager = ({
       sellerInfo,
       linkedAttachmentCount,
       supplierInfo,
+      canViewPrintFieldPath,
       isSystemFieldVisible,
     ]
   );

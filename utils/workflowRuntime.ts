@@ -54,6 +54,34 @@ export const createWorkflowEvaluationContext = (moduleId: string): WorkflowEvalu
 
 const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
 
+const hydrateWorkflowCurrentRecord = async (
+  moduleId: string,
+  currentRecord: Record<string, any>
+): Promise<Record<string, any>> => {
+  const recordId = String(currentRecord?.id || '').trim();
+  if (!moduleId || !recordId) return currentRecord;
+
+  const { data, error } = await supabase
+    .from(getModuleTable(moduleId))
+    .select('*')
+    .eq('id', recordId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(`Workflow record hydration failed (${moduleId}/${recordId}):`, error);
+    return currentRecord;
+  }
+
+  if (!data || typeof data !== 'object') {
+    return currentRecord;
+  }
+
+  return {
+    ...currentRecord,
+    ...data,
+  };
+};
+
 const toComparable = (value: any): any => {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) return value.map((item) => toComparable(item));
@@ -2111,6 +2139,7 @@ export const runWorkflowsForEvent = async ({
   previousRecord = null,
 }: RunWorkflowArgs) => {
   if (!moduleId || !currentRecord) return;
+  const hydratedCurrentRecord = await hydrateWorkflowCurrentRecord(moduleId, currentRecord);
   const triggerTypes = event === 'create' ? ['on_create', 'on_upsert'] : ['on_upsert'];
 
   const { data, error } = await supabase
@@ -2131,7 +2160,7 @@ export const runWorkflowsForEvent = async ({
       const result = await executeWorkflowForRecord({
         workflow,
         moduleId,
-        currentRecord,
+        currentRecord: hydratedCurrentRecord,
         previousRecord,
         event,
         runType: 'event',
@@ -2148,7 +2177,7 @@ export const runWorkflowsForEvent = async ({
         await logWorkflowRun({
           workflow,
           moduleId,
-          currentRecord,
+          currentRecord: hydratedCurrentRecord,
           event,
           runType: 'event',
           status: 'failed',

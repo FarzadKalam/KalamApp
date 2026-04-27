@@ -30,7 +30,7 @@ vi.mock('./smsGateway', () => ({
   sendSmsViaGateway: mocks.sendSmsViaGateway,
 }));
 
-import { evaluateWorkflowConditions, executeWorkflowAction } from './workflowRuntime';
+import { evaluateWorkflowConditions, executeWorkflowAction, runWorkflowsForEvent } from './workflowRuntime';
 
 const GROUP_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -62,6 +62,44 @@ const makeQuery = (table: string) => ({
     }),
   })),
 });
+
+const createFilterableSelectQuery = (rows: any[]) => {
+  const filters: Array<{ type: 'eq' | 'in'; field: string; value: any }> = [];
+
+  const applyFilters = () =>
+    rows.filter((row) =>
+      filters.every((filter) => {
+        if (filter.type === 'eq') {
+          return row?.[filter.field] === filter.value;
+        }
+        if (filter.type === 'in') {
+          return Array.isArray(filter.value) && filter.value.includes(row?.[filter.field]);
+        }
+        return true;
+      })
+    );
+
+  const chain: any = {
+    eq: (field: string, value: any) => {
+      filters.push({ type: 'eq', field, value });
+      return chain;
+    },
+    in: async (field: string, value: any[]) => {
+      filters.push({ type: 'in', field, value });
+      return { data: applyFilters(), error: null };
+    },
+    maybeSingle: async () => ({
+      data: applyFilters()[0] ?? null,
+      error: null,
+    }),
+    limit: async (count: number) => ({
+      data: applyFilters().slice(0, count),
+      error: null,
+    }),
+  };
+
+  return chain;
+};
 
 describe('workflow action recipients', () => {
   beforeEach(() => {
@@ -178,5 +216,91 @@ describe('evaluateWorkflowConditions', () => {
       currentRecord: { status: 'closed', priority: 'high' },
       moduleId: 'tasks',
     })).resolves.toBe(true);
+  });
+});
+
+describe('runWorkflowsForEvent', () => {
+  beforeEach(() => {
+    mocks.from.mockReset();
+    mocks.sendSmsViaGateway.mockResolvedValue({ success: true, sent: 1 });
+    vi.clearAllMocks();
+  });
+
+  it('hydrates the latest record snapshot before evaluating conditions', async () => {
+    const recordId = '88888888-8888-4888-8888-888888888888';
+    const workflowLogs: any[] = [];
+    const workflowRows = [
+      {
+        id: 'wf-1',
+        module_id: 'attendance_logs',
+        name: 'ارسال پیامک ثبت تردد وب فرم',
+        trigger_type: 'on_create',
+        execution_mode: 'every_match',
+        is_active: true,
+        conditions_all: [
+          { id: 'cond-1', field: 'source_type', operator: 'eq', value: 'web_form' },
+        ],
+        conditions_any: [],
+        actions: [
+          {
+            id: 'action-1',
+            type: 'send_sms',
+            config: {
+              message: 'ثبت شد',
+              manual_numbers: ['09123456789'],
+            },
+          },
+        ],
+      },
+    ];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'attendance_logs') {
+        return {
+          select: vi.fn(() =>
+            createFilterableSelectQuery([
+              { id: recordId, org_id: 'org-1', source_type: 'web_form' },
+            ])
+          ),
+        };
+      }
+
+      if (table === 'workflows') {
+        return {
+          select: vi.fn(() => createFilterableSelectQuery(workflowRows)),
+          update: vi.fn(() => ({
+            eq: vi.fn(async () => ({ data: null, error: null })),
+          })),
+        };
+      }
+
+      if (table === 'workflow_logs') {
+        return {
+          select: vi.fn(() => createFilterableSelectQuery([])),
+          insert: vi.fn(async (payload: any) => {
+            workflowLogs.push(payload);
+            return { data: null, error: null };
+          }),
+        };
+      }
+
+      return makeQuery(table);
+    });
+
+    await runWorkflowsForEvent({
+      moduleId: 'attendance_logs',
+      event: 'create',
+      currentRecord: { id: recordId },
+    });
+
+    expect(mocks.sendSmsViaGateway).toHaveBeenCalledTimes(1);
+    expect(workflowLogs).toEqual([
+      expect.objectContaining({
+        workflow_id: 'wf-1',
+        module_id: 'attendance_logs',
+        record_id: recordId,
+        status: 'success',
+      }),
+    ]);
   });
 });
