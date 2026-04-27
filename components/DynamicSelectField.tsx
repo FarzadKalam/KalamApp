@@ -5,6 +5,7 @@ import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import { supabase } from '../supabaseClient';
 import { replaceDynamicOptionValueAcrossModules } from '../utils/dynamicOptionReplacement';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import AdaptiveSelectField from './AdaptiveSelectField';
 import {
   AdaptivePickerMode,
@@ -35,6 +36,7 @@ interface DynamicSelectFieldProps {
   overlayZIndexBase?: number;
   adaptiveMode?: AdaptivePickerMode;
   pickerTitle?: string;
+  preferLocalPopupContainer?: boolean;
 }
 
 const normalizeDynamicCompareValue = (value: string) =>
@@ -116,6 +118,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   overlayZIndexBase = 13080,
   adaptiveMode = 'auto',
   pickerTitle,
+  preferLocalPopupContainer = false,
 }) => {
   const { message: msg } = App.useApp();
   const [newOptionValue, setNewOptionValue] = useState('');
@@ -168,6 +171,28 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
   React.useEffect(() => {
     setLocalOptions([]);
   }, [category]);
+
+  React.useEffect(() => {
+    if (!category || (options || []).length > 0) return;
+    let cancelled = false;
+
+    const loadInitialOptions = async () => {
+      try {
+        const loaded = await fetchDynamicOptionsByCategory(supabase, category);
+        if (cancelled || !Array.isArray(loaded) || loaded.length === 0) return;
+        setLocalOptions((prev) => mergeDynamicOptions(prev, loaded));
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Failed loading dynamic options from field fallback:', category, error);
+        }
+      }
+    };
+
+    void loadInitialOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [category, options]);
 
   const mergedOptions = useMemo(
     () => mergeDynamicOptions(options || [], localOptions),
@@ -591,6 +616,7 @@ const DynamicSelectField: React.FC<DynamicSelectFieldProps> = ({
         overlayZIndexBase={overlayZIndexBase}
         adaptiveMode={adaptiveMode}
         pickerTitle={pickerTitle || placeholder}
+        preferLocalPopupContainer={preferLocalPopupContainer}
         sheetSubtitle={category ? `دسته: ${category}` : undefined}
         optionRender={(option) => (
           <div

@@ -65,6 +65,42 @@ export const resolveStableOverlayRoot = (hostNode?: HTMLElement | null) => {
   return stableRoot || hostNode;
 };
 
+const parseComputedZIndex = (node?: HTMLElement | null) => {
+  if (typeof window === 'undefined' || !node) return null;
+  const value = Number.parseInt(window.getComputedStyle(node).zIndex || '', 10);
+  return Number.isFinite(value) ? value : null;
+};
+
+export const resolveParentOverlayZIndex = (triggerNode?: HTMLElement | null, fallback = 1000) => {
+  if (typeof window === 'undefined') return fallback;
+
+  const seen = new Set<HTMLElement>();
+  const candidates: HTMLElement[] = [];
+  let current = triggerNode || null;
+
+  while (current) {
+    if (
+      current.matches?.(OVERLAY_HOST_SELECTOR)
+      || current.matches?.('.ant-modal-wrap')
+      || current.matches?.('.ant-modal-mask')
+    ) {
+      if (!seen.has(current)) {
+        seen.add(current);
+        candidates.push(current);
+      }
+    }
+    current = current.parentElement;
+  }
+
+  const resolved = candidates
+    .map((node) => parseComputedZIndex(node))
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+
+  return resolved.length > 0
+    ? Math.max(fallback, ...resolved)
+    : fallback;
+};
+
 export const resolveSelectPopupContainer = (triggerNode?: HTMLElement | null) => {
   if (typeof document === 'undefined') {
     return (triggerNode || {}) as HTMLElement;

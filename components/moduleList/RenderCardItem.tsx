@@ -14,6 +14,8 @@ import { MODULES } from "../../moduleRegistry";
 import TaskActionButtons from "../tasks/TaskActionButtons";
 import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
 import { buildImagePreviewUrl } from "../../utils/imagePreview";
+import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules";
+import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
 
 export interface RenderCardItemProps {
   item: any;
@@ -37,6 +39,19 @@ export interface RenderCardItemProps {
   dragHandleTitle?: string;
   onDragHandlePointerDown?: (item: any, event: React.PointerEvent<HTMLButtonElement>) => void;
 }
+
+const getAdaptiveCardTitleClassName = (value: unknown, minimal = false) => {
+  const length = String(value || '').trim().length;
+  const sizeClass = length > 90
+    ? 'text-[11px]'
+    : length > 62
+      ? 'text-[12px]'
+      : length > 38
+        ? 'text-[13px]'
+        : (minimal ? 'text-[11px]' : 'text-sm');
+
+  return `font-extrabold text-gray-800 dark:text-white mb-0.5 ${sizeClass} leading-5 line-clamp-2 break-words overflow-hidden ${minimal ? 'min-h-[2.5rem]' : ''}`;
+};
 
 const RenderCardItem: React.FC<RenderCardItemProps> = ({
   item,
@@ -67,7 +82,20 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     setTaskPatch({});
   }, [item?.id, item?.updated_at]);
   const cardItem = isTasks ? { ...item, ...taskPatch } : item;
-  const imageUrl = imageField ? cardItem[imageField] : null;
+  const conditionalDisplaySettings = React.useMemo(
+    () => getResolvedModuleConditionalDisplay(moduleConfig?.id),
+    [moduleConfig?.id]
+  );
+  const cardFieldStateMap = React.useMemo(
+    () => buildConditionalFieldStateMap(Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [], cardItem || {}, conditionalDisplaySettings),
+    [cardItem, conditionalDisplaySettings, moduleConfig?.fields]
+  );
+  const isCardFieldVisible = React.useCallback((fieldOrKey?: any) => {
+    const fieldKey = String(typeof fieldOrKey === "string" ? fieldOrKey : fieldOrKey?.key || "").trim();
+    if (!fieldKey) return true;
+    return cardFieldStateMap[fieldKey]?.visible !== false;
+  }, [cardFieldStateMap]);
+  const imageUrl = imageField && isCardFieldVisible(imageField) ? cardItem[imageField] : null;
   const imagePreviewUrl = React.useMemo(
     () => buildImagePreviewUrl(imageUrl ? String(imageUrl) : '', isTasks ? 'card' : 'avatar'),
     [imageUrl, isTasks]
@@ -110,9 +138,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const assigneeType = cardItem.assignee_type;
   const assigneeLabel = getAssigneeLabel(moduleId);
   const dueDate = cardItem.due_date;
-  const assigneeAllowed = canViewField ? canViewField('assignee_id') !== false : true;
-  const dueAllowed = canViewField ? canViewField('due_date') !== false : true;
-  const categoryAllowed = canViewField ? canViewField(categoryFieldConfig?.key || 'related_to_module') !== false : true;
+  const assigneeAllowed = (canViewField ? canViewField('assignee_id') !== false : true) && isCardFieldVisible('assignee_id');
+  const dueAllowed = (canViewField ? canViewField('due_date') !== false : true) && isCardFieldVisible('due_date');
+  const categoryAllowed = (canViewField ? canViewField(categoryFieldConfig?.key || 'related_to_module') !== false : true)
+    && isCardFieldVisible(categoryFieldConfig?.key || categoryField || 'related_to_module');
   const sourceLink = isTasks ? resolveTaskSourceLink(cardItem) : { moduleId: null, recordId: null };
   const relatedRelationFields = isTasks
     ? (moduleConfig?.fields || []).filter(
@@ -152,7 +181,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     ? true
     : (
       selectedRelationField
-        ? (canViewField ? canViewField(selectedRelationField.key) !== false : true)
+        ? (canViewField ? canViewField(selectedRelationField.key) !== false : true) && isCardFieldVisible(selectedRelationField.key)
         : false
     );
   const relatedOptions = (
@@ -180,8 +209,10 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     : null;
   const showRelatedRecord = isTasks && relatedRecordId && relatedModuleId && relatedFieldAllowed;
   const recordCode = cardItem.system_code || cardItem.manual_code || null;
-  const cardStatusMeta = resolveCardStatusMeta(cardItem, moduleConfig, statusField);
-  const cardTags = getRecordCardTags(cardItem, tagsField);
+  const cardStatusMeta = isCardFieldVisible(statusFieldConfig?.key || statusField || '')
+    ? resolveCardStatusMeta(cardItem, moduleConfig, statusField)
+    : null;
+  const cardTags = tagsField && isCardFieldVisible(tagsField) ? getRecordCardTags(cardItem, tagsField) : [];
   const summaryExcludedKeys = [
     statusFieldConfig?.key || statusField || '',
     cardStatusMeta?.field?.key || '',
@@ -356,36 +387,35 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           />
 
           <div className={`min-w-0 flex-1 ${hideSelection ? '' : 'pr-6'}`}>
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <h4
-                  className={`font-extrabold text-gray-800 dark:text-white mb-0.5 ${minimal ? "text-[11px] leading-4 line-clamp-2 min-h-[2rem]" : "text-sm truncate"}`}
-                  title={title}
-                >
-                  {title}
-                </h4>
-                <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : ""}`}>
+            <div className="min-w-0">
+              <h4
+                className={getAdaptiveCardTitleClassName(title, minimal)}
+                title={title}
+              >
+                {title}
+              </h4>
+              <div className={`mt-1 flex min-w-0 flex-wrap items-center justify-between gap-2 ${minimal ? "leading-4" : ""}`}>
+                <div className="min-w-0 text-[10px] text-gray-400 font-mono">
                   {recordCode || "---"}
                 </div>
-              </div>
-
-              <div className="flex flex-col items-end gap-1 shrink-0">
-                {cardStatusMeta ? (
-                  <Tag
-                    color={cardStatusMeta.color || "default"}
-                    className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold"
-                  >
-                    {cardStatusMeta.label}
-                  </Tag>
-                ) : null}
-                {category && categoryAllowed ? (
-                  <Tag
-                    color="default"
-                    className="!m-0 !rounded-full !border-0 !bg-gray-100 !px-2 !py-0.5 !text-[10px] !text-gray-600 dark:!bg-gray-800 dark:!text-gray-300"
-                  >
-                    {categoryLabel}
-                  </Tag>
-                ) : null}
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  {cardStatusMeta ? (
+                    <Tag
+                      color={cardStatusMeta.color || "default"}
+                      className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold"
+                    >
+                      {cardStatusMeta.label}
+                    </Tag>
+                  ) : null}
+                  {category && categoryAllowed ? (
+                    <Tag
+                      color="default"
+                      className="!m-0 !rounded-full !border-0 !bg-gray-100 !px-2 !py-0.5 !text-[10px] !text-gray-600 dark:!bg-gray-800 dark:!text-gray-300"
+                    >
+                      {categoryLabel}
+                    </Tag>
+                  ) : null}
+                </div>
               </div>
             </div>
 
@@ -455,7 +485,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           ) : <span />}
 
           <div className="flex items-end gap-3">
-            {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) ? (
+            {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) && isCardFieldVisible('buy_price') ? (
               <div className="flex flex-col gap-0">
                 <span className="text-gray-500 dark:text-gray-400 text-[8px]">خرید</span>
                 <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
@@ -463,7 +493,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                 </span>
               </div>
             ) : null}
-            {cardItem.sell_price && (canViewField ? canViewField('sell_price') !== false : true) ? (
+            {cardItem.sell_price && (canViewField ? canViewField('sell_price') !== false : true) && isCardFieldVisible('sell_price') ? (
               <div className="flex flex-col gap-0">
                 <span className="text-gray-500 dark:text-gray-400 text-[8px]">فروش</span>
                 <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
@@ -506,7 +536,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         </div>
       ) : null}
 
-      <div className="mb-2 flex items-start justify-between gap-3">
+      <div className="mb-2 flex items-start gap-3">
         {!isTasks && (
           <Avatar
             shape="square"
@@ -518,66 +548,70 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         )}
         <div className={`min-w-0 flex-1 ${hideSelection ? '' : 'pr-6'}`}>
           <h4
-            className={`font-extrabold text-gray-800 dark:text-white mb-0.5 ${minimal ? "text-[11px] leading-4 line-clamp-2 min-h-[2rem]" : "text-sm truncate"}`}
+            className={getAdaptiveCardTitleClassName(title, minimal)}
             title={title}
           >
             {title}
           </h4>
-          {isTasks ? (
-            cardTags.length > 0 ? (
-              <div className={`mt-1 flex flex-wrap gap-1 ${minimal ? "" : "mb-1"}`}>
-                {cardTags.slice(0, 2).map((tag, index) => (
-                  <Tag
-                    key={`${tag.label}-${index}`}
-                    color={tag.color || 'blue'}
-                    className="!m-0 !rounded-full !px-1.5 !py-0 !text-[9px] !leading-4"
-                  >
-                    {tag.label}
-                  </Tag>
-                ))}
-                {cardTags.length > 2 ? (
-                  <span className="rounded-full bg-gray-100 px-1.5 py-0 text-[9px] leading-4 text-gray-500 dark:bg-gray-800 dark:text-gray-300">
-                    +{cardTags.length - 2}
-                  </span>
-                ) : null}
-              </div>
-            ) : recordCode ? (
-              <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : "mb-1"}`}>
-                {recordCode}
-              </div>
-            ) : null
-          ) : (
-            <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : "mb-1"}`}>
-              {recordCode || "---"}
+          <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              {isTasks ? (
+                cardTags.length > 0 ? (
+                  <>
+                    {cardTags.slice(0, 2).map((tag, index) => (
+                      <Tag
+                        key={`${tag.label}-${index}`}
+                        color={tag.color || 'blue'}
+                        className="!m-0 !rounded-full !px-1.5 !py-0 !text-[9px] !leading-4"
+                      >
+                        {tag.label}
+                      </Tag>
+                    ))}
+                    {cardTags.length > 2 ? (
+                      <span className="rounded-full bg-gray-100 px-1.5 py-0 text-[9px] leading-4 text-gray-500 dark:bg-gray-800 dark:text-gray-300">
+                        +{cardTags.length - 2}
+                      </span>
+                    ) : null}
+                  </>
+                ) : recordCode ? (
+                  <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : ""}`}>
+                    {recordCode}
+                  </div>
+                ) : null
+              ) : (
+                <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : ""}`}>
+                  {recordCode || "---"}
+                </div>
+              )}
+              {isTasks && category && categoryAllowed && (
+                <Tag
+                  color="default"
+                  className="!m-0 !rounded-full !border-0 !bg-gray-100 !px-2 !py-0.5 !text-[10px] !text-gray-600 dark:!bg-gray-800 dark:!text-gray-300"
+                >
+                  {categoryLabel}
+                </Tag>
+              )}
             </div>
-          )}
-          {isTasks && category && categoryAllowed && (
-            <Tag
-              color="default"
-              className="!m-0 !rounded-full !border-0 !bg-gray-100 !px-2 !py-0.5 !text-[10px] !text-gray-600 dark:!bg-gray-800 dark:!text-gray-300"
-            >
-              {categoryLabel}
-            </Tag>
-          )}
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {isTasks ? (
-            <TaskActionButtons
-              task={cardItem}
-              onTaskUpdated={async (updatedTask) => {
-                setTaskPatch((prev) => ({ ...prev, ...updatedTask }));
-              }}
-              modalZIndex={12100}
-            />
-          ) : null}
-          {cardStatusMeta ? (
-            <Tag
-              color={cardStatusMeta.color || "default"}
-              className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold shrink-0"
-            >
-              {cardStatusMeta.label}
-            </Tag>
-          ) : null}
+            <div className="flex shrink-0 items-center gap-1">
+              {isTasks ? (
+                <TaskActionButtons
+                  task={cardItem}
+                  onTaskUpdated={async (updatedTask) => {
+                    setTaskPatch((prev) => ({ ...prev, ...updatedTask }));
+                  }}
+                  modalZIndex={12100}
+                />
+              ) : null}
+              {cardStatusMeta ? (
+                <Tag
+                  color={cardStatusMeta.color || "default"}
+                  className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold shrink-0"
+                >
+                  {cardStatusMeta.label}
+                </Tag>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -585,13 +619,13 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
         <>
           <div className="flex justify-between gap-2 mb-2 px-0">
             <div className="flex items-center gap-2 flex-wrap flex-1">
-              {!isTasks && statusOption && (canViewField ? canViewField(statusFieldConfig?.key || 'status') !== false : true) && (
+              {!isTasks && statusOption && (canViewField ? canViewField(statusFieldConfig?.key || 'status') !== false : true) && isCardFieldVisible(statusFieldConfig?.key || statusField || 'status') && (
                 <Tag color={statusOption.color || "default"} style={{ fontSize: "10px", lineHeight: "16px", margin: 0 }}>
                   {statusOption.label}
                 </Tag>
               )}
 
-              {!isTasks && category && (canViewField ? canViewField(categoryFieldConfig?.key || 'category') !== false : true) && (
+              {!isTasks && category && (canViewField ? canViewField(categoryFieldConfig?.key || 'category') !== false : true) && isCardFieldVisible(categoryFieldConfig?.key || categoryField || 'category') && (
                 <Tag
                   color="default"
                   style={{
@@ -607,7 +641,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               )}
             </div>
 
-            {!isTasks && tagsField && cardItem[tagsField] && (
+            {!isTasks && tagsField && isCardFieldVisible(tagsField) && cardItem[tagsField] && (
               <div className="flex flex-wrap gap-1 justify-end flex-1">
                 {(Array.isArray(cardItem[tagsField]) ? cardItem[tagsField] : [cardItem[tagsField]]).slice(0, 1).map((t: any, idx: number) => {
                   const tagTitle = typeof t === "string" ? t : t.title || t.label;
@@ -663,7 +697,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               </>
             ) : (
               <>
-                {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) && (
+                {cardItem.buy_price && (canViewField ? canViewField('buy_price') !== false : true) && isCardFieldVisible('buy_price') && (
                   <div className="flex flex-col gap-0">
                     <span className="text-gray-500 dark:text-gray-400 text-[8px]">خرید</span>
                     <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">
@@ -671,7 +705,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
                     </span>
                   </div>
                 )}
-                {cardItem.sell_price && (canViewField ? canViewField('sell_price') !== false : true) && (
+                {cardItem.sell_price && (canViewField ? canViewField('sell_price') !== false : true) && isCardFieldVisible('sell_price') && (
                   <div className="flex flex-col gap-0">
                     <span className="text-gray-500 dark:text-gray-400 text-[8px]">فروش</span>
                     <span className="font-bold text-gray-700 dark:text-gray-300 persian-number text-[11px]">

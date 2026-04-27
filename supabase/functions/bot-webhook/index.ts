@@ -589,6 +589,88 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   };
 };
 
+const extractMessageIdentity = (payload: Record<string, any>) => {
+  const rubikaUpdate = payload?.update || null;
+  const rubikaRootMessage = payload?.new_message || null;
+  const rubikaNewMessage = rubikaUpdate?.new_message || null;
+  const rubikaUpdatedMessage = rubikaUpdate?.updated_message || null;
+  const rubikaInlineMessage = payload?.inline_message || null;
+  const callbackQuery = payload?.callback_query || payload?.body?.callback_query || payload?.data?.callback_query || null;
+  const message =
+    payload?.message ||
+    payload?.body?.message ||
+    payload?.data?.message ||
+    payload?.event?.message ||
+    payload?.update?.message ||
+    callbackQuery?.message ||
+    rubikaNewMessage ||
+    rubikaUpdatedMessage ||
+    rubikaRootMessage ||
+    rubikaInlineMessage ||
+    null;
+  const replyMessage =
+    message?.reply_to_message ||
+    message?.replyToMessage ||
+    message?.replied_message ||
+    message?.repliedMessage ||
+    message?.reply_to ||
+    message?.replyTo ||
+    rubikaNewMessage?.reply_to_message ||
+    rubikaNewMessage?.replied_message ||
+    rubikaRootMessage?.reply_to_message ||
+    rubikaRootMessage?.replied_message ||
+    payload?.reply_to_message ||
+    payload?.replied_message ||
+    null;
+
+  const providerMessageId = pick(
+    message?.message_id,
+    message?.messageId,
+    message?.id,
+    rubikaUpdate?.message_id,
+    rubikaUpdate?.messageId,
+    rubikaRootMessage?.message_id,
+    rubikaRootMessage?.messageId,
+    rubikaRootMessage?.id,
+    rubikaNewMessage?.message_id,
+    rubikaNewMessage?.messageId,
+    rubikaNewMessage?.id,
+    rubikaUpdatedMessage?.message_id,
+    rubikaUpdatedMessage?.messageId,
+    rubikaInlineMessage?.message_id,
+    rubikaInlineMessage?.messageId,
+    payload?.message_id,
+    payload?.messageId
+  );
+
+  const replyProviderMessageId = pick(
+    message?.reply_to_message_id,
+    message?.replyToMessageId,
+    message?.replied_message_id,
+    message?.repliedMessageId,
+    message?.reply_to_id,
+    message?.replyToId,
+    replyMessage?.message_id,
+    replyMessage?.messageId,
+    replyMessage?.id,
+    rubikaUpdate?.reply_to_message_id,
+    rubikaUpdate?.replyToMessageId,
+    rubikaRootMessage?.reply_to_message_id,
+    rubikaRootMessage?.replyToMessageId,
+    rubikaNewMessage?.reply_to_message_id,
+    rubikaNewMessage?.replyToMessageId,
+    payload?.reply_to_message_id,
+    payload?.replyToMessageId,
+    payload?.replied_message_id,
+    payload?.repliedMessageId
+  );
+
+  return {
+    providerMessageId: providerMessageId || null,
+    replyProviderMessageId: replyProviderMessageId || null,
+  };
+};
+
 const DEFAULT_FILE_STORAGE_BUCKET = String(
   Deno.env.get('FILE_STORAGE_BUCKET')
   || Deno.env.get('VITE_FILE_STORAGE_BUCKET')
@@ -1232,6 +1314,58 @@ const insertCounterpartyBotMessage = async (
   return Array.isArray(parsed) ? parsed[0] : parsed;
 };
 
+const loadCounterpartyBotMessageByProviderId = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  {
+    orgId,
+    botGroupId,
+    channel,
+    chatId,
+    providerMessageId,
+  }: {
+    orgId?: string | null;
+    botGroupId?: string | null;
+    channel: BotChannel;
+    chatId?: string | null;
+    providerMessageId?: string | null;
+  }
+) => {
+  const normalizedProviderMessageId = String(providerMessageId || '').trim();
+  if (!normalizedProviderMessageId) return null;
+
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
+  url.searchParams.set('provider_message_id', `eq.${normalizedProviderMessageId}`);
+  url.searchParams.set('channel_type', `eq.${channel}`);
+  url.searchParams.set('select', 'id,bot_group_id,chat_id,provider_message_id,created_at');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '1');
+
+  const normalizedBotGroupId = String(botGroupId || '').trim();
+  const normalizedChatId = String(chatId || '').trim();
+  const normalizedOrgId = String(orgId || '').trim();
+  if (normalizedBotGroupId) {
+    url.searchParams.set('bot_group_id', `eq.${normalizedBotGroupId}`);
+  } else if (normalizedChatId) {
+    url.searchParams.set('chat_id', `eq.${normalizedChatId}`);
+  }
+  if (normalizedOrgId) {
+    url.searchParams.set('org_id', `eq.${normalizedOrgId}`);
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    console.warn('[bot-webhook] could not resolve replied bot message', raw);
+    return null;
+  }
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+};
+
 const syncCounterpartyBotGroupByInbound = async ({
   supabaseUrl,
   serviceRoleKey,
@@ -1456,6 +1590,16 @@ Deno.serve(async (req) => {
 
     try {
       const mediaInfo = extractMediaInfo(payload);
+      const messageIdentity = extractMessageIdentity(payload);
+      const replyTarget = messageIdentity.replyProviderMessageId
+        ? await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
+          orgId: integration.org_id || null,
+          botGroupId: matchedGroup?.id || null,
+          channel,
+          chatId: String(contact.chatId || '').trim() || null,
+          providerMessageId: messageIdentity.replyProviderMessageId,
+        })
+        : null;
       const normalizedOrgId = String(integration?.org_id || '').trim() || 'unknown_org';
       const mediaStored = await resolveAndStoreInboundMedia({
         supabaseUrl,
@@ -1489,6 +1633,7 @@ Deno.serve(async (req) => {
         direction: 'inbound',
         message_type: mediaInfo.messageType,
         chat_id: String(contact.chatId || '').trim() || null,
+        provider_message_id: messageIdentity.providerMessageId || null,
         content_text: String(contact.text || '').trim() || null,
         file_url: finalMediaUrl || null,
         file_name: mediaStored?.fileName || mediaInfo.fileName,
@@ -1504,6 +1649,9 @@ Deno.serve(async (req) => {
           media_storage_bucket: mediaStored?.storageBucket || null,
           media_storage_path: mediaStored?.storagePath || null,
           attachments: attachmentEntry,
+          provider_message_id: messageIdentity.providerMessageId || null,
+          reply_provider_message_id: messageIdentity.replyProviderMessageId || null,
+          reply_to_message_id: replyTarget?.id || null,
         },
       });
     } catch (error) {

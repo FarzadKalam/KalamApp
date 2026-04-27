@@ -98,6 +98,33 @@ export const mergeProcessLinkMaps = (...maps: Array<ProcessLinkMap | null | unde
     return acc;
   }, {} as ProcessLinkMap);
 
+export const extractProcessLinkMapFromStages = (stages: Array<Record<string, any>> | null | undefined): ProcessLinkMap =>
+  (Array.isArray(stages) ? stages : []).reduce<ProcessLinkMap>((acc, stage) => {
+    const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
+      ? stage.process_link_map
+      : {};
+    return mergeProcessLinkMaps(acc, parseProcessLinkMap(rawMap));
+  }, {} as ProcessLinkMap);
+
+export const buildProcessLinkMapFromRecord = (
+  moduleId: string,
+  record: Record<string, any> | null | undefined,
+  targetModuleIds: string[],
+  explicitLinks?: ProcessLinkMap | null,
+) => {
+  const normalizedModuleId = normalizeModuleId(moduleId);
+  const normalizedTargets = normalizeProcessTargetModuleIds(targetModuleIds, normalizedModuleId);
+  const directContextLinks = mergeProcessLinkMaps(
+    normalizedModuleId && record?.id ? { [normalizedModuleId]: String(record.id) } : {}
+  );
+
+  return mergeProcessLinkMaps(
+    directContextLinks,
+    getRelationFieldLinksForModules(normalizedModuleId, record, normalizedTargets),
+    explicitLinks || {},
+  );
+};
+
 export const parseProcessLinkMap = (value: unknown): ProcessLinkMap => {
   const raw = value && typeof value === 'object'
     ? value as Record<string, any>

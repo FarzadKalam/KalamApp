@@ -7,7 +7,7 @@ describe('buildModuleListOptionPlan', () => {
     const plan = buildModuleListOptionPlan(customerModule);
 
     expect(plan.immediateDynamicCategories).toEqual(['customer_industry', 'customer_interests']);
-    expect(plan.immediateRelationFields).toEqual([]);
+    expect(plan.immediateRelationFields.map((field) => field.key)).toEqual(['tags']);
     expect(plan.allRelationFields.map((field) => field.key)).toEqual(
       expect.arrayContaining([
         'related_employee_id',

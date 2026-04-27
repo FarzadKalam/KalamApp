@@ -1,5 +1,6 @@
 import React, { useMemo, useRef } from 'react';
 import { Modal } from 'antd';
+import OverlayEventBoundary from './OverlayEventBoundary';
 import { resolveStableOverlayRoot } from '../utils/popupContainer';
 
 interface AdaptivePickerSurfaceProps {
@@ -69,6 +70,11 @@ const AdaptivePickerSurface: React.FC<AdaptivePickerSurfaceProps> = ({
         rootClassName="kalam-adaptive-picker-modal-root"
         getContainer={getModalContainer}
         closeIcon={null}
+        modalRender={(node) => (
+          <OverlayEventBoundary>
+            {node}
+          </OverlayEventBoundary>
+        )}
         style={{
           maxWidth: 'min(calc(100vw - 24px), 460px)',
           margin: '0 auto',

@@ -226,7 +226,6 @@ const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
 const SEEN_BOT_MESSAGES_STORAGE_KEY = 'notif_seen_bot_messages_v1';
 const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
 const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
-const DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY = 'notif_dismissed_ui_v1';
 type AssigneeQueryMode = 'primary' | 'typed_legacy_role' | 'id_only' | 'owner_only' | 'none';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, AssigneeQueryMode>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
@@ -402,6 +401,19 @@ type NotificationStateEntryInput = {
   dismissedAt?: string | null;
 };
 
+type DrawerCloseSnapshot = {
+  variant: 'chat' | 'alerts';
+  activeDrawerSection: NotificationSectionKey | null;
+  selectedNoteUserId: string | null;
+  selectedBotGroupId: string | null;
+  displayedChatNotes: any[];
+  botMessages: CounterpartyBotMessageRow[];
+  displayedSmsMessages: any[];
+  tasks: any[];
+  responsibilities: any[];
+  displayedVoipCalls: any[];
+};
+
 type SmsThreadItem = {
   id: string;
   phone: string;
@@ -463,6 +475,7 @@ const formatBadgeCount = (count: number) => (count ? toPersianNumber(count) : 0)
 const ENTRY_ANIMATION_WINDOW_MS = 12_000;
 const READ_RECEIPTS_KEY = 'read_receipts';
 const LIKES_KEY = 'likes';
+const EMPTY_READ_FALLBACK_SET = new Set<string>();
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
@@ -964,7 +977,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [seenBotMessageIds, setSeenBotMessageIds] = useState<Set<string>>(() => loadSeenSet(SEEN_BOT_MESSAGES_STORAGE_KEY));
   const [seenSmsMessageIds, setSeenSmsMessageIds] = useState<Set<string>>(() => loadSeenSet(SEEN_SMS_MESSAGES_STORAGE_KEY));
   const [seenVoipCallIds, setSeenVoipCallIds] = useState<Set<string>>(() => loadSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY));
-  const [dismissedUiNotificationIds, setDismissedUiNotificationIds] = useState<Set<string>>(() => loadSeenSet(DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY));
+  const [dismissedUiNotificationIds, setDismissedUiNotificationIds] = useState<Set<string>>(() => new Set());
   const [notificationStateMap, setNotificationStateMap] = useState<Record<string, NotificationStateEntry>>({});
   const [uiNotifications, setUiNotifications] = useState<UiNotificationItem[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
@@ -985,6 +998,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const notesPollingPauseLoggedRef = useRef(false);
   const mobileDrawerHistoryActiveRef = useRef(false);
   const skipNextDrawerPopStateRef = useRef(false);
+  const drawerCloseSnapshotRef = useRef<DrawerCloseSnapshot | null>(null);
   const notesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const noteShouldStickToBottomRef = useRef(true);
   const noteForceScrollToBottomRef = useRef(false);
@@ -1226,10 +1240,6 @@ useEffect(() => {
     }
   }, [variant]);
 
-  useEffect(() => {
-    persistSeenSet(DISMISSED_UI_NOTIFICATIONS_STORAGE_KEY, dismissedUiNotificationIds);
-  }, [dismissedUiNotificationIds]);
-
   const relevantNotificationStateSections = useMemo<NotificationStateSectionKey[]>(
     () => Array.from(new Set(getSectionsForVariant(variant).map(toNotificationStateSection))),
     [variant]
@@ -1355,23 +1365,6 @@ useEffect(() => {
         sourceType: String(entry.sourceType || '').trim(),
         sourceId: String(entry.sourceId || '').trim(),
         readAt,
-      }))
-      .filter((entry) => entry.sourceType && entry.sourceId);
-    if (normalized.length === 0) return;
-    mergeNotificationStateEntries(normalized);
-    void persistNotificationStateEntries(normalized);
-  }, [mergeNotificationStateEntries, persistNotificationStateEntries]);
-
-  const dismissNotificationEntries = useCallback((entries: NotificationStateEntryInput[]) => {
-    if (!Array.isArray(entries) || entries.length === 0) return;
-    const timestamp = new Date().toISOString();
-    const normalized = entries
-      .map((entry) => ({
-        section: entry.section,
-        sourceType: String(entry.sourceType || '').trim(),
-        sourceId: String(entry.sourceId || '').trim(),
-        readAt: entry.readAt ?? timestamp,
-        dismissedAt: timestamp,
       }))
       .filter((entry) => entry.sourceType && entry.sourceId);
     if (normalized.length === 0) return;
@@ -2621,7 +2614,14 @@ useEffect(() => {
         direction: 'outbound',
         message_type: messageType,
         chat_id: chatId,
-        provider_message_id: String(providerResponse?.result?.message_id || providerResponse?.message_id || providerResponse?.data?.message_id || '') || null,
+        provider_message_id: String(
+          providerResponse?.result?.message_id
+          || providerResponse?.message_id
+          || providerResponse?.data?.message_id
+          || providerResponse?.data?.message_update?.message_id
+          || providerResponse?.data?.messageUpdate?.messageId
+          || ''
+        ) || null,
         content_text: text,
         created_by: currentUserId,
         payload: {
@@ -2997,7 +2997,7 @@ useEffect(() => {
     const authorId = String(n?.author_id || '').trim();
     return (
       (!authorId || authorId !== String(profile.id || ''))
-      && !isNotificationRead('notes', 'note', String(n?.id || ''), seenNoteIds.has(String(n?.id || '')))
+      && !isNotificationRead('notes', 'note', String(n?.id || ''), false)
     );
   }).length + noteLikeNotifications.filter((item) => (
     !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
@@ -3010,11 +3010,11 @@ useEffect(() => {
   )).length;
   const botMessagesCount = botNotificationMessages.filter((row) => (
     String(row?.direction || '').trim() === 'inbound'
-    && !isNotificationRead('bot_messages', 'counterparty_bot_message', String(row?.id || '').trim(), seenBotMessageIds.has(String(row?.id || '').trim()))
+    && !isNotificationRead('bot_messages', 'counterparty_bot_message', String(row?.id || '').trim(), false)
   )).length;
   const smsMessagesCount = smsMessages.filter((row: any) => (
     String(row?.direction || '').trim() === 'inbound'
-    && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), seenSmsMessageIds.has(String(row?.id || '').trim()))
+    && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), false)
   )).length;
   const voipCallsCount = voipCalls.filter((row: any) => (
     String(row?.direction || '').trim() === 'incoming'
@@ -3027,10 +3027,10 @@ useEffect(() => {
     () => buildSmsThreads({
       messages: smsMessages,
       recordTitleMap,
-      seenSmsMessageIds,
+      seenSmsMessageIds: EMPTY_READ_FALLBACK_SET,
       isNotificationRead,
     }),
-    [isNotificationRead, recordTitleMap, seenSmsMessageIds, smsMessages]
+    [isNotificationRead, recordTitleMap, smsMessages]
   );
   const selectedSmsThread = useMemo(
     () => smsThreads.find((thread) => thread.id === selectedSmsThreadKey) || smsThreads[0] || null,
@@ -3291,10 +3291,10 @@ useEffect(() => {
       return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
     }, 0);
     const unreadCount = systemNotes.filter((note: any) => (
-      !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
+      !isNotificationRead('notes', 'note', String(note?.id || ''), false)
     )).length;
     return { noteCount: systemNotes.length, latestMessageAt, unreadCount };
-  }, [isNotificationRead, notes, seenNoteIds]);
+  }, [isNotificationRead, notes]);
   const myNoteStats = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
     const myNotes = currentUserId
@@ -3314,10 +3314,10 @@ useEffect(() => {
       noteLookup,
       currentUserId: profile.id,
       roleLookup,
-      seenNoteIds,
+      seenNoteIds: EMPTY_READ_FALLBACK_SET,
       isNotificationRead,
     }),
-    [availableDirectUsers, chatGroups, isNotificationRead, noteLookup, notes, profile.id, roleLookup, seenNoteIds]
+    [availableDirectUsers, chatGroups, isNotificationRead, noteLookup, notes, profile.id, roleLookup]
   );
   const visibleNoteConversations = useMemo(() => {
     const search = String(noteUserSearch || '').trim().toLowerCase();
@@ -3705,22 +3705,22 @@ useEffect(() => {
   }, [taskProcessModalTask]);
   const badgeColor = 'rgb(var(--brand-500-rgb))';
   const overlaySource = useMemo(() => `notifications:${variant}`, [variant]);
-  const drawerHeaderStyle: React.CSSProperties = {
+  const drawerHeaderStyle = useMemo<React.CSSProperties>(() => ({
     background: 'rgb(var(--app-dark-surface-rgb))',
     borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
     color: '#fff',
-  };
-  const desktopDrawerBodyStyle: React.CSSProperties = {
+  }), []);
+  const desktopDrawerBodyStyle = useMemo<React.CSSProperties>(() => ({
     padding: 0,
-  };
-  const mobileDrawerBodyStyle: React.CSSProperties = {
+  }), []);
+  const mobileDrawerBodyStyle = useMemo<React.CSSProperties>(() => ({
     padding: 0,
     overflow: 'hidden',
     background: 'transparent',
-  };
-  const drawerContentStyle: React.CSSProperties = {
+  }), []);
+  const drawerContentStyle = useMemo<React.CSSProperties>(() => ({
     overflow: 'hidden',
-  };
+  }), []);
   function scrollNotesToBottom(behavior: ScrollBehavior = 'auto') {
     const node = notesScrollContainerRef.current;
     if (!node) return;
@@ -3805,14 +3805,14 @@ useEffect(() => {
     if (!currentUserId || !Array.isArray(rows) || rows.length === 0) return;
     const readAt = new Date().toISOString();
     const readableRows = rows.filter((note: any) => {
-      const id = String(note?.id || '').trim();
-      const authorId = String(note?.author_id || '').trim();
-      return (
-        id
-        && authorId !== currentUserId
-        && (!seenNoteIds.has(id) || !hasReadReceiptForUser(note?.metadata, currentUserId))
-      );
-    });
+        const id = String(note?.id || '').trim();
+        const authorId = String(note?.author_id || '').trim();
+        return (
+          id
+          && authorId !== currentUserId
+          && (!isNotificationRead('notes', 'note', id, false) || !hasReadReceiptForUser(note?.metadata, currentUserId))
+        );
+      });
     if (readableRows.length === 0) return;
 
     const readableIds = new Set(readableRows.map((note: any) => String(note.id)));
@@ -3840,7 +3840,7 @@ useEffect(() => {
       Array.from(readableIds).map((sourceId) => ({ section: 'notes' as const, sourceType: 'note', sourceId }))
     );
     void persistNoteReadReceipts(readableRows, readAt);
-  }, [buildReadReceiptBox, markNotificationEntriesRead, persistNoteReadReceipts, profile.id, seenNoteIds]);
+  }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, persistNoteReadReceipts, profile.id]);
 
   const persistBotReadReceipts = useCallback(async (rows: CounterpartyBotMessageRow[], readAt: string) => {
     const currentUserId = String(profile.id || '').trim();
@@ -3879,7 +3879,7 @@ useEffect(() => {
     const unreadInboundIds = rows
       .filter((row) => String(row?.direction || '').trim() === 'inbound')
       .map((row) => String(row?.id || '').trim())
-      .filter((id) => isUuidValue(id) && !seenBotMessageIds.has(id));
+      .filter((id) => isUuidValue(id) && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, false));
     const receiptRows = rows.filter((row) => {
       const id = String(row?.id || '').trim();
       return isUuidValue(id) && !hasReadReceiptForUser(row?.payload, String(profile.id || '').trim());
@@ -3915,7 +3915,7 @@ useEffect(() => {
       unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }))
     );
     void persistBotReadReceipts(receiptRows, readAt);
-  }, [buildReadReceiptBox, markNotificationEntriesRead, persistBotReadReceipts, profile.id, seenBotMessageIds]);
+  }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, persistBotReadReceipts, profile.id]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const taskIds = (rows || [])
@@ -3945,7 +3945,7 @@ useEffect(() => {
     const messageIds = (rows || [])
       .filter((row) => String(row?.direction || '').trim() === 'inbound')
       .map((row) => String(row?.id || '').trim())
-      .filter((id) => id && !isNotificationRead('sms_messages', 'inbound_sms', id, seenSmsMessageIds.has(id)));
+      .filter((id) => id && !isNotificationRead('sms_messages', 'inbound_sms', id, false));
     if (messageIds.length === 0) return;
     setSeenSmsMessageIds((prev) => new Set([...prev, ...messageIds]));
     markNotificationEntriesRead(messageIds.map((sourceId) => ({ section: 'sms_messages' as const, sourceType: 'inbound_sms', sourceId })));
@@ -3978,8 +3978,32 @@ useEffect(() => {
     }
   }, [botMessages, markBotMessagesAsSeen]);
 
+  const captureDrawerCloseSnapshot = useCallback(() => {
+    drawerCloseSnapshotRef.current = {
+      variant,
+      activeDrawerSection,
+      selectedNoteUserId,
+      selectedBotGroupId,
+      displayedChatNotes,
+      botMessages,
+      displayedSmsMessages,
+      tasks,
+      responsibilities,
+      displayedVoipCalls,
+    };
+  }, [activeDrawerSection, botMessages, displayedChatNotes, displayedSmsMessages, displayedVoipCalls, responsibilities, selectedBotGroupId, selectedNoteUserId, tasks, variant]);
+
   const handleClose = useCallback(() => {
     mobileDrawerHistoryActiveRef.current = false;
+    captureDrawerCloseSnapshot();
+    setOpen(false);
+  }, [captureDrawerCloseSnapshot]);
+
+  const finalizeDrawerClose = useCallback(() => {
+    const snapshot = drawerCloseSnapshotRef.current;
+    drawerCloseSnapshotRef.current = null;
+    if (!snapshot) return;
+
     setMobileNoteSearchOpen(false);
     setMobileBotSearchOpen(false);
     setNoteMessageSearch('');
@@ -3988,31 +4012,32 @@ useEffect(() => {
     setForwardTargetUserIds([]);
     setNoteNewIncomingCount(0);
     setBotNewIncomingCount(0);
-    if (variant === 'chat') {
-      if (activeDrawerSection === 'notes' && selectedNoteUserId) {
-        markNotesAsSeen(displayedChatNotes);
+
+    if (snapshot.variant === 'chat') {
+      if (snapshot.activeDrawerSection === 'notes' && snapshot.selectedNoteUserId) {
+        markNotesAsSeen(snapshot.displayedChatNotes);
       }
-      if (activeDrawerSection === 'bot_messages' && selectedBotGroupId) {
-        markBotMessagesAsSeen(botMessages);
+      if (snapshot.activeDrawerSection === 'bot_messages' && snapshot.selectedBotGroupId) {
+        markBotMessagesAsSeen(snapshot.botMessages);
       }
-      if (activeDrawerSection === 'sms_messages') {
-        markSmsMessagesAsSeen(displayedSmsMessages);
+      if (snapshot.activeDrawerSection === 'sms_messages') {
+        markSmsMessagesAsSeen(snapshot.displayedSmsMessages);
       }
     } else {
-      if (activeDrawerSection === 'tasks') {
-        markTasksAsSeen(tasks);
+      if (snapshot.activeDrawerSection === 'tasks') {
+        markTasksAsSeen(snapshot.tasks);
       }
-      if (activeDrawerSection === 'responsibilities') {
-        markResponsibilitiesAsSeen(responsibilities);
+      if (snapshot.activeDrawerSection === 'responsibilities') {
+        markResponsibilitiesAsSeen(snapshot.responsibilities);
       }
-      if (activeDrawerSection === 'voip_calls') {
-        markVoipCallsAsSeen(displayedVoipCalls);
+      if (snapshot.activeDrawerSection === 'voip_calls') {
+        markVoipCallsAsSeen(snapshot.displayedVoipCalls);
       }
     }
+
     setPreviewRecord(null);
     setTaskProcessModalTask(null);
-    setOpen(false);
-  }, [activeDrawerSection, botMessages, displayedChatNotes, displayedSmsMessages, displayedVoipCalls, markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, responsibilities, selectedBotGroupId, selectedNoteUserId, tasks, variant]);
+  }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen]);
 
   useEffect(() => {
     setSelectedConversationNotes(null);
@@ -4795,7 +4820,7 @@ useEffect(() => {
           return (
             noteId
             && !prevNotesRef.current.has(noteId)
-            && !isNotificationRead('notes', 'note', noteId, seenNoteIds.has(noteId))
+            && !isNotificationRead('notes', 'note', noteId, false)
             && String(note?.author_id || '').trim() !== String(profile.id || '')
             && !dismissedUiNotificationIds.has(`note:${noteId}`)
             && !isNotificationDismissed('notes', 'note', noteId)
@@ -4867,7 +4892,7 @@ useEffect(() => {
           if (String(row?.direction || '') !== 'inbound') return false;
           return !prevBotMessageIdsRef.current.has(id)
             && !dismissedUiNotificationIds.has(`bot:${id}`)
-            && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))
+            && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, false)
             && !isNotificationDismissed('bot_messages', 'counterparty_bot_message', id);
         })
         .map((row) => {
@@ -4898,7 +4923,7 @@ useEffect(() => {
           if (!id) return false;
           if (String(row?.direction || '') !== 'inbound') return false;
           return !prevSmsMessageIdsRef.current.has(id)
-            && !isNotificationRead('sms_messages', 'inbound_sms', id, seenSmsMessageIds.has(id))
+            && !isNotificationRead('sms_messages', 'inbound_sms', id, false)
             && !dismissedUiNotificationIds.has(`sms:${id}`)
             && !isNotificationDismissed('sms_messages', 'inbound_sms', id);
         })
@@ -4959,7 +4984,7 @@ useEffect(() => {
           const key = item.dedupeKey || item.id;
           if (!unique.has(key)) unique.set(key, item);
         });
-        return Array.from(unique.values()).slice(0, 4);
+        return Array.from(unique.values()).slice(0, 30);
       });
       playNotificationChime();
     }
@@ -5001,14 +5026,14 @@ useEffect(() => {
       const entityId = separatorIndex >= 0 ? rawId.slice(separatorIndex + 1) : '';
       if (!kind || !entityId) return false;
       if (dismissedUiNotificationIds.has(rawId)) return false;
-      if (kind === 'note' || kind === 'assistant') return !isNotificationRead('notes', 'note', entityId, seenNoteIds.has(entityId));
+      if (kind === 'note' || kind === 'assistant') return !isNotificationRead('notes', 'note', entityId, false);
       if (kind === 'task') return !isNotificationRead('tasks', 'task', entityId, seenTaskIds.has(entityId));
       if (kind === 'responsibility') {
         const sourceType = item.responsibility ? getResponsibilitySourceType(item.responsibility) : 'responsibility';
         return !isNotificationRead('responsibilities', sourceType, entityId, seenResponsibilityIds.has(entityId));
       }
-      if (kind === 'bot') return !isNotificationRead('bot_messages', 'counterparty_bot_message', entityId, seenBotMessageIds.has(entityId));
-      if (kind === 'sms') return !isNotificationRead('sms_messages', 'inbound_sms', entityId, seenSmsMessageIds.has(entityId));
+      if (kind === 'bot') return !isNotificationRead('bot_messages', 'counterparty_bot_message', entityId, false);
+      if (kind === 'sms') return !isNotificationRead('sms_messages', 'inbound_sms', entityId, false);
       if (kind === 'voip_call') return !isNotificationRead('voip_calls', 'voip_call', entityId, seenVoipCallIds.has(entityId));
       return false;
     }));
@@ -5017,37 +5042,7 @@ useEffect(() => {
   const handleDismissUiNotification = useCallback((notificationId: string) => {
     setDismissedUiNotificationIds((prev) => new Set(prev).add(notificationId));
     setUiNotifications((prev) => prev.filter((item) => item.id !== notificationId));
-    const separatorIndex = notificationId.indexOf(':');
-    const kind = separatorIndex >= 0 ? notificationId.slice(0, separatorIndex) : '';
-    const entityId = separatorIndex >= 0 ? notificationId.slice(separatorIndex + 1) : '';
-    if (!entityId) return;
-    if (kind === 'note' || kind === 'assistant') {
-      dismissNotificationEntries([{ section: 'notes', sourceType: 'note', sourceId: entityId }]);
-      return;
-    }
-    if (kind === 'task') {
-      dismissNotificationEntries([{ section: 'tasks', sourceType: 'task', sourceId: entityId }]);
-      return;
-    }
-    if (kind === 'responsibility') {
-      const row = responsibilities.find((item: any) => String(item?.id || '').trim() === entityId);
-      if (row) {
-        dismissNotificationEntries([{ section: 'responsibilities', sourceType: getResponsibilitySourceType(row), sourceId: entityId }]);
-      }
-      return;
-    }
-    if (kind === 'bot') {
-      dismissNotificationEntries([{ section: 'bot_messages', sourceType: 'counterparty_bot_message', sourceId: entityId }]);
-      return;
-    }
-    if (kind === 'sms') {
-      dismissNotificationEntries([{ section: 'sms_messages', sourceType: 'inbound_sms', sourceId: entityId }]);
-      return;
-    }
-    if (kind === 'voip_call') {
-      dismissNotificationEntries([{ section: 'voip_calls', sourceType: 'voip_call', sourceId: entityId }]);
-    }
-  }, [dismissNotificationEntries, responsibilities]);
+  }, []);
 
   const openUiNotification = useCallback((item: UiNotificationItem) => {
     if ((item.kind === 'note' || item.kind === 'assistant') && item.note) {
@@ -5414,7 +5409,7 @@ useEffect(() => {
                 const noteReadReceipts = normalizeReadReceipts(note.metadata);
                 const noteLikeReceipts = normalizeLikeReceipts(note.metadata);
                 const noteId = String(note.id || '');
-                const isUnreadNote = !isMine && !isNotificationRead('notes', 'note', noteId, seenNoteIds.has(noteId));
+                const isUnreadNote = !isMine && !isNotificationRead('notes', 'note', noteId, false);
                 const likedByMe = Boolean(likeReceiptMapFromBox(note.metadata)[String(profile.id || '').trim()]);
 
                 return (
@@ -6438,7 +6433,7 @@ useEffect(() => {
       const groupId = String(row?.bot_group_id || '').trim();
       const id = String(row?.id || '').trim();
       if (!groupId || !id || String(row?.direction || '').trim() !== 'inbound') return acc;
-      if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))) return acc;
+      if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, false)) return acc;
       acc[groupId] = (acc[groupId] || 0) + 1;
       return acc;
     }, {});
@@ -6790,7 +6785,7 @@ useEffect(() => {
                 const botReadReceipts = normalizeReadReceipts(payload);
                 const botMessageId = String(row.id || '').trim();
                 const isPersistedBotMessage = isUuidValue(botMessageId);
-                const isUnreadBotMessage = !outgoing && !isNotificationRead('bot_messages', 'counterparty_bot_message', botMessageId, seenBotMessageIds.has(botMessageId));
+                const isUnreadBotMessage = !outgoing && !isNotificationRead('bot_messages', 'counterparty_bot_message', botMessageId, false);
                 return (
                   <div key={row.id}>
                     <SharedNoteCard
@@ -7423,7 +7418,12 @@ useEffect(() => {
                 <div className="mb-2">
                   <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
                     <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
-                    <Link to={`/${item.module_id}/${item.id}`} className="text-sm text-gray-800 dark:text-gray-200" onClick={handleClose}>
+                    <Link
+                      to={`/${item.module_id}/${item.id}`}
+                      className="block w-full text-right text-sm font-semibold leading-5 text-gray-800 line-clamp-2 break-words overflow-hidden dark:text-gray-200"
+                      title={title}
+                      onClick={handleClose}
+                    >
                       {title}
                     </Link>
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -7518,7 +7518,12 @@ useEffect(() => {
                 <div className="mb-2">
                   <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
                     <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
-                    <Link to={`/${item.module_id}/${item.id}`} className="text-sm text-gray-800 dark:text-gray-200" onClick={handleClose}>
+                    <Link
+                      to={`/${item.module_id}/${item.id}`}
+                      className="block w-full text-right text-sm font-semibold leading-5 text-gray-800 line-clamp-2 break-words overflow-hidden dark:text-gray-200"
+                      title={title}
+                      onClick={handleClose}
+                    >
                       {title}
                     </Link>
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -7560,7 +7565,8 @@ useEffect(() => {
     );
   };
 
-  const contentDesktop = (
+  const renderLegacyNotificationContent = false;
+  const contentDesktop = renderLegacyNotificationContent && (
     <div className="w-[880px] max-w-[90vw] h-[90vh] p-4">
       <div className="grid grid-cols-3 gap-4 h-full min-h-0">
       <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
@@ -7592,7 +7598,7 @@ useEffect(() => {
     </div>
   );
 
-  const contentMobile = (
+  const contentMobile = renderLegacyNotificationContent && (
     <div className="h-full min-h-0 flex flex-col bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
       <Tabs
         activeKey={mobileActiveKey}
@@ -7629,48 +7635,57 @@ useEffect(() => {
     </div>
   );
 
+  const renderLazyDrawerPane = (
+    tabKey: DrawerTabKey,
+    activeKey: DrawerTabKey,
+    className: string,
+    renderPane: () => React.ReactNode,
+  ) => (
+    <div className={className}>
+      {activeKey === tabKey ? renderPane() : null}
+    </div>
+  );
+
   const desktopModernItems = variant === 'chat'
     ? [
       {
         key: 'notes',
         label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌های داخلی</span></Badge>,
-        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderNotesPanel('desktop')}</div>,
+        children: renderLazyDrawerPane('notes', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderNotesPanel('desktop')),
       },
       {
         key: 'bot_messages',
         label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
-        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderBotMessagesPanel('desktop')}</div>,
+        children: renderLazyDrawerPane('bot_messages', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderBotMessagesPanel('desktop')),
       },
       {
         key: 'sms_messages',
         label: <Badge count={formatBadgeCount(smsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
-        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderSmsMessagesPanel('desktop')}</div>,
+        children: renderLazyDrawerPane('sms_messages', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderSmsMessagesPanel('desktop')),
       },
       {
         key: 'voip_calls',
         label: <Badge count={formatBadgeCount(voipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
-        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">{renderVoipCallsPanel('desktop')}</div>,
+        children: renderLazyDrawerPane('voip_calls', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderVoipCallsPanel('desktop')),
       },
       {
         key: 'assistant',
         label: <span className="px-1">هوش مصنوعی</span>,
-        children: (
-          <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden">
-            <AssistantPanel active={open && desktopActiveKey === 'assistant'} />
-          </div>
-        ),
+        children: renderLazyDrawerPane('assistant', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => (
+          <AssistantPanel active={open && desktopActiveKey === 'assistant'} />
+        )),
       },
     ]
     : [
       {
         key: 'tasks',
         label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderTasksPanel('grid')}</div>,
+        children: renderLazyDrawerPane('tasks', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3', () => renderTasksPanel('grid')),
       },
       {
         key: 'responsibilities',
         label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-        children: <div className="h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3">{renderResponsibilitiesPanel('grid')}</div>,
+        children: renderLazyDrawerPane('responsibilities', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3', () => renderResponsibilitiesPanel('grid')),
       },
     ];
 
@@ -7696,43 +7711,41 @@ useEffect(() => {
       {
         key: 'notes',
         label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌های داخلی</span></Badge>,
-        children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderNotesPanel('mobile')}</div>,
+        children: renderLazyDrawerPane('notes', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderNotesPanel('mobile')),
       },
       {
         key: 'bot_messages',
         label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
-        children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderBotMessagesPanel('mobile')}</div>,
+        children: renderLazyDrawerPane('bot_messages', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderBotMessagesPanel('mobile')),
       },
       {
         key: 'sms_messages',
         label: <Badge count={formatBadgeCount(smsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
-        children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderSmsMessagesPanel('mobile')}</div>,
+        children: renderLazyDrawerPane('sms_messages', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderSmsMessagesPanel('mobile')),
       },
       {
         key: 'voip_calls',
         label: <Badge count={formatBadgeCount(voipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
-        children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderVoipCallsPanel('mobile')}</div>,
+        children: renderLazyDrawerPane('voip_calls', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderVoipCallsPanel('mobile')),
       },
       {
         key: 'assistant',
         label: <span className="px-1">هوش مصنوعی</span>,
-        children: (
-          <div className="h-full min-h-0 flex flex-col overflow-hidden">
-            <AssistantPanel active={open && mobileActiveKey === 'assistant'} />
-          </div>
-        ),
+        children: renderLazyDrawerPane('assistant', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => (
+          <AssistantPanel active={open && mobileActiveKey === 'assistant'} />
+        )),
       },
     ]
     : [
       {
         key: 'tasks',
         label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-        children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderTasksPanel('grid')}</div>,
+        children: renderLazyDrawerPane('tasks', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderTasksPanel('grid')),
       },
       {
         key: 'responsibilities',
         label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-        children: <div className="h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2">{renderResponsibilitiesPanel('grid')}</div>,
+        children: renderLazyDrawerPane('responsibilities', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderResponsibilitiesPanel('grid')),
       },
     ];
 
@@ -7784,7 +7797,9 @@ useEffect(() => {
           height="var(--app-viewport-height, 100dvh)"
           open={open}
           onClose={requestDrawerClose}
-          forceRender
+          afterOpenChange={(nextOpen) => {
+            if (!nextOpen) finalizeDrawerClose();
+          }}
           destroyOnHidden={false}
           getContainer={drawerContainer}
           rootStyle={{ position: 'fixed', inset: 0 }}
@@ -7812,7 +7827,9 @@ useEffect(() => {
           width={800}
           open={open}
           onClose={handleClose}
-          forceRender
+          afterOpenChange={(nextOpen) => {
+            if (!nextOpen) finalizeDrawerClose();
+          }}
           destroyOnHidden={false}
           getContainer={drawerContainer}
           rootStyle={{ position: 'fixed', inset: 0 }}

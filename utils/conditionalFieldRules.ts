@@ -359,3 +359,40 @@ export const buildConditionalFieldStateMap = (
 ) => Object.fromEntries(
   (fields || []).map((field) => [field.key, resolveConditionalFieldState(field, values, settings, fields)])
 ) as Record<string, ConditionalFieldRuntimeState>;
+
+export const isConditionalFieldVisibleForRecord = (
+  field: ModuleField | null | undefined,
+  values: Record<string, any>,
+  settings?: Partial<ConditionalFieldSettings> | null,
+  allFields?: ModuleField[]
+) => {
+  if (!field?.key) return true;
+  return resolveConditionalFieldState(field, values, settings, allFields || (field ? [field] : [])).visible;
+};
+
+export const filterConditionallyVisibleFieldsForDataset = <T extends Pick<ModuleField, 'key'>>(
+  candidateFields: T[],
+  allFields: ModuleField[],
+  rows: Array<Record<string, any> | null | undefined>,
+  settings?: Partial<ConditionalFieldSettings> | null
+) => {
+  if (!Array.isArray(candidateFields) || candidateFields.length === 0) return [];
+  if (!Array.isArray(rows) || rows.length === 0) return candidateFields;
+
+  const visibleKeys = new Set<string>();
+  rows.forEach((row) => {
+    const stateMap = buildConditionalFieldStateMap(allFields || [], row || {}, settings);
+    candidateFields.forEach((field) => {
+      const fieldKey = normalizeString(field?.key);
+      if (!fieldKey) return;
+      if (stateMap[fieldKey]?.visible !== false) {
+        visibleKeys.add(fieldKey);
+      }
+    });
+  });
+
+  return candidateFields.filter((field) => {
+    const fieldKey = normalizeString(field?.key);
+    return !fieldKey || visibleKeys.has(fieldKey);
+  });
+};

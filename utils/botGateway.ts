@@ -241,6 +241,8 @@ export const sendCounterpartyBotGroupMessage = async ({
     providerResponse?.result?.message_id
     || providerResponse?.message_id
     || providerResponse?.data?.message_id
+    || providerResponse?.data?.message_update?.message_id
+    || providerResponse?.data?.messageUpdate?.messageId
     || ''
   ).trim() || null;
   const { data: authData } = await supabase.auth.getUser();

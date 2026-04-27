@@ -1,3 +1,5 @@
+import { MODULES } from '../moduleRegistry';
+import { FieldType } from '../types';
 import { fetchSessionBootstrap } from './sessionCache';
 import { getMergedTaskTypeOptions } from './taskMeta';
 
@@ -59,6 +61,113 @@ const normalizeDynamicOptions = (rows: any[]) =>
       value: String(item?.value ?? item?.label ?? '').trim(),
     }))
     .filter((item: DynamicOptionRow) => item.value);
+
+const mergeDynamicOptionRows = (...groups: DynamicOptionRow[][]): DynamicOptionRow[] => {
+  const map = new Map<string, DynamicOptionRow>();
+  groups.forEach((group) => {
+    (group || []).forEach((item) => {
+      const value = String(item?.value || '').trim();
+      const label = String(item?.label || item?.value || '').trim();
+      if (!value) return;
+      if (!map.has(value)) {
+        map.set(value, { label: label || value, value });
+      }
+    });
+  });
+  return Array.from(map.values());
+};
+
+const DYNAMIC_OPTION_FALLBACK_PAGE_SIZE = 200;
+const DYNAMIC_OPTION_FALLBACK_MAX_PAGES = 5;
+
+const parseDynamicFieldRawValue = (raw: unknown): string[] => {
+  if (raw === null || raw === undefined) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        return parseDynamicFieldRawValue(JSON.parse(trimmed));
+      } catch {
+        return [trimmed];
+      }
+    }
+    return [trimmed];
+  }
+  if (typeof raw === 'object') {
+    return [];
+  }
+  return [String(raw).trim()].filter(Boolean);
+};
+
+const buildDynamicOptionsFromModuleFallback = async (
+  supabaseClient: any,
+  category: string
+): Promise<DynamicOptionRow[]> => {
+  const normalizedCategory = String(category || '').trim();
+  if (!normalizedCategory) return [];
+
+  const candidateFields = Object.values(MODULES)
+    .flatMap((moduleDef) =>
+      (moduleDef?.fields || [])
+        .filter((field) =>
+          String(field?.dynamicOptionsCategory || '').trim() === normalizedCategory
+          && (
+            field.type === FieldType.SELECT
+            || field.type === FieldType.MULTI_SELECT
+            || field.type === FieldType.STATUS
+            || field.type === FieldType.TAGS
+          )
+        )
+        .map((field) => ({
+          table: String(moduleDef?.table || moduleDef?.id || '').trim(),
+          key: String(field?.key || '').trim(),
+        }))
+    )
+    .filter((item) => item.table && item.key);
+
+  const seenSources = new Set<string>();
+  const uniqueCandidates = candidateFields.filter((item) => {
+    const sourceKey = `${item.table}::${item.key}`;
+    if (seenSources.has(sourceKey)) return false;
+    seenSources.add(sourceKey);
+    return true;
+  });
+
+  if (uniqueCandidates.length === 0) return [];
+
+  const collectedValues = new Set<string>();
+
+  await Promise.allSettled(
+    uniqueCandidates.map(async ({ table, key }) => {
+      for (let page = 0; page < DYNAMIC_OPTION_FALLBACK_MAX_PAGES; page += 1) {
+        const from = page * DYNAMIC_OPTION_FALLBACK_PAGE_SIZE;
+        const to = from + DYNAMIC_OPTION_FALLBACK_PAGE_SIZE - 1;
+        const { data, error } = await supabaseClient
+          .from(table)
+          .select(key)
+          .range(from, to);
+        if (error) break;
+
+        const rows = Array.isArray(data) ? data : [];
+        rows.forEach((row: any) => {
+          parseDynamicFieldRawValue(row?.[key]).forEach((value) => collectedValues.add(value));
+        });
+
+        if (rows.length < DYNAMIC_OPTION_FALLBACK_PAGE_SIZE) break;
+      }
+    })
+  );
+
+  return Array.from(collectedValues)
+    .sort((a, b) => a.localeCompare(b, 'fa'))
+    .map((value) => ({ label: value, value }));
+};
 
 const normalizeUsers = (rows: any[]) =>
   (rows || []).map((user: any) => ({
@@ -352,9 +461,13 @@ export const fetchDynamicOptionsByCategory = async (
       .eq('category', normalizedCategory)
       .eq('is_active', true);
 
-    const normalized = normalizedCategory === 'task_type'
+    const storedOptions = normalizedCategory === 'task_type'
       ? getMergedTaskTypeOptions(data || [])
       : normalizeDynamicOptions(data || []);
+    const fallbackOptions = storedOptions.length === 0
+      ? await buildDynamicOptionsFromModuleFallback(supabaseClient, normalizedCategory)
+      : [];
+    const normalized = mergeDynamicOptionRows(storedOptions, fallbackOptions);
     dynamicOptionsCache.set(normalizedCategory, {
       data: normalized,
       expiresAt: Date.now() + REFERENCE_TTL_MS,

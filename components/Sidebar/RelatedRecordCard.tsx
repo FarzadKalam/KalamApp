@@ -36,24 +36,26 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
 
   const card = (
       <div className="mb-3 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-gradient-to-b from-white to-gray-50 p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:from-[#1d1d1d] dark:to-[#171717]">
-        <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="mb-3 min-w-0">
           <div className="min-w-0">
-            <div className="truncate text-sm font-extrabold text-gray-800 dark:text-gray-100" title={title}>
+            <div className="line-clamp-2 break-words text-sm font-extrabold leading-5 text-gray-800 dark:text-gray-100" title={title}>
               {toPersianNumber(title)}
             </div>
-            <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-300">
-              {moduleLabel}
-              {codeLabel ? ` • ${toPersianNumber(codeLabel)}` : ''}
+            <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 text-[11px] text-gray-500 dark:text-gray-300">
+                {moduleLabel}
+                {codeLabel ? ` • ${toPersianNumber(codeLabel)}` : ''}
+              </div>
+              {statusMeta ? (
+                <Tag
+                  className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[11px] !font-semibold"
+                  color={statusMeta.color}
+                >
+                  {statusMeta.label}
+                </Tag>
+              ) : null}
             </div>
           </div>
-          {statusMeta ? (
-            <Tag
-              className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[11px] !font-semibold"
-              color={statusMeta.color}
-            >
-              {statusMeta.label}
-            </Tag>
-          ) : null}
         </div>
 
         {summaryFields.length > 0 ? (

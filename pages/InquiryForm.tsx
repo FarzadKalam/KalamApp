@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Card, Form, Input, Space, Spin, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -21,6 +21,12 @@ import {
   type WebFormAccessScope,
   type WebFormFieldRecord,
 } from "../utils/webForms";
+import { getResolvedModuleConditionalDisplay } from "../utils/moduleSettingsRuntime";
+import {
+  buildConditionalFieldStateMap,
+  normalizeConditionalFieldSettings,
+  type ConditionalFieldSettings,
+} from "../utils/conditionalFieldRules";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -40,6 +46,7 @@ type PublicWebFormState = {
   config: ReturnType<typeof normalizeWebFormConfig>;
   fields: WebFormFieldRecord[];
   companySettings: Record<string, any>;
+  conditionalDisplay: ConditionalFieldSettings;
 };
 
 type PublicBrandingRpcRow = {
@@ -55,6 +62,7 @@ type PublicWebFormRpcRow = {
   fields?: unknown;
   company_settings?: unknown;
   branding_settings?: unknown;
+  conditional_display?: unknown;
 };
 
 type PublicChoiceOption = {
@@ -275,6 +283,7 @@ const buildLegacyInquiryState = (companySettings?: Record<string, any>): PublicW
   }),
   fields: LEGACY_INQUIRY_FIELDS,
   companySettings: companySettings || {},
+  conditionalDisplay: normalizeConditionalFieldSettings(),
 });
 
 const ensureAbsoluteUrl = (value: string) => {
@@ -368,6 +377,48 @@ const InquiryForm = () => {
       }, {}),
     [currentEmployee?.id, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
+  const conditionalDisplaySettings = useMemo(() => {
+    if (publicForm?.conditionalDisplay?.rules?.length) {
+      return normalizeConditionalFieldSettings(publicForm.conditionalDisplay);
+    }
+    return getResolvedModuleConditionalDisplay(publicForm?.targetModuleId);
+  }, [publicForm?.conditionalDisplay, publicForm?.targetModuleId]);
+  const publicModuleFields = useMemo(
+    () => (publicForm?.fields || []).map((field) => buildPublicModuleField(field, publicForm?.targetModuleId)),
+    [publicForm?.fields, publicForm?.targetModuleId]
+  );
+  const runtimeEvaluationValues = useMemo(
+    () => ({
+      ...(publicForm?.config.default_record_values || {}),
+      ...initialFieldValues,
+      ...watchedFormValues,
+    }),
+    [initialFieldValues, publicForm?.config.default_record_values, watchedFormValues]
+  );
+  const publicFieldRuntimeStateMap = useMemo(
+    () => buildConditionalFieldStateMap(publicModuleFields, runtimeEvaluationValues, conditionalDisplaySettings),
+    [conditionalDisplaySettings, publicModuleFields, runtimeEvaluationValues]
+  );
+  const isPublicFieldVisible = useCallback((field: WebFormFieldRecord) => {
+    const targetFieldKey = String(field.target_field_key || field.field_key || "").trim();
+    if (!targetFieldKey) return true;
+    return publicFieldRuntimeStateMap[targetFieldKey]?.visible !== false;
+  }, [publicFieldRuntimeStateMap]);
+  const isPublicFieldRequired = useCallback((field: WebFormFieldRecord) => {
+    const targetFieldKey = String(field.target_field_key || field.field_key || "").trim();
+    if (!targetFieldKey) return field.is_required === true;
+    return publicFieldRuntimeStateMap[targetFieldKey]?.required ?? (field.is_required === true);
+  }, [publicFieldRuntimeStateMap]);
+  const getRuntimePublicModuleField = useCallback((field: WebFormFieldRecord) => {
+    const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
+    return {
+      ...moduleField,
+      validation: {
+        ...(moduleField.validation || {}),
+        required: isPublicFieldRequired(field),
+      },
+    };
+  }, [isPublicFieldRequired, publicForm?.targetModuleId]);
 
   useEffect(() => {
     const syncBranding = () => {
@@ -532,6 +583,7 @@ const InquiryForm = () => {
               config,
               fields,
               companySettings: toRecord(response.company_settings),
+              conditionalDisplay: normalizeConditionalFieldSettings(toRecord(response.conditional_display)),
             });
           }
           return;
@@ -606,8 +658,9 @@ const InquiryForm = () => {
       && !isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId)
       && !(field.field_type === "relation" && publicForm?.accessScope !== "internal")
       && !isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)
+      && isPublicFieldVisible(field)
     ),
-    [publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
+    [isPublicFieldVisible, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
   const isSlideMode = publicForm?.config.display_mode === "slide";
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
@@ -715,7 +768,7 @@ const InquiryForm = () => {
     const normalizedValues = isMultiSelect
       ? (Array.isArray(currentValue) ? currentValue.map((item) => String(item)) : [])
       : [String(currentValue ?? "")].filter(Boolean);
-    const rules = field.is_required
+    const rules = isPublicFieldRequired(field)
       ? [{
           validator: async (_: unknown, value: unknown) => {
             if (isMultiSelect) {
@@ -812,7 +865,7 @@ const InquiryForm = () => {
   };
 
   const renderSlideTextLikeField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
-    const rules = field.is_required
+    const rules = isPublicFieldRequired(field)
       ? [{
           required: true,
           message: `${field.label} را ${field.field_type === "long_text" ? "تکمیل" : "وارد"} کنید.`,
@@ -884,7 +937,7 @@ const InquiryForm = () => {
     const assetList = Array.isArray(currentAssets) ? currentAssets as PublicUploadedAsset[] : [];
     const isUploading = uploadingFieldKeys[field.field_key] === true;
     const accept = field.field_type === "image" ? "image/*" : undefined;
-    const rules = field.is_required
+    const rules = isPublicFieldRequired(field)
       ? [{
           validator: async (_: unknown, value: unknown) => {
             const normalized = normalizePublicFieldValue(field, value);
@@ -996,7 +1049,7 @@ const InquiryForm = () => {
   };
 
   const renderField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
-    if (field.is_hidden || isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId)) return null;
+    if (field.is_hidden || isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId) || !isPublicFieldVisible(field)) return null;
     if (field.field_type === "relation" && publicForm?.accessScope !== "internal") return null;
     if (field.field_type === "image" || field.field_type === "file") {
       return renderAttachmentField(field, options);
@@ -1008,8 +1061,8 @@ const InquiryForm = () => {
       return renderSlideTextLikeField(field, options);
     }
 
-    const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
-    const rules = field.is_required
+    const moduleField = getRuntimePublicModuleField(field);
+    const rules = isPublicFieldRequired(field)
       ? [{
           required: true,
           message: field.field_type === "checkbox" ? `${field.label} را تعیین کنید.` : `${field.label} را وارد کنید.`,

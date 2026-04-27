@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Modal } from 'antd';
 import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined, EyeOutlined } from '@ant-design/icons';
+import OverlayEventBoundary from '../OverlayEventBoundary';
 import PersianDatePicker from '../PersianDatePicker';
 import { isTaskDoneStatus } from '../../utils/taskCompletion';
 import { updateTaskDueDateWithAutomation, updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { getTaskStatusSwatchColor } from '../../utils/processTaskStatusOptions';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { resolveOverlayPopupContainer, resolveParentOverlayZIndex, resolveStableOverlayRoot } from '../../utils/popupContainer';
 
 type TaskActionButtonsProps = {
   task: any;
@@ -29,6 +31,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   showReview = false,
 }) => {
   const { message } = App.useApp();
+  const overlayAnchorRef = useRef<HTMLDivElement | null>(null);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [draftDueDate, setDraftDueDate] = useState<string | null>(task?.due_date || null);
   const [savingReschedule, setSavingReschedule] = useState(false);
@@ -46,6 +49,16 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
       setDraftDueDate(task?.due_date || null);
     }
   }, [rescheduleOpen, task?.due_date]);
+
+  const effectiveModalZIndex = useMemo(
+    () => Math.max(modalZIndex, resolveParentOverlayZIndex(overlayAnchorRef.current, modalZIndex) + 40),
+    [modalZIndex, rescheduleOpen]
+  );
+
+  const getModalContainer = useMemo(
+    () => () => resolveStableOverlayRoot(resolveOverlayPopupContainer(overlayAnchorRef.current)),
+    []
+  );
 
   const stopEvent = (event?: React.SyntheticEvent | Event) => {
     if (!stopPropagation || !event) return;
@@ -178,7 +191,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   return (
     <>
-      <div className="flex items-center justify-center gap-1.5">
+      <div ref={overlayAnchorRef} className="flex items-center justify-center gap-1.5">
         <Button
           type="text"
           size={size}
@@ -246,7 +259,13 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
         cancelText="انصراف"
         confirmLoading={savingReschedule}
         destroyOnHidden
-        zIndex={modalZIndex}
+        zIndex={effectiveModalZIndex}
+        getContainer={getModalContainer}
+        modalRender={(node) => (
+          <OverlayEventBoundary>
+            {node}
+          </OverlayEventBoundary>
+        )}
       >
         <div className="space-y-3 pt-1">
           <div className="text-sm text-gray-700">موعد انجام جدید تعیین کنید:</div>
@@ -254,7 +273,9 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
             value={draftDueDate}
             onChange={setDraftDueDate}
             type="DATETIME"
-            zIndex={modalZIndex + 20}
+            zIndex={effectiveModalZIndex + 20}
+            modalContainer={getModalContainer}
+            overlayZIndexBase={effectiveModalZIndex + 20}
           />
         </div>
       </Modal>

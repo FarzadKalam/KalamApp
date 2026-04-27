@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState } from 'react';
-import { Button, Progress, theme } from 'antd';
+import { Badge, Button, Progress, theme } from 'antd';
 import {
   BellOutlined,
   CheckCircleFilled,
@@ -15,7 +15,6 @@ import {
   OpenAIOutlined,
   StopFilled,
   TeamOutlined,
-  UpOutlined,
 } from '@ant-design/icons';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
 import { dismissUiNotificationOverlayItem, useUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
@@ -125,6 +124,7 @@ const UploadProgressOverlay: React.FC = () => {
   const notifications = useUiNotificationOverlayItems();
   const { token } = theme.useToken();
   const [minimized, setMinimized] = useState(false);
+  const [hiddenSignature, setHiddenSignature] = useState<string | null>(null);
   const renderedNotifications = usePresenceList(notifications, getNotificationId);
   const renderedTasks = usePresenceList(tasks, getTaskId);
 
@@ -142,6 +142,13 @@ const UploadProgressOverlay: React.FC = () => {
   const displayNotificationCount = hasNotifications ? notificationCount : renderedNotifications.length;
   const hasDisplayedUploads = hasUploads || hasRenderedUploads;
   const hasDisplayedNotifications = hasNotifications || hasRenderedNotifications;
+  const displaySignature = useMemo(
+    () => [
+      notifications.map((item) => `n:${item.id}`).join(','),
+      tasks.map((task) => `u:${task.id}:${task.status}`).join(','),
+    ].join('|'),
+    [notifications, tasks],
+  );
   const overlayTitle = hasDisplayedUploads && hasDisplayedNotifications
     ? 'آپلودها و اعلان‌ها'
     : hasDisplayedNotifications
@@ -155,34 +162,58 @@ const UploadProgressOverlay: React.FC = () => {
         ? `${toPersianNumber(String(activeCount))} مورد در حال آپلود`
         : `${toPersianNumber(String(displayUploadCount))} مورد در صف نمایش`;
 
+  React.useEffect(() => {
+    if (hiddenSignature && displaySignature && hiddenSignature !== displaySignature) {
+      setHiddenSignature(null);
+      setMinimized(false);
+    }
+  }, [displaySignature, hiddenSignature]);
+
   if (!hasDisplayedUploads && !hasDisplayedNotifications) return null;
+  if (hiddenSignature && hiddenSignature === displaySignature) return null;
 
   if (minimized) {
     return (
       <div
-        className="pointer-events-none fixed inset-x-3 bottom-3 md:left-auto md:right-4 md:w-[320px]"
+        className="pointer-events-none fixed bottom-3 right-3 flex items-center gap-2 md:right-4"
         style={{ zIndex: 2147483000 }}
       >
-        <button
-          type="button"
-          onClick={() => setMinimized(false)}
-          className="pointer-events-auto flex w-full items-center justify-between rounded-full border px-4 py-3 text-right shadow-2xl backdrop-blur"
-          style={{
-            background: token.colorBgElevated,
-            borderColor: token.colorBorderSecondary,
-            boxShadow: token.boxShadowSecondary,
-          }}
-        >
-          <div className="min-w-0">
-            <div className="text-sm font-semibold" style={{ color: token.colorTextHeading }}>
-              {overlayTitle}
-            </div>
-            <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-              {overlaySubtitle}
-            </div>
-          </div>
-          <UpOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
-        </button>
+        {hasDisplayedNotifications ? (
+          <Badge count={displayNotificationCount ? toPersianNumber(String(displayNotificationCount)) : 0} size="small" color="#2563eb">
+            <button
+              type="button"
+              onClick={() => setMinimized(false)}
+              className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full border text-base shadow-2xl backdrop-blur transition-transform hover:scale-105"
+              style={{
+                background: token.colorBgElevated,
+                borderColor: token.colorBorderSecondary,
+                boxShadow: token.boxShadowSecondary,
+                color: '#2563eb',
+              }}
+              aria-label="نمایش اعلان‌ها"
+            >
+              <BellOutlined />
+            </button>
+          </Badge>
+        ) : null}
+        {hasDisplayedUploads ? (
+          <Badge count={displayUploadCount ? toPersianNumber(String(displayUploadCount)) : 0} size="small" color={activeCount > 0 ? token.colorPrimary : token.colorSuccess}>
+            <button
+              type="button"
+              onClick={() => setMinimized(false)}
+              className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full border text-base shadow-2xl backdrop-blur transition-transform hover:scale-105"
+              style={{
+                background: token.colorBgElevated,
+                borderColor: token.colorBorderSecondary,
+                boxShadow: token.boxShadowSecondary,
+                color: activeCount > 0 ? token.colorPrimary : token.colorSuccess,
+              }}
+              aria-label="نمایش آپلودها"
+            >
+              <LoadingOutlined spin={activeCount > 0} />
+            </button>
+          </Badge>
+        ) : null}
       </div>
     );
   }
@@ -212,15 +243,26 @@ const UploadProgressOverlay: React.FC = () => {
               {overlaySubtitle}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setMinimized(true)}
-            className="flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
-            style={{ color: token.colorTextTertiary }}
-            aria-label="کوچک کردن پنجره"
-          >
-            <MinusOutlined style={{ fontSize: 12 }} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setMinimized(true)}
+              className="flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
+              style={{ color: token.colorTextTertiary }}
+              aria-label="کوچک کردن پنجره"
+            >
+              <MinusOutlined style={{ fontSize: 12 }} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setHiddenSignature(displaySignature)}
+              className="flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
+              style={{ color: token.colorTextTertiary }}
+              aria-label="بستن پنجره"
+            >
+              <CloseOutlined style={{ fontSize: 12 }} />
+            </button>
+          </div>
         </div>
 
         <div
@@ -228,6 +270,12 @@ const UploadProgressOverlay: React.FC = () => {
           style={{ scrollbarGutter: 'stable both-edges', overscrollBehavior: 'contain' }}
         >
           <div className="flex flex-col gap-2.5">
+            {renderedNotifications.length > 0 ? (
+              <div
+                className="max-h-[330px] overflow-y-auto pr-1"
+                style={{ scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
+              >
+                <div className="flex flex-col gap-2.5">
             {renderedNotifications.map((entry) => {
               const item = entry.item;
               const icon = item.kind === 'note'
@@ -288,7 +336,7 @@ const UploadProgressOverlay: React.FC = () => {
                           <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : item.kind === 'sms' ? 'پیامک' : item.kind === 'voip_call' ? 'تماس ورودی' : 'مسئولیت')}</span>
                           <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
                         </div>
-                        <div className="mt-1 truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
+                        <div className="mt-1 line-clamp-2 break-words text-sm font-medium leading-5" style={{ color: token.colorTextHeading }}>
                           {item.title}
                         </div>
                         <div className="mt-1 line-clamp-2 text-[12px] leading-5" style={{ color: token.colorTextSecondary }}>
@@ -311,6 +359,9 @@ const UploadProgressOverlay: React.FC = () => {
                 </div>
               );
             })}
+                </div>
+              </div>
+            ) : null}
             {renderedTasks.map((entry) => {
               const task = entry.item;
               const meta = statusMeta[task.status];
@@ -345,7 +396,7 @@ const UploadProgressOverlay: React.FC = () => {
                         {meta.icon}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium" style={{ color: token.colorTextHeading }}>
+                        <div className="line-clamp-2 break-words text-sm font-medium leading-5" style={{ color: token.colorTextHeading }}>
                           {task.name}
                         </div>
                         <div className="flex items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>

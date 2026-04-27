@@ -99,10 +99,10 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   return (
     <div className="mb-2">
       <div className={`border ${statusColor} rounded-2xl bg-white/95 p-3 shadow-sm transition-all hover:border-[rgba(var(--brand-400-rgb),0.75)] hover:shadow-md dark:bg-[rgba(var(--app-dark-surface-rgb),0.65)]`}>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col gap-2">
           <button
             type="button"
-            className="font-bold text-gray-800 dark:text-gray-200 hover:underline text-right"
+            className="w-full text-right text-sm font-bold leading-5 text-gray-800 hover:underline line-clamp-2 break-words overflow-hidden dark:text-gray-200"
             onClick={() => {
               openTaskProcessModal({ task });
               onClose?.();
@@ -110,7 +110,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
           >
             {toPersianNumber(String(task.name || 'بدون عنوان'))}
           </button>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <TaskActionButtons
               task={task}
               currentUser={currentUser}

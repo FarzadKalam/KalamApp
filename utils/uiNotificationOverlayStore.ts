@@ -67,8 +67,7 @@ const recompute = () => {
     .sort((a, b) => {
       const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
       return timeDiff || String(a.id).localeCompare(String(b.id));
-    })
-    .slice(0, 6);
+    });
 };
 
 export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[], source = 'default') => {

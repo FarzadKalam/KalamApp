@@ -1111,7 +1111,14 @@ const sendTestMessage = async (
         status: 'sent',
         sent_at: new Date().toISOString(),
         message_text: deliveredText,
-        provider_message_id: String(payload?.result?.message_id || payload?.message_id || payload?.data?.message_id || ''),
+        provider_message_id: String(
+          payload?.result?.message_id
+          || payload?.message_id
+          || payload?.data?.message_id
+          || payload?.data?.message_update?.message_id
+          || payload?.data?.messageUpdate?.messageId
+          || ''
+        ),
         metadata: shouldLog
           ? {
             channel,

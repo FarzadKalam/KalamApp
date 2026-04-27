@@ -415,6 +415,7 @@ const ModuleShow: React.FC = () => {
   const [quickProjectLoading, setQuickProjectLoading] = useState(false);
   const [quickProjectCustomerOptions, setQuickProjectCustomerOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [quickProjectTemplateOptions, setQuickProjectTemplateOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [quickProjectDynamicOptions, setQuickProjectDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [quickProjectTargetModuleIds, setQuickProjectTargetModuleIds] = useState<string[]>([]);
   const [quickProjectLinkedRecords, setQuickProjectLinkedRecords] = useState<Record<string, string | null>>({});
   const [quickProjectRelationOptions, setQuickProjectRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -2920,7 +2921,12 @@ const ModuleShow: React.FC = () => {
   const loadQuickProjectModalOptions = useCallback(async (prefill?: { customerId?: string | null; templateId?: string | null }) => {
     const prefillCustomerId = String(prefill?.customerId || '').trim();
     try {
-      const [recentCustomerOptions, exactCustomerOptions, { data: templates, error: templatesError }] = await Promise.all([
+      const dynamicCategories = Array.from(new Set(
+        quickProjectModalFields
+          .map((field: any) => String(field?.dynamicOptionsCategory || '').trim())
+          .filter(Boolean)
+      ));
+      const [recentCustomerOptions, exactCustomerOptions, { data: templates, error: templatesError }, dynamicOptionMap] = await Promise.all([
         fetchRelationOptionsForField(supabase, quickProjectCustomerField, { limit: 200 }),
         prefillCustomerId
           ? fetchRelationOptionsForField(supabase, quickProjectCustomerField, { exactId: prefillCustomerId, limit: 1 }).catch(() => [])
@@ -2929,6 +2935,9 @@ const ModuleShow: React.FC = () => {
           .from('process_templates')
           .select('id,name,module_id,module_ids,is_active')
           .order('name', { ascending: true }),
+        dynamicCategories.length > 0
+          ? fetchDynamicOptionsMap(supabase, dynamicCategories)
+          : Promise.resolve({}),
       ]);
       if (templatesError) throw templatesError;
       const customerOptions = mergeOptionLists(recentCustomerOptions, exactCustomerOptions);
@@ -2941,14 +2950,16 @@ const ModuleShow: React.FC = () => {
       }));
       setQuickProjectCustomerOptions(customerOptions);
       setQuickProjectTemplateOptions(templateOptions);
-      return { customerOptions, templateOptions };
+      setQuickProjectDynamicOptions(dynamicOptionMap || {});
+      return { customerOptions, templateOptions, dynamicOptionMap: dynamicOptionMap || {} };
     } catch (error) {
       console.warn('Could not load quick project modal options', error);
       setQuickProjectCustomerOptions([]);
       setQuickProjectTemplateOptions([]);
-      return { customerOptions: [], templateOptions: [] };
+      setQuickProjectDynamicOptions({});
+      return { customerOptions: [], templateOptions: [], dynamicOptionMap: {} };
     }
-  }, [quickProjectCustomerField]);
+  }, [quickProjectCustomerField, quickProjectModalFields]);
 
   const handleOpenQuickProjectModal = useCallback(async () => {
     const baseTitle = String(getRecordTitle(data, moduleConfig, { fallback: '' }) || data?.name || data?.title || data?.system_code || 'جدید').trim();
@@ -2974,6 +2985,7 @@ const ModuleShow: React.FC = () => {
     setQuickProjectLinkedRecords({});
     setQuickProjectRelationOptions({});
     setQuickProjectRelationLoading({});
+    setQuickProjectDynamicOptions({});
     setIsQuickProjectModalOpen(true);
   }, [data, loadQuickProjectModalOptions, moduleConfig, moduleId, quickProjectForm]);
 
@@ -3006,6 +3018,7 @@ const ModuleShow: React.FC = () => {
       setQuickProjectLinkedRecords({});
       setQuickProjectRelationOptions({});
       setQuickProjectRelationLoading({});
+      setQuickProjectDynamicOptions({});
       return;
     }
 
@@ -6030,6 +6043,7 @@ const ModuleShow: React.FC = () => {
           setQuickProjectLinkedRecords({});
           setQuickProjectRelationOptions({});
           setQuickProjectRelationLoading({});
+          setQuickProjectDynamicOptions({});
           quickProjectSubmitLockRef.current = false;
           quickProjectForm.resetFields();
         }}
@@ -6050,7 +6064,9 @@ const ModuleShow: React.FC = () => {
               ? quickProjectCustomerOptions
               : fieldKey === 'process_template_id'
                 ? quickProjectTemplateOptions
-                : field.options;
+                : field.dynamicOptionsCategory
+                  ? (quickProjectDynamicOptions[String(field.dynamicOptionsCategory || '').trim()] || field.options || [])
+                  : field.options;
             const handleOptionsUpdate = fieldKey === 'customer_id' || fieldKey === 'process_template_id'
               ? () => {
                   void loadQuickProjectModalOptions({

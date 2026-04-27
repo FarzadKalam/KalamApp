@@ -24,7 +24,14 @@ import { applyInventoryDeltas, syncMultipleProductsStock } from '../utils/invent
 import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField, SelectOption } from '../types';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { buildStandardSelectPopupRootStyle, resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../utils/popupContainer';
+import OverlayEventBoundary from './OverlayEventBoundary';
+import {
+  buildStandardSelectPopupRootStyle,
+  resolveOverlayPopupContainer,
+  resolveParentOverlayZIndex,
+  resolveSelectPopupContainer,
+  resolveStableOverlayRoot,
+} from '../utils/popupContainer';
 import {
   applyTaskSourceRecordFilter,
   buildTaskSourcePatch,
@@ -61,10 +68,11 @@ import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import WorkflowActionsBuilder from './workflows/WorkflowActionsBuilder';
 import HelpHint from './HelpHint';
 import {
+  buildProcessLinkMapFromRecord,
   createProcessLinkedFieldKey,
   doesProcessTemplateSupportModule,
+  extractProcessLinkMapFromStages,
   getProcessTargetModuleFields,
-  getRelationFieldLinksForModules,
   mergeProcessLinkMaps,
   normalizeProcessTargetModuleIds,
   parseProcessLinkMap,
@@ -519,6 +527,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [tasksLoaded, setTasksLoaded] = useState(false);
   const autoOpenedTaskIdRef = useRef<string | null>(null);
   const taskQuickModalHistoryRef = useRef<string | null>(null);
+  const taskQuickModalBoundaryRef = useRef<HTMLDivElement | null>(null);
   const draftTemplateSelectionRef = useRef<Record<string, { start: number; end: number }>>({});
   const draftStageNameInputRef = useRef<any>(null);
   const draftStageDescriptionInputRef = useRef<any>(null);
@@ -561,9 +570,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, []);
   const openTaskLayerConfirm = useCallback((config: Parameters<typeof Modal.confirm>[0]) => (
     Modal.confirm({
-      zIndex: 13020,
+      zIndex: resolveParentOverlayZIndex(taskQuickModalBoundaryRef.current, 15080) + 60,
       centered: true,
       maskClosable: false,
+      getContainer: () => resolveStableOverlayRoot(resolveOverlayPopupContainer(taskQuickModalBoundaryRef.current)),
       ...config,
     })
   ), []);
@@ -4619,7 +4629,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 onTaskUpdated={handleHandoverTaskUpdated}
                 size="middle"
                 showReview
-                modalZIndex={12050}
+                modalZIndex={15120}
               />
             </div>
           ) : null}
@@ -5029,19 +5039,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!isProcessRecordModule || readOnly) return;
     const normalizedTemplateId = String(group?.templateId || '').trim() || null;
     const stageSeed = Array.isArray(group?.stages) ? group?.stages : [];
-    const seededLinks = stageSeed.reduce<Record<string, string | null>>((acc, stage: any) => {
-      const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
-        ? stage.process_link_map
-        : {};
-      Object.entries(rawMap).forEach(([targetModuleId, linkedRecordId]) => {
-        const normalizedTargetModuleId = String(targetModuleId || '').trim();
-        const normalizedRecordId = String(linkedRecordId || '').trim();
-        if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
-          acc[normalizedTargetModuleId] = normalizedRecordId;
-        }
-      });
-      return acc;
-    }, {});
+    const seededLinks = extractProcessLinkMapFromStages(stageSeed);
     const seededTargetModuleIds = normalizeProcessTargetModuleIds(
       [
         ...stageSeed.flatMap((stage: any) => Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
@@ -5097,10 +5095,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, []);
 
-  const resolveKnownProcessLinks = useCallback(async (targetModuleIds: string[]) => {
+  const resolveKnownProcessLinks = useCallback(async (targetModuleIds: string[], explicitLinks?: Record<string, string | null> | null) => {
     const normalizedTargetModuleIds = normalizeProcessTargetModuleIds(targetModuleIds, moduleId);
     const directContextLinks = mergeProcessLinkMaps(
       recordId && moduleId ? { [moduleId]: String(recordId) } : {},
+      explicitLinks || {},
     );
     if (!recordId || !moduleId || normalizedTargetModuleIds.length === 0) {
       return directContextLinks;
@@ -5114,9 +5113,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .maybeSingle();
       if (error) throw error;
 
-      return mergeProcessLinkMaps(
-        directContextLinks,
-        getRelationFieldLinksForModules(moduleId, sourceRecord || null, normalizedTargetModuleIds),
+      return buildProcessLinkMapFromRecord(
+        moduleId,
+        sourceRecord || null,
+        normalizedTargetModuleIds,
+        explicitLinks || {},
       );
     } catch (error) {
       console.warn('Could not infer process links from current record', error);
@@ -5220,7 +5221,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         ));
 
         const knownLinks = appendProcessModalMode === 'links'
-          ? (appendProcessLinkedRecordsRef.current || {})
+          ? (await resolveKnownProcessLinks(targetModuleIds, appendProcessLinkedRecordsRef.current || {}))
           : (await resolveKnownProcessLinks(targetModuleIds) || {});
         if (cancelled) return;
         appendProcessLinkedRecordsRef.current = knownLinks;
@@ -7616,13 +7617,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           content: { overflow: 'hidden' },
         }}
         modalRender={(node) => (
-          <div
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-            onTouchStart={(event) => event.stopPropagation()}
-          >
-            {node}
-          </div>
+          <OverlayEventBoundary>
+            <div ref={taskQuickModalBoundaryRef}>
+              {node}
+            </div>
+          </OverlayEventBoundary>
         )}
       >
         {activeTaskQuickModalTask ? renderPopupContent(activeTaskQuickModalTask) : null}

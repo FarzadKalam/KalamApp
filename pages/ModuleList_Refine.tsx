@@ -504,6 +504,10 @@ export const ModuleListRefine: React.FC<{
   const [tagViewFilterTotal, setTagViewFilterTotal] = useState(0);
   const [tagViewFilterLoading, setTagViewFilterLoading] = useState(false);
   const [tagViewFilterRefreshSeed, setTagViewFilterRefreshSeed] = useState(0);
+  const [nonListRows, setNonListRows] = useState<any[]>([]);
+  const [nonListTotal, setNonListTotal] = useState(0);
+  const [nonListLoading, setNonListLoading] = useState(false);
+  const [nonListReady, setNonListReady] = useState(false);
   const [gridPageSize, setGridPageSize] = useState<number>(() => getDefaultGridPageSize()); // ✅ Grid pagination
   const [kanbanVisibleCounts, setKanbanVisibleCounts] = useState<Record<string, number>>({});
   const [kanbanDraggingRecordId, setKanbanDraggingRecordId] = useState<string | null>(null);
@@ -562,6 +566,7 @@ export const ModuleListRefine: React.FC<{
     () => isModuleListLiveInvalidationSupportedView(viewMode),
     [viewMode]
   );
+  const isListView = viewMode === ViewMode.LIST;
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
     resource: dataResource,
@@ -599,19 +604,37 @@ export const ModuleListRefine: React.FC<{
         .filter(Boolean) as Array<{ fieldKey: string; sourceOperator: string; tagIds: string[] }>,
     [moduleConfig, viewFiltersState]
   );
+  const normalizedActiveTagViewFilters = useMemo(
+    () =>
+      activeTagViewFilters.map((item) => ({
+        sourceOperator: String(item?.sourceOperator || "eq").trim(),
+        tagIds: (Array.isArray(item?.tagIds) ? item.tagIds : [])
+          .map((tagId) => String(tagId || "").trim())
+          .filter(Boolean),
+      })),
+    [activeTagViewFilters]
+  );
   const hasActiveTagViewFilters = activeTagViewFilters.length > 0;
-  const loading = hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading;
-  const queryPending = hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending;
-  const allData = hasActiveTagViewFilters ? tagViewFilterRows : baseAllData;
+  const loading = isListView
+    ? (hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading)
+    : nonListLoading;
+  const queryPending = isListView
+    ? (hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending)
+    : nonListLoading;
+  const allData = isListView
+    ? (hasActiveTagViewFilters ? tagViewFilterRows : baseAllData)
+    : nonListRows;
   const effectiveAllData = useMemo(() => {
     if (resolvedModuleId !== "cash_bank_operations" || cashBankFallbackRows.length === 0) return allData;
     const existingIds = new Set((allData || []).map((row: any) => String(row?.id || "").trim()).filter(Boolean));
     const fallbackRows = cashBankFallbackRows.filter((row: any) => !existingIds.has(String(row?.id || "").trim()));
     return [...(allData || []), ...fallbackRows];
   }, [allData, cashBankFallbackRows, resolvedModuleId]);
-  const hasQueryResult = hasActiveTagViewFilters
-    ? (!tagViewFilterLoading || tagViewFilterRows.length > 0)
-    : baseHasQueryResult;
+  const hasQueryResult = isListView
+    ? (hasActiveTagViewFilters
+      ? (!tagViewFilterLoading || tagViewFilterRows.length > 0)
+      : baseHasQueryResult)
+    : nonListReady;
   const selectedRows = useMemo(
     () =>
       selectedRowKeys
@@ -636,6 +659,9 @@ export const ModuleListRefine: React.FC<{
       if (resolvedModuleId === "cash_bank_operations" && cashBankFallbackRows.length > 0) {
         return effectiveAllData.length;
       }
+      if (!isListView) {
+        return Number(nonListTotal || effectiveAllData.length || 0);
+      }
       if (hasActiveTagViewFilters) {
         return Number(tagViewFilterTotal || 0);
       }
@@ -643,7 +669,7 @@ export const ModuleListRefine: React.FC<{
       const paginationTotal = Number(paginationConfig?.total || 0);
       return Number(paginationTotal || tableQueryResult.data?.total || 0);
     },
-    [cashBankFallbackRows.length, effectiveAllData.length, hasActiveTagViewFilters, resolvedModuleId, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
+    [cashBankFallbackRows.length, effectiveAllData.length, hasActiveTagViewFilters, isListView, nonListTotal, resolvedModuleId, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
   );
   const effectiveTablePagination = useMemo(() => {
     if (resolvedModuleId === "cash_bank_operations" && cashBankFallbackRows.length > 0) {
@@ -662,6 +688,339 @@ export const ModuleListRefine: React.FC<{
       pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
     };
   }, [cashBankFallbackRows.length, current, effectiveAllData.length, hasActiveTagViewFilters, pageSize, resolvedModuleId, tableProps.pagination, tagViewFilterTotal]);
+
+  const fetchRowsByIdsPreservingOrder = useCallback(async (ids: string[], serverFilters: CrudFilters) => {
+    if (!ids.length || !resolvedModuleId) return [];
+    const resource = dataResource || resolvedModuleId;
+    const CHUNK_SIZE = 500;
+    const rowById = new Map<string, any>();
+
+    for (let index = 0; index < ids.length; index += CHUNK_SIZE) {
+      const chunkIds = ids.slice(index, index + CHUNK_SIZE);
+      const response = await refineProvider.getList({
+        resource,
+        pagination: { current: 1, pageSize: Math.max(chunkIds.length, 1) },
+        sorters: stableSorters,
+        filters: [
+          ...serverFilters,
+          { field: "id", operator: "in", value: chunkIds } as any,
+        ],
+      });
+      const rows = Array.isArray(response?.data) ? response.data : [];
+      rows.forEach((row: any) => {
+        const rowId = String(row?.id || "").trim();
+        if (rowId) {
+          rowById.set(rowId, row);
+        }
+      });
+    }
+
+    return ids
+      .map((id) => rowById.get(id))
+      .filter(Boolean);
+  }, [dataResource, refineProvider, resolvedModuleId, stableSorters]);
+
+  const fetchAllRowsForFilters = useCallback(async (serverFilters: CrudFilters) => {
+    if (!resolvedModuleId) {
+      return { rows: [], total: 0 };
+    }
+    const resource = dataResource || resolvedModuleId;
+    const SCAN_PAGE_SIZE = 500;
+    const rows: any[] = [];
+    let currentPage = 1;
+    let totalPages = 1;
+    let resolvedTotal = 0;
+
+    while (currentPage <= totalPages) {
+      const response = await refineProvider.getList({
+        resource,
+        pagination: { current: currentPage, pageSize: SCAN_PAGE_SIZE },
+        sorters: stableSorters,
+        filters: serverFilters,
+      });
+
+      const pageRows = Array.isArray(response?.data) ? response.data : [];
+      rows.push(...pageRows);
+
+      if (currentPage === 1) {
+        resolvedTotal = Number(response?.total || 0);
+        if (resolvedTotal > 0) {
+          totalPages = Math.max(1, Math.ceil(resolvedTotal / SCAN_PAGE_SIZE));
+        } else if (pageRows.length < SCAN_PAGE_SIZE) {
+          break;
+        } else {
+          totalPages = Number.MAX_SAFE_INTEGER;
+        }
+      } else if (pageRows.length < SCAN_PAGE_SIZE && totalPages === Number.MAX_SAFE_INTEGER) {
+        break;
+      }
+
+      if (pageRows.length === 0) break;
+      currentPage += 1;
+    }
+
+    return {
+      rows,
+      total: resolvedTotal || rows.length,
+    };
+  }, [dataResource, refineProvider, resolvedModuleId, stableSorters]);
+
+  const fetchOrderedIdsForFilters = useCallback(async (serverFilters: CrudFilters) => {
+    if (!resolvedModuleId || !dataResource) return [];
+
+    const orderedIds: string[] = [];
+    const SCAN_PAGE_SIZE = 1000;
+    let scanPage = 1;
+    let totalPages = 1;
+
+    while (scanPage <= totalPages) {
+      const response = await refineProvider.getList({
+        resource: dataResource,
+        pagination: { current: scanPage, pageSize: SCAN_PAGE_SIZE },
+        sorters: stableSorters,
+        filters: serverFilters,
+        meta: { select: "id" },
+      });
+
+      const rows = Array.isArray(response?.data) ? response.data : [];
+      orderedIds.push(
+        ...rows
+          .map((row: any) => String(row?.id || "").trim())
+          .filter(Boolean)
+      );
+
+      if (scanPage === 1) {
+        const totalRows = Number(response?.total || 0);
+        if (totalRows > 0) {
+          totalPages = Math.max(1, Math.ceil(totalRows / SCAN_PAGE_SIZE));
+        } else if (rows.length < SCAN_PAGE_SIZE) {
+          break;
+        } else {
+          totalPages = Number.MAX_SAFE_INTEGER;
+        }
+      } else if (rows.length < SCAN_PAGE_SIZE && totalPages === Number.MAX_SAFE_INTEGER) {
+        break;
+      }
+
+      if (rows.length === 0) break;
+      scanPage += 1;
+    }
+
+    return orderedIds;
+  }, [dataResource, refineProvider, resolvedModuleId, stableSorters]);
+
+  const resolveOrderedTagFilteredIds = useCallback(async (serverFilters: CrudFilters) => {
+    if (!resolvedModuleId || !dataResource) return [];
+
+    const cacheSignature = JSON.stringify({
+      moduleId: resolvedModuleId,
+      dataResource,
+      filters: serverFilters,
+      sorters: stableSorters,
+      tagFilters: normalizedActiveTagViewFilters,
+    });
+
+    if (tagViewFilterIdsCacheRef.current?.signature === cacheSignature) {
+      return tagViewFilterIdsCacheRef.current.ids;
+    }
+
+    const needsAllTaggedUniverse = normalizedActiveTagViewFilters.some(
+      (item) => {
+        const operator = String(item?.sourceOperator || "eq").trim();
+        return operator === "is_null" || operator === "not_null";
+      }
+    );
+    const hasNegativeTagFilter = normalizedActiveTagViewFilters.some((item) => {
+      const operator = String(item?.sourceOperator || "eq").trim();
+      return operator === "neq" || operator === "not_in" || operator === "not_contains";
+    });
+    const unionTagIds = Array.from(
+      new Set(normalizedActiveTagViewFilters.flatMap((item) => item.tagIds).filter(Boolean))
+    );
+    const RECORD_TAGS_SCAN_SIZE = 1000;
+    const TAG_FAST_FILTER_LIMIT = 800;
+    const selectedTagsByRecord = new Map<string, Set<string>>();
+    const allTagsByRecord = new Map<string, Set<string>>();
+
+    const loadTagRows = async (tagIds?: string[] | null) => {
+      const target = tagIds && tagIds.length > 0 ? selectedTagsByRecord : allTagsByRecord;
+      let tagsPage = 0;
+
+      while (true) {
+        let tagQuery = supabase
+          .from("record_tags")
+          .select("record_id, tag_id")
+          .eq("module_id", resolvedModuleId)
+          .range(tagsPage * RECORD_TAGS_SCAN_SIZE, ((tagsPage + 1) * RECORD_TAGS_SCAN_SIZE) - 1);
+
+        if (tagIds && tagIds.length > 0) {
+          tagQuery = tagQuery.in("tag_id", tagIds);
+        }
+
+        const { data: tagRows, error: tagError } = await tagQuery;
+        if (tagError) throw tagError;
+
+        const normalizedRows = Array.isArray(tagRows) ? tagRows : [];
+        normalizedRows.forEach((row: any) => {
+          const recordId = String(row?.record_id || "").trim();
+          const tagId = String(row?.tag_id || "").trim();
+          if (!recordId || !tagId) return;
+          if (!target.has(recordId)) {
+            target.set(recordId, new Set<string>());
+          }
+          target.get(recordId)!.add(tagId);
+        });
+
+        if (normalizedRows.length < RECORD_TAGS_SCAN_SIZE) break;
+        tagsPage += 1;
+      }
+    };
+
+    if (unionTagIds.length > 0) {
+      await loadTagRows(unionTagIds);
+    }
+    if (needsAllTaggedUniverse) {
+      await loadTagRows();
+    }
+
+    const taggedRecordIds = needsAllTaggedUniverse
+      ? new Set(Array.from(allTagsByRecord.keys()))
+      : null;
+
+    const positiveMatchSets: Array<Set<string>> = [];
+    const excludedRecordIds = new Set<string>();
+    const buildMatchedRecordIdSet = (tagIds: string[]) => {
+      const matched = new Set<string>();
+      if (tagIds.length === 0) return matched;
+      selectedTagsByRecord.forEach((recordTagIds, recordId) => {
+        if (tagIds.some((tagId) => recordTagIds.has(tagId))) {
+          matched.add(recordId);
+        }
+      });
+      return matched;
+    };
+
+    normalizedActiveTagViewFilters.forEach((tagFilter) => {
+      const operator = String(tagFilter.sourceOperator || "eq").trim();
+      const tagIds = tagFilter.tagIds;
+
+      if (operator === "not_null") {
+        positiveMatchSets.push(taggedRecordIds || new Set<string>());
+        return;
+      }
+
+      if (operator === "is_null") {
+        (taggedRecordIds || new Set<string>()).forEach((recordId) => excludedRecordIds.add(recordId));
+        return;
+      }
+
+      const matchedRecordIds = buildMatchedRecordIdSet(tagIds);
+      if (operator === "eq" || operator === "in" || operator === "contains") {
+        positiveMatchSets.push(matchedRecordIds);
+        return;
+      }
+
+      if (operator === "neq" || operator === "not_in" || operator === "not_contains") {
+        matchedRecordIds.forEach((recordId) => excludedRecordIds.add(recordId));
+      }
+    });
+
+    const includedRecordIds = positiveMatchSets.length > 0
+      ? positiveMatchSets.reduce((carry, currentSet) => {
+        if (!carry) return new Set(currentSet);
+        const next = new Set<string>();
+        carry.forEach((recordId) => {
+          if (currentSet.has(recordId)) {
+            next.add(recordId);
+          }
+        });
+        return next;
+      }, null as Set<string> | null)
+      : null;
+
+    if (includedRecordIds && includedRecordIds.size === 0) {
+      tagViewFilterIdsCacheRef.current = {
+        signature: cacheSignature,
+        ids: [],
+      };
+      return [];
+    }
+
+    const canUseDirectIdFastPath =
+      (!includedRecordIds || includedRecordIds.size <= TAG_FAST_FILTER_LIMIT) &&
+      (!excludedRecordIds.size || excludedRecordIds.size <= TAG_FAST_FILTER_LIMIT) &&
+      (includedRecordIds !== null || excludedRecordIds.size > 0 || needsAllTaggedUniverse || hasNegativeTagFilter);
+
+    if (canUseDirectIdFastPath) {
+      const narrowedFilters: CrudFilters = [...serverFilters];
+      if (includedRecordIds && includedRecordIds.size > 0) {
+        narrowedFilters.push({
+          field: "id",
+          operator: "in",
+          value: Array.from(includedRecordIds),
+        } as any);
+      }
+      if (excludedRecordIds.size > 0) {
+        narrowedFilters.push({
+          field: "id",
+          operator: "nin",
+          value: Array.from(excludedRecordIds),
+        } as any);
+      }
+
+      const orderedFilteredIds = await fetchOrderedIdsForFilters(narrowedFilters);
+      tagViewFilterIdsCacheRef.current = {
+        signature: cacheSignature,
+        ids: orderedFilteredIds,
+      };
+      return orderedFilteredIds;
+    }
+
+    const tagsByRecord = needsAllTaggedUniverse ? allTagsByRecord : selectedTagsByRecord;
+
+    const passesTagFilters = (recordId: string) => {
+      const recordTagIds = tagsByRecord.get(recordId) || new Set<string>();
+      const hasAnyTag = recordTagIds.size > 0;
+
+      for (const tagFilter of normalizedActiveTagViewFilters) {
+        const op = String(tagFilter.sourceOperator || "eq");
+        const tagIds = tagFilter.tagIds;
+
+        if (op === "is_null") {
+          if (hasAnyTag) return false;
+          continue;
+        }
+
+        if (op === "not_null") {
+          if (!hasAnyTag) return false;
+          continue;
+        }
+
+        if (tagIds.length === 0) continue;
+        const hasSelectedTag = tagIds.some((tagId) => recordTagIds.has(tagId));
+
+        if (op === "eq" || op === "in" || op === "contains") {
+          if (!hasSelectedTag) return false;
+          continue;
+        }
+
+        if (op === "neq" || op === "not_in" || op === "not_contains") {
+          if (hasSelectedTag) return false;
+          continue;
+        }
+      }
+
+      return true;
+    };
+    const baseOrderedIds = await fetchOrderedIdsForFilters(serverFilters);
+    const orderedFilteredIds = baseOrderedIds.filter((id) => passesTagFilters(id));
+
+    tagViewFilterIdsCacheRef.current = {
+      signature: cacheSignature,
+      ids: orderedFilteredIds,
+    };
+    return orderedFilteredIds;
+  }, [dataResource, fetchOrderedIdsForFilters, normalizedActiveTagViewFilters, resolvedModuleId, stableSorters]);
 
   useEffect(() => {
     autoSortSyncDoneRef.current = false;
@@ -732,22 +1091,13 @@ export const ModuleListRefine: React.FC<{
   }, [isMobileViewport]);
 
   useEffect(() => {
-    if (!resolvedModuleId) return;
-    const isListView = viewMode === ViewMode.LIST;
-    const fallbackPageSize = isListView ? DEFAULT_LIST_PAGE_SIZE : getDefaultGridPageSize();
-    const desiredPageSize = isListView
-      ? DEFAULT_LIST_PAGE_SIZE
-      : Math.max(Number(tableQueryResult.data?.total || 0), fallbackPageSize);
+    if (!resolvedModuleId || !isListView) return;
     const currentPageSize = Number(pageSize || 0);
-
-    if (isListView && currentPageSize <= 0) return;
-    if (!desiredPageSize || currentPageSize === desiredPageSize || lastRequestedPageSizeRef.current === desiredPageSize) return;
-    lastRequestedPageSizeRef.current = desiredPageSize;
-    if (current !== 1) {
-      setCurrent(1);
-    }
-    setPageSize(desiredPageSize);
-  }, [current, pageSize, resolvedModuleId, setCurrent, setPageSize, tableQueryResult.data?.total, viewMode]);
+    if (currentPageSize > 0) return;
+    if (lastRequestedPageSizeRef.current === DEFAULT_LIST_PAGE_SIZE) return;
+    lastRequestedPageSizeRef.current = DEFAULT_LIST_PAGE_SIZE;
+    setPageSize(DEFAULT_LIST_PAGE_SIZE);
+  }, [isListView, pageSize, resolvedModuleId, setPageSize]);
 
   useEffect(() => {
     if (autoSortSyncDoneRef.current) return;
@@ -755,6 +1105,72 @@ export const ModuleListRefine: React.FC<{
     if (areCrudSortersEqual(sorters as CrudSort[], stableSorters)) return;
     setSorters(stableSorters);
   }, [setSorters, sorters, stableSorters]);
+
+  useEffect(() => {
+    if (isListView || !resolvedModuleId || !dataResource) {
+      setNonListRows((prev) => (prev.length > 0 ? [] : prev));
+      setNonListTotal((prev) => (prev !== 0 ? 0 : prev));
+      setNonListLoading(false);
+      setNonListReady(false);
+      return;
+    }
+
+    let isActive = true;
+
+    const loadNonListRows = async () => {
+      try {
+        setNonListLoading(true);
+        setNonListReady(false);
+        const serverFilters = buildMergedFilters(viewFiltersState, searchTerm, columnFilters);
+
+        if (hasActiveTagViewFilters) {
+          const orderedIds = await resolveOrderedTagFilteredIds(serverFilters);
+          const rows = orderedIds.length > 0
+            ? await fetchRowsByIdsPreservingOrder(orderedIds, serverFilters)
+            : [];
+          if (!isActive) return;
+          setNonListRows(rows);
+          setNonListTotal(orderedIds.length);
+          setNonListReady(true);
+          return;
+        }
+
+        const { rows, total } = await fetchAllRowsForFilters(serverFilters);
+        if (!isActive) return;
+        setNonListRows(rows);
+        setNonListTotal(total);
+        setNonListReady(true);
+      } catch (error) {
+        if (!isActive) return;
+        console.error("Error while loading non-list module rows:", error);
+        setNonListRows([]);
+        setNonListTotal(0);
+        setNonListReady(true);
+      } finally {
+        if (isActive) {
+          setNonListLoading(false);
+        }
+      }
+    };
+
+    void loadNonListRows();
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    columnFilters,
+    dataResource,
+    fetchAllRowsForFilters,
+    fetchRowsByIdsPreservingOrder,
+    hasActiveTagViewFilters,
+    isListView,
+    resolvedModuleId,
+    resolveOrderedTagFilteredIds,
+    searchTerm,
+    tagViewFilterRefreshSeed,
+    viewFiltersState,
+  ]);
 
   useEffect(() => {
     if (!hasInitializedModuleStateRef.current) {
@@ -1753,6 +2169,22 @@ export const ModuleListRefine: React.FC<{
     navigate(`/${resolvedModuleId}/${recordId}`);
   }, [navigate, resolvedModuleId, useQuickPreviewModal]);
 
+  const handleTableRowProps = useCallback((record: any) => ({
+    onClick: (event: React.MouseEvent<HTMLElement>) => {
+      if (selectedRowKeys.length > 0) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          'a,button,input,label,select,textarea,[role="button"],.ant-btn,.ant-checkbox-wrapper,.ant-checkbox'
+        )
+      ) {
+        return;
+      }
+      openRecordFromList(record);
+    },
+    style: { cursor: selectedRowKeys.length > 0 ? 'default' : 'pointer' },
+  }), [selectedRowKeys, openRecordFromList]);
+
   const moduleListNavigate = useCallback((path: string) => {
     const normalizedPath = String(path || "").trim();
     if (resolvedModuleId === "cash_bank_operations") {
@@ -2190,7 +2622,7 @@ export const ModuleListRefine: React.FC<{
   }, [searchTerm, viewFiltersState]);
 
   useEffect(() => {
-    if (!hasActiveTagViewFilters || !resolvedModuleId || !dataResource) {
+    if (!isListView || !hasActiveTagViewFilters || !resolvedModuleId || !dataResource) {
       setTagViewFilterRows((prev) => (prev.length > 0 ? [] : prev));
       setTagViewFilterTotal((prev) => (prev !== 0 ? 0 : prev));
       setTagViewFilterLoading((prev) => (prev ? false : prev));
@@ -2205,168 +2637,16 @@ export const ModuleListRefine: React.FC<{
         setTagViewFilterLoading(true);
 
         const serverFilters = buildMergedFilters(viewFiltersState, searchTerm, columnFilters);
-        const normalizedTagFilters = activeTagViewFilters.map((item) => ({
-          sourceOperator: String(item?.sourceOperator || "eq").trim(),
-          tagIds: (Array.isArray(item?.tagIds) ? item.tagIds : [])
-            .map((tagId) => String(tagId || "").trim())
-            .filter(Boolean),
-        }));
-        const cacheSignature = JSON.stringify({
-          moduleId: resolvedModuleId,
-          dataResource,
-          filters: serverFilters,
-          sorters: stableSorters,
-          tagFilters: normalizedTagFilters,
-        });
-
-        let orderedFilteredIds: string[] = [];
-        if (tagViewFilterIdsCacheRef.current?.signature === cacheSignature) {
-          orderedFilteredIds = tagViewFilterIdsCacheRef.current.ids;
-        } else {
-          const requiresAnyTagLookup = normalizedTagFilters.some(
-            (item) => item.sourceOperator === "is_null" || item.sourceOperator === "not_null"
-          );
-          const unionTagIds = Array.from(
-            new Set(normalizedTagFilters.flatMap((item) => item.tagIds).filter(Boolean))
-          );
-          const tagsByRecord = new Map<string, Set<string>>();
-          const RECORD_TAGS_SCAN_SIZE = 1000;
-
-          let tagsPage = 0;
-          while (true) {
-            let tagQuery = supabase
-              .from("record_tags")
-              .select("record_id, tag_id")
-              .eq("module_id", resolvedModuleId)
-              .range(tagsPage * RECORD_TAGS_SCAN_SIZE, ((tagsPage + 1) * RECORD_TAGS_SCAN_SIZE) - 1);
-
-            if (!requiresAnyTagLookup && unionTagIds.length > 0) {
-              tagQuery = tagQuery.in("tag_id", unionTagIds);
-            }
-
-            const { data: tagRows, error: tagError } = await tagQuery;
-            if (tagError) throw tagError;
-
-            const normalizedRows = Array.isArray(tagRows) ? tagRows : [];
-            normalizedRows.forEach((row: any) => {
-              const recordId = String(row?.record_id || "").trim();
-              const tagId = String(row?.tag_id || "").trim();
-              if (!recordId || !tagId) return;
-              if (!tagsByRecord.has(recordId)) {
-                tagsByRecord.set(recordId, new Set<string>());
-              }
-              tagsByRecord.get(recordId)!.add(tagId);
-            });
-
-            if (normalizedRows.length < RECORD_TAGS_SCAN_SIZE) break;
-            tagsPage += 1;
-          }
-
-          const passesTagFilters = (recordId: string) => {
-            const recordTagIds = tagsByRecord.get(recordId) || new Set<string>();
-            const hasAnyTag = recordTagIds.size > 0;
-
-            for (const tagFilter of normalizedTagFilters) {
-              const op = String(tagFilter.sourceOperator || "eq");
-              const tagIds = tagFilter.tagIds;
-
-              if (op === "is_null") {
-                if (hasAnyTag) return false;
-                continue;
-              }
-
-              if (op === "not_null") {
-                if (!hasAnyTag) return false;
-                continue;
-              }
-
-              if (tagIds.length === 0) continue;
-              const hasSelectedTag = tagIds.some((tagId) => recordTagIds.has(tagId));
-
-              if (op === "eq" || op === "in" || op === "contains") {
-                if (!hasSelectedTag) return false;
-                continue;
-              }
-
-              if (op === "neq" || op === "not_in" || op === "not_contains") {
-                if (hasSelectedTag) return false;
-                continue;
-              }
-            }
-
-            return true;
-          };
-
-          const SCAN_PAGE_SIZE = 1000;
-          let scanPage = 1;
-          let totalPages = 1;
-          while (scanPage <= totalPages) {
-            const response = await refineProvider.getList({
-              resource: dataResource,
-              pagination: { current: scanPage, pageSize: SCAN_PAGE_SIZE },
-              sorters: stableSorters,
-              filters: serverFilters,
-              meta: { select: "id" },
-            });
-
-            const rows = Array.isArray(response?.data) ? response.data : [];
-            const ids = rows
-              .map((row: any) => String(row?.id || "").trim())
-              .filter(Boolean);
-
-            ids.forEach((id) => {
-              if (passesTagFilters(id)) {
-                orderedFilteredIds.push(id);
-              }
-            });
-
-            if (scanPage === 1) {
-              const totalRows = Number(response?.total || 0);
-              if (totalRows > 0) {
-                totalPages = Math.max(1, Math.ceil(totalRows / SCAN_PAGE_SIZE));
-              } else if (rows.length < SCAN_PAGE_SIZE) {
-                break;
-              } else {
-                totalPages = Number.MAX_SAFE_INTEGER;
-              }
-            } else if (rows.length < SCAN_PAGE_SIZE && totalPages === Number.MAX_SAFE_INTEGER) {
-              break;
-            }
-
-            if (rows.length === 0) break;
-            scanPage += 1;
-          }
-
-          tagViewFilterIdsCacheRef.current = {
-            signature: cacheSignature,
-            ids: orderedFilteredIds,
-          };
-        }
+        const orderedFilteredIds = await resolveOrderedTagFilteredIds(serverFilters);
 
         const safeCurrent = Math.max(1, Number(current || 1));
         const safePageSize = Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE));
         const fromIndex = (safeCurrent - 1) * safePageSize;
         const pageIds = orderedFilteredIds.slice(fromIndex, fromIndex + safePageSize);
 
-        let pageRows: any[] = [];
-        if (pageIds.length > 0) {
-          const pageResponse = await refineProvider.getList({
-            resource: dataResource,
-            pagination: { current: 1, pageSize: Math.max(pageIds.length, 1) },
-            sorters: stableSorters,
-            filters: [
-              ...serverFilters,
-              { field: "id", operator: "in", value: pageIds } as any,
-            ],
-          });
-          const fetchedRows = Array.isArray(pageResponse?.data) ? pageResponse.data : [];
-          const rowById = new Map(
-            fetchedRows.map((row: any) => [String(row?.id || "").trim(), row])
-          );
-          pageRows = pageIds
-            .map((id) => rowById.get(id))
-            .filter(Boolean);
-        }
+        const pageRows = pageIds.length > 0
+          ? await fetchRowsByIdsPreservingOrder(pageIds, serverFilters)
+          : [];
 
         if (!isActive) return;
         setTagViewFilterRows(pageRows);
@@ -2389,16 +2669,15 @@ export const ModuleListRefine: React.FC<{
       isActive = false;
     };
   }, [
-    activeTagViewFilters,
     columnFilters,
     current,
     dataResource,
+    fetchRowsByIdsPreservingOrder,
     hasActiveTagViewFilters,
+    isListView,
     pageSize,
-    refineProvider,
-    resolvedModuleId,
+    resolveOrderedTagFilteredIds,
     searchTerm,
-    stableSorters,
     tagViewFilterRefreshSeed,
     viewFiltersState,
   ]);
@@ -3327,7 +3606,7 @@ export const ModuleListRefine: React.FC<{
                 overflowCount={999}
                 count={
                   <span className="inline-flex min-w-[2rem] items-center justify-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600 shadow-none font-['Vazirmatn'] persian-number">
-                    {toPersianNumber(tableQueryResult.data?.total || 0)}
+                    {toPersianNumber(totalFilteredRecordCount)}
                   </span>
                 }
                 style={{ backgroundColor: 'transparent', boxShadow: 'none' }}
@@ -3660,21 +3939,7 @@ export const ModuleListRefine: React.FC<{
                      onChange={handleTableChange}
                      rowSelection={{ selectedRowKeys, onChange: handleRowSelectionChange, preserveSelectedRowKeys: true }}
                     onVisibleDataChange={handleVisibleDataChange}
-                    onRow={(record: any) => ({
-                      onClick: (event: React.MouseEvent<HTMLElement>) => {
-                        if (selectedRowKeys.length > 0) return;
-                        const target = event.target as HTMLElement | null;
-                        if (
-                          target?.closest(
-                            'a,button,input,label,select,textarea,[role="button"],.ant-btn,.ant-checkbox-wrapper,.ant-checkbox'
-                          )
-                        ) {
-                          return;
-                        }
-                        openRecordFromList(record);
-                      },
-                      style: { cursor: selectedRowKeys.length > 0 ? 'default' : 'pointer' },
-                    })}
+                    onRow={handleTableRowProps}
                     dynamicOptions={dynamicOptions}
                      relationOptions={effectiveRelationOptions}
                      tagsMap={tagsMap}

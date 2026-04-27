@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { cashBankOperationsConfig } from '../modules/cashBankOperationsConfig';
 import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
-import { normalizeConditionalFieldSettings, resolveConditionalFieldState } from './conditionalFieldRules';
+import { FieldType, type ModuleField } from '../types';
+import {
+  filterConditionallyVisibleFieldsForDataset,
+  normalizeConditionalFieldSettings,
+  resolveConditionalFieldState,
+} from './conditionalFieldRules';
 
 const getField = (key: string) => {
   const field = cashBankOperationsConfig.fields.find((entry) => entry.key === key);
@@ -123,5 +128,57 @@ describe('conditionalFieldRules', () => {
     });
 
     expect(settings.rules[0]?.conditions_all?.[0]?.operator).toBe('eq');
+  });
+
+  it('keeps dataset columns only when a field is visible for at least one record', () => {
+    const fields: ModuleField[] = [
+      {
+        key: 'mode',
+        type: FieldType.SELECT,
+        labels: { fa: 'حالت', en: 'Mode' },
+        options: [
+          { label: 'خودرو', value: 'car' },
+          { label: 'پیاده', value: 'walk' },
+        ],
+      } as ModuleField,
+      {
+        key: 'plate_no',
+        type: FieldType.TEXT,
+        labels: { fa: 'پلاک', en: 'Plate' },
+      } as ModuleField,
+    ];
+    const settings = normalizeConditionalFieldSettings({
+      rules: [
+        {
+          id: 'show-plate-for-car',
+          targetFieldKey: 'plate_no',
+          source: 'user',
+          enabled: true,
+          priority: 100,
+          conditions_all: [{ id: 'mode-car', field: 'mode', operator: 'eq', value: 'car' }],
+          conditions_any: [],
+          effect: { showField: true },
+        },
+      ],
+    });
+
+    const visibleInSomeRows = filterConditionallyVisibleFieldsForDataset(
+      fields,
+      fields,
+      [
+        { mode: 'walk', plate_no: '11الف111' },
+        { mode: 'car', plate_no: '22ب222' },
+      ],
+      settings
+    );
+    const hiddenInAllRows = filterConditionallyVisibleFieldsForDataset(
+      fields,
+      fields,
+      [{ mode: 'walk', plate_no: '11الف111' }],
+      settings
+    );
+
+    expect(visibleInSomeRows.map((field) => field.key)).toEqual(['mode', 'plate_no']);
+    expect(hiddenInAllRows.map((field) => field.key)).toEqual(['mode']);
   });
 });

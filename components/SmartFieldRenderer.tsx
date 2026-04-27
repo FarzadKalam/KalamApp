@@ -420,6 +420,7 @@ interface SmartFieldRendererProps {
   disableRequired?: boolean;
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
+  preferLocalPopupContainer?: boolean;
 }
 
 type ReadyTextItem = {
@@ -430,7 +431,7 @@ type ReadyTextItem = {
 };
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1400, popupContainer
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -2237,8 +2238,9 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                      popupStyle={{ zIndex: selectPopupZIndex }}
                      modalZIndex={modalOverlayZIndex}
                      overlayZIndexBase={selectPopupZIndex}
+                     preferLocalPopupContainer={preferLocalPopupContainer}
                      pickerTitle={fieldLabel}
-                 />
+                  />
             );
         }
         return (
@@ -2253,6 +2255,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 getPopupContainer={selectPopupContainer}
                 placement={selectPlacement}
                 overlayZIndexBase={selectPopupZIndex}
+                preferLocalPopupContainer={preferLocalPopupContainer}
                 pickerTitle={fieldLabel}
             />
         );
@@ -2274,6 +2277,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     popupStyle={{ zIndex: selectPopupZIndex }}
                     modalZIndex={modalOverlayZIndex}
                     overlayZIndexBase={selectPopupZIndex}
+                    preferLocalPopupContainer={preferLocalPopupContainer}
                     pickerTitle={fieldLabel}
                 />
             );
@@ -2291,6 +2295,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 getPopupContainer={selectPopupContainer}
                 placement={selectPlacement}
                 overlayZIndexBase={selectPopupZIndex}
+                preferLocalPopupContainer={preferLocalPopupContainer}
                 pickerTitle={fieldLabel}
             />
         );
@@ -2335,6 +2340,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     listHeight={isMobileViewport ? 224 : 320}
                     popupStyle={buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' })}
                     overlayZIndexBase={selectPopupZIndex + 20}
+                    preferLocalPopupContainer={preferLocalPopupContainer}
                     filterOption={false}
                     searchValue={relationSearchQuery}
                     onChange={(nextValue) => {
@@ -3371,6 +3377,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         disableRequired
         overlayZIndexBase={childOverlayZIndexBase}
         popupContainer={quickCreatePopupContainer}
+        preferLocalPopupContainer
       />
     );
   };
@@ -3461,6 +3468,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                     getPopupContainer={quickCreatePopupContainer}
                     modalContainer={quickCreatePopupContainer}
                     overlayZIndexBase={childOverlayZIndexBase}
+                    preferLocalPopupContainer
                     onChange={(value) => {
                       const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
                       const normalizedType = String(assignee_type || 'user');

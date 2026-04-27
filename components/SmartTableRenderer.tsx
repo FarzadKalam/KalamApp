@@ -24,6 +24,8 @@ import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { getTaskStatusOption } from '../utils/processTaskStatusOptions';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
+import { buildConditionalFieldStateMap, filterConditionallyVisibleFieldsForDataset } from '../utils/conditionalFieldRules';
+import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRuntime';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -84,6 +86,28 @@ export const buildSmartTablePagination = (pagination: any, isMobileViewport = fa
           return originalElement;
         },
       };
+
+const normalizeDigits = (value: string | number | null | undefined): string => {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .trim()
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+};
+
+const parseRangeValue = (
+  raw: React.Key | boolean | undefined
+): { from?: string | number; to?: string | number } => {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(String(raw));
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch {
+    return {};
+  }
+  return {};
+};
 
 const OverflowTooltipText: React.FC<{ label: string; className: string }> = ({ label, className }) => {
   const textRef = useRef<HTMLSpanElement>(null);
@@ -207,6 +231,42 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   }, [normalizeFieldKey]);
   const activeColumnFilters = controlledColumnFilters ?? internalColumnFilters;
   const isColumnFiltersControlled = controlledColumnFilters !== undefined;
+  const conditionalDisplaySettings = useMemo(
+    () => getResolvedModuleConditionalDisplay(moduleConfig?.id),
+    [moduleConfig?.id]
+  );
+  const conditionalFieldStateMapsByRowKey = useMemo(() => {
+    const maps = new Map<string, Record<string, any>>();
+    if (!moduleConfig?.fields?.length) return maps;
+    (data || []).forEach((record: any, index) => {
+      const rowKey = String(record?.id || `row_${index}`);
+      maps.set(
+        rowKey,
+        buildConditionalFieldStateMap(moduleConfig.fields || [], record || {}, conditionalDisplaySettings)
+      );
+    });
+    return maps;
+  }, [conditionalDisplaySettings, data, moduleConfig?.fields]);
+  const conditionallyVisibleFieldKeySet = useMemo(
+    () => new Set(
+      filterConditionallyVisibleFieldsForDataset(
+        moduleConfig?.fields || [],
+        moduleConfig?.fields || [],
+        data || [],
+        conditionalDisplaySettings
+      ).map((field) => String(field?.key || '').trim()).filter(Boolean)
+    ),
+    [conditionalDisplaySettings, data, moduleConfig?.fields]
+  );
+  const isFieldVisibleForRecord = useCallback(
+    (field: any, record: any, index?: number) => {
+      const fieldKey = String(field?.key || '').trim();
+      if (!fieldKey) return true;
+      const rowKey = String(record?.id || `row_${index ?? 0}`);
+      return conditionalFieldStateMapsByRowKey.get(rowKey)?.[fieldKey]?.visible !== false;
+    },
+    [conditionalFieldStateMapsByRowKey]
+  );
   const renderDeferredInlinePlaceholder = useCallback(
     (widthClass = 'w-[72%]') => (
       <div className="flex min-h-[22px] w-full items-center overflow-hidden">
@@ -305,48 +365,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     }
   }, [isColumnFiltersControlled, moduleConfig?.id]);
 
-  const normalizeDigits = (value: string | number | null | undefined) => {
-    if (value === null || value === undefined) return '';
-    return String(value)
-      .trim()
-      .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
-  };
-
-  const parseRangeValue = (
-    raw: React.Key | boolean | undefined
-  ): { from?: string | number; to?: string | number } => {
-    if (!raw) return {};
-    try {
-      const parsed = JSON.parse(String(raw));
-      if (parsed && typeof parsed === 'object') {
-        return parsed;
-      }
-    } catch {
-      return {};
-    }
-    return {};
-  };
-
-  const toComparableTime = (raw: any): number | null => {
-    const normalized = normalizeDigits(raw);
-    if (!normalized) return null;
-    const match = normalized.match(/^(\d{1,2}):(\d{2})/);
-    if (!match) return null;
-    const hh = Number(match[1]);
-    const mm = Number(match[2]);
-    if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
-    return (hh * 60) + mm;
-  };
-
-  const toComparableDate = (raw: any, withTime: boolean): number | null => {
-    const normalized = normalizeDigits(raw);
-    if (!normalized) return null;
-    const asIso = normalized.includes('/') ? normalized.replace(/\//g, '-') : normalized;
-    const value = withTime ? asIso.replace(' ', 'T') : `${asIso}T00:00:00`;
-    const ts = new Date(value).getTime();
-    return Number.isNaN(ts) ? null : ts;
-  };
-
   // --- لاجیک جستجوی ستونی (بهینه شده) ---
   const handleSearch = (_selectedKeys: string[], confirm: (param?: FilterConfirmProps) => void) => {
     confirm();
@@ -372,7 +390,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   if (!moduleConfig || !moduleConfig.fields) return null;
 
-  const getColumnSearchProps = (dataIndex: string, title: string): ColumnType<any> => ({
+  const getColumnSearchProps = (_dataIndex: string, title: string): ColumnType<any> => ({
     filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters, close }) => (
       <div style={{ padding: 8 }} onKeyDown={(e) => e.stopPropagation()}>
         <Input
@@ -407,10 +425,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     filterIcon: (filtered: boolean) => (
       <SearchOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />
     ),
-    onFilter: (value, record) => {
-        const text = record[dataIndex] ? record[dataIndex].toString() : '';
-        return text.toLowerCase().includes((value as string).toLowerCase());
-    },
     filterDropdownProps: {
       ...sharedFilterDropdownProps,
       onOpenChange: (visible) => {
@@ -422,7 +436,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   });
 
   const getRangeFilterProps = (
-    dataIndex: string,
+    _dataIndex: string,
     title: string,
     kind: 'PRICE' | 'DATE' | 'TIME' | 'DATETIME'
   ): ColumnType<any> => ({
@@ -540,46 +554,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       <SearchOutlined style={{ color: filtered ? 'rgb(var(--brand-500-rgb))' : undefined }} />
     ),
     filterDropdownProps: sharedFilterDropdownProps,
-    onFilter: (rawValue, record) => {
-      const { from, to } = parseRangeValue(rawValue as React.Key);
-      const recordValue = record[dataIndex];
-
-      if (kind === 'PRICE') {
-        const minVal = from !== undefined ? fromPersianNumber(String(from)) : null;
-        const maxVal = to !== undefined ? fromPersianNumber(String(to)) : null;
-        const current = Number(recordValue);
-        if (Number.isNaN(current)) return false;
-        if (minVal !== null && current < minVal) return false;
-        if (maxVal !== null && current > maxVal) return false;
-        return true;
-      }
-
-      if (kind === 'TIME') {
-        const minTime = from ? toComparableTime(from) : null;
-        const maxTime = to ? toComparableTime(to) : null;
-        const current = toComparableTime(recordValue);
-        if (current === null) return false;
-        if (minTime !== null && current < minTime) return false;
-        if (maxTime !== null && current > maxTime) return false;
-        return true;
-      }
-
-      const withTime = kind === 'DATETIME';
-      const minDate = from ? toComparableDate(from, withTime) : null;
-      const maxDate = to ? toComparableDate(to, withTime) : null;
-      const currentDate = toComparableDate(recordValue, withTime);
-      if (currentDate === null) return false;
-      if (minDate !== null && currentDate < minDate) return false;
-      if (maxDate !== null && currentDate > maxDate) return false;
-      return true;
-    },
   });
 
   // ✅ فیلتر تگ‌ها (برای ستون‌های تگ) - مشابه MULTI_SELECT
-  const getTagFilterProps = useCallback((dataIndex: string, _title: string) => {
+  const getTagFilterProps = useCallback((_dataIndex: string, _title: string) => {
     const allTags = new Map<string, string>();
     data.forEach((record: any) => {
-      const tags = record[dataIndex];
+      const tags = record[_dataIndex];
       if (Array.isArray(tags)) {
         tags.forEach((tag: any) => {
           const tagValue = typeof tag === 'string' ? tag : (tag.title || tag.label || tag.id);
@@ -591,69 +572,96 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     return {
       filters: Array.from(allTags.values()).map(tag => ({ text: tag, value: tag })),
       multiple: true,
-      onFilter: (value: string, record: any) => {
-        const tags = record[dataIndex];
-        if (!Array.isArray(tags)) return false;
-        return tags.some((tag: any) => {
-          const tagValue = typeof tag === 'string' ? tag : (tag.title || tag.label || tag.id);
-          return tagValue === value;
-        });
-      }
     };
   }, [data]);
 
   // --- ساخت ستون‌ها ---
-  let tableFields = moduleConfig.fields
-    .filter(f => f.isTableColumn)
-    .filter(f => (canViewField ? canViewField(f.key) !== false : true))
-    .filter(f => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))
-    .sort((a, b) => (a.order || 0) - (b.order || 0));
+  const { tableFields, primaryTitleField, tagsField } = useMemo(() => {
+    let fields: any[] = moduleConfig.fields
+      .filter((f: any) => f.isTableColumn)
+      .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+      .filter((f: any) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))
+      .sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
 
-  // اگر visibleColumns مشخص است، از آن استفاده کن
-  if (visibleColumns && visibleColumns.length > 0) {
-      tableFields = visibleColumns
-        .map(colKey => moduleConfig.fields.find(f => f.key === colKey))
-        .filter(f => f !== undefined)
-        .filter(f => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String((f as any)?.key || '').trim()))
-        .filter(f => (canViewField ? canViewField((f as any).key) !== false : true)) as any[];
-  }
-  // Fallback: اگر هیچ visibleColumns یا isTableColumn نیست
-  else if (tableFields.length === 0) {
-      tableFields = moduleConfig.fields.filter(f => 
-          ['name', 'title', 'business_name', 'system_code', 'sell_price', 'stock_quantity', 'status', 'mobile_1', 'rank'].includes(f.key)
+    // اگر visibleColumns مشخص است، از آن استفاده کن
+    if (visibleColumns && visibleColumns.length > 0) {
+      fields = visibleColumns
+        .map((colKey: string) => moduleConfig.fields.find((f: any) => f.key === colKey))
+        .filter((f: any) => f !== undefined)
+        .filter((f: any) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))
+        .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true));
+    } else if (fields.length === 0) {
+      // Fallback: اگر هیچ visibleColumns یا isTableColumn نیست
+      fields = moduleConfig.fields.filter((f: any) =>
+        ['name', 'title', 'business_name', 'system_code', 'sell_price', 'stock_quantity', 'status', 'mobile_1', 'rank'].includes(f.key)
       );
-  }
+    }
 
-  const allViewableFields = moduleConfig.fields.filter(f => (canViewField ? canViewField(f.key) !== false : true));
-  // ✅ ترتیب مجدد ستون‌ها: اول تصویر، سپس نام، سپس تگ‌ها، سپس بقیه
-  const tagsField = allViewableFields.find(f => f.type === FieldType.TAGS);
-  const imageField = tableFields.find(f => f.type === FieldType.IMAGE);
-  const primaryTitleField = tableFields.find((f) => isNameOrTitleField(f));
-  const otherFields = tableFields.filter(f => f !== tagsField && f !== imageField && f !== primaryTitleField);
-  
-  if (imageField && primaryTitleField) {
-    tableFields = [imageField, primaryTitleField, ...otherFields];
-  } else if (primaryTitleField) {
-    tableFields = [primaryTitleField, ...otherFields];
-  }
+    if (shouldAppendManagedAssigneeColumn) {
+      fields = fields.filter((field: any) => String(field?.key || '').trim() !== 'assignee_id');
+    }
 
-  const resolvedTagFilterProps = tagsField ? getTagFilterProps(tagsField.key, tagsField.labels.fa) : null;
-  const activeTagFilterValues = tagsField && Array.isArray(activeColumnFilters[tagsField.key])
-    ? activeColumnFilters[tagsField.key]!.map((value) => String(value))
-    : [];
-  const keyFieldMobileWidth = !isMobileViewport || !primaryTitleField
-    ? null
-    : Math.min(
-        280,
-        Math.max(
-          156,
-          (data.reduce((maxLength, record: any) => {
-            const rawValue = record?.[primaryTitleField.key];
-            const normalized = rawValue === null || rawValue === undefined || rawValue === '' ? '-' : String(rawValue).trim();
-            return Math.max(maxLength, normalized.length);
-          }, 0) * 9) + 52
-        )
-      );
+    fields = filterConditionallyVisibleFieldsForDataset(
+      fields,
+      moduleConfig.fields || [],
+      data || [],
+      conditionalDisplaySettings
+    );
+
+    const allViewableFields = moduleConfig.fields.filter((field: any) =>
+      (canViewField ? canViewField(field.key) !== false : true)
+      && ((data || []).length === 0 || conditionallyVisibleFieldKeySet.has(String(field?.key || '').trim()))
+    );
+
+    // ✅ ترتیب مجدد ستون‌ها: اول تصویر، سپس نام، سپس تگ‌ها، سپس بقیه
+    const computedTagsField = allViewableFields.find((f: any) => f.type === FieldType.TAGS) ?? null;
+    const computedImageField = fields.find((f: any) => f.type === FieldType.IMAGE) ?? null;
+    const computedPrimaryTitleField = fields.find((f: any) => isNameOrTitleField(f)) ?? null;
+    const otherFields = fields.filter((f: any) => f !== computedTagsField && f !== computedImageField && f !== computedPrimaryTitleField);
+
+    if (computedImageField && computedPrimaryTitleField) {
+      fields = [computedImageField, computedPrimaryTitleField, ...otherFields];
+    } else if (computedPrimaryTitleField) {
+      fields = [computedPrimaryTitleField, ...otherFields];
+    }
+
+    return { tableFields: fields, primaryTitleField: computedPrimaryTitleField, tagsField: computedTagsField };
+  }, [
+    moduleConfig?.fields,
+    moduleConfig?.id,
+    visibleColumns,
+    canViewField,
+    shouldAppendManagedAssigneeColumn,
+    data,
+    conditionalDisplaySettings,
+    conditionallyVisibleFieldKeySet,
+    isNameOrTitleField,
+  ]);
+
+  const resolvedTagFilterProps = useMemo(
+    () => tagsField ? getTagFilterProps(tagsField.key, tagsField.labels.fa) : null,
+    [tagsField, getTagFilterProps]
+  );
+  const activeTagFilterValues = useMemo(
+    () => tagsField && Array.isArray(activeColumnFilters[tagsField.key])
+      ? activeColumnFilters[tagsField.key]!.map((value) => String(value))
+      : [],
+    [tagsField, activeColumnFilters]
+  );
+  const keyFieldMobileWidth = useMemo(() => {
+    if (!isMobileViewport || !primaryTitleField) return null;
+    return Math.min(
+      280,
+      Math.max(
+        156,
+        (data.reduce((maxLength: number, record: any) => {
+          const rawValue = record?.[primaryTitleField.key];
+          const normalized = rawValue === null || rawValue === undefined || rawValue === '' ? '-' : String(rawValue).trim();
+          return Math.max(maxLength, normalized.length);
+        }, 0) * 9) + 52
+      )
+    );
+  }, [isMobileViewport, primaryTitleField, data]);
 
   const updateTagFilters = (nextValues: string[]) => {
     if (!tagsField) return;
@@ -807,7 +815,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     return options.length > 0 ? options : undefined;
   };
 
-  const columns: ColumnsType<any> = tableFields.map(field => {
+  const columns = useMemo((): ColumnsType<any> => {
+    const cols: ColumnsType<any> = tableFields.map(field => {
     const isKeyLikeField = isNameOrTitleField(field);
     const isPrimaryTitleColumn = isKeyLikeField && primaryTitleField?.key === field.key;
     const isSearchable = field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
@@ -965,15 +974,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       ...(field.type === FieldType.DATETIME ? getRangeFilterProps(field.key, fieldLabel, 'DATETIME') : {}),
 
       filters: (tagFilterProps as any)?.filters ?? (hasChoiceFilter ? choiceOptions : undefined),
-      onFilter: (tagFilterProps as any)?.onFilter ?? (hasChoiceFilter
-          ? (value, record) => {
-              const recordValue = record[field.key];
-              if (field.type === FieldType.MULTI_SELECT && Array.isArray(recordValue)) {
-                return recordValue.map((item: any) => String(item)).includes(String(value));
-              }
-              return String(recordValue ?? '') === String(value ?? '');
-            }
-          : undefined),
 
       render: (value: any, record: any) => {
         const effectiveField = (
@@ -982,6 +982,9 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
             ? { ...field, options: getProcessTemplateModuleOptions() }
             : field
         );
+        if (!isFieldVisibleForRecord(field, record)) {
+          return null;
+        }
         // Shared fallback for empty/invalid dates
         const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[10px] md:text-[11px]">-</span>;
         
@@ -1028,7 +1031,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         if (field.type === FieldType.STATUS) {
             const opt = moduleConfig?.id === 'tasks' && String(field?.key || '') === 'status'
               ? getTaskStatusOption(value, record, field.options || [])
-              : field.options?.find(o => o.value === value);
+              : field.options?.find((o: any) => o.value === value);
             const label = formatDisplayText(opt?.label ?? value);
             return <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>;
         }
@@ -1219,10 +1222,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
              );
         }
         if (isKeyLikeField) {
-             const inlineTags = isPrimaryTitleColumn ? getRecordTags(record, tagsField?.key) : [];
-               if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
-                 return renderStableTextCell(
-                   formatDisplayText(value),
+             const inlineTags = isPrimaryTitleColumn && tagsField && isFieldVisibleForRecord(tagsField, record)
+               ? getRecordTags(record, tagsField.key)
+               : [];
+                if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
+                  return renderStableTextCell(
+                    formatDisplayText(value),
                   "block w-full truncate text-[13px] md:text-sm font-bold text-gray-700 dark:text-gray-200"
                 );
               }
@@ -1259,7 +1264,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         : assigneeSorter?.order === 'desc'
           ? 'descend'
           : null;
-    columns.push({
+    cols.push({
     title: <span className="text-[11px] text-gray-500">{assigneeLabel}</span>,
     dataIndex: 'assignee_id',
     key: 'assignee_id',
@@ -1278,7 +1283,6 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     filterDropdownProps: sharedFilterDropdownProps,
     filterSearch: true,
     filters: assigneeFilterOptions,
-    onFilter: (value, record) => String(getResolvedAssigneeId(record) ?? '') === String(value ?? ''),
     render: (_: any, record: any) => {
       if (deferredDataLoading) {
         return renderDeferredAssigneePlaceholder();
@@ -1321,7 +1325,41 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     });
   }
 
-  const activeColumnFilterBubbles = (() => {
+    return cols;
+  }, [
+    tableFields,
+    primaryTitleField,
+    tagsField,
+    activeColumnFilters,
+    isMobileViewport,
+    keyFieldMobileWidth,
+    moduleConfig?.id,
+    sorters,
+    deferredDataLoading,
+    dynamicOptions,
+    relationOptions,
+    allUsers,
+    allRoles,
+    shouldAppendManagedAssigneeColumn,
+    canViewField,
+    assigneeLabel,
+    currencyLabel,
+    isTagFilterPopoverOpen,
+    activeTagFilterValues,
+    getTagFilterProps,
+    isNameOrTitleField,
+    getFieldLabel,
+    isFieldVisibleForRecord,
+    getRecordTags,
+    renderStableTextCell,
+    formatDisplayText,
+    renderDeferredTagPlaceholder,
+    renderDeferredInlinePlaceholder,
+    renderDeferredAssigneePlaceholder,
+    sharedFilterDropdownProps,
+  ]);
+
+  const activeColumnFilterBubbles = useMemo(() => {
     const fieldsMap = new Map(tableFields.map((field: any) => [field.key, field]));
     const tagLabelById = new Map<string, string>();
     Object.values(tagsMap || {}).forEach((recordTags) => {
@@ -1401,35 +1439,17 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     });
 
     return bubbles;
-  })();
-
-  const filterColumnsByKey = useMemo(() => {
-    const map = new Map(
-      columns
-        .map((column) => {
-          const key = (column as any).key ?? (column as any).dataIndex;
-          return key ? [String(key), column] : null;
-        })
-        .filter(Boolean) as Array<[string, ColumnsType<any>[number]]>
-    );
-    if (tagsField && resolvedTagFilterProps && !map.has(tagsField.key)) {
-      map.set(tagsField.key, resolvedTagFilterProps as ColumnsType<any>[number]);
-    }
-    return map;
-  }, [columns, resolvedTagFilterProps, tagsField]);
-
-  const filteredData = useMemo(() => {
-    const activeFilters = Object.entries(activeColumnFilters).filter(([, values]) => Array.isArray(values) && values.length > 0);
-    if (activeFilters.length === 0) return data;
-
-    return data.filter((record) =>
-      activeFilters.every(([fieldKey, values]) => {
-        const column = filterColumnsByKey.get(fieldKey) as ColumnType<any> | undefined;
-        if (!column || typeof column.onFilter !== 'function' || !Array.isArray(values)) return true;
-        return values.some((value) => column.onFilter?.(value, record));
-      })
-    );
-  }, [activeColumnFilters, data, filterColumnsByKey]);
+  }, [
+    tableFields,
+    tagsField,
+    tagsMap,
+    resolvedTagFilterProps,
+    shouldAppendManagedAssigneeColumn,
+    canViewField,
+    assigneeLabel,
+    getFieldLabel,
+    activeColumnFilters,
+  ]);
 
   const removeFilterBubble = (fieldKey: string, rawValue: string) => {
     const current = activeColumnFilters[fieldKey];
@@ -1491,14 +1511,14 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
   useEffect(() => {
     if (!onVisibleDataChange) return;
-    const nextSignature = filteredData
+    const nextSignature = data
       .map((row: any) => String(row?.id || '').trim())
       .filter(Boolean)
       .join('|');
     if (lastVisibleRowSignatureRef.current === nextSignature) return;
     lastVisibleRowSignatureRef.current = nextSignature;
-    onVisibleDataChange(filteredData);
-  }, [filteredData, onVisibleDataChange]);
+    onVisibleDataChange(data);
+  }, [data, onVisibleDataChange]);
 
   useEffect(() => {
     if (disableScroll) return;
@@ -1587,7 +1607,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         <Table 
           className="smarttable-table h-full min-h-0"
           columns={columns} 
-          dataSource={filteredData} 
+          dataSource={data} 
           rowKey="id" 
           loading={loading} 
           size="small" 

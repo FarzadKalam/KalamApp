@@ -34,7 +34,13 @@ import { syncRecordTags } from '../utils/recordTags';
 import { getImplicitCreateDefaultValue } from '../utils/defaultValues';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
-import { createProcessLinkedFieldKey, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
+import {
+  buildProcessLinkMapFromRecord,
+  createProcessLinkedFieldKey,
+  extractProcessLinkMapFromStages,
+  normalizeProcessTargetModuleIds,
+  syncProcessTemplateTargetModules,
+} from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
@@ -631,19 +637,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         )),
         ''
       );
-      const linkedRecordMap = draftStages.reduce<Record<string, string>>((acc, stage: any) => {
-        const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
-          ? stage.process_link_map
-          : {};
-        Object.entries(rawMap).forEach(([targetModuleId, recordId]) => {
-          const normalizedTargetModuleId = String(targetModuleId || '').trim();
-          const normalizedRecordId = String(recordId || '').trim();
-          if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
-            acc[normalizedTargetModuleId] = normalizedRecordId;
-          }
-        });
-        return acc;
-      }, {});
+      const linkedRecordMap = extractProcessLinkMapFromStages(draftStages);
 
       for (const targetModuleId of targetModuleIds) {
         if (!MODULES[targetModuleId] || PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId)) continue;
@@ -1043,17 +1037,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
         if (error) throw error;
 
         const targetModuleIds = normalizeProcessTargetModuleIds(templateRow?.module_ids, templateRow?.module_id);
-        const inferredProcessLinks = {
-          ...getRelationFieldLinksForModules(module.id, currentValues || {}, targetModuleIds),
-          ...targetModuleIds.reduce<Record<string, string>>((acc, targetModuleId) => {
+        const inferredProcessLinks = buildProcessLinkMapFromRecord(
+          module.id,
+          currentValues || {},
+          targetModuleIds,
+          targetModuleIds.reduce<Record<string, string>>((acc, targetModuleId) => {
             const linkedFieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
             const linkedRecordId = String(currentValues?.[linkedFieldKey] || formData?.[linkedFieldKey] || '').trim();
             if (linkedRecordId) {
               acc[targetModuleId] = linkedRecordId;
             }
             return acc;
-          }, {}),
-        };
+          }, {})
+        );
 
         const mappedDraft = (stages || []).map((stage: any, index: number) => ({
           ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
@@ -2148,19 +2144,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       )),
       ''
     );
-    const linkedRecordMap = draftStages.reduce((acc: Record<string, string>, stage: any) => {
-      const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object'
-        ? stage.process_link_map
-        : {};
-      Object.entries(rawMap).forEach(([targetModuleId, recordId]) => {
-        const normalizedTargetModuleId = String(targetModuleId || '').trim();
-        const normalizedRecordId = String(recordId || '').trim();
-        if (normalizedTargetModuleId && normalizedRecordId && !acc[normalizedTargetModuleId]) {
-          acc[normalizedTargetModuleId] = normalizedRecordId;
-        }
-      });
-      return acc;
-    }, {});
+    const linkedRecordMap = extractProcessLinkMapFromStages(draftStages);
 
     return targetModuleIds
       .filter((targetModuleId) => !!MODULES[targetModuleId] && !PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS.has(targetModuleId))
@@ -2462,6 +2446,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             recordId={recordId}
                             allValues={currentValues}
                             popupContainer={resolveSmartFormPopupContainer}
+                            preferLocalPopupContainer
                           />
                         </div>
                       </div>
@@ -2641,6 +2626,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   moduleId={module.id}
                                   allValues={currentValues}
                                   popupContainer={resolveSmartFormPopupContainer}
+                                  preferLocalPopupContainer
                                 />
                              </div>
                            );
@@ -2691,6 +2677,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   moduleId={module.id}
                                   allValues={currentValues}
                                   popupContainer={resolveSmartFormPopupContainer}
+                                  preferLocalPopupContainer
                                 />
                               </div>
                             ))}
