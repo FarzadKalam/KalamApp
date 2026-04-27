@@ -301,6 +301,77 @@ type BotStatusModalContext = {
   counterpartyId: string;
 };
 
+const _msToNumber = (value: any) => {
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const _msCalcDeliveredQty = (row?: Partial<StartMaterialDeliveryRow> | null) => {
+  const length = Math.max(0, _msToNumber((row as any)?.length));
+  const width = Math.max(0, _msToNumber((row as any)?.width));
+  const quantity = Math.max(0, _msToNumber((row as any)?.quantity));
+  return length * width * quantity;
+};
+
+const _msSumDeliveredRows = (rows: StartMaterialDeliveryRow[]) =>
+  rows.reduce((sum: number, row: StartMaterialDeliveryRow) => sum + _msCalcDeliveredQty(row), 0);
+
+const _msBuildDeliveryRowKey = () =>
+  `delivery_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+const _msNormalizeDeliveryRow = (group: StartMaterialGroup, rawRow?: any): StartMaterialDeliveryRow => {
+  const firstPiece = Array.isArray(group.pieces) && group.pieces.length > 0 ? group.pieces[0] : null;
+  return {
+    key: String(rawRow?.key || _msBuildDeliveryRowKey()),
+    pieceKey: rawRow?.pieceKey ? String(rawRow.pieceKey) : undefined,
+    name: String(rawRow?.name ?? firstPiece?.name ?? ''),
+    length: _msToNumber(rawRow?.length ?? firstPiece?.length ?? 0),
+    width: _msToNumber(rawRow?.width ?? firstPiece?.width ?? 0),
+    quantity: _msToNumber(rawRow?.quantity ?? firstPiece?.quantity ?? 1),
+    mainUnit: String(rawRow?.mainUnit ?? firstPiece?.mainUnit ?? ''),
+    subUnit: String(rawRow?.subUnit ?? firstPiece?.subUnit ?? ''),
+    deliveredQty: _msCalcDeliveredQty({
+      length: rawRow?.length ?? firstPiece?.length ?? 0,
+      width: rawRow?.width ?? firstPiece?.width ?? 0,
+      quantity: rawRow?.quantity ?? firstPiece?.quantity ?? 1,
+    }),
+  };
+};
+
+const _msRecalcStartGroup = (group: StartMaterialGroup): StartMaterialGroup => {
+  const pieces = Array.isArray(group.pieces) ? group.pieces : [];
+  const deliveryRows = (Array.isArray(group.deliveryRows) ? group.deliveryRows : []).map((row) => ({
+    ...row,
+    deliveredQty: _msCalcDeliveredQty(row),
+  }));
+  return {
+    ...group,
+    deliveryRows,
+    totalPerItemUsage: pieces.reduce((sum: number, piece: StartMaterialPiece) => sum + piece.perItemUsage, 0),
+    totalUsage: pieces.reduce((sum: number, piece: StartMaterialPiece) => sum + piece.totalUsage, 0),
+    totalDeliveredQty: _msSumDeliveredRows(deliveryRows),
+  };
+};
+
+const _msMergeUsersById = (rows: any[]) =>
+  rows.reduce((acc: any[], row: any) => {
+    const id = String(row?.id || '').trim();
+    if (!id) return acc;
+    const existingIndex = acc.findIndex((item) => String(item?.id || '') === id);
+    if (existingIndex >= 0) {
+      const next = [...acc];
+      next[existingIndex] = { ...next[existingIndex], ...row };
+      return next;
+    }
+    return [...acc, row];
+  }, []);
+
+const _msIsMissingColumnError = (error: any, columnName: string) => {
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  const needle = String(columnName || '').toLowerCase();
+  return !!text && !!needle && text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
+};
+
 const ModuleShow: React.FC = () => {
   const { moduleId = 'products', id } = useParams();
   const navigate = useNavigate();
@@ -646,57 +717,12 @@ const ModuleShow: React.FC = () => {
     return map;
   }, [relationOptions]);
 
-  const toNumber = (value: any) => {
-    const parsed = parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-
-  const calcDeliveredQty = (row?: Partial<StartMaterialDeliveryRow> | null) => {
-    const length = Math.max(0, toNumber((row as any)?.length));
-    const width = Math.max(0, toNumber((row as any)?.width));
-    const quantity = Math.max(0, toNumber((row as any)?.quantity));
-    return length * width * quantity;
-  };
-
-  const sumDeliveredRows = (rows: StartMaterialDeliveryRow[]) => {
-    return rows.reduce((sum: number, row: StartMaterialDeliveryRow) => sum + calcDeliveredQty(row), 0);
-  };
-
-  const buildDeliveryRowKey = () => `delivery_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-
-  const normalizeDeliveryRow = (group: StartMaterialGroup, rawRow?: any): StartMaterialDeliveryRow => {
-    const firstPiece = Array.isArray(group.pieces) && group.pieces.length > 0 ? group.pieces[0] : null;
-    return {
-      key: String(rawRow?.key || buildDeliveryRowKey()),
-      pieceKey: rawRow?.pieceKey ? String(rawRow.pieceKey) : undefined,
-      name: String(rawRow?.name ?? firstPiece?.name ?? ''),
-      length: toNumber(rawRow?.length ?? firstPiece?.length ?? 0),
-      width: toNumber(rawRow?.width ?? firstPiece?.width ?? 0),
-      quantity: toNumber(rawRow?.quantity ?? firstPiece?.quantity ?? 1),
-      mainUnit: String(rawRow?.mainUnit ?? firstPiece?.mainUnit ?? ''),
-      subUnit: String(rawRow?.subUnit ?? firstPiece?.subUnit ?? ''),
-      deliveredQty: calcDeliveredQty({
-        length: rawRow?.length ?? firstPiece?.length ?? 0,
-        width: rawRow?.width ?? firstPiece?.width ?? 0,
-        quantity: rawRow?.quantity ?? firstPiece?.quantity ?? 1,
-      }),
-    };
-  };
-
-  const recalcStartGroup = (group: StartMaterialGroup): StartMaterialGroup => {
-    const pieces = Array.isArray(group.pieces) ? group.pieces : [];
-    const deliveryRows = (Array.isArray(group.deliveryRows) ? group.deliveryRows : []).map((row) => ({
-      ...row,
-      deliveredQty: calcDeliveredQty(row),
-    }));
-    return {
-      ...group,
-      deliveryRows,
-      totalPerItemUsage: pieces.reduce((sum: number, piece: StartMaterialPiece) => sum + piece.perItemUsage, 0),
-      totalUsage: pieces.reduce((sum: number, piece: StartMaterialPiece) => sum + piece.totalUsage, 0),
-      totalDeliveredQty: sumDeliveredRows(deliveryRows),
-    };
-  };
+  const toNumber = _msToNumber;
+  const calcDeliveredQty = _msCalcDeliveredQty;
+  const sumDeliveredRows = _msSumDeliveredRows;
+  const buildDeliveryRowKey = _msBuildDeliveryRowKey;
+  const normalizeDeliveryRow = _msNormalizeDeliveryRow;
+  const recalcStartGroup = _msRecalcStartGroup;
 
   const getRowSelectedProduct = useCallback((row: any) => {
     const header = row?.header || {};
@@ -1134,18 +1160,7 @@ const ModuleShow: React.FC = () => {
   const [pendingPrintShareFile, setPendingPrintShareFile] = useState<{ url: string; name: string } | null>(null);
   const [printShareMessageText, setPrintShareMessageText] = useState('');
 
-  const mergeUsersById = (rows: any[]) =>
-    rows.reduce((acc: any[], row: any) => {
-      const id = String(row?.id || '').trim();
-      if (!id) return acc;
-      const existingIndex = acc.findIndex((item) => String(item?.id || '') === id);
-      if (existingIndex >= 0) {
-        const next = [...acc];
-        next[existingIndex] = { ...next[existingIndex], ...row };
-        return next;
-      }
-      return [...acc, row];
-    }, []);
+  const mergeUsersById = _msMergeUsersById;
 
   const fetchBaseInfo = useCallback(async () => {
       if (moduleShowBaseInfoCache) {
@@ -2474,11 +2489,7 @@ const ModuleShow: React.FC = () => {
     });
   }, [allRoles, allUsers, data, dynamicOptions, id, moduleConfig, modal, moduleId, msg, navigate, relationOptions]);
 
-  const isMissingColumnError = (error: any, columnName: string) => {
-    const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
-    const needle = String(columnName || '').toLowerCase();
-    return !!text && !!needle && text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
-  };
+  const isMissingColumnError = _msIsMissingColumnError;
 
   const createProjectWithFallback = async (payload: Record<string, any>) => {
     let currentPayload: Record<string, any> = { ...payload };
@@ -2525,12 +2536,12 @@ const ModuleShow: React.FC = () => {
     }
   };
 
-  const clearBotStatusWatchTimer = () => {
+  const clearBotStatusWatchTimer = useCallback(() => {
     if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
       window.clearInterval(botStatusWatchTimerRef.current);
       botStatusWatchTimerRef.current = null;
     }
-  };
+  }, [botStatusWatchTimerRef]);
 
   const loadBotStatusRow = useCallback(async (
     context: BotStatusModalContext,
@@ -4872,11 +4883,11 @@ const ModuleShow: React.FC = () => {
     uploadGeneratedPdf,
   ]);
 
-  const getUserName = (uid: string) => {
-      if (!String(uid || '').trim()) return 'سیستم';
-      const user = allUsers.find(u => u.id === uid);
-      return user?.full_name || user?.email || user?.mobile_1 || 'نامشخص';
-  };
+  const getUserName = useCallback((uid: string) => {
+    if (!String(uid || '').trim()) return 'سیستم';
+    const user = allUsers.find(u => u.id === uid);
+    return user?.full_name || user?.email || user?.mobile_1 || 'نامشخص';
+  }, [allUsers]);
 
   const currentAssigneeOption = useMemo(() => {
     if (!supportsAssignee) return null;

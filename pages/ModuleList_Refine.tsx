@@ -574,8 +574,8 @@ export const ModuleListRefine: React.FC<{
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
       enabled: !!dataResource,
-      staleTime: 0,
-      refetchOnMount: "always",
+      staleTime: 30_000,
+      refetchOnMount: true,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },

@@ -489,6 +489,18 @@ function App() {
           syncWithLocation: true,
           warnWhenUnsavedChanges: true,
           disableTelemetry: true,
+          reactQuery: {
+            clientConfig: {
+              defaultOptions: {
+                queries: {
+                  staleTime: 30_000,
+                  gcTime: 5 * 60_000,
+                  retry: 1,
+                  refetchOnWindowFocus: false,
+                },
+              },
+            },
+          },
         }}
       >
         <Routes>

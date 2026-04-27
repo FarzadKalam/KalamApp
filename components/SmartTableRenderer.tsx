@@ -1630,5 +1630,5 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   );
 };
 
-export default SmartTableRenderer;
+export default React.memo(SmartTableRenderer);
 
