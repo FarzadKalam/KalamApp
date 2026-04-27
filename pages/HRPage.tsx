@@ -217,6 +217,9 @@ type AttendanceLogRecord = {
   related_profile_id?: string | null;
   log_type?: string | null;
   occurred_at?: string | null;
+  attendance_date?: string | null;
+  check_in_time?: string | null;
+  check_out_time?: string | null;
   source_type?: string | null;
   actual_check_in_time?: string | null;
   actual_check_out_time?: string | null;
@@ -258,10 +261,16 @@ type HrRequestRecord = {
 type AttendanceComputedRow = {
   key: string;
   id: string;
+  rawIds: string[];
+  checkInRawId: string | null;
+  checkOutRawId: string | null;
   employeeId: string | null;
   employeeName: string;
   logType: string;
   occurredAt: string | null;
+  attendanceDate: string | null;
+  checkInAt: string | null;
+  checkOutAt: string | null;
   sourceType: string;
   notes: string | null;
   locationText: string | null;
@@ -526,38 +535,48 @@ const formatMinutesLabel = (minutes: number) => {
     : `${toPersianNumber(hours)} ساعت`;
 };
 
-const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
-  const grouped = new Map<string, AttendanceComputedRow[]>();
-  rows.forEach((row) => {
-    const key = row.employeeId || row.employeeName || 'unknown';
-    grouped.set(key, [...(grouped.get(key) || []), row]);
-  });
+const getAttendanceDateBase = (row: AttendanceLogRecord) =>
+  row.attendance_date ||
+  parseDate(row.manual_check_in_time || null)?.format('YYYY-MM-DD') ||
+  parseDate(row.manual_check_out_time || null)?.format('YYYY-MM-DD') ||
+  parseDate(row.actual_check_in_time || null)?.format('YYYY-MM-DD') ||
+  parseDate(row.actual_check_out_time || null)?.format('YYYY-MM-DD') ||
+  parseDate(row.occurred_at || null)?.format('YYYY-MM-DD') ||
+  null;
 
-  let total = 0;
-  grouped.forEach((items) => {
-    const sorted = [...items].sort((a, b) => {
-      const aTime = parseDate(a.occurredAt || null)?.valueOf() || 0;
-      const bTime = parseDate(b.occurredAt || null)?.valueOf() || 0;
-      return aTime - bTime;
-    });
-    let openCheckIn: dayjs.Dayjs | null = null;
-    sorted.forEach((row) => {
-      const occurred = parseDate(row.occurredAt || null);
-      if (!occurred) return;
-      if (row.logType === 'check_in') {
-        openCheckIn = occurred;
-        return;
-      }
-      if (row.logType === 'check_out' && openCheckIn) {
-        const diff = occurred.diff(openCheckIn, 'minute');
-        if (diff > 0 && diff < 24 * 60) {
-          total += diff;
-        }
-        openCheckIn = null;
-      }
-    });
-  });
-  return total;
+const combineAttendanceDateTime = (row: AttendanceLogRecord, timeValue: string | null | undefined) => {
+  const trimmed = String(timeValue || '').trim();
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  const date = getAttendanceDateBase(row);
+  if (!date) return null;
+  return `${date}T${String(match[1]).padStart(2, '0')}:${match[2]}:${match[3] || '00'}`;
+};
+
+const getAttendanceCheckInAt = (row: AttendanceLogRecord) => {
+  const logType = String(row.log_type || '');
+  return combineAttendanceDateTime(row, row.check_in_time) ||
+    row.manual_check_in_time ||
+    (logType === 'check_in' ? row.actual_check_in_time || row.occurred_at || null : null);
+};
+
+const getAttendanceCheckOutAt = (row: AttendanceLogRecord) => {
+  const logType = String(row.log_type || '');
+  const checkOutFromTime = combineAttendanceDateTime(row, row.check_out_time);
+  if (checkOutFromTime) return checkOutFromTime;
+  if (logType === 'check_in') return null;
+  return row.manual_check_out_time ||
+    (logType === 'check_out' ? row.actual_check_out_time || row.occurred_at || null : null);
+};
+
+const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
+  return rows.reduce((total, row) => {
+    const checkIn = parseDate(row.checkInAt || null);
+    const checkOut = parseDate(row.checkOutAt || null);
+    if (!checkIn || !checkOut) return total;
+    const diff = checkOut.diff(checkIn, 'minute');
+    return diff > 0 && diff < 24 * 60 ? total + diff : total;
+  }, 0);
 };
 
 const renderDateTime = (value: string | null | undefined) => safeJalaliFormat(value, 'YYYY/MM/DD HH:mm') || '-';
@@ -965,7 +984,7 @@ const HRPage: React.FC = () => {
       const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult] = await Promise.allSettled([
         supabase
           .from('attendance_logs')
-          .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
+          .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
           .gte('occurred_at', monthStart.toISOString())
           .lte('occurred_at', monthEnd.toISOString())
           .order('occurred_at', { ascending: false })
@@ -1006,6 +1025,9 @@ const HRPage: React.FC = () => {
           related_profile_id: row?.related_profile_id || null,
           log_type: row?.log_type || null,
           occurred_at: row?.occurred_at || null,
+          attendance_date: row?.attendance_date || null,
+          check_in_time: row?.check_in_time || null,
+          check_out_time: row?.check_out_time || null,
           source_type: row?.source_type || null,
           actual_check_in_time: row?.actual_check_in_time || null,
           actual_check_out_time: row?.actual_check_out_time || null,
@@ -1447,8 +1469,13 @@ const HRPage: React.FC = () => {
   );
 
   const attendanceComputedRows = useMemo<AttendanceComputedRow[]>(() => {
-    return attendanceRows
-      .map((row) => {
+    const dailyRows = new Map<string, {
+      row: AttendanceComputedRow;
+      firstAtValue: number;
+      lastAtValue: number;
+    }>();
+
+    attendanceRows.forEach((row) => {
         const directEmployeeId = row.employee_id ? String(row.employee_id) : null;
         const fromAssignee = row.assignee_id ? profileByRelatedId.get(String(row.assignee_id)) : undefined;
         const fromRelated = row.related_profile_id ? profileByRelatedId.get(String(row.related_profile_id)) : undefined;
@@ -1460,15 +1487,37 @@ const HRPage: React.FC = () => {
           employee?.full_name ||
           (row.assignee_id ? profileByRelatedId.get(String(row.assignee_id))?.full_name : null) ||
           (row.assignee_id ? row.assignee_id : 'بدون کارمند');
-        const schedule = computeScheduleForEmployee(employeeId, row.occurred_at || null);
-        const actualTime = timeToMinutes(parseDate(row.occurred_at || null)?.format('HH:mm') || null);
+        const checkInAt = getAttendanceCheckInAt(row);
+        const checkOutAt = getAttendanceCheckOutAt(row);
+        const baseAt = checkInAt || checkOutAt || row.occurred_at || null;
+        const parsedBaseAt = parseDate(baseAt);
+        const attendanceDate = parsedBaseAt?.format('YYYY-MM-DD') || null;
+        const groupKey = `${employeeId || row.assignee_id || row.related_profile_id || 'unknown'}::${attendanceDate || row.id}`;
+        const existing = dailyRows.get(groupKey);
+        const sourceTypes = [existing?.row.sourceType, row.source_type].filter((item) => item && item !== '-');
+        const notes = [existing?.row.notes, row.notes].filter(Boolean).join(' | ') || null;
+        const locationText = [existing?.row.locationText, row.location_text].filter(Boolean).join(' | ') || null;
+        const nextCheckInAt = [existing?.row.checkInAt || null, checkInAt || null]
+          .map((item) => ({ item, time: parseDate(item)?.valueOf() || Number.POSITIVE_INFINITY }))
+          .sort((a, b) => a.time - b.time)[0]?.item || null;
+        const nextCheckOutAt = [existing?.row.checkOutAt || null, checkOutAt || null]
+          .map((item) => ({ item, time: parseDate(item)?.valueOf() || Number.NEGATIVE_INFINITY }))
+          .sort((a, b) => b.time - a.time)[0]?.item || null;
+        const rowTimeValue = parsedBaseAt?.valueOf() || 0;
+        const firstAtValue = existing ? Math.min(existing.firstAtValue, rowTimeValue || existing.firstAtValue) : rowTimeValue;
+        const lastAtValue = existing ? Math.max(existing.lastAtValue, rowTimeValue || existing.lastAtValue) : rowTimeValue;
+        const occurredAt = parseDate(nextCheckOutAt || null)?.valueOf()
+          ? nextCheckOutAt
+          : nextCheckInAt || baseAt;
+        const schedule = computeScheduleForEmployee(employeeId, nextCheckInAt || nextCheckOutAt || baseAt);
+        const checkInMinutes = timeToMinutes(parseDate(nextCheckInAt || null)?.format('HH:mm') || null);
+        const checkOutMinutes = timeToMinutes(parseDate(nextCheckOutAt || null)?.format('HH:mm') || null);
         const startMinutes = timeToMinutes(schedule.start);
         const endMinutes = timeToMinutes(schedule.end);
-        const logType = String(row.log_type || '');
-        const lateMinutes = logType === 'check_in' && actualTime !== null && startMinutes !== null ? Math.max(actualTime - startMinutes, 0) : 0;
-        const earlyArrivalMinutes = logType === 'check_in' && actualTime !== null && startMinutes !== null ? Math.max(startMinutes - actualTime, 0) : 0;
-        const earlyLeaveMinutes = logType === 'check_out' && actualTime !== null && endMinutes !== null ? Math.max(endMinutes - actualTime, 0) : 0;
-        const overtimeStayMinutes = logType === 'check_out' && actualTime !== null && endMinutes !== null ? Math.max(actualTime - endMinutes, 0) : 0;
+        const lateMinutes = checkInMinutes !== null && startMinutes !== null ? Math.max(checkInMinutes - startMinutes, 0) : 0;
+        const earlyArrivalMinutes = checkInMinutes !== null && startMinutes !== null ? Math.max(startMinutes - checkInMinutes, 0) : 0;
+        const earlyLeaveMinutes = checkOutMinutes !== null && endMinutes !== null ? Math.max(endMinutes - checkOutMinutes, 0) : 0;
+        const overtimeStayMinutes = checkOutMinutes !== null && endMinutes !== null ? Math.max(checkOutMinutes - endMinutes, 0) : 0;
 
         let deltaLabel = 'بدون اختلاف';
         let deltaColor = 'default';
@@ -1486,27 +1535,41 @@ const HRPage: React.FC = () => {
           deltaColor = 'blue';
         }
 
-        return {
-          key: row.id,
-          id: row.id,
-          employeeId: employeeId || null,
-          employeeName: String(employeeName || 'بدون کارمند'),
-          logType: logType || '-',
-          occurredAt: row.occurred_at || null,
-          sourceType: String(row.source_type || '-'),
-          notes: row.notes || null,
-          locationText: row.location_text || null,
-          scheduleTitle: schedule.title,
-          scheduledStart: schedule.start,
-          scheduledEnd: schedule.end,
-          lateMinutes,
-          earlyArrivalMinutes,
-          earlyLeaveMinutes,
-          overtimeStayMinutes,
-          deltaLabel,
-          deltaColor,
-        };
-      })
+        dailyRows.set(groupKey, {
+          firstAtValue,
+          lastAtValue,
+          row: {
+            key: groupKey,
+            id: existing?.row.id || row.id,
+            rawIds: [...(existing?.row.rawIds || []), row.id],
+            checkInRawId: existing?.row.checkInRawId || (checkInAt ? row.id : null),
+            checkOutRawId: checkOutAt ? row.id : existing?.row.checkOutRawId || null,
+            employeeId: employeeId || null,
+            employeeName: String(employeeName || 'بدون کارمند'),
+            logType: nextCheckInAt && nextCheckOutAt ? 'daily' : nextCheckInAt ? 'check_in' : nextCheckOutAt ? 'check_out' : String(row.log_type || '-'),
+            occurredAt: occurredAt || null,
+            attendanceDate,
+            checkInAt: nextCheckInAt,
+            checkOutAt: nextCheckOutAt,
+            sourceType: sourceTypes.length ? Array.from(new Set(sourceTypes.map(String))).join(' / ') : '-',
+            notes,
+            locationText,
+            scheduleTitle: schedule.title,
+            scheduledStart: schedule.start,
+            scheduledEnd: schedule.end,
+            lateMinutes,
+            earlyArrivalMinutes,
+            earlyLeaveMinutes,
+            overtimeStayMinutes,
+            deltaLabel,
+            deltaColor,
+          },
+        });
+      });
+
+    return Array.from(dailyRows.values())
+      .sort((a, b) => b.lastAtValue - a.lastAtValue)
+      .map((item) => item.row)
       .filter((row) => !row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)));
   }, [attendanceRows, computeScheduleForEmployee, profileById, profileByRelatedId, selectedEmployeeIdSet]);
 
@@ -2124,23 +2187,32 @@ const HRPage: React.FC = () => {
       render: (val: string) => <span className="font-medium text-leather-700">{val}</span>,
     },
     {
-      title: 'نوع',
-      dataIndex: 'logType',
-      key: 'logType',
-      render: (val: string) => {
-        const map: Record<string, { label: string; color: string }> = {
-          check_in: { label: 'ورود', color: 'green' },
-          check_out: { label: 'خروج', color: 'red' },
-        };
-        const meta = map[String(val || '')] || { label: val || '-', color: 'default' };
-        return <Tag color={meta.color}>{meta.label}</Tag>;
-      },
+      title: 'تاریخ',
+      dataIndex: 'attendanceDate',
+      key: 'attendanceDate',
+      render: (_: string | null, row: AttendanceComputedRow) => (
+        <span>{row.attendanceDate ? toPersianNumber(safeJalaliFormat(row.attendanceDate, 'YYYY/MM/DD')) : '-'}</span>
+      ),
     },
     {
-      title: 'زمان ثبت',
-      dataIndex: 'occurredAt',
-      key: 'occurredAt',
-      render: (val: string | null) => <span>{val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD HH:mm')) : '-'}</span>,
+      title: 'ورود',
+      dataIndex: 'checkInAt',
+      key: 'checkInAt',
+      render: (val: string | null) => (
+        val
+          ? <Tag color="green">{toPersianNumber(safeJalaliFormat(val, 'HH:mm'))}</Tag>
+          : <span className="text-gray-400">-</span>
+      ),
+    },
+    {
+      title: 'خروج',
+      dataIndex: 'checkOutAt',
+      key: 'checkOutAt',
+      render: (val: string | null) => (
+        val
+          ? <Tag color="red">{toPersianNumber(safeJalaliFormat(val, 'HH:mm'))}</Tag>
+          : <span className="text-gray-400">-</span>
+      ),
     },
     {
       title: 'برنامه حضور',
@@ -2193,7 +2265,8 @@ const HRPage: React.FC = () => {
             size="small"
             onClick={(event) => {
               event.stopPropagation();
-              const rawRow = attendanceRows.find((item) => String(item.id) === String(row.id)) || null;
+              const rawId = row.checkInRawId || row.checkOutRawId || row.id;
+              const rawRow = attendanceRows.find((item) => String(item.id) === String(rawId)) || null;
               openAttendanceModal('view', rawRow);
             }}
           >
@@ -2203,7 +2276,8 @@ const HRPage: React.FC = () => {
             size="small"
             onClick={(event) => {
               event.stopPropagation();
-              const rawRow = attendanceRows.find((item) => String(item.id) === String(row.id)) || null;
+              const rawId = row.checkInRawId || row.checkOutRawId || row.id;
+              const rawRow = attendanceRows.find((item) => String(item.id) === String(rawId)) || null;
               openAttendanceModal('edit', rawRow);
             }}
           >
@@ -2626,7 +2700,8 @@ const HRPage: React.FC = () => {
             scroll={{ x: 1600 }}
             onRow={(row: AttendanceComputedRow) => ({
               onClick: () => {
-                const rawRow = attendanceRows.find((item) => String(item.id) === String(row.id)) || null;
+                const rawId = row.checkInRawId || row.checkOutRawId || row.id;
+                const rawRow = attendanceRows.find((item) => String(item.id) === String(rawId)) || null;
                 openAttendanceModal('view', rawRow);
               },
               style: { cursor: 'pointer' },

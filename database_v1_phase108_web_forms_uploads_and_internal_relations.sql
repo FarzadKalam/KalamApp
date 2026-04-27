@@ -251,7 +251,7 @@ begin
     v_record_action := 'skipped';
     v_submission_record_payload := v_record_payload;
   elsif v_existing_record_id is not null and v_duplicate_strategy = 'update' then
-    select string_agg(format('t.%1$I = src.%1$I', c.column_name), ', ')
+    select string_agg(format('%1$I = src.%1$I', c.column_name), ', ')
       into v_update_assignments
     from information_schema.columns c
     where c.table_schema = 'public'

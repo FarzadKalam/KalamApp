@@ -318,7 +318,7 @@ try {
     $scpCommonArgs = $sessionOptions.ScpArgs
   }
 
-  $migrationFiles = Resolve-MigrationFiles -RepoRoot $repoRoot -SqlPattern $Pattern -ExplicitFiles $SqlFiles
+  $migrationFiles = @(Resolve-MigrationFiles -RepoRoot $repoRoot -SqlPattern $Pattern -ExplicitFiles $SqlFiles)
   if (-not $migrationFiles -or $migrationFiles.Count -eq 0) {
     throw "No migration files found for pattern: $Pattern"
   }
