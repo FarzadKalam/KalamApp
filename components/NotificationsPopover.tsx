@@ -6,7 +6,7 @@ import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
-import { fetchAssigneeDirectory } from '../utils/referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from '../utils/referenceData';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
 import QrScanPopover from './QrScanPopover';
@@ -31,6 +31,7 @@ import { sendSmsViaGateway } from '../utils/smsGateway';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import AssistantPanel from './ai/AssistantPanel';
 import { renderRecordTemplate } from '../utils/recordMessaging';
+import { collectTemplateDynamicOptionCategories } from '../utils/messageTemplateRenderer';
 import MessageComposerModal from './MessageComposerModal';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
@@ -52,6 +53,20 @@ import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
+
+const renderNotificationTemplate = async (
+  template: string,
+  record: Record<string, any> | null | undefined,
+  moduleId: string | null | undefined
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId || !record) return String(template || '');
+  const categories = collectTemplateDynamicOptionCategories(template, normalizedModuleId);
+  const optionLabelMaps = categories.length > 0
+    ? await fetchDynamicOptionsMap(supabase, categories).catch(() => ({}))
+    : {};
+  return renderRecordTemplate(template, record, normalizedModuleId, { optionLabelMaps });
+};
 
 interface NotificationsPopoverProps {
   isMobile: boolean;
@@ -4456,7 +4471,7 @@ useEffect(() => {
     try {
       const scope = normalizeNoteScope(noteModuleId, noteRecordId);
       const renderedNoteText = noteModuleId && noteTemplateRecord
-        ? renderRecordTemplate(noteText, noteTemplateRecord, noteModuleId)
+        ? await renderNotificationTemplate(noteText, noteTemplateRecord, noteModuleId)
         : noteText;
       const { mentionUserIds, mentionRoleIds } = parseMentionSelections(mentionValues);
       const groupPayload = getChatGroupPayload(selectedChatGroup);
@@ -6508,7 +6523,7 @@ useEffect(() => {
           ? String(selectedGroup.customer_id || '').trim()
           : String(selectedGroup.supplier_id || '').trim();
         const renderedText = recordModuleId && botTemplateRecord
-          ? renderRecordTemplate(text, botTemplateRecord, recordModuleId)
+          ? await renderNotificationTemplate(text, botTemplateRecord, recordModuleId)
           : text;
         const uploadedAttachments = botAttachments.length > 0
           ? await uploadNoteAttachments(recordModuleId, recordId || null, botAttachments)

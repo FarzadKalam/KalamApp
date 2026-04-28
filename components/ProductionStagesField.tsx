@@ -195,12 +195,20 @@ type DraftModalTabKey = 'stage' | 'fields' | 'automation';
 const DRAFT_MODAL_STEP_KEYS: DraftModalTabKey[] = ['stage', 'fields', 'automation'];
 
 const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
+const taskPriorityField = (MODULES.tasks?.fields || []).find((field: any) => String(field?.key || '').trim() === 'priority');
 const createProcessAutomationTaskVariableFields = (): ModuleField[] => ([
   { key: 'task_name', labels: { fa: 'عنوان فعالیت', en: 'Task Name' }, type: FieldType.TEXT, nature: 'standard' as any },
   { key: 'task_type', labels: { fa: 'نوع فعالیت', en: 'Task Type' }, type: FieldType.TEXT, nature: 'standard' as any },
   { key: 'task_status', labels: { fa: 'وضعیت فعالیت', en: 'Task Status' }, type: FieldType.TEXT, nature: 'standard' as any },
   { key: 'status_label', labels: { fa: 'عنوان وضعیت فعالیت', en: 'Task Status Label' }, type: FieldType.TEXT, nature: 'standard' as any },
   { key: 'task_status_label', labels: { fa: 'عنوان وضعیت فعالیت (کلید اختصاصی)', en: 'Task Status Label Key' }, type: FieldType.TEXT, nature: 'standard' as any },
+  {
+    key: 'task_priority',
+    labels: { fa: 'اولویت فعالیت', en: 'Task Priority' },
+    type: FieldType.STATUS,
+    options: taskPriorityField?.options || [],
+    nature: 'standard' as any,
+  },
   { key: 'task_due_date', labels: { fa: 'موعد فعالیت', en: 'Task Due Date' }, type: FieldType.DATETIME, nature: 'standard' as any },
   { key: 'task_image_url', labels: { fa: 'تصویر اصلی همین فعالیت', en: 'Current Task Main Image' }, type: FieldType.IMAGE, nature: 'standard' as any },
 ]);

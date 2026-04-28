@@ -28,6 +28,8 @@ import AdaptiveSelectField from './AdaptiveSelectField';
 import PhoneDisplay from './PhoneDisplay';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
+import { fetchDynamicOptionsMap } from '../utils/referenceData';
+import { collectTemplateDynamicOptionCategories, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 
 type ReadyTextRow = {
   id: string;
@@ -74,6 +76,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
 
   const [readyTextsLoading, setReadyTextsLoading] = useState(false);
   const [readyTexts, setReadyTexts] = useState<ReadyTextRow[]>([]);
+  const [templateOptionLabelMaps, setTemplateOptionLabelMaps] = useState<TemplateOptionLabelMaps>({});
   const [addingReadyText, setAddingReadyText] = useState(false);
   const [newReadyTextTitle, setNewReadyTextTitle] = useState('');
   const [newReadyTextContent, setNewReadyTextContent] = useState('');
@@ -159,9 +162,36 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     overlayZIndexBase: 12600,
   };
 
+  useEffect(() => {
+    if (!open) {
+      setTemplateOptionLabelMaps({});
+      return;
+    }
+
+    const categories = collectTemplateDynamicOptionCategories(messageText, moduleId);
+    if (categories.length === 0) {
+      setTemplateOptionLabelMaps({});
+      return;
+    }
+
+    let cancelled = false;
+    fetchDynamicOptionsMap(supabase, categories)
+      .then((maps) => {
+        if (!cancelled) setTemplateOptionLabelMaps(maps);
+      })
+      .catch((error) => {
+        console.warn('Could not load message template dynamic options', error);
+        if (!cancelled) setTemplateOptionLabelMaps({});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, messageText, moduleId]);
+
   const renderedPreview = useMemo(
-    () => renderRecordTemplate(messageText, record || {}, moduleId),
-    [messageText, record, moduleId]
+    () => renderRecordTemplate(messageText, record || {}, moduleId, { optionLabelMaps: templateOptionLabelMaps }),
+    [messageText, record, moduleId, templateOptionLabelMaps]
   );
 
   useEffect(() => {
@@ -428,7 +458,12 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       return;
     }
 
-    const finalText = String(renderedPreview || '').trim();
+    const dynamicCategories = collectTemplateDynamicOptionCategories(messageText, moduleId);
+    const missingDynamicCategory = dynamicCategories.some((category) => !templateOptionLabelMaps[category]);
+    const finalOptionLabelMaps = dynamicCategories.length > 0 && missingDynamicCategory
+      ? await fetchDynamicOptionsMap(supabase, dynamicCategories).catch(() => ({}))
+      : templateOptionLabelMaps;
+    const finalText = String(renderRecordTemplate(messageText, record || {}, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
     if (!finalText) {
       msg.warning('متن پیام خالی است.');
       return;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderTemplateText } from './messageTemplateRenderer';
+import { formatTemplateValueByField, renderTemplateText } from './messageTemplateRenderer';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
 
 const directory = {
@@ -44,5 +44,60 @@ describe('messageTemplateRenderer assignee values', () => {
     );
 
     expect(text).toBe('مسئول: مدیر فروش');
+  });
+});
+
+describe('messageTemplateRenderer option values', () => {
+  it('renders attendance log_type as the Persian option label', () => {
+    const text = renderTemplateText(
+      'نوع تردد: {{log_type}}',
+      { log_type: 'check_out' },
+      { moduleId: 'attendance_logs' }
+    );
+
+    expect(text).toBe('نوع تردد: خروج');
+  });
+
+  it('renders task priority as the Persian option label', () => {
+    const text = renderTemplateText(
+      'اولویت: {{priority}}',
+      { priority: 'medium' },
+      { moduleId: 'tasks' }
+    );
+
+    expect(text).toBe('اولویت: متوسط');
+  });
+
+  it('renders task aliases in activity reminders as Persian option labels', () => {
+    const text = renderTemplateText(
+      'اولویت: {{task_priority}} - وضعیت: {{task_status}}',
+      { task_priority: 'medium', task_status: 'done' }
+    );
+
+    expect(text).toBe('اولویت: متوسط - وضعیت: تکمیل شده');
+  });
+
+  it('renders dynamic option values from runtime option maps', () => {
+    const text = renderTemplateText(
+      'نوع فعالیت: {{task_type}}',
+      { task_type: 'outbound_call' },
+      {
+        optionLabelMaps: {
+          task_type: [{ label: 'تماس خروجی', value: 'outbound_call' }],
+        },
+      }
+    );
+
+    expect(text).toBe('نوع فعالیت: تماس خروجی');
+  });
+
+  it('renders multi-select values as option labels', () => {
+    const text = formatTemplateValueByField({
+      moduleId: 'process_templates',
+      fieldKey: 'module_ids',
+      value: ['customers', 'attendance_logs'],
+    });
+
+    expect(text).toBe('مشتریان, تردد');
   });
 });

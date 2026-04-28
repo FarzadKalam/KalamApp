@@ -1,5 +1,5 @@
 import { MODULES } from '../moduleRegistry';
-import { renderTemplateText } from './messageTemplateRenderer';
+import { renderTemplateText, type TemplateOptionLabelMaps } from './messageTemplateRenderer';
 import { normalizePhoneForStorage } from './phoneNumber';
 
 export type MessageReadyTextKind = 'field' | 'message';
@@ -23,8 +23,9 @@ export const getReadyTextScopeModuleId = (
 export const renderRecordTemplate = (
   template: string,
   record?: Record<string, any> | null,
-  moduleId?: string | null
-) => renderTemplateText(template, record, { moduleId });
+  moduleId?: string | null,
+  options?: { optionLabelMaps?: TemplateOptionLabelMaps | null }
+) => renderTemplateText(template, record, { moduleId, optionLabelMaps: options?.optionLabelMaps });
 
 export const getRecordPhoneCandidates = (
   moduleId?: string | null,
