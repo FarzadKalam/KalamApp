@@ -3,6 +3,7 @@ import {
   FieldLocation,
   FieldNature,
   FieldType,
+  LogicOperator,
   ModuleDefinition,
   ModuleNature,
   ViewMode,
@@ -109,6 +110,7 @@ export const attendanceLogsModule: ModuleDefinition = {
       hideInCreateForm: true,
       isTableColumn: true,
       nature: FieldNature.STANDARD,
+      logic: { visibleIf: { field: "log_type", operator: LogicOperator.EQUALS, value: "check_in" } },
     },
     {
       key: "check_out_time",
@@ -120,6 +122,7 @@ export const attendanceLogsModule: ModuleDefinition = {
       hideInCreateForm: true,
       isTableColumn: true,
       nature: FieldNature.STANDARD,
+      logic: { visibleIf: { field: "log_type", operator: LogicOperator.EQUALS, value: "check_out" } },
     },
     {
       key: "presence_minutes",
@@ -280,6 +283,7 @@ export const attendanceLogsModule: ModuleDefinition = {
       order: 5,
       nature: FieldNature.STANDARD,
       isTableColumn: true,
+      logic: { visibleIf: { field: "log_type", operator: LogicOperator.EQUALS, value: "check_in" } },
     },
     {
       key: "manual_check_out_time",
@@ -290,6 +294,7 @@ export const attendanceLogsModule: ModuleDefinition = {
       order: 6,
       nature: FieldNature.STANDARD,
       isTableColumn: true,
+      logic: { visibleIf: { field: "log_type", operator: LogicOperator.EQUALS, value: "check_out" } },
     },
     {
       key: "location_text",

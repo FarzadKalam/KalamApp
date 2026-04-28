@@ -277,12 +277,30 @@ type AttendanceComputedRow = {
   scheduleTitle: string | null;
   scheduledStart: string | null;
   scheduledEnd: string | null;
+  scheduleShifts: AttendanceScheduleShift[];
+  shiftDeltas: AttendanceShiftDelta[];
   lateMinutes: number;
   earlyArrivalMinutes: number;
   earlyLeaveMinutes: number;
   overtimeStayMinutes: number;
   deltaLabel: string;
   deltaColor: string;
+};
+
+type AttendanceScheduleShift = {
+  key: 'shift1' | 'shift2';
+  label: string;
+  start: string | null;
+  end: string | null;
+};
+
+type AttendanceShiftDelta = AttendanceScheduleShift & {
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  lateMinutes: number;
+  earlyArrivalMinutes: number;
+  earlyLeaveMinutes: number;
+  overtimeStayMinutes: number;
 };
 
 type AttendanceModalMode = 'create' | 'view' | 'edit';
@@ -525,6 +543,14 @@ const timeToMinutes = (value: string | null | undefined) => {
   return (hh * 60) + mm;
 };
 
+const minutesToTime = (minutes: number | null) => {
+  if (minutes === null) return null;
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+};
+
+const dateTimeToMinutes = (value: string | null | undefined) =>
+  timeToMinutes(parseDate(value || null)?.format('HH:mm') || null);
+
 const formatMinutesLabel = (minutes: number) => {
   if (minutes <= 0) return '۰';
   if (minutes < 60) return `${toPersianNumber(minutes)} دقیقه`;
@@ -533,6 +559,101 @@ const formatMinutesLabel = (minutes: number) => {
   return rest > 0
     ? `${toPersianNumber(hours)} ساعت و ${toPersianNumber(rest)} دقیقه`
     : `${toPersianNumber(hours)} ساعت`;
+};
+
+const normalizeAttendanceDateTimes = (values: Array<string | null | undefined>) =>
+  Array.from(
+    new Set(
+      values
+        .filter((value): value is string => Boolean(value && parseDate(value || null)))
+        .map((value) => String(value)),
+    ),
+  ).sort((a, b) => (parseDate(a)?.valueOf() || 0) - (parseDate(b)?.valueOf() || 0));
+
+const pickClosestAttendanceTime = (
+  values: string[],
+  usedIndexes: Set<number>,
+  targetMinutes: number | null,
+) => {
+  const candidates = values
+    .map((value, index) => ({ value, index, minutes: dateTimeToMinutes(value) }))
+    .filter((item) =>
+      !usedIndexes.has(item.index) &&
+      item.minutes !== null,
+    );
+
+  if (!candidates.length) return null;
+
+  const picked = candidates.sort((a, b) => {
+    if (targetMinutes === null) return a.index - b.index;
+    return Math.abs((a.minutes || 0) - targetMinutes) - Math.abs((b.minutes || 0) - targetMinutes);
+  })[0];
+
+  usedIndexes.add(picked.index);
+  return picked.value;
+};
+
+const assignAttendanceTimesToShifts = (
+  values: string[],
+  sortedShifts: AttendanceScheduleShift[],
+  targetPart: 'start' | 'end',
+) => {
+  if (!values.length) return sortedShifts.map(() => null as string | null);
+  if (values.length >= sortedShifts.length) {
+    return sortedShifts.map((_, index) => values[index] || null);
+  }
+
+  const usedIndexes = new Set<number>();
+  return sortedShifts.map((shift) => pickClosestAttendanceTime(values, usedIndexes, timeToMinutes(shift[targetPart])));
+};
+
+const buildAttendanceShiftDeltas = (
+  scheduleShifts: AttendanceScheduleShift[],
+  checkIns: string[],
+  checkOuts: string[],
+) => {
+  const sortedShifts = scheduleShifts
+    .filter((shift) => shift.start || shift.end)
+    .sort((a, b) => (timeToMinutes(a.start || a.end) ?? 0) - (timeToMinutes(b.start || b.end) ?? 0));
+  const assignedCheckIns = assignAttendanceTimesToShifts(checkIns, sortedShifts, 'start');
+  const assignedCheckOuts = assignAttendanceTimesToShifts(checkOuts, sortedShifts, 'end');
+
+  return sortedShifts.map((shift, index) => {
+    const shiftStart = timeToMinutes(shift.start);
+    const shiftEnd = timeToMinutes(shift.end);
+    const checkInAt = assignedCheckIns[index] || null;
+    const checkOutAt = assignedCheckOuts[index] || null;
+    const checkInMinutes = dateTimeToMinutes(checkInAt);
+    const checkOutMinutes = dateTimeToMinutes(checkOutAt);
+
+    return {
+      ...shift,
+      checkInAt,
+      checkOutAt,
+      lateMinutes: checkInMinutes !== null && shiftStart !== null ? Math.max(checkInMinutes - shiftStart, 0) : 0,
+      earlyArrivalMinutes: checkInMinutes !== null && shiftStart !== null ? Math.max(shiftStart - checkInMinutes, 0) : 0,
+      earlyLeaveMinutes: checkOutMinutes !== null && shiftEnd !== null ? Math.max(shiftEnd - checkOutMinutes, 0) : 0,
+      overtimeStayMinutes: checkOutMinutes !== null && shiftEnd !== null ? Math.max(checkOutMinutes - shiftEnd, 0) : 0,
+    };
+  });
+};
+
+const summarizeAttendanceDelta = (
+  lateMinutes: number,
+  earlyArrivalMinutes: number,
+  earlyLeaveMinutes: number,
+  overtimeStayMinutes: number,
+) => {
+  const parts = [];
+  if (lateMinutes > 0) parts.push(`دیرکرد ${formatMinutesLabel(lateMinutes)}`);
+  const earlyMinutes = earlyArrivalMinutes + earlyLeaveMinutes;
+  if (earlyMinutes > 0) parts.push(`تعجیل ${formatMinutesLabel(earlyMinutes)}`);
+  if (overtimeStayMinutes > 0) parts.push(`ماندن اضافه ${formatMinutesLabel(overtimeStayMinutes)}`);
+
+  return {
+    deltaLabel: parts.length ? parts.join(' / ') : 'بدون اختلاف',
+    deltaColor: lateMinutes > 0 ? 'red' : earlyMinutes > 0 ? 'green' : overtimeStayMinutes > 0 ? 'blue' : 'default',
+  };
 };
 
 const getAttendanceDateBase = (row: AttendanceLogRecord) =>
@@ -571,6 +692,17 @@ const getAttendanceCheckOutAt = (row: AttendanceLogRecord) => {
 
 const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
   return rows.reduce((total, row) => {
+    if (row.shiftDeltas.length) {
+      const shiftPresenceMinutes = row.shiftDeltas.reduce((sum, shift) => {
+        const checkIn = parseDate(shift.checkInAt || null);
+        const checkOut = parseDate(shift.checkOutAt || null);
+        if (!checkIn || !checkOut) return sum;
+        const diff = checkOut.diff(checkIn, 'minute');
+        return diff > 0 && diff < 24 * 60 ? sum + diff : sum;
+      }, 0);
+      if (shiftPresenceMinutes > 0) return total + shiftPresenceMinutes;
+    }
+
     const checkIn = parseDate(row.checkInAt || null);
     const checkOut = parseDate(row.checkOutAt || null);
     if (!checkIn || !checkOut) return total;
@@ -1407,12 +1539,12 @@ const HRPage: React.FC = () => {
   const computeScheduleForEmployee = useCallback(
     (employeeId: string | null, targetDateIso: string | null) => {
       if (!employeeId || !targetDateIso) {
-        return { title: null, start: null as string | null, end: null as string | null };
+        return { title: null, start: null as string | null, end: null as string | null, shifts: [] as AttendanceScheduleShift[] };
       }
 
       const targetDate = parseDate(targetDateIso);
       if (!targetDate) {
-        return { title: null, start: null as string | null, end: null as string | null };
+        return { title: null, start: null as string | null, end: null as string | null, shifts: [] as AttendanceScheduleShift[] };
       }
 
       const candidates = scheduleRows
@@ -1442,28 +1574,29 @@ const HRPage: React.FC = () => {
         const currentDayPlan = normalizedPlan?.[dayKey];
         if (!currentDayPlan) continue;
 
-        const starts = [currentDayPlan.shift1.start, currentDayPlan.shift2.start].map(timeToMinutes).filter((value): value is number => value !== null);
-        const ends = [currentDayPlan.shift1.end, currentDayPlan.shift2.end].map(timeToMinutes).filter((value): value is number => value !== null);
+        const shifts: AttendanceScheduleShift[] = (['shift1', 'shift2'] as const)
+          .map((shiftKey, index) => ({
+            key: shiftKey,
+            label: `شیفت ${toPersianNumber(index + 1)}`,
+            start: currentDayPlan[shiftKey].start,
+            end: currentDayPlan[shiftKey].end,
+          }))
+          .filter((shift) => shift.start || shift.end)
+          .sort((a, b) => (timeToMinutes(a.start || a.end) ?? 0) - (timeToMinutes(b.start || b.end) ?? 0));
+        const starts = shifts.map((shift) => timeToMinutes(shift.start)).filter((value): value is number => value !== null);
+        const ends = shifts.map((shift) => timeToMinutes(shift.end)).filter((value): value is number => value !== null);
         const earliestStart = starts.length ? Math.min(...starts) : null;
         const latestEnd = ends.length ? Math.max(...ends) : null;
 
-        const start =
-          earliestStart === null
-            ? null
-            : `${String(Math.floor(earliestStart / 60)).padStart(2, '0')}:${String(earliestStart % 60).padStart(2, '0')}`;
-        const end =
-          latestEnd === null
-            ? null
-            : `${String(Math.floor(latestEnd / 60)).padStart(2, '0')}:${String(latestEnd % 60).padStart(2, '0')}`;
-
         return {
           title: schedule.title || null,
-          start,
-          end,
+          start: minutesToTime(earliestStart),
+          end: minutesToTime(latestEnd),
+          shifts,
         };
       }
 
-      return { title: null, start: null as string | null, end: null as string | null };
+      return { title: null, start: null as string | null, end: null as string | null, shifts: [] as AttendanceScheduleShift[] };
     },
     [scheduleRows],
   );
@@ -1473,6 +1606,8 @@ const HRPage: React.FC = () => {
       row: AttendanceComputedRow;
       firstAtValue: number;
       lastAtValue: number;
+      checkIns: string[];
+      checkOuts: string[];
     }>();
 
     attendanceRows.forEach((row) => {
@@ -1497,12 +1632,10 @@ const HRPage: React.FC = () => {
         const sourceTypes = [existing?.row.sourceType, row.source_type].filter((item) => item && item !== '-');
         const notes = [existing?.row.notes, row.notes].filter(Boolean).join(' | ') || null;
         const locationText = [existing?.row.locationText, row.location_text].filter(Boolean).join(' | ') || null;
-        const nextCheckInAt = [existing?.row.checkInAt || null, checkInAt || null]
-          .map((item) => ({ item, time: parseDate(item)?.valueOf() || Number.POSITIVE_INFINITY }))
-          .sort((a, b) => a.time - b.time)[0]?.item || null;
-        const nextCheckOutAt = [existing?.row.checkOutAt || null, checkOutAt || null]
-          .map((item) => ({ item, time: parseDate(item)?.valueOf() || Number.NEGATIVE_INFINITY }))
-          .sort((a, b) => b.time - a.time)[0]?.item || null;
+        const checkIns = normalizeAttendanceDateTimes([...(existing?.checkIns || []), checkInAt || null]);
+        const checkOuts = normalizeAttendanceDateTimes([...(existing?.checkOuts || []), checkOutAt || null]);
+        const nextCheckInAt = checkIns[0] || null;
+        const nextCheckOutAt = checkOuts[checkOuts.length - 1] || null;
         const rowTimeValue = parsedBaseAt?.valueOf() || 0;
         const firstAtValue = existing ? Math.min(existing.firstAtValue, rowTimeValue || existing.firstAtValue) : rowTimeValue;
         const lastAtValue = existing ? Math.max(existing.lastAtValue, rowTimeValue || existing.lastAtValue) : rowTimeValue;
@@ -1510,34 +1643,43 @@ const HRPage: React.FC = () => {
           ? nextCheckOutAt
           : nextCheckInAt || baseAt;
         const schedule = computeScheduleForEmployee(employeeId, nextCheckInAt || nextCheckOutAt || baseAt);
-        const checkInMinutes = timeToMinutes(parseDate(nextCheckInAt || null)?.format('HH:mm') || null);
-        const checkOutMinutes = timeToMinutes(parseDate(nextCheckOutAt || null)?.format('HH:mm') || null);
+        const shiftDeltas = buildAttendanceShiftDeltas(schedule.shifts, checkIns, checkOuts);
+        const checkInMinutes = dateTimeToMinutes(nextCheckInAt);
+        const checkOutMinutes = dateTimeToMinutes(nextCheckOutAt);
         const startMinutes = timeToMinutes(schedule.start);
         const endMinutes = timeToMinutes(schedule.end);
-        const lateMinutes = checkInMinutes !== null && startMinutes !== null ? Math.max(checkInMinutes - startMinutes, 0) : 0;
-        const earlyArrivalMinutes = checkInMinutes !== null && startMinutes !== null ? Math.max(startMinutes - checkInMinutes, 0) : 0;
-        const earlyLeaveMinutes = checkOutMinutes !== null && endMinutes !== null ? Math.max(endMinutes - checkOutMinutes, 0) : 0;
-        const overtimeStayMinutes = checkOutMinutes !== null && endMinutes !== null ? Math.max(checkOutMinutes - endMinutes, 0) : 0;
-
-        let deltaLabel = 'بدون اختلاف';
-        let deltaColor = 'default';
-        if (lateMinutes > 0) {
-          deltaLabel = `دیرکرد ${formatMinutesLabel(lateMinutes)}`;
-          deltaColor = 'red';
-        } else if (earlyArrivalMinutes > 0) {
-          deltaLabel = `تعجیل ورود ${formatMinutesLabel(earlyArrivalMinutes)}`;
-          deltaColor = 'green';
-        } else if (earlyLeaveMinutes > 0) {
-          deltaLabel = `تعجیل خروج ${formatMinutesLabel(earlyLeaveMinutes)}`;
-          deltaColor = 'orange';
-        } else if (overtimeStayMinutes > 0) {
-          deltaLabel = `ماندن اضافه ${formatMinutesLabel(overtimeStayMinutes)}`;
-          deltaColor = 'blue';
-        }
+        const fallbackDelta = {
+          lateMinutes: checkInMinutes !== null && startMinutes !== null ? Math.max(checkInMinutes - startMinutes, 0) : 0,
+          earlyArrivalMinutes: checkInMinutes !== null && startMinutes !== null ? Math.max(startMinutes - checkInMinutes, 0) : 0,
+          earlyLeaveMinutes: checkOutMinutes !== null && endMinutes !== null ? Math.max(endMinutes - checkOutMinutes, 0) : 0,
+          overtimeStayMinutes: checkOutMinutes !== null && endMinutes !== null ? Math.max(checkOutMinutes - endMinutes, 0) : 0,
+        };
+        const shiftTotals = shiftDeltas.reduce(
+          (acc, shift) => ({
+            lateMinutes: acc.lateMinutes + shift.lateMinutes,
+            earlyArrivalMinutes: acc.earlyArrivalMinutes + shift.earlyArrivalMinutes,
+            earlyLeaveMinutes: acc.earlyLeaveMinutes + shift.earlyLeaveMinutes,
+            overtimeStayMinutes: acc.overtimeStayMinutes + shift.overtimeStayMinutes,
+          }),
+          { lateMinutes: 0, earlyArrivalMinutes: 0, earlyLeaveMinutes: 0, overtimeStayMinutes: 0 },
+        );
+        const totalsForDelta = shiftDeltas.length ? shiftTotals : fallbackDelta;
+        const lateMinutes = totalsForDelta.lateMinutes;
+        const earlyArrivalMinutes = totalsForDelta.earlyArrivalMinutes;
+        const earlyLeaveMinutes = totalsForDelta.earlyLeaveMinutes;
+        const overtimeStayMinutes = totalsForDelta.overtimeStayMinutes;
+        const { deltaLabel, deltaColor } = summarizeAttendanceDelta(
+          lateMinutes,
+          earlyArrivalMinutes,
+          earlyLeaveMinutes,
+          overtimeStayMinutes,
+        );
 
         dailyRows.set(groupKey, {
           firstAtValue,
           lastAtValue,
+          checkIns,
+          checkOuts,
           row: {
             key: groupKey,
             id: existing?.row.id || row.id,
@@ -1557,6 +1699,8 @@ const HRPage: React.FC = () => {
             scheduleTitle: schedule.title,
             scheduledStart: schedule.start,
             scheduledEnd: schedule.end,
+            scheduleShifts: schedule.shifts,
+            shiftDeltas,
             lateMinutes,
             earlyArrivalMinutes,
             earlyLeaveMinutes,
@@ -2198,21 +2342,45 @@ const HRPage: React.FC = () => {
       title: 'ورود',
       dataIndex: 'checkInAt',
       key: 'checkInAt',
-      render: (val: string | null) => (
-        val
+      render: (val: string | null, row: AttendanceComputedRow) => {
+        const shiftEntries = row.shiftDeltas.filter((shift) => shift.checkInAt);
+        if (row.shiftDeltas.length > 1 && shiftEntries.length) {
+          return (
+            <div className="flex flex-col gap-1">
+              {shiftEntries.map((shift) => (
+                <Tag key={`${shift.key}_in`} color="green" className="w-fit">
+                  {shift.label}: {toPersianNumber(safeJalaliFormat(shift.checkInAt || '', 'HH:mm'))}
+                </Tag>
+              ))}
+            </div>
+          );
+        }
+        return val
           ? <Tag color="green">{toPersianNumber(safeJalaliFormat(val, 'HH:mm'))}</Tag>
-          : <span className="text-gray-400">-</span>
-      ),
+          : <span className="text-gray-400">-</span>;
+      },
     },
     {
       title: 'خروج',
       dataIndex: 'checkOutAt',
       key: 'checkOutAt',
-      render: (val: string | null) => (
-        val
+      render: (val: string | null, row: AttendanceComputedRow) => {
+        const shiftEntries = row.shiftDeltas.filter((shift) => shift.checkOutAt);
+        if (row.shiftDeltas.length > 1 && shiftEntries.length) {
+          return (
+            <div className="flex flex-col gap-1">
+              {shiftEntries.map((shift) => (
+                <Tag key={`${shift.key}_out`} color="red" className="w-fit">
+                  {shift.label}: {toPersianNumber(safeJalaliFormat(shift.checkOutAt || '', 'HH:mm'))}
+                </Tag>
+              ))}
+            </div>
+          );
+        }
+        return val
           ? <Tag color="red">{toPersianNumber(safeJalaliFormat(val, 'HH:mm'))}</Tag>
-          : <span className="text-gray-400">-</span>
-      ),
+          : <span className="text-gray-400">-</span>;
+      },
     },
     {
       title: 'برنامه حضور',
@@ -2220,9 +2388,17 @@ const HRPage: React.FC = () => {
       render: (_: unknown, row: AttendanceComputedRow) => (
         <div className="text-xs leading-6">
           <div className="font-bold">{row.scheduleTitle || '-'}</div>
-          <div className="text-gray-500">
-            {row.scheduledStart || row.scheduledEnd ? `${toPersianNumber(row.scheduledStart || '--')} تا ${toPersianNumber(row.scheduledEnd || '--')}` : 'بدون برنامه'}
-          </div>
+          {row.scheduleShifts.length ? (
+            row.scheduleShifts.map((shift) => (
+              <div key={shift.key} className="text-gray-500">
+                {shift.label}: {toPersianNumber(shift.start || '--')} تا {toPersianNumber(shift.end || '--')}
+              </div>
+            ))
+          ) : (
+            <div className="text-gray-500">
+              {row.scheduledStart || row.scheduledEnd ? `${toPersianNumber(row.scheduledStart || '--')} تا ${toPersianNumber(row.scheduledEnd || '--')}` : 'بدون برنامه'}
+            </div>
+          )}
         </div>
       ),
     },
@@ -2236,10 +2412,24 @@ const HRPage: React.FC = () => {
       key: 'delta_details',
       render: (_: unknown, row: AttendanceComputedRow) => (
         <div className="text-xs leading-6">
-          <div>دیرکرد: <span className="persian-number text-red-700">{formatMinutesLabel(row.lateMinutes)}</span></div>
-          <div>تعجیل ورود: <span className="persian-number text-green-700">{formatMinutesLabel(row.earlyArrivalMinutes)}</span></div>
-          <div>تعجیل خروج: <span className="persian-number text-orange-600">{formatMinutesLabel(row.earlyLeaveMinutes)}</span></div>
-          <div>اضافه‌ماندن: <span className="persian-number text-blue-700">{formatMinutesLabel(row.overtimeStayMinutes)}</span></div>
+          {row.shiftDeltas.length ? (
+            row.shiftDeltas.map((shift) => (
+              <div key={shift.key} className="mb-1">
+                <div className="font-bold text-gray-700">{shift.label}</div>
+                <div>دیرکرد: <span className="persian-number text-red-700">{formatMinutesLabel(shift.lateMinutes)}</span></div>
+                <div>تعجیل ورود: <span className="persian-number text-green-700">{formatMinutesLabel(shift.earlyArrivalMinutes)}</span></div>
+                <div>تعجیل خروج: <span className="persian-number text-orange-600">{formatMinutesLabel(shift.earlyLeaveMinutes)}</span></div>
+                <div>اضافه‌ماندن: <span className="persian-number text-blue-700">{formatMinutesLabel(shift.overtimeStayMinutes)}</span></div>
+              </div>
+            ))
+          ) : (
+            <>
+              <div>دیرکرد: <span className="persian-number text-red-700">{formatMinutesLabel(row.lateMinutes)}</span></div>
+              <div>تعجیل ورود: <span className="persian-number text-green-700">{formatMinutesLabel(row.earlyArrivalMinutes)}</span></div>
+              <div>تعجیل خروج: <span className="persian-number text-orange-600">{formatMinutesLabel(row.earlyLeaveMinutes)}</span></div>
+              <div>اضافه‌ماندن: <span className="persian-number text-blue-700">{formatMinutesLabel(row.overtimeStayMinutes)}</span></div>
+            </>
+          )}
         </div>
       ),
     },

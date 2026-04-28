@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { attendanceLogsModule } from '../modules/attendanceLogsConfig';
 import { cashBankOperationsConfig } from '../modules/cashBankOperationsConfig';
 import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
 import { FieldType, type ModuleField } from '../types';
@@ -76,6 +77,44 @@ describe('conditionalFieldRules', () => {
     expect(chequeState.visible).toBe(true);
     expect(chequeState.required).toBe(true);
     expect(cashState.visible).toBe(false);
+  });
+
+  it('shows only the matching attendance manual datetime field for the selected log type', () => {
+    const settings = buildResolvedConditionalFieldSettings(attendanceLogsModule);
+    const checkInField = attendanceLogsModule.fields.find((entry) => entry.key === 'manual_check_in_time');
+    const checkOutField = attendanceLogsModule.fields.find((entry) => entry.key === 'manual_check_out_time');
+
+    if (!checkInField || !checkOutField) throw new Error('Attendance manual datetime fields not found');
+
+    const checkInState = resolveConditionalFieldState(
+      checkInField,
+      { log_type: 'check_in' },
+      settings,
+      attendanceLogsModule.fields,
+    );
+    const checkOutStateForCheckIn = resolveConditionalFieldState(
+      checkOutField,
+      { log_type: 'check_in' },
+      settings,
+      attendanceLogsModule.fields,
+    );
+    const checkInStateForCheckOut = resolveConditionalFieldState(
+      checkInField,
+      { log_type: 'check_out' },
+      settings,
+      attendanceLogsModule.fields,
+    );
+    const checkOutState = resolveConditionalFieldState(
+      checkOutField,
+      { log_type: 'check_out' },
+      settings,
+      attendanceLogsModule.fields,
+    );
+
+    expect(checkInState.visible).toBe(true);
+    expect(checkOutStateForCheckIn.visible).toBe(false);
+    expect(checkInStateForCheckOut.visible).toBe(false);
+    expect(checkOutState.visible).toBe(true);
   });
 
   it('lets higher-priority user rules override required state', () => {

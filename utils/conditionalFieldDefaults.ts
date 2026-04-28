@@ -163,6 +163,61 @@ const buildCashBankSystemRules = (): ConditionalFieldRule[] => [
   },
 ];
 
+const buildAttendanceLogsSystemRules = (): ConditionalFieldRule[] => [
+  {
+    id: 'system:attendance_logs:check_in_time:log_type',
+    targetFieldKey: 'check_in_time',
+    source: 'system',
+    locked: true,
+    enabled: true,
+    priority: 220,
+    conditions_all: [
+      { id: 'attendance_log_type_check_in', field: 'log_type', operator: 'eq', value: 'check_in' },
+    ],
+    conditions_any: [],
+    effect: { showField: true },
+  },
+  {
+    id: 'system:attendance_logs:check_out_time:log_type',
+    targetFieldKey: 'check_out_time',
+    source: 'system',
+    locked: true,
+    enabled: true,
+    priority: 220,
+    conditions_all: [
+      { id: 'attendance_log_type_check_out', field: 'log_type', operator: 'eq', value: 'check_out' },
+    ],
+    conditions_any: [],
+    effect: { showField: true },
+  },
+  {
+    id: 'system:attendance_logs:manual_check_in_time:log_type',
+    targetFieldKey: 'manual_check_in_time',
+    source: 'system',
+    locked: true,
+    enabled: true,
+    priority: 220,
+    conditions_all: [
+      { id: 'attendance_log_type_manual_check_in', field: 'log_type', operator: 'eq', value: 'check_in' },
+    ],
+    conditions_any: [],
+    effect: { showField: true },
+  },
+  {
+    id: 'system:attendance_logs:manual_check_out_time:log_type',
+    targetFieldKey: 'manual_check_out_time',
+    source: 'system',
+    locked: true,
+    enabled: true,
+    priority: 220,
+    conditions_all: [
+      { id: 'attendance_log_type_manual_check_out', field: 'log_type', operator: 'eq', value: 'check_out' },
+    ],
+    conditions_any: [],
+    effect: { showField: true },
+  },
+];
+
 export const getSystemConditionalFieldRules = (moduleDef?: Pick<ModuleDefinition, 'id' | 'fields'> | null) => {
   if (!moduleDef) return [] as ConditionalFieldRule[];
   const moduleId = String(moduleDef.id || '').trim();
@@ -172,6 +227,10 @@ export const getSystemConditionalFieldRules = (moduleDef?: Pick<ModuleDefinition
 
   if (moduleId === 'cash_bank_operations') {
     return [...fieldRules, ...buildCashBankSystemRules()];
+  }
+
+  if (moduleId === 'attendance_logs') {
+    return [...fieldRules, ...buildAttendanceLogsSystemRules()];
   }
 
   return fieldRules;
