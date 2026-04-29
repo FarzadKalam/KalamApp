@@ -235,6 +235,14 @@ const formatNumericForInput = (raw: any, withGrouping = false): string => {
   return toPersianNumber(output);
 };
 
+const normalizePriceString = (raw: any): string => {
+  const normalized = normalizeNumericString(raw);
+  if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return normalized;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return normalized;
+  return String(Math.round(parsed));
+};
+
 const resolveFormatterSourceValue = (inputValue: any, currentValue: any) => {
   if (inputValue === '' && currentValue !== null && currentValue !== undefined && String(currentValue) !== '') {
     return currentValue;
@@ -2214,10 +2222,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 className="w-full persian-number" 
                 controls={false}
                 stringMode
-                inputMode="decimal"
+                inputMode={fieldType === FieldType.PRICE ? 'numeric' : 'decimal'}
                 suffix={fieldType === FieldType.PRICE && currencyLabel ? currencyLabel : undefined}
-                formatter={(val, info) => formatNumericForInput(resolveFormatterSourceValue(info?.input, val), true)}
-                parser={(val) => normalizeNumericString(val)}
+                formatter={(val, info) => formatNumericForInput(
+                  fieldType === FieldType.PRICE
+                    ? normalizePriceString(resolveFormatterSourceValue(info?.input, val))
+                    : resolveFormatterSourceValue(info?.input, val),
+                  true,
+                )}
+                parser={(val) => fieldType === FieldType.PRICE ? normalizePriceString(val) : normalizeNumericString(val)}
                 onKeyDown={preventNonNumericKeyDown}
                 onPaste={preventNonNumericPaste}
             />

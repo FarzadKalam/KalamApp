@@ -28,7 +28,8 @@ export const formatPersianPrice = (num: any, withComma = true): string => {
   const normalized = toEnglishDigits(String(num)).replace(/,/g, '').trim();
   const number = Number(normalized);
   if (!Number.isFinite(number)) return toPersianNumber(String(num));
-  const str = withComma ? number.toLocaleString('en-US') : String(number);
+  const rounded = Math.round(number);
+  const str = withComma ? rounded.toLocaleString('en-US', { maximumFractionDigits: 0 }) : String(rounded);
   return toPersianNumber(str);
 };
 

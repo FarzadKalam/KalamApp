@@ -25,7 +25,7 @@ import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece,
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
 import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
-import { toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { convertArea } from '../utils/unitConversions';
 import QrScanPopover from '../components/QrScanPopover';
 import { PRODUCTION_MESSAGES } from '../utils/productionMessages';
@@ -4831,7 +4831,7 @@ const ModuleShow: React.FC = () => {
     if (value === null || value === undefined) return '';
     if (Array.isArray(value)) return value.join('، ');
     if (field.type === FieldType.CHECKBOX) return value ? 'بله' : 'خیر';
-    if (field.type === FieldType.PRICE) return `${Number(value).toLocaleString()} ${currencyLabel}`;
+    if (field.type === FieldType.PRICE) return `${formatPersianPrice(value)} ${currencyLabel}`;
     if (field.type === FieldType.PERCENTAGE) return `${value}%`;
     if (field.type === FieldType.DATE) {
       return formatPersian(value, 'DATE') || String(value);

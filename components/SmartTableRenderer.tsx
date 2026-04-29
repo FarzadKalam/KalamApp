@@ -469,12 +469,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                     if (value === undefined || value === null) return '';
                     const normalized = fromPersianNumber(String(value));
                     if (Number.isNaN(normalized)) return '';
-                    return toPersianNumber(normalized.toLocaleString('en-US'));
+                    return toPersianNumber(Math.round(normalized).toLocaleString('en-US'));
                   }}
                   parser={(value) => {
                     const normalized = normalizeDigits(value || '').replace(/,/g, '');
                     const parsed = Number(normalized);
-                    return Number.isFinite(parsed) ? parsed : 0;
+                    return Number.isFinite(parsed) ? Math.round(parsed) : 0;
                   }}
                   onChange={(val) => updateRange({ ...range, from: val ?? undefined })}
                 />
@@ -487,12 +487,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                     if (value === undefined || value === null) return '';
                     const normalized = fromPersianNumber(String(value));
                     if (Number.isNaN(normalized)) return '';
-                    return toPersianNumber(normalized.toLocaleString('en-US'));
+                    return toPersianNumber(Math.round(normalized).toLocaleString('en-US'));
                   }}
                   parser={(value) => {
                     const normalized = normalizeDigits(value || '').replace(/,/g, '');
                     const parsed = Number(normalized);
-                    return Number.isFinite(parsed) ? parsed : 0;
+                    return Number.isFinite(parsed) ? Math.round(parsed) : 0;
                   }}
                   onChange={(val) => updateRange({ ...range, to: val ?? undefined })}
                 />
@@ -1416,8 +1416,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           const from = range.from !== undefined && range.from !== '' ? String(range.from) : '...';
           const to = range.to !== undefined && range.to !== '' ? String(range.to) : '...';
           if (field?.type === FieldType.PRICE) {
-            const fromNum = from !== '...' ? fromPersianNumber(from).toLocaleString('en-US') : from;
-            const toNum = to !== '...' ? fromPersianNumber(to).toLocaleString('en-US') : to;
+            const fromNum = from !== '...' ? Math.round(fromPersianNumber(from)).toLocaleString('en-US') : from;
+            const toNum = to !== '...' ? Math.round(fromPersianNumber(to)).toLocaleString('en-US') : to;
             valueLabel = `${toPersianNumber(fromNum)} تا ${toPersianNumber(toNum)}`;
           } else {
             valueLabel = `${from} تا ${to}`;

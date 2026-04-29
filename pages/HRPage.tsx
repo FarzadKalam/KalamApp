@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Col,
-  DatePicker,
   Empty,
   Form,
   Input,
@@ -36,6 +35,7 @@ import { isTaskDoneStatus, normalizeTaskStatus } from '../utils/taskCompletion';
 import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import PersianDatePicker from '../components/PersianDatePicker';
+import PersianDateRangePicker, { type PersianDateRangeValue } from '../components/PersianDateRangePicker';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { useCurrencyConfig } from '../utils/currency';
 import { buildClientFallbackSystemCode } from '../utils/systemCode';
@@ -49,6 +49,7 @@ import { evaluateGoalRewardRules, type GoalRewardEntry, type GoalRewardFormula }
 import { syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
 import {
   fetchPayrollLedgerEntries,
+  isMissingPayrollLedgerError,
   mapPayrollLedgerEntriesToLines,
   markPayrollLedgerEntriesIncluded,
   sumPayrollLedgerEntries,
@@ -59,7 +60,13 @@ import {
   type ActivityPerformanceFormula,
   type ActivityPerformanceRule,
 } from '../utils/activityPerformanceRuntime';
-import { buildCommissionPreviewRows, type CommissionBasis, type CommissionPreviewRow } from '../utils/commissionRuntime';
+import {
+  buildCommissionCalculatedKey,
+  buildCommissionPreviewRows,
+  type CommissionBasis,
+  type CommissionPercentMode,
+  type CommissionPreviewRow,
+} from '../utils/commissionRuntime';
 import type { GoalRecord } from '../utils/goalTypes';
 import { resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../utils/popupContainer';
 
@@ -169,6 +176,32 @@ type PayrollFormValues = {
   production_bonus_rate: number;
   seniority_base_amount: number;
   seniority_formula_id?: string | null;
+};
+
+type CommissionCalculationFormValues = {
+  period_range: PersianDateRangeValue | null;
+  employee_profile_id: string;
+  basis: CommissionBasis;
+  percent_mode: CommissionPercentMode;
+};
+
+type CommissionLedgerRow = {
+  id: string;
+  employee_id: string | null;
+  employee_name: string;
+  period_start: string | null;
+  period_end: string | null;
+  entry_type: string;
+  title: string | null;
+  amount: number;
+  status: string | null;
+  source_record_id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  assignee_id: string | null;
+  details: Record<string, any> | null;
 };
 
 type EmployeeGoalTouchRow = {
@@ -363,6 +396,18 @@ const RELATED_MODULE_FA: Record<string, string> = {
   purchase_invoices: 'فاکتورهای خرید',
   tasks: 'فعالیت ها',
 };
+
+const COMMISSION_BASIS_OPTIONS: Array<{ label: string; value: CommissionBasis }> = [
+  { label: 'بر اساس فاکتورهای تایید شده', value: 'approved_invoices' },
+  { label: 'بر اساس فاکتورهای تسویه شده', value: 'settled_invoices' },
+  { label: 'بر اساس فاکتورهای پیش پرداخت و تسویه شده', value: 'prepaid_and_settled_invoices' },
+  { label: 'بر اساس فاکتورهای تسویه شده و چک های وصول شده', value: 'settled_and_collected_cheques' },
+];
+
+const COMMISSION_PERCENT_MODE_OPTIONS: Array<{ label: string; value: CommissionPercentMode }> = [
+  { label: 'درصد پیش فرض هر کالا یا خدمات', value: 'product_default' },
+  { label: 'درصد پورسانت پیش فرض بازاریاب (کارمند)', value: 'employee_default' },
+];
 
 const toNumber = (value: unknown): number => {
   if (value === null || value === undefined || value === '') return 0;
@@ -883,6 +928,11 @@ const HRPage: React.FC = () => {
   const [goalTouchLoading, setGoalTouchLoading] = useState(false);
   const [commissionRows, setCommissionRows] = useState<CommissionPreviewRow[]>([]);
   const [commissionLoading, setCommissionLoading] = useState(false);
+  const [calculatedCommissionRows, setCalculatedCommissionRows] = useState<CommissionLedgerRow[]>([]);
+  const [calculatedCommissionLoading, setCalculatedCommissionLoading] = useState(false);
+  const [commissionModalOpen, setCommissionModalOpen] = useState(false);
+  const [commissionModalSaving, setCommissionModalSaving] = useState(false);
+  const [commissionForm] = Form.useForm<CommissionCalculationFormValues>();
   const [lineQuantityById, setLineQuantityById] = useState<Record<string, number>>({});
   const [orderQuantityById, setOrderQuantityById] = useState<Record<string, number>>({});
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
@@ -949,10 +999,37 @@ const HRPage: React.FC = () => {
     }
   }, [employeeId, monthEnd, monthStart]);
 
-  const onDateRangeChange = (values: [Dayjs | null, Dayjs | null] | null) => {
-    if (!values || !values[0] || !values[1]) return;
-    setSelectedRange([values[0].startOf('day'), values[1].endOf('day')]);
-  };
+  const updateSelectedRangeDates = useCallback((value: PersianDateRangeValue | null) => {
+    const startDate = parseDateValue(value?.[0] || null);
+    const endDate = parseDateValue(value?.[1] || null);
+    if (!startDate?.isValid() || !endDate?.isValid()) return;
+    setSelectedRange((current) => {
+      let nextStart = startDate.startOf('day');
+      let nextEnd = endDate.endOf('day');
+      if (nextStart.valueOf() > nextEnd.valueOf()) {
+        [nextStart, nextEnd] = [current[0].startOf('day'), current[1].endOf('day')];
+      }
+      return [nextStart, nextEnd];
+    });
+  }, []);
+
+  const renderHrRangePicker = useCallback((
+    value: [Dayjs, Dayjs],
+    onChange: (value: PersianDateRangeValue | null) => void,
+    overlayZIndexBase = 1400,
+  ) => (
+    <PersianDateRangePicker
+      value={[
+        toGregorianDateString(value[0], 'YYYY-MM-DD'),
+        toGregorianDateString(value[1], 'YYYY-MM-DD'),
+      ]}
+      onChange={onChange}
+      placeholder="بازه زمانی"
+      modalContainer={resolveSelectPopupContainer}
+      overlayZIndexBase={overlayZIndexBase}
+      className="w-full"
+    />
+  ), []);
 
   const fetchData = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -1457,54 +1534,70 @@ const HRPage: React.FC = () => {
     void run();
   }, [activeTab, visibleSummaries]);
 
+  const fetchCalculatedCommissionRows = useCallback(async () => {
+    const periodStart = toGregorianDateString(monthStart, 'YYYY-MM-DD');
+    const periodEnd = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+    if (!periodStart || !periodEnd) return;
+
+    const targetEmployeeIds = visibleSummaries
+      .map((row) => String(row.profile.source_id || row.profile.id || '').trim())
+      .filter(Boolean);
+    if (targetEmployeeIds.length === 0) {
+      setCalculatedCommissionRows([]);
+      return;
+    }
+
+    setCalculatedCommissionLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('payroll_calculation_entries')
+        .select('id, employee_id, period_start, period_end, entry_type, source_record_id, title, amount, status, details, created_by, updated_by, created_at, updated_at, assignee_id')
+        .eq('source_type', 'commission')
+        .in('employee_id', targetEmployeeIds)
+        .gte('period_end', periodStart)
+        .lte('period_start', periodEnd)
+        .neq('status', 'voided')
+        .order('created_at', { ascending: false })
+        .limit(1000);
+      if (error) throw error;
+
+      setCalculatedCommissionRows((data || []).map((row: any) => {
+        const employeeIdValue = row?.employee_id ? String(row.employee_id) : null;
+        return {
+          id: String(row?.id),
+          employee_id: employeeIdValue,
+          employee_name: employeeIdValue ? profiles.find((profile) => String(profile.id) === employeeIdValue || String(profile.source_id || '') === employeeIdValue)?.full_name || employeeIdValue : '-',
+          period_start: row?.period_start || null,
+          period_end: row?.period_end || null,
+          entry_type: String(row?.entry_type || ''),
+          title: row?.title || null,
+          amount: toNumber(row?.amount),
+          status: row?.status || null,
+          source_record_id: row?.source_record_id || null,
+          created_at: row?.created_at || null,
+          updated_at: row?.updated_at || null,
+          created_by: row?.created_by || null,
+          updated_by: row?.updated_by || null,
+          assignee_id: row?.assignee_id || row?.details?.assignee_id || null,
+          details: row?.details || null,
+        };
+      }));
+    } catch (error) {
+      if (isMissingPayrollLedgerError(error)) {
+        setCalculatedCommissionRows([]);
+      } else {
+        console.warn('Commission ledger is not available yet.', error);
+        setCalculatedCommissionRows([]);
+      }
+    } finally {
+      setCalculatedCommissionLoading(false);
+    }
+  }, [monthEnd, monthStart, profiles, visibleSummaries]);
+
   useEffect(() => {
     if (activeTab !== 'commissions') return;
-
-    const run = async () => {
-      setCommissionLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('invoices')
-          .select('id, name, status, invoice_date, total_invoice_amount, assignee_id, invoiceItems, payments')
-          .gte('invoice_date', toGregorianDateString(monthStart, 'YYYY-MM-DD') || '')
-          .lte('invoice_date', toGregorianDateString(monthEnd, 'YYYY-MM-DD') || '')
-          .limit(3000);
-        if (error) throw error;
-
-        const selectedProfiles = visibleSummaries
-          .map((row) => row.profile)
-          .filter((profile) => profile.source_table === 'employees' && profile.source_id);
-        const employeeIdByAssigneeId = selectedProfiles.reduce<Record<string, string>>((acc, profile) => {
-          const assigneeId = String(profile.related_profile_id || profile.id || '').trim();
-          const employeeId = String(profile.source_id || '').trim();
-          if (assigneeId && employeeId) acc[assigneeId] = employeeId;
-          return acc;
-        }, {});
-        const employeeDefaultCommissionByEmployeeId = selectedProfiles.reduce<Record<string, number>>((acc, profile) => {
-          const employeeId = String(profile.source_id || '').trim();
-          if (employeeId) acc[employeeId] = toNumber(profile.commission_percentage);
-          return acc;
-        }, {});
-
-        const bases: CommissionBasis[] = ['approved_invoices', 'settled_invoices', 'settled_and_collected_cheques'];
-        const nextRows = bases.flatMap((basis) => buildCommissionPreviewRows({
-          invoices: (data || []) as any[],
-          employeeIdByAssigneeId,
-          employeeDefaultCommissionByEmployeeId,
-          basis,
-        }));
-
-        setCommissionRows(nextRows);
-      } catch (error) {
-        console.warn('Commission preview is not available yet.', error);
-        setCommissionRows([]);
-      } finally {
-        setCommissionLoading(false);
-      }
-    };
-
-    void run();
-  }, [activeTab, monthEnd, monthStart, visibleSummaries]);
+    void fetchCalculatedCommissionRows();
+  }, [activeTab, fetchCalculatedCommissionRows]);
 
   const selectedEmployeeSummary = useMemo(() => {
     if (!employeeId) return null;
@@ -1803,18 +1896,20 @@ const HRPage: React.FC = () => {
 
   const commissionTotals = useMemo(() => {
     const rowsByBasis = {
-      approved_invoices: commissionRows.filter((row) => row.basis === 'approved_invoices'),
-      settled_invoices: commissionRows.filter((row) => row.basis === 'settled_invoices'),
-      settled_and_collected_cheques: commissionRows.filter((row) => row.basis === 'settled_and_collected_cheques'),
+      approved_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'approved_invoices'),
+      settled_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'settled_invoices'),
+      prepaid_and_settled_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'prepaid_and_settled_invoices'),
+      settled_and_collected_cheques: calculatedCommissionRows.filter((row) => row.details?.basis === 'settled_and_collected_cheques'),
     };
     return {
-      approved: rowsByBasis.approved_invoices.reduce((sum, row) => sum + row.commission_amount, 0),
-      settled: rowsByBasis.settled_invoices.reduce((sum, row) => sum + row.commission_amount, 0),
-      collectedCheque: rowsByBasis.settled_and_collected_cheques.reduce((sum, row) => sum + row.commission_amount, 0),
-      invoices: new Set(commissionRows.map((row) => row.invoice_id)).size,
+      approved: rowsByBasis.approved_invoices.reduce((sum, row) => sum + row.amount, 0),
+      settled: rowsByBasis.settled_invoices.reduce((sum, row) => sum + row.amount, 0),
+      prepaid: rowsByBasis.prepaid_and_settled_invoices.reduce((sum, row) => sum + row.amount, 0),
+      collectedCheque: rowsByBasis.settled_and_collected_cheques.reduce((sum, row) => sum + row.amount, 0),
+      invoices: new Set(calculatedCommissionRows.map((row) => row.details?.invoice_id || row.source_record_id).filter(Boolean)).size,
       pendingRows: rowsByBasis.settled_and_collected_cheques.length,
     };
-  }, [commissionRows]);
+  }, [calculatedCommissionRows]);
 
   const attendanceInsights = useMemo(() => {
     const deltas = attendanceComputedRows.reduce(
@@ -1909,6 +2004,227 @@ const HRPage: React.FC = () => {
       setAttendanceModalSaving(false);
     }
   }, [attendanceForm, attendanceModalMode, attendanceModalRecord?.id, closeAttendanceModal, fetchData, message, profileById]);
+
+  const openCommissionModal = useCallback(() => {
+    const defaultProfileId =
+      (selectedEmployeeIds.length === 1 ? selectedEmployeeIds[0] : null) ||
+      visibleSummaries.find((row) => row.profile.source_table === 'employees')?.profile.id ||
+      profiles.find((profile) => profile.source_table === 'employees')?.id ||
+      '';
+    commissionForm.setFieldsValue({
+      period_range: [
+        toGregorianDateString(selectedRange[0], 'YYYY-MM-DD'),
+        toGregorianDateString(selectedRange[1], 'YYYY-MM-DD'),
+      ],
+      employee_profile_id: defaultProfileId,
+      basis: 'prepaid_and_settled_invoices',
+      percent_mode: 'product_default',
+    });
+    setCommissionRows([]);
+    setCommissionModalOpen(true);
+  }, [commissionForm, profiles, selectedEmployeeIds, selectedRange, visibleSummaries]);
+
+  const getCommissionPeriodValues = useCallback((values: Partial<CommissionCalculationFormValues>) => {
+    const periodStart = String(values.period_range?.[0] || toGregorianDateString(selectedRange[0], 'YYYY-MM-DD') || '').trim();
+    const periodEnd = String(values.period_range?.[1] || toGregorianDateString(selectedRange[1], 'YYYY-MM-DD') || '').trim();
+    const startDate = parseDateValue(periodStart);
+    const endDate = parseDateValue(periodEnd);
+    if (!periodStart || !periodEnd || !startDate?.isValid() || !endDate?.isValid()) return null;
+    if (startDate.startOf('day').valueOf() > endDate.startOf('day').valueOf()) return null;
+    return { periodStart, periodEnd };
+  }, [selectedRange]);
+
+  const handleBuildCommissionPreview = useCallback(async () => {
+    try {
+      const values = await commissionForm.validateFields();
+      const selectedProfile = profiles.find((profile) => String(profile.id) === String(values.employee_profile_id));
+      if (!selectedProfile?.source_id || selectedProfile.source_table !== 'employees') {
+        message.error('برای محاسبه پورسانت باید یک کارمند متصل به کاربر انتخاب شود.');
+        return;
+      }
+      const periodValues = getCommissionPeriodValues(values);
+      if (!periodValues) {
+        message.error('بازه زمانی محاسبه معتبر نیست.');
+        return;
+      }
+      const { periodStart, periodEnd } = periodValues;
+
+      setCommissionLoading(true);
+      const employeeIdValue = String(selectedProfile.source_id || selectedProfile.id);
+      const assigneeId = String(selectedProfile.related_profile_id || selectedProfile.id || '').trim();
+      const [invoicesResult, existingResult] = await Promise.all([
+        supabase
+          .from('invoices')
+          .select('id, name, status, invoice_date, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags')
+          .eq('assignee_id', assigneeId)
+          .lte('invoice_date', periodEnd)
+          .order('invoice_date', { ascending: false })
+          .limit(5000),
+        supabase
+          .from('payroll_calculation_entries')
+          .select('id, details, status')
+          .eq('source_type', 'commission')
+          .eq('employee_id', employeeIdValue)
+          .neq('status', 'voided')
+          .limit(5000),
+      ]);
+      if (invoicesResult.error) throw invoicesResult.error;
+      if (existingResult.error && !isMissingPayrollLedgerError(existingResult.error)) throw existingResult.error;
+
+      const invoices = ((invoicesResult.data || []) as any[]).map((invoice) => ({
+        ...invoice,
+        invoiceItems: Array.isArray(invoice?.invoiceItems) ? invoice.invoiceItems : [],
+        payments: Array.isArray(invoice?.payments) ? invoice.payments : [],
+      }));
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const productIds = Array.from(new Set(
+        invoices
+          .flatMap((invoice) => invoice.invoiceItems || [])
+          .map((item: any) => String(item?.product_id || '').trim())
+          .filter((id: string) => uuidPattern.test(id)),
+      ));
+      const productById = new Map<string, any>();
+      if (productIds.length > 0) {
+        const { data: productsData, error: productsError } = await supabase
+          .from('products')
+          .select('id, name, commission_percentage')
+          .in('id', productIds);
+        if (productsError) throw productsError;
+        (productsData || []).forEach((product: any) => productById.set(String(product.id), product));
+      }
+      const billboardById = new Map<string, any>();
+      if (productIds.length > 0) {
+        const { data: billboardsData, error: billboardsError } = await supabase
+          .from('billboards')
+          .select('id, name, address, commission_percentage')
+          .in('id', productIds);
+        if (billboardsError) throw billboardsError;
+        (billboardsData || []).forEach((billboard: any) => billboardById.set(String(billboard.id), billboard));
+      }
+
+      const enrichedInvoices = invoices.map((invoice) => ({
+        ...invoice,
+        invoiceItems: (invoice.invoiceItems || []).map((item: any) => {
+          const product = productById.get(String(item?.product_id || ''));
+          const billboard = billboardById.get(String(item?.product_id || ''));
+          return {
+            ...item,
+            product_name: item?.product_name || item?.name || product?.name || billboard?.name || billboard?.address || item?.product_id || null,
+            commission_percentage: item?.commission_percentage ?? product?.commission_percentage ?? billboard?.commission_percentage ?? 0,
+          };
+        }),
+      }));
+
+      const alreadyCalculatedKeys = new Set<string>();
+      (existingResult.data || []).forEach((entry: any) => {
+        const keys = Array.isArray(entry?.details?.calculated_keys) ? entry.details.calculated_keys : [];
+        keys.forEach((key: any) => {
+          const text = String(key || '').trim();
+          if (text) alreadyCalculatedKeys.add(text);
+        });
+      });
+
+      const previewRows = buildCommissionPreviewRows({
+        invoices: enrichedInvoices,
+        employeeIdByAssigneeId: { [assigneeId]: employeeIdValue },
+        employeeDefaultCommissionByEmployeeId: { [employeeIdValue]: toNumber(selectedProfile.commission_percentage) },
+        basis: values.basis,
+        percentMode: values.percent_mode,
+        periodStart,
+        periodEnd,
+        alreadyCalculatedKeys,
+        includeNotCalculated: true,
+        groupByPercent: true,
+      });
+      setCommissionRows(values.basis === 'settled_invoices'
+        ? previewRows.filter((row) => row.eligible_ratio > 0 || row.already_calculated)
+        : previewRows);
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(toFaErrorMessage(err, 'محاسبه پورسانت ناموفق بود'));
+      setCommissionRows([]);
+    } finally {
+      setCommissionLoading(false);
+    }
+  }, [commissionForm, getCommissionPeriodValues, message, profiles]);
+
+  const hashText = (value: string) => {
+    let hash = 0;
+    for (let i = 0; i < value.length; i += 1) {
+      hash = ((hash << 5) - hash) + value.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash).toString(36);
+  };
+
+  const handleSaveCommissionCalculation = useCallback(async () => {
+    try {
+      const values = await commissionForm.validateFields();
+      const periodValues = getCommissionPeriodValues(values);
+      if (!periodValues) {
+        message.error('بازه زمانی محاسبه معتبر نیست.');
+        return;
+      }
+      const { periodStart, periodEnd } = periodValues;
+      const rowsToSave = commissionRows.filter((row) => row.commission_status === 'calculated' && row.commission_amount > 0);
+      if (rowsToSave.length === 0) {
+        message.info('ردیف قابل ثبت برای پورسانت وجود ندارد.');
+        return;
+      }
+
+      setCommissionModalSaving(true);
+      const payloads = rowsToSave.map((row) => {
+        const calculatedKeys = row.item_keys.map((itemKey) => buildCommissionCalculatedKey(row.basis, row.percent_mode, itemKey));
+        const groupHash = hashText(row.item_keys.join('|'));
+        return {
+          employee_id: row.employee_id,
+          period_start: periodStart,
+          period_end: periodEnd,
+          entry_type: `commission_${row.basis}_${row.percent_mode}_${groupHash}`,
+          source_type: 'commission',
+          source_module_id: `commission:${row.basis}:${row.percent_mode}`,
+          source_record_id: row.invoice_id,
+          title: `پورسانت ${row.invoice_name}`,
+          amount: row.commission_amount,
+          quantity: row.base_amount,
+          rate: row.commission_percent,
+          status: 'proposed',
+          assignee_id: row.assignee_id || null,
+          details: {
+            basis: row.basis,
+            percent_mode: row.percent_mode,
+            assignee_id: row.assignee_id || null,
+            invoice_id: row.invoice_id,
+            invoice_name: row.invoice_name,
+            invoice_date: row.invoice_date,
+            invoice_status: row.invoice_status,
+            invoice_total_amount: row.invoice_total_amount,
+            invoice_received_amount: row.invoice_received_amount,
+            eligible_ratio: row.eligible_ratio,
+            eligible_amount: row.eligible_amount,
+            base_amount: row.base_amount,
+            commission_percent: row.commission_percent,
+            item_count: row.item_count,
+            item_keys: row.item_keys,
+            calculated_keys: calculatedKeys,
+            lines: row.lines,
+          },
+        };
+      });
+
+      const { error } = await supabase.from('payroll_calculation_entries').insert(payloads);
+      if (error) throw error;
+      message.success(`${toPersianNumber(payloads.length)} رکورد پورسانت ثبت شد.`);
+      setCommissionModalOpen(false);
+      setCommissionRows([]);
+      await fetchCalculatedCommissionRows();
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(toFaErrorMessage(err, 'ثبت محاسبه پورسانت ناموفق بود'));
+    } finally {
+      setCommissionModalSaving(false);
+    }
+  }, [commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message]);
 
   const openPayrollConfigModal = (profile: ProfileRecord) => {
     setEditingProfile(profile);
@@ -2691,14 +3007,103 @@ const HRPage: React.FC = () => {
   const commissionBasisLabel: Record<CommissionBasis, string> = {
     approved_invoices: 'فاکتور تاییدشده',
     settled_invoices: 'فاکتور تسویه‌شده',
+    prepaid_and_settled_invoices: 'پیش‌پرداخت و تسویه‌شده',
     settled_and_collected_cheques: 'تسویه و چک وصول‌شده',
   };
+  const renderProfileName = (id: string | null | undefined) => {
+    if (!id) return '-';
+    return profileByRelatedId.get(String(id))?.full_name || profileById.get(String(id))?.full_name || String(id);
+  };
+  const invoiceStatusOptions = (((MODULES.invoices?.fields || []).find((field: any) => field?.key === 'status') as any)?.options || []) as Array<{ label: string; value: string; color?: string }>;
+  const renderInvoiceStatusTag = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim();
+    if (!normalized) return <Tag>-</Tag>;
+    const option = invoiceStatusOptions.find((item) => String(item.value) === normalized);
+    return <Tag color={option?.color || 'default'}>{option?.label || normalized}</Tag>;
+  };
 
-  const commissionColumns = [
+  const commissionInvoiceRows = useMemo(() => {
+    const grouped = new Map<string, CommissionPreviewRow[]>();
+    commissionRows.forEach((row) => {
+      grouped.set(row.invoice_id, [...(grouped.get(row.invoice_id) || []), row]);
+    });
+    return Array.from(grouped.entries()).map(([invoiceId, rows]) => {
+      const first = rows[0];
+      const commissionAmount = rows.reduce((sum, row) => sum + row.commission_amount, 0);
+      const baseAmount = rows.reduce((sum, row) => sum + row.base_amount, 0);
+      const itemCount = rows.reduce((sum, row) => sum + row.item_count, 0);
+      const hasCalculated = rows.some((row) => row.commission_status === 'calculated');
+      const allAlreadyCalculated = rows.length > 0 && rows.every((row) => row.already_calculated);
+      return {
+        key: invoiceId,
+        invoice_id: invoiceId,
+        employee_id: first?.employee_id || '',
+        invoice_name: first?.invoice_name || invoiceId,
+        invoice_status: first?.invoice_status || null,
+        invoice_total_amount: first?.invoice_total_amount || 0,
+        invoice_received_amount: first?.invoice_received_amount || 0,
+        invoice_date: first?.invoice_date || null,
+        eligible_ratio: first?.eligible_ratio || 0,
+        commission_amount: commissionAmount,
+        base_amount: baseAmount,
+        item_count: itemCount,
+        commission_status: hasCalculated ? 'calculated' : 'not_calculated',
+        exclusion_reason: allAlreadyCalculated ? 'قبلا محاسبه شده' : rows.find((row) => row.exclusion_reason)?.exclusion_reason || null,
+        groups: rows,
+      };
+    });
+  }, [commissionRows]);
+
+  const commissionGroupColumns = [
     {
-      title: 'کارمند',
-      key: 'employeeName',
+      title: 'درصد',
+      dataIndex: 'commission_percent',
+      key: 'commission_percent',
+      render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span>,
+    },
+    {
+      title: 'اقلام',
+      key: 'items',
       render: (_: unknown, row: CommissionPreviewRow) => (
+        <div className="text-xs leading-6">
+          {row.lines.slice(0, 3).map((line) => (
+            <div key={line.key}>
+              {line.product_label} - {formatMoney(line.net_amount)}
+            </div>
+          ))}
+          {row.lines.length > 3 ? <div className="text-gray-400">+{toPersianNumber(row.lines.length - 3)} ردیف</div> : null}
+        </div>
+      ),
+    },
+    {
+      title: 'مبلغ نهایی ردیف‌ها',
+      dataIndex: 'base_amount',
+      key: 'base_amount',
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'سهم بازاریاب',
+      dataIndex: 'commission_amount',
+      key: 'commission_amount',
+      render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'وضعیت پورسانت',
+      key: 'commission_status',
+      render: (_: unknown, row: CommissionPreviewRow) => (
+        <Tag color={row.commission_status === 'calculated' ? 'green' : 'default'}>
+          {row.commission_status === 'calculated' ? 'محاسبه می‌شود' : 'محاسبه نمی‌شود'}
+          {row.exclusion_reason ? ` - ${row.exclusion_reason}` : ''}
+        </Tag>
+      ),
+    },
+  ];
+
+  const commissionInvoiceColumns = [
+    {
+      title: 'بازاریاب',
+      key: 'employeeName',
+      render: (_: unknown, row: any) => (
         <span className="font-bold text-leather-700">
           {profiles.find((profile) => String(profile.source_id || '') === String(row.employee_id))?.full_name || row.employee_id}
         </span>
@@ -2708,17 +3113,39 @@ const HRPage: React.FC = () => {
       title: 'فاکتور',
       dataIndex: 'invoice_name',
       key: 'invoice_name',
-      render: (val: string, row: CommissionPreviewRow) => (
+      render: (val: string, row: any) => (
         <a href={`/invoices/${row.invoice_id}`} className="text-leather-700 hover:underline">
           {val}
         </a>
       ),
     },
     {
-      title: 'مبنا',
-      dataIndex: 'basis',
-      key: 'basis',
-      render: (val: CommissionBasis) => <Tag>{commissionBasisLabel[val] || val}</Tag>,
+      title: 'وضعیت فاکتور',
+      dataIndex: 'invoice_status',
+      key: 'invoice_status',
+      render: (val: string | null) => renderInvoiceStatusTag(val),
+    },
+    {
+      title: 'جمع نهایی فاکتور',
+      dataIndex: 'invoice_total_amount',
+      key: 'invoice_total_amount',
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'جمع دریافتی',
+      dataIndex: 'invoice_received_amount',
+      key: 'invoice_received_amount',
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'سهم بازاریاب',
+      key: 'marketerShare',
+      render: (_: unknown, row: any) => (
+        <div className="text-sm">
+          <div className="text-xs text-gray-500">{toPersianNumber(row.item_count)} قلم</div>
+          <div className="persian-number font-bold text-green-700">{formatMoney(row.commission_amount)}</div>
+        </div>
+      ),
     },
     {
       title: 'نسبت احراز',
@@ -2727,16 +3154,96 @@ const HRPage: React.FC = () => {
       render: (val: number) => <span className="persian-number">{toPersianNumber((val * 100).toFixed(1))}%</span>,
     },
     {
-      title: 'پورسانت',
-      dataIndex: 'commission_amount',
-      key: 'commission_amount',
-      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
+      title: 'وضعیت پورسانت',
+      key: 'commission_status',
+      render: (_: unknown, row: any) => (
+        <Tag color={row.commission_status === 'calculated' ? 'green' : 'default'}>
+          {row.commission_status === 'calculated' ? 'دارای ردیف قابل ثبت' : 'محاسبه نمی‌شود'}
+          {row.exclusion_reason ? ` - ${row.exclusion_reason}` : ''}
+        </Tag>
+      ),
     },
     {
       title: 'تاریخ',
       dataIndex: 'invoice_date',
       key: 'invoice_date',
       render: (val: string | null) => val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD')) : '-',
+    },
+  ];
+
+  const calculatedCommissionColumns = [
+    {
+      title: 'بازاریاب',
+      dataIndex: 'employee_name',
+      key: 'employee_name',
+      render: (val: string) => <span className="font-bold text-leather-700">{val}</span>,
+    },
+    {
+      title: 'عنوان',
+      dataIndex: 'title',
+      key: 'title',
+      render: (val: string | null, row: CommissionLedgerRow) => (
+        row.source_record_id ? (
+          <a href={`/invoices/${row.source_record_id}`} className="text-leather-700 hover:underline">
+            {val || row.details?.invoice_name || 'پورسانت فاکتور'}
+          </a>
+        ) : (val || 'پورسانت')
+      ),
+    },
+    {
+      title: 'مبنا',
+      key: 'basis',
+      render: (_: unknown, row: CommissionLedgerRow) => {
+        const basis = row.details?.basis as CommissionBasis | undefined;
+        return <Tag>{basis ? commissionBasisLabel[basis] || basis : '-'}</Tag>;
+      },
+    },
+    {
+      title: 'مبلغ نهایی',
+      key: 'base_amount',
+      render: (_: unknown, row: CommissionLedgerRow) => <span className="persian-number">{formatMoney(toNumber(row.details?.base_amount))}</span>,
+    },
+    {
+      title: 'پورسانت',
+      dataIndex: 'amount',
+      key: 'amount',
+      render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'وضعیت',
+      dataIndex: 'status',
+      key: 'status',
+      render: (val: string | null) => <Tag color={val === 'included_in_payroll' ? 'green' : val === 'voided' ? 'red' : 'blue'}>{val || '-'}</Tag>,
+    },
+    {
+      title: 'مسئول',
+      dataIndex: 'assignee_id',
+      key: 'assignee_id',
+      render: (val: string | null) => renderProfileName(val),
+    },
+    {
+      title: 'تاریخ ایجاد',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (val: string | null) => renderDateTime(val),
+    },
+    {
+      title: 'ایجاد کننده',
+      dataIndex: 'created_by',
+      key: 'created_by',
+      render: (val: string | null) => renderProfileName(val),
+    },
+    {
+      title: 'آخرین ویرایش',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      render: (val: string | null) => renderDateTime(val),
+    },
+    {
+      title: 'آخرین ویرایشگر',
+      dataIndex: 'updated_by',
+      key: 'updated_by',
+      render: (val: string | null) => renderProfileName(val),
     },
   ];
 
@@ -2760,7 +3267,7 @@ const HRPage: React.FC = () => {
       </div>
 
       <div className="bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 p-2">
-        <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[auto_280px_auto_auto]'}`}>
+        <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[auto_minmax(320px,420px)_auto_auto]'}`}>
           <Button
             icon={<ArrowRightOutlined />}
             onClick={() => navigate(`/hr?${selectedRangeQuery}`)}
@@ -2768,16 +3275,7 @@ const HRPage: React.FC = () => {
           >
             بازگشت
           </Button>
-          <DatePicker.RangePicker
-            value={selectedRange}
-            onChange={onDateRangeChange}
-            allowClear={false}
-            className="w-full hr-range-picker persian-number"
-            format="YYYY/MM/DD"
-            inputReadOnly
-            placeholder={['از تاریخ', 'تا تاریخ']}
-            classNames={{ popup: { root: 'hr-range-popup' } }}
-          />
+          {renderHrRangePicker(selectedRange, updateSelectedRangeDates, 1400)}
           <Button
             icon={<ReloadOutlined />}
             onClick={() => fetchData(true)}
@@ -3050,19 +3548,25 @@ const HRPage: React.FC = () => {
   const commissionsTabContent = (
     <>
       <Row gutter={[12, 12]} className="mb-4">
-        <Col xs={24} md={8}>
+        <Col xs={24} md={6}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پورسانت بر مبنای تایید</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.approved)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={6}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پورسانت بر مبنای تسویه</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.settled)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={6}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">پیش‌پرداخت و تسویه</div>
+            <div className="text-2xl font-black">{formatMoney(commissionTotals.prepaid)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">مبنای وصول چک</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.collectedCheque)}</div>
@@ -3071,18 +3575,20 @@ const HRPage: React.FC = () => {
       </Row>
       <Card>
         <div className="flex flex-wrap gap-2 mb-4">
+          <Button type="primary" onClick={openCommissionModal}>محاسبه پورسانت</Button>
           <Button onClick={() => navigate('/invoices')}>فاکتورهای فروش</Button>
           <Button onClick={() => navigate('/products')}>درصد پورسانت محصولات</Button>
+          <Button onClick={fetchCalculatedCommissionRows} loading={calculatedCommissionLoading}>بروزرسانی</Button>
         </div>
-        {commissionLoading ? (
+        {calculatedCommissionLoading ? (
           <div className="py-10 flex items-center justify-center"><Spin /></div>
-        ) : commissionRows.length === 0 ? (
-          <Empty description="برای این بازه پورسانتی محاسبه نشد." />
+        ) : calculatedCommissionRows.length === 0 ? (
+          <Empty description="برای این بازه پورسانت ثبت‌شده‌ای وجود ندارد." />
         ) : (
           <Table
-            rowKey={(row) => `${row.employee_id}_${row.invoice_id}_${row.basis}`}
-            columns={commissionColumns}
-            dataSource={commissionRows}
+            rowKey="id"
+            columns={calculatedCommissionColumns}
+            dataSource={calculatedCommissionRows}
             pagination={{ pageSize: 15, showSizeChanger: false }}
             scroll={{ x: 1200 }}
           />
@@ -3228,17 +3734,8 @@ const HRPage: React.FC = () => {
             </div>
 
             <div className="bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 p-2">
-              <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[280px_minmax(260px,1fr)_auto_auto]'}`}>
-                <DatePicker.RangePicker
-                  value={selectedRange}
-                  onChange={onDateRangeChange}
-                  allowClear={false}
-                  className="w-full hr-range-picker persian-number"
-                  format="YYYY/MM/DD"
-                  inputReadOnly
-                  placeholder={['از تاریخ', 'تا تاریخ']}
-                  classNames={{ popup: { root: 'hr-range-popup' } }}
-                />
+              <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[minmax(320px,420px)_minmax(260px,1fr)_auto_auto]'}`}>
+                {renderHrRangePicker(selectedRange, updateSelectedRangeDates, 1400)}
                 <Select
                   mode="multiple"
                   allowClear
@@ -3283,6 +3780,152 @@ const HRPage: React.FC = () => {
           />
         </>
       )}
+
+      <Modal
+        title="محاسبه پورسانت"
+        open={commissionModalOpen}
+        onCancel={() => setCommissionModalOpen(false)}
+        footer={null}
+        width={1200}
+        destroyOnHidden
+      >
+        <div className="space-y-4">
+          <Form form={commissionForm} layout="vertical">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <Form.Item
+                name="period_range"
+                label="بازه زمانی"
+                className="md:col-span-2"
+                rules={[
+                  {
+                    validator: async (_, value: PersianDateRangeValue | null) => {
+                      const startDate = parseDateValue(value?.[0] || null);
+                      const endDate = parseDateValue(value?.[1] || null);
+                      if (!value?.[0] || !value?.[1] || !startDate?.isValid() || !endDate?.isValid()) {
+                        throw new Error('بازه زمانی الزامی است');
+                      }
+                      if (startDate.startOf('day').valueOf() > endDate.startOf('day').valueOf()) {
+                        throw new Error('بازه زمانی معتبر نیست');
+                      }
+                    },
+                  },
+                ]}
+              >
+                <PersianDateRangePicker
+                  placeholder="بازه زمانی"
+                  modalContainer={resolveSelectPopupContainer}
+                  overlayZIndexBase={14000}
+                  className="w-full"
+                />
+              </Form.Item>
+              <Form.Item
+                name="employee_profile_id"
+                label="نام بازاریاب"
+                rules={[{ required: true, message: 'انتخاب بازاریاب الزامی است' }]}
+              >
+                <AdaptiveSelectField
+                  showSearch
+                  optionFilterProp="label"
+                  options={profiles
+                    .filter((profile) => profile.source_table === 'employees' && profile.related_profile_id)
+                    .map((profile) => ({ label: profile.full_name || profile.id, value: String(profile.id) }))}
+                  placeholder="نام بازاریاب"
+                  getPopupContainer={resolveSelectPopupContainer}
+                  modalContainer={resolveSelectPopupContainer}
+                  overlayZIndexBase={14000}
+                />
+              </Form.Item>
+              <Form.Item
+                name="basis"
+                label="نوع محاسبه پورسانت"
+                rules={[{ required: true, message: 'نوع محاسبه الزامی است' }]}
+              >
+                <AdaptiveSelectField
+                  options={COMMISSION_BASIS_OPTIONS}
+                  getPopupContainer={resolveSelectPopupContainer}
+                  modalContainer={resolveSelectPopupContainer}
+                  overlayZIndexBase={14000}
+                />
+              </Form.Item>
+              <Form.Item
+                name="percent_mode"
+                label="درصد پورسانت"
+                rules={[{ required: true, message: 'نوع درصد پورسانت الزامی است' }]}
+              >
+                <AdaptiveSelectField
+                  options={COMMISSION_PERCENT_MODE_OPTIONS}
+                  getPopupContainer={resolveSelectPopupContainer}
+                  modalContainer={resolveSelectPopupContainer}
+                  overlayZIndexBase={14000}
+                />
+              </Form.Item>
+            </div>
+          </Form>
+
+          <Card>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-gray-500">
+                جمع پورسانت قابل ثبت:{' '}
+                <span className="font-black text-green-700 persian-number">
+                  {formatMoney(commissionRows.filter((row) => row.commission_status === 'calculated').reduce((sum, row) => sum + row.commission_amount, 0))}
+                </span>
+              </div>
+              <Space>
+                <Button onClick={handleBuildCommissionPreview} loading={commissionLoading}>محاسبه</Button>
+                <Button
+                  type="primary"
+                  onClick={handleSaveCommissionCalculation}
+                  loading={commissionModalSaving}
+                  disabled={!commissionRows.some((row) => row.commission_status === 'calculated' && row.commission_amount > 0)}
+                >
+                  ثبت محاسبه
+                </Button>
+              </Space>
+            </div>
+            {commissionLoading ? (
+              <div className="py-10 flex items-center justify-center"><Spin /></div>
+            ) : commissionRows.length === 0 ? (
+              <Empty description="برای مشاهده ردیف‌ها، محاسبه را اجرا کنید." />
+            ) : (
+              <Table
+                rowKey="key"
+                columns={commissionInvoiceColumns}
+                dataSource={commissionInvoiceRows}
+                pagination={{ pageSize: 10, showSizeChanger: false }}
+                scroll={{ x: 1200 }}
+                expandable={{
+                  expandedRowRender: (invoiceRow: any) => (
+                    <Table
+                      rowKey="key"
+                      size="small"
+                      pagination={false}
+                      dataSource={invoiceRow.groups}
+                      columns={commissionGroupColumns}
+                      expandable={{
+                        expandedRowRender: (groupRow: CommissionPreviewRow) => (
+                          <Table
+                            rowKey="key"
+                            size="small"
+                            pagination={false}
+                            dataSource={groupRow.lines}
+                            columns={[
+                              { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label' },
+                              { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
+                              { title: 'مبلغ نهایی ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                              { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span> },
+                              { title: 'سهم بازاریاب', dataIndex: 'commission_amount', key: 'commission_amount', render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span> },
+                            ]}
+                          />
+                        ),
+                      }}
+                    />
+                  ),
+                }}
+              />
+            )}
+          </Card>
+        </div>
+      </Modal>
 
       <Modal
         title={attendanceModalMode === 'create' ? 'افزودن سریع رکورد تردد' : attendanceModalMode === 'edit' ? 'ویرایش رکورد تردد' : 'نمایش رکورد تردد'}
@@ -3561,17 +4204,6 @@ const HRPage: React.FC = () => {
           }
         }}
       />
-      <style>{`
-        .hr-range-popup .ant-picker-panels > *:last-child {
-          display: none !important;
-        }
-        .hr-range-popup .ant-picker-panels {
-          min-width: auto !important;
-        }
-        .hr-range-picker input {
-          font-family: Vazirmatn, sans-serif !important;
-        }
-      `}</style>
     </div>
   );
 };

@@ -100,6 +100,15 @@ const parseNumberInput = (value: any) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const parsePriceInput = (value: any) => Math.round(parseNumberInput(value));
+
+const formatPriceInput = (value: any) => {
+  if (value === null || value === undefined || value === '') return '';
+  const parsed = parseNumberInput(value);
+  if (!Number.isFinite(parsed)) return '';
+  return formatGroupedInput(Math.round(parsed));
+};
+
 const GridTable: React.FC<GridTableProps> = ({
   block,
   initialData,
@@ -1624,8 +1633,8 @@ const GridTable: React.FC<GridTableProps> = ({
                                     className="font-medium persian-number"
                                     value={val}
                                     onChange={(v) => updatePiece(rowIndex, pieceIndex, { unit_price: v })}
-                                    formatter={(v) => formatGroupedInput(v)}
-                                    parser={(v) => parseNumberInput(v)}
+                                    formatter={(v) => formatPriceInput(v)}
+                                    parser={(v) => parsePriceInput(v)}
                                   />
                                 )
                                 : <Text className="persian-number font-medium whitespace-nowrap inline-block">{formatPersianPrice(val || 0, true)}</Text>
