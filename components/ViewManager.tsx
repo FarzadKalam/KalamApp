@@ -35,6 +35,7 @@ import { getWorkflowConditionFields } from '../utils/workflowHelpers';
 import { createWorkflowId } from '../utils/workflowTypes';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
+import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 
 type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
@@ -69,6 +70,23 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleConfig = MODULES[moduleId];
+  const getViewColumnKeys = useCallback(
+    (columns?: string[] | null) => {
+      const sourceColumns = Array.isArray(columns) && columns.length > 0
+        ? columns
+        : (moduleConfig?.fields || []).map((field) => field.key);
+      if (moduleId === 'cash_bank_operations') {
+        return normalizeCashBankVisibleColumnKeys(moduleConfig, sourceColumns);
+      }
+      return sourceColumns;
+    },
+    [moduleConfig, moduleId]
+  );
+  const viewColumnFields = useMemo(
+    () => (moduleConfig?.fields || []).filter((field) => getViewColumnKeys([field.key]).includes(field.key)),
+    [getViewColumnKeys, moduleConfig?.fields]
+  );
+  const selectedColumnKeys = useMemo(() => getViewColumnKeys(config.columns), [config.columns, getViewColumnKeys]);
   const viewConditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
   const supportedViewFilterOperators = useMemo(
     () =>
@@ -211,7 +229,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   }, [isModalOpen, moduleId, moduleConfig, viewConditionFields]);
 
   const handleOpenNewView = () => {
-    const allCols = moduleConfig.fields.map((f) => f.key);
+    const allCols = getViewColumnKeys();
     setConfig({ columns: allCols, filters: [] });
     setViewName('');
     setEditingViewId(null);
@@ -229,8 +247,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     const safeConfig: ViewConfig = {
       columns:
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
-          ? rawConfig.columns
-          : moduleConfig.fields.map((f) => f.key),
+          ? getViewColumnKeys(rawConfig.columns)
+          : getViewColumnKeys(),
       filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
     };
@@ -252,8 +270,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     const safeConfig: ViewConfig = {
       columns:
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
-          ? rawConfig.columns
-          : moduleConfig.fields.map((f) => f.key),
+          ? getViewColumnKeys(rawConfig.columns)
+          : getViewColumnKeys(),
       filters: normalizeViewFilters(rawConfig.filters).map((filter) => ({
         ...filter,
         id: createWorkflowId(),
@@ -271,8 +289,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     const safeConfig: ViewConfig = {
       columns:
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
-          ? rawConfig.columns
-          : moduleConfig.fields.map((f) => f.key),
+          ? getViewColumnKeys(rawConfig.columns)
+          : getViewColumnKeys(),
       filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
     };
@@ -305,7 +323,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       )
     );
 
-    const cleanConfig: ViewConfig = { ...config, filters: validFilters };
+    const cleanConfig: ViewConfig = { ...config, columns: getViewColumnKeys(config.columns), filters: validFilters };
     const payload = {
       module_id: moduleId,
       name: viewName,
@@ -367,7 +385,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       } else if (direction === 'down' && index < newCols.length - 1) {
         [newCols[index], newCols[index + 1]] = [newCols[index + 1], newCols[index]];
       }
-      return { ...prev, columns: newCols };
+      return { ...prev, columns: getViewColumnKeys(newCols) };
     });
   };
 
@@ -376,7 +394,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       let newCols = [...(prev.columns || [])];
       if (newCols.includes(key)) newCols = newCols.filter((col) => col !== key);
       else newCols.push(key);
-      return { ...prev, columns: newCols };
+      return { ...prev, columns: getViewColumnKeys(newCols) };
     });
   };
 
@@ -402,7 +420,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   };
 
   const handleViewSelect = (view: SavedView) => {
-    onViewChange(view, (view.config as any));
+    const rawConfig = (view.config as any) || {};
+    onViewChange(view, {
+      ...rawConfig,
+      columns: getViewColumnKeys(rawConfig.columns),
+    });
     if (renderMode === 'mobile-sheet') {
       setIsMobileSheetOpen(false);
     }
@@ -672,7 +694,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                     <div className="flex flex-1 flex-col rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/80 p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
                       <div className="mb-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.72)] p-2 text-xs font-bold text-[rgba(var(--brand-700-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)]">موجود</div>
                       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                        {moduleConfig.fields.map((field) => (
+                        {viewColumnFields.map((field) => (
                           <div
                             key={field.key}
                             className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition hover:bg-[rgba(var(--brand-50-rgb),0.78)] dark:hover:bg-white/5 cursor-pointer"
@@ -688,17 +710,17 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                     <div className="flex flex-1 flex-col rounded-2xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/80 p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
                       <div className="mb-2 flex justify-between rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-[rgba(var(--brand-50-rgb),0.72)] p-2 text-xs font-bold text-[rgba(var(--brand-700-rgb),1)] dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)]">
                         <span>انتخاب شده</span>
-                        <span className="rounded-md border border-[rgba(var(--brand-300-rgb),0.65)] bg-white/80 px-1.5 py-0.5 text-[rgba(var(--brand-700-rgb),1)] dark:bg-white/10 dark:text-[rgba(var(--brand-100-rgb),1)]">{config.columns?.length || 0}</span>
+                        <span className="rounded-md border border-[rgba(var(--brand-300-rgb),0.65)] bg-white/80 px-1.5 py-0.5 text-[rgba(var(--brand-700-rgb),1)] dark:bg-white/10 dark:text-[rgba(var(--brand-100-rgb),1)]">{selectedColumnKeys.length || 0}</span>
                       </div>
                       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
                         <List
                           size="small"
-                          dataSource={config.columns || []}
+                          dataSource={selectedColumnKeys}
                           renderItem={(item) => {
                             const colKey = item as string;
                             const field = moduleConfig.fields.find((f) => f.key === colKey);
                             if (!field) return null;
-                            const index = config.columns.indexOf(colKey);
+                            const index = selectedColumnKeys.indexOf(colKey);
                             return (
                               <List.Item className="!mb-1.5 !flex !justify-between !rounded-xl !border !border-[rgba(var(--brand-200-rgb),0.55)] !bg-[rgba(var(--brand-50-rgb),0.42)] !px-3 !py-2 shadow-sm transition hover:!border-[rgba(var(--brand-400-rgb),0.85)] dark:!border-[rgba(var(--brand-300-rgb),0.18)] dark:!bg-white/5">
                                 <span className="text-sm font-medium">{field.labels.fa}</span>
@@ -714,7 +736,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                                     size="small"
                                     type="text"
                                     icon={<ArrowDownOutlined className="text-[10px]" />}
-                                    disabled={index === (config.columns?.length || 0) - 1}
+                                    disabled={index === selectedColumnKeys.length - 1}
                                     onClick={() => moveColumn(index, 'down')}
                                   />
                                 </div>

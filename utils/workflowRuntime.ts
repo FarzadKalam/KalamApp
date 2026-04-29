@@ -22,6 +22,7 @@ import { fetchAssigneeDirectory } from './referenceData';
 import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { getRecordTitle } from './recordTitle';
+import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
 
 type WorkflowEvent = 'create' | 'upsert' | 'interval';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -1645,21 +1646,18 @@ const loadProcessTemplateStages = async (templateId: string) => {
   return data || [];
 };
 
-const mapTemplateStagesToDraft = (templateId: string, stages: any[]) =>
-  (stages || []).map((stage: any, index: number) => ({
-    ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-    id: stage?.id || `${templateId}_${index + 1}`,
-    name: stage?.stage_name || `مرحله ${index + 1}`,
-    sort_order: stage?.sort_order || (index + 1) * 10,
-    wage: Number(stage?.wage || 0),
-    weight: Number(stage?.metadata?.weight || 0),
-    duration_value: Number(stage?.metadata?.duration_value || 0),
-    duration_unit: String(stage?.metadata?.duration_unit || 'day'),
-    duration_from: String(stage?.metadata?.duration_from || 'project_start'),
-    default_assignee_id: stage?.default_assignee_id || null,
-    default_assignee_role_id: stage?.default_assignee_role_id || null,
-    template_stage_id: stage?.id || null,
-  }));
+const loadProcessTemplateName = async (templateId: string) => {
+  const { data, error } = await supabase
+    .from('process_templates')
+    .select('name')
+    .eq('id', templateId)
+    .maybeSingle();
+  if (error) return null;
+  return String((data as any)?.name || '').trim() || null;
+};
+
+const mapTemplateStagesToDraft = (templateId: string, stages: any[], templateName?: string | null) =>
+  mapProcessTemplateStagesToDraft(templateId, stages, { templateName });
 
 export const executeWorkflowAction = async (
   action: WorkflowAction,
@@ -1970,10 +1968,13 @@ export const executeWorkflowAction = async (
     const draftFieldKey = resolveWorkflowProcessDraftFieldKey(moduleId);
     if (!templateId || !draftFieldKey || !currentRecord?.id) return;
 
-    const stages = await loadProcessTemplateStages(templateId);
+    const [stages, templateName] = await Promise.all([
+      loadProcessTemplateStages(templateId),
+      loadProcessTemplateName(templateId),
+    ]);
     const patch = {
       process_template_id: templateId,
-      [draftFieldKey]: mapTemplateStagesToDraft(templateId, stages),
+      [draftFieldKey]: mapTemplateStagesToDraft(templateId, stages, templateName),
     } as Record<string, any>;
 
     const { error } = await supabase

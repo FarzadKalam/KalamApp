@@ -115,6 +115,13 @@ import { createFileManagerOriginForUpload, detectFileManagerTables } from '../ut
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
+import {
+  createProcessGroupId,
+  ensureProcessRunForDraftStageGroup,
+  getDraftStageProcessGroupMeta,
+  mapProcessTemplateStagesToDraft,
+  syncProcessRunStageFromTask,
+} from '../utils/processRunRuntime';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -955,7 +962,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         ? 'مراحل اجرای فرآیند'
         : 'فرآیندها';
   const buildProcessGroupId = useCallback(
-    () => `process_group_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    () => createProcessGroupId(),
     []
   );
   const normalizeStageName = useCallback(
@@ -963,12 +970,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     []
   );
   const getStageProcessGroupMeta = useCallback((stage: any) => {
-    const fallbackGroupId = String(stage?.source_template_id || 'default_process_group').trim() || 'default_process_group';
-    const groupId = String(stage?.process_group_id || fallbackGroupId).trim() || 'default_process_group';
-    const groupLabel = String(stage?.process_group_name || stage?.source_template_name || '').trim() || null;
-    const templateId = String(stage?.source_template_id || '').trim() || null;
-    const templateName = String(stage?.source_template_name || '').trim() || null;
-    return { groupId, groupLabel, templateId, templateName };
+    return getDraftStageProcessGroupMeta(stage);
   }, []);
   const previousDraftStage = useMemo(() => {
     const currentSortOrder = Number(watchedDraftStageSortOrder || editingDraft?.sort_order || 0);
@@ -1725,6 +1727,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'source_template_id',
       'source_stage_sort_order',
       'process_group_id',
+      'process_run_id',
+      'process_run_stage_id',
       'blocked_reason',
       'waiting_for_task_type',
       'escalation_level',
@@ -1747,6 +1751,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .select(TASK_AUTOMATION_SELECT);
       if (!error) {
         const insertedRows = Array.isArray(data) ? data : [];
+        for (const insertedTask of insertedRows) {
+          await syncProcessRunStageFromTask({
+            supabaseClient: supabase,
+            task: insertedTask,
+          });
+        }
         for (const insertedTask of insertedRows) {
           await runProcessAutomationsForTaskEvent({
             task: insertedTask,
@@ -1823,6 +1833,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'source_template_id',
       'source_stage_sort_order',
       'process_group_id',
+      'process_run_id',
+      'process_run_stage_id',
       'blocked_reason',
       'waiting_for_task_type',
       'escalation_level',
@@ -1849,6 +1861,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .maybeSingle();
       if (!error) {
         if (options.runAutomation !== false && data) {
+          await syncProcessRunStageFromTask({
+            supabaseClient: supabase,
+            task: data,
+          });
           await runProcessAutomationsForTaskEvent({
             task: data,
             event: 'update',
@@ -3508,6 +3524,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         }
       }
 
+      const draftStageMeta = draftToCreate ? getStageProcessGroupMeta(draftToCreate) : null;
+      const effectiveProcessGroupMeta = {
+        id: activeProcessGroupMeta?.id || draftStageMeta?.groupId || null,
+        label: activeProcessGroupMeta?.label || draftStageMeta?.groupLabel || null,
+        templateId: activeProcessGroupMeta?.templateId || draftStageMeta?.templateId || null,
+        templateName: activeProcessGroupMeta?.templateName || draftStageMeta?.templateName || null,
+      };
+      const processRunContext = draftToCreate && isProcessRecordModule && moduleId
+        ? await ensureProcessRunForDraftStageGroup({
+          supabaseClient: supabase,
+          moduleId,
+          recordId,
+          stages: Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
+          targetStage: {
+            ...draftToCreate,
+            process_group_id: effectiveProcessGroupMeta.id,
+            process_group_name: effectiveProcessGroupMeta.label,
+            source_template_id: effectiveProcessGroupMeta.templateId,
+            source_template_name: effectiveProcessGroupMeta.templateName,
+          },
+          currentUserId: user?.id || null,
+        })
+        : { processRunId: null, processRunStageId: null };
+
       const payload: any = {
         name: resolvedTaskName || values.name,
         status: 'todo',
@@ -3521,9 +3561,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         weight: values.weight || 0,
         sort_order: values.sort_order || ((tasks.length + 1) * 10),
         created_by: user?.id,
-        source_template_id: activeProcessGroupMeta?.templateId || null,
+        source_template_id: effectiveProcessGroupMeta.templateId || null,
         source_stage_sort_order: values.sort_order || draftToCreate?.sort_order || null,
-        process_group_id: activeProcessGroupMeta?.id || null,
+        process_group_id: effectiveProcessGroupMeta.id || null,
+        process_run_id: processRunContext.processRunId || null,
+        process_run_stage_id: processRunContext.processRunStageId || null,
         ...buildTaskSourceInitialValues(isProductionOrder ? 'production_orders' : moduleId, recordId),
       };
       const currentRecurrence = values?.recurrence_info && typeof values.recurrence_info === 'object'
@@ -3553,18 +3595,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_automation_rules: stageAutomationRules,
           process_target_module_ids: stageTargetModuleIds,
           process_links: effectiveStageProcessLinkMap,
+          process_run_id: processRunContext.processRunId || null,
+          process_run_stage_id: processRunContext.processRunStageId || null,
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         };
-        if (activeProcessGroupMeta?.id) {
+        if (effectiveProcessGroupMeta.id) {
           payload.recurrence_info = {
             ...(payload.recurrence_info || {}),
             process_group: {
-              id: activeProcessGroupMeta.id,
-              name: activeProcessGroupMeta.label || null,
-              template_id: activeProcessGroupMeta.templateId || null,
-              template_name: activeProcessGroupMeta.templateName || null,
+              id: effectiveProcessGroupMeta.id,
+              name: effectiveProcessGroupMeta.label || null,
+              template_id: effectiveProcessGroupMeta.templateId || null,
+              template_name: effectiveProcessGroupMeta.templateName || null,
             },
           };
         }
@@ -5316,38 +5360,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const nextGroupName = String(selectedTemplate?.label || fallbackGroupName).trim() || fallbackGroupName;
       const currentLinkedRecords = appendProcessLinkedRecordsRef.current || appendProcessLinkedRecords;
 
-      const appendedStages = incomingStages.map((stage: any, index: number) => {
-        const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
-        const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
-
-        const row = {
-          id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
-          name: stageName,
-          description: String(metadata?.description || '').trim() || null,
-          task_type: String(metadata?.task_type || '').trim() || null,
-          automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
-          process_task_custom_fields: normalizeProcessTaskCustomFields(metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
-          process_task_status_options: normalizeProcessTaskStatusOptions(metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
-          sort_order: cursor,
-          wage: Number(stage?.wage || 0),
-          weight: Number(metadata?.weight || 0),
-          default_assignee_id: stage?.default_assignee_id || null,
-          default_assignee_role_id: stage?.default_assignee_role_id || null,
-          duration_value: Number(metadata?.duration_value || 0),
-          duration_unit: String(metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-          duration_from: String(metadata?.duration_from || 'project_start') === 'previous_stage_end'
-            ? 'previous_stage_end'
-            : 'project_start',
-          source_template_id: appendProcessTemplateId,
-          source_template_name: selectedTemplate?.label || null,
-          process_group_id: nextGroupId,
-          process_group_name: nextGroupName,
-          process_target_module_ids: appendProcessTargetModuleIds,
-          process_link_map: currentLinkedRecords,
-        };
-        cursor += 10;
-        return row;
-      });
+      const appendedStages = mapProcessTemplateStagesToDraft(appendProcessTemplateId, incomingStages, {
+        groupId: nextGroupId,
+        groupName: nextGroupName,
+        templateName: selectedTemplate?.label || null,
+        targetModuleIds: appendProcessTargetModuleIds,
+        processLinkMap: currentLinkedRecords,
+        startSortOrder: cursor,
+      }).map((stage: any) => ({
+        ...stage,
+        automation_rules: normalizeProcessAutomationRules(stage?.automation_rules),
+        process_task_custom_fields: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
+        process_task_status_options: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
+        duration_unit: String(stage?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+        duration_from: String(stage?.duration_from || 'project_start') === 'previous_stage_end'
+          ? 'previous_stage_end'
+          : 'project_start',
+      }));
 
       const nextStages = [...existing, ...appendedStages].sort(
         (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
@@ -5500,35 +5529,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       const fallbackGroupName = String(currentGroupStages[0]?.process_group_name || currentGroupStages[0]?.source_template_name || '').trim();
       const nextGroupName = String(selectedTemplate?.label || fallbackGroupName || `فرآیند ${toPersianNumber(1)}`).trim();
-      const replacedStages = incomingStages.map((stage: any, index: number) => {
-        const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
-        const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
-        const row = {
-          id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
-          name: stageName,
-          description: String(metadata?.description || '').trim() || null,
-          task_type: String(metadata?.task_type || '').trim() || null,
-          automation_rules: normalizeProcessAutomationRules(metadata?.automation_rules),
-          process_task_custom_fields: normalizeProcessTaskCustomFields(metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
-          process_task_status_options: normalizeProcessTaskStatusOptions(metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
-          sort_order: cursor,
-          wage: Number(stage?.wage || 0),
-          weight: Number(metadata?.weight || 0),
-          default_assignee_id: stage?.default_assignee_id || null,
-          default_assignee_role_id: stage?.default_assignee_role_id || null,
-          duration_value: Number(metadata?.duration_value || 0),
-          duration_unit: String(metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-          duration_from: String(metadata?.duration_from || 'project_start') === 'previous_stage_end'
-            ? 'previous_stage_end'
-            : 'project_start',
-          source_template_id: normalizedTemplateId,
-          source_template_name: selectedTemplate?.label || null,
-          process_group_id: normalizedGroupId,
-          process_group_name: nextGroupName,
-        };
-        cursor += 10;
-        return row;
-      });
+      const replacedStages = mapProcessTemplateStagesToDraft(normalizedTemplateId, incomingStages, {
+        groupId: normalizedGroupId,
+        groupName: nextGroupName,
+        templateName: selectedTemplate?.label || null,
+        startSortOrder: cursor,
+      }).map((stage: any) => ({
+        ...stage,
+        automation_rules: normalizeProcessAutomationRules(stage?.automation_rules),
+        process_task_custom_fields: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
+        process_task_status_options: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
+        duration_unit: String(stage?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+        duration_from: String(stage?.duration_from || 'project_start') === 'previous_stage_end'
+          ? 'previous_stage_end'
+          : 'project_start',
+      }));
 
       const nextStages = [...otherStages, ...replacedStages].sort(
         (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
@@ -5752,6 +5767,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const stageCustomFields = getProcessTaskCustomFieldsFromStage(stage);
         const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
         const dueDate = dueByStageKey.get(buildProcessStageTaskKey(stageMeta.groupId, normalized, stage?.sort_order)) || null;
+        const processRunContext = await ensureProcessRunForDraftStageGroup({
+          supabaseClient: supabase,
+          moduleId,
+          recordId,
+          stages: Array.isArray(draftLocalRef.current) ? draftLocalRef.current : stageRows,
+          targetStage: stage,
+          currentUserId: userId,
+        });
         const processLinkMap = mergeProcessLinkMaps(
           stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
           recurrenceBase?.process_links && typeof recurrenceBase.process_links === 'object' ? recurrenceBase.process_links : {},
@@ -5796,6 +5819,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           source_template_id: stageMeta.templateId,
           source_stage_sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
           process_group_id: stageMeta.groupId,
+          process_run_id: processRunContext.processRunId || null,
+          process_run_stage_id: processRunContext.processRunStageId || null,
           production_line_id: null,
           production_shelf_id: null,
           produced_qty: 0,
@@ -5815,6 +5840,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             process_automation_rules: stageAutomationRules,
             process_target_module_ids: stageTargetModuleIds,
             process_links: effectiveProcessLinkMap,
+            process_run_id: processRunContext.processRunId || null,
+            process_run_stage_id: processRunContext.processRunStageId || null,
             [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
             [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
             [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,

@@ -26,6 +26,7 @@ import { getTaskStatusOption } from '../utils/processTaskStatusOptions';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { buildConditionalFieldStateMap, filterConditionallyVisibleFieldsForDataset } from '../utils/conditionalFieldRules';
 import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRuntime';
+import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -585,7 +586,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
     // اگر visibleColumns مشخص است، از آن استفاده کن
     if (visibleColumns && visibleColumns.length > 0) {
-      fields = visibleColumns
+      const nextVisibleColumns = moduleConfig.id === 'cash_bank_operations'
+        ? normalizeCashBankVisibleColumnKeys(moduleConfig, visibleColumns)
+        : visibleColumns;
+      fields = nextVisibleColumns
         .map((colKey: string) => moduleConfig.fields.find((f: any) => f.key === colKey))
         .filter((f: any) => f !== undefined)
         .filter((f: any) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))

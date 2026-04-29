@@ -144,6 +144,9 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   if (contains(normalized, 'private key has not been saved')) {
     return 'کلید خصوصی سامانه مودیان ذخیره نشده است.';
   }
+  if (contains(normalized, 'certificate is required for taxpayer-system v2 mode')) {
+    return 'برای مسیر نسخه ۲ سامانه مودیان، گواهی امضا الزامی است.';
+  }
   if (contains(normalized, 'sales invoice was not found')) {
     return 'فاکتور فروش پیدا نشد.';
   }
@@ -156,6 +159,9 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   if (contains(normalized, 'product/service identifier is missing')) {
     return 'شناسه کالا/خدمت برای یکی از ردیف‌های فاکتور ثبت نشده است.';
   }
+  if (contains(normalized, 'taxpayer measure unit code is missing')) {
+    return 'کد واحد اندازه‌گیری مودیان برای یکی از ردیف‌های فاکتور ثبت نشده است.';
+  }
   if (contains(normalized, 'quantity is invalid')) {
     return 'تعداد یکی از ردیف‌های فاکتور معتبر نیست.';
   }
@@ -165,7 +171,7 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   if (contains(normalized, 'unsupported action')) {
     return 'عملیات درخواستی پشتیبانی نمی‌شود.';
   }
-  if (contains(normalized, 'submission uid is missing')) {
+  if (contains(normalized, 'submission uid is missing') || contains(normalized, 'submission uid/reference number/taxid is missing')) {
     return 'شناسه ارسال سامانه مودیان پیدا نشد.';
   }
 

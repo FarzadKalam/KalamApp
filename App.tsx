@@ -53,6 +53,7 @@ const loadAccountingAccountReviewPage = () => import("./pages/AccountingAccountR
 const loadAccountingReportsPage = () => import("./pages/AccountingReportsPage");
 const loadAccountingReportViewerPage = () => import("./pages/AccountingReportViewerPage");
 const loadAccountingSettingsPage = () => import("./pages/AccountingSettingsPage");
+const loadCashBankPage = () => import("./pages/CashBankPage");
 const loadChartOfAccountsTreePage = () => import("./pages/ChartOfAccountsTreePage");
 const loadAccountingRecordPage = () => import("./pages/AccountingRecordPage");
 const loadJournalEntryCreatePage = () => import("./pages/JournalEntryCreatePage");
@@ -86,6 +87,7 @@ const AccountingAccountReviewPage = lazy(loadAccountingAccountReviewPage);
 const AccountingReportsPage = lazy(loadAccountingReportsPage);
 const AccountingReportViewerPage = lazy(loadAccountingReportViewerPage);
 const AccountingSettingsPage = lazy(loadAccountingSettingsPage);
+const CashBankPage = lazy(loadCashBankPage);
 const ChartOfAccountsTreePage = lazy(loadChartOfAccountsTreePage);
 const AccountingRecordPage = lazy(loadAccountingRecordPage);
 const JournalEntryCreatePage = lazy(loadJournalEntryCreatePage);
@@ -120,6 +122,7 @@ const routePreloaders = [
   loadAccountingReportsPage,
   loadAccountingReportViewerPage,
   loadAccountingSettingsPage,
+  loadCashBankPage,
   loadChartOfAccountsTreePage,
   loadAccountingRecordPage,
   loadJournalEntryCreatePage,
@@ -437,6 +440,9 @@ function App() {
     const { moduleId: routeModuleId } = useParams();
     if (routeModuleId === "chart_of_accounts") {
       return <ChartOfAccountsTreePage />;
+    }
+    if (routeModuleId === "cash_bank_operations") {
+      return <CashBankPage />;
     }
     return <ModuleListRefine key={`module-list:${routeModuleId || "unknown"}`} />;
   };

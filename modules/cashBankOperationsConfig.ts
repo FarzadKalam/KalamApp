@@ -99,6 +99,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
         ],
       },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -125,6 +126,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
         ],
       },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -142,6 +144,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 2,
       relationConfig: { targetModule: 'invoices', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -159,6 +162,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 3,
       relationConfig: { targetModule: 'purchase_invoices', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -176,6 +180,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 4,
       relationConfig: { targetModule: 'customers', targetField: 'business_name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -193,6 +198,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 4.5,
       relationConfig: { targetModule: 'expense_documents', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -210,6 +216,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 5,
       relationConfig: { targetModule: 'suppliers', targetField: 'business_name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -227,6 +234,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 5.5,
       relationConfig: { targetModule: 'employee_advances', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -254,6 +262,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 6.5,
       relationConfig: { targetModule: 'payroll_slips', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -275,6 +284,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
         quickCreateFieldKeys: ['serial_no', 'sayad_id', 'issue_date', 'due_date', 'amount', 'payee_name', 'account_holder_name', 'bank_name', 'image_url'],
       },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',
@@ -292,6 +302,7 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       order: 8,
       relationConfig: { targetModule: 'barters', targetField: 'name' },
       nature: FieldNature.STANDARD,
+      isTableColumn: true,
       logic: {
         visibleIf: {
           field: 'operation_type',

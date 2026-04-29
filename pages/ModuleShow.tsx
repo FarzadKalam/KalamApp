@@ -60,6 +60,7 @@ import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { syncRecordTags } from '../utils/recordTags';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
+import { mapProcessTemplateStagesToDraft } from '../utils/processRunRuntime';
 import { createProcessLinkedFieldKey, doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
 import { applyTaskSourceRecordFilter, buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
@@ -2178,20 +2179,12 @@ const ModuleShow: React.FC = () => {
           .order('sort_order', { ascending: true });
         if (error) throw error;
 
-        const mappedDraft = (stages || []).map((stage: any, index: number) => ({
-            ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-          id: stage.id || `${data.process_template_id}_${index + 1}`,
-          name: stage.stage_name || `مرحله ${index + 1}`,
-          sort_order: stage.sort_order || ((index + 1) * 10),
-          wage: stage.wage || 0,
-              weight: Number(stage?.metadata?.weight || 0),
-              duration_value: Number(stage?.metadata?.duration_value || 0),
-              duration_unit: stage?.metadata?.duration_unit || 'day',
-              duration_from: stage?.metadata?.duration_from || 'project_start',
-              default_assignee_id: stage.default_assignee_id || null,
-          default_assignee_role_id: stage.default_assignee_role_id || null,
-          template_stage_id: stage.id || null,
-        }));
+        const templateOption = processTemplateFieldOptions.find(
+          (option) => String(option.value) === String(data.process_template_id)
+        );
+        const mappedDraft = mapProcessTemplateStagesToDraft(data.process_template_id, stages || [], {
+          templateName: templateOption?.label || null,
+        });
 
         const patch = { [processDraftFieldKey]: mappedDraft } as any;
         await supabase.from(moduleId).update(patch).eq('id', data.id);
@@ -2203,7 +2196,7 @@ const ModuleShow: React.FC = () => {
     };
 
     syncFromProcessTemplate();
-  }, [moduleId, data, processDraftFieldKey, autoSyncedProcessTemplateId]);
+  }, [moduleId, data, processDraftFieldKey, autoSyncedProcessTemplateId, processTemplateFieldOptions]);
 
   useEffect(() => {
     if (!moduleConfig) return;
@@ -2371,7 +2364,7 @@ const ModuleShow: React.FC = () => {
         try {
           const { data: templateRow } = await supabase
             .from('process_templates')
-            .select('id, module_id, module_ids')
+            .select('id, name, module_id, module_ids')
             .eq('id', templateId)
             .maybeSingle();
           const targetModuleIds = normalizeProcessTargetModuleIds(templateRow?.module_ids, templateRow?.module_id);
@@ -2386,22 +2379,14 @@ const ModuleShow: React.FC = () => {
             .order('sort_order', { ascending: true });
           if (error) throw error;
 
-          const mappedDraft = (stages || []).map((stage: any, index: number) => ({
-            ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-            id: stage.id || `${templateId}_${index + 1}`,
-            name: stage.stage_name || `مرحله ${index + 1}`,
-            sort_order: stage.sort_order || ((index + 1) * 10),
-            wage: stage.wage || 0,
-              weight: Number(stage?.metadata?.weight || 0),
-              duration_value: Number(stage?.metadata?.duration_value || 0),
-              duration_unit: stage?.metadata?.duration_unit || 'day',
-              duration_from: stage?.metadata?.duration_from || 'project_start',
-            default_assignee_id: stage.default_assignee_id || null,
-            default_assignee_role_id: stage.default_assignee_role_id || null,
-            template_stage_id: stage.id || null,
-            process_target_module_ids: targetModuleIds,
-            process_link_map: processLinkMap,
-          }));
+          const templateOption = processTemplateFieldOptions.find(
+            (option) => String(option.value) === String(templateId)
+          );
+          const mappedDraft = mapProcessTemplateStagesToDraft(templateId, stages || [], {
+            templateName: String(templateRow?.name || templateOption?.label || '').trim() || null,
+            targetModuleIds,
+            processLinkMap,
+          });
 
           const patch: Record<string, any> = {
             process_template_id: templateId,
@@ -2432,7 +2417,7 @@ const ModuleShow: React.FC = () => {
         }
       },
     });
-  }, [id, moduleId, msg, modal, processDraftFieldKey]);
+  }, [data, id, moduleId, msg, modal, processDraftFieldKey, processTemplateFieldOptions]);
 
   const handleDelete = () => {
     modal.confirm({

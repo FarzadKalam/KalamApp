@@ -98,9 +98,12 @@ const parseMissingColumnFromError = (error: any): string | null => {
 const RECEIVED_PAYMENT_STATUSES = new Set([
   'received',
   'paid',
+  'approved',
   'settled',
   'دریافت شده',
   'پرداخت شده',
+  'تایید شده',
+  'تأیید شده',
   'تسویه شده',
 ]);
 

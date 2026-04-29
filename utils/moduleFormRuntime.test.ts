@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { transformModulePayloadForSave, validateModuleFormValues } from './moduleFormRuntime';
+import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from './moduleFormRuntime';
 
 describe('moduleFormRuntime', () => {
   it('requires distinct payment and receipt accounts for transfers', () => {
@@ -70,5 +70,31 @@ describe('moduleFormRuntime', () => {
     expect(payload.expense_document_id).toBeNull();
     expect(payload.employee_advance_id).toBeNull();
     expect(payload.payroll_slip_id).toBeNull();
+  });
+
+  it('keeps legacy receipt account data visible but saves new receipts into receipt account columns', () => {
+    const normalized = normalizeModuleFormValues('cash_bank_operations', {
+      operation_type: 'receipt',
+      bank_account_id: 'legacy-bank-1',
+    });
+
+    expect(normalized.receipt_account_id).toBe('legacy-bank-1');
+
+    const payload = transformModulePayloadForSave(
+      'cash_bank_operations',
+      {
+        ...normalized,
+        receipt_account_id: 'legacy-bank-1',
+      },
+      {
+        receipt_account_id: [{ value: 'legacy-bank-1', module: 'bank_accounts' }],
+      },
+    );
+
+    expect(payload.receipt_bank_account_id).toBe('legacy-bank-1');
+    expect(payload.bank_account_id).toBeNull();
+    expect(payload.cash_box_id).toBeNull();
+    expect(payload.petty_fund_id).toBeNull();
+    expect(payload).not.toHaveProperty('receipt_account_id');
   });
 });

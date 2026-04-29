@@ -1,4 +1,13 @@
-export const TAXPAYER_DEFAULT_BASE_URL = 'https://tp.tax.gov.ir/req';
+export const TAXPAYER_LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
+export const TAXPAYER_V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
+export const TAXPAYER_DEFAULT_BASE_URL = TAXPAYER_V2_BASE_URL;
+
+export type TaxpayerIntegrationMode = 'certificate_v2' | 'no_certificate_legacy';
+
+export const TAXPAYER_INTEGRATION_MODE_OPTIONS = [
+  { label: 'با گواهی امضا (نسخه ۲)', value: 'certificate_v2' },
+  { label: 'بدون گواهی امضا (مسیر قدیمی)', value: 'no_certificate_legacy' },
+];
 
 
 export const TAXPAYER_INVOICE_TYPE_OPTIONS = [
@@ -134,6 +143,56 @@ const normalizeStableJsonValue = (value: any): any => {
 
 export const stableStringifyForTaxpayer = (value: any) =>
   JSON.stringify(normalizeStableJsonValue(value)).replace(/#/g, '\\u0023');
+
+const flattenTaxpayerEntries = (target: Record<string, unknown>, value: unknown, prefix = '') => {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => flattenTaxpayerEntries(target, item, prefix ? `${prefix}.E${index}` : `E${index}`));
+    return;
+  }
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    Object.entries(value as Record<string, unknown>).forEach(([key, next]) => {
+      flattenTaxpayerEntries(target, next, prefix ? `${prefix}.${key}` : key);
+    });
+    return;
+  }
+  if (prefix) target[prefix] = value;
+};
+
+export const normalizeTaxpayerLegacySignatureValue = (
+  data: unknown,
+  headers?: Record<string, string | null | undefined> | null
+) => {
+  const merged: Record<string, unknown> = {};
+  if (data !== null && data !== undefined) {
+    if (Array.isArray(data)) merged.packets = data;
+    else Object.assign(merged, typeof data === 'object' ? data as Record<string, unknown> : { value: data });
+  }
+  Object.entries(headers || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    merged[key] = key === 'Authorization' && typeof value === 'string' && value.length > 7
+      ? value.slice(7)
+      : value;
+  });
+
+  const flattened: Record<string, unknown> = {};
+  flattenTaxpayerEntries(flattened, merged);
+  return Object.keys(flattened)
+    .sort((left, right) => left.localeCompare(right, 'en'))
+    .map((key) => {
+      const value = flattened[key];
+      if (value === null || value === undefined || String(value) === '') return '#';
+      return String(value).replace(/#/g, '##');
+    })
+    .join('#');
+};
+
+export const omitNullTaxpayerLegacySignatureKeyId = <T extends Record<string, any>>(packet: T): T => {
+  if (packet?.signatureKeyId === null || packet?.signatureKeyId === undefined || packet?.signatureKeyId === '') {
+    const { signatureKeyId: _signatureKeyId, ...rest } = packet;
+    return rest as T;
+  }
+  return packet;
+};
 
 export const normalizeTaxpayerMoneyToRial = (amount: unknown, currencyCode?: string | null) => {
   const parsed = Number(amount || 0);

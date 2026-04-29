@@ -20,7 +20,13 @@ import type { BotChannel } from '../../utils/botGateway';
 import { formatIranMobileForInput } from '../../utils/phoneNumber';
 import PhoneActionsPopover from '../../components/PhoneActionsPopover';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
-import { TAXPAYER_DEFAULT_BASE_URL } from '../../utils/taxpayerSystem';
+import {
+  TAXPAYER_DEFAULT_BASE_URL,
+  TAXPAYER_INTEGRATION_MODE_OPTIONS,
+  TAXPAYER_LEGACY_BASE_URL,
+  TAXPAYER_V2_BASE_URL,
+  type TaxpayerIntegrationMode,
+} from '../../utils/taxpayerSystem';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 
 type ConnectionType =
@@ -141,6 +147,7 @@ type FormValues = {
     is_active?: boolean;
   };
   taxpayer_system: {
+    integration_mode?: TaxpayerIntegrationMode;
     fiscal_id?: string;
     base_url?: string;
     private_key?: string;
@@ -271,6 +278,7 @@ const DEFAULT_VALUES: FormValues = {
     is_active: true,
   },
   taxpayer_system: {
+    integration_mode: 'certificate_v2',
     fiscal_id: '',
     base_url: TAXPAYER_DEFAULT_BASE_URL,
     private_key: '',
@@ -306,6 +314,9 @@ const createWebhookSecret = (channel: BotChannel | 'sms' | 'voip') => {
       : `${Date.now()}${Math.random().toString(16).slice(2)}`;
   return `kalam-${channel}-${randomPart}`;
 };
+
+const taxpayerBaseUrlForMode = (mode?: string) =>
+  mode === 'no_certificate_legacy' ? TAXPAYER_LEGACY_BASE_URL : TAXPAYER_V2_BASE_URL;
 
 const toTimeValue = (value: unknown) => {
   const timestamp = Date.parse(String(value || ''));
@@ -517,9 +528,11 @@ const ConnectionsTab: React.FC = () => {
 
   const buildTaxpayerSystemRequestSettings = () => {
     const values = getTaxpayerSystemValues();
+    const integrationMode = values.integration_mode === 'no_certificate_legacy' ? 'no_certificate_legacy' : 'certificate_v2';
     return {
+      integration_mode: integrationMode,
       fiscal_id: String(values.fiscal_id || '').trim().toUpperCase(),
-      base_url: TAXPAYER_DEFAULT_BASE_URL,
+      base_url: taxpayerBaseUrlForMode(integrationMode),
       private_key: String(values.private_key || '').trim(),
       certificate_pem: String(values.certificate_pem || '').trim(),
       legacy_last_serial: String(values.legacy_last_serial || '').trim(),
@@ -536,6 +549,7 @@ const ConnectionsTab: React.FC = () => {
       merged.is_active === true ||
       merged.has_private_key === true ||
       merged.has_certificate === true ||
+      merged.integration_mode !== DEFAULT_VALUES.taxpayer_system.integration_mode ||
       Boolean(String(merged.fiscal_id || '').trim()) ||
       Boolean(String(merged.private_key || '').trim()) ||
       Boolean(String(merged.certificate_pem || '').trim()) ||
@@ -693,10 +707,13 @@ const ConnectionsTab: React.FC = () => {
         if (taxpayerError) throw taxpayerError;
         if (taxpayerData?.success && taxpayerData?.settings) {
           const taxpayerSettings = taxpayerData.settings;
+          const integrationMode =
+            taxpayerSettings.integration_mode === 'no_certificate_legacy' ? 'no_certificate_legacy' : 'certificate_v2';
           nextValues.taxpayer_system = {
             ...DEFAULT_VALUES.taxpayer_system,
+            integration_mode: integrationMode,
             fiscal_id: String(taxpayerSettings.fiscal_id || ''),
-            base_url: TAXPAYER_DEFAULT_BASE_URL,
+            base_url: taxpayerBaseUrlForMode(integrationMode),
             private_key: '',
             certificate_pem: '',
             legacy_last_serial: taxpayerSettings.legacy_last_serial ? String(taxpayerSettings.legacy_last_serial) : '',
@@ -1045,7 +1062,7 @@ const ConnectionsTab: React.FC = () => {
       if (!settings.private_key && !currentValues.has_private_key) {
         throw new Error('کلید خصوصی امضا را وارد و ذخیره کنید.');
       }
-      if (!settings.certificate_pem && !currentValues.has_certificate) {
+      if (settings.integration_mode === 'certificate_v2' && !settings.certificate_pem && !currentValues.has_certificate) {
         throw new Error('گواهی امضا را وارد و ذخیره کنید.');
       }
 
@@ -1997,11 +2014,18 @@ const ConnectionsTab: React.FC = () => {
                     showIcon
                     className="mb-3"
                     message="تنظیمات ارسال مستقیم صورتحساب"
-                    description="اطلاعات این بخش برای هر سازمان به صورت جداگانه ذخیره می‌شود. برای شروع ارسال، شناسه یکتای حافظه مالیاتی، کلید خصوصی امضا و گواهی امضای همان مودی را وارد کنید. شماره اقتصادی فروشنده از تب اطلاعات شرکت خوانده می‌شود و در این فرم نیازی به ورود مجدد آن نیست."
+                    description="اطلاعات این بخش برای هر سازمان جداگانه ذخیره می‌شود. مسیر با گواهی از SDK نسخه ۲ و endpointهای requestsmanager/api/v2 استفاده می‌کند. مسیر بدون گواهی مطابق SDK 0.0.56 و endpoint self-tsp است و همچنان به کلید خصوصی معتبر همان حافظه مالیاتی نیاز دارد."
                   />
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <Form.Item label="فعال" name={['taxpayer_system', 'is_active']} valuePropName="checked">
                       <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+                    </Form.Item>
+                    <Form.Item
+                      label="مسیر اتصال"
+                      name={['taxpayer_system', 'integration_mode']}
+                      extra="اگر گواهی امضا دارید مسیر نسخه ۲ را انتخاب کنید؛ بدون گواهی فقط با کلید خصوصی و شناسه حافظه مالیاتی ارسال می‌کند."
+                    >
+                      <Select options={TAXPAYER_INTEGRATION_MODE_OPTIONS} />
                     </Form.Item>
                     <Form.Item
                       label="شناسه یکتای حافظه مالیاتی"

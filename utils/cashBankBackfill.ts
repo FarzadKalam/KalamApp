@@ -1,18 +1,24 @@
 import { supabase as sharedSupabase } from '../supabaseClient';
-import { resolveOperationalCashBankPaymentType } from './cashBankPaymentType';
 import { syncRecordTags } from './recordTags';
+import { runSelectWithCompatibleColumns } from './selectCompat';
+import { runWriteWithCompatiblePayload } from './writeCompat';
+import {
+  OPERATIONAL_CASH_BANK_SOURCE_MODULES,
+  buildCashBankOperationPayloadFromPaymentRow,
+  buildOperationMetadata,
+  buildSourceOperationKey,
+  collectPaymentAccountIds,
+  fetchAllOperationalRows,
+  fetchTreasuryAccountModuleMap,
+  getOperationalPaymentRowKeyCandidates,
+  normalizeOperationalText,
+  parseCashBankMetadata,
+  parseOperationalPayments,
+  normalizeRowTags,
+  resolveOperationalPaymentRowKey,
+} from './operationalCashBankSources';
 
 type BackfillSupabaseClient = typeof sharedSupabase;
-
-type BackfillSourceModule = {
-  moduleId: 'invoices' | 'purchase_invoices' | 'expense_documents' | 'employee_advances' | 'payroll_slips';
-  table: string;
-  operationType: 'receipt' | 'payment';
-  dateField: string;
-  accountField: 'target_account' | 'source_account';
-  sourceLinkField: 'sales_invoice_id' | 'purchase_invoice_id' | 'expense_document_id' | 'employee_advance_id' | 'payroll_slip_id';
-  selectFields: string[];
-};
 
 type BackfillSummary = {
   inserted: number;
@@ -22,63 +28,6 @@ type BackfillSummary = {
   sourceRecordsUpdated: number;
 };
 
-const SOURCE_MODULES: BackfillSourceModule[] = [
-  {
-    moduleId: 'invoices',
-    table: 'invoices',
-    operationType: 'receipt',
-    dateField: 'invoice_date',
-    accountField: 'target_account',
-    sourceLinkField: 'sales_invoice_id',
-    selectFields: ['id', 'invoice_date', 'customer_id', 'assignee_id', 'payments'],
-  },
-  {
-    moduleId: 'purchase_invoices',
-    table: 'purchase_invoices',
-    operationType: 'payment',
-    dateField: 'invoice_date',
-    accountField: 'source_account',
-    sourceLinkField: 'purchase_invoice_id',
-    selectFields: ['id', 'invoice_date', 'supplier_id', 'assignee_id', 'payments'],
-  },
-  {
-    moduleId: 'expense_documents',
-    table: 'expense_documents',
-    operationType: 'payment',
-    dateField: 'expense_date',
-    accountField: 'source_account',
-    sourceLinkField: 'expense_document_id',
-    selectFields: ['id', 'expense_date', 'customer_id', 'supplier_id', 'assignee_id', 'payments'],
-  },
-  {
-    moduleId: 'employee_advances',
-    table: 'employee_advances',
-    operationType: 'payment',
-    dateField: 'request_date',
-    accountField: 'source_account',
-    sourceLinkField: 'employee_advance_id',
-    selectFields: ['id', 'request_date', 'assignee_id', 'payments'],
-  },
-  {
-    moduleId: 'payroll_slips',
-    table: 'payroll_slips',
-    operationType: 'payment',
-    dateField: 'period_end',
-    accountField: 'source_account',
-    sourceLinkField: 'payroll_slip_id',
-    selectFields: ['id', 'period_end', 'assignee_id', 'payments'],
-  },
-];
-
-const BATCH_SIZE = 200;
-
-const normalizeText = (value: any) => String(value ?? '').trim();
-
-const toSafeNumber = (value: any) => {
-  const parsed = Number(String(value ?? '').replace(/,/g, '').trim());
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
 const createLocalRowKey = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -86,128 +35,80 @@ const createLocalRowKey = () => {
   return `row_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 };
 
-const parsePayments = (value: any): Record<string, any>[] => {
-  if (Array.isArray(value)) return value.filter((item) => item && typeof item === 'object');
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === 'object') : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-};
+const CASH_BANK_OPERATION_FETCH_COLUMNS = [
+  'id',
+  'metadata',
+  'status',
+  'operation_type',
+  'payment_type',
+  'operation_date',
+  'amount',
+  'bank_account_id',
+  'cash_box_id',
+  'petty_fund_id',
+  'payment_bank_account_id',
+  'payment_cash_box_id',
+  'payment_petty_fund_id',
+  'receipt_bank_account_id',
+  'receipt_cash_box_id',
+  'receipt_petty_fund_id',
+  'customer_id',
+  'supplier_id',
+  'employee_id',
+  'assignee_id',
+  'assignee_type',
+  'assignee_role_id',
+  'image_url',
+  'description',
+  'attachment_url',
+  'barter_id',
+  'cheque_id',
+  'sales_invoice_id',
+  'purchase_invoice_id',
+  'expense_document_id',
+  'employee_advance_id',
+  'payroll_slip_id',
+  'tags',
+] as const;
 
-const parseMetadata = (value: any): Record<string, any> | null => {
-  if (value && typeof value === 'object') return value;
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-};
-
-const fetchAllRows = async (supabase: BackfillSupabaseClient, table: string, selectClause: string) => {
+const fetchExistingCashBankOperationRows = async (supabase: BackfillSupabaseClient) => {
   const rows: any[] = [];
   let from = 0;
 
   while (true) {
-    const to = from + BATCH_SIZE - 1;
-    const { data, error } = await supabase
-      .from(table)
-      .select(selectClause)
-      .range(from, to);
-    if (error) throw error;
-    const batch = Array.isArray(data) ? data : [];
+    const to = from + 199;
+    const result = await runSelectWithCompatibleColumns<any[]>({
+      cacheKey: 'cash-bank-backfill:existing-operations',
+      columns: CASH_BANK_OPERATION_FETCH_COLUMNS,
+      execute: (selectExpr) =>
+        supabase
+          .from('cash_bank_operations')
+          .select(selectExpr)
+          .range(from, to),
+    });
+    if (result.error) throw result.error;
+    const batch = Array.isArray(result.data) ? result.data : [];
     rows.push(...batch);
-    if (batch.length < BATCH_SIZE) break;
-    from += BATCH_SIZE;
+    if (batch.length < 200) break;
+    from += 200;
   }
 
   return rows;
 };
 
-const buildSourceOperationKey = (moduleId: string, recordId: string, rowKey: string) =>
-  `${moduleId}:${recordId}:${rowKey}`;
-
-const buildOperationMetadata = (moduleId: string, recordId: string, rowKey: string) => ({
-  source_table: moduleId,
-  source_record_id: recordId,
-  source_block_id: 'payments',
-  source_row_key: rowKey,
-  is_auto_generated: true,
-});
-
-const resolvePaymentRowAccountId = (row: any, preferredField: 'target_account' | 'source_account') =>
-  normalizeText(
-    row?.[preferredField]
-    || row?.receipt_account_id
-    || row?.payment_account_id
-    || row?.bank_account_id
-    || row?.cash_box_id
-    || row?.petty_fund_id
-  ) || null;
-
-const resolvePaymentRowAttachment = (row: any) =>
-  normalizeText(
-    row?.attachment
-    || row?.attachment_url
-    || row?.file
-    || row?.file_url
-    || row?.image_url
-    || row?.cheque_image_url
-  ) || null;
-
-const resolvePaymentRowAssigneeId = (row: any, record: any) =>
-  normalizeText(
-    row?.responsible_id
-    || row?.assignee_id
-    || row?.employee_id
-    || record?.assignee_id
-  ) || null;
-
-const resolvePaymentRowDate = (row: any, record: any, dateField: string) =>
-  normalizeText(row?.date || row?.operation_date || row?.receipt_date || row?.payment_date || record?.[dateField]) || null;
-
-const normalizeRowTags = (value: any) => {
-  if (Array.isArray(value)) return value.filter(Boolean);
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return [];
-    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-      } catch {
-        return [];
-      }
-    }
-  }
-  return [];
-};
-
 const fetchExistingAutoGeneratedOperations = async (supabase: BackfillSupabaseClient) => {
-  const rows = await fetchAllRows(
-    supabase,
-    'cash_bank_operations',
-    'id,metadata,status,operation_type,payment_type,operation_date,amount,bank_account_id,customer_id,supplier_id,employee_id,assignee_id,assignee_type,assignee_role_id,image_url,description,attachment_url,barter_id,cheque_id,sales_invoice_id,purchase_invoice_id,expense_document_id,employee_advance_id,payroll_slip_id,tags',
-  );
+  const rows = await fetchExistingCashBankOperationRows(supabase);
   const map = new Map<string, any>();
   const byId = new Map<string, any>();
 
   rows.forEach((row: any) => {
-    const rowId = normalizeText(row?.id);
+    const rowId = normalizeOperationalText(row?.id);
     if (rowId) byId.set(rowId, row);
-    const metadata = parseMetadata(row?.metadata);
+    const metadata = parseCashBankMetadata(row?.metadata);
     if (!metadata || metadata.is_auto_generated !== true) return;
-    const sourceTable = normalizeText(metadata.source_table);
-    const sourceRecordId = normalizeText(metadata.source_record_id);
-    const sourceRowKey = normalizeText(metadata.source_row_key);
+    const sourceTable = normalizeOperationalText(metadata.source_table);
+    const sourceRecordId = normalizeOperationalText(metadata.source_record_id);
+    const sourceRowKey = normalizeOperationalText(metadata.source_row_key);
     if (!sourceTable || !sourceRecordId || !sourceRowKey) return;
     map.set(buildSourceOperationKey(sourceTable, sourceRecordId, sourceRowKey), { ...row, metadata });
   });
@@ -222,6 +123,14 @@ const OPERATION_COMPARE_KEYS = [
   'operation_date',
   'amount',
   'bank_account_id',
+  'cash_box_id',
+  'petty_fund_id',
+  'payment_bank_account_id',
+  'payment_cash_box_id',
+  'payment_petty_fund_id',
+  'receipt_bank_account_id',
+  'receipt_cash_box_id',
+  'receipt_petty_fund_id',
   'customer_id',
   'supplier_id',
   'employee_id',
@@ -266,6 +175,15 @@ const shouldUpdateOperation = (existingRow: any, nextPayload: Record<string, any
 export const backfillOperationalCashBankOperations = async (
   supabase: BackfillSupabaseClient = sharedSupabase,
 ): Promise<BackfillSummary> => {
+  void supabase;
+  return {
+    inserted: 0,
+    updated: 0,
+    canceled: 0,
+    sourceRowsUpdated: 0,
+    sourceRecordsUpdated: 0,
+  };
+
   const existingOperations = await fetchExistingAutoGeneratedOperations(supabase);
   const nowIso = new Date().toISOString();
   const summary: BackfillSummary = {
@@ -277,13 +195,17 @@ export const backfillOperationalCashBankOperations = async (
   };
   const activeSourceKeys = new Set<string>();
 
-  for (const source of SOURCE_MODULES) {
-    const records = await fetchAllRows(supabase, source.table, source.selectFields.join(','));
+  for (const source of OPERATIONAL_CASH_BANK_SOURCE_MODULES) {
+    const records = await fetchAllOperationalRows(supabase, source.table, source.selectFields.join(','));
+    const accountModuleById = await fetchTreasuryAccountModuleMap(
+      supabase,
+      collectPaymentAccountIds(records, source.accountField),
+    );
 
     for (const record of records) {
-      const recordId = normalizeText(record?.id);
+      const recordId = normalizeOperationalText(record?.id);
       if (!recordId) continue;
-      const payments = parsePayments(record?.payments);
+      const payments = parseOperationalPayments(record?.payments);
       if (payments.length === 0) continue;
 
       const nextPayments = payments.map((row) => ({ ...row }));
@@ -293,7 +215,7 @@ export const backfillOperationalCashBankOperations = async (
 
       for (let index = 0; index < nextPayments.length; index += 1) {
         const row = nextPayments[index];
-        let rowKey = normalizeText(row?.row_key || row?._cash_bank_operation_id || row?._barter_allocation_key);
+        let rowKey = resolveOperationalPaymentRowKey(row, index);
         if (!rowKey) {
           rowKey = createLocalRowKey();
           row.row_key = rowKey;
@@ -302,72 +224,64 @@ export const backfillOperationalCashBankOperations = async (
         }
 
         const sourceKey = buildSourceOperationKey(source.moduleId, recordId, rowKey);
+        const sourceKeyCandidates = getOperationalPaymentRowKeyCandidates(row, index)
+          .map((candidate) => buildSourceOperationKey(source.moduleId, recordId, candidate));
         const existingOperation =
+          sourceKeyCandidates.map((candidate) => existingOperations.bySourceKey.get(candidate)).find(Boolean)
+          ||
           existingOperations.bySourceKey.get(sourceKey)
-          || existingOperations.byId.get(normalizeText(row?._cash_bank_operation_id));
-        if (existingOperation) {
-          if (normalizeText(row?._cash_bank_operation_id) !== existingOperation.id) {
-            row._cash_bank_operation_id = existingOperation.id;
-            sourceChanged = true;
-            summary.sourceRowsUpdated += 1;
-          }
+          || existingOperations.byId.get(normalizeOperationalText(row?._cash_bank_operation_id));
+        if (existingOperation && normalizeOperationalText(row?._cash_bank_operation_id) !== existingOperation.id) {
+          row._cash_bank_operation_id = existingOperation.id;
+          sourceChanged = true;
+          summary.sourceRowsUpdated += 1;
         }
 
-        const paymentType = resolveOperationalCashBankPaymentType(row);
-        const amount = Math.abs(toSafeNumber(row?.amount));
-        const statusRaw = normalizeText(row?.status);
-        const status = ['pending', 'received', 'returned', 'canceled'].includes(statusRaw) ? statusRaw : 'pending';
+        const { payload, paymentType, amount, status, rowTags } = buildCashBankOperationPayloadFromPaymentRow({
+          source,
+          record,
+          row,
+          rowKey,
+          accountModuleById,
+          nowIso,
+        });
+
         if (!paymentType || amount <= 0 || status === 'canceled') {
-          if (existingOperation && normalizeText(existingOperation?.status) !== 'canceled') {
-            const { error: cancelError } = await supabase
-              .from('cash_bank_operations')
-              .update({
-                status: 'canceled',
-                metadata: buildOperationMetadata(source.moduleId, recordId, rowKey),
-                updated_at: nowIso,
-              })
-              .eq('id', existingOperation.id);
-            if (cancelError) throw cancelError;
+          if (existingOperation && normalizeOperationalText(existingOperation?.status) !== 'canceled') {
+            const cancelPayload = {
+              status: 'canceled',
+              metadata: buildOperationMetadata(source.moduleId, recordId, rowKey),
+              updated_at: nowIso,
+            };
+            const cancelResult = await runWriteWithCompatiblePayload<null>({
+              cacheKey: 'cash-bank-backfill:cancel',
+              payload: cancelPayload,
+              execute: (compatiblePayload) =>
+                supabase
+                  .from('cash_bank_operations')
+                  .update(compatiblePayload)
+                  .eq('id', existingOperation.id),
+            });
+            if (cancelResult.error) throw cancelResult.error;
             summary.canceled += 1;
           }
           continue;
         }
 
-        const accountId = resolvePaymentRowAccountId(row, source.accountField);
-        const assigneeId = resolvePaymentRowAssigneeId(row, record);
-        const rowTags = normalizeRowTags(row?.tags);
-        const payload: Record<string, any> = {
-          operation_type: source.operationType,
-          payment_type: paymentType,
-          status,
-          operation_date: resolvePaymentRowDate(row, record, source.dateField),
-          amount,
-          bank_account_id: accountId,
-          customer_id: normalizeText(record?.customer_id) || null,
-          supplier_id: normalizeText(record?.supplier_id) || null,
-          assignee_id: assigneeId,
-          assignee_type: assigneeId ? 'user' : null,
-          assignee_role_id: null,
-          employee_id: assigneeId,
-          image_url: resolvePaymentRowAttachment(row),
-          description: row?.description || null,
-          attachment_url: resolvePaymentRowAttachment(row),
-          tags: rowTags,
-          barter_id: normalizeText(row?.barter_id) || null,
-          cheque_id: normalizeText(row?.cheque_id || row?.spent_cheque_id) || null,
-          metadata: buildOperationMetadata(source.moduleId, recordId, rowKey),
-          updated_at: nowIso,
-          [source.sourceLinkField]: recordId,
-        };
         activeSourceKeys.add(sourceKey);
 
         if (existingOperation) {
           if (shouldUpdateOperation(existingOperation, payload)) {
-            const { error: updateError } = await supabase
-              .from('cash_bank_operations')
-              .update(payload)
-              .eq('id', existingOperation.id);
-            if (updateError) throw updateError;
+            const updateResult = await runWriteWithCompatiblePayload<null>({
+              cacheKey: 'cash-bank-backfill:update',
+              payload,
+              execute: (compatiblePayload) =>
+                supabase
+                  .from('cash_bank_operations')
+                  .update(compatiblePayload)
+                  .eq('id', existingOperation.id),
+            });
+            if (updateResult.error) throw updateResult.error;
             summary.updated += 1;
           }
           await syncRecordTags(supabase, 'cash_bank_operations', existingOperation.id, rowTags);
@@ -385,29 +299,43 @@ export const backfillOperationalCashBankOperations = async (
       }
 
       if (inserts.length > 0) {
-        const { data: insertedRows, error: insertError } = await supabase
-          .from('cash_bank_operations')
-          .insert(inserts)
-          .select('id,metadata');
-        if (insertError) throw insertError;
+        const insertedRows: any[] = [];
+        for (let insertIndex = 0; insertIndex < inserts.length; insertIndex += 1) {
+          const insertPayload = inserts[insertIndex];
+          const insertResult = await runWriteWithCompatiblePayload<any>({
+            cacheKey: 'cash-bank-backfill:insert',
+            payload: insertPayload,
+            execute: (compatiblePayload) =>
+              supabase
+                .from('cash_bank_operations')
+                .insert(compatiblePayload)
+                .select('id')
+                .single(),
+          });
+          if (insertResult.error) throw insertResult.error;
+          insertedRows.push({
+            ...(insertResult.data || {}),
+            metadata: insertResult.payload?.metadata ?? insertPayload?.metadata ?? null,
+          });
+        }
 
         for (let insertedIndex = 0; insertedIndex < (insertedRows || []).length; insertedIndex += 1) {
           const insertedRow: any = (insertedRows || [])[insertedIndex];
           const paymentIndex = insertTargets[insertedIndex];
           if (paymentIndex === undefined) continue;
-          const insertedId = normalizeText(insertedRow?.id);
+          const insertedId = normalizeOperationalText(insertedRow?.id);
           if (!insertedId) continue;
           const paymentRow = nextPayments[paymentIndex];
-          nextPayments[paymentIndex]._cash_bank_operation_id = insertedId;
+          paymentRow._cash_bank_operation_id = insertedId;
           sourceChanged = true;
           summary.sourceRowsUpdated += 1;
           summary.inserted += 1;
           await syncRecordTags(supabase, 'cash_bank_operations', insertedId, normalizeRowTags(paymentRow?.tags));
 
-          const metadata = parseMetadata(insertedRow?.metadata);
-          const sourceTable = normalizeText(metadata?.source_table) || source.moduleId;
-          const sourceRecordId = normalizeText(metadata?.source_record_id) || recordId;
-          const sourceRowKey = normalizeText(metadata?.source_row_key || nextPayments[paymentIndex]?.row_key);
+          const metadata = parseCashBankMetadata(insertedRow?.metadata);
+          const sourceTable = normalizeOperationalText(metadata?.source_table) || source.moduleId;
+          const sourceRecordId = normalizeOperationalText(metadata?.source_record_id) || recordId;
+          const sourceRowKey = normalizeOperationalText(metadata?.source_row_key || paymentRow?.row_key);
           if (sourceRowKey) {
             existingOperations.bySourceKey.set(buildSourceOperationKey(sourceTable, sourceRecordId, sourceRowKey), {
               id: insertedId,
@@ -436,20 +364,26 @@ export const backfillOperationalCashBankOperations = async (
 
   for (const [sourceKey, existingOperation] of existingOperations.bySourceKey.entries()) {
     if (activeSourceKeys.has(sourceKey)) continue;
-    if (normalizeText(existingOperation?.status) === 'canceled') continue;
-    const metadata = parseMetadata(existingOperation?.metadata);
-    const rowKey = normalizeText(metadata?.source_row_key);
-    const sourceTable = normalizeText(metadata?.source_table);
-    const sourceRecordId = normalizeText(metadata?.source_record_id);
-    const { error: cancelError } = await supabase
-      .from('cash_bank_operations')
-      .update({
-        status: 'canceled',
-        metadata: buildOperationMetadata(sourceTable, sourceRecordId, rowKey),
-        updated_at: nowIso,
-      })
-      .eq('id', existingOperation.id);
-    if (cancelError) throw cancelError;
+    if (normalizeOperationalText(existingOperation?.status) === 'canceled') continue;
+    const metadata = parseCashBankMetadata(existingOperation?.metadata);
+    const rowKey = normalizeOperationalText(metadata?.source_row_key);
+    const sourceTable = normalizeOperationalText(metadata?.source_table);
+    const sourceRecordId = normalizeOperationalText(metadata?.source_record_id);
+    const cancelPayload = {
+      status: 'canceled',
+      metadata: buildOperationMetadata(sourceTable, sourceRecordId, rowKey),
+      updated_at: nowIso,
+    };
+    const cancelResult = await runWriteWithCompatiblePayload<null>({
+      cacheKey: 'cash-bank-backfill:cancel',
+      payload: cancelPayload,
+      execute: (compatiblePayload) =>
+        supabase
+          .from('cash_bank_operations')
+          .update(compatiblePayload)
+          .eq('id', existingOperation.id),
+    });
+    if (cancelResult.error) throw cancelResult.error;
     summary.canceled += 1;
   }
 

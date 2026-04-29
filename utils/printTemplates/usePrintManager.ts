@@ -1052,7 +1052,7 @@ export const usePrintManager = ({
     }, 0);
     const paymentsTotal = payments.reduce((sum: number, row: any) => {
       const status = String(row?.status || '').toLowerCase();
-      const isReceived = !status || status === 'received' || status === 'paid' || status === 'cleared';
+      const isReceived = !status || status === 'received' || status === 'paid' || status === 'approved' || status === 'cleared';
       return isReceived ? sum + toNumberSafe(row?.amount) : sum;
     }, 0);
 

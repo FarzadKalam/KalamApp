@@ -14,6 +14,13 @@ type ModuleFieldLike = {
     targetModule?: string;
     targetField?: string;
     filter?: Record<string, any>;
+    sourceModules?: Array<{
+      targetModule?: string;
+      targetField?: string;
+      filter?: Record<string, any>;
+      tagLabel?: string;
+      tagColor?: string;
+    }>;
   };
 };
 
@@ -65,6 +72,38 @@ const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[]
   );
 };
 
+export const CASH_BANK_REQUIRED_VISIBLE_FIELD_KEYS = [
+  'image_url',
+  'operation_type',
+  'status',
+  'operation_date',
+  'amount',
+  'payment_type',
+  'receipt_account_id',
+  'payment_account_id',
+] as const;
+
+export const normalizeCashBankVisibleColumnKeys = (
+  moduleConfig: ModuleDefinition | null | undefined,
+  columns?: string[] | null,
+) => {
+  const allowedFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || '').trim()).filter(Boolean));
+  const seen = new Set<string>();
+  const normalized = [
+    ...CASH_BANK_REQUIRED_VISIBLE_FIELD_KEYS,
+    ...(Array.isArray(columns) ? columns : []),
+  ]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .filter((key) => {
+      if (CASH_BANK_LEGACY_ACCOUNT_KEYS.has(key)) return false;
+      if (!allowedFieldKeys.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return normalized;
+};
+
 const prependCashBankImageField = (
   moduleConfig: ModuleDefinition,
   fields: ModuleFieldLike[]
@@ -83,7 +122,10 @@ export const getModuleListVisibleFields = (
   if (!moduleConfig) return [];
 
   if (Array.isArray(visibleColumns) && visibleColumns.length > 0) {
-    return prependCashBankImageField(moduleConfig, visibleColumns
+    const nextVisibleColumns = moduleConfig.id === 'cash_bank_operations'
+      ? normalizeCashBankVisibleColumnKeys(moduleConfig, visibleColumns)
+      : visibleColumns;
+    return prependCashBankImageField(moduleConfig, nextVisibleColumns
       .filter((fieldKey) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(fieldKey || '').trim()))
       .map((fieldKey) => moduleConfig.fields.find((field) => field.key === fieldKey))
       .filter(Boolean) as ModuleFieldLike[]);
@@ -203,6 +245,7 @@ const buildRelationOptionsFromRows = (
     return {
       label: `${labelValue}${systemCodeSuffix}`,
       value: row.id,
+      module: targetModule,
       searchText: isCustomer
         ? buildCustomerRelationSearchText(row, resolvedTargetField)
         : `${String(labelValue || '').toLowerCase()} ${String(row?.system_code || '').toLowerCase()}`.trim(),
@@ -336,6 +379,20 @@ const fetchRelationOptionsByTarget = async (
   return pending;
 };
 
+const mergeRelationOptions = (...lists: Array<any[] | undefined | null>) => {
+  const merged = new Map<string, any>();
+  lists.forEach((list) => {
+    (list || []).forEach((item: any) => {
+      const value = normalizeOptionValue(item?.value);
+      const moduleId = normalizeOptionValue(item?.module);
+      const key = `${moduleId}:${value}`;
+      if (!value || merged.has(key)) return;
+      merged.set(key, item);
+    });
+  });
+  return Array.from(merged.values());
+};
+
 export const fetchModuleListRelationOptions = async (
   supabaseClient: any,
   fields: ModuleFieldLike[],
@@ -381,7 +438,32 @@ export const fetchModuleListRelationOptions = async (
     }
 
     const targetModule = normalizeOptionValue(field.relationConfig?.targetModule);
-    if (!targetModule) return;
+    const sourceModules = Array.isArray(field.relationConfig?.sourceModules)
+      ? field.relationConfig?.sourceModules || []
+      : [];
+    if (!targetModule && sourceModules.length === 0) return;
+
+    if (sourceModules.length > 0) {
+      sourceModules.forEach((sourceModule) => {
+        const sourceTargetModule = normalizeOptionValue(sourceModule?.targetModule);
+        if (!sourceTargetModule) return;
+        const sourceTargetField = normalizeOptionValue(sourceModule?.targetField) || undefined;
+        const sourceFilter = normalizeFilter(sourceModule?.filter);
+        const signature = JSON.stringify({ targetModule: sourceTargetModule, targetField: sourceTargetField, filter: sourceFilter });
+        const existing = groupedTargets.get(signature);
+        if (existing) {
+          existing.fieldKeys.push(fieldKey);
+          return;
+        }
+        groupedTargets.set(signature, {
+          fieldKeys: [fieldKey],
+          targetModule: sourceTargetModule,
+          targetField: sourceTargetField,
+          filter: sourceFilter,
+        });
+      });
+      return;
+    }
 
     if (targetModule === 'profiles') {
       relationOptions[fieldKey] = profileOptions;
@@ -424,9 +506,10 @@ export const fetchModuleListRelationOptions = async (
 
   loadedGroups.forEach((group) => {
     group.fieldKeys.forEach((fieldKey) => {
-      relationOptions[fieldKey] = group.options;
+      relationOptions[fieldKey] = mergeRelationOptions(relationOptions[fieldKey], group.options);
       if (fieldKey.includes('_')) {
-        relationOptions[fieldKey.split('_').pop() || fieldKey] = group.options;
+        const shortKey = fieldKey.split('_').pop() || fieldKey;
+        relationOptions[shortKey] = mergeRelationOptions(relationOptions[shortKey], group.options);
       }
     });
   });

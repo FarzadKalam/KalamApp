@@ -48,8 +48,9 @@ import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
-import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
+import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 import { resolveSelectPopupContainer } from '../utils/popupContainer';
+import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from '../utils/cashBankLegacyAccountKeys';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
 type FieldOption = { value: string; label: string; color?: string; module?: string };
@@ -75,10 +76,6 @@ const CHEQUE_INLINE_FIELD_KEYS = new Set<string>([
 ]);
 const CHEQUE_DEFERRED_FIELD_KEYS = new Set<string>(['notes']);
 const ACCOUNTING_HERO_EXCLUDED_FIELD_KEYS = new Set<string>(['tags']);
-const CASH_BANK_TRANSFER_ONLY_FIELD_KEYS = new Set<string>([
-  'payment_account_id',
-  'receipt_account_id',
-]);
 const CASH_BANK_NON_TRANSFER_FIELD_KEYS = new Set<string>([
   'bank_account_id',
   'cash_box_id',
@@ -168,9 +165,8 @@ const AccountingRecordPage: React.FC = () => {
           const paymentType = String(formData?.payment_type || '').trim();
           if (f.key === 'cheque_id') return paymentType === 'cheque' && operationType !== 'transfer';
           if (f.key === 'barter_id') return paymentType === 'barter' && operationType !== 'transfer';
-          if (f.key === 'cash_box_id' || f.key === 'petty_fund_id') return false;
+          if (CASH_BANK_LEGACY_ACCOUNT_KEYS.has(f.key)) return false;
           if (operationType === 'transfer' && CASH_BANK_NON_TRANSFER_FIELD_KEYS.has(f.key)) return false;
-          if (operationType !== 'transfer' && CASH_BANK_TRANSFER_ONLY_FIELD_KEYS.has(f.key)) return false;
         }
         return true;
       })
@@ -207,16 +203,18 @@ const AccountingRecordPage: React.FC = () => {
         if (formData?.[key]) patch[key] = null;
       });
     } else {
-      [
-        'payment_account_id',
-        'receipt_account_id',
-        'payment_bank_account_id',
-        'payment_cash_box_id',
-        'payment_petty_fund_id',
-        'receipt_bank_account_id',
-        'receipt_cash_box_id',
-        'receipt_petty_fund_id',
-      ].forEach((key) => {
+      const staleKeys = [
+        'bank_account_id',
+        'cash_box_id',
+        'petty_fund_id',
+        ...(operationType === 'receipt'
+          ? ['payment_bank_account_id', 'payment_cash_box_id', 'payment_petty_fund_id', 'payment_account_id']
+          : []),
+        ...(operationType === 'payment'
+          ? ['receipt_bank_account_id', 'receipt_cash_box_id', 'receipt_petty_fund_id', 'receipt_account_id']
+          : []),
+      ];
+      staleKeys.forEach((key) => {
         if (formData?.[key]) patch[key] = null;
       });
     }
@@ -596,12 +594,7 @@ const AccountingRecordPage: React.FC = () => {
       const normalizedRow = isChequeModule
         ? { ...row, due_date: row.issue_date || row.due_date || null }
         : moduleId === 'cash_bank_operations'
-          ? {
-              ...row,
-              bank_account_id: row.bank_account_id || row.cash_box_id || row.petty_fund_id || null,
-              payment_account_id: row.payment_bank_account_id || row.payment_cash_box_id || row.payment_petty_fund_id || null,
-              receipt_account_id: row.receipt_bank_account_id || row.receipt_cash_box_id || row.receipt_petty_fund_id || null,
-            }
+          ? normalizeModuleFormValues(moduleId, row)
           : row;
       setRecord(normalizedRow);
       setFormData(normalizedRow);
@@ -924,24 +917,10 @@ const AccountingRecordPage: React.FC = () => {
         }
       }
 
-      if (moduleId === 'cash_bank_operations' && String(mergedValues.operation_type || '') === 'transfer') {
-        const paymentAccountId = String(mergedValues.payment_account_id || '').trim();
-        const receiptAccountId = String(mergedValues.receipt_account_id || '').trim();
-        if (!paymentAccountId || !receiptAccountId) {
-          message.error('برای انتقال، انتخاب حساب پرداخت و حساب دریافت الزامی است.');
-          return;
-        }
-
-        const paymentOption = (relationOptions.payment_account_id || []).find(
-          (option) => String(option.value || '').trim() === paymentAccountId
-        );
-        const receiptOption = (relationOptions.receipt_account_id || []).find(
-          (option) => String(option.value || '').trim() === receiptAccountId
-        );
-        const paymentModule = String(paymentOption?.module || '').trim();
-        const receiptModule = String(receiptOption?.module || '').trim();
-        if (paymentAccountId === receiptAccountId && paymentModule === receiptModule) {
-          message.error('حساب پرداخت و حساب دریافت نمی‌توانند یکسان باشند.');
+      if (moduleId === 'cash_bank_operations') {
+        const validationError = validateModuleFormValues(moduleId, mergedValues, relationOptions);
+        if (validationError) {
+          message.error(validationError);
           return;
         }
       }

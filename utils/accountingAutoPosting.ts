@@ -115,7 +115,7 @@ const FINAL_STATUSES: Record<SupportedInvoiceModule, Set<string>> = {
   purchase_invoices: new Set(['final', 'settled', 'completed']),
 };
 
-const PAYMENT_FINAL_STATUSES = new Set(['received', 'paid', 'cleared']);
+const PAYMENT_FINAL_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
 const OUTDOOR_AD_COST_CENTER_NAME = 'تبلیغات محیطی';
 const OUTDOOR_AD_KEYWORDS = ['تبلیغات محیطی', 'billboard', 'outdoor'];
 

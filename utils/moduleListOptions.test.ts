@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { customerModule } from '../modules/customerConfig';
-import { buildModuleListOptionPlan } from './moduleListOptions';
+import { cashBankOperationsConfig } from '../modules/cashBankOperationsConfig';
+import { buildModuleListOptionPlan, getModuleListVisibleFields } from './moduleListOptions';
 
 describe('buildModuleListOptionPlan', () => {
   it('keeps initial list preload limited to visible list fields', () => {
@@ -24,5 +25,46 @@ describe('buildModuleListOptionPlan', () => {
 
     expect(plan.immediateDynamicCategories).toEqual(['customer_industry']);
     expect(plan.immediateRelationFields.map((field) => field.key)).toEqual(['referrer_customer_id']);
+  });
+
+  it('keeps cash bank operational columns visible when a saved view is too narrow', () => {
+    const fields = getModuleListVisibleFields(cashBankOperationsConfig, ['image_url', 'assignee_id'])
+      .map((field) => field.key);
+
+    expect(fields).toEqual(
+      expect.arrayContaining([
+        'image_url',
+        'operation_type',
+        'status',
+        'operation_date',
+        'amount',
+        'payment_type',
+        'receipt_account_id',
+        'payment_account_id',
+        'assignee_id',
+      ])
+    );
+  });
+
+  it('marks cash bank account and source relation fields as table columns', () => {
+    const tableFieldKeys = cashBankOperationsConfig.fields
+      .filter((field) => field.isTableColumn)
+      .map((field) => field.key);
+
+    expect(tableFieldKeys).toEqual(
+      expect.arrayContaining([
+        'receipt_account_id',
+        'payment_account_id',
+        'sales_invoice_id',
+        'purchase_invoice_id',
+        'expense_document_id',
+        'employee_advance_id',
+        'payroll_slip_id',
+        'customer_id',
+        'supplier_id',
+        'cheque_id',
+        'barter_id',
+      ])
+    );
   });
 });

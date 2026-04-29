@@ -5,6 +5,8 @@ import {
   buildTaxpayerVerhoeffInput,
   mapTaxpayerSettlementMethodToSetm,
   normalizeTaxpayerMoneyToRial,
+  normalizeTaxpayerLegacySignatureValue,
+  omitNullTaxpayerLegacySignatureKeyId,
   stableStringifyForTaxpayer,
 } from './taxpayerSystem';
 
@@ -35,5 +37,21 @@ describe('taxpayerSystem', () => {
     expect(mapTaxpayerSettlementMethodToSetm('cash')).toBe(1);
     expect(mapTaxpayerSettlementMethodToSetm('credit')).toBe(2);
     expect(mapTaxpayerSettlementMethodToSetm('mixed')).toBe(3);
+  });
+
+  it('normalizes legacy SDK signatures with bearer token stripped', () => {
+    const normalized = normalizeTaxpayerLegacySignatureValue(
+      [{ uid: 'u1', packetType: 'INVOICE.V01', retry: false, data: { amount: 10 } }],
+      { Authorization: 'Bearer token-1', requestTraceId: 'trace-1', timestamp: '123' }
+    );
+    expect(normalized).toBe('token-1#10#INVOICE.V01#false#u1#trace-1#123');
+  });
+
+  it('omits null legacy packet signature key id before signing', () => {
+    expect(omitNullTaxpayerLegacySignatureKeyId({ uid: 'u1', signatureKeyId: null })).toEqual({ uid: 'u1' });
+    expect(omitNullTaxpayerLegacySignatureKeyId({ uid: 'u1', signatureKeyId: 'key-1' })).toEqual({
+      uid: 'u1',
+      signatureKeyId: 'key-1',
+    });
   });
 });

@@ -13,6 +13,7 @@ export const CASH_BANK_PAYMENT_TYPE_OPTIONS = [
 export const CASH_BANK_OPERATION_STATUS_OPTIONS = [
   { label: 'در انتظار', value: 'pending', color: 'orange' },
   { label: 'انجام شده', value: 'received', color: 'green' },
+  { label: 'تایید شده', value: 'approved', color: 'blue' },
   { label: 'برگشت', value: 'returned', color: 'red' },
   { label: 'لغو شده', value: 'canceled', color: 'default' },
 ] as const;

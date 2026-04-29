@@ -15,6 +15,7 @@ const MODULES_WITH_SYSTEM_CODE = new Set([
   'production_boms',
   'production_group_orders',
   'production_orders',
+  'process_runs',
   'projects',
   'purchase_invoices',
   'recruitment_applicants',

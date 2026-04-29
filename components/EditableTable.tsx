@@ -29,6 +29,7 @@ import { getCachedAuthUser } from '../utils/sessionCache';
 import { syncRecordTags } from '../utils/recordTags';
 import { runWriteWithCompatiblePayload } from '../utils/writeCompat';
 import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
+import { resolveOperationalPaymentRowKey } from '../utils/operationalCashBankSources';
 import {
   buildSalesPackageDescription,
   calculateSalesPackageTotal,
@@ -257,12 +258,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return `row_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   };
   const ensurePaymentRowKey = (row: any) => {
-    const existingKey = String(
-      row?.row_key
-      || row?._cash_bank_operation_id
-      || row?._barter_allocation_key
-      || ''
-    ).trim();
+    const existingKey = resolveOperationalPaymentRowKey(row);
     if (existingKey) return existingKey;
     return createLocalRowKey();
   };
@@ -1827,7 +1823,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     });
   };
 
-  const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'cleared']);
+  const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
   const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
   const calculateFinancialFields = (
     itemRows: any[],
@@ -2402,8 +2398,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       if (paymentType && String(nextRow?.payment_type || '').trim() !== paymentType) {
         nextRow.payment_type = paymentType;
       }
-      const rowStatusRaw = String(row?.status || '').trim();
-      const rowStatus = ['pending', 'received', 'returned', 'canceled'].includes(rowStatusRaw) ? rowStatusRaw : 'pending';
+      const rowStatusRaw = String(row?.status || '').trim().toLowerCase();
+      const rowStatus = ['pending', 'received', 'approved', 'returned', 'canceled'].includes(rowStatusRaw) ? rowStatusRaw : 'pending';
       const accountId = String(row?.[accountField] || '').trim() || null;
       const amount = Math.abs(toSafeNumber(row?.amount));
       const issueDate = row?.date || null;

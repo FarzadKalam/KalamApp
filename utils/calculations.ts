@@ -1,6 +1,6 @@
 import { RowCalculationType, SummaryCalculationType, BlockType } from '../types';
 
-const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'cleared']);
+const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
 const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
 
 export const calculateRow = (row: any, type: RowCalculationType = RowCalculationType.SIMPLE_MULTIPLY) => {

@@ -13,17 +13,36 @@ const getSelectedRelationModule = (value: any, options: RelationOptionLike[]) =>
   };
 };
 
+const inferSelectedAccountModule = (
+  selectedId: string,
+  values: Record<string, any>,
+  prefix?: 'payment' | 'receipt',
+) => {
+  if (!selectedId) return '';
+  if (prefix) {
+    if (String(values?.[`${prefix}_bank_account_id`] || '').trim() === selectedId) return 'bank_accounts';
+    if (String(values?.[`${prefix}_cash_box_id`] || '').trim() === selectedId) return 'cash_boxes';
+    if (String(values?.[`${prefix}_petty_fund_id`] || '').trim() === selectedId) return 'petty_funds';
+  }
+  if (String(values?.bank_account_id || '').trim() === selectedId) return 'bank_accounts';
+  if (String(values?.cash_box_id || '').trim() === selectedId) return 'cash_boxes';
+  if (String(values?.petty_fund_id || '').trim() === selectedId) return 'petty_funds';
+  return '';
+};
+
 const getTransferAccountPatch = (
   fieldKey: 'payment_account_id' | 'receipt_account_id',
   value: any,
-  options: RelationOptionLike[]
+  options: RelationOptionLike[],
+  values: Record<string, any> = {}
 ) => {
   const { selectedId, selectedModule } = getSelectedRelationModule(value, options);
   const prefix = fieldKey === 'payment_account_id' ? 'payment' : 'receipt';
+  const resolvedModule = selectedModule || inferSelectedAccountModule(selectedId, values, prefix);
   return {
-    [`${prefix}_bank_account_id`]: selectedModule === 'bank_accounts' && selectedId ? selectedId : null,
-    [`${prefix}_cash_box_id`]: selectedModule === 'cash_boxes' && selectedId ? selectedId : null,
-    [`${prefix}_petty_fund_id`]: selectedModule === 'petty_funds' && selectedId ? selectedId : null,
+    [`${prefix}_bank_account_id`]: resolvedModule === 'bank_accounts' && selectedId ? selectedId : null,
+    [`${prefix}_cash_box_id`]: resolvedModule === 'cash_boxes' && selectedId ? selectedId : null,
+    [`${prefix}_petty_fund_id`]: resolvedModule === 'petty_funds' && selectedId ? selectedId : null,
   } as Record<string, string | null>;
 };
 
@@ -38,6 +57,8 @@ export const normalizeModuleFormValues = (
     const treasuryAccountId = values.bank_account_id || values.cash_box_id || values.petty_fund_id || null;
     const paymentTransferAccountId = values.payment_bank_account_id || values.payment_cash_box_id || values.payment_petty_fund_id || null;
     const receiptTransferAccountId = values.receipt_bank_account_id || values.receipt_cash_box_id || values.receipt_petty_fund_id || null;
+    const paymentAccountId = paymentTransferAccountId || (operationType === 'payment' ? treasuryAccountId : null);
+    const receiptAccountId = receiptTransferAccountId || (operationType === 'receipt' ? treasuryAccountId : null);
     const assigneeId = values.assignee_id || values.employee_id || null;
     const assigneeType = values.assignee_type || (values.assignee_role_id ? 'role' : assigneeId ? 'user' : null);
     const imageUrl = values.image_url || values.attachment_url || null;
@@ -49,12 +70,8 @@ export const normalizeModuleFormValues = (
       assignee_type: assigneeType,
       assignee_role_id: assigneeType === 'role' ? (values.assignee_role_id || assigneeId || null) : (values.assignee_role_id || null),
       bank_account_id: treasuryAccountId,
-      payment_account_id: operationType === 'transfer'
-        ? paymentTransferAccountId
-        : (operationType === 'payment' ? treasuryAccountId : null),
-      receipt_account_id: operationType === 'transfer'
-        ? receiptTransferAccountId
-        : (operationType === 'receipt' ? treasuryAccountId : null),
+      payment_account_id: paymentAccountId,
+      receipt_account_id: receiptAccountId,
     };
   }
 
@@ -184,8 +201,8 @@ export const transformModulePayloadForSave = (
   if (operationType === 'transfer') {
     Object.assign(
       payload,
-      getTransferAccountPatch('payment_account_id', payload.payment_account_id, relationOptions.payment_account_id || []),
-      getTransferAccountPatch('receipt_account_id', payload.receipt_account_id, relationOptions.receipt_account_id || [])
+      getTransferAccountPatch('payment_account_id', payload.payment_account_id, relationOptions.payment_account_id || [], payload),
+      getTransferAccountPatch('receipt_account_id', payload.receipt_account_id, relationOptions.receipt_account_id || [], payload)
     );
     payload.bank_account_id = null;
     payload.cash_box_id = null;
@@ -203,15 +220,17 @@ export const transformModulePayloadForSave = (
     const sourceFieldKey = operationType === 'receipt' ? 'receipt_account_id' : 'payment_account_id';
     const sourceValue = payload[sourceFieldKey];
     const { selectedId, selectedModule } = getSelectedRelationModule(sourceValue, relationOptions[sourceFieldKey] || []);
-    payload.bank_account_id = selectedModule === 'bank_accounts' && selectedId ? selectedId : null;
-    payload.cash_box_id = selectedModule === 'cash_boxes' && selectedId ? selectedId : null;
-    payload.petty_fund_id = selectedModule === 'petty_funds' && selectedId ? selectedId : null;
-    payload.payment_bank_account_id = null;
-    payload.payment_cash_box_id = null;
-    payload.payment_petty_fund_id = null;
-    payload.receipt_bank_account_id = null;
-    payload.receipt_cash_box_id = null;
-    payload.receipt_petty_fund_id = null;
+    const prefix = operationType === 'receipt' ? 'receipt' : 'payment';
+    const resolvedModule = selectedModule || inferSelectedAccountModule(selectedId, payload, prefix);
+    payload.bank_account_id = null;
+    payload.cash_box_id = null;
+    payload.petty_fund_id = null;
+    payload.payment_bank_account_id = operationType === 'payment' && resolvedModule === 'bank_accounts' && selectedId ? selectedId : null;
+    payload.payment_cash_box_id = operationType === 'payment' && resolvedModule === 'cash_boxes' && selectedId ? selectedId : null;
+    payload.payment_petty_fund_id = operationType === 'payment' && resolvedModule === 'petty_funds' && selectedId ? selectedId : null;
+    payload.receipt_bank_account_id = operationType === 'receipt' && resolvedModule === 'bank_accounts' && selectedId ? selectedId : null;
+    payload.receipt_cash_box_id = operationType === 'receipt' && resolvedModule === 'cash_boxes' && selectedId ? selectedId : null;
+    payload.receipt_petty_fund_id = operationType === 'receipt' && resolvedModule === 'petty_funds' && selectedId ? selectedId : null;
   }
 
   payload.image_url = imageUrl;

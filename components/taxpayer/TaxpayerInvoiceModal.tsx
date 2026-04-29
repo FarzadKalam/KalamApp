@@ -24,6 +24,7 @@ type TaxpayerSubmission = {
   created_at?: string | null;
   request_payload?: any;
   response_payload?: any;
+  integration_mode?: string | null;
 };
 
 type Props = {
@@ -157,7 +158,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
     try {
       const { data, error } = await supabase
         .from('taxpayer_invoice_submissions')
-        .select('id,taxid,uid,reference_number,status,error_message,sent_at,last_inquiry_at,created_at,request_payload,response_payload')
+        .select('id,taxid,uid,reference_number,status,error_message,sent_at,last_inquiry_at,created_at,request_payload,response_payload,integration_mode')
         .eq('invoice_id', invoiceId)
         .order('created_at', { ascending: false });
       if (error) throw error;
@@ -263,6 +264,12 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
       },
       { title: 'مرحله', key: 'debug_stage', render: (_: unknown, record: TaxpayerSubmission) => getSubmissionDebug(record).stage || '-' },
       { title: 'شماره مالیاتی', dataIndex: 'taxid', key: 'taxid', render: (value: string) => value || '-' },
+      {
+        title: 'مسیر',
+        dataIndex: 'integration_mode',
+        key: 'integration_mode',
+        render: (value: string) => value === 'no_certificate_legacy' ? 'بدون گواهی' : value === 'certificate_v2' ? 'نسخه ۲' : '-',
+      },
       { title: 'UID', dataIndex: 'uid', key: 'uid', render: (value: string) => value || '-' },
       { title: 'رسید', dataIndex: 'reference_number', key: 'reference_number', render: (value: string) => value || '-' },
       { title: 'ارسال', dataIndex: 'sent_at', key: 'sent_at', render: formatDateTime },
@@ -274,7 +281,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
           <Button
             size="small"
             icon={<ReloadOutlined />}
-            disabled={!record.uid}
+            disabled={!record.uid && !record.reference_number && !record.taxid}
             loading={inquiringId === record.id}
             onClick={() => void handleInquiry(record.id)}
           >

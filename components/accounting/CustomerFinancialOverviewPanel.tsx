@@ -35,7 +35,7 @@ type TimelineRow = {
 };
 
 const FINAL_SALES_INVOICE_STATUSES = new Set(['confirmed', 'final', 'settled', 'completed']);
-const FINAL_PAYMENT_STATUSES = new Set(['', 'received', 'paid', 'cleared']);
+const FINAL_PAYMENT_STATUSES = new Set(['', 'received', 'paid', 'approved', 'cleared']);
 const FAILED_CHEQUE_STATUSES = new Set(['bounced', 'returned']);
 
 const PAYMENT_TYPE_LABEL: Record<string, string> = {

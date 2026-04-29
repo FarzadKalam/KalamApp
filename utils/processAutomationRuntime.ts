@@ -116,6 +116,8 @@ const buildAutomationActionRecord = (
     source_module_id: sourceModuleId || sourceLink.moduleId || '',
     source_record_id: sourceLink.recordId ?? '',
     process_group_id: task?.process_group_id ?? parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id ?? '',
+    process_run_id: task?.process_run_id ?? recurrence?.process_run_id ?? '',
+    process_run_stage_id: task?.process_run_stage_id ?? recurrence?.process_run_stage_id ?? '',
     process_links: processLinks,
   };
   customFields.forEach((field) => {
@@ -412,30 +414,57 @@ const resolveCounterpartyBotChatIdsFromSource = async (
 
 const getSameProcessTasks = async (task: Record<string, any>) => {
   const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+  const processRunId = String(task?.process_run_id || recurrence?.process_run_id || '').trim();
   const processGroupId = String(task?.process_group_id || recurrence?.process_group?.id || '').trim();
   const sourceLink = resolveTaskSourceLink(task);
-
-  let query = supabase
-    .from('tasks')
-    .select('id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, process_group_id, recurrence_info, source_module_id, source_record_id')
-    .neq('id', String(task?.id || ''));
-
-  if (processGroupId) {
-    query = query.eq('process_group_id', processGroupId);
-  } else if (sourceLink.moduleId && sourceLink.recordId) {
-    query = query
-      .eq('source_module_id', sourceLink.moduleId)
-      .eq('source_record_id', sourceLink.recordId);
-    if (task?.source_template_id) {
-      query = query.eq('source_template_id', task.source_template_id);
+  const baseSelect = 'id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, process_group_id, process_run_id, process_run_stage_id, recurrence_info, source_module_id, source_record_id, source_template_id, source_stage_sort_order';
+  const fallbackSelect = 'id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, process_group_id, recurrence_info, source_module_id, source_record_id, source_template_id, source_stage_sort_order';
+  const fetchTasks = async (applyScope: (query: any) => any, select = baseSelect) => {
+    let query = supabase
+      .from('tasks')
+      .select(select)
+      .neq('id', String(task?.id || ''));
+    query = applyScope(query);
+    const { data, error } = await query.order('sort_order', { ascending: true });
+    if (error) throw error;
+    return Array.isArray(data) ? data.map((row: any) => withProcessTaskCustomFieldValues(row)) : [];
+  };
+  const fetchTasksWithColumnFallback = async (applyScope: (query: any) => any) => {
+    try {
+      return await fetchTasks(applyScope, baseSelect);
+    } catch (error) {
+      if (!isMissingColumnError(error, 'process_run_id') && !isMissingColumnError(error, 'process_run_stage_id')) {
+        throw error;
+      }
+      return fetchTasks(applyScope, fallbackSelect);
     }
-  } else {
-    return [] as Record<string, any>[];
+  };
+
+  if (processRunId) {
+    try {
+      return await fetchTasksWithColumnFallback((query) => query.eq('process_run_id', processRunId));
+    } catch (error) {
+      if (!isMissingColumnError(error, 'process_run_id')) throw error;
+    }
   }
 
-  const { data, error } = await query.order('sort_order', { ascending: true });
-  if (error) throw error;
-  return Array.isArray(data) ? data.map((row: any) => withProcessTaskCustomFieldValues(row)) : [];
+  if (processGroupId) {
+    return fetchTasksWithColumnFallback((query) => query.eq('process_group_id', processGroupId));
+  }
+
+  if (sourceLink.moduleId && sourceLink.recordId) {
+    return fetchTasksWithColumnFallback((query) => {
+      let scoped = query
+        .eq('source_module_id', sourceLink.moduleId)
+        .eq('source_record_id', sourceLink.recordId);
+      if (task?.source_template_id) {
+        scoped = scoped.eq('source_template_id', task.source_template_id);
+      }
+      return scoped;
+    });
+  }
+
+  return [] as Record<string, any>[];
 };
 
 const fetchSourceRecord = async (task: Record<string, any>) => {
@@ -1030,6 +1059,9 @@ const logProcessAutomationRun = async ({
       process_automation_rule_name: String(rule?.name || '').trim() || null,
       process_automation_trigger_type: String(rule?.trigger_type || '').trim() || null,
       process_automation_event: event,
+      process_run_id: String(task?.process_run_id || parseRecurrenceInfo(task?.recurrence_info)?.process_run_id || '').trim() || null,
+      process_group_id: String(task?.process_group_id || parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id || '').trim() || null,
+      process_run_stage_id: String(task?.process_run_stage_id || parseRecurrenceInfo(task?.recurrence_info)?.process_run_stage_id || '').trim() || null,
       action_count: Array.isArray(rule?.actions) ? rule.actions.length : 0,
       actor_id: String(currentUser?.id || '').trim() || null,
     },

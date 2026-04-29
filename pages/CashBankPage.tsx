@@ -294,6 +294,18 @@ const CashBankPage: React.FC = () => {
   }, [loadData]);
 
   useEffect(() => {
+    const isSourceBackedCashBankOperation = (op: any) => {
+      const metadata = op?.metadata && typeof op.metadata === 'object' ? op.metadata : null;
+      if (metadata?.is_auto_generated === true) return true;
+      return Boolean(
+        op?.sales_invoice_id ||
+        op?.purchase_invoice_id ||
+        op?.expense_document_id ||
+        op?.employee_advance_id ||
+        op?.payroll_slip_id
+      );
+    };
+
     const fromSales = (salesInvoices || []).flatMap((inv: any) =>
       (Array.isArray(inv?.payments) ? inv.payments : []).map(
         (p: any, idx: number): RowItem => {
@@ -352,7 +364,9 @@ const CashBankPage: React.FC = () => {
       )
     );
 
-    const fromOps = (operations || []).map((op: any): RowItem => {
+    const fromOps = (operations || [])
+      .filter((op: any) => !isSourceBackedCashBankOperation(op))
+      .map((op: any): RowItem => {
       const operationType = String(op?.operation_type || '').trim();
       const accountId = String(op?.bank_account_id || op?.cash_box_id || op?.petty_fund_id || '').trim();
       const account = financialAccountById[accountId];

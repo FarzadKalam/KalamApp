@@ -5,6 +5,7 @@ import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { dispatchTaskRuntimeUpdated } from './taskRuntimeEvents';
 import { syncProjectStatusWithProcessState } from './projectProcessStatus';
 import { resolveTaskSourceLink } from './taskMeta';
+import { syncProcessRunStageFromTask } from './processRunRuntime';
 
 type TaskAutomationActor = {
   id?: string | null;
@@ -19,7 +20,7 @@ type UpdateTaskStatusWithAutomationArgs = {
 };
 
 export const TASK_AUTOMATION_SELECT =
-  'id, name, status, due_date, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, source_template_id, source_module_id, source_record_id, process_group_id, recurrence_info, start_date, completed_at, actual_start_at, actual_end_at, schedule_variance_hours';
+  'id, name, status, due_date, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, source_template_id, source_module_id, source_record_id, process_group_id, process_run_id, process_run_stage_id, recurrence_info, start_date, completed_at, actual_start_at, actual_end_at, schedule_variance_hours';
 
 const TASK_AUTOMATION_FALLBACK_SELECT =
   'id, name, status, due_date, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, source_template_id, source_module_id, source_record_id, process_group_id, recurrence_info, start_date, completed_at';
@@ -28,6 +29,8 @@ const OPTIONAL_TASK_RUNTIME_COLUMNS = new Set([
   'actual_start_at',
   'actual_end_at',
   'schedule_variance_hours',
+  'process_run_id',
+  'process_run_stage_id',
 ]);
 
 const getErrorText = (error: any) =>
@@ -164,6 +167,11 @@ export const updateTaskStatusWithAutomation = async ({
     task_status_label: nextStatusLabel || String(nextStatus || '').trim(),
   } as Record<string, any>;
 
+  await syncProcessRunStageFromTask({
+    supabaseClient: supabase,
+    task: updatedTask,
+  });
+
   await runProcessAutomationsForTaskEvent({
     task: updatedTask,
     event: 'update',
@@ -232,6 +240,11 @@ export const updateTaskDueDateWithAutomation = async ({
     ...currentTask,
     ...payload,
   } as Record<string, any>;
+
+  await syncProcessRunStageFromTask({
+    supabaseClient: supabase,
+    task: updatedTask,
+  });
 
   await runProcessAutomationsForTaskEvent({
     task: updatedTask,
