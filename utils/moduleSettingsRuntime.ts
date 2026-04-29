@@ -1,5 +1,5 @@
 import { MODULES } from '../moduleRegistry';
-import { BlockDefinition, ModuleDefinition, ModuleField } from '../types';
+import { BlockDefinition, BlockType, FieldLocation, ModuleDefinition, ModuleField } from '../types';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE, type ModuleSettingsConfig, type ModuleSettingsStore } from '../pages/Settings/moduleSettingsTypes';
 import { fetchSessionBootstrap } from './sessionCache';
 import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
@@ -40,6 +40,58 @@ const baseModuleRegistrySnapshot: Record<string, Pick<ModuleDefinition, 'fields'
 );
 
 const moduleConditionalDisplaySnapshot: Record<string, ConditionalFieldSettings> = {};
+
+const ATTENDANCE_LOG_DETAIL_FIELD_ORDER: Record<string, number> = {
+  presence_minutes: 1,
+  presence_hours: 2,
+  actual_check_in_time: 3,
+  actual_check_out_time: 4,
+  manual_check_in_time: 5,
+  manual_check_out_time: 6,
+  location_text: 7,
+  notes: 8,
+};
+
+const normalizeAttendanceLogsDetailSchema = (fields: ModuleField[]) => {
+  const allowedDetailFieldKeys = new Set(Object.keys(ATTENDANCE_LOG_DETAIL_FIELD_ORDER));
+  const normalizedFields = (fields || []).map((field) => {
+    const fieldKey = String(field?.key || '').trim();
+    if (allowedDetailFieldKeys.has(fieldKey)) {
+      return {
+        ...field,
+        location: FieldLocation.BLOCK,
+        blockId: 'attendance_info',
+        order: ATTENDANCE_LOG_DETAIL_FIELD_ORDER[fieldKey],
+      };
+    }
+
+    if (
+      String(field?.location || '') === FieldLocation.BLOCK
+      || ['base', 'legacy_import', 'runtime', 'attendance_info'].includes(String(field?.blockId || ''))
+    ) {
+      return {
+        ...field,
+        location: FieldLocation.BLOCK,
+        blockId: 'attendance_hidden',
+        isTableColumn: fieldKey === 'closure_status' ? false : field.isTableColumn,
+      };
+    }
+
+    return field;
+  });
+
+  const normalizedBlocks = [{
+    id: 'attendance_info',
+    titles: { fa: 'اطلاعات تردد', en: 'Attendance Info' },
+    type: BlockType.FIELD_GROUP,
+    order: 1,
+  }];
+
+  return {
+    fields: normalizedFields,
+    blocks: normalizedBlocks,
+  };
+};
 
 const normalizeFields = (fields: ModuleField[]) =>
   [...(fields || [])]
@@ -82,8 +134,13 @@ export const applyModuleSettingsStoreToRegistry = (
     const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
     const resolvedFields = mergeRequiredTagsField(baseFields, incomingFields);
 
-    moduleDef.fields = normalizeFields(resolvedFields);
-    moduleDef.blocks = normalizeBlocks(cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[]));
+    const resolvedBlocks = cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[]);
+    const normalizedSchema = moduleId === 'attendance_logs'
+      ? normalizeAttendanceLogsDetailSchema(resolvedFields)
+      : { fields: resolvedFields, blocks: resolvedBlocks };
+
+    moduleDef.fields = normalizeFields(normalizedSchema.fields);
+    moduleDef.blocks = normalizeBlocks(normalizedSchema.blocks);
     moduleConditionalDisplaySnapshot[moduleId] = buildResolvedConditionalFieldSettings(
       { id: moduleId, fields: moduleDef.fields } as Pick<ModuleDefinition, 'id' | 'fields'>,
       incoming?.conditionalDisplay

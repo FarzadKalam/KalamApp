@@ -84,6 +84,7 @@ import { serializeNoteContent } from '../utils/noteContent';
 import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
+import { enrichAttendancePresenceRows } from '../utils/attendancePresence';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
@@ -429,6 +430,56 @@ const ModuleShow: React.FC = () => {
     () => normalizeModuleFormValues(moduleId, data || {}),
     [data, moduleId]
   );
+  useEffect(() => {
+    if (moduleId !== 'attendance_logs' || !id || !data) return;
+    if (displayData?.presence_minutes !== null && displayData?.presence_minutes !== undefined && displayData?.presence_minutes !== '') return;
+    if (displayData?.presence_hours !== null && displayData?.presence_hours !== undefined && displayData?.presence_hours !== '') return;
+
+    const attendanceDate = String(displayData?.attendance_date || '').trim().slice(0, 10);
+    if (!attendanceDate) return;
+
+    const run = async () => {
+      let query = supabase
+        .from('attendance_logs')
+        .select('id, org_id, employee_id, related_profile_id, assignee_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, presence_minutes, presence_hours')
+        .eq('attendance_date', attendanceDate);
+
+      if (displayData?.org_id) query = query.eq('org_id', displayData.org_id);
+      if (displayData?.employee_id) {
+        query = query.eq('employee_id', displayData.employee_id);
+      } else if (displayData?.related_profile_id) {
+        query = query.eq('related_profile_id', displayData.related_profile_id);
+      } else if (displayData?.assignee_id) {
+        query = query.eq('assignee_id', displayData.assignee_id);
+      } else {
+        return;
+      }
+
+      const { data: siblingRows, error } = await query.limit(50);
+      if (error || !Array.isArray(siblingRows) || siblingRows.length === 0) return;
+      const enrichedRows = enrichAttendancePresenceRows(siblingRows);
+      const currentRow = enrichedRows.find((row: any) => String(row?.id || '') === String(id));
+      if (!currentRow?.presence_minutes && !currentRow?.presence_hours) return;
+      setData((prev: any) => ({
+        ...(prev || {}),
+        presence_minutes: currentRow.presence_minutes ?? prev?.presence_minutes,
+        presence_hours: currentRow.presence_hours ?? prev?.presence_hours,
+      }));
+    };
+
+    void run();
+  }, [
+    data,
+    displayData?.assignee_id,
+    displayData?.attendance_date,
+    displayData?.employee_id,
+    displayData?.org_id,
+    displayData?.presence_hours,
+    displayData?.presence_minutes,
+    displayData?.related_profile_id,
+    id,
+    moduleId,
+  ]);
   const conditionalFieldRuntime = useConditionalFieldRuntime(moduleConfig || null, displayData || {});
   
   const [, setLinkedBomData] = useState<any>(null);

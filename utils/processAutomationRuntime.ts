@@ -27,7 +27,8 @@ import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { serializeNoteContent } from './noteContent';
 import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './intervalSchedule';
-import { fetchAssigneeDirectory } from './referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from './referenceData';
+import { collectTemplateDynamicOptionCategories } from './messageTemplateRenderer';
 
 type AutomationActor = {
   id?: string | null;
@@ -111,6 +112,7 @@ const buildAutomationActionRecord = (
     task_status: task?.status ?? '',
     status_label: getTaskStatusLabel(task?.status, task),
     task_status_label: getTaskStatusLabel(task?.status, task),
+    task_priority: task?.priority ?? '',
     task_due_date: task?.due_date ?? '',
     task_image_url: task?.image_url ?? '',
     source_module_id: sourceModuleId || sourceLink.moduleId || '',
@@ -120,6 +122,11 @@ const buildAutomationActionRecord = (
     process_run_stage_id: task?.process_run_stage_id ?? recurrence?.process_run_stage_id ?? '',
     process_links: processLinks,
   };
+  (MODULES.tasks?.fields || []).forEach((field: any) => {
+    const key = String(field?.key || '').trim();
+    if (!key) return;
+    merged[`${TASK_AUTOMATION_FIELD_PREFIX}${key}`] = task?.[key];
+  });
   customFields.forEach((field) => {
     const key = String(field?.key || '').trim();
     if (!key) return;
@@ -171,12 +178,18 @@ const isRunnableProcessAutomationCondition = (condition: WorkflowCondition) => {
   return !isBlankConditionValue(condition?.value);
 };
 
-const renderAutomationTemplateWithBoldMarkers = (
+const renderAutomationTemplateWithBoldMarkers = async (
   template: string,
   record: Record<string, any>,
   moduleId?: string | null,
   assigneeDirectory?: Awaited<ReturnType<typeof fetchAssigneeDirectory>> | null
-) => renderTemplateText(template, record, { moduleId, bold: true, assigneeDirectory });
+) => {
+  const dynamicCategories = collectTemplateDynamicOptionCategories(template, moduleId);
+  const optionLabelMaps = dynamicCategories.length > 0
+    ? await fetchDynamicOptionsMap(supabase, dynamicCategories).catch(() => ({}))
+    : {};
+  return renderTemplateText(template, record, { moduleId, bold: true, assigneeDirectory, optionLabelMaps });
+};
 
 const templateMayNeedAssigneeDirectory = (template: string) =>
   /\{\{\s*[^}]*assignee[^}]*\s*\}\}/i.test(String(template || ''));
@@ -678,12 +691,12 @@ const insertAutomationNote = async (
   const assigneeDirectory = templateMayNeedAssigneeDirectory(noteTemplate)
     ? await fetchAssigneeDirectory(supabase).catch(() => null)
     : null;
-  const noteText = renderAutomationTemplateWithBoldMarkers(
+  const noteText = (await renderAutomationTemplateWithBoldMarkers(
     noteTemplate,
     actionRecord,
     resolvedModuleId,
     assigneeDirectory
-  ).trim();
+  )).trim();
   const attachments = await resolveNoteAttachmentsFromFields({
     currentRecord: actionRecord,
     moduleId: resolvedModuleId,

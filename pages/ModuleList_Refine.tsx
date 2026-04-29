@@ -63,6 +63,7 @@ import {
 } from "../utils/moduleListLive";
 import { resolveCashBankSourceNavigation } from "../utils/cashBankNavigation";
 import { normalizeModuleFormValues } from "../utils/moduleFormRuntime";
+import { enrichAttendancePresenceRows } from "../utils/attendancePresence";
 import { backfillOperationalCashBankOperations } from "../utils/cashBankBackfill";
 import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows";
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
@@ -162,6 +163,7 @@ const sanitizeModuleVisibleColumns = (
     .filter(Boolean)
     .filter((key) => {
       if (moduleId === "cash_bank_operations" && CASH_BANK_LEGACY_ACCOUNT_KEYS.has(key)) return false;
+      if (moduleId === "attendance_logs" && key === "closure_status") return false;
       if (!allowedFieldKeys.has(key) || seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1471,6 +1473,7 @@ export const ModuleListRefine: React.FC<{
   }, [allowedRoleIds, allowedUserIds, canViewModule, currentOrgId, currentUserId, currentUserRoleId, effectiveAllData, recordScope, resolvedModuleId]);
 
   const normalizedAccessibleData = useMemo(() => {
+    if (resolvedModuleId === "attendance_logs") return enrichAttendancePresenceRows(accessibleData);
     if (resolvedModuleId !== "cash_bank_operations") return accessibleData;
     return accessibleData.map((record: any) => normalizeModuleFormValues(resolvedModuleId, record));
   }, [accessibleData, resolvedModuleId]);

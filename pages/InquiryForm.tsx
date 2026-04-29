@@ -378,10 +378,13 @@ const InquiryForm = () => {
     [currentEmployee?.id, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
   const conditionalDisplaySettings = useMemo(() => {
-    if (publicForm?.conditionalDisplay?.rules?.length) {
-      return normalizeConditionalFieldSettings(publicForm.conditionalDisplay);
-    }
-    return getResolvedModuleConditionalDisplay(publicForm?.targetModuleId);
+    const moduleSettings = getResolvedModuleConditionalDisplay(publicForm?.targetModuleId);
+    return normalizeConditionalFieldSettings({
+      rules: [
+        ...(moduleSettings.rules || []),
+        ...(publicForm?.conditionalDisplay?.rules || []),
+      ],
+    });
   }, [publicForm?.conditionalDisplay, publicForm?.targetModuleId]);
   const publicModuleFields = useMemo(
     () => (publicForm?.fields || []).map((field) => buildPublicModuleField(field, publicForm?.targetModuleId)),
@@ -1101,6 +1104,10 @@ const InquiryForm = () => {
         if (currentEmployee?.id) {
           acc[field.field_key] = currentEmployee.id;
         }
+        return acc;
+      }
+      const targetFieldKey = String(field.target_field_key || field.field_key || "").trim();
+      if (targetFieldKey && publicFieldRuntimeStateMap[targetFieldKey]?.visible === false) {
         return acc;
       }
       const value = normalizePublicFieldValue(field, values[field.field_key]);

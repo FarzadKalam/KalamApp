@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
-import { formatTemplateValueByField } from './messageTemplateRenderer';
+import { collectTemplateDynamicOptionCategories, formatTemplateValueByField } from './messageTemplateRenderer';
 import { normalizeNoteScope } from './noteScope';
 import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
@@ -18,7 +18,7 @@ import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './inte
 import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { NoteAttachment, serializeNoteContent } from './noteContent';
-import { fetchAssigneeDirectory } from './referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from './referenceData';
 import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { getRecordTitle } from './recordTitle';
@@ -245,6 +245,10 @@ const renderWorkflowTemplate = async (
   const assigneeDirectory = templateMayNeedAssigneeDirectory(rawTemplate)
     ? await fetchAssigneeDirectory(supabase).catch(() => null)
     : null;
+  const dynamicCategories = collectTemplateDynamicOptionCategories(rawTemplate, moduleId);
+  const optionLabelMaps = dynamicCategories.length > 0
+    ? await fetchDynamicOptionsMap(supabase, dynamicCategories).catch(() => ({}))
+    : {};
   const matches = Array.from(rawTemplate.matchAll(/\{\{\s*([^}]+)\s*\}\}/g));
   let rendered = rawTemplate;
   for (const match of matches) {
@@ -261,6 +265,7 @@ const renderWorkflowTemplate = async (
       fieldKey,
       sourceRecord: record,
       assigneeDirectory,
+      optionLabelMaps,
     }).trim();
     rendered = rendered.split(fullToken).join(options.bold && text ? `**${text}**` : text);
   }
