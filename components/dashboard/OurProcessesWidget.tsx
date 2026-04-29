@@ -33,6 +33,13 @@ const MIN_TASK_FETCH_LIMIT = 180;
 const MAX_TASK_FETCH_LIMIT = 600;
 const MAX_PROCESS_RECORD_FETCH_PER_MODULE = 40;
 const COMPLETED_PROCESS_TASK_STATUSES = new Set(['done', 'completed', 'confirmed', 'final', 'settled']);
+const PROCESS_RECORD_SCAN_EXCLUDED_MODULE_IDS = new Set([
+  'automation_execution_reports',
+  'sms_delivery_reports',
+  'voip_call_reports',
+  'petty_funds',
+  'surveys',
+]);
 
 const TASK_PROCESS_COLUMNS = [
   'id',
@@ -201,6 +208,8 @@ const getProcessModuleIds = (access: CurrentUserRecordAccessContext) =>
     .filter((module: any) => {
       const moduleId = String(module?.id || '').trim();
       if (!moduleId || !module?.table) return false;
+      if (PROCESS_RECORD_SCAN_EXCLUDED_MODULE_IDS.has(moduleId)) return false;
+      if (module?.systemManaged || module?.disableDetailView) return false;
       if (access.permissions?.[moduleId]?.view === false) return false;
       const fieldKeys = new Set((module?.fields || []).map((field: any) => String(field?.key || '').trim()));
       return fieldKeys.has('process_template_id') || fieldKeys.has('execution_process_draft');

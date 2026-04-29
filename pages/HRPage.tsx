@@ -3022,7 +3022,7 @@ const HRPage: React.FC = () => {
     return <Tag color={option?.color || 'default'}>{option?.label || normalized}</Tag>;
   };
 
-  const commissionInvoiceRows = useMemo(() => {
+  const commissionInvoiceRows = (() => {
     const grouped = new Map<string, CommissionPreviewRow[]>();
     commissionRows.forEach((row) => {
       grouped.set(row.invoice_id, [...(grouped.get(row.invoice_id) || []), row]);
@@ -3052,7 +3052,7 @@ const HRPage: React.FC = () => {
         groups: rows,
       };
     });
-  }, [commissionRows]);
+  })();
 
   const commissionGroupColumns = [
     {
