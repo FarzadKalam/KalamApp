@@ -528,7 +528,7 @@ const WebFormBuilderPage: React.FC = () => {
     message.error("دانلود QR ناموفق بود.");
   }, [form, message, watchedSlug]);
 
-  const renderDefaultValueInput = (fieldIndex: number) => {
+  const renderDefaultValueInput = (fieldIndex: number, listFieldName: number) => {
     const targetFieldKey = String(watchedFields?.[fieldIndex]?.target_field_key || "").trim();
     const targetFieldItem = targetFieldMap[targetFieldKey];
     const fieldType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
@@ -542,7 +542,7 @@ const WebFormBuilderPage: React.FC = () => {
     if (fieldType === "relation") {
       return (
         <div className="space-y-2">
-          <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+          <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
             <Select
               allowClear
               showSearch
@@ -553,11 +553,11 @@ const WebFormBuilderPage: React.FC = () => {
             />
           </Form.Item>
           {canUseCurrentEmployeeDefault ? (
-            <Form.Item name={["fields", fieldIndex, "default_to_current_employee"]} valuePropName="checked" className="mb-0">
+            <Form.Item name={[listFieldName, "default_to_current_employee"]} valuePropName="checked" className="mb-0">
               <Checkbox
                 onChange={(event) => {
                   if (event.target.checked) {
-                    form.setFieldValue(["fields", fieldIndex, "default_value"], undefined);
+                    form.setFieldValue(["fields", listFieldName, "default_value"], undefined);
                   }
                 }}
               >
@@ -571,7 +571,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "select") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <Select
             allowClear
             showSearch
@@ -585,7 +585,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "checkbox") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]} valuePropName="checked">
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]} valuePropName="checked">
           <Checkbox>به‌صورت پیش‌فرض فعال باشد</Checkbox>
         </Form.Item>
       );
@@ -593,7 +593,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "multi_select") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <Select
             mode="multiple"
             allowClear
@@ -608,7 +608,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "number") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <InputNumber className="!w-full" placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
         </Form.Item>
       );
@@ -616,7 +616,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "date") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <Input type="date" placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
         </Form.Item>
       );
@@ -624,7 +624,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "time") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <Input type="time" placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
         </Form.Item>
       );
@@ -632,7 +632,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "datetime") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <Input type="datetime-local" placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
         </Form.Item>
       );
@@ -640,7 +640,7 @@ const WebFormBuilderPage: React.FC = () => {
 
     if (fieldType === "location") {
       return (
-        <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+        <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <Input placeholder="مثال: 35.6892, 51.3890" />
         </Form.Item>
       );
@@ -655,7 +655,7 @@ const WebFormBuilderPage: React.FC = () => {
     }
 
     return (
-      <Form.Item label="مقدار پیش‌فرض" name={["fields", fieldIndex, "default_value"]}>
+      <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
         <Input placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
       </Form.Item>
     );
@@ -999,7 +999,7 @@ const WebFormBuilderPage: React.FC = () => {
                               <InputNumber className="!w-full" placeholder="ترتیب" />
                             </Form.Item>
 
-                            {renderDefaultValueInput(index)}
+                            {renderDefaultValueInput(index, field.name)}
 
                             <Form.Item name={[field.name, "is_required"]} valuePropName="checked" className="mb-0">
                               <Checkbox>اجباری برای ثبت‌کننده</Checkbox>

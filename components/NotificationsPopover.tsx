@@ -6,7 +6,7 @@ import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from '../utils/referenceData';
+import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
 import QrScanPopover from './QrScanPopover';
@@ -31,7 +31,7 @@ import { sendSmsViaGateway } from '../utils/smsGateway';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import AssistantPanel from './ai/AssistantPanel';
 import { renderRecordTemplate } from '../utils/recordMessaging';
-import { collectTemplateDynamicOptionCategories } from '../utils/messageTemplateRenderer';
+import { resolveTemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 import MessageComposerModal from './MessageComposerModal';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
@@ -61,10 +61,8 @@ const renderNotificationTemplate = async (
 ) => {
   const normalizedModuleId = String(moduleId || '').trim();
   if (!normalizedModuleId || !record) return String(template || '');
-  const categories = collectTemplateDynamicOptionCategories(template, normalizedModuleId);
-  const optionLabelMaps = categories.length > 0
-    ? await fetchDynamicOptionsMap(supabase, categories).catch(() => ({}))
-    : {};
+  const optionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, template, normalizedModuleId, record)
+    .catch(() => ({}));
   return renderRecordTemplate(template, record, normalizedModuleId, { optionLabelMaps });
 };
 

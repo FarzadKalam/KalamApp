@@ -139,7 +139,7 @@ const withStandardAssigneeField = (module: ModuleDefinition): ModuleDefinition =
   };
 };
 
-const BASE_MODULES: Record<string, ModuleDefinition> = {
+export const BASE_MODULES: Record<string, ModuleDefinition> = {
   products: productsConfig,
   billboards: billboardConfig,
   product_bundles: productBundlesConfig,

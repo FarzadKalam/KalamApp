@@ -27,8 +27,8 @@ import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { serializeNoteContent } from './noteContent';
 import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './intervalSchedule';
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap } from './referenceData';
-import { collectTemplateDynamicOptionCategories } from './messageTemplateRenderer';
+import { fetchAssigneeDirectory } from './referenceData';
+import { resolveTemplateOptionLabelMaps } from './messageTemplateRenderer';
 
 type AutomationActor = {
   id?: string | null;
@@ -184,10 +184,7 @@ const renderAutomationTemplateWithBoldMarkers = async (
   moduleId?: string | null,
   assigneeDirectory?: Awaited<ReturnType<typeof fetchAssigneeDirectory>> | null
 ) => {
-  const dynamicCategories = collectTemplateDynamicOptionCategories(template, moduleId);
-  const optionLabelMaps = dynamicCategories.length > 0
-    ? await fetchDynamicOptionsMap(supabase, dynamicCategories).catch(() => ({}))
-    : {};
+  const optionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, template, moduleId, record);
   return renderTemplateText(template, record, { moduleId, bold: true, assigneeDirectory, optionLabelMaps });
 };
 

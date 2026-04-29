@@ -2215,6 +2215,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 controls={false}
                 stringMode
                 inputMode="decimal"
+                suffix={fieldType === FieldType.PRICE && currencyLabel ? currencyLabel : undefined}
                 formatter={(val, info) => formatNumericForInput(resolveFormatterSourceValue(info?.input, val), true)}
                 parser={(val) => normalizeNumericString(val)}
                 onKeyDown={preventNonNumericKeyDown}

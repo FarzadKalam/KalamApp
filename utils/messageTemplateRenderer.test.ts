@@ -68,6 +68,16 @@ describe('messageTemplateRenderer option values', () => {
     expect(text).toBe('اولویت: متوسط');
   });
 
+  it('renders leave request leave_type as the Persian option label', () => {
+    const text = renderTemplateText(
+      'نوع مرخصی: {{leave_type}}',
+      { leave_type: 'daily' },
+      { moduleId: 'leave_requests' }
+    );
+
+    expect(text).toBe('نوع مرخصی: روزانه');
+  });
+
   it('renders task aliases in activity reminders as Persian option labels', () => {
     const text = renderTemplateText(
       'اولویت: {{task_priority}} - وضعیت: {{task_status}}',
@@ -89,6 +99,23 @@ describe('messageTemplateRenderer option values', () => {
     );
 
     expect(text).toBe('نوع فعالیت: تماس خروجی');
+  });
+
+  it('renders relation uid values from runtime option maps', () => {
+    const text = renderTemplateText(
+      'برند اکران: {{opening_brand_id}}',
+      { opening_brand_id: '33333333-3333-4333-8333-333333333333' },
+      {
+        moduleId: 'billboards',
+        optionLabelMaps: {
+          'field:billboards:opening_brand_id': [
+            { label: 'برند نمونه', value: '33333333-3333-4333-8333-333333333333' },
+          ],
+        },
+      }
+    );
+
+    expect(text).toBe('برند اکران: برند نمونه');
   });
 
   it('renders multi-select values as option labels', () => {

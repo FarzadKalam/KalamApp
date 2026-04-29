@@ -28,8 +28,7 @@ import AdaptiveSelectField from './AdaptiveSelectField';
 import PhoneDisplay from './PhoneDisplay';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
-import { fetchDynamicOptionsMap } from '../utils/referenceData';
-import { collectTemplateDynamicOptionCategories, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
+import { resolveTemplateOptionLabelMaps, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 
 type ReadyTextRow = {
   id: string;
@@ -168,14 +167,8 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       return;
     }
 
-    const categories = collectTemplateDynamicOptionCategories(messageText, moduleId);
-    if (categories.length === 0) {
-      setTemplateOptionLabelMaps({});
-      return;
-    }
-
     let cancelled = false;
-    fetchDynamicOptionsMap(supabase, categories)
+    resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, record || {})
       .then((maps) => {
         if (!cancelled) setTemplateOptionLabelMaps(maps);
       })
@@ -187,7 +180,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, messageText, moduleId]);
+  }, [open, messageText, moduleId, record]);
 
   const renderedPreview = useMemo(
     () => renderRecordTemplate(messageText, record || {}, moduleId, { optionLabelMaps: templateOptionLabelMaps }),
@@ -458,11 +451,8 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       return;
     }
 
-    const dynamicCategories = collectTemplateDynamicOptionCategories(messageText, moduleId);
-    const missingDynamicCategory = dynamicCategories.some((category) => !templateOptionLabelMaps[category]);
-    const finalOptionLabelMaps = dynamicCategories.length > 0 && missingDynamicCategory
-      ? await fetchDynamicOptionsMap(supabase, dynamicCategories).catch(() => ({}))
-      : templateOptionLabelMaps;
+    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, record || {})
+      .catch(() => templateOptionLabelMaps);
     const finalText = String(renderRecordTemplate(messageText, record || {}, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
     if (!finalText) {
       msg.warning('متن پیام خالی است.');

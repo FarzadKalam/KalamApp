@@ -96,7 +96,7 @@ const buildFinancialOperationalSearchValues = (targetModule: string, item: any) 
 
 const buildRelationOptionLabel = (targetModule: string, item: any, targetField: string) => {
   if (targetModule === 'customers') {
-    return String(item?.full_name || item?.[targetField] || item?.business_name || item?.system_code || item?.id || 'بدون نام').trim();
+    return String(item?.[targetField] || item?.business_name || item?.full_name || item?.system_code || item?.id || 'بدون نام').trim();
   }
 
   if (targetModule === 'cheques') {

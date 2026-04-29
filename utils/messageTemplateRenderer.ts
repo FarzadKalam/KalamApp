@@ -1,9 +1,11 @@
-import { MODULES } from '../moduleRegistry';
+import { BASE_MODULES, MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { parseProcessLinkedFieldKey } from './processTargets';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
 import { formatPersianPrice, formatPersianTime, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import { readCurrencyConfig } from './currency';
+import { fetchDynamicOptionsMap } from './referenceData';
+import { fetchRelationOptionsForField } from './relationOptions';
 
 type RenderTemplateOptions = {
   moduleId?: string | null;
@@ -26,10 +28,11 @@ type AssigneeDirectory = {
   roles?: Array<{ id: string; title?: string | null; name?: string | null }>;
 };
 
-type TemplateFieldConfig = {
+export type TemplateFieldConfig = {
   key?: string | null;
   type?: unknown;
   dynamicOptionsCategory?: string | null;
+  relationConfig?: Record<string, any> | null;
   options?: Array<{ label?: unknown; value?: unknown }>;
 };
 
@@ -41,6 +44,7 @@ type TemplateFieldContext = {
   key: string;
   fieldType: string | null;
   fieldConfig: TemplateFieldConfig | null;
+  tokenKey: string;
 };
 
 const DATE_ONLY_REGEX = /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/;
@@ -68,16 +72,27 @@ const TASK_TEMPLATE_ALIAS_KEYS: Record<string, string> = {
 
 const normalizeFieldType = (value: unknown) => String(value || '').trim().toLowerCase();
 
-const readFieldConfigFromModule = (moduleId: string | null | undefined, key: string): TemplateFieldConfig | null => {
-  const normalizedModuleId = String(moduleId || '').trim();
-  const normalizedKey = String(key || '').trim();
-  if (!normalizedModuleId || !normalizedKey) return null;
+const mergeTemplateFieldConfig = (
+  primary?: TemplateFieldConfig | null,
+  fallback?: TemplateFieldConfig | null
+): TemplateFieldConfig | null => {
+  if (!primary && !fallback) return null;
+  return {
+    ...(fallback || {}),
+    ...(primary || {}),
+    options: Array.isArray(primary?.options) && primary.options.length > 0
+      ? primary.options
+      : fallback?.options,
+    dynamicOptionsCategory: primary?.dynamicOptionsCategory || fallback?.dynamicOptionsCategory,
+    relationConfig: primary?.relationConfig || fallback?.relationConfig,
+  };
+};
 
-  const moduleConfig: any = MODULES[normalizedModuleId];
+const findFieldConfigInModule = (moduleConfig: any, key: string): TemplateFieldConfig | null => {
   if (!moduleConfig) return null;
-
   const fields = Array.isArray(moduleConfig.fields) ? moduleConfig.fields : [];
   const blocks = Array.isArray(moduleConfig.blocks) ? moduleConfig.blocks : [];
+  const normalizedKey = String(key || '').trim();
   const fallbackKey = normalizedKey.includes('.') ? normalizedKey.split('.').pop() || '' : '';
 
   const directField = fields.find((field: any) => String(field?.key || '').trim() === normalizedKey);
@@ -104,37 +119,50 @@ const readFieldConfigFromModule = (moduleId: string | null | undefined, key: str
   return null;
 };
 
+const readFieldConfigFromModule = (moduleId: string | null | undefined, key: string): TemplateFieldConfig | null => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedModuleId || !normalizedKey) return null;
+
+  return mergeTemplateFieldConfig(
+    findFieldConfigInModule(MODULES[normalizedModuleId], normalizedKey),
+    findFieldConfigInModule(BASE_MODULES[normalizedModuleId], normalizedKey)
+  );
+};
+
 const createFieldContext = (
   moduleId: string | null | undefined,
   key: string,
-  fieldConfig?: TemplateFieldConfig | null
+  fieldConfig?: TemplateFieldConfig | null,
+  tokenKey?: string | null
 ): TemplateFieldContext => ({
   moduleId: String(moduleId || '').trim() || null,
   key: String(key || '').trim(),
   fieldConfig: fieldConfig || null,
   fieldType: fieldConfig?.type ? normalizeFieldType(fieldConfig.type) : null,
+  tokenKey: String(tokenKey || key || '').trim(),
 });
 
 const resolveFieldContext = (moduleId: string | null | undefined, fieldKey: string | null | undefined): TemplateFieldContext => {
   const normalizedFieldKey = String(fieldKey || '').trim();
   const defaultModuleId = String(moduleId || '').trim();
   if (!normalizedFieldKey) {
-    return createFieldContext(defaultModuleId || null, '');
+    return createFieldContext(defaultModuleId || null, '', null, normalizedFieldKey);
   }
 
   if (normalizedFieldKey.startsWith(TASK_AUTOMATION_FIELD_PREFIX)) {
     const taskKey = normalizedFieldKey.slice(TASK_AUTOMATION_FIELD_PREFIX.length);
-    return createFieldContext('tasks', taskKey, readFieldConfigFromModule('tasks', taskKey));
+    return createFieldContext('tasks', taskKey, readFieldConfigFromModule('tasks', taskKey), normalizedFieldKey);
   }
 
   if (normalizedFieldKey.startsWith(PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX)) {
     const taskKey = normalizedFieldKey.slice(PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX.length);
-    return createFieldContext('tasks', taskKey, readFieldConfigFromModule('tasks', taskKey));
+    return createFieldContext('tasks', taskKey, readFieldConfigFromModule('tasks', taskKey), normalizedFieldKey);
   }
 
   if (TASK_TEMPLATE_ALIAS_KEYS[normalizedFieldKey]) {
     const taskKey = TASK_TEMPLATE_ALIAS_KEYS[normalizedFieldKey];
-    return createFieldContext('tasks', taskKey, readFieldConfigFromModule('tasks', taskKey));
+    return createFieldContext('tasks', taskKey, readFieldConfigFromModule('tasks', taskKey), normalizedFieldKey);
   }
 
   const linked = parseProcessLinkedFieldKey(normalizedFieldKey);
@@ -142,7 +170,8 @@ const resolveFieldContext = (moduleId: string | null | undefined, fieldKey: stri
     return createFieldContext(
       linked.moduleId || null,
       linked.targetFieldKey || '',
-      readFieldConfigFromModule(linked.moduleId, linked.targetFieldKey)
+      readFieldConfigFromModule(linked.moduleId, linked.targetFieldKey),
+      normalizedFieldKey
     );
   }
 
@@ -151,14 +180,16 @@ const resolveFieldContext = (moduleId: string | null | undefined, fieldKey: stri
     return createFieldContext(
       related.targetModuleId || null,
       related.targetFieldKey || '',
-      readFieldConfigFromModule(related.targetModuleId, related.targetFieldKey)
+      readFieldConfigFromModule(related.targetModuleId, related.targetFieldKey),
+      normalizedFieldKey
     );
   }
 
   return createFieldContext(
     defaultModuleId || null,
     normalizedFieldKey,
-    readFieldConfigFromModule(defaultModuleId || null, normalizedFieldKey)
+    readFieldConfigFromModule(defaultModuleId || null, normalizedFieldKey),
+    normalizedFieldKey
   );
 };
 
@@ -462,4 +493,128 @@ export const collectTemplateDynamicOptionCategories = (
     if (category) categories.add(category);
   });
   return Array.from(categories);
+};
+
+export const collectTemplateRelationFields = (
+  template: string,
+  moduleId?: string | null
+): Array<{
+  tokenKey: string;
+  moduleId: string | null;
+  fieldKey: string;
+  fieldConfig: TemplateFieldConfig;
+}> => {
+  const items: Array<{
+    tokenKey: string;
+    moduleId: string | null;
+    fieldKey: string;
+    fieldConfig: TemplateFieldConfig;
+  }> = [];
+  const seen = new Set<string>();
+  const rawTemplate = String(template || '');
+  Array.from(rawTemplate.matchAll(/\{\{\s*([^}]+)\s*\}\}/g)).forEach((match) => {
+    const fieldKey = String(match[1] || '').trim();
+    if (!fieldKey) return;
+    const fieldContext = resolveFieldContext(moduleId, fieldKey);
+    if (normalizeFieldType(fieldContext.fieldType) !== FieldType.RELATION) return;
+    if (!fieldContext.fieldConfig?.relationConfig) return;
+    const dedupeKey = `${fieldContext.tokenKey}:${fieldContext.moduleId}:${fieldContext.key}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    items.push({
+      tokenKey: fieldContext.tokenKey,
+      moduleId: fieldContext.moduleId,
+      fieldKey: fieldContext.key,
+      fieldConfig: fieldContext.fieldConfig,
+    });
+  });
+  return items;
+};
+
+const addOptionMap = (
+  maps: TemplateOptionLabelMaps,
+  keys: string[],
+  options: Array<{ label?: unknown; value?: unknown }>
+) => {
+  const normalizedOptions = (options || [])
+    .map((item) => ({
+      label: String(item?.label ?? item?.value ?? '').trim(),
+      value: String(item?.value ?? '').trim(),
+    }))
+    .filter((item) => item.label && item.value);
+  if (normalizedOptions.length === 0) return;
+
+  keys
+    .map((key) => String(key || '').trim())
+    .filter(Boolean)
+    .forEach((key) => {
+      maps[key] = [...(maps[key] || []), ...normalizedOptions];
+    });
+};
+
+const buildOptionMapKeys = (
+  moduleId: string | null | undefined,
+  fieldKey: string | null | undefined,
+  tokenKey: string | null | undefined
+) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  const normalizedTokenKey = String(tokenKey || '').trim();
+  const tokenLeafKey = normalizedTokenKey.includes('.') ? normalizedTokenKey.split('.').pop() || '' : '';
+  const fieldLeafKey = normalizedFieldKey.includes('.') ? normalizedFieldKey.split('.').pop() || '' : '';
+  return [
+    normalizedModuleId && normalizedFieldKey ? `field:${normalizedModuleId}:${normalizedFieldKey}` : '',
+    normalizedFieldKey ? `field:${normalizedFieldKey}` : '',
+    normalizedTokenKey ? `field:${normalizedTokenKey}` : '',
+    tokenLeafKey ? `field:${tokenLeafKey}` : '',
+    fieldLeafKey ? `field:${fieldLeafKey}` : '',
+    normalizedModuleId && normalizedFieldKey ? `${normalizedModuleId}.${normalizedFieldKey}` : '',
+    normalizedTokenKey,
+    tokenLeafKey,
+  ];
+};
+
+export const resolveTemplateOptionLabelMaps = async (
+  supabaseClient: any,
+  template: string,
+  moduleId?: string | null,
+  record?: Record<string, any> | null
+): Promise<TemplateOptionLabelMaps> => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const dynamicCategories = collectTemplateDynamicOptionCategories(template, normalizedModuleId);
+  const maps: TemplateOptionLabelMaps = dynamicCategories.length > 0
+    ? await fetchDynamicOptionsMap(supabaseClient, dynamicCategories).catch(() => ({}))
+    : {};
+
+  const relationFields = collectTemplateRelationFields(template, normalizedModuleId);
+  await Promise.allSettled(
+    relationFields.map(async (fieldRef) => {
+      const rawValue =
+        resolveValueFromRecord(record, fieldRef.tokenKey)
+        ?? resolveValueFromRecord(record, fieldRef.fieldKey);
+      const values = Array.isArray(rawValue) ? rawValue : [rawValue];
+      const relationOptions = (
+        await Promise.all(
+          values
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .map((value) =>
+              fetchRelationOptionsForField(supabaseClient, fieldRef.fieldConfig, {
+                allValues: record || undefined,
+                exactId: value,
+                limit: 1,
+              }).catch(() => [])
+            )
+        )
+      ).flat();
+
+      addOptionMap(
+        maps,
+        buildOptionMapKeys(fieldRef.moduleId, fieldRef.fieldKey, fieldRef.tokenKey),
+        relationOptions
+      );
+    })
+  );
+
+  return maps;
 };
