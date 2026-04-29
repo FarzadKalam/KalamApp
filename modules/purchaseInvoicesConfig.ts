@@ -243,7 +243,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       order: 4,
       options: [
         { label: 'ایجاد شده', value: 'created', color: 'blue' },
-        { label: 'پیش فاکتور', value: 'proforma', color: 'orange' },
+        { label: 'منتظر تایید', value: 'proforma', color: 'orange' },
         { label: 'تایید شده', value: 'final', color: 'green' },
         { label: 'تسویه شده', value: 'settled', color: 'purple' },
         { label: 'لغو شده', value: 'canceled', color: 'red' },
@@ -272,6 +272,14 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       dynamicOptionsCategory: 'purchase_source',
       location: FieldLocation.HEADER,
       order: 6,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'notify_supplier',
+      labels: { fa: 'اطلاع رسانی به تامین کننده', en: 'Notify Supplier' },
+      type: FieldType.CHECKBOX,
+      location: FieldLocation.HEADER,
+      order: 6.2,
       nature: FieldNature.STANDARD,
     },
     {

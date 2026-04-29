@@ -36,6 +36,11 @@ const normalizeSelectOptions = (value: any) =>
     })
     .filter(Boolean);
 
+const normalizeFieldOrder = (value: any) => {
+  const order = Number(value);
+  return Number.isFinite(order) ? order : undefined;
+};
+
 export const normalizeProcessTaskCustomFieldKey = (raw: any) =>
   String(raw || '')
     .trim()
@@ -68,6 +73,7 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
   const relationTargetModule = String(value?.relationConfig?.targetModule || '').trim();
   const relationTargetField = String(value?.relationConfig?.targetField || '').trim();
   const dynamicOptionsCategory = String(value?.dynamicOptionsCategory || '').trim();
+  const order = normalizeFieldOrder(value?.order);
   const normalized: ModuleField = {
     key,
     type,
@@ -89,19 +95,36 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
       : undefined,
     mode: type === FieldType.MULTI_SELECT ? 'multiple' : (type === FieldType.TAGS ? 'tags' : undefined),
     defaultValue: value?.defaultValue,
+    order,
   };
 
   if (!normalized.options?.length) delete normalized.options;
   if (!normalized.relationConfig) delete normalized.relationConfig;
   if (!normalized.dynamicOptionsCategory) delete normalized.dynamicOptionsCategory;
+  if (normalized.order === undefined) delete normalized.order;
 
   return normalized;
 };
 
+export const assignProcessTaskCustomFieldOrder = (fields: ModuleField[]): ModuleField[] =>
+  (Array.isArray(fields) ? fields : []).map((field, index) => ({
+    ...field,
+    order: (index + 1) * 10,
+  }));
+
 export const normalizeProcessTaskCustomFields = (value: any): ModuleField[] =>
   (Array.isArray(value) ? value : [])
-    .map((field) => normalizeProcessTaskCustomField(field))
-    .filter((field): field is ModuleField => Boolean(field));
+    .map((field, index) => ({ field: normalizeProcessTaskCustomField(field), index }))
+    .filter((entry): entry is { field: ModuleField; index: number } => Boolean(entry.field))
+    .sort((left, right) => {
+      const leftOrder = normalizeFieldOrder(left.field.order);
+      const rightOrder = normalizeFieldOrder(right.field.order);
+      const leftRank = leftOrder ?? (100000 + left.index);
+      const rightRank = rightOrder ?? (100000 + right.index);
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return left.index - right.index;
+    })
+    .map((entry) => entry.field);
 
 export const getProcessTaskCustomFieldsFromStage = (stage: any): ModuleField[] =>
   normalizeProcessTaskCustomFields(

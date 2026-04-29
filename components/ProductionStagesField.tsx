@@ -79,6 +79,7 @@ import {
   syncProcessTemplateTargetModules,
 } from '../utils/processTargets';
 import {
+  assignProcessTaskCustomFieldOrder,
   buildPreviousStageTaskCustomAutomationFields,
   buildProcessTaskCustomAutomationFields,
   getProcessTaskCustomFieldValuesFromRecurrence,
@@ -530,6 +531,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [editingDraftCustomFieldKey, setEditingDraftCustomFieldKey] = useState<string | null>(null);
   const [draftCustomFieldOptionsEditorKey, setDraftCustomFieldOptionsEditorKey] = useState<string | null>(null);
   const [taskCustomFieldDrafts, setTaskCustomFieldDrafts] = useState<Record<string, Record<string, any>>>({});
+  const [editingTaskCustomFields, setEditingTaskCustomFields] = useState<Record<string, boolean>>({});
   const [taskCustomFieldDynamicOptions, setTaskCustomFieldDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [taskCustomFieldRelationOptions, setTaskCustomFieldRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [savingTaskCustomFields, setSavingTaskCustomFields] = useState<Record<string, boolean>>({});
@@ -1221,6 +1223,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
     );
   }, [parseRecurrenceInfo]);
+
+  const getTaskCustomFieldEditKey = useCallback((taskId: string, fieldKey: string) =>
+    `${String(taskId || '').trim()}::${String(fieldKey || '').trim()}`, []);
 
   const rememberDraftTemplateSelection = useCallback((targetKey: string, target: any) => {
     const node = getInputLikeElement(target);
@@ -3777,9 +3782,46 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }));
   }, []);
 
-  const handleSaveTaskCustomFields = useCallback(async (task: any) => {
+  const removeTaskCustomFieldDraftValue = useCallback((taskId: string, fieldKey: string) => {
+    setTaskCustomFieldDrafts((prev) => {
+      const currentDraft = prev[taskId] || {};
+      if (!Object.prototype.hasOwnProperty.call(currentDraft, fieldKey)) return prev;
+      const nextTaskDraft = { ...currentDraft };
+      delete nextTaskDraft[fieldKey];
+      const next = { ...prev };
+      if (Object.keys(nextTaskDraft).length > 0) next[taskId] = nextTaskDraft;
+      else delete next[taskId];
+      return next;
+    });
+  }, []);
+
+  const startTaskCustomFieldEdit = useCallback((task: any, field: ModuleField, value: any) => {
+    const taskId = String(task?.id || '').trim();
+    const fieldKey = String(field?.key || '').trim();
+    if (!taskId || !fieldKey) return;
+    updateTaskCustomFieldDraft(taskId, fieldKey, value);
+    setEditingTaskCustomFields((prev) => ({
+      ...prev,
+      [getTaskCustomFieldEditKey(taskId, fieldKey)]: true,
+    }));
+  }, [getTaskCustomFieldEditKey, updateTaskCustomFieldDraft]);
+
+  const cancelTaskCustomFieldEdit = useCallback((taskId: string, fieldKey: string) => {
+    const normalizedTaskId = String(taskId || '').trim();
+    const normalizedFieldKey = String(fieldKey || '').trim();
+    if (!normalizedTaskId || !normalizedFieldKey) return;
+    removeTaskCustomFieldDraftValue(normalizedTaskId, normalizedFieldKey);
+    setEditingTaskCustomFields((prev) => ({
+      ...prev,
+      [getTaskCustomFieldEditKey(normalizedTaskId, normalizedFieldKey)]: false,
+    }));
+  }, [getTaskCustomFieldEditKey, removeTaskCustomFieldDraftValue]);
+
+  const handleSaveTaskCustomField = useCallback(async (task: any, fieldKey: string) => {
     if (!task?.id) return;
     const taskId = String(task.id);
+    const normalizedFieldKey = String(fieldKey || '').trim();
+    if (!normalizedFieldKey) return;
     const recurrence = parseRecurrenceInfo(task?.recurrence_info);
     const fields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
     if (fields.length === 0) return;
@@ -3788,18 +3830,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       fields,
       getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
     );
+    const draft = taskCustomFieldDrafts[taskId] || {};
+    const nextFieldValue = Object.prototype.hasOwnProperty.call(draft, normalizedFieldKey)
+      ? draft[normalizedFieldKey]
+      : currentValues[normalizedFieldKey];
     const nextValues = {
       ...currentValues,
-      ...(taskCustomFieldDrafts[taskId] || {}),
+      [normalizedFieldKey]: nextFieldValue,
     };
     const nextRecurrence = {
       ...recurrence,
       [PROCESS_TASK_CUSTOM_FIELDS_KEY]: fields,
       [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues,
     };
+    const savingKey = getTaskCustomFieldEditKey(taskId, normalizedFieldKey);
 
     try {
-      setSavingTaskCustomFields((prev) => ({ ...prev, [taskId]: true }));
+      setSavingTaskCustomFields((prev) => ({ ...prev, [savingKey]: true }));
       await updateTaskWithFallback(taskId, {
         recurrence_info: nextRecurrence,
       });
@@ -3808,18 +3855,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ? withProcessTaskCustomFieldValues({ ...row, recurrence_info: nextRecurrence })
           : row
       )));
-      setTaskCustomFieldDrafts((prev) => {
-        const next = { ...prev };
-        delete next[taskId];
-        return next;
-      });
+      removeTaskCustomFieldDraftValue(taskId, normalizedFieldKey);
+      setEditingTaskCustomFields((prev) => ({ ...prev, [savingKey]: false }));
       message.success('فیلدهای اختصاصی فعالیت ذخیره شد');
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ذخیره فیلدهای اختصاصی ناموفق بود'));
     } finally {
-      setSavingTaskCustomFields((prev) => ({ ...prev, [taskId]: false }));
+      setSavingTaskCustomFields((prev) => ({ ...prev, [savingKey]: false }));
     }
-  }, [parseRecurrenceInfo, taskCustomFieldDrafts, updateTaskWithFallback]);
+  }, [getTaskCustomFieldEditKey, parseRecurrenceInfo, removeTaskCustomFieldDraftValue, taskCustomFieldDrafts, updateTaskWithFallback]);
 
   const handleProducedQtyChange = async (taskId: string, value: number | null) => {
     try {
@@ -4290,185 +4334,103 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const renderTaskCustomFieldInput = useCallback((task: any, field: ModuleField, value: any) => {
     const taskId = String(task?.id || '');
-    const disabled = !!savingTaskCustomFields[taskId];
-    const onValueChange = (nextValue: any) => updateTaskCustomFieldDraft(taskId, String(field.key), nextValue);
+    const fieldKey = String(field?.key || '');
+    const disabled = !!savingTaskCustomFields[getTaskCustomFieldEditKey(taskId, fieldKey)];
+    const onValueChange = (nextValue: any) => updateTaskCustomFieldDraft(taskId, fieldKey, nextValue);
     const options = getProcessTaskFieldOptions(field);
 
-    if (field.dynamicOptionsCategory) {
-      return (
-        <DynamicSelectField
+    return (
+      <div className={disabled ? 'pointer-events-none opacity-60' : undefined}>
+        <SmartFieldRenderer
+          field={{ ...field, readonly: disabled }}
           value={value}
-          onChange={(nextValue) => onValueChange(nextValue)}
+          onChange={onValueChange}
+          forceEditMode={true}
+          compactMode
           options={options}
-          category={field.dynamicOptionsCategory}
-          mode={
-            field.type === FieldType.MULTI_SELECT
-              ? 'multiple'
-              : field.type === FieldType.TAGS
-                ? 'tags'
-                : undefined
-          }
-          disabled={disabled}
-          className="w-full"
-          allowClear
-          showSearch
-          getPopupContainer={resolveOverlayPopupContainer}
-          popupStyle={buildStandardSelectPopupRootStyle({ zIndex: 12640, maxWidth: 'calc(100vw - 1rem)' })}
-          modalContainer={resolveOverlayPopupContainer}
           onOptionsUpdate={() => { void loadTaskCustomFieldOptions([field]); }}
-          protectedValues={field.dynamicOptionsCategory === 'task_type' ? getTaskTypeProtectedValues() : undefined}
-        />
-      );
-    }
-
-    if (field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) {
-      return (
-        <Input.TextArea
-          value={value}
-          autoSize={{ minRows: 2, maxRows: 4 }}
-          disabled={disabled}
-          onChange={(event) => onValueChange(event.target.value)}
-        />
-      );
-    }
-
-    if (
-      field.type === FieldType.NUMBER
-      || field.type === FieldType.PRICE
-      || field.type === FieldType.PERCENTAGE
-      || field.type === FieldType.STOCK
-    ) {
-      return (
-        <InputNumber
-          className="w-full persian-number"
-          value={value}
-          disabled={disabled}
-          onChange={(nextValue) => onValueChange(nextValue)}
-        />
-      );
-    }
-
-    if (field.type === FieldType.CHECKBOX) {
-      return (
-        <Switch
-          checked={!!value}
-          disabled={disabled}
-          onChange={(checked) => onValueChange(checked)}
-        />
-      );
-    }
-
-    if (field.type === FieldType.DATE) {
-      return (
-        <PersianDatePicker
-          type="DATE"
-          value={value}
-          disabled={disabled}
-          onChange={(nextValue) => onValueChange(nextValue)}
-          className="w-full"
-          zIndex={12620}
-          modalContainer={resolveOverlayPopupContainer}
-        />
-      );
-    }
-
-    if (field.type === FieldType.TIME) {
-      return (
-        <PersianDatePicker
-          type="TIME"
-          value={value}
-          disabled={disabled}
-          onChange={(nextValue) => onValueChange(nextValue)}
-          className="w-full"
-          zIndex={12620}
-          modalContainer={resolveOverlayPopupContainer}
-        />
-      );
-    }
-
-    if (field.type === FieldType.DATETIME) {
-      return (
-        <PersianDatePicker
-          type="DATETIME"
-          value={value}
-          disabled={disabled}
-          onChange={(nextValue) => onValueChange(nextValue)}
-          className="w-full"
-          zIndex={12620}
-          modalContainer={resolveOverlayPopupContainer}
-        />
-      );
-    }
-
-    if (field.type === FieldType.MULTI_SELECT) {
-      return (
-        <AdaptiveSelectField
-          mode="multiple"
-          value={Array.isArray(value) ? value : []}
-          disabled={disabled}
-          options={options}
-          className="w-full"
-          optionFilterProp="label"
-          showSearch
-          maxTagCount="responsive"
-          getPopupContainer={resolveOverlayPopupContainer}
-          modalContainer={resolveOverlayPopupContainer}
+          allValues={{
+            ...(task || {}),
+            ...getTaskCustomFieldValues(task),
+            [fieldKey]: value,
+          }}
+          recordId={taskId === TASK_MODAL_CUSTOM_FIELD_DRAFT_ID ? undefined : taskId}
+          moduleId="tasks"
           overlayZIndexBase={12640}
-          onChange={(nextValue) => onValueChange(nextValue)}
+          popupContainer={resolveOverlayPopupContainer}
         />
-      );
-    }
+      </div>
+    );
 
-    if (field.type === FieldType.TAGS) {
-      return (
-        <AdaptiveSelectField
-          mode="tags"
-          value={Array.isArray(value) ? value : []}
-          disabled={disabled}
-          options={options}
-          className="w-full"
-          tokenSeparators={[',']}
-          maxTagCount="responsive"
-          getPopupContainer={resolveOverlayPopupContainer}
-          modalContainer={resolveOverlayPopupContainer}
-          overlayZIndexBase={12640}
-          onChange={(nextValue) => onValueChange(nextValue)}
-        />
-      );
-    }
+  }, [getProcessTaskFieldOptions, getTaskCustomFieldEditKey, getTaskCustomFieldValues, loadTaskCustomFieldOptions, savingTaskCustomFields, updateTaskCustomFieldDraft]);
 
-    if (
-      field.type === FieldType.SELECT
-      || field.type === FieldType.STATUS
-      || field.type === FieldType.RELATION
-      || field.type === FieldType.USER
-    ) {
+  const renderTaskCustomFieldInline = useCallback((task: any, field: ModuleField, currentValue: any) => {
+    const taskId = String(task?.id || '').trim();
+    const fieldKey = String(field?.key || '').trim();
+    const editKey = getTaskCustomFieldEditKey(taskId, fieldKey);
+    const isEditing = !!editingTaskCustomFields[editKey];
+    const isSaving = !!savingTaskCustomFields[editKey];
+    const taskDraft = taskCustomFieldDrafts[taskId] || {};
+    const editValue = Object.prototype.hasOwnProperty.call(taskDraft, fieldKey)
+      ? taskDraft[fieldKey]
+      : currentValue;
+    const options = getProcessTaskFieldOptions(field);
+    const allValues = {
+      ...(task || {}),
+      ...getTaskCustomFieldValues(task),
+      [fieldKey]: isEditing ? editValue : currentValue,
+    };
+
+    if (isEditing) {
       return (
-        <AdaptiveSelectField
-          allowClear
-          value={value ?? undefined}
-          disabled={disabled}
-          options={options}
-          className="w-full"
-          showSearch
-          optionFilterProp="label"
-          getPopupContainer={resolveOverlayPopupContainer}
-          modalContainer={resolveOverlayPopupContainer}
-          overlayZIndexBase={12640}
-          onChange={(nextValue) => onValueChange(nextValue)}
-        />
+        <div className={`flex min-w-[150px] w-full gap-1 ${field.type === FieldType.SUPER_LONG_TEXT || field.type === FieldType.LONG_TEXT ? 'items-start' : 'items-center'}`}>
+          <div className="min-w-0 flex-1">
+            {renderTaskCustomFieldInput(task, field, editValue)}
+          </div>
+          <Button
+            size="small"
+            type="text"
+            icon={<CheckOutlined />}
+            loading={isSaving}
+            onClick={() => { void handleSaveTaskCustomField(task, fieldKey); }}
+            className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
+          />
+          <Button
+            size="small"
+            type="text"
+            icon={<CloseOutlined />}
+            disabled={isSaving}
+            onClick={() => cancelTaskCustomFieldEdit(taskId, fieldKey)}
+            className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
+          />
+        </div>
       );
     }
 
     return (
-      <Input
-        value={value ?? ''}
-        disabled={disabled}
-        className="w-full"
-        onChange={(event) => onValueChange(event.target.value)}
-      />
+      <div
+        className={`group flex min-h-[32px] cursor-pointer justify-between rounded-lg border border-transparent px-3 -mx-3 transition-colors hover:border-gray-100 hover:bg-gray-50 dark:hover:border-gray-700 dark:hover:bg-white/5 ${field.type === FieldType.SUPER_LONG_TEXT || field.type === FieldType.LONG_TEXT ? 'items-start py-2' : 'items-center'}`}
+        onClick={() => startTaskCustomFieldEdit(task, field, currentValue)}
+      >
+        <div className="min-w-0 flex-1 text-gray-800 dark:text-gray-200">
+          <SmartFieldRenderer
+            field={field}
+            value={currentValue}
+            onChange={() => undefined}
+            forceEditMode={false}
+            compactMode
+            options={options}
+            allValues={allValues}
+            recordId={taskId}
+            moduleId="tasks"
+            overlayZIndexBase={12640}
+            popupContainer={resolveOverlayPopupContainer}
+          />
+        </div>
+        <EditOutlined className="text-leather-400 opacity-0 transition-opacity group-hover:opacity-100" />
+      </div>
     );
-  }, [getProcessTaskFieldOptions, loadTaskCustomFieldOptions, savingTaskCustomFields, updateTaskCustomFieldDraft]);
+  }, [cancelTaskCustomFieldEdit, editingTaskCustomFields, getProcessTaskFieldOptions, getTaskCustomFieldEditKey, getTaskCustomFieldValues, handleSaveTaskCustomField, renderTaskCustomFieldInput, savingTaskCustomFields, startTaskCustomFieldEdit, taskCustomFieldDrafts]);
 
   const renderDraftTemplatePicker = useCallback((targetKey: string) => (
     <>
@@ -4615,7 +4577,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const fallback = getTaskOptionalFieldFallback(task);
     const customFields = getTaskCustomFields(task);
     const currentCustomFieldValues = getTaskCustomFieldValues(task);
-    const taskCustomFieldDraft = taskCustomFieldDrafts[String(task?.id || '')] || {};
     const taskTypeValue = String(task?.task_type || fallback.taskType || '').trim() || undefined;
     const reportDraft = taskReportDrafts[String(task.id)] ?? fallback.taskReport;
     const hasWage = task?.wage !== undefined && task?.wage !== null && Number(task.wage) !== 0;
@@ -4788,31 +4749,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-gray-500">فیلدهای اختصاصی این فعالیت:</span>
-                {savingTaskCustomFields[String(task.id)] && <span className="text-[11px] text-gray-500">در حال ذخیره...</span>}
               </div>
               <div className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-900/80 p-2">
                 {customFields.map((field) => (
                   <div key={`${task.id}-${field.key}`} className="space-y-1">
                     <div className="text-[11px] text-gray-500">{field.labels?.fa || field.key}</div>
-                    {renderTaskCustomFieldInput(
-                      task,
-                      field,
-                      Object.prototype.hasOwnProperty.call(taskCustomFieldDraft, String(field.key))
-                        ? taskCustomFieldDraft[String(field.key)]
-                        : currentCustomFieldValues[String(field.key)]
-                    )}
+                    {renderTaskCustomFieldInline(task, field, currentCustomFieldValues[String(field.key)])}
                   </div>
                 ))}
-                <div className="flex justify-end pt-1">
-                  <Button
-                    size="small"
-                    icon={<SaveOutlined />}
-                    loading={!!savingTaskCustomFields[String(task.id)]}
-                    onClick={() => { void handleSaveTaskCustomFields(task); }}
-                  >
-                    ثبت فیلدها
-                  </Button>
-                </div>
               </div>
             </div>
           )}
@@ -5947,7 +5891,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         : (existingStage?.task_type ?? existingMetadata?.task_type ?? '')
     ).trim() || null;
     const stageStatusOptions = getDraftStageEditorStatusOptions();
-    const processTaskCustomFields = normalizeProcessTaskCustomFields(draftCustomFields);
+    const processTaskCustomFields = normalizeProcessTaskCustomFields(assignProcessTaskCustomFieldOrder(draftCustomFields));
     const weight = Number(values?.weight || 0);
     const durationValue = Number(values?.duration_value || 0);
     const durationUnit = values?.duration_unit || 'day';
@@ -6451,6 +6395,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ? String(values?.dynamicCategory || '').trim() || undefined
           : undefined,
         options: processTaskOptionEditableTypes.has(fieldType) ? (previousField?.options || []) : undefined,
+        defaultValue: previousField?.defaultValue,
+        order: previousField?.order,
       }])[0];
 
       if (!normalizedField) {
@@ -6459,8 +6405,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       setDraftCustomFields((prev) => {
-        const next = prev.filter((field) => String(field?.key || '') !== String(editingDraftCustomFieldKey || ''));
-        return [...next, normalizedField].sort((a, b) => String(a.labels?.fa || a.key).localeCompare(String(b.labels?.fa || b.key), 'fa'));
+        if (editingDraftCustomFieldKey) {
+          return assignProcessTaskCustomFieldOrder(prev.map((field) => (
+            String(field?.key || '') === String(editingDraftCustomFieldKey || '')
+              ? normalizedField
+              : field
+          )));
+        }
+        return assignProcessTaskCustomFieldOrder([...prev, normalizedField]);
       });
       closeDraftCustomFieldModal();
     } catch {
@@ -6469,7 +6421,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [closeDraftCustomFieldModal, draftCustomFieldForm, draftCustomFields, editingDraftCustomFieldKey]);
 
   const removeDraftCustomField = useCallback((fieldKey: string) => {
-    setDraftCustomFields((prev) => prev.filter((field) => String(field?.key || '') !== String(fieldKey || '')));
+    setDraftCustomFields((prev) => assignProcessTaskCustomFieldOrder(
+      prev.filter((field) => String(field?.key || '') !== String(fieldKey || ''))
+    ));
+  }, []);
+
+  const moveDraftCustomField = useCallback((fieldKey: string, direction: 'up' | 'down') => {
+    const normalizedFieldKey = String(fieldKey || '').trim();
+    if (!normalizedFieldKey) return;
+    setDraftCustomFields((prev) => {
+      const currentIndex = prev.findIndex((field) => String(field?.key || '').trim() === normalizedFieldKey);
+      if (currentIndex < 0) return prev;
+      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+
+      const reordered = [...prev];
+      const [moved] = reordered.splice(currentIndex, 1);
+      reordered.splice(targetIndex, 0, moved);
+      return assignProcessTaskCustomFieldOrder(reordered);
+    });
   }, []);
 
   const openDraftCustomFieldOptionsEditor = useCallback((field: ModuleField) => {
@@ -6545,7 +6515,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       setExpandedDraftAutomationRuleIds(
         nextAutomationRules.length > 0 ? [String(nextAutomationRules[0]?.id || '')].filter(Boolean) : []
       );
-      setDraftCustomFields(getProcessTaskCustomFieldsFromStage(draftForEditor));
+      setDraftCustomFields(assignProcessTaskCustomFieldOrder(getProcessTaskCustomFieldsFromStage(draftForEditor)));
       setDraftStageStatusOptions(getProcessTaskStatusOptionsFromStage(draftForEditor));
     } else {
       draftForm.setFieldsValue({
@@ -8241,7 +8211,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       />
                     ) : (
                       <div className="space-y-3">
-                        {draftCustomFields.map((field) => (
+                        {draftCustomFields.map((field, index) => (
                             <div
                               key={field.key}
                               className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/95 p-4 shadow-sm dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.7)]"
@@ -8265,6 +8235,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-2">
+                                    <Tooltip title="جابجایی به بالا">
+                                      <Button
+                                        size="small"
+                                        htmlType="button"
+                                        icon={<UpOutlined />}
+                                        disabled={index === 0}
+                                        onClick={() => moveDraftCustomField(String(field.key), 'up')}
+                                      />
+                                    </Tooltip>
+                                    <Tooltip title="جابجایی به پایین">
+                                      <Button
+                                        size="small"
+                                        htmlType="button"
+                                        icon={<DownOutlined />}
+                                        disabled={index === draftCustomFields.length - 1}
+                                        onClick={() => moveDraftCustomField(String(field.key), 'down')}
+                                      />
+                                    </Tooltip>
                                     <Button size="small" htmlType="button" icon={<EditOutlined />} onClick={() => openDraftCustomFieldModal(field)}>
                                       ویرایش
                                     </Button>

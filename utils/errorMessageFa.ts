@@ -187,6 +187,9 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   if (code === '22P02' || contains(normalized, 'invalid input syntax')) {
     return 'مقدار واردشده معتبر نیست.';
   }
+  if (code === '22003' || contains(normalized, 'out of range for type integer')) {
+    return 'نوع یکی از ستون‌های دیتابیس برای این مقدار مناسب نیست. شماره تماس‌ها و کدهای شناسه باید به صورت متن ذخیره شوند.';
+  }
   if (code === '42501' || contains(normalized, 'permission denied') || contains(normalized, 'row-level security')) {
     return 'شما دسترسی لازم برای انجام این عملیات را ندارید.';
   }
