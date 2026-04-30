@@ -56,6 +56,7 @@ import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
+  createProcessNextStageFieldKey,
   intervalUnitOptions,
   parseWorkflowRelatedFieldKey,
   triggerTypeOptions,
@@ -203,6 +204,10 @@ type DraftModalTabKey = 'stage' | 'fields' | 'automation';
 const DRAFT_MODAL_STEP_KEYS: DraftModalTabKey[] = ['stage', 'fields', 'automation'];
 
 const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
+const NEXT_STAGE_TRANSFER_LABELS: Record<1 | 2, string> = {
+  1: 'مرحله بعد',
+  2: 'دو مرحله بعد',
+};
 const taskPriorityField = (MODULES.tasks?.fields || []).find((field: any) => String(field?.key || '').trim() === 'priority');
 const createProcessAutomationTaskVariableFields = (): ModuleField[] => ([
   { key: 'task_name', labels: { fa: 'عنوان فعالیت', en: 'Task Name' }, type: FieldType.TEXT, nature: 'standard' as any },
@@ -982,6 +987,59 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const getStageProcessGroupMeta = useCallback((stage: any) => {
     return getDraftStageProcessGroupMeta(stage);
   }, []);
+  const nextDraftStagesForAutomation = useMemo(() => {
+    const currentSortOrder = Number(watchedDraftStageSortOrder || editingDraft?.sort_order || 0);
+    const editingId = String(editingDraft?.id || '').trim();
+    const currentGroupId = editingDraft ? getStageProcessGroupMeta(editingDraft).groupId : '';
+    return (Array.isArray(draftLocal) ? draftLocal : [])
+      .filter((stage: any) => {
+        if (editingId && String(stage?.id || '').trim() === editingId) return false;
+        if (currentGroupId && getStageProcessGroupMeta(stage).groupId !== currentGroupId) return false;
+        if (currentSortOrder > 0) return Number(stage?.sort_order || 0) > currentSortOrder;
+        return true;
+      })
+      .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))
+      .slice(0, 2);
+  }, [draftLocal, editingDraft, getStageProcessGroupMeta, watchedDraftStageSortOrder]);
+  const nextStageTransferFields = useMemo(() => {
+    const taskPublicFields = (MODULES.tasks?.fields || [])
+      .filter((field: ModuleField) => {
+        const key = String(field?.key || '').trim();
+        if (!key) return false;
+        if (field.readonly === true || String(field.nature || '') === 'system') return false;
+        if (key === 'tags') return false;
+        return true;
+      });
+    const taskAssigneeField = getSyntheticWorkflowAssigneeField('tasks');
+    const baseTaskFields = taskAssigneeField
+      ? [...taskPublicFields, taskAssigneeField]
+      : taskPublicFields;
+
+    return nextDraftStagesForAutomation.flatMap((stage: any, index: number) => {
+      const offset = (index + 1) as 1 | 2;
+      const stageLabel = NEXT_STAGE_TRANSFER_LABELS[offset];
+      const fields = [
+        ...baseTaskFields,
+        ...getProcessTaskCustomFieldsFromStage(stage),
+      ];
+
+      return Array.from(
+        new Map(
+          fields
+            .filter((field) => !!String(field?.key || '').trim())
+            .map((field) => [String(field.key), field] as const)
+        ).values()
+      ).map((field) => ({
+        ...field,
+        key: createProcessNextStageFieldKey(offset, String(field.key)),
+        labels: {
+          ...field.labels,
+          fa: `${field.labels?.fa || field.key} (${stageLabel})`,
+        },
+        ...( { workflowOptionScopeModuleId: 'tasks' } as any ),
+      }));
+    });
+  }, [nextDraftStagesForAutomation]);
   const previousDraftStage = useMemo(() => {
     const currentSortOrder = Number(watchedDraftStageSortOrder || editingDraft?.sort_order || 0);
     const editingId = String(editingDraft?.id || '').trim();
@@ -1090,7 +1148,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [getStageProcessGroupMeta, normalizeStageName]);
 
   const loadAutomationOptions = useCallback(async () => {
-    if (automationConditionFields.length === 0) {
+    const automationOptionFields = Array.from(
+      new Map(
+        [
+          ...automationConditionFields,
+          ...automationActionVariableFields,
+          ...nextStageTransferFields,
+        ]
+          .filter((field) => !!String(field?.key || '').trim())
+          .map((field) => [String(field.key), field] as const)
+      ).values()
+    );
+
+    if (automationOptionFields.length === 0) {
       setAutomationDynamicOptions({});
       setAutomationRelationOptions({});
       return;
@@ -1099,7 +1169,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const nextDynamicOptions: Record<string, Array<{ label: string; value: string }>> = {};
     const nextRelationOptions: Record<string, Array<{ label: string; value: string }>> = {};
 
-    await Promise.all(automationConditionFields.map(async (field) => {
+    await Promise.all(automationOptionFields.map(async (field) => {
       if (field.dynamicOptionsCategory && !nextDynamicOptions[field.dynamicOptionsCategory]) {
         nextDynamicOptions[field.dynamicOptionsCategory] = field.dynamicOptionsCategory === 'task_type'
           ? taskTypeOptions
@@ -1164,7 +1234,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     setAutomationDynamicOptions(nextDynamicOptions);
     setAutomationRelationOptions(nextRelationOptions);
-  }, [automationConditionFields, automationScopeModuleId, taskTypeOptions]);
+  }, [automationActionVariableFields, automationConditionFields, automationScopeModuleId, nextStageTransferFields, taskTypeOptions]);
 
   const parseRecurrenceInfo = useCallback((value: any) => {
     if (!value) return {};
@@ -8623,6 +8693,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   currentModuleId={automationScopeModuleId || 'tasks'}
                                   currentModuleFields={automationActionModuleFields}
                                   variableFields={automationActionVariableFields}
+                                  nextStageFields={nextStageTransferFields}
+                                  enableNextStageActions
                                   moduleOptions={workflowModuleOptions}
                                   relationSourceModuleOptions={automationScopeModuleIds.map((scopeModuleId) => ({
                                     value: scopeModuleId,

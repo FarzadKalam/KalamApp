@@ -31,6 +31,11 @@ vi.mock('./smsGateway', () => ({
 }));
 
 import { evaluateWorkflowConditions, executeWorkflowAction, runWorkflowsForEvent } from './workflowRuntime';
+import { createProcessNextStageFieldKey } from './workflowTypes';
+import {
+  PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+} from './processTaskCustomFields';
 
 const GROUP_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -98,6 +103,26 @@ const createFilterableSelectQuery = (rows: any[]) => {
     }),
   };
 
+  return chain;
+};
+
+const createOrderableTaskQuery = (rows: any[]) => {
+  const filters: Array<{ field: string; value: any }> = [];
+  const applyFilters = () =>
+    rows.filter((row) => filters.every((filter) => row?.[filter.field] === filter.value));
+  const chain: any = {
+    eq: (field: string, value: any) => {
+      filters.push({ field, value });
+      return chain;
+    },
+    order: async (field: string, options?: { ascending?: boolean }) => {
+      const sorted = [...applyFilters()].sort((left, right) => {
+        const direction = options?.ascending === false ? -1 : 1;
+        return (Number(left?.[field] || 0) - Number(right?.[field] || 0)) * direction;
+      });
+      return { data: sorted, error: null };
+    },
+  };
   return chain;
 };
 
@@ -180,6 +205,114 @@ describe('workflow action recipients', () => {
       to: ['09111111111', '09222222222'],
       title: 'ارسال پیامک خودکار',
     }));
+  });
+});
+
+describe('send_to_next_stages workflow action', () => {
+  beforeEach(() => {
+    mocks.from.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('writes values into the next task custom fields', async () => {
+    const updates: Array<{ id: string; payload: Record<string, any> }> = [];
+    const nextRecurrence = {
+      [PROCESS_TASK_CUSTOM_FIELDS_KEY]: [
+        {
+          key: 'handover_note',
+          type: 'text',
+          labels: { fa: 'یادداشت تحویل' },
+        },
+      ],
+      [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: {},
+    };
+    const taskRows = [
+      { id: 'task-current', sort_order: 10, process_group_id: 'group-1', recurrence_info: {} },
+      { id: 'task-next', sort_order: 20, process_group_id: 'group-1', recurrence_info: nextRecurrence },
+    ];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'tasks') {
+        return {
+          select: vi.fn(() => createOrderableTaskQuery(taskRows)),
+          update: vi.fn((payload: Record<string, any>) => ({
+            eq: vi.fn(async (_field: string, id: string) => {
+              updates.push({ id, payload });
+              return { data: null, error: null };
+            }),
+          })),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-next-1',
+        type: 'send_to_next_stages',
+        config: {
+          field: createProcessNextStageFieldKey(1, 'handover_note'),
+          value_mode: 'from_source',
+          source_field: '__task__result',
+        },
+      },
+      'customers',
+      {
+        id: 'source-1',
+        task_id: 'task-current',
+        process_group_id: 'group-1',
+        __task__result: 'آماده ارسال',
+      }
+    );
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe('task-next');
+    expect(updates[0].payload.recurrence_info?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]?.handover_note)
+      .toBe('آماده ارسال');
+  });
+
+  it('can target the second next task public fields', async () => {
+    const updates: Array<{ id: string; payload: Record<string, any> }> = [];
+    const taskRows = [
+      { id: 'task-current', sort_order: 10, process_group_id: 'group-1', recurrence_info: {} },
+      { id: 'task-next', sort_order: 20, process_group_id: 'group-1', recurrence_info: {} },
+      { id: 'task-second-next', sort_order: 30, process_group_id: 'group-1', recurrence_info: {} },
+    ];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'tasks') {
+        return {
+          select: vi.fn(() => createOrderableTaskQuery(taskRows)),
+          update: vi.fn((payload: Record<string, any>) => ({
+            eq: vi.fn(async (_field: string, id: string) => {
+              updates.push({ id, payload });
+              return { data: null, error: null };
+            }),
+          })),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-next-2',
+        type: 'send_to_next_stages',
+        config: {
+          field: createProcessNextStageFieldKey(2, 'task_report'),
+          value_mode: 'static',
+          value: 'گزارش منتقل شد',
+        },
+      },
+      'customers',
+      { id: 'source-1', task_id: 'task-current', process_group_id: 'group-1' }
+    );
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toEqual({
+      id: 'task-second-next',
+      payload: expect.objectContaining({ task_report: 'گزارش منتقل شد' }),
+    });
   });
 });
 

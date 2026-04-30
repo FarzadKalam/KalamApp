@@ -43,6 +43,8 @@ interface WorkflowActionsBuilderProps {
   relationSourceModuleOptions?: WorkflowModuleOption[];
   additionalRecipientFieldOptions?: Array<{ label: string; value: string }>;
   actionOptions?: Array<{ label: string; value: WorkflowActionType }>;
+  nextStageFields?: ModuleField[];
+  enableNextStageActions?: boolean;
   disabled?: boolean;
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
@@ -122,6 +124,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_target: 'message',
       };
     case 'update_record':
+    case 'send_to_next_stages':
       return { field: '', value_mode: 'static', value: null, source_field: '' };
     case 'create_related_record':
       return { source_module_id: '', target_module_id: '', relation_field_key: '', field_mappings: [] };
@@ -165,6 +168,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   relationSourceModuleOptions,
   additionalRecipientFieldOptions,
   actionOptions,
+  nextStageFields,
+  enableNextStageActions = false,
   disabled = false,
   overlayZIndexBase = 1400,
   popupContainer: popupContainerProp,
@@ -198,6 +203,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           value: field.key,
         })),
     [currentModuleFields]
+  );
+  const nextStageFieldOptions = useMemo(
+    () =>
+      (Array.isArray(nextStageFields) ? nextStageFields : [])
+        .filter((f) => !!f?.key && f?.readonly !== true && f?.nature !== 'system')
+        .map((field) => ({
+          label: getFieldLabel(field),
+          value: field.key,
+        })),
+    [nextStageFields]
   );
 
   const variableFieldOptions = useMemo(
@@ -423,7 +438,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ];
     const baseOptions = actionOptions && actionOptions.length > 0
       ? actionOptions
-      : actionTypeOptions.filter((option) => option.value !== 'send_email');
+      : actionTypeOptions.filter((option) => (
+          option.value !== 'send_email'
+          && (option.value !== 'send_to_next_stages' || enableNextStageActions)
+        ));
     const optionsByValue = new Map(
       [...baseOptions, ...supplementalOptions].map((option) => [String(option.value), option] as const)
     );
@@ -436,7 +454,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       }
     });
     return Array.from(optionsByValue.values());
-  }, [actionOptions, safeValue]);
+  }, [actionOptions, enableNextStageActions, safeValue]);
 
   const addAction = () => {
     const type = effectiveActionTypeOptions[0]?.value || 'send_note';
@@ -511,6 +529,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (!field) return [];
     if (field.dynamicOptionsCategory) {
       return dynamicOptions[field.dynamicOptionsCategory] || [];
+    }
+    const fieldKey = String(field.key || '').trim();
+    const hasAssigneeDirectoryOptions =
+      fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
+      || fieldKey === `__task__${WORKFLOW_ASSIGNEE_FIELD_KEY}`
+      || fieldKey.endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`)
+      || fieldKey.endsWith(`::${WORKFLOW_ASSIGNEE_FIELD_KEY}`);
+    if (hasAssigneeDirectoryOptions && relationOptions[field.key]) {
+      return (relationOptions[field.key] || []).map((opt) => ({
+        label: String(opt?.label || opt?.value || '-'),
+        value: String(opt?.value || ''),
+      }));
     }
     if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
       return (relationOptions[field.key] || []).map((opt) => ({
@@ -736,7 +766,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   const renderUpdateValueInput = (action: WorkflowAction) => {
     const targetFieldKey = String(action?.config?.field || '');
-    const targetField = currentModuleFields.find((f) => f.key === targetFieldKey);
+    const targetFields = action.type === 'send_to_next_stages'
+      ? (Array.isArray(nextStageFields) ? nextStageFields : [])
+      : currentModuleFields;
+    const targetField = targetFields.find((f) => f.key === targetFieldKey);
     const valueMode = String(action?.config?.value_mode || 'static');
     if (valueMode === 'from_source' || valueMode === 'from_related') {
       const options = valueMode === 'from_related' ? relatedVariableFieldOptions : sourceVariableFieldOptions;
@@ -1141,7 +1174,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         </div>
       );
     }
-    if (actionType === 'update_record') {
+    if (actionType === 'update_record' || actionType === 'send_to_next_stages') {
+      const targetOptions = actionType === 'send_to_next_stages'
+        ? nextStageFieldOptions
+        : updatableFieldOptions;
       return (
         <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
           <div className="space-y-1 md:col-span-5">
@@ -1149,10 +1185,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             <Select
               {...commonSelectProps}
               value={config.field}
-              disabled={disabled}
-              options={updatableFieldOptions}
+              disabled={disabled || (actionType === 'send_to_next_stages' && targetOptions.length === 0)}
+              options={targetOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { field: nextVal, value: null })}
-              placeholder="فیلد مقصد"
+              placeholder={actionType === 'send_to_next_stages' && targetOptions.length === 0 ? 'مرحله بعدی برای ارسال اطلاعات پیدا نشد' : 'فیلد مقصد'}
             />
           </div>
           <div className="space-y-1 md:col-span-3">

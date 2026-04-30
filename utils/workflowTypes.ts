@@ -12,12 +12,14 @@ export type WorkflowActionType =
   | 'send_bale_bot'
   | 'send_rubika_bot'
   | 'update_record'
+  | 'send_to_next_stages'
   | 'create_related_record'
   | 'copy_process_template'
   | 'execute_process';
 
 export const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
+const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
 
 export type WorkflowCondition = {
   id: string;
@@ -90,10 +92,27 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال در بله', value: 'send_bale_bot' },
   { label: 'ارسال در روبیکا', value: 'send_rubika_bot' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
+  { label: 'ارسال اطلاعات به مراحل بعد', value: 'send_to_next_stages' },
   { label: 'ایجاد رکورد مرتبط', value: 'create_related_record' },
   { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },
   { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
 ];
+
+export const createProcessNextStageFieldKey = (
+  offset: 1 | 2,
+  fieldKey: string
+) => `${PROCESS_NEXT_STAGE_FIELD_PREFIX}${offset}__${String(fieldKey || '').trim()}`;
+
+export const parseProcessNextStageFieldKey = (value: string) => {
+  const normalized = String(value || '').trim();
+  if (!normalized.startsWith(PROCESS_NEXT_STAGE_FIELD_PREFIX)) return null;
+  const raw = normalized.slice(PROCESS_NEXT_STAGE_FIELD_PREFIX.length);
+  const match = raw.match(/^([12])__(.+)$/);
+  if (!match) return null;
+  const fieldKey = String(match[2] || '').trim();
+  if (!fieldKey) return null;
+  return { offset: Number(match[1]) as 1 | 2, fieldKey };
+};
 
 export const createWorkflowRelatedFieldKey = (
   relationFieldKey: string,

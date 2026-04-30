@@ -9,11 +9,19 @@ import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTarget
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
 import {
   parseWorkflowRelatedFieldKey,
+  parseProcessNextStageFieldKey,
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   WorkflowAction,
   WorkflowCondition,
   WorkflowRecord,
 } from './workflowTypes';
+import {
+  getProcessTaskCustomFieldValuesFromRecurrence,
+  getProcessTaskCustomFieldsFromRecurrence,
+  mergeProcessTaskCustomFieldValues,
+  PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+} from './processTaskCustomFields';
 import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './intervalSchedule';
 import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
@@ -1619,6 +1627,168 @@ const resolveConfiguredActionValue = async (
   return config?.value ?? null;
 };
 
+const parseWorkflowObject = (value: any): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const resolveCurrentTaskIdForNextStageAction = (
+  moduleId: string,
+  currentRecord: Record<string, any>
+) => String(
+  currentRecord?.task_id
+  || currentRecord?.__task__id
+  || (moduleId === 'tasks' ? currentRecord?.id : '')
+  || ''
+).trim();
+
+const getProcessTransferScope = (
+  moduleId: string,
+  currentRecord: Record<string, any>
+) => {
+  const processRunId = String(currentRecord?.process_run_id || '').trim();
+  const processGroupId = String(currentRecord?.process_group_id || '').trim();
+  const sourceModuleId = String(currentRecord?.source_module_id || (moduleId !== 'tasks' ? moduleId : '') || '').trim();
+  const sourceRecordId = String(currentRecord?.source_record_id || (moduleId !== 'tasks' ? currentRecord?.id : '') || '').trim();
+  return { processRunId, processGroupId, sourceModuleId, sourceRecordId };
+};
+
+const fetchProcessTransferTasks = async (
+  moduleId: string,
+  currentRecord: Record<string, any>
+) => {
+  const taskId = resolveCurrentTaskIdForNextStageAction(moduleId, currentRecord);
+  const scope = getProcessTransferScope(moduleId, currentRecord);
+  const select = 'id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, sort_order, process_group_id, process_run_id, process_run_stage_id, recurrence_info, source_module_id, source_record_id, source_template_id';
+  const fetchRows = async (applyScope: (query: any) => any) => {
+    let query = supabase
+      .from('tasks')
+      .select(select);
+    query = applyScope(query);
+    const { data, error } = await query.order('sort_order', { ascending: true });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  };
+
+  if (scope.processRunId) {
+    const rows = await fetchRows((query) => query.eq('process_run_id', scope.processRunId));
+    if (rows.some((row) => String(row?.id || '').trim() === taskId)) return rows;
+  }
+
+  if (scope.processGroupId) {
+    const rows = await fetchRows((query) => query.eq('process_group_id', scope.processGroupId));
+    if (rows.some((row) => String(row?.id || '').trim() === taskId)) return rows;
+  }
+
+  if (scope.sourceModuleId && scope.sourceRecordId) {
+    const rows = await fetchRows((query) => {
+      let scoped = query
+        .eq('source_module_id', scope.sourceModuleId)
+        .eq('source_record_id', scope.sourceRecordId);
+      const templateId = String(currentRecord?.source_template_id || '').trim();
+      if (templateId) scoped = scoped.eq('source_template_id', templateId);
+      return scoped;
+    });
+    if (rows.some((row) => String(row?.id || '').trim() === taskId)) return rows;
+  }
+
+  if (!taskId) return [];
+  return fetchRows((query) => query.eq('id', taskId));
+};
+
+const resolveNextStageTargetTask = async (
+  moduleId: string,
+  currentRecord: Record<string, any>,
+  offset: 1 | 2
+) => {
+  const taskId = resolveCurrentTaskIdForNextStageAction(moduleId, currentRecord);
+  if (!taskId) return null;
+
+  const rows = await fetchProcessTransferTasks(moduleId, currentRecord);
+  if (rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+  const currentIndex = sorted.findIndex((row) => String(row?.id || '').trim() === taskId);
+  if (currentIndex < 0) return null;
+  return sorted[currentIndex + offset] || null;
+};
+
+const buildAssigneePatch = (value: any) => {
+  const raw = Array.isArray(value) ? String(value[0] || '').trim() : String(value || '').trim();
+  const match = raw.match(/^(user|role)[:_](.+)$/i);
+  if (!match) {
+    return {
+      assignee_id: raw || null,
+      assignee_role_id: null,
+      assignee_type: raw ? 'user' : null,
+    };
+  }
+  const id = String(match[2] || '').trim() || null;
+  if (String(match[1] || '').toLowerCase() === 'role') {
+    return {
+      assignee_id: null,
+      assignee_role_id: id,
+      assignee_type: id ? 'role' : null,
+    };
+  }
+  return {
+    assignee_id: id,
+    assignee_role_id: null,
+    assignee_type: id ? 'user' : null,
+  };
+};
+
+const updateNextStageTaskField = async (
+  targetTask: Record<string, any>,
+  fieldKey: string,
+  nextValue: any
+) => {
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  const targetTaskId = String(targetTask?.id || '').trim();
+  if (!normalizedFieldKey || !targetTaskId) return;
+
+  const recurrence = parseWorkflowObject(targetTask?.recurrence_info);
+  const customFields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
+  const isCustomField = customFields.some((field) => String(field?.key || '').trim() === normalizedFieldKey);
+
+  if (isCustomField) {
+    const currentValues = mergeProcessTaskCustomFieldValues(
+      customFields,
+      getProcessTaskCustomFieldValuesFromRecurrence(recurrence)
+    );
+    const nextRecurrence = {
+      ...recurrence,
+      [PROCESS_TASK_CUSTOM_FIELDS_KEY]: customFields,
+      [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: {
+        ...currentValues,
+        [normalizedFieldKey]: nextValue,
+      },
+    };
+    const { error } = await supabase
+      .from('tasks')
+      .update({ recurrence_info: nextRecurrence, updated_at: new Date().toISOString() })
+      .eq('id', targetTaskId);
+    if (error) throw error;
+    targetTask.recurrence_info = nextRecurrence;
+    return;
+  }
+
+  const patch = normalizedFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
+    ? buildAssigneePatch(nextValue)
+    : { [normalizedFieldKey]: nextValue };
+  const { error } = await supabase
+    .from('tasks')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', targetTaskId);
+  if (error) throw error;
+  Object.assign(targetTask, patch);
+};
+
 const getCurrentAuthUser = async () => {
   const { data } = await supabase.auth.getUser();
   return data?.user || null;
@@ -1879,6 +2049,16 @@ export const executeWorkflowAction = async (
 
   if (action.type === 'send_email') {
     throw new Error('ارسال ایمیل هنوز پیاده‌سازی نشده است.');
+  }
+
+  if (action.type === 'send_to_next_stages') {
+    const fieldMeta = parseProcessNextStageFieldKey(String(config.field || '').trim());
+    if (!fieldMeta) return;
+    const targetTask = await resolveNextStageTargetTask(moduleId, currentRecord, fieldMeta.offset);
+    if (!targetTask) return;
+    const nextValue = await resolveConfiguredActionValue(moduleId, config, currentRecord);
+    await updateNextStageTaskField(targetTask, fieldMeta.fieldKey, nextValue);
+    return;
   }
 
   if (action.type === 'update_record') {

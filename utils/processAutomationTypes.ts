@@ -29,7 +29,9 @@ export type ProcessAutomationActionType =
   | 'send_sms'
   | 'send_email'
   | 'send_bale_bot'
-  | 'send_rubika_bot';
+  | 'send_rubika_bot'
+  | 'update_record'
+  | 'send_to_next_stages';
 
 export type ProcessAutomationRule = {
   id: string;
