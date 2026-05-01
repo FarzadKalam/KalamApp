@@ -30,6 +30,8 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { resolveTemplateOptionLabelMaps, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 
+const MESSAGE_COMPOSER_MODAL_Z_INDEX = 30000;
+
 type ReadyTextRow = {
   id: string;
   title: string;
@@ -158,7 +160,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 240,
     virtual: false,
-    overlayZIndexBase: 12600,
+    overlayZIndexBase: MESSAGE_COMPOSER_MODAL_Z_INDEX + 100,
   };
 
   useEffect(() => {
@@ -527,7 +529,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       onCancel={onCancel}
       width={1080}
       destroyOnHidden
-      zIndex={12500}
+      zIndex={MESSAGE_COMPOSER_MODAL_Z_INDEX}
       maskClosable={false}
       getContainer={() => document.body}
       modalRender={(node) => (

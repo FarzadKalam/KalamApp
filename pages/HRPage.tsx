@@ -8,12 +8,12 @@ import {
   Empty,
   Form,
   Input,
-  InputNumber,
   Modal,
+  Progress,
   Row,
-  Select,
   Space,
   Spin,
+  Steps,
   Table,
   Tag,
   Tabs,
@@ -21,9 +21,14 @@ import {
 } from 'antd';
 import {
   ArrowRightOutlined,
+  CheckOutlined,
+  CheckCircleOutlined,
   CloseOutlined,
   ClockCircleOutlined,
+  EditOutlined,
+  EyeOutlined,
   HistoryOutlined,
+  PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
@@ -45,8 +50,9 @@ import { ensureDefaultHrTaskGoals, executeGoalProgress, normalizeGoalRecord } fr
 import FormulaEditorModal from '../components/formulas/FormulaEditorModal';
 import ActivityPerformanceRulesManager from '../components/hr/ActivityPerformanceRulesManager';
 import AdaptiveSelectField from '../components/AdaptiveSelectField';
+import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { evaluateGoalRewardRules, type GoalRewardEntry, type GoalRewardFormula } from '../utils/goalRewardRuntime';
-import { syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
+import { buildGoalRewardSourceKey, syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
 import {
   fetchPayrollLedgerEntries,
   isMissingPayrollLedgerError,
@@ -69,6 +75,8 @@ import {
 } from '../utils/commissionRuntime';
 import type { GoalRecord } from '../utils/goalTypes';
 import { resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../utils/popupContainer';
+import { employeesModule } from '../modules/employeesConfig';
+import { fetchCurrentUserRolePermissions, type ModulePermissionConfig } from '../utils/permissions';
 
 type TaskRecord = {
   id: string;
@@ -99,7 +107,16 @@ type ProfileRecord = {
   source_id?: string;
   employment_status?: string | null;
   role?: string | null;
+  salary_type?: string | null;
+  default_work_schedule_id?: string | null;
+  has_flexible_hours?: boolean | null;
+  expected_daily_minutes?: number | string | null;
+  grace_minutes_for_late?: number | string | null;
+  overtime_auto_approve?: boolean | null;
+  leave_auto_approve?: boolean | null;
+  mission_auto_approve?: boolean | null;
   base_salary?: number | string | null;
+  hourly_rate?: number | string | null;
   overtime_rate?: number | string | null;
   late_penalty_rate?: number | string | null;
   early_bonus_rate?: number | string | null;
@@ -169,13 +186,7 @@ type EmployeeSummaryRow = {
 };
 
 type PayrollFormValues = {
-  base_salary: number;
-  overtime_rate: number;
-  late_penalty_rate: number;
-  early_bonus_rate: number;
-  production_bonus_rate: number;
-  seniority_base_amount: number;
-  seniority_formula_id?: string | null;
+  [key: string]: any;
 };
 
 type CommissionCalculationFormValues = {
@@ -212,11 +223,41 @@ type EmployeeGoalTouchRow = {
   goalName: string;
   achievedValue: number;
   targetValue: number;
+  subAchievedValue: number;
+  subTargetValue: number;
   activeLevelLabel: string;
   moduleLabel: string;
+  metricLabel: string;
   periodLabel: string;
+  subPeriodLabel: string;
   rewardSuggestion: number;
   rewardEntries: GoalRewardEntry[];
+  sourceKeys: string[];
+  payrollStatus?: 'not_registered' | 'proposed' | 'included_in_payroll';
+  payrollSlipId?: string | null;
+  payrollSlipName?: string | null;
+};
+
+type PayrollPeriodSlipRow = {
+  id: string;
+  employee_id: string | null;
+  name: string | null;
+  status: string | null;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+type PayrollDashboardLedgerRow = {
+  id: string;
+  employee_id: string | null;
+  entry_type: string | null;
+  source_type: string | null;
+  source_key?: string | null;
+  title: string | null;
+  amount: number;
+  status: string | null;
+  payroll_slip_id?: string | null;
+  details?: Record<string, any> | null;
 };
 
 type HrSupportStats = {
@@ -409,11 +450,41 @@ const COMMISSION_PERCENT_MODE_OPTIONS: Array<{ label: string; value: CommissionP
   { label: 'درصد پورسانت پیش فرض بازاریاب (کارمند)', value: 'employee_default' },
 ];
 
+const HR_PAYROLL_CONFIG_BLOCK_IDS = new Set(['attendance_policy_info', 'payroll_info', 'insurance_info']);
+const HR_PAYROLL_CONFIG_BLOCKS = employeesModule.blocks
+  .filter((block: any) => HR_PAYROLL_CONFIG_BLOCK_IDS.has(String(block.id || '')))
+  .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
+const HR_PAYROLL_CONFIG_FIELDS = employeesModule.fields
+  .filter((field: any) => HR_PAYROLL_CONFIG_BLOCK_IDS.has(String(field.blockId || '')))
+  .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
+
+const PAYROLL_LEDGER_SOURCE_LABELS: Record<string, string> = {
+  activity_performance: 'عملکرد فعالیت',
+  commission: 'پورسانت',
+  goal_reward: 'پاداش هدف',
+  attendance_overtime: 'اضافه‌کاری تردد',
+};
+
 const toNumber = (value: unknown): number => {
   if (value === null || value === undefined || value === '') return 0;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const isMissingSourceKeyError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('source_key') && (text.includes('column') || text.includes('could not find') || text.includes('schema cache'));
+};
+
+const buildCommissionSourceKey = (row: Pick<CommissionPreviewRow, 'employee_id' | 'invoice_id' | 'basis' | 'percent_mode' | 'item_keys'>) =>
+  [
+    'commission',
+    String(row.employee_id || '').trim(),
+    String(row.invoice_id || '').trim(),
+    String(row.basis || '').trim(),
+    String(row.percent_mode || '').trim(),
+    [...(row.item_keys || [])].sort().join('|'),
+  ].join(':');
 
 const parseDate = (value: string | null | undefined): dayjs.Dayjs | null => {
   if (!value) return null;
@@ -439,6 +510,16 @@ const parseDateParam = (rawDate: string | null): Dayjs | null => {
   if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
   const normalized = dayjs(gregorian);
   return normalized.isValid() ? normalized : null;
+};
+
+const toNativeGregorianDateString = (value: Dayjs | null | undefined): string | null => {
+  if (!value?.isValid?.()) return null;
+  const date = value.toDate();
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const year = String(date.getFullYear()).padStart(4, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
@@ -853,28 +934,12 @@ const buildSummaries = ({
     const employeeActivityEntries = (activityEntriesByEmployee.get(String(profile.source_id || profile.id || '')) || [])
       .filter((entry) => payrollEligibleTaskIds.has(String(entry.task_id)));
     const activityPerformanceTotal = employeeActivityEntries.reduce((sum, entry) => sum + toNumber(entry.amount), 0);
-    const overtimeHours = assigneeTasks
-      .filter((task) => payrollEligibleTaskIds.has(String(task.id)))
-      .reduce((sum, task) => {
-        const spent = toNumber(task.spent_hours);
-        const estimated = toNumber(task.estimated_hours);
-        return sum + Math.max(0, spent - estimated);
-      }, 0);
+    const overtimeHours = 0;
     const lateHours = payrollDetailRows.reduce((sum, row) => sum + row.lateHours, 0);
 
     const baseSalary = toNumber(profile.base_salary);
-    const overtimeRate = toNumber(profile.overtime_rate);
-    const latePenaltyRate = toNumber(profile.late_penalty_rate);
-    const earlyBonusRate = toNumber(profile.early_bonus_rate);
-    const productionBonusRate = toNumber(profile.production_bonus_rate);
-    const earlyCount = payrollDetailRows.filter((row) => row.performanceCode === 'early').length;
-
-    const bonusTotal =
-      (overtimeHours * overtimeRate) +
-      (earlyCount * earlyBonusRate) +
-      (producedQty * productionBonusRate) +
-      activityPerformanceTotal;
-    const penaltyTotal = lateHours * latePenaltyRate;
+    const bonusTotal = 0;
+    const penaltyTotal = 0;
     const netPayable = baseSalary + taskWageTotal + bonusTotal - penaltyTotal;
 
     return {
@@ -924,12 +989,26 @@ const HRPage: React.FC = () => {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [activityPerformanceEntries, setActivityPerformanceEntries] = useState<ActivityPerformanceEntry[]>([]);
+  const [savingActivityPerformance, setSavingActivityPerformance] = useState(false);
   const [goalTouchRows, setGoalTouchRows] = useState<EmployeeGoalTouchRow[]>([]);
   const [goalTouchLoading, setGoalTouchLoading] = useState(false);
   const [commissionRows, setCommissionRows] = useState<CommissionPreviewRow[]>([]);
   const [commissionLoading, setCommissionLoading] = useState(false);
   const [calculatedCommissionRows, setCalculatedCommissionRows] = useState<CommissionLedgerRow[]>([]);
   const [calculatedCommissionLoading, setCalculatedCommissionLoading] = useState(false);
+  const [payrollPeriodSlips, setPayrollPeriodSlips] = useState<PayrollPeriodSlipRow[]>([]);
+  const [payrollLedgerRows, setPayrollLedgerRows] = useState<PayrollDashboardLedgerRow[]>([]);
+  const [payrollStatusLoading, setPayrollStatusLoading] = useState(false);
+  const [payrollWizardOpen, setPayrollWizardOpen] = useState(false);
+  const [payrollWizardEmployeeId, setPayrollWizardEmployeeId] = useState<string | null>(null);
+  const [payrollWizardStep, setPayrollWizardStep] = useState(0);
+  const [employeeModulePermissions, setEmployeeModulePermissions] = useState<ModulePermissionConfig>({});
+  const [editingPayrollWizardFieldKey, setEditingPayrollWizardFieldKey] = useState<string | null>(null);
+  const [payrollWizardDraftValues, setPayrollWizardDraftValues] = useState<Record<string, any>>({});
+  const [savingPayrollWizardFieldKey, setSavingPayrollWizardFieldKey] = useState<string | null>(null);
+  const [creatingPayrollSlip, setCreatingPayrollSlip] = useState(false);
+  const [savingGoalLedger, setSavingGoalLedger] = useState(false);
+  const [savingOvertimeLedgerKey, setSavingOvertimeLedgerKey] = useState<string | null>(null);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionModalSaving, setCommissionModalSaving] = useState(false);
   const [commissionForm] = Form.useForm<CommissionCalculationFormValues>();
@@ -953,13 +1032,12 @@ const HRPage: React.FC = () => {
   const [requestRows, setRequestRows] = useState<HrRequestRecord[]>([]);
   const [activeTab, setActiveTab] = useState('performance');
   const [showKpiManager, setShowKpiManager] = useState(false);
-  const [formulaOptions, setFormulaOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [formulaModalConfig, setFormulaModalConfig] = useState<{
     open: boolean;
     defaultScope: string;
     defaultContextType: string;
     defaultOutputType: string;
-    assignToField?: keyof PayrollFormValues;
+    assignToField?: string;
   }>({
     open: false,
     defaultScope: 'activity_performance',
@@ -969,11 +1047,42 @@ const HRPage: React.FC = () => {
 
   const formatMoney = useCallback((value: number) => `${formatPersianPrice(value)} ${currencyLabel}`, [currencyLabel]);
 
+  useEffect(() => {
+    let mounted = true;
+    const loadPermissions = async () => {
+      try {
+        const permissions = await fetchCurrentUserRolePermissions(supabase);
+        if (!mounted) return;
+        setEmployeeModulePermissions(permissions?.employees || {});
+      } catch (err) {
+        console.warn('Could not fetch employee permissions:', err);
+        if (mounted) setEmployeeModulePermissions({ edit: true, fields: {} });
+      }
+    };
+    void loadPermissions();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const canViewEmployeePayrollField = useCallback(
+    (fieldKey: string) => {
+      const fields = employeeModulePermissions.fields || {};
+      if (Object.prototype.hasOwnProperty.call(fields, fieldKey)) {
+        return fields[fieldKey] !== false;
+      }
+      return true;
+    },
+    [employeeModulePermissions.fields],
+  );
+
+  const canEditEmployeePayrollConfig = employeeModulePermissions.edit !== false;
+
   const monthStart = useMemo(() => selectedRange[0].startOf('day'), [selectedRange]);
   const monthEnd = useMemo(() => selectedRange[1].endOf('day'), [selectedRange]);
   const selectedRangeQuery = useMemo(() => {
-    const from = toGregorianDateString(monthStart, 'YYYY-MM-DD');
-    const to = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+    const from = toNativeGregorianDateString(monthStart);
+    const to = toNativeGregorianDateString(monthEnd);
     return `from=${from || ''}&to=${to || ''}`;
   }, [monthStart, monthEnd]);
 
@@ -988,8 +1097,8 @@ const HRPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const from = toGregorianDateString(monthStart, 'YYYY-MM-DD');
-    const to = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+    const from = toNativeGregorianDateString(monthStart);
+    const to = toNativeGregorianDateString(monthEnd);
     if (!from || !to) return;
     const nextPath = employeeId ? `/hr/${employeeId}` : '/hr';
     const nextUrl = `${nextPath}?from=${from}&to=${to}`;
@@ -1013,6 +1122,21 @@ const HRPage: React.FC = () => {
     });
   }, []);
 
+  const toHrRangePickerDate = (value: Dayjs) => {
+    return toNativeGregorianDateString(value);
+  };
+
+  const getHrRangePickerDisplayValue = (value: [Dayjs, Dayjs]) => {
+    const start = toHrRangePickerDate(value[0]);
+    const end = toHrRangePickerDate(value[1]);
+    const startLabel = start ? safeJalaliFormat(start, 'YYYY/MM/DD') : '';
+    const endLabel = end ? safeJalaliFormat(end, 'YYYY/MM/DD') : '';
+    if (startLabel && endLabel) return `${toPersianNumber(startLabel)} تا ${toPersianNumber(endLabel)}`;
+    if (startLabel) return `${toPersianNumber(startLabel)} تا ...`;
+    if (endLabel) return `... تا ${toPersianNumber(endLabel)}`;
+    return '';
+  };
+
   const renderHrRangePicker = useCallback((
     value: [Dayjs, Dayjs],
     onChange: (value: PersianDateRangeValue | null) => void,
@@ -1020,12 +1144,13 @@ const HRPage: React.FC = () => {
   ) => (
     <PersianDateRangePicker
       value={[
-        toGregorianDateString(value[0], 'YYYY-MM-DD'),
-        toGregorianDateString(value[1], 'YYYY-MM-DD'),
+        toHrRangePickerDate(value[0]),
+        toHrRangePickerDate(value[1]),
       ]}
       onChange={onChange}
       placeholder="بازه زمانی"
-      modalContainer={resolveSelectPopupContainer}
+      displayValue={getHrRangePickerDisplayValue(value)}
+      modalContainer={resolveOverlayPopupContainer}
       overlayZIndexBase={overlayZIndexBase}
       className="w-full"
     />
@@ -1066,7 +1191,16 @@ const HRPage: React.FC = () => {
         source_id: String(row?.id),
         employment_status: row?.employment_status || 'active',
         role: row?.employment_type || null,
+        salary_type: row?.salary_type || 'performance',
+        default_work_schedule_id: row?.default_work_schedule_id || null,
+        has_flexible_hours: row?.has_flexible_hours ?? false,
+        expected_daily_minutes: row?.expected_daily_minutes ?? 480,
+        grace_minutes_for_late: row?.grace_minutes_for_late ?? 0,
+        overtime_auto_approve: row?.overtime_auto_approve ?? false,
+        leave_auto_approve: row?.leave_auto_approve ?? false,
+        mission_auto_approve: row?.mission_auto_approve ?? false,
         base_salary: row?.base_salary ?? 0,
+        hourly_rate: row?.hourly_rate ?? 0,
         overtime_rate: row?.overtime_rate ?? 0,
         late_penalty_rate: row?.late_penalty_rate ?? 0,
         early_bonus_rate: row?.early_bonus_rate ?? 0,
@@ -1088,7 +1222,16 @@ const HRPage: React.FC = () => {
         source_id: String(row?.id),
         employment_status: null,
         role: row?.role || null,
+        salary_type: row?.salary_type || 'performance',
+        default_work_schedule_id: row?.default_work_schedule_id || null,
+        has_flexible_hours: row?.has_flexible_hours ?? false,
+        expected_daily_minutes: row?.expected_daily_minutes ?? 480,
+        grace_minutes_for_late: row?.grace_minutes_for_late ?? 0,
+        overtime_auto_approve: row?.overtime_auto_approve ?? false,
+        leave_auto_approve: row?.leave_auto_approve ?? false,
+        mission_auto_approve: row?.mission_auto_approve ?? false,
         base_salary: row?.base_salary ?? 0,
+        hourly_rate: row?.hourly_rate ?? 0,
         overtime_rate: row?.overtime_rate ?? 0,
         late_penalty_rate: row?.late_penalty_rate ?? 0,
         early_bonus_rate: row?.early_bonus_rate ?? 0,
@@ -1127,7 +1270,9 @@ const HRPage: React.FC = () => {
 
       let nextActivityPerformanceEntries: ActivityPerformanceEntry[] = [];
       try {
-        const [rulesResult, performanceFormulasResult] = await Promise.all([
+        const periodStart = toNativeGregorianDateString(monthStart);
+        const periodEnd = toNativeGregorianDateString(monthEnd);
+        const [rulesResult, performanceFormulasResult, existingPerformanceResult] = await Promise.all([
           supabase
             .from('activity_performance_rules')
             .select('id, name, employee_id, task_type, formula_id, output_type, priority, conditions_all, conditions_any, is_active, config')
@@ -1137,10 +1282,34 @@ const HRPage: React.FC = () => {
             .from('calculation_formulas')
             .select('id, name, expression_config, output_type, config')
             .eq('is_active', true),
+          periodStart && periodEnd
+            ? supabase
+              .from('payroll_calculation_entries')
+              .select('source_key, details, status')
+              .eq('source_type', 'activity_performance')
+              .eq('period_start', periodStart)
+              .eq('period_end', periodEnd)
+              .neq('status', 'voided')
+              .limit(5000)
+            : Promise.resolve({ data: [], error: null } as any),
         ]);
 
         if (rulesResult.error) throw rulesResult.error;
         if (performanceFormulasResult.error) throw performanceFormulasResult.error;
+        const existingPerformanceErrorText = String(
+          existingPerformanceResult.error?.message || existingPerformanceResult.error?.details || ''
+        ).toLowerCase();
+        const missingPerformanceSourceKey =
+          existingPerformanceErrorText.includes('source_key') &&
+          (existingPerformanceErrorText.includes('column') || existingPerformanceErrorText.includes('schema cache') || existingPerformanceErrorText.includes('could not find'));
+        if (existingPerformanceResult.error && !isMissingPayrollLedgerError(existingPerformanceResult.error) && !missingPerformanceSourceKey) throw existingPerformanceResult.error;
+        const alreadyIncludedSourceKeys = new Set<string>();
+        (existingPerformanceResult.data || []).forEach((entry: any) => {
+          const sourceKey = String(entry?.source_key || entry?.details?.source_key || '').trim();
+          if (sourceKey && String(entry?.status || '') === 'included_in_payroll') {
+            alreadyIncludedSourceKeys.add(sourceKey);
+          }
+        });
 
         const employeeIdByAssigneeId = normalizedProfiles.reduce<Record<string, string>>((acc, profile) => {
           const assigneeId = String(profile.related_profile_id || profile.id || '').trim();
@@ -1172,6 +1341,7 @@ const HRPage: React.FC = () => {
           tasks: normalizedTasks,
           employeeIdByAssigneeId,
           taskMetricsById,
+          alreadyIncludedSourceKeys,
         });
       } catch (error) {
         console.warn('Activity performance rules are not available yet.', error);
@@ -1181,14 +1351,6 @@ const HRPage: React.FC = () => {
       setProfiles(normalizedProfiles);
       setTasks(normalizedTasks);
       setActivityPerformanceEntries(nextActivityPerformanceEntries);
-      setFormulaOptions(
-        (formulasResult.data || [])
-          .map((row: any) => ({
-            label: String(row?.name || row?.id || '').trim(),
-            value: String(row?.id || '').trim(),
-          }))
-          .filter((item) => item.label && item.value),
-      );
 
       const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult] = await Promise.allSettled([
         supabase
@@ -1453,10 +1615,96 @@ const HRPage: React.FC = () => {
     return allSummaries.filter((row) => selectedSet.has(String(row.profile.id)));
   }, [allSummaries, selectedEmployeeIds]);
 
-  const singleSelectedProfileForPayrollConfig = useMemo(() => {
-    if (visibleSummaries.length !== 1) return null;
-    return visibleSummaries[0]?.profile || null;
-  }, [visibleSummaries]);
+  const refreshPayrollPeriodState = useCallback(async () => {
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    const employeeIds = profiles
+      .filter((profile) => profile.source_table === 'employees' && profile.source_id)
+      .map((profile) => String(profile.source_id || '').trim())
+      .filter(Boolean);
+    if (!periodStart || !periodEnd || employeeIds.length === 0) {
+      setPayrollPeriodSlips([]);
+      setPayrollLedgerRows([]);
+      return;
+    }
+
+    setPayrollStatusLoading(true);
+    try {
+      const [slipsResult, initialLedgerResult] = await Promise.all([
+        supabase
+          .from('payroll_slips')
+          .select('id, employee_id, name, status, period_start, period_end')
+          .eq('period_start', periodStart)
+          .eq('period_end', periodEnd)
+          .in('employee_id', employeeIds)
+          .neq('status', 'canceled'),
+        supabase
+          .from('payroll_calculation_entries')
+          .select('id, employee_id, entry_type, source_type, source_key, title, amount, status, payroll_slip_id, details')
+          .eq('period_start', periodStart)
+          .eq('period_end', periodEnd)
+          .in('employee_id', employeeIds)
+          .in('status', ['draft', 'proposed', 'included_in_payroll']),
+      ]);
+      let ledgerResult: any = initialLedgerResult;
+      if (ledgerResult.error && isMissingSourceKeyError(ledgerResult.error)) {
+        ledgerResult = await supabase
+          .from('payroll_calculation_entries')
+          .select('id, employee_id, entry_type, source_type, title, amount, status, payroll_slip_id, details')
+          .eq('period_start', periodStart)
+          .eq('period_end', periodEnd)
+          .in('employee_id', employeeIds)
+          .in('status', ['draft', 'proposed', 'included_in_payroll']);
+      }
+      if (slipsResult.error) throw slipsResult.error;
+      if (ledgerResult.error && !isMissingPayrollLedgerError(ledgerResult.error)) throw ledgerResult.error;
+      setPayrollPeriodSlips((slipsResult.data || []) as PayrollPeriodSlipRow[]);
+      setPayrollLedgerRows(((ledgerResult.data || []) as any[]).map((row) => ({
+        id: String(row?.id || ''),
+        employee_id: row?.employee_id || null,
+        entry_type: row?.entry_type || null,
+        source_type: row?.source_type || null,
+        source_key: row?.source_key || row?.details?.source_key || null,
+        title: row?.title || null,
+        amount: toNumber(row?.amount),
+        status: row?.status || null,
+        payroll_slip_id: row?.payroll_slip_id || null,
+        details: row?.details || null,
+      })));
+    } catch (error) {
+      console.warn('Payroll period status is not available yet.', error);
+      setPayrollPeriodSlips([]);
+      setPayrollLedgerRows([]);
+    } finally {
+      setPayrollStatusLoading(false);
+    }
+  }, [monthEnd, monthStart, profiles]);
+
+  useEffect(() => {
+    void refreshPayrollPeriodState();
+  }, [refreshPayrollPeriodState]);
+
+  const payrollSlipByEmployeeId = useMemo(() => {
+    return new Map(
+      payrollPeriodSlips
+        .filter((row) => row.employee_id)
+        .map((row) => [String(row.employee_id), row] as const),
+    );
+  }, [payrollPeriodSlips]);
+
+  const payrollSlipById = useMemo(() => {
+    return new Map(payrollPeriodSlips.map((row) => [String(row.id), row] as const));
+  }, [payrollPeriodSlips]);
+
+  const payrollLedgerByEmployeeId = useMemo(() => {
+    const map = new Map<string, PayrollDashboardLedgerRow[]>();
+    payrollLedgerRows.forEach((row) => {
+      const employeeKey = String(row.employee_id || '').trim();
+      if (!employeeKey) return;
+      map.set(employeeKey, [...(map.get(employeeKey) || []), row]);
+    });
+    return map;
+  }, [payrollLedgerRows]);
 
   useEffect(() => {
     if (activeTab !== 'goal_fulfillment') return;
@@ -1502,6 +1750,23 @@ const HRPage: React.FC = () => {
                 snapshot,
                 formulas: rewardFormulas,
               });
+              const sourceKeys = rewardEntries
+                .filter((entry) => entry.formula_id && toNumber(entry.amount) !== 0)
+                .map((entry) => buildGoalRewardSourceKey({
+                  employeeId: String(profile.source_id || ''),
+                  goalId: goal.id,
+                  formulaId: entry.formula_id,
+                  triggerType: entry.trigger_type,
+                  outputType: entry.output_type,
+                }));
+              const matchingLedger = payrollLedgerRows.find((entry) => (
+                String(entry.employee_id || '') === String(profile.source_id || '') &&
+                String(entry.source_type || '') === 'goal_reward' &&
+                sourceKeys.includes(String(entry.source_key || entry.details?.source_key || ''))
+              ));
+              const relatedSlip = matchingLedger?.payroll_slip_id
+                ? payrollSlipById.get(String(matchingLedger.payroll_slip_id))
+                : null;
               nextRows.push({
                 key: `${profile.source_id}_${goal.id}`,
                 employeeId: String(profile.source_id || ''),
@@ -1510,11 +1775,21 @@ const HRPage: React.FC = () => {
                 goalName: goal.name,
                 achievedValue: snapshot.achievedValue,
                 targetValue: snapshot.targetValue,
+                subAchievedValue: snapshot.subAchievedValue,
+                subTargetValue: snapshot.subTargetValue,
                 activeLevelLabel: snapshot.activeLevelKey ? snapshot.levels.find((item) => item.key === snapshot.activeLevelKey)?.label || '-' : 'در حال پیشروی',
                 moduleLabel: snapshot.moduleLabel,
+                metricLabel: snapshot.metricLabel,
                 periodLabel: `${snapshot.mainRange.startLabel} تا ${snapshot.mainRange.endLabel}`,
+                subPeriodLabel: `${snapshot.subRange.startLabel} تا ${snapshot.subRange.endLabel}`,
                 rewardSuggestion: rewardEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0),
                 rewardEntries,
+                sourceKeys,
+                payrollStatus: matchingLedger
+                  ? (String(matchingLedger.status || '') === 'included_in_payroll' ? 'included_in_payroll' : 'proposed')
+                  : 'not_registered',
+                payrollSlipId: matchingLedger?.payroll_slip_id || null,
+                payrollSlipName: relatedSlip?.name || null,
               });
             } catch {
               continue;
@@ -1532,11 +1807,11 @@ const HRPage: React.FC = () => {
     };
 
     void run();
-  }, [activeTab, visibleSummaries]);
+  }, [activeTab, payrollLedgerRows, payrollSlipById, visibleSummaries]);
 
   const fetchCalculatedCommissionRows = useCallback(async () => {
-    const periodStart = toGregorianDateString(monthStart, 'YYYY-MM-DD');
-    const periodEnd = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
     if (!periodStart || !periodEnd) return;
 
     const targetEmployeeIds = visibleSummaries
@@ -1603,6 +1878,80 @@ const HRPage: React.FC = () => {
     if (!employeeId) return null;
     return allSummaries.find((row) => String(row.profile.id) === String(employeeId)) || null;
   }, [allSummaries, employeeId]);
+
+  const selectedActivityGroups = useMemo(() => {
+    if (!selectedEmployeeSummary) return [];
+    const taskById = new Map(selectedEmployeeSummary.detailRows.map((row) => [String(row.taskId), row]));
+    const groups = new Map<string, {
+      key: string;
+      title: string;
+      entries: ActivityPerformanceEntry[];
+      metricKeys: string[];
+      rows: Array<TaskDetailRow & { metricValues: Record<string, number>; metricAmounts: Record<string, number>; groupAmount: number }>;
+      totalAmount: number;
+    }>();
+
+    (selectedEmployeeSummary.activityPerformanceEntries || []).forEach((entry) => {
+      const groupKey = String(entry.source_rule_id || 'unknown');
+      const current = groups.get(groupKey) || {
+        key: groupKey,
+        title: entry.title || 'محاسبه عملکرد',
+        entries: [],
+        metricKeys: [],
+        rows: [],
+        totalAmount: 0,
+      };
+      current.entries.push(entry);
+      const metricKey = String(entry.metric_key || 'amount');
+      if (!current.metricKeys.includes(metricKey)) current.metricKeys.push(metricKey);
+      current.totalAmount += toNumber(entry.amount);
+      groups.set(groupKey, current);
+    });
+
+    groups.forEach((group) => {
+      const rowsByTask = new Map<string, TaskDetailRow & { metricValues: Record<string, number>; metricAmounts: Record<string, number>; groupAmount: number }>();
+      group.entries.forEach((entry) => {
+        const taskId = String(entry.task_id || '').trim();
+        const baseRow = taskById.get(taskId);
+        if (!baseRow) return;
+        const row = rowsByTask.get(taskId) || {
+          ...baseRow,
+          metricValues: {},
+          metricAmounts: {},
+          groupAmount: 0,
+        };
+        const metricKey = String(entry.metric_key || 'amount');
+        row.metricValues[metricKey] = (row.metricValues[metricKey] || 0) + toNumber(entry.quantity ?? 1);
+        row.metricAmounts[metricKey] = (row.metricAmounts[metricKey] || 0) + toNumber(entry.amount);
+        row.groupAmount += toNumber(entry.amount);
+        rowsByTask.set(taskId, row);
+      });
+      group.rows = Array.from(rowsByTask.values());
+    });
+
+    const matchedTaskIds = new Set(
+      Array.from(groups.values()).flatMap((group) => group.rows.map((row) => String(row.taskId))),
+    );
+    const unmatchedRows = selectedEmployeeSummary.detailRows
+      .filter((row) => !matchedTaskIds.has(String(row.taskId)))
+      .map((row) => ({
+        ...row,
+        metricValues: {},
+        metricAmounts: {},
+        groupAmount: 0,
+      }));
+    return [
+      ...Array.from(groups.values()).filter((group) => group.rows.length > 0),
+      ...(unmatchedRows.length > 0 ? [{
+        key: 'without_activity_performance',
+        title: 'بدون محاسبه عملکرد',
+        entries: [],
+        metricKeys: [],
+        rows: unmatchedRows,
+        totalAmount: 0,
+      }] : []),
+    ];
+  }, [selectedEmployeeSummary]);
 
   const profileByRelatedId = useMemo(() => {
     const entries = profiles
@@ -1894,6 +2243,66 @@ const HRPage: React.FC = () => {
     rewardSuggestion: goalTouchRows.reduce((sum, row) => sum + row.rewardSuggestion, 0),
   }), [goalTouchRows]);
 
+  const goalCards = useMemo(() => {
+    const grouped = new Map<string, {
+      key: string;
+      goalId: string;
+      goalName: string;
+      moduleLabel: string;
+      periodLabel: string;
+      rows: EmployeeGoalTouchRow[];
+      rewardTotal: number;
+    }>();
+    goalTouchRows.forEach((row) => {
+      const current = grouped.get(row.goalId) || {
+        key: row.goalId,
+        goalId: row.goalId,
+        goalName: row.goalName,
+        moduleLabel: row.moduleLabel,
+        periodLabel: row.periodLabel,
+        rows: [],
+        rewardTotal: 0,
+      };
+      current.rows.push(row);
+      current.rewardTotal += toNumber(row.rewardSuggestion);
+      grouped.set(row.goalId, current);
+    });
+    return Array.from(grouped.values());
+  }, [goalTouchRows]);
+
+  const payrollLedgerTotalsByEmployeeId = useMemo(() => {
+    const map = new Map<string, {
+      commission: number;
+      goals: number;
+      activity: number;
+      attendance: number;
+      proposedNet: number;
+      includedNet: number;
+    }>();
+    payrollLedgerRows.forEach((row) => {
+      const employeeIdValue = String(row.employee_id || '').trim();
+      if (!employeeIdValue) return;
+      const current = map.get(employeeIdValue) || {
+        commission: 0,
+        goals: 0,
+        activity: 0,
+        attendance: 0,
+        proposedNet: 0,
+        includedNet: 0,
+      };
+      const amount = toNumber(row.amount);
+      const sourceType = String(row.source_type || '');
+      if (sourceType === 'commission') current.commission += amount;
+      else if (sourceType === 'goal_reward') current.goals += amount;
+      else if (sourceType === 'activity_performance') current.activity += amount;
+      else if (sourceType.startsWith('attendance_')) current.attendance += amount;
+      if (String(row.status || '') === 'included_in_payroll') current.includedNet += amount;
+      else current.proposedNet += amount;
+      map.set(employeeIdValue, current);
+    });
+    return map;
+  }, [payrollLedgerRows]);
+
   const commissionTotals = useMemo(() => {
     const rowsByBasis = {
       approved_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'approved_invoices'),
@@ -1926,6 +2335,111 @@ const HRPage: React.FC = () => {
       presenceMinutes: calculatePresenceMinutes(attendanceComputedRows),
     };
   }, [attendanceComputedRows]);
+
+  const computeRequiredWorkMinutesForProfile = useCallback((profile: ProfileRecord | null | undefined) => {
+    if (!profile?.id) return 0;
+    let total = 0;
+    let cursor = monthStart.startOf('day');
+    const end = monthEnd.startOf('day');
+    while (cursor.valueOf() <= end.valueOf()) {
+      const dateIso = toNativeGregorianDateString(cursor);
+      const schedule = computeScheduleForEmployee(String(profile.id), dateIso);
+      if (schedule.shifts.length > 0) {
+        total += schedule.shifts.reduce((sum, shift) => {
+          const start = timeToMinutes(shift.start);
+          const finish = timeToMinutes(shift.end);
+          return sum + (start !== null && finish !== null && finish > start ? finish - start : 0);
+        }, 0);
+      } else if (cursor.toDate().getDay() !== 5) {
+        total += toNumber(profile.expected_daily_minutes || 480);
+      }
+      cursor = cursor.add(1, 'day');
+    }
+    return total;
+  }, [computeScheduleForEmployee, monthEnd, monthStart]);
+
+  const payrollWizardSummary = useMemo(() => {
+    if (!payrollWizardEmployeeId) return null;
+    return visibleSummaries.find((row) => String(row.profile.source_id || row.profile.id) === String(payrollWizardEmployeeId)) || null;
+  }, [payrollWizardEmployeeId, visibleSummaries]);
+
+  const visiblePayrollConfigFields = useMemo(
+    () => HR_PAYROLL_CONFIG_FIELDS.filter((field: any) => canViewEmployeePayrollField(String(field.key || ''))),
+    [canViewEmployeePayrollField],
+  );
+
+  const payrollWizardEmployeeLedger = useMemo(() => {
+    if (!payrollWizardEmployeeId) return [];
+    return payrollLedgerByEmployeeId.get(String(payrollWizardEmployeeId)) || [];
+  }, [payrollLedgerByEmployeeId, payrollWizardEmployeeId]);
+
+  const payrollWizardOpenLedger = useMemo(
+    () => payrollWizardEmployeeLedger.filter((entry) => ['draft', 'proposed'].includes(String(entry.status || ''))),
+    [payrollWizardEmployeeLedger],
+  );
+
+  const payrollWizardIncludedLedger = useMemo(
+    () => payrollWizardEmployeeLedger.filter((entry) => String(entry.status || '') === 'included_in_payroll'),
+    [payrollWizardEmployeeLedger],
+  );
+
+  const payrollWizardAttendanceRows = useMemo(() => {
+    if (!payrollWizardEmployeeId) return [];
+    return attendanceComputedRows.filter((row) => String(row.employeeId || '') === String(payrollWizardEmployeeId));
+  }, [attendanceComputedRows, payrollWizardEmployeeId]);
+
+  const payrollWizardGoalRows = useMemo(() => {
+    if (!payrollWizardEmployeeId) return [];
+    return goalTouchRows.filter((row) => String(row.employeeId || '') === String(payrollWizardEmployeeId));
+  }, [goalTouchRows, payrollWizardEmployeeId]);
+
+  const payrollWizardRequiredMinutes = useMemo(
+    () => computeRequiredWorkMinutesForProfile(payrollWizardSummary?.profile),
+    [computeRequiredWorkMinutesForProfile, payrollWizardSummary?.profile],
+  );
+
+  const payrollWizardHourlyRate = useMemo(() => {
+    const profile = payrollWizardSummary?.profile;
+    const explicitRate = toNumber(profile?.hourly_rate);
+    if (explicitRate > 0) return explicitRate;
+    const requiredHours = payrollWizardRequiredMinutes / 60;
+    return requiredHours > 0 ? toNumber(profile?.base_salary) / requiredHours : 0;
+  }, [payrollWizardRequiredMinutes, payrollWizardSummary?.profile]);
+
+  const payrollWizardLedgerNet = useMemo(
+    () => payrollWizardOpenLedger.reduce((sum, entry) => sum + toNumber(entry.amount), 0),
+    [payrollWizardOpenLedger],
+  );
+
+  const payrollWizardInsurance = useMemo(() => {
+    const row = payrollWizardSummary;
+    if (!row || row.profile.insurance_subject === false) return { employee: 0, employer: 0 };
+    return {
+      employee: (row.netPayable * toNumber(row.profile.employee_insurance_rate)) / 100,
+      employer: (row.netPayable * toNumber(row.profile.employer_insurance_rate)) / 100,
+    };
+  }, [payrollWizardSummary]);
+
+  const payrollWizardFinalNet = useMemo(
+    () => toNumber(payrollWizardSummary?.netPayable) + payrollWizardLedgerNet - payrollWizardInsurance.employee,
+    [payrollWizardInsurance.employee, payrollWizardLedgerNet, payrollWizardSummary?.netPayable],
+  );
+
+  const openPayrollWizard = useCallback((employeeIdValue: string) => {
+    setPayrollWizardEmployeeId(employeeIdValue);
+    setPayrollWizardStep(0);
+    setEditingPayrollWizardFieldKey(null);
+    setPayrollWizardDraftValues({});
+    setPayrollWizardOpen(true);
+  }, []);
+
+  const closePayrollWizard = useCallback(() => {
+    setPayrollWizardOpen(false);
+    setPayrollWizardEmployeeId(null);
+    setPayrollWizardStep(0);
+    setEditingPayrollWizardFieldKey(null);
+    setPayrollWizardDraftValues({});
+  }, []);
 
   const closeAttendanceModal = useCallback(() => {
     setAttendanceModalOpen(false);
@@ -2013,8 +2527,8 @@ const HRPage: React.FC = () => {
       '';
     commissionForm.setFieldsValue({
       period_range: [
-        toGregorianDateString(selectedRange[0], 'YYYY-MM-DD'),
-        toGregorianDateString(selectedRange[1], 'YYYY-MM-DD'),
+        toNativeGregorianDateString(selectedRange[0]),
+        toNativeGregorianDateString(selectedRange[1]),
       ],
       employee_profile_id: defaultProfileId,
       basis: 'prepaid_and_settled_invoices',
@@ -2025,8 +2539,8 @@ const HRPage: React.FC = () => {
   }, [commissionForm, profiles, selectedEmployeeIds, selectedRange, visibleSummaries]);
 
   const getCommissionPeriodValues = useCallback((values: Partial<CommissionCalculationFormValues>) => {
-    const periodStart = String(values.period_range?.[0] || toGregorianDateString(selectedRange[0], 'YYYY-MM-DD') || '').trim();
-    const periodEnd = String(values.period_range?.[1] || toGregorianDateString(selectedRange[1], 'YYYY-MM-DD') || '').trim();
+    const periodStart = String(values.period_range?.[0] || toNativeGregorianDateString(selectedRange[0]) || '').trim();
+    const periodEnd = String(values.period_range?.[1] || toNativeGregorianDateString(selectedRange[1]) || '').trim();
     const startDate = parseDateValue(periodStart);
     const endDate = parseDateValue(periodEnd);
     if (!periodStart || !periodEnd || !startDate?.isValid() || !endDate?.isValid()) return null;
@@ -2182,6 +2696,7 @@ const HRPage: React.FC = () => {
           period_end: periodEnd,
           entry_type: `commission_${row.basis}_${row.percent_mode}_${groupHash}`,
           source_type: 'commission',
+          source_key: buildCommissionSourceKey(row),
           source_module_id: `commission:${row.basis}:${row.percent_mode}`,
           source_record_id: row.invoice_id,
           title: `پورسانت ${row.invoice_name}`,
@@ -2228,15 +2743,11 @@ const HRPage: React.FC = () => {
 
   const openPayrollConfigModal = (profile: ProfileRecord) => {
     setEditingProfile(profile);
-    configForm.setFieldsValue({
-      base_salary: toNumber(profile.base_salary),
-      overtime_rate: toNumber(profile.overtime_rate),
-      late_penalty_rate: toNumber(profile.late_penalty_rate),
-      early_bonus_rate: toNumber(profile.early_bonus_rate),
-      production_bonus_rate: toNumber(profile.production_bonus_rate),
-      seniority_base_amount: toNumber(profile.seniority_base_amount),
-      seniority_formula_id: profile.seniority_formula_id || null,
-    });
+    const values = HR_PAYROLL_CONFIG_FIELDS.reduce<Record<string, any>>((acc, field: any) => {
+      acc[field.key] = (profile as any)[field.key] ?? field.defaultValue ?? null;
+      return acc;
+    }, {});
+    configForm.setFieldsValue(values);
     setPayrollConfigModalOpen(true);
   };
 
@@ -2245,6 +2756,208 @@ const HRPage: React.FC = () => {
     setConfigModalOpen(true);
   };
 
+  const handleSaveActivityPerformanceEntries = useCallback(async () => {
+    if (!selectedEmployeeSummary?.profile?.source_id) {
+      message.error('کارمند معتبر برای ثبت محاسبه عملکرد پیدا نشد.');
+      return;
+    }
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) {
+      message.error('بازه محاسبه معتبر نیست.');
+      return;
+    }
+
+    const candidateEntries = (selectedEmployeeSummary.activityPerformanceEntries || [])
+      .filter((entry) => String(entry.source_key || '').trim() && toNumber(entry.amount) !== 0);
+    if (candidateEntries.length === 0) {
+      message.info('ردیف قابل ثبت برای محاسبه عملکرد وجود ندارد.');
+      return;
+    }
+
+    setSavingActivityPerformance(true);
+    try {
+      const sourceKeys = candidateEntries.map((entry) => String(entry.source_key || '').trim()).filter(Boolean);
+      let existingKeys = new Set<string>();
+      const { data: existingRows, error: existingError } = await supabase
+        .from('payroll_calculation_entries')
+        .select('source_key, details')
+        .eq('source_type', 'activity_performance')
+        .eq('employee_id', String(selectedEmployeeSummary.profile.source_id))
+        .eq('period_start', periodStart)
+        .eq('period_end', periodEnd)
+        .neq('status', 'voided')
+        .in('source_key', sourceKeys);
+      if (existingError) {
+        const text = String(existingError?.message || existingError?.details || '').toLowerCase();
+        const missingSourceKey = text.includes('source_key') && (text.includes('column') || text.includes('schema cache') || text.includes('could not find'));
+        if (!missingSourceKey && !isMissingPayrollLedgerError(existingError)) throw existingError;
+      } else {
+        existingKeys = new Set((existingRows || []).map((row: any) => String(row?.source_key || row?.details?.source_key || '').trim()).filter(Boolean));
+      }
+
+      const rowsToSave = candidateEntries.filter((entry) => !existingKeys.has(String(entry.source_key || '').trim()));
+      if (rowsToSave.length === 0) {
+        message.info('همه محاسبه‌های این بازه قبلا ثبت شده‌اند.');
+        return;
+      }
+
+      const payloads = rowsToSave.map((entry) => ({
+        employee_id: String(selectedEmployeeSummary.profile.source_id),
+        period_start: periodStart,
+        period_end: periodEnd,
+        entry_type: entry.output_type === 'penalty' || toNumber(entry.amount) < 0 ? 'penalty' : 'activity_performance',
+        source_type: 'activity_performance',
+        source_key: String(entry.source_key || '').trim(),
+        source_module_id: 'tasks',
+        source_record_id: entry.task_id || null,
+        title: entry.title || entry.metric_label || 'محاسبه عملکرد',
+        amount: toNumber(entry.amount),
+        quantity: entry.quantity ?? null,
+        rate: entry.rate ?? null,
+        status: 'proposed',
+        assignee_id: selectedEmployeeSummary.profile.related_profile_id || null,
+        details: {
+          source_key: entry.source_key || null,
+          source_rule_id: entry.source_rule_id,
+          task_id: entry.task_id,
+          metric_key: entry.metric_key || null,
+          metric_label: entry.metric_label || null,
+          output_type: entry.output_type,
+          snapshot: entry.snapshot || {},
+        },
+      }));
+
+      const { error } = await supabase.from('payroll_calculation_entries').insert(payloads);
+      if (error) throw error;
+      message.success(`${toPersianNumber(payloads.length)} ردیف محاسبه عملکرد ثبت شد.`);
+      await fetchData(true);
+    } catch (error: any) {
+      if (String(error?.code || '').toUpperCase() === '23505') {
+        message.info('برخی ردیف‌ها قبلا ثبت شده‌اند و دوباره ثبت نشدند.');
+        await fetchData(true);
+      } else {
+        message.error(toFaErrorMessage(error, 'ثبت محاسبه عملکرد ناموفق بود.'));
+      }
+    } finally {
+      setSavingActivityPerformance(false);
+    }
+  }, [fetchData, message, monthEnd, monthStart, selectedEmployeeSummary]);
+
+  const handleSaveGoalRewardRows = useCallback(async (rows: EmployeeGoalTouchRow[]) => {
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) {
+      message.error('بازه محاسبه معتبر نیست.');
+      return;
+    }
+    const profileItems = rows
+      .filter((row) => row.rewardEntries.length > 0 && row.payrollStatus !== 'included_in_payroll')
+      .map((row) => {
+        const profile = profiles.find((item) => String(item.source_id || item.id) === String(row.employeeId));
+        return profile ? {
+          employeeId: String(profile.source_id || profile.id),
+          profileUserId: String(profile.related_profile_id || profile.id),
+          profileName: profile.full_name || row.employeeName || null,
+        } : null;
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    const uniqueProfiles = Array.from(new Map(profileItems.map((item) => [item.employeeId, item])).values());
+    if (uniqueProfiles.length === 0) {
+      message.info('ردیف قابل ثبت برای تحقق اهداف وجود ندارد.');
+      return;
+    }
+
+    setSavingGoalLedger(true);
+    try {
+      await syncGoalRewardEntriesForPayroll(supabase as any, {
+        profiles: uniqueProfiles,
+        periodStart,
+        periodEnd,
+      });
+      message.success('محاسبه تحقق اهداف در فیش حقوقی آماده شد.');
+      await refreshPayrollPeriodState();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ثبت تحقق اهداف ناموفق بود.'));
+    } finally {
+      setSavingGoalLedger(false);
+    }
+  }, [message, monthEnd, monthStart, profiles, refreshPayrollPeriodState]);
+
+  const buildAttendanceOvertimeSourceKey = (row: AttendanceComputedRow) =>
+    `attendance_overtime:${String(row.employeeId || '').trim()}:${String(row.attendanceDate || row.key || '').trim()}`;
+
+  const handleApproveAttendanceOvertime = useCallback(async (row: AttendanceComputedRow) => {
+    if (!row.employeeId || row.overtimeStayMinutes <= 0) return;
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) {
+      message.error('بازه محاسبه معتبر نیست.');
+      return;
+    }
+    const sourceKey = buildAttendanceOvertimeSourceKey(row);
+    const employee = profiles.find((item) => String(item.source_id || item.id) === String(row.employeeId));
+    const overtimeHours = row.overtimeStayMinutes / 60;
+    const rate = toNumber(employee?.overtime_rate || employee?.hourly_rate);
+    const amount = overtimeHours * rate;
+    setSavingOvertimeLedgerKey(sourceKey);
+    try {
+      const { error: requestError } = await supabase.from('overtime_requests').insert({
+        employee_id: row.employeeId,
+        status: 'approved',
+        work_date: row.attendanceDate,
+        start_time: row.scheduledEnd || null,
+        end_time: parseDate(row.checkOutAt)?.format('HH:mm') || null,
+        total_minutes: row.overtimeStayMinutes,
+        notes: `تایید اضافه‌کاری از ویزارد فیش حقوقی برای ${row.employeeName}`,
+      });
+      if (requestError) throw requestError;
+
+      const { data: existingRows, error: existingError } = await supabase
+        .from('payroll_calculation_entries')
+        .select('id, status')
+        .eq('employee_id', row.employeeId)
+        .eq('period_start', periodStart)
+        .eq('period_end', periodEnd)
+        .eq('source_type', 'attendance_overtime')
+        .eq('source_key', sourceKey)
+        .neq('status', 'voided');
+      if (existingError && !isMissingPayrollLedgerError(existingError) && !isMissingSourceKeyError(existingError)) throw existingError;
+      const alreadyExists = (existingRows || []).some((entry: any) => String(entry?.status || '') !== 'voided');
+      if (!alreadyExists && amount !== 0) {
+        const { error: insertError } = await supabase.from('payroll_calculation_entries').insert({
+          employee_id: row.employeeId,
+          period_start: periodStart,
+          period_end: periodEnd,
+          entry_type: 'attendance_overtime',
+          source_type: 'attendance_overtime',
+          source_key: sourceKey,
+          source_module_id: 'attendance_logs',
+          source_record_id: row.rawIds[0] || row.id || null,
+          title: `اضافه‌کاری ${row.employeeName}`,
+          amount,
+          quantity: overtimeHours,
+          rate,
+          status: 'proposed',
+          details: {
+            source_key: sourceKey,
+            attendance_date: row.attendanceDate,
+            raw_ids: row.rawIds,
+            overtime_minutes: row.overtimeStayMinutes,
+            employee_name: row.employeeName,
+          },
+        });
+        if (insertError && !isMissingPayrollLedgerError(insertError)) throw insertError;
+      }
+      message.success('اضافه‌کاری تایید و برای فیش آماده شد.');
+      await refreshPayrollPeriodState();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ثبت اضافه‌کاری ناموفق بود.'));
+    } finally {
+      setSavingOvertimeLedgerKey(null);
+    }
+  }, [message, monthEnd, monthStart, profiles, refreshPayrollPeriodState]);
+
   const handleSavePayrollConfig = async () => {
     if (!editingProfile?.id) return;
     try {
@@ -2252,17 +2965,26 @@ const HRPage: React.FC = () => {
       setSavingProfileConfig(true);
       const targetTable = editingProfile.source_table === 'profiles' ? 'profiles' : 'employees';
       const targetId = editingProfile.source_id || editingProfile.id;
-      const patch: Record<string, any> = {
-        base_salary: toNumber(values.base_salary),
-        overtime_rate: toNumber(values.overtime_rate),
-        late_penalty_rate: toNumber(values.late_penalty_rate),
-        early_bonus_rate: toNumber(values.early_bonus_rate),
-        production_bonus_rate: toNumber(values.production_bonus_rate),
-      };
-      if (targetTable === 'employees') {
-        patch.seniority_base_amount = toNumber(values.seniority_base_amount);
-        patch.seniority_formula_id = values.seniority_formula_id || null;
-      }
+      const fieldsToSave = targetTable === 'employees'
+        ? HR_PAYROLL_CONFIG_FIELDS
+        : HR_PAYROLL_CONFIG_FIELDS.filter((field: any) => [
+          'base_salary',
+          'overtime_rate',
+          'late_penalty_rate',
+          'early_bonus_rate',
+          'production_bonus_rate',
+          'insurance_subject',
+          'employee_insurance_rate',
+          'employer_insurance_rate',
+        ].includes(String(field.key)));
+      const patch = fieldsToSave.reduce<Record<string, any>>((acc, field: any) => {
+        const rawValue = values[field.key];
+        const type = String(field.type || '');
+        if (['number', 'price', 'percentage'].includes(type)) acc[field.key] = toNumber(rawValue);
+        else if (type === 'checkbox') acc[field.key] = Boolean(rawValue);
+        else acc[field.key] = rawValue === undefined || rawValue === '' ? null : rawValue;
+        return acc;
+      }, {});
       const { error } = await supabase
         .from(targetTable)
         .update(patch)
@@ -2278,149 +3000,332 @@ const HRPage: React.FC = () => {
     }
   };
 
-  const handleCreatePayrollSlips = useCallback(async () => {
+  const handleSavePayrollWizardConfigField = async (field: any) => {
+    const profile = payrollWizardSummary?.profile;
+    const fieldKey = String(field?.key || '').trim();
+    if (!profile?.id || !fieldKey) return;
+    if (!canEditEmployeePayrollConfig) {
+      message.error('دسترسی ویرایش تنظیمات کارمند را ندارید.');
+      return;
+    }
+
+    const targetTable = profile.source_table === 'profiles' ? 'profiles' : 'employees';
+    const targetId = profile.source_id || profile.id;
+    const profileFallbackAllowedFields = new Set([
+      'base_salary',
+      'overtime_rate',
+      'late_penalty_rate',
+      'early_bonus_rate',
+      'production_bonus_rate',
+      'insurance_subject',
+      'employee_insurance_rate',
+      'employer_insurance_rate',
+    ]);
+    if (targetTable !== 'employees' && !profileFallbackAllowedFields.has(fieldKey)) {
+      message.error('این فیلد برای رکورد کاربر قابل ویرایش نیست.');
+      return;
+    }
+
+    const rawValue = Object.prototype.hasOwnProperty.call(payrollWizardDraftValues, fieldKey)
+      ? payrollWizardDraftValues[fieldKey]
+      : (profile as any)[fieldKey];
+    const type = String(field.type || '');
+    const nextValue = ['number', 'price', 'percentage'].includes(type)
+      ? toNumber(rawValue)
+      : type === 'checkbox'
+        ? Boolean(rawValue)
+        : rawValue === undefined || rawValue === '' ? null : rawValue;
+
+    setSavingPayrollWizardFieldKey(fieldKey);
     try {
-      const targetRows = visibleSummaries.filter((row) => row.profile?.source_table === 'employees' && row.profile?.source_id);
-      if (targetRows.length === 0) {
-        message.info('برای کارکنان انتخاب‌شده داده‌ای برای ایجاد فیش حقوقی وجود ندارد.');
-        return;
-      }
+      const { error } = await supabase
+        .from(targetTable)
+        .update({ [fieldKey]: nextValue })
+        .eq('id', targetId);
+      if (error) throw error;
 
-      const employeeIds = targetRows.map((row) => String(row.profile.source_id || '')).filter(Boolean);
-      const periodStart = toGregorianDateString(monthStart, 'YYYY-MM-DD');
-      const periodEnd = toGregorianDateString(monthEnd, 'YYYY-MM-DD');
-      if (!periodStart || !periodEnd) {
-        message.error('بازه فیش حقوقی معتبر نیست.');
-        return;
-      }
+      setProfiles((current) => current.map((item) => (
+        String(item.source_id || item.id) === String(profile.source_id || profile.id)
+          ? { ...item, [fieldKey]: nextValue }
+          : item
+      )));
+      setEditingPayrollWizardFieldKey(null);
+      setPayrollWizardDraftValues((current) => {
+        const next = { ...current };
+        delete next[fieldKey];
+        return next;
+      });
+      message.success('فیلد ذخیره شد.');
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'ذخیره فیلد ناموفق بود'));
+    } finally {
+      setSavingPayrollWizardFieldKey(null);
+    }
+  };
 
-      const { data: existingRows, error: existingError } = await supabase
-        .from('payroll_slips')
-        .select('id, employee_id')
-        .eq('period_start', periodStart)
-        .eq('period_end', periodEnd)
-        .in('employee_id', employeeIds);
-      if (existingError) throw existingError;
+  const ensureActivityPerformanceLedgerForSummary = useCallback(async (row: EmployeeSummaryRow, periodStart: string, periodEnd: string) => {
+    const employeeIdValue = String(row.profile.source_id || '').trim();
+    if (!employeeIdValue) return;
+    const candidateEntries = (row.activityPerformanceEntries || [])
+      .filter((entry) => String(entry.source_key || '').trim() && toNumber(entry.amount) !== 0);
+    if (candidateEntries.length === 0) return;
 
-      const existingEmployeeIds = new Set((existingRows || []).map((row: any) => String(row?.employee_id || '')).filter(Boolean));
-      const rowsToCreate = targetRows.filter((row) => !existingEmployeeIds.has(String(row.profile.source_id || '')));
-      if (rowsToCreate.length === 0) {
-        message.info('برای این بازه، فیش حقوقی کارکنان انتخاب‌شده قبلا ایجاد شده است.');
-        navigate('/payroll_slips');
-        return;
-      }
+    const sourceKeys = candidateEntries.map((entry) => String(entry.source_key || '').trim()).filter(Boolean);
+    const { data: existingRows, error: existingError } = await supabase
+      .from('payroll_calculation_entries')
+      .select('source_key, details')
+      .eq('source_type', 'activity_performance')
+      .eq('employee_id', employeeIdValue)
+      .eq('period_start', periodStart)
+      .eq('period_end', periodEnd)
+      .neq('status', 'voided')
+      .in('source_key', sourceKeys);
+    if (existingError && !isMissingPayrollLedgerError(existingError) && !isMissingSourceKeyError(existingError)) throw existingError;
 
+    const existingKeys = new Set((existingRows || []).map((entry: any) => String(entry?.source_key || entry?.details?.source_key || '').trim()).filter(Boolean));
+    const payloads = candidateEntries
+      .filter((entry) => !existingKeys.has(String(entry.source_key || '').trim()))
+      .map((entry) => ({
+        employee_id: employeeIdValue,
+        period_start: periodStart,
+        period_end: periodEnd,
+        entry_type: entry.output_type === 'penalty' || toNumber(entry.amount) < 0 ? 'penalty' : 'activity_performance',
+        source_type: 'activity_performance',
+        source_key: String(entry.source_key || '').trim(),
+        source_module_id: 'tasks',
+        source_record_id: entry.task_id || null,
+        title: entry.title || entry.metric_label || 'محاسبه عملکرد',
+        amount: toNumber(entry.amount),
+        quantity: entry.quantity ?? null,
+        rate: entry.rate ?? null,
+        status: 'proposed',
+        assignee_id: row.profile.related_profile_id || null,
+        details: {
+          source_key: entry.source_key || null,
+          source_rule_id: entry.source_rule_id,
+          task_id: entry.task_id,
+          metric_key: entry.metric_key || null,
+          metric_label: entry.metric_label || null,
+          output_type: entry.output_type,
+          snapshot: entry.snapshot || {},
+        },
+      }));
+    if (payloads.length > 0) {
+      const { error } = await supabase.from('payroll_calculation_entries').insert(payloads);
+      if (error && String(error?.code || '').toUpperCase() !== '23505') throw error;
+    }
+  }, []);
+
+  const handleCreatePayrollSlipFromWizard = useCallback(async () => {
+    const row = payrollWizardSummary;
+    if (!row?.profile?.source_id) {
+      message.error('کارمند معتبر برای ایجاد فیش پیدا نشد.');
+      return;
+    }
+    const employeeIdValue = String(row.profile.source_id);
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) {
+      message.error('بازه فیش حقوقی معتبر نیست.');
+      return;
+    }
+    const existingSlip = payrollSlipByEmployeeId.get(employeeIdValue);
+    if (existingSlip?.id) {
+      navigate(`/payroll_slips/${existingSlip.id}`);
+      return;
+    }
+
+    setCreatingPayrollSlip(true);
+    try {
+      await ensureActivityPerformanceLedgerForSummary(row, periodStart, periodEnd);
       await syncGoalRewardEntriesForPayroll(supabase as any, {
-        profiles: rowsToCreate
-          .map((row) => ({
-            employeeId: String(row.profile.source_id || '').trim(),
-            profileUserId: String(row.profile.related_profile_id || row.profile.id || '').trim(),
-            profileName: row.name,
-          }))
-          .filter((item) => item.employeeId && item.profileUserId),
+        profiles: [{
+          employeeId: employeeIdValue,
+          profileUserId: String(row.profile.related_profile_id || row.profile.id),
+          profileName: row.name,
+        }],
         periodStart,
         periodEnd,
       });
 
-      const rowsToCreateEmployeeIds = rowsToCreate.map((row) => String(row.profile.source_id || '')).filter(Boolean);
-      const ledgerEntries = await fetchPayrollLedgerEntries(supabase as any, rowsToCreateEmployeeIds, periodStart, periodEnd);
-      const ledgerByEmployee = new Map<string, typeof ledgerEntries>();
-      ledgerEntries.forEach((entry) => {
-        const key = String(entry.employee_id || '').trim();
-        if (!key) return;
-        ledgerByEmployee.set(key, [...(ledgerByEmployee.get(key) || []), entry]);
-      });
-
-      const payloads = await Promise.all(rowsToCreate.map(async (row) => {
-        const employeeIdValue = String(row.profile.source_id || '');
-        const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
-        const employeeLedgerEntries = ledgerByEmployee.get(employeeIdValue) || [];
-        const ledgerLines = mapPayrollLedgerEntriesToLines(employeeLedgerEntries);
-        const ledgerNet = sumPayrollLedgerEntries(employeeLedgerEntries);
-        const ledgerBonusTotal = employeeLedgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
-        const ledgerDeductionTotal = employeeLedgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
-        const activityPerformanceTotal = toNumber(row.activityPerformanceTotal);
-        const activityPerformanceBonusTotal = Math.max(0, activityPerformanceTotal);
-        const activityPerformancePenaltyTotal = Math.abs(Math.min(0, activityPerformanceTotal));
-        const otherBonusTotal = Math.max(0, row.bonusTotal - activityPerformanceTotal);
-        const lines = [
+      const ledgerEntries = await fetchPayrollLedgerEntries(supabase as any, [employeeIdValue], periodStart, periodEnd);
+      const ledgerLines = mapPayrollLedgerEntriesToLines(ledgerEntries);
+      const ledgerNet = sumPayrollLedgerEntries(ledgerEntries);
+      const ledgerBonusTotal = ledgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
+      const ledgerDeductionTotal = ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
+      const employeeInsuranceAmount = row.profile?.insurance_subject === false
+        ? 0
+        : (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100;
+      const employerInsuranceAmount = row.profile?.insurance_subject === false
+        ? 0
+        : (row.netPayable * toNumber(row.profile?.employer_insurance_rate)) / 100;
+      const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
+      const payload = {
+        name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
+        system_code: systemCode,
+        employee_id: employeeIdValue,
+        period_start: periodStart,
+        period_end: periodEnd,
+        status: 'draft',
+        assignee_id: row.profile.related_profile_id || null,
+        base_salary: row.baseSalary,
+        task_wage_total: row.taskWageTotal,
+        bonus_total: ledgerBonusTotal,
+        deduction_total: ledgerDeductionTotal + employeeInsuranceAmount,
+        insurance_employee_amount: employeeInsuranceAmount,
+        insurance_employer_amount: employerInsuranceAmount,
+        gross_amount: row.baseSalary + row.taskWageTotal + ledgerBonusTotal,
+        net_amount: row.netPayable + ledgerNet - employeeInsuranceAmount,
+        lines: [
           { line_type: 'earning', title: 'حقوق پایه', amount: row.baseSalary, description: `بازه ${periodStart} تا ${periodEnd}` },
           { line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` },
-          ...(otherBonusTotal > 0 ? [{ line_type: 'bonus', title: 'مزایا و پاداش', amount: otherBonusTotal, description: 'محاسبه از عملکرد پایه' }] : []),
-          ...(activityPerformanceTotal !== 0 ? [{
-            line_type: activityPerformanceTotal < 0 ? 'deduction' : 'bonus',
-            title: 'ضرایب فعالیت‌ها',
-            amount: Math.abs(activityPerformanceTotal),
-            description: `${toPersianNumber(row.activityPerformanceEntries.length)} محاسبه فرمولی`,
-          }] : []),
-          ...(row.penaltyTotal > 0 ? [{ line_type: 'deduction', title: 'کسورات', amount: row.penaltyTotal, description: 'تاخیر و سایر کسورات' }] : []),
           ...ledgerLines,
-          ...(row.profile?.insurance_subject !== false && (toNumber(row.profile?.employee_insurance_rate) > 0)
-            ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100, description: 'برآورد از تنظیمات پرسنل' }]
-            : []),
-        ];
-        const employeeInsuranceAmount = row.profile?.insurance_subject === false
-          ? 0
-          : (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100;
-        const employerInsuranceAmount = row.profile?.insurance_subject === false
-          ? 0
-          : (row.netPayable * toNumber(row.profile?.employer_insurance_rate)) / 100;
-
-        return {
-          name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
-          system_code: systemCode,
-          employee_id: employeeIdValue,
-          period_start: periodStart,
-          period_end: periodEnd,
-          status: 'draft',
-          assignee_id: row.profile.related_profile_id || null,
-          base_salary: row.baseSalary,
-          task_wage_total: row.taskWageTotal,
-          bonus_total: otherBonusTotal + activityPerformanceBonusTotal + ledgerBonusTotal,
-          deduction_total: row.penaltyTotal + activityPerformancePenaltyTotal + ledgerDeductionTotal + employeeInsuranceAmount,
-          insurance_employee_amount: employeeInsuranceAmount,
-          insurance_employer_amount: employerInsuranceAmount,
-          gross_amount: row.baseSalary + row.taskWageTotal + otherBonusTotal + activityPerformanceBonusTotal + ledgerBonusTotal,
-          net_amount: row.netPayable + ledgerNet - employeeInsuranceAmount,
-          lines,
-          payments: [],
-          performance_snapshot: {
-            total_tasks: row.totalTasks,
-            done_count: row.doneCount,
-            overdue_open_count: row.overdueOpenCount,
-            overtime_hours: row.overtimeHours,
-            late_hours: row.lateHours,
-            produced_qty: row.producedQty,
-            activity_performance_total: activityPerformanceTotal,
-            activity_performance_entries: row.activityPerformanceEntries,
-            payroll_ledger_entry_ids: employeeLedgerEntries.map((entry) => entry.id),
+          ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
+        ],
+        payments: [],
+        performance_snapshot: {
+          total_tasks: row.totalTasks,
+          done_count: row.doneCount,
+          overtime_hours: row.overtimeHours,
+          late_hours: row.lateHours,
+          produced_qty: row.producedQty,
+          payroll_ledger_entry_ids: ledgerEntries.map((entry) => entry.id),
+          attendance: {
+            required_minutes: payrollWizardRequiredMinutes,
+            hourly_rate: payrollWizardHourlyRate,
+            presence_minutes: calculatePresenceMinutes(payrollWizardAttendanceRows),
           },
-          task_ids: row.detailRows.map((detail) => detail.taskId).filter(Boolean),
-          notes: `ایجاد شده از داشبورد منابع انسانی برای بازه ${periodStart} تا ${periodEnd}`,
-        };
-      }));
+        },
+        task_ids: row.detailRows.map((detail) => detail.taskId).filter(Boolean),
+        notes: `ایجاد شده از ویزارد منابع انسانی برای بازه ${periodStart} تا ${periodEnd}`,
+      };
 
-      const { data: insertedRows, error: insertError } = await supabase
+      const { data: inserted, error: insertError } = await supabase
         .from('payroll_slips')
-        .insert(payloads)
-        .select('id, employee_id');
+        .insert(payload)
+        .select('id, employee_id')
+        .single();
       if (insertError) throw insertError;
-
-      await Promise.all((insertedRows || []).map(async (inserted: any) => {
-        const employeeId = String(inserted?.employee_id || '').trim();
-        const slipId = String(inserted?.id || '').trim();
-        const ids = (ledgerByEmployee.get(employeeId) || []).map((entry) => entry.id);
-        await markPayrollLedgerEntriesIncluded(supabase as any, ids, slipId);
-      }));
-
-      message.success(`${toPersianNumber(rowsToCreate.length)} فیش حقوقی ایجاد شد.`);
-      const firstId = insertedRows?.[0]?.id ? String(insertedRows[0].id) : '';
-      if (firstId) navigate(`/payroll_slips/${firstId}`);
-      else navigate('/payroll_slips');
+      await markPayrollLedgerEntriesIncluded(supabase as any, ledgerEntries.map((entry) => entry.id), String(inserted?.id || ''));
+      message.success('فیش حقوقی پیش‌نویس ایجاد شد.');
+      closePayrollWizard();
+      await refreshPayrollPeriodState();
+      navigate(`/payroll_slips/${inserted.id}`);
     } catch (error: any) {
-      message.error(toFaErrorMessage(error));
+      message.error(toFaErrorMessage(error, 'ایجاد فیش حقوقی ناموفق بود.'));
+    } finally {
+      setCreatingPayrollSlip(false);
     }
-  }, [message, monthEnd, monthStart, navigate, visibleSummaries]);
+  }, [
+    closePayrollWizard,
+    ensureActivityPerformanceLedgerForSummary,
+    message,
+    monthEnd,
+    monthStart,
+    navigate,
+    payrollSlipByEmployeeId,
+    payrollWizardAttendanceRows,
+    payrollWizardHourlyRate,
+    payrollWizardRequiredMinutes,
+    payrollWizardSummary,
+    refreshPayrollPeriodState,
+  ]);
+
+  const renderPayrollWizardConfigField = (field: any) => {
+    const profile = payrollWizardSummary?.profile;
+    if (!profile) return null;
+    const fieldKey = String(field.key || '').trim();
+    const fieldLabel = field.labels?.fa || 'فیلد';
+    const isEditing = editingPayrollWizardFieldKey === fieldKey;
+    const baseValue = (profile as any)[fieldKey] ?? field.defaultValue ?? null;
+    const fieldValue = Object.prototype.hasOwnProperty.call(payrollWizardDraftValues, fieldKey)
+      ? payrollWizardDraftValues[fieldKey]
+      : baseValue;
+    const allValues = { ...profile, ...payrollWizardDraftValues, [fieldKey]: fieldValue };
+
+    if (isEditing) {
+      return (
+        <div key={fieldKey} className="rounded-xl border border-gray-200 px-3 py-2 dark:border-gray-800">
+          <div className="mb-1 text-[11px] font-bold text-gray-500">{fieldLabel}</div>
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SmartFieldRenderer
+                field={field}
+                value={fieldValue}
+                onChange={(value) => setPayrollWizardDraftValues((current) => ({ ...current, [fieldKey]: value }))}
+                allValues={allValues}
+                moduleId="employees"
+                forceEditMode
+                compactMode
+                overlayZIndexBase={12000}
+                popupContainer={resolveOverlayPopupContainer}
+                preferLocalPopupContainer
+              />
+            </div>
+            <Button
+              size="small"
+              type="text"
+              icon={<CheckOutlined />}
+              loading={savingPayrollWizardFieldKey === fieldKey}
+              onClick={() => handleSavePayrollWizardConfigField(field)}
+              className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
+            />
+            <Button
+              size="small"
+              type="text"
+              icon={<CloseOutlined />}
+              onClick={() => {
+                setEditingPayrollWizardFieldKey(null);
+                setPayrollWizardDraftValues((current) => {
+                  const next = { ...current };
+                  delete next[fieldKey];
+                  return next;
+                });
+              }}
+              className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
+            />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        key={fieldKey}
+        className={`group min-h-[58px] rounded-xl border border-gray-100 px-3 py-2 transition-colors dark:border-gray-800 ${
+          canEditEmployeePayrollConfig ? 'cursor-pointer hover:border-gray-200 hover:bg-gray-50 dark:hover:bg-white/5' : ''
+        }`}
+        onClick={() => {
+          if (!canEditEmployeePayrollConfig) return;
+          setEditingPayrollWizardFieldKey(fieldKey);
+          setPayrollWizardDraftValues((current) => ({ ...current, [fieldKey]: baseValue }));
+        }}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-bold text-gray-500">{fieldLabel}</div>
+            <div className="mt-1 min-h-[22px] text-sm font-bold text-gray-800 dark:text-gray-100">
+              <SmartFieldRenderer
+                field={field}
+                value={baseValue}
+                onChange={() => undefined}
+                allValues={profile}
+                moduleId="employees"
+                forceEditMode={false}
+                compactMode
+                overlayZIndexBase={12000}
+                popupContainer={resolveOverlayPopupContainer}
+                preferLocalPopupContainer
+              />
+            </div>
+          </div>
+          {canEditEmployeePayrollConfig && (
+            <EditOutlined className="mt-1 shrink-0 text-xs text-leather-400 opacity-0 transition-opacity group-hover:opacity-100" />
+          )}
+        </div>
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -2921,86 +3826,76 @@ const HRPage: React.FC = () => {
       render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
     },
     {
-      title: 'ضرایب فعالیت',
-      dataIndex: 'activityPerformanceTotal',
-      key: 'activityPerformanceTotal',
-      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
+      title: 'عملکرد ثبت‌شده',
+      key: 'activityLedger',
+      render: (_: unknown, row: EmployeeSummaryRow) => {
+        const totals = payrollLedgerTotalsByEmployeeId.get(String(row.profile.source_id || row.profile.id));
+        return <span className="persian-number text-green-700">{formatMoney(totals?.activity || 0)}</span>;
+      },
     },
     {
-      title: 'مزایا',
-      dataIndex: 'bonusTotal',
-      key: 'bonusTotal',
-      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
+      title: 'پورسانت‌ها',
+      key: 'commissionLedger',
+      render: (_: unknown, row: EmployeeSummaryRow) => {
+        const totals = payrollLedgerTotalsByEmployeeId.get(String(row.profile.source_id || row.profile.id));
+        return <span className="persian-number text-green-700">{formatMoney(totals?.commission || 0)}</span>;
+      },
     },
     {
-      title: 'کسورات',
-      dataIndex: 'penaltyTotal',
-      key: 'penaltyTotal',
-      render: (val: number) => <span className="persian-number text-red-700">{formatMoney(val)}</span>,
+      title: 'تحقق اهداف',
+      key: 'goalLedger',
+      render: (_: unknown, row: EmployeeSummaryRow) => {
+        const totals = payrollLedgerTotalsByEmployeeId.get(String(row.profile.source_id || row.profile.id));
+        return <span className="persian-number text-green-700">{formatMoney(totals?.goals || 0)}</span>;
+      },
     },
     {
-      title: 'خالص',
-      dataIndex: 'netPayable',
+      title: 'وضعیت فیش',
+      key: 'payrollStatus',
+      render: (_: unknown, row: EmployeeSummaryRow) => {
+        const slip = payrollSlipByEmployeeId.get(String(row.profile.source_id || row.profile.id));
+        return slip ? (
+          <Tag color="green" icon={<CheckCircleOutlined />}>{slip.name || 'فیش صادر شده'}</Tag>
+        ) : (
+          <Tag color="default">بدون فیش</Tag>
+        );
+      },
+    },
+    {
+      title: 'خالص پیشنهادی',
       key: 'netPayable',
-      render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span>,
-    },
-  ];
-
-  const goalFulfillmentColumns = [
-    {
-      title: 'کارمند',
-      dataIndex: 'employeeName',
-      key: 'employeeName',
-      render: (val: string) => <span className="font-bold text-leather-700">{val}</span>,
+      render: (_: unknown, row: EmployeeSummaryRow) => {
+        const totals = payrollLedgerTotalsByEmployeeId.get(String(row.profile.source_id || row.profile.id));
+        const insurance = row.profile.insurance_subject === false
+          ? 0
+          : (row.netPayable * toNumber(row.profile.employee_insurance_rate)) / 100;
+        return <span className="persian-number font-bold">{formatMoney(row.netPayable + (totals?.proposedNet || 0) - insurance)}</span>;
+      },
     },
     {
-      title: 'هدف',
-      dataIndex: 'goalName',
-      key: 'goalName',
-    },
-    {
-      title: 'ماژول',
-      dataIndex: 'moduleLabel',
-      key: 'moduleLabel',
-      render: (val: string) => <Tag>{val}</Tag>,
-    },
-    {
-      title: 'پیشرفت',
-      key: 'progress',
-      render: (_: unknown, row: EmployeeGoalTouchRow) => (
-        <div className="text-sm">
-          <div>تحقق: <span className="persian-number">{toPersianNumber(row.achievedValue)}</span></div>
-          <div>هدف: <span className="persian-number">{toPersianNumber(row.targetValue)}</span></div>
-        </div>
-      ),
-    },
-    {
-      title: 'سطح',
-      dataIndex: 'activeLevelLabel',
-      key: 'activeLevelLabel',
-      render: (val: string) => <Tag color={val === 'در حال پیشروی' ? 'blue' : 'gold'}>{val}</Tag>,
-    },
-    {
-      title: 'بازه هدف',
-      dataIndex: 'periodLabel',
-      key: 'periodLabel',
-    },
-    {
-      title: 'پاداش/جریمه',
-      dataIndex: 'rewardSuggestion',
-      key: 'rewardSuggestion',
-      render: (_: unknown, row: EmployeeGoalTouchRow) => (
-        <div className="text-sm">
-          <div className={`persian-number font-bold ${row.rewardSuggestion < 0 ? 'text-red-700' : 'text-green-700'}`}>
-            {formatMoney(row.rewardSuggestion)}
-          </div>
-          <div className="mt-1 text-xs leading-6 text-gray-500">
-            {row.rewardEntries.length > 0
-              ? row.rewardEntries.map((entry) => entry.title).join(' | ')
-              : 'تعریف نشده'}
-          </div>
-        </div>
-      ),
+      title: 'عملیات',
+      key: 'actions',
+      fixed: 'right' as const,
+      render: (_: unknown, row: EmployeeSummaryRow) => {
+        const employeeIdValue = String(row.profile.source_id || row.profile.id);
+        const slip = payrollSlipByEmployeeId.get(employeeIdValue);
+        return (
+          <Space size="small" wrap>
+            {slip ? (
+              <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/payroll_slips/${slip.id}`)}>
+                مشاهده فیش
+              </Button>
+            ) : (
+              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openPayrollWizard(employeeIdValue)}>
+                ایجاد فیش
+              </Button>
+            )}
+            <Button size="small" onClick={() => openPayrollConfigModal(row.profile)}>
+              تنظیمات حقوق
+            </Button>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -3286,10 +4181,10 @@ const HRPage: React.FC = () => {
           </Button>
           <Button
             icon={<SafetyCertificateOutlined />}
-            onClick={() => openPayrollConfigModal(selectedEmployeeSummary.profile)}
+            onClick={() => openConfigModal(selectedEmployeeSummary.profile)}
             className="w-full rounded-xl"
           >
-            حقوق و سنوات
+            ضرایب فعالیت‌ها
           </Button>
         </div>
       </div>
@@ -3517,16 +4412,95 @@ const HRPage: React.FC = () => {
         </div>
         {goalTouchLoading ? (
           <div className="py-10 flex items-center justify-center"><Spin /></div>
-        ) : goalTouchRows.length === 0 ? (
+        ) : goalCards.length === 0 ? (
           <Empty description="برای نیروهای انتخاب‌شده هنوز هدف لمس‌شده‌ای پیدا نشد." />
         ) : (
-          <Table
-            rowKey="key"
-            columns={goalFulfillmentColumns}
-            dataSource={goalTouchRows}
-            pagination={{ pageSize: 12, showSizeChanger: false }}
-            scroll={{ x: 1200 }}
-          />
+          <div className="flex snap-x gap-4 overflow-x-auto pb-2">
+            {goalCards.map((card) => (
+              <div key={card.key} className="min-w-[min(920px,calc(100vw-48px))] snap-start rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-black text-gray-800 dark:text-gray-100">{card.goalName}</div>
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
+                      <Tag>{card.moduleLabel}</Tag>
+                      <span>{card.periodLabel}</span>
+                      <span>جمع پاداش: <span className="persian-number font-bold text-green-700">{formatMoney(card.rewardTotal)}</span></span>
+                    </div>
+                  </div>
+                  <Button
+                    type="primary"
+                    loading={savingGoalLedger}
+                    disabled={!card.rows.some((row) => row.rewardEntries.length > 0 && row.payrollStatus !== 'included_in_payroll')}
+                    onClick={() => handleSaveGoalRewardRows(card.rows)}
+                  >
+                    افزودن کارت به فیش حقوقی
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  {card.rows.map((row) => {
+                    const mainPercent = row.targetValue > 0 ? Math.min(100, (row.achievedValue / row.targetValue) * 100) : 0;
+                    const subBase = row.subTargetValue || row.targetValue;
+                    const subPercent = subBase > 0 ? Math.min(100, (row.subAchievedValue / subBase) * 100) : 0;
+                    const isIncluded = row.payrollStatus === 'included_in_payroll';
+                    const isProposed = row.payrollStatus === 'proposed';
+                    return (
+                      <div key={row.key} className="rounded-lg border border-gray-100 p-3 dark:border-gray-800">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="font-bold text-leather-700">{row.employeeName}</div>
+                          <Space size="small" wrap>
+                            <Tag color={row.activeLevelLabel === 'در حال پیشروی' ? 'blue' : 'gold'}>{row.activeLevelLabel}</Tag>
+                            {isIncluded ? (
+                              <Tag color="green" icon={<CheckCircleOutlined />}>
+                                ثبت شده در فیش {row.payrollSlipName || ''}
+                              </Tag>
+                            ) : isProposed ? (
+                              <Tag color="cyan">آماده فیش حقوقی</Tag>
+                            ) : (
+                              <Tag>ثبت نشده</Tag>
+                            )}
+                            {row.payrollSlipId ? (
+                              <Button size="small" onClick={() => navigate(`/payroll_slips/${row.payrollSlipId}`)}>مشاهده فیش</Button>
+                            ) : (
+                              <Button
+                                size="small"
+                                disabled={!row.rewardEntries.length || isIncluded || isProposed}
+                                loading={savingGoalLedger}
+                                onClick={() => handleSaveGoalRewardRows([row])}
+                              >
+                                افزودن به فیش
+                              </Button>
+                            )}
+                          </Space>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <div>
+                            <div className="mb-1 text-xs text-gray-500">پیشرفت اصلی ({row.metricLabel})</div>
+                            <Progress percent={Number(mainPercent.toFixed(1))} />
+                            <div className="persian-number text-xs text-gray-500">
+                              {toPersianNumber(row.achievedValue)} از {toPersianNumber(row.targetValue)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="mb-1 text-xs text-gray-500">پیشرفت فرعی - {row.subPeriodLabel}</div>
+                            <Progress percent={Number(subPercent.toFixed(1))} strokeColor="#16a34a" />
+                            <div className="persian-number text-xs text-gray-500">
+                              {toPersianNumber(row.subAchievedValue)} از {toPersianNumber(subBase)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                          <span>{row.rewardEntries.length ? row.rewardEntries.map((entry) => entry.title).join(' | ') : 'فرمول پاداش تعریف نشده'}</span>
+                          <span className={`persian-number font-black ${row.rewardSuggestion < 0 ? 'text-red-700' : 'text-green-700'}`}>
+                            {formatMoney(row.rewardSuggestion)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </Card>
       {showKpiManager ? (
@@ -3622,21 +4596,8 @@ const HRPage: React.FC = () => {
       <Card>
         <div className="flex flex-wrap gap-2 mb-4">
           <Button onClick={() => navigate('/employees')}>تنظیمات حقوقی کارکنان</Button>
-          <Button
-            onClick={() => singleSelectedProfileForPayrollConfig && openPayrollConfigModal(singleSelectedProfileForPayrollConfig)}
-            disabled={!singleSelectedProfileForPayrollConfig}
-          >
-            تنظیمات حقوق و سنوات
-          </Button>
-          <Button type="primary" onClick={handleCreatePayrollSlips}>
-            ایجاد فیش حقوقی
-          </Button>
+          <Button onClick={refreshPayrollPeriodState} loading={payrollStatusLoading}>بروزرسانی وضعیت فیش‌ها</Button>
         </div>
-        {!singleSelectedProfileForPayrollConfig ? (
-          <div className="mb-4 text-xs leading-6 text-gray-500">
-            برای ویرایش حقوق پایه، اضافه‌کار و سنوات، یک کارمند را از فیلتر بالای صفحه انتخاب کنید.
-          </div>
-        ) : null}
         {visibleSummaries.length === 0 ? (
           <Empty description="داده‌ای برای محاسبه حقوق در این بازه یافت نشد." />
         ) : (
@@ -3645,7 +4606,7 @@ const HRPage: React.FC = () => {
             columns={payrollColumns}
             dataSource={visibleSummaries}
             pagination={{ pageSize: 15, showSizeChanger: false }}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 1500 }}
           />
         )}
       </Card>
@@ -3694,19 +4655,92 @@ const HRPage: React.FC = () => {
               </Row>
 
               <Card>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm text-gray-500">
+                    جمع محاسبه عملکرد قابل ثبت:{' '}
+                    <span className="font-black text-green-700 persian-number">
+                      {formatMoney(selectedEmployeeSummary.activityPerformanceTotal)}
+                    </span>
+                  </div>
+                  <Button
+                    type="primary"
+                    onClick={handleSaveActivityPerformanceEntries}
+                    loading={savingActivityPerformance}
+                    disabled={!selectedEmployeeSummary.activityPerformanceEntries.length}
+                  >
+                    ثبت محاسبه عملکرد
+                  </Button>
+                </div>
                 {selectedEmployeeSummary.detailRows.length === 0 ? (
                   <Empty description="برای این نیرو در این بازه موردی یافت نشد." />
                 ) : (
                   isMobile ? (
                     <div>{selectedEmployeeSummary.detailRows.map(renderTaskMobileCard)}</div>
                   ) : (
-                    <Table
-                      rowKey="key"
-                      columns={detailColumns}
-                      dataSource={selectedEmployeeSummary.detailRows}
-                      pagination={{ pageSize: 30, showSizeChanger: false }}
-                      scroll={{ x: 1300 }}
-                    />
+                    <div className="space-y-4">
+                      {selectedActivityGroups.map((group) => {
+                        const metricLabelByKey = new Map(
+                          group.entries.map((entry) => [String(entry.metric_key || 'amount'), entry.metric_label || entry.metric_key || 'مقدار']),
+                        );
+                        const groupColumns = [
+                          ...detailColumns.slice(0, 8),
+                          ...group.metricKeys.map((metricKey) => ({
+                            title: metricLabelByKey.get(metricKey) || metricKey,
+                            key: `metric_${metricKey}`,
+                            render: (_: unknown, row: any) => (
+                              <div className="text-xs leading-6">
+                                <div className="persian-number">{toPersianNumber((row.metricValues?.[metricKey] || 0).toFixed(2))}</div>
+                                <div className="persian-number font-bold text-green-700">{formatMoney(row.metricAmounts?.[metricKey] || 0)}</div>
+                              </div>
+                            ),
+                          })),
+                          ...(group.entries.length > 0 ? [{
+                            title: 'جمع گروه',
+                            key: 'groupAmount',
+                            render: (_: unknown, row: any) => <span className="persian-number font-bold">{formatMoney(row.groupAmount || 0)}</span>,
+                          }] : []),
+                        ];
+                        return (
+                          <div key={group.key} className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <div className="font-bold text-gray-800 dark:text-gray-100">{group.title}</div>
+                              {group.entries.length > 0 ? (
+                                <Tag color={group.totalAmount < 0 ? 'red' : 'green'}>{formatMoney(group.totalAmount)}</Tag>
+                              ) : null}
+                            </div>
+                            <Table
+                              rowKey="key"
+                              columns={groupColumns as any}
+                              dataSource={group.rows}
+                              pagination={{ pageSize: 30, showSizeChanger: false }}
+                              scroll={{ x: 1200 + (group.metricKeys.length * 180) }}
+                              summary={() => group.entries.length > 0 ? (
+                                <Table.Summary fixed>
+                                  <Table.Summary.Row>
+                                    <Table.Summary.Cell index={0} colSpan={8}>جمع</Table.Summary.Cell>
+                                    {group.metricKeys.map((metricKey, index) => (
+                                      <Table.Summary.Cell key={metricKey} index={index + 8}>
+                                        <div className="text-xs leading-6">
+                                          <div className="persian-number">
+                                            {toPersianNumber((group.rows as any[]).reduce((sum: number, row: any) => sum + toNumber(row.metricValues?.[metricKey]), 0).toFixed(2))}
+                                          </div>
+                                          <div className="persian-number font-bold text-green-700">
+                                            {formatMoney((group.rows as any[]).reduce((sum: number, row: any) => sum + toNumber(row.metricAmounts?.[metricKey]), 0))}
+                                          </div>
+                                        </div>
+                                      </Table.Summary.Cell>
+                                    ))}
+                                    <Table.Summary.Cell index={8 + group.metricKeys.length}>
+                                      <span className="persian-number font-bold">{formatMoney(group.totalAmount)}</span>
+                                    </Table.Summary.Cell>
+                                  </Table.Summary.Row>
+                                </Table.Summary>
+                              ) : null}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
                   )
                 )}
               </Card>
@@ -3736,7 +4770,7 @@ const HRPage: React.FC = () => {
             <div className="bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 p-2">
               <div className={`grid gap-2 ${isMobile ? 'grid-cols-1' : 'grid-cols-[minmax(320px,420px)_minmax(260px,1fr)_auto_auto]'}`}>
                 {renderHrRangePicker(selectedRange, updateSelectedRangeDates, 1400)}
-                <Select
+                <AdaptiveSelectField
                   mode="multiple"
                   allowClear
                   placeholder="فیلتر نیرو"
@@ -3744,6 +4778,9 @@ const HRPage: React.FC = () => {
                   onChange={(values) => setSelectedEmployeeIds(values as string[])}
                   options={employeeOptions}
                   className="w-full min-w-0"
+                  getPopupContainer={resolveSelectPopupContainer}
+                  modalContainer={resolveSelectPopupContainer}
+                  maxTagCount="responsive"
                 />
                 <Button
                   icon={<CloseOutlined />}
@@ -3780,6 +4817,252 @@ const HRPage: React.FC = () => {
           />
         </>
       )}
+
+      <Modal
+        title={payrollWizardSummary ? `ویزارد فیش حقوقی - ${payrollWizardSummary.name}` : 'ویزارد فیش حقوقی'}
+        open={payrollWizardOpen}
+        onCancel={closePayrollWizard}
+        footer={null}
+        width={1080}
+        destroyOnHidden
+      >
+        {payrollWizardSummary ? (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-black text-gray-800 dark:text-gray-100">{payrollWizardSummary.name}</div>
+                  <div className="mt-1 text-xs text-gray-500">
+                    بازه {toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM/DD'))} تا {toPersianNumber(safeJalaliFormat(monthEnd.toISOString(), 'YYYY/MM/DD'))}
+                  </div>
+                </div>
+                <Space size="small" wrap>
+                  {payrollSlipByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id)) ? (
+                    <Tag color="green">
+                      فیش موجود: {payrollSlipByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.name || 'پیش‌نویس'}
+                    </Tag>
+                  ) : (
+                    <Tag color="blue">فیش هنوز ایجاد نشده</Tag>
+                  )}
+                  <Tag color="gold">خالص پیشنهادی: {formatMoney(payrollWizardFinalNet)}</Tag>
+                </Space>
+              </div>
+            </div>
+
+            <Steps
+              current={payrollWizardStep}
+              items={[
+                { title: 'تردد و حقوق پایه' },
+                { title: 'عملکرد و پورسانت' },
+                { title: 'تحقق اهداف' },
+                { title: 'بازبینی نهایی' },
+              ]}
+            />
+
+            {payrollWizardStep === 0 ? (
+              <div className="space-y-4">
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حضور موثر</div><div className="persian-number text-2xl font-black">{toPersianNumber((calculatePresenceMinutes(payrollWizardAttendanceRows) / 60).toFixed(1))} ساعت</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ساعات موظف</div><div className="persian-number text-2xl font-black">{toPersianNumber((payrollWizardRequiredMinutes / 60).toFixed(1))} ساعت</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">نرخ ساعتی</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardHourlyRate)}</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">اضافه‌کاری آماده فیش</div><div className="persian-number text-2xl font-black text-green-700">{formatMoney(payrollLedgerTotalsByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.attendance || 0)}</div></Card></Col>
+                </Row>
+
+                <Card>
+                  <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">تنظیمات حقوق و تردد</div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+                    {visiblePayrollConfigFields.map((field: any) => renderPayrollWizardConfigField(field))}
+                  </div>
+                </Card>
+
+                <Card>
+                  <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">لاگ تردد و اضافه‌کاری</div>
+                  {payrollWizardAttendanceRows.length === 0 ? (
+                    <Empty description="برای این بازه رکورد ترددی وجود ندارد." />
+                  ) : (
+                    <Table
+                      rowKey="key"
+                      size="small"
+                      pagination={{ pageSize: 8, showSizeChanger: false }}
+                      scroll={{ x: 1200 }}
+                      dataSource={payrollWizardAttendanceRows}
+                      columns={[
+                        { title: 'تاریخ', key: 'attendanceDate', render: (_: unknown, row: any) => row.attendanceDate ? toPersianNumber(safeJalaliFormat(row.attendanceDate, 'YYYY/MM/DD')) : '-' },
+                        { title: 'ورود', dataIndex: 'checkInAt', key: 'checkInAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
+                        { title: 'خروج', dataIndex: 'checkOutAt', key: 'checkOutAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
+                        { title: 'حضور', key: 'presence', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber((row.presenceMinutes / 60).toFixed(1))} ساعت</span> },
+                        { title: 'تاخیر', key: 'late', render: (_: unknown, row: any) => <span className="persian-number text-red-700">{toPersianNumber(row.lateMinutes)}</span> },
+                        { title: 'تعجیل', key: 'early', render: (_: unknown, row: any) => <span className="persian-number text-green-700">{toPersianNumber(row.earlyArrivalMinutes)}</span> },
+                        { title: 'اضافه‌کاری', key: 'overtime', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber(row.overtimeStayMinutes)}</span> },
+                        {
+                          title: 'وضعیت فیش',
+                          key: 'ledger',
+                          render: (_: unknown, row: any) => {
+                            const entry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_overtime' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceOvertimeSourceKey(row));
+                            if (!entry) return <Tag>ثبت نشده</Tag>;
+                            if (entry.status === 'included_in_payroll') return <Tag color="green">در فیش</Tag>;
+                            return <Tag color="cyan">آماده فیش</Tag>;
+                          },
+                        },
+                        {
+                          title: 'عملیات',
+                          key: 'actions',
+                          render: (_: unknown, row: any) => {
+                            const entry = payrollWizardEmployeeLedger.find((ledger) => ledger.source_type === 'attendance_overtime' && String(ledger.source_key || ledger.details?.source_key || '') === buildAttendanceOvertimeSourceKey(row));
+                            return row.overtimeStayMinutes > 0 && !entry ? (
+                              <Button size="small" loading={savingOvertimeLedgerKey === buildAttendanceOvertimeSourceKey(row)} onClick={() => handleApproveAttendanceOvertime(row)}>
+                                تایید اضافه‌کاری
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-gray-400">-</span>
+                            );
+                          },
+                        },
+                      ]}
+                    />
+                  )}
+                </Card>
+              </div>
+            ) : null}
+
+            {payrollWizardStep === 1 ? (
+              <div className="space-y-4">
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={8}><Card><div className="text-xs text-gray-500 mb-1">عملکرد آماده فیش</div><div className="persian-number text-2xl font-black text-green-700">{formatMoney(payrollLedgerTotalsByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.activity || 0)}</div></Card></Col>
+                  <Col xs={24} md={8}><Card><div className="text-xs text-gray-500 mb-1">پورسانت آماده فیش</div><div className="persian-number text-2xl font-black text-green-700">{formatMoney(payrollLedgerTotalsByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.commission || 0)}</div></Card></Col>
+                  <Col xs={24} md={8}><Card><div className="text-xs text-gray-500 mb-1">ثبت‌شده در فیش‌های قبلی</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardIncludedLedger.reduce((sum, entry) => sum + toNumber(entry.amount), 0))}</div></Card></Col>
+                </Row>
+                <Card>
+                  <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">ردیف‌های آماده فیش برای عملکرد و پورسانت</div>
+                  {payrollWizardEmployeeLedger.filter((entry) => ['activity_performance', 'commission'].includes(String(entry.source_type || ''))).length === 0 ? (
+                    <Empty description="ردیفی برای این مرحله وجود ندارد." />
+                  ) : (
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                      dataSource={payrollWizardEmployeeLedger.filter((entry) => ['activity_performance', 'commission'].includes(String(entry.source_type || '')))}
+                      columns={[
+                        { title: 'عنوان', dataIndex: 'title', key: 'title', render: (val: string | null) => val || '-' },
+                        { title: 'منبع', dataIndex: 'source_type', key: 'source_type', render: (val: string | null) => <Tag>{PAYROLL_LEDGER_SOURCE_LABELS[String(val || '')] || 'نامشخص'}</Tag> },
+                        { title: 'مبلغ', dataIndex: 'amount', key: 'amount', render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span> },
+                        { title: 'وضعیت', dataIndex: 'status', key: 'status', render: (val: string | null) => <Tag color={val === 'included_in_payroll' ? 'green' : 'blue'}>{val === 'included_in_payroll' ? 'ثبت‌شده در فیش' : 'آماده فیش'}</Tag> },
+                      ]}
+                    />
+                  )}
+                </Card>
+              </div>
+            ) : null}
+
+            {payrollWizardStep === 2 ? (
+              <Card>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm font-bold text-gray-700 dark:text-gray-200">تحقق اهداف این کارمند</div>
+                  <Button
+                    disabled={!payrollWizardGoalRows.some((row) => row.rewardEntries.length > 0 && row.payrollStatus !== 'included_in_payroll' && row.payrollStatus !== 'proposed')}
+                    loading={savingGoalLedger}
+                    onClick={() => handleSaveGoalRewardRows(payrollWizardGoalRows)}
+                  >
+                    افزودن همه به فیش
+                  </Button>
+                </div>
+                {payrollWizardGoalRows.length === 0 ? (
+                  <Empty description="هدف فعالی برای این بازه لمس نشده است." />
+                ) : (
+                  <div className="space-y-3">
+                    {payrollWizardGoalRows.map((row) => (
+                      <div key={row.key} className="rounded-xl border border-gray-100 p-3 dark:border-gray-800">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="font-bold text-gray-800 dark:text-gray-100">{row.goalName}</div>
+                            <div className="text-xs text-gray-500">{row.periodLabel}</div>
+                          </div>
+                          <Space size="small" wrap>
+                            <Tag>{row.activeLevelLabel}</Tag>
+                            <Tag color={row.payrollStatus === 'included_in_payroll' ? 'green' : row.payrollStatus === 'proposed' ? 'cyan' : 'default'}>
+                              {row.payrollStatus === 'included_in_payroll' ? 'در فیش' : row.payrollStatus === 'proposed' ? 'آماده فیش' : 'ثبت نشده'}
+                            </Tag>
+                            {row.payrollSlipId ? (
+                              <Button size="small" onClick={() => navigate(`/payroll_slips/${row.payrollSlipId}`)}>مشاهده فیش</Button>
+                            ) : (
+                              <Button size="small" disabled={row.payrollStatus === 'included_in_payroll' || row.payrollStatus === 'proposed' || row.rewardEntries.length === 0} loading={savingGoalLedger} onClick={() => handleSaveGoalRewardRows([row])}>
+                                افزودن به فیش
+                              </Button>
+                            )}
+                          </Space>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <div>
+                            <div className="text-xs text-gray-500">پیشرفت اصلی</div>
+                            <Progress percent={row.targetValue > 0 ? Number(Math.min(100, ((row.achievedValue / row.targetValue) * 100)).toFixed(1)) : 0} />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">پیشرفت فرعی</div>
+                            <Progress percent={(row.subTargetValue || row.targetValue) > 0 ? Number(Math.min(100, ((row.subAchievedValue / (row.subTargetValue || row.targetValue)) * 100)).toFixed(1)) : 0} strokeColor="#16a34a" />
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                          <span>{row.rewardEntries.map((entry) => entry.title).join(' | ') || 'بدون فرمول'}</span>
+                          <span className="persian-number font-black">{formatMoney(row.rewardSuggestion)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            ) : null}
+
+            {payrollWizardStep === 3 ? (
+              <div className="space-y-4">
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حقوق پایه</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.baseSalary)}</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">کارکرد فعالیت‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.taskWageTotal)}</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ردیف‌های انتخابی فیش</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardLedgerNet)}</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">بیمه سهم کارمند</div><div className="persian-number text-2xl font-black text-red-700">{formatMoney(payrollWizardInsurance.employee)}</div></Card></Col>
+                </Row>
+                <Card>
+                  <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">اقلامی که در فیش پیش‌نویس قرار می‌گیرند</div>
+                  <Table
+                    rowKey="key"
+                    size="small"
+                    pagination={false}
+                    dataSource={[
+                      { key: 'base', title: 'حقوق پایه', amount: payrollWizardSummary.baseSalary, type: 'earning' },
+                      { key: 'task', title: 'کارکرد فعالیت‌ها', amount: payrollWizardSummary.taskWageTotal, type: 'earning' },
+                      ...payrollWizardOpenLedger.map((entry) => ({
+                        key: entry.id,
+                        title: entry.title || 'آیتم محاسباتی',
+                        amount: toNumber(entry.amount),
+                        type: toNumber(entry.amount) < 0 ? 'deduction' : 'bonus',
+                      })),
+                      ...(payrollWizardInsurance.employee > 0 ? [{ key: 'insurance', title: 'بیمه سهم کارمند', amount: -payrollWizardInsurance.employee, type: 'deduction' as const }] : []),
+                    ]}
+                    columns={[
+                      { title: 'شرح', dataIndex: 'title', key: 'title' },
+                      { title: 'نوع', dataIndex: 'type', key: 'type', render: (val: string) => <Tag color={val === 'deduction' ? 'red' : 'green'}>{val === 'deduction' ? 'کسورات' : 'مزایا'}</Tag> },
+                      { title: 'مبلغ', dataIndex: 'amount', key: 'amount', render: (val: number) => <span className={`persian-number font-bold ${val < 0 ? 'text-red-700' : 'text-green-700'}`}>{formatMoney(val)}</span> },
+                    ]}
+                  />
+                </Card>
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-3">
+              <Button onClick={closePayrollWizard}>انصراف</Button>
+              <Space>
+                {payrollWizardStep > 0 ? <Button onClick={() => setPayrollWizardStep((current) => Math.max(0, current - 1))}>مرحله قبل</Button> : null}
+                {payrollWizardStep < 3 ? (
+                  <Button type="primary" onClick={() => setPayrollWizardStep((current) => Math.min(3, current + 1))}>مرحله بعد</Button>
+                ) : (
+                  <Button type="primary" loading={creatingPayrollSlip} onClick={handleCreatePayrollSlipFromWizard}>ایجاد فیش پیش‌نویس</Button>
+                )}
+              </Space>
+            </div>
+          </div>
+        ) : (
+          <Empty description="کارمند معتبری برای ویزارد انتخاب نشده است." />
+        )}
+      </Modal>
 
       <Modal
         title="محاسبه پورسانت"
@@ -4124,7 +5407,7 @@ const HRPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title={`تنظیمات حقوق و سنوات - ${editingProfile?.full_name || editingProfile?.id || ''}`}
+        title={`تنظیمات حقوق و دستمزد - ${editingProfile?.full_name || editingProfile?.id || ''}`}
         open={payrollConfigModalOpen}
         forceRender
         onCancel={() => setPayrollConfigModalOpen(false)}
@@ -4135,57 +5418,57 @@ const HRPage: React.FC = () => {
         width={780}
       >
         <Form form={configForm} layout="vertical">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <Form.Item name="base_salary" label="حقوق پایه ماهانه">
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
-            <Form.Item name="overtime_rate" label="نرخ هر ساعت اضافه‌کار">
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
-            <Form.Item name="late_penalty_rate" label="جریمه هر ساعت دیرکرد">
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
-            <Form.Item name="early_bonus_rate" label="پاداش هر فعالیت با تعجیل">
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
-            <Form.Item name="production_bonus_rate" label="پاداش به ازای هر واحد تولید">
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
-            <Form.Item name="seniority_base_amount" label="مبلغ پایه سنوات">
-              <InputNumber min={0} className="w-full" />
-            </Form.Item>
+          <div className="mb-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-white/5">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <div className="text-xs text-gray-500">ساعات موظف این بازه</div>
+                <div className="persian-number mt-1 text-lg font-black">{toPersianNumber((computeRequiredWorkMinutesForProfile(editingProfile) / 60).toFixed(1))} ساعت</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">حقوق پایه</div>
+                <div className="persian-number mt-1 text-lg font-black">{formatMoney(toNumber(configForm.getFieldValue('base_salary')))}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">نرخ ساعتی پیشنهادی</div>
+                <div className="persian-number mt-1 text-lg font-black text-green-700">
+                  {formatMoney((() => {
+                    const requiredMinutes = computeRequiredWorkMinutesForProfile(editingProfile);
+                    const explicitRate = toNumber(configForm.getFieldValue('hourly_rate'));
+                    if (explicitRate > 0) return explicitRate;
+                    const requiredHours = requiredMinutes / 60;
+                    return requiredHours > 0 ? toNumber(configForm.getFieldValue('base_salary')) / requiredHours : 0;
+                  })())}
+                </div>
+              </div>
+            </div>
           </div>
-          <Form.Item name="seniority_formula_id" label="فرمول سنوات">
-            <Space.Compact className="w-full">
-              <Select
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                getPopupContainer={resolveSelectPopupContainer}
-                value={configForm.getFieldValue('seniority_formula_id') || undefined}
-                onChange={(value) => configForm.setFieldValue('seniority_formula_id', value || null)}
-                options={formulaOptions.map((item: any) => ({
-                  label: item.label,
-                  value: item.value,
-                }))}
-                placeholder="فرمول سنوات را انتخاب کنید"
-                className="w-full"
-              />
-              <Button
-                onClick={() =>
-                  setFormulaModalConfig({
-                    open: true,
-                    defaultScope: 'payroll',
-                    defaultContextType: 'employee',
-                    defaultOutputType: 'money',
-                    assignToField: 'seniority_formula_id',
-                  })
-                }
-              >
-                +
-              </Button>
-            </Space.Compact>
-          </Form.Item>
+
+          {HR_PAYROLL_CONFIG_BLOCKS.map((block: any) => {
+            const blockFields = visiblePayrollConfigFields.filter((field: any) => String(field.blockId || '') === String(block.id || ''));
+            if (blockFields.length === 0) return null;
+            return (
+              <div key={block.id} className="mb-5 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+                <div className="mb-4 text-sm font-black text-gray-800 dark:text-gray-100">{block.titles?.fa || 'تنظیمات'}</div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  {blockFields.map((field: any) => (
+                    <Form.Item key={field.key} label={field.labels?.fa || 'فیلد'}>
+                      <SmartFieldRenderer
+                        field={field}
+                        value={configForm.getFieldValue(field.key)}
+                        onChange={(value) => configForm.setFieldValue(String(field.key), value)}
+                        allValues={configForm.getFieldsValue(true)}
+                        moduleId="employees"
+                        forceEditMode
+                        overlayZIndexBase={12000}
+                        popupContainer={resolveOverlayPopupContainer}
+                        preferLocalPopupContainer
+                      />
+                    </Form.Item>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </Form>
       </Modal>
       <FormulaEditorModal
@@ -4195,10 +5478,6 @@ const HRPage: React.FC = () => {
         defaultContextType={formulaModalConfig.defaultContextType}
         defaultOutputType={formulaModalConfig.defaultOutputType}
         onSaved={(formula) => {
-          setFormulaOptions((current) => {
-            if (current.some((item) => item.value === formula.id)) return current;
-            return [...current, { label: formula.name, value: formula.id }].sort((a, b) => a.label.localeCompare(b.label, 'fa'));
-          });
           if (formulaModalConfig.assignToField) {
             configForm.setFieldValue(formulaModalConfig.assignToField, formula.id);
           }

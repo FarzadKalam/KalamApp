@@ -61,11 +61,13 @@ interface SmartFormProps {
   visible: boolean;
   onCancel: () => void;
   onSave?: (values: any, meta?: { productInventory?: any[]; templateStagesPreview?: any[]; selectedTags?: any[] }) => void;
+  onPersisted?: (record: { id?: string | number | null; values?: Record<string, any> }) => void;
   recordId?: string;
   title?: string;
   isBulkEdit?: boolean;
   initialValues?: Record<string, any>;
   displayMode?: 'modal' | 'embedded';
+  overlayZIndex?: number;
 }
 
 const isAbortLikeError = (error: unknown) =>
@@ -233,7 +235,9 @@ const resolveSmartFormPopupContainer = (trigger?: HTMLElement | null) => {
 const SmartForm: React.FC<SmartFormProps> = ({ 
   module, visible, onCancel, onSave, recordId, title, isBulkEdit = false,
   initialValues: initialValuesProp,
-  displayMode = 'modal'
+  displayMode = 'modal',
+  onPersisted,
+  overlayZIndex,
 }) => {
   const initialValues = initialValuesProp ?? EMPTY_INITIAL_VALUES;
   const initialValuesSignature = useMemo(() => safeJsonStringify(initialValuesProp ?? {}), [initialValuesProp]);
@@ -1876,6 +1880,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
               console.warn('Changelog insert failed:', err);
             }
           }
+          onPersisted?.({ id: inserted?.id ?? null, values });
         }
 
         messageApi.success('ثبت شد');
@@ -2297,7 +2302,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           ? 'fixed inset-0 bg-black/50 z-[1300] flex items-center justify-center p-3 md:p-4 backdrop-blur-sm animate-fadeIn'
           : 'w-full animate-fadeIn'
       }
-      style={{ fontFamily: 'Vazirmatn, sans-serif' }}
+      style={{ fontFamily: 'Vazirmatn, sans-serif', ...(displayMode === 'modal' && typeof overlayZIndex === 'number' ? { zIndex: overlayZIndex } : {}) }}
     >
       <div
         className={

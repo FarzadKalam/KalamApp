@@ -135,4 +135,74 @@ describe('activityPerformanceRuntime', () => {
     expect(entries[0]?.amount).toBe(6430);
     expect(entries[0]?.snapshot?.evaluation_mode).toBe('simple');
   });
+
+  it('evaluates pay item rules with process scope and stable source keys', async () => {
+    const entries = await evaluateActivityPerformanceRules({
+      rules: [{
+        id: 'rule-1',
+        name: 'پاداش فرآیند نصب',
+        output_type: 'bonus',
+        conditions_all: [{ id: 'c1', field: 'status', operator: 'eq', value: 'done' }],
+        conditions_any: [],
+        is_active: true,
+        config: {
+          assignee_profile_ids: ['profile-1'],
+          process_scope: 'specific_processes',
+          process_template_ids: ['template-1'],
+          pay_items: [
+            { metric_key: 'activity_count', metric_label: 'فعالیت', amount: 1000 },
+            { metric_key: 'weight', metric_label: 'هر واحد وزن', amount: 200 },
+          ],
+        },
+      }],
+      formulas: [],
+      tasks: [{
+        id: 'task-1',
+        status: 'done',
+        assignee_id: 'profile-1',
+        weight: 3,
+        recurrence_info: {
+          process_group: { template_id: 'template-1' },
+        },
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+    });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.amount)).toEqual([1000, 600]);
+    expect(entries[0]?.source_key).toBe('activity_performance:employee-1:task-1:rule-1:activity_count');
+    expect(entries[1]?.snapshot?.evaluation_mode).toBe('pay_items');
+  });
+
+  it('skips already included source keys and makes penalty amounts negative', async () => {
+    const entries = await evaluateActivityPerformanceRules({
+      rules: [{
+        id: 'rule-1',
+        output_type: 'penalty',
+        conditions_all: [{ id: 'c1', field: 'status', operator: 'eq', value: 'done' }],
+        is_active: true,
+        config: {
+          pay_items: [
+            { metric_key: 'activity_count', metric_label: 'فعالیت', amount: 1000 },
+            { metric_key: 'late_minutes', metric_label: 'هر دقیقه تاخیر', amount: 50 },
+          ],
+        },
+      }],
+      formulas: [],
+      tasks: [{
+        id: 'task-1',
+        status: 'done',
+        assignee_id: 'profile-1',
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      taskMetricsById: {
+        'task-1': { late_minutes: 4 },
+      },
+      alreadyIncludedSourceKeys: new Set(['activity_performance:employee-1:task-1:rule-1:activity_count']),
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.metric_key).toBe('late_minutes');
+    expect(entries[0]?.amount).toBe(-200);
+  });
 });

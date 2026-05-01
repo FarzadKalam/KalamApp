@@ -81,6 +81,7 @@ describe('goalRewardPayrollSync', () => {
       employee_id: 'employee-1',
       entry_type: 'goal_bonus_achieve',
       source_type: 'goal_reward',
+      source_key: 'goal_reward:employee-1:00000000-0000-0000-0000-000000000111:formula-1:achieve:bonus',
       source_module_id: 'goal_reward:achieve:formula-1:bonus',
       source_record_id: '00000000-0000-0000-0000-000000000111',
       amount: 750000,

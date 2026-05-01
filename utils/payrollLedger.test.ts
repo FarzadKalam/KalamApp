@@ -9,6 +9,7 @@ describe('payrollLedger', () => {
         employee_id: 'employee-1',
         entry_type: 'goal_bonus',
         source_type: 'goal',
+        source_key: 'goal:1',
         title: 'پاداش هدف',
         amount: 1000000,
       },

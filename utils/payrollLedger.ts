@@ -5,6 +5,7 @@ export type PayrollLedgerEntry = {
   employee_id: string | null;
   entry_type: string;
   source_type: string;
+  source_key?: string | null;
   title: string | null;
   amount: number | string | null;
   details?: Record<string, any> | null;
@@ -13,6 +14,11 @@ export type PayrollLedgerEntry = {
 export const isMissingPayrollLedgerError = (error: any) => {
   const text = String(error?.message || error?.details || error || '').toLowerCase();
   return text.includes('payroll_calculation_entries') && (text.includes('does not exist') || text.includes('could not find'));
+};
+
+const isMissingSourceKeyError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('source_key') && (text.includes('column') || text.includes('could not find') || text.includes('schema cache'));
 };
 
 const toNumber = (value: unknown) => {
@@ -27,20 +33,28 @@ export const fetchPayrollLedgerEntries = async (
   periodEnd: string,
 ): Promise<PayrollLedgerEntry[]> => {
   if (employeeIds.length === 0) return [];
-  const { data, error } = await supabase
+
+  const runQuery = (selectColumns: string) => supabase
     .from('payroll_calculation_entries')
-    .select('id, employee_id, entry_type, source_type, title, amount, details')
+    .select(selectColumns)
     .in('employee_id', employeeIds)
     .eq('period_start', periodStart)
     .eq('period_end', periodEnd)
     .in('status', ['draft', 'proposed']);
+
+  let { data, error } = await runQuery('id, employee_id, entry_type, source_type, source_key, title, amount, details');
+  if (error && isMissingSourceKeyError(error)) {
+    const fallback = await runQuery('id, employee_id, entry_type, source_type, title, amount, details');
+    data = fallback.data;
+    error = fallback.error;
+  }
 
   if (error) {
     if (isMissingPayrollLedgerError(error)) return [];
     throw error;
   }
 
-  return (data || []) as PayrollLedgerEntry[];
+  return (data || []) as unknown as PayrollLedgerEntry[];
 };
 
 export const mapPayrollLedgerEntriesToLines = (entries: PayrollLedgerEntry[]) =>

@@ -17,7 +17,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import maplibregl from 'maplibre-gl';
-import { ModuleField, FieldType, FieldNature } from '../types';
+import { ModuleField, FieldType, FieldNature, BlockType } from '../types';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -71,6 +71,9 @@ import {
   resolveOverlayPopupContainer,
   resolveSelectPopupContainer,
 } from '../utils/popupContainer';
+
+const SmartFormLazy = React.lazy(() => import('./SmartForm'));
+const GLOBAL_MODAL_OVERLAY_Z_INDEX = 30000;
 
 const normalizeDigitsToEnglish = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -515,9 +518,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const canShowFilesGallery = supportsFilesGallery && canViewFilesManager;
   const isMobileViewport = typeof window !== 'undefined' && window.innerWidth < 768;
   const selectPopupZIndex = overlayZIndexBase;
-  const modalOverlayZIndex = overlayZIndexBase + 10;
-  const scanModalZIndex = overlayZIndexBase + 15;
-  const quickCreateModalZIndex = overlayZIndexBase + 260;
+  const modalOverlayZIndex = Math.max(overlayZIndexBase + 10, GLOBAL_MODAL_OVERLAY_Z_INDEX);
+  const scanModalZIndex = Math.max(overlayZIndexBase + 15, GLOBAL_MODAL_OVERLAY_Z_INDEX + 5);
+  const quickCreateModalZIndex = Math.max(overlayZIndexBase + 260, GLOBAL_MODAL_OVERLAY_Z_INDEX + 20);
+  const fullRelationCreateModalZIndex = quickCreateModalZIndex + 20;
   const selectPlacement = 'bottomRight' as const;
   const selectPopupContainer = popupContainer || resolveSelectPopupContainer;
 
@@ -668,6 +672,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     && quickCreateTargetModule.disableCreate !== true
     && quickCreateTargetModule.systemManaged !== true
     && relationConfigAny?.disableQuickCreate !== true;
+  const relationTargetNeedsFullCreate = !!quickCreateTargetModule?.blocks?.some((block: any) => (
+    block?.type === BlockType.TABLE
+    || block?.type === BlockType.GRID_TABLE
+    || (Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
+  ));
   const resolveRelationDisplayLabel = useCallback(() => {
     const matchedOption = relationResolvedOptions.find((item: any) => String(item?.value) === String(value))
       || (fieldOptions as any[]).find((item: any) => String(item?.value) === String(value));
@@ -1539,6 +1548,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     setQuickCreateRelationOptions({});
     setQuickCreateDynamicOptions({});
   };
+  const openRelationCreate = () => {
+    if (relationTargetNeedsFullCreate) {
+      setQuickCreateOpen(true);
+      return;
+    }
+    setQuickCreateOpen(true);
+  };
 
   useEffect(() => {
     if (!quickCreateOpen) return;
@@ -2387,7 +2403,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                                   <div className="h-[1px] bg-gray-100 my-1"></div>
                                   <div 
                                       className="p-2 text-blue-500 cursor-pointer text-xs hover:bg-blue-50 flex items-center gap-1"
-                                      onClick={() => setQuickCreateOpen(true)}
+                                      onClick={openRelationCreate}
                                   >
                                       <PlusOutlined /> افزودن مورد جدید...
                                   </div>
@@ -2403,7 +2419,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     sheetToolbar={!compactMode && canQuickCreate ? (
                       <Button
                         icon={<PlusOutlined />}
-                        onClick={() => setQuickCreateOpen(true)}
+                        onClick={openRelationCreate}
                         disabled={!forceEditMode || isReadonly}
                       >
                         افزودن مورد جدید
@@ -2429,7 +2445,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   <Button
                     icon={<PlusOutlined />}
                     className="shrink-0"
-                    onClick={() => setQuickCreateOpen(true)}
+                    onClick={openRelationCreate}
                     disabled={!forceEditMode || isReadonly}
                   />
                 )}
@@ -2949,7 +2965,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         <div className="w-full">
             {renderInputContent()}
             
-            {canRelationQuickCreate && (
+            {canRelationQuickCreate && !relationTargetNeedsFullCreate && (
                 <RelationQuickCreateInline 
                     open={quickCreateOpen}
                     label={fieldLabel}
@@ -2964,6 +2980,24 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     onOk={handleQuickCreate}
                     overlayZIndexBase={quickCreateModalZIndex}
                 />
+            )}
+            {canRelationQuickCreate && relationTargetNeedsFullCreate && quickCreateTargetModule && (
+              <React.Suspense fallback={null}>
+                <SmartFormLazy
+                  module={quickCreateTargetModule as any}
+                  visible={quickCreateOpen}
+                  onCancel={closeQuickCreate}
+                  title={`افزودن ${quickCreateTargetModule.titles?.faSingular || quickCreateTargetModule.titles?.fa || 'رکورد'} جدید`}
+                  overlayZIndex={fullRelationCreateModalZIndex}
+                  onPersisted={({ id }: any) => {
+                    if (id) {
+                      onChange(id);
+                      void loadRelationOptions('', id);
+                    }
+                    if (onOptionsUpdate) onOptionsUpdate();
+                  }}
+                />
+              </React.Suspense>
             )}
              <Modal 
                 title="اسکن بارکد" 
@@ -3002,7 +3036,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             {renderInputContent()}
         </Form.Item>
 
-        {canRelationQuickCreate && (
+        {canRelationQuickCreate && !relationTargetNeedsFullCreate && (
             <RelationQuickCreateInline 
                 open={quickCreateOpen}
                 label={fieldLabel}
@@ -3017,6 +3051,24 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 onOk={handleQuickCreate}
                 overlayZIndexBase={quickCreateModalZIndex}
             />
+        )}
+        {canRelationQuickCreate && relationTargetNeedsFullCreate && quickCreateTargetModule && (
+          <React.Suspense fallback={null}>
+            <SmartFormLazy
+              module={quickCreateTargetModule as any}
+              visible={quickCreateOpen}
+              onCancel={closeQuickCreate}
+              title={`افزودن ${quickCreateTargetModule.titles?.faSingular || quickCreateTargetModule.titles?.fa || 'رکورد'} جدید`}
+              overlayZIndex={fullRelationCreateModalZIndex}
+              onPersisted={({ id }: any) => {
+                if (id) {
+                  onChange(id);
+                  void loadRelationOptions('', id);
+                }
+                if (onOptionsUpdate) onOptionsUpdate();
+              }}
+            />
+          </React.Suspense>
         )}
         <Modal 
             title="اسکن بارکد" 

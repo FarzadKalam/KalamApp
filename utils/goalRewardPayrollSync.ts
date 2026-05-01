@@ -16,6 +16,7 @@ type GoalRewardLedgerDraft = {
   period_end: string;
   entry_type: string;
   source_type: 'goal_reward';
+  source_key: string;
   source_module_id: string;
   source_record_id: string;
   title: string;
@@ -36,6 +37,28 @@ const buildSourceModuleId = (triggerType: string, formulaId: string, outputType:
 
 const buildEntryType = (triggerType: string, outputType: string) =>
   `goal_${String(outputType || 'bonus').trim()}_${String(triggerType || 'reward').trim()}`;
+
+export const buildGoalRewardSourceKey = ({
+  employeeId,
+  goalId,
+  formulaId,
+  triggerType,
+  outputType,
+}: {
+  employeeId: string | null | undefined;
+  goalId: string | null | undefined;
+  formulaId: string | null | undefined;
+  triggerType: string | null | undefined;
+  outputType: string | null | undefined;
+}) =>
+  [
+    'goal_reward',
+    String(employeeId || '').trim(),
+    String(goalId || '').trim(),
+    String(formulaId || '').trim(),
+    String(triggerType || '').trim(),
+    String(outputType || '').trim(),
+  ].join(':');
 
 const buildDraftKey = (draft: Pick<GoalRewardLedgerDraft, 'employee_id' | 'source_module_id' | 'source_record_id' | 'entry_type' | 'period_start' | 'period_end'>) =>
   [
@@ -89,6 +112,13 @@ export const collectGoalRewardLedgerDrafts = async ({
             period_end: periodEnd,
             entry_type: buildEntryType(entry.trigger_type, entry.output_type),
             source_type: 'goal_reward',
+            source_key: buildGoalRewardSourceKey({
+              employeeId: profile.employeeId,
+              goalId: goal.id,
+              formulaId: entry.formula_id,
+              triggerType: entry.trigger_type,
+              outputType: entry.output_type,
+            }),
             source_module_id: buildSourceModuleId(entry.trigger_type, entry.formula_id, entry.output_type),
             source_record_id: String(goal.id),
             title: entry.title,
@@ -136,7 +166,7 @@ export const syncGoalRewardEntriesForPayroll = async (
   const employeeIds = Array.from(new Set(profiles.map((item) => String(item.employeeId || '').trim()).filter(Boolean)));
   if (employeeIds.length === 0) return;
 
-  const [goalsResult, formulasResult, existingResult] = await Promise.all([
+  const [goalsResult, formulasResult, initialExistingResult] = await Promise.all([
     supabase.from('goals').select('*').eq('is_active', true),
     supabase
       .from('calculation_formulas')
@@ -145,7 +175,7 @@ export const syncGoalRewardEntriesForPayroll = async (
       .eq('context_type', 'goal'),
     supabase
       .from('payroll_calculation_entries')
-      .select('id, employee_id, period_start, period_end, entry_type, source_type, source_module_id, source_record_id, status')
+      .select('id, employee_id, period_start, period_end, entry_type, source_type, source_key, source_module_id, source_record_id, status')
       .in('employee_id', employeeIds)
       .eq('period_start', periodStart)
       .eq('period_end', periodEnd)
@@ -154,6 +184,16 @@ export const syncGoalRewardEntriesForPayroll = async (
 
   if (goalsResult.error) throw goalsResult.error;
   if (formulasResult.error) throw formulasResult.error;
+  let existingResult: any = initialExistingResult;
+  if (existingResult.error && String(existingResult.error?.message || existingResult.error?.details || '').toLowerCase().includes('source_key')) {
+    existingResult = await supabase
+      .from('payroll_calculation_entries')
+      .select('id, employee_id, period_start, period_end, entry_type, source_type, source_module_id, source_record_id, status')
+      .in('employee_id', employeeIds)
+      .eq('period_start', periodStart)
+      .eq('period_end', periodEnd)
+      .eq('source_type', 'goal_reward');
+  }
   if (existingResult.error) {
     if (isMissingPayrollLedgerError(existingResult.error)) return;
     throw existingResult.error;
@@ -169,24 +209,27 @@ export const syncGoalRewardEntriesForPayroll = async (
 
   const existingRows = (existingResult.data || []) as Array<Record<string, any>>;
   const existingByKey = new Map(
-    existingRows.map((row) => [buildDraftKey({
-      employee_id: String(row.employee_id || ''),
-      source_module_id: String(row.source_module_id || ''),
-      source_record_id: String(row.source_record_id || ''),
-      entry_type: String(row.entry_type || ''),
-      period_start: String(row.period_start || ''),
-      period_end: String(row.period_end || ''),
-    }), row] as const)
+    existingRows.map((row) => [
+      String(row.source_key || '').trim() || buildDraftKey({
+        employee_id: String(row.employee_id || ''),
+        source_module_id: String(row.source_module_id || ''),
+        source_record_id: String(row.source_record_id || ''),
+        entry_type: String(row.entry_type || ''),
+        period_start: String(row.period_start || ''),
+        period_end: String(row.period_end || ''),
+      }),
+      row,
+    ] as const)
   );
-  const nextKeys = new Set(drafts.map((draft) => buildDraftKey(draft)));
+  const nextKeys = new Set(drafts.map((draft) => draft.source_key || buildDraftKey(draft)));
 
-  const inserts = drafts.filter((draft) => !existingByKey.has(buildDraftKey(draft)));
+  const inserts = drafts.filter((draft) => !existingByKey.has(draft.source_key || buildDraftKey(draft)));
   const updates = drafts
-    .map((draft) => ({ draft, existing: existingByKey.get(buildDraftKey(draft)) }))
+    .map((draft) => ({ draft, existing: existingByKey.get(draft.source_key || buildDraftKey(draft)) }))
     .filter((item) => item.existing && String(item.existing.status || '') !== 'included_in_payroll');
   const voidIds = existingRows
     .filter((row) => {
-      const key = buildDraftKey({
+      const key = String(row.source_key || '').trim() || buildDraftKey({
         employee_id: String(row.employee_id || ''),
         source_module_id: String(row.source_module_id || ''),
         source_record_id: String(row.source_record_id || ''),
