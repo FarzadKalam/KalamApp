@@ -61,6 +61,10 @@ export type GoalProgressSnapshot = {
   selectedSubperiodUnit: GoalPeriodUnit;
   metricLabel: string;
   moduleLabel: string;
+  subjectUserId?: string | null;
+  subjectRoleId?: string | null;
+  subjectLabel?: string | null;
+  isSharedView?: boolean;
 };
 
 export const GOAL_PERIOD_UNIT_OPTIONS: Array<{ label: string; value: GoalPeriodUnit }> = [

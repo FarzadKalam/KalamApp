@@ -1,6 +1,7 @@
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { FieldType } from '../types';
+import type { AssigneeDirectory } from './referenceData';
 import {
   canAccessAssignedRecord,
   GOALS_PERMISSION_KEY,
@@ -46,6 +47,8 @@ const normalizeArray = (value: unknown) =>
   Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
+
+const normalizeGoalConfigArray = (value: unknown) => normalizeArray(value);
 
 const normalizeNumber = (value: unknown) => {
   const parsed = Number(value);
@@ -102,6 +105,12 @@ export const normalizeGoalRecord = (value: any): GoalRecord => ({
 export const isGoalAssignedToAllUsers = (goal: GoalRecord) =>
   String(goal?.config?.assignment_users_mode || '').trim() === 'all';
 
+export const getGoalResultShareUserIds = (goal?: GoalRecord | null) =>
+  normalizeGoalConfigArray(goal?.config?.result_share_user_ids);
+
+export const getGoalResultShareRoleIds = (goal?: GoalRecord | null) =>
+  normalizeGoalConfigArray(goal?.config?.result_share_role_ids);
+
 export const getGoalUserSelectionValue = (goal?: GoalRecord | null) => {
   if (!goal) return [];
   if (isGoalAssignedToAllUsers(goal)) return [GOAL_ALL_USERS_VALUE];
@@ -157,6 +166,102 @@ export const isGoalVisibleToUser = (
   const roleIds = normalizeArray(goal.assignee_role_ids);
   if (userIds.length === 0 && roleIds.length === 0) return true;
   return (!!userId && userIds.includes(userId)) || (!!roleId && roleIds.includes(roleId));
+};
+
+export const isGoalSharedWithUser = (
+  goal: GoalRecord,
+  userId: string | null,
+  roleId: string | null
+) => {
+  const sharedUserIds = getGoalResultShareUserIds(goal);
+  const sharedRoleIds = getGoalResultShareRoleIds(goal);
+  return (!!userId && sharedUserIds.includes(userId)) || (!!roleId && sharedRoleIds.includes(roleId));
+};
+
+export const canUserViewGoalResults = (
+  goal: GoalRecord,
+  userId: string | null,
+  roleId: string | null
+) => isGoalVisibleToUser(goal, userId, roleId) || isGoalSharedWithUser(goal, userId, roleId);
+
+export type GoalAssignedMember = {
+  userId: string;
+  roleId: string | null;
+  label: string;
+};
+
+export type GoalProgressSubject = {
+  userId: string | null;
+  roleId?: string | null;
+  label?: string | null;
+  isSharedView?: boolean;
+};
+
+export const resolveGoalAssignedMembers = (
+  goal: GoalRecord,
+  directory: AssigneeDirectory | null | undefined
+): GoalAssignedMember[] => {
+  const users = Array.isArray(directory?.users) ? directory!.users : [];
+  const userIds = normalizeArray(goal.assignee_user_ids);
+  const roleIds = normalizeArray(goal.assignee_role_ids);
+  const directUserMap = new Map(users.map((item) => [String(item.id || '').trim(), item] as const));
+  const results = new Map<string, GoalAssignedMember>();
+
+  const addMember = (userId: string, roleId: string | null, label: string) => {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId) return;
+    if (results.has(normalizedUserId)) return;
+    results.set(normalizedUserId, {
+      userId: normalizedUserId,
+      roleId: roleId ? String(roleId).trim() : null,
+      label: String(label || normalizedUserId).trim() || normalizedUserId,
+    });
+  };
+
+  if (isGoalAssignedToAllUsers(goal)) {
+    users.forEach((user) => {
+      addMember(
+        String(user.id || ''),
+        user.role_id ? String(user.role_id) : null,
+        String(user.display_name || user.full_name || user.email || user.id || '')
+      );
+    });
+    return Array.from(results.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+  }
+
+  if (userIds.length === 0 && roleIds.length === 0) {
+    users.forEach((user) => {
+      addMember(
+        String(user.id || ''),
+        user.role_id ? String(user.role_id) : null,
+        String(user.display_name || user.full_name || user.email || user.id || '')
+      );
+    });
+    return Array.from(results.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+  }
+
+  userIds.forEach((userId) => {
+    const user = directUserMap.get(String(userId));
+    addMember(
+      userId,
+      user?.role_id ? String(user.role_id) : null,
+      String(user?.display_name || user?.full_name || user?.email || userId)
+    );
+  });
+
+  if (roleIds.length > 0) {
+    users
+      .filter((user) => user.role_id && roleIds.includes(String(user.role_id)))
+      .forEach((user) => {
+        addMember(
+          String(user.id || ''),
+          user.role_id ? String(user.role_id) : null,
+          String(user.display_name || user.full_name || user.email || user.id || '')
+        );
+      });
+  }
+
+  return Array.from(results.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
 };
 
 export const canViewGoalPlacement = (
@@ -350,6 +455,177 @@ const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
     }
   }
   return filtered;
+};
+
+const resolveRecordAssigneeKey = (row: any) => {
+  if (!row || typeof row !== 'object') return null;
+  if (row.assignee_type === 'role') {
+    return {
+      assigneeType: 'role' as const,
+      assigneeId: String(row.assignee_role_id || row.assignee_id || '').trim() || null,
+    };
+  }
+  return {
+    assigneeType: 'user' as const,
+    assigneeId: String(row.assignee_id || '').trim() || null,
+  };
+};
+
+const filterRowsForGoalSubject = (
+  rows: any[],
+  subjectUserId: string | null | undefined,
+  subjectRoleId: string | null | undefined
+) => {
+  const normalizedUserId = String(subjectUserId || '').trim();
+  const normalizedRoleId = String(subjectRoleId || '').trim();
+  return rows.filter((row) => {
+    const recordAssignee = resolveRecordAssigneeKey(row);
+    if (!recordAssignee?.assigneeId) return false;
+    if (recordAssignee.assigneeType === 'role') {
+      return !!normalizedRoleId && recordAssignee.assigneeId === normalizedRoleId;
+    }
+    return !!normalizedUserId && recordAssignee.assigneeId === normalizedUserId;
+  });
+};
+
+const buildGoalProgressSnapshotFromRows = (
+  goal: GoalRecord,
+  mainRange: GoalProgressSnapshot['mainRange'],
+  subRange: GoalProgressSnapshot['subRange'],
+  subperiodUnit: GoalPeriodUnit,
+  filteredMainRows: any[],
+  filteredSubRows: any[],
+  subject?: { userId?: string | null; roleId?: string | null; label?: string | null; isSharedView?: boolean }
+): GoalProgressSnapshot => {
+  const levels = buildGoalLevels(goal);
+  const targetValue = resolveGoalTargetValue(goal, levels);
+  const achievedValue = resolveMetricValue(filteredMainRows, goal.metric_type, goal.metric_field_key);
+  const subAchievedValue = resolveMetricValue(filteredSubRows, goal.metric_type, goal.metric_field_key);
+  const ratio = calculateRangeRatio(mainRange, subRange);
+  const subTargetValue = targetValue > 0 ? targetValue * ratio : 0;
+  const { tone, activeLevelKey } = resolveGoalTone(achievedValue, levels);
+
+  return {
+    goal,
+    achievedValue,
+    targetValue,
+    subAchievedValue,
+    subTargetValue,
+    mainRange,
+    subRange,
+    tone,
+    activeLevelKey,
+    levels,
+    availableSubperiodUnits: getAvailableGoalSubperiodUnits(goal.period_unit),
+    selectedSubperiodUnit: subperiodUnit,
+    metricLabel: resolveMetricLabel(goal),
+    moduleLabel: resolveGoalModuleLabel(goal),
+    subjectUserId: subject?.userId || null,
+    subjectRoleId: subject?.roleId || null,
+    subjectLabel: subject?.label || null,
+    isSharedView: subject?.isSharedView === true,
+  };
+};
+
+const prepareGoalProgressRows = async (
+  goal: GoalRecord,
+  options: {
+    userId: string | null;
+    roleId: string | null;
+    orgId?: string | null;
+    allowedRoleIds?: string[];
+    allowedUserIds?: string[];
+    permissions?: PermissionMap | null;
+    fiscalYear?: FiscalYearSnapshot | null;
+    selectedSubperiodUnit?: GoalPeriodUnit | null;
+    cache?: Map<string, any[]>;
+  }
+) => {
+  const subperiodUnit = clampGoalSubperiodUnit(
+    goal.period_unit,
+    options.selectedSubperiodUnit || goal.subperiod_unit
+  );
+
+  const { mainBounds, subBounds } = resolveGoalPeriodBounds(
+    goal,
+    subperiodUnit,
+    options.fiscalYear
+  );
+  const mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
+  const subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
+
+  const cache = options.cache || new Map<string, any[]>();
+  const [mainRows, subRows] = await Promise.all([
+    loadScopedRows(goal, mainRange, {
+      userId: options.userId,
+      roleId: options.roleId,
+      orgId: options.orgId,
+      allowedRoleIds: options.allowedRoleIds,
+      allowedUserIds: options.allowedUserIds,
+      permissions: options.permissions,
+      cache,
+    }),
+    loadScopedRows(goal, subRange, {
+      userId: options.userId,
+      roleId: options.roleId,
+      orgId: options.orgId,
+      allowedRoleIds: options.allowedRoleIds,
+      allowedUserIds: options.allowedUserIds,
+      permissions: options.permissions,
+      cache,
+    }),
+  ]);
+
+  const [filteredMainRows, filteredSubRows] = await Promise.all([
+    filterGoalRows(goal, mainRows),
+    filterGoalRows(goal, subRows),
+  ]);
+
+  return {
+    subperiodUnit,
+    mainRange,
+    subRange,
+    filteredMainRows,
+    filteredSubRows,
+  };
+};
+
+export const executeGoalProgressForSubjects = async (
+  goalInput: GoalRecord,
+  options: {
+    userId: string | null;
+    roleId: string | null;
+    orgId?: string | null;
+    allowedRoleIds?: string[];
+    allowedUserIds?: string[];
+    permissions?: PermissionMap | null;
+    fiscalYear?: FiscalYearSnapshot | null;
+    selectedSubperiodUnit?: GoalPeriodUnit | null;
+    cache?: Map<string, any[]>;
+    subjects: GoalProgressSubject[];
+  }
+): Promise<GoalProgressSnapshot[]> => {
+  const goal = normalizeGoalRecord(goalInput);
+  const module = MODULES[goal.module_id];
+  if (!module) return [];
+
+  const prepared = await prepareGoalProgressRows(goal, options);
+  return (Array.isArray(options.subjects) ? options.subjects : []).map((subject) =>
+    buildGoalProgressSnapshotFromRows(
+      goal,
+      prepared.mainRange,
+      prepared.subRange,
+      prepared.subperiodUnit,
+      filterRowsForGoalSubject(prepared.filteredMainRows, subject.userId, subject.roleId),
+      filterRowsForGoalSubject(prepared.filteredSubRows, subject.userId, subject.roleId),
+      {
+        userId: subject.userId,
+        roleId: subject.roleId || null,
+        label: subject.label || null,
+        isSharedView: subject.isSharedView === true,
+      }
+    )
+  );
 };
 
 const DEFAULT_SALES_INVOICE_GOAL_SEED_KEY = 'sales_invoices_monthly_paid_total_v1';
@@ -671,6 +947,10 @@ export const buildGoalFallbackProgressSnapshot = (
       selectedSubperiodUnit: subperiodUnit,
       metricLabel: resolveMetricLabel(goal),
       moduleLabel: resolveGoalModuleLabel(goal),
+      subjectUserId: null,
+      subjectRoleId: null,
+      subjectLabel: null,
+      isSharedView: false,
     };
   } catch {
     const now = new Date();
@@ -700,6 +980,10 @@ export const buildGoalFallbackProgressSnapshot = (
       selectedSubperiodUnit: subperiodUnit,
       metricLabel: resolveMetricLabel(goal),
       moduleLabel: resolveGoalModuleLabel(goal),
+      subjectUserId: null,
+      subjectRoleId: null,
+      subjectLabel: null,
+      isSharedView: false,
     };
   }
 };
@@ -716,74 +1000,94 @@ export const executeGoalProgress = async (
     fiscalYear?: FiscalYearSnapshot | null;
     selectedSubperiodUnit?: GoalPeriodUnit | null;
     cache?: Map<string, any[]>;
+    subjectUserId?: string | null;
+    subjectRoleId?: string | null;
+    subjectLabel?: string | null;
+    fallbackSubjects?: GoalAssignedMember[];
   }
 ): Promise<GoalProgressSnapshot | null> => {
   const goal = normalizeGoalRecord(goalInput);
   const module = MODULES[goal.module_id];
   if (!module) return null;
+  const prepared = await prepareGoalProgressRows(goal, options);
 
-  const subperiodUnit = clampGoalSubperiodUnit(
-    goal.period_unit,
-    options.selectedSubperiodUnit || goal.subperiod_unit
-  );
+  const explicitSubjectUserId = String(options.subjectUserId || '').trim();
+  const explicitSubjectRoleId = String(options.subjectRoleId || '').trim();
+  if (explicitSubjectUserId || explicitSubjectRoleId) {
+    return buildGoalProgressSnapshotFromRows(
+      goal,
+      prepared.mainRange,
+      prepared.subRange,
+      prepared.subperiodUnit,
+      filterRowsForGoalSubject(prepared.filteredMainRows, explicitSubjectUserId, explicitSubjectRoleId),
+      filterRowsForGoalSubject(prepared.filteredSubRows, explicitSubjectUserId, explicitSubjectRoleId),
+      {
+        userId: explicitSubjectUserId || null,
+        roleId: explicitSubjectRoleId || null,
+        label: options.subjectLabel || null,
+        isSharedView: false,
+      }
+    );
+  }
 
-  const { mainBounds, subBounds } = resolveGoalPeriodBounds(
+  if (goal.goal_scope === 'personal') {
+    if (isGoalVisibleToUser(goal, options.userId, options.roleId)) {
+      return buildGoalProgressSnapshotFromRows(
+        goal,
+        prepared.mainRange,
+        prepared.subRange,
+        prepared.subperiodUnit,
+        filterRowsForGoalSubject(prepared.filteredMainRows, options.userId, options.roleId),
+        filterRowsForGoalSubject(prepared.filteredSubRows, options.userId, options.roleId),
+        {
+          userId: options.userId,
+          roleId: options.roleId,
+          label: null,
+          isSharedView: false,
+        }
+      );
+    }
+
+    const fallbackSubjects = Array.isArray(options.fallbackSubjects) ? options.fallbackSubjects : [];
+    if (fallbackSubjects.length > 0) {
+      const ranked = fallbackSubjects
+        .map((subject) =>
+          buildGoalProgressSnapshotFromRows(
+            goal,
+            prepared.mainRange,
+            prepared.subRange,
+            prepared.subperiodUnit,
+            filterRowsForGoalSubject(prepared.filteredMainRows, subject.userId, subject.roleId),
+            filterRowsForGoalSubject(prepared.filteredSubRows, subject.userId, subject.roleId),
+            {
+              userId: subject.userId,
+              roleId: subject.roleId,
+              label: subject.label,
+              isSharedView: true,
+            }
+          )
+        )
+        .sort((a, b) => {
+          if (b.achievedValue !== a.achievedValue) return b.achievedValue - a.achievedValue;
+          if (b.subAchievedValue !== a.subAchievedValue) return b.subAchievedValue - a.subAchievedValue;
+          return String(a.subjectLabel || '').localeCompare(String(b.subjectLabel || ''), 'fa');
+        });
+      if (ranked[0]) return ranked[0];
+    }
+  }
+
+  return buildGoalProgressSnapshotFromRows(
     goal,
-    subperiodUnit,
-    options.fiscalYear
+    prepared.mainRange,
+    prepared.subRange,
+    prepared.subperiodUnit,
+    prepared.filteredMainRows,
+    prepared.filteredSubRows,
+    {
+      userId: null,
+      roleId: null,
+      label: null,
+      isSharedView: false,
+    }
   );
-  const mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
-  const subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
-
-  const cache = options.cache || new Map<string, any[]>();
-  const [mainRows, subRows] = await Promise.all([
-    loadScopedRows(goal, mainRange, {
-      userId: options.userId,
-      roleId: options.roleId,
-      orgId: options.orgId,
-      allowedRoleIds: options.allowedRoleIds,
-      allowedUserIds: options.allowedUserIds,
-      permissions: options.permissions,
-      cache,
-    }),
-    loadScopedRows(goal, subRange, {
-      userId: options.userId,
-      roleId: options.roleId,
-      orgId: options.orgId,
-      allowedRoleIds: options.allowedRoleIds,
-      allowedUserIds: options.allowedUserIds,
-      permissions: options.permissions,
-      cache,
-    }),
-  ]);
-
-  const [filteredMainRows, filteredSubRows] = await Promise.all([
-    filterGoalRows(goal, mainRows),
-    filterGoalRows(goal, subRows),
-  ]);
-
-  const levels = buildGoalLevels(goal);
-  const targetValue = resolveGoalTargetValue(goal, levels);
-  const achievedValue = resolveMetricValue(filteredMainRows, goal.metric_type, goal.metric_field_key);
-  const subAchievedValue = resolveMetricValue(filteredSubRows, goal.metric_type, goal.metric_field_key);
-  const ratio = calculateRangeRatio(mainRange, subRange);
-  const subTargetValue = targetValue > 0 ? targetValue * ratio : 0;
-  const { tone, activeLevelKey } = resolveGoalTone(achievedValue, levels);
-
-  return {
-    goal,
-    achievedValue,
-    targetValue,
-    subAchievedValue,
-    subTargetValue,
-    mainRange,
-    subRange,
-    tone,
-    activeLevelKey,
-    levels,
-    availableSubperiodUnits: getAvailableGoalSubperiodUnits(goal.period_unit),
-    selectedSubperiodUnit: subperiodUnit,
-    metricLabel: resolveMetricLabel(goal),
-    moduleLabel: resolveGoalModuleLabel(goal),
-  };
 };

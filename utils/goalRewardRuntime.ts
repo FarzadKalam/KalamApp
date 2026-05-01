@@ -52,6 +52,9 @@ const isRuleTriggered = (rule: GoalRewardRule, snapshot: GoalProgressSnapshot) =
   if (trigger === 'achieve') {
     return normalizeNumber(snapshot.targetValue) > 0 && normalizeNumber(snapshot.achievedValue) >= normalizeNumber(snapshot.targetValue);
   }
+  if (trigger === 'per_record') {
+    return normalizeNumber(snapshot.achievedValue) > 0;
+  }
   if (!LEVEL_ORDER.includes(trigger as GoalLevelKey)) return false;
   if (!snapshot.activeLevelKey) return false;
   return LEVEL_ORDER.indexOf(snapshot.activeLevelKey) >= LEVEL_ORDER.indexOf(trigger as GoalLevelKey);

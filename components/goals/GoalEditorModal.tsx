@@ -8,7 +8,6 @@ import {
   InputNumber,
   Modal,
   Radio,
-  Select,
   Switch,
 } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
@@ -35,6 +34,7 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveModuleGoalAccessPermissions } from '../../utils/permissions';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import PersianDatePicker from '../PersianDatePicker';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 
@@ -67,6 +67,8 @@ type FormValues = {
   gold_value?: number | null;
   assignee_user_ids: string[];
   assignee_role_ids: string[];
+  result_share_user_ids: string[];
+  result_share_role_ids: string[];
   reward_rules?: Array<{
     title?: string;
     trigger_type?: 'touch' | 'achieve' | 'bronze' | 'silver' | 'gold';
@@ -80,6 +82,7 @@ type FormValues = {
 const GOAL_REWARD_TRIGGER_OPTIONS = [
   { label: 'هر بار ورود به کارت هدف', value: 'touch' },
   { label: 'هر بار تحقق هدف', value: 'achieve' },
+  { label: 'به ازای هر رکورد', value: 'per_record' },
   { label: 'تحقق سطح برنزی', value: 'bronze' },
   { label: 'تحقق سطح نقره‌ای', value: 'silver' },
   { label: 'تحقق سطح طلایی', value: 'gold' },
@@ -114,6 +117,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const [formulaOptions, setFormulaOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [formulaModalOpen, setFormulaModalOpen] = useState(false);
   const [formulaTargetIndex, setFormulaTargetIndex] = useState<number | null>(null);
+  const [editingFormulaId, setEditingFormulaId] = useState<string | null>(null);
 
   const isEditMode = !!record?.id;
   const metricType = Form.useWatch('metric_type', form);
@@ -136,14 +140,22 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
     return GOAL_PERIOD_UNIT_OPTIONS.slice(0, selectedIndex + 1);
   }, [periodUnit]);
   const conditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
-  const popupContainer = (triggerNode?: HTMLElement | null) =>
-    resolveOverlayPopupContainer(triggerNode);
+  const popupContainer = (triggerNode?: HTMLElement | null) => {
+    const modalBodyHost = triggerNode?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
+    return modalBodyHost || resolveOverlayPopupContainer(triggerNode);
+  };
   const overlayZIndexBase = 1400;
   const rewardTriggerOptions = useMemo(
-    () => levelsEnabled
-      ? GOAL_REWARD_TRIGGER_OPTIONS
-      : GOAL_REWARD_TRIGGER_OPTIONS.filter((item) => item.value === 'touch' || item.value === 'achieve'),
-    [levelsEnabled]
+    () => {
+      let options = levelsEnabled
+        ? GOAL_REWARD_TRIGGER_OPTIONS
+        : GOAL_REWARD_TRIGGER_OPTIONS.filter((item) => item.value === 'touch' || item.value === 'achieve' || item.value === 'per_record');
+      if (metricType !== 'count') {
+        options = options.filter((item) => item.value !== 'per_record');
+      }
+      return options;
+    },
+    [levelsEnabled, metricType]
   );
 
   useEffect(() => {
@@ -170,6 +182,8 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       gold_value: normalized?.gold_value ?? undefined,
       assignee_user_ids: getGoalUserSelectionValue(normalized),
       assignee_role_ids: Array.isArray(normalized?.assignee_role_ids) ? normalized!.assignee_role_ids! : [],
+      result_share_user_ids: Array.isArray(normalized?.config?.result_share_user_ids) ? normalized!.config!.result_share_user_ids! : [],
+      result_share_role_ids: Array.isArray(normalized?.config?.result_share_role_ids) ? normalized!.config!.result_share_role_ids! : [],
       reward_rules: Array.isArray(normalized?.config?.goal_reward_rules)
         ? normalized!.config!.goal_reward_rules!.map((item: any) => ({
           title: String(item?.title || '').trim() || undefined,
@@ -360,6 +374,8 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           assignment_users_mode: useAllUsers ? 'all' : 'selected',
           goal_start_date: values.goal_start_date || null,
           goal_end_date: values.goal_end_date || null,
+          result_share_user_ids: Array.isArray(values.result_share_user_ids) ? values.result_share_user_ids : [],
+          result_share_role_ids: Array.isArray(values.result_share_role_ids) ? values.result_share_role_ids : [],
           goal_reward_rules: (Array.isArray(values.reward_rules) ? values.reward_rules : [])
             .map((item) => ({
               title: String(item?.title || '').trim() || null,
@@ -422,12 +438,15 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
         <div className="mb-4 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item label="ماژول" name="module_id" rules={[{ required: true, message: 'ماژول الزامی است.' }]}>
-              <Select
+              <AdaptiveSelectField
                 showSearch
                 optionFilterProp="label"
                 options={moduleOptions}
                 onChange={(value) => setModuleId(String(value || ''))}
-                getPopupContainer={popupContainer}
+                getPopupContainer={popupContainer as any}
+                modalContainer={popupContainer}
+                preferLocalPopupContainer
+                overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب ماژول"
               />
             </Form.Item>
@@ -452,35 +471,38 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           <h4 className="mb-3 font-bold">بازه و معیار محاسبه</h4>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <Form.Item label="بازه اصلی" name="period_unit" initialValue="month">
-              <Select options={GOAL_PERIOD_UNIT_OPTIONS} getPopupContainer={popupContainer} />
+              <AdaptiveSelectField options={GOAL_PERIOD_UNIT_OPTIONS} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
             <Form.Item label="بازه فرعی پیش‌فرض" name="subperiod_unit" initialValue="week">
-              <Select options={availableSubperiodOptions} getPopupContainer={popupContainer} />
+              <AdaptiveSelectField options={availableSubperiodOptions} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
             <Form.Item label="فیلد تاریخ" name="date_field_key" initialValue="created_at">
-              <Select options={dateFieldOptions} getPopupContainer={popupContainer} />
+              <AdaptiveSelectField options={dateFieldOptions} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <Form.Item label="نوع سنجش" name="metric_type" initialValue="count">
-              <Select options={GOAL_METRIC_TYPE_OPTIONS} getPopupContainer={popupContainer} />
+              <AdaptiveSelectField options={GOAL_METRIC_TYPE_OPTIONS} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
             <Form.Item label="فیلد عددی" name="metric_field_key">
-              <Select
+              <AdaptiveSelectField
                 options={numericFieldOptions}
                 placeholder={metricType === 'count' ? 'برای تعداد نیاز نیست' : 'انتخاب فیلد عددی'}
                 disabled={metricType === 'count'}
                 allowClear
-                getPopupContainer={popupContainer}
+                getPopupContainer={popupContainer as any}
+                modalContainer={popupContainer}
+                preferLocalPopupContainer
+                overlayZIndexBase={overlayZIndexBase}
               />
             </Form.Item>
           </div>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item label="تاریخ شروع بازه اصلی" name="goal_start_date">
-              <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} />
+              <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
             <Form.Item label="تاریخ پایان بازه اصلی" name="goal_end_date">
-              <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} />
+              <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
           </div>
         </div>
@@ -515,22 +537,63 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           <h4 className="mb-3 font-bold">انتساب هدف</h4>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item label="اشخاص" name="assignee_user_ids" initialValue={[]}>
-              <Select
+              <AdaptiveSelectField
                 mode="multiple"
                 options={userSelectOptions}
                 optionFilterProp="label"
                 showSearch
-                getPopupContainer={popupContainer}
+                getPopupContainer={popupContainer as any}
+                modalContainer={popupContainer}
+                preferLocalPopupContainer
+                overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب چند کاربر"
               />
             </Form.Item>
             <Form.Item label="نقش‌ها" name="assignee_role_ids" initialValue={[]}>
-              <Select
+              <AdaptiveSelectField
                 mode="multiple"
                 options={roleOptions}
                 optionFilterProp="label"
                 showSearch
-                getPopupContainer={popupContainer}
+                getPopupContainer={popupContainer as any}
+                modalContainer={popupContainer}
+                preferLocalPopupContainer
+                overlayZIndexBase={overlayZIndexBase}
+                placeholder="انتخاب چند نقش"
+              />
+            </Form.Item>
+          </div>
+        </div>
+
+        <div className="mb-4 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
+          <h4 className="mb-3 font-bold">اشتراک‌گذاری نتایج هدف</h4>
+          <div className="mb-2 text-xs leading-6 text-gray-500">
+            افراد یا نقش‌های انتخاب‌شده می‌توانند مودال تحقق این هدف را ببینند. اگر به هدف منتسب نباشند، روی کارت بیشترین تحقق اعضای هدف را خواهند دید.
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Form.Item label="کاربران مجاز" name="result_share_user_ids" initialValue={[]}>
+              <AdaptiveSelectField
+                mode="multiple"
+                options={userOptions}
+                optionFilterProp="label"
+                showSearch
+                getPopupContainer={popupContainer as any}
+                modalContainer={popupContainer}
+                preferLocalPopupContainer
+                overlayZIndexBase={overlayZIndexBase}
+                placeholder="انتخاب چند کاربر"
+              />
+            </Form.Item>
+            <Form.Item label="نقش‌های مجاز" name="result_share_role_ids" initialValue={[]}>
+              <AdaptiveSelectField
+                mode="multiple"
+                options={roleOptions}
+                optionFilterProp="label"
+                showSearch
+                getPopupContainer={popupContainer as any}
+                modalContainer={popupContainer}
+                preferLocalPopupContainer
+                overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب چند نقش"
               />
             </Form.Item>
@@ -594,7 +657,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                         initialValue="bonus"
                         rules={[{ required: true, message: 'نوع خروجی را انتخاب کنید.' }]}
                       >
-                        <Select options={GOAL_REWARD_OUTPUT_OPTIONS} getPopupContainer={popupContainer} />
+                        <AdaptiveSelectField options={GOAL_REWARD_OUTPUT_OPTIONS} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
                       </Form.Item>
                     </div>
 
@@ -605,19 +668,22 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                         initialValue="achieve"
                         rules={[{ required: true, message: 'رویداد را انتخاب کنید.' }]}
                       >
-                        <Select options={rewardTriggerOptions} getPopupContainer={popupContainer} />
+                        <AdaptiveSelectField options={rewardTriggerOptions} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
                       </Form.Item>
                       <Form.Item
                         label="فرمول محاسبه"
                         name={[field.name, 'formula_id']}
                         rules={[{ required: true, message: 'فرمول را انتخاب کنید.' }]}
                       >
-                        <Select
+                        <AdaptiveSelectField
                           showSearch
                           allowClear
                           optionFilterProp="label"
                           options={formulaOptions}
-                          getPopupContainer={popupContainer}
+                          getPopupContainer={popupContainer as any}
+                          modalContainer={popupContainer}
+                          preferLocalPopupContainer
+                          overlayZIndexBase={overlayZIndexBase}
                           placeholder="انتخاب فرمول پاداش هدف"
                         />
                       </Form.Item>
@@ -626,11 +692,30 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
                           icon={<PlusOutlined />}
                           onClick={() => {
                             setFormulaTargetIndex(field.name);
+                            setEditingFormulaId(null);
                             setFormulaModalOpen(true);
                           }}
                         >
                           فرمول
                         </Button>
+                        <Form.Item shouldUpdate noStyle>
+                          {() => {
+                            const selectedFormulaId = String(form.getFieldValue(['reward_rules', field.name, 'formula_id']) || '').trim();
+                            return (
+                              <Button
+                                disabled={!selectedFormulaId}
+                                onClick={() => {
+                                  if (!selectedFormulaId) return;
+                                  setFormulaTargetIndex(field.name);
+                                  setEditingFormulaId(selectedFormulaId);
+                                  setFormulaModalOpen(true);
+                                }}
+                              >
+                                ویرایش فرمول
+                              </Button>
+                            );
+                          }}
+                        </Form.Item>
                         <Button danger onClick={() => remove(field.name)}>
                           حذف
                         </Button>
@@ -682,13 +767,20 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
         onCancel={() => {
           setFormulaModalOpen(false);
           setFormulaTargetIndex(null);
+          setEditingFormulaId(null);
         }}
         defaultScope="goal_reward"
         defaultContextType="goal"
         defaultOutputType="money"
+        initialFormulaId={editingFormulaId}
         onSaved={(formula) => {
           setFormulaOptions((current) => {
-            if (current.some((item) => item.value === formula.id)) return current;
+            const existing = current.find((item) => item.value === formula.id);
+            if (existing) {
+              return current
+                .map((item) => item.value === formula.id ? { ...item, label: formula.name } : item)
+                .sort((a, b) => a.label.localeCompare(b.label, 'fa'));
+            }
             return [...current, { label: formula.name, value: formula.id }].sort((a, b) => a.label.localeCompare(b.label, 'fa'));
           });
           if (formulaTargetIndex !== null) {
@@ -696,6 +788,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           }
           setFormulaModalOpen(false);
           setFormulaTargetIndex(null);
+          setEditingFormulaId(null);
         }}
       />
     </Modal>

@@ -4,7 +4,7 @@ import { fetchSessionBootstrap } from './sessionCache';
 import { getMergedTaskTypeOptions } from './taskMeta';
 
 type DynamicOptionRow = { label: string; value: string };
-type AssigneeDirectory = {
+export type AssigneeDirectory = {
   users: Array<{
     id: string;
     full_name?: string | null;

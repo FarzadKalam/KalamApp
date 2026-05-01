@@ -36,6 +36,7 @@ import { workSchedulesModule } from './modules/workSchedulesConfig';
 import { leaveRequestsModule } from './modules/leaveRequestsConfig';
 import { overtimeRequestsModule } from './modules/overtimeRequestsConfig';
 import { missionRequestsModule } from './modules/missionRequestsConfig';
+import { profilesModule } from './modules/profilesConfig';
 import { priceListsConfig } from './modules/priceListsConfig';
 import { webFormsConfig } from './modules/webFormsConfig';
 import { automationExecutionReportsConfig } from './modules/automationExecutionReportsConfig';
@@ -172,6 +173,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   cheques: chequesConfig,
   barters: bartersConfig,
   cash_bank_operations: cashBankOperationsConfig,
+  profiles: profilesModule,
   employees: employeesModule,
   attendance_logs: attendanceLogsModule,
   work_schedules: workSchedulesModule,

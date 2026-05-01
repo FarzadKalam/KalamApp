@@ -13,6 +13,7 @@ type FormulaEditorModalProps = {
   defaultScope?: string;
   defaultContextType?: string;
   defaultOutputType?: string;
+  initialFormulaId?: string | null;
 };
 
 type FormulaEditorValues = {
@@ -74,11 +75,14 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
   defaultScope = 'activity_performance',
   defaultContextType = 'task',
   defaultOutputType = 'money',
+  initialFormulaId = null,
 }) => {
   const { message } = App.useApp();
   const [form] = Form.useForm<FormulaEditorValues>();
   const [saving, setSaving] = useState(false);
+  const [loadingFormula, setLoadingFormula] = useState(false);
   const [savedFormulas, setSavedFormulas] = useState<Array<{ id: string; name: string; formula?: string | null; expression_config?: any; config?: any }>>([]);
+  const isEditMode = !!String(initialFormulaId || '').trim();
 
   useEffect(() => {
     if (!open) return;
@@ -88,7 +92,40 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
       expression_text: '',
       description: '',
     });
-  }, [defaultOutputType, form, open]);
+  }, [defaultOutputType, form, open, initialFormulaId]);
+
+  useEffect(() => {
+    if (!open || !isEditMode) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        setLoadingFormula(true);
+        const { data, error } = await supabase
+          .from('calculation_formulas')
+          .select('id, name, description, output_type, formula, config')
+          .eq('id', String(initialFormulaId))
+          .single();
+        if (error) throw error;
+        if (cancelled) return;
+        form.setFieldsValue({
+          name: String(data?.name || ''),
+          description: String(data?.description || ''),
+          output_type: String(data?.output_type || defaultOutputType),
+          expression_text: String(data?.config?.expression_text || data?.formula || ''),
+        });
+      } catch (error: any) {
+        if (!cancelled) {
+          message.error(toFaErrorMessage(error, 'دریافت فرمول ناموفق بود.'));
+        }
+      } finally {
+        if (!cancelled) setLoadingFormula(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultOutputType, form, initialFormulaId, isEditMode, message, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -146,14 +183,22 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
       };
 
       setSaving(true);
-      const { data, error } = await supabase
-        .from('calculation_formulas')
-        .insert([payload])
-        .select('id, name')
-        .single();
+      const query = isEditMode
+        ? supabase
+            .from('calculation_formulas')
+            .update(payload)
+            .eq('id', String(initialFormulaId))
+            .select('id, name')
+            .single()
+        : supabase
+            .from('calculation_formulas')
+            .insert([payload])
+            .select('id, name')
+            .single();
+      const { data, error } = await query;
       if (error) throw error;
 
-      message.success('فرمول محاسباتی ثبت شد.');
+      message.success(isEditMode ? 'فرمول محاسباتی بروزرسانی شد.' : 'فرمول محاسباتی ثبت شد.');
       onSaved?.({ id: String(data.id), name: String(data.name || values.name) });
       onCancel();
     } catch (error: any) {
@@ -166,12 +211,12 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
 
   return (
     <Modal
-      title="مدیریت و ساخت فرمول"
+      title={isEditMode ? 'ویرایش فرمول' : 'مدیریت و ساخت فرمول'}
       open={open}
       onCancel={onCancel}
       onOk={handleSave}
-      confirmLoading={saving}
-      okText="ذخیره فرمول"
+      confirmLoading={saving || loadingFormula}
+      okText={isEditMode ? 'ذخیره تغییرات' : 'ذخیره فرمول'}
       cancelText="انصراف"
       destroyOnHidden
       width={1120}

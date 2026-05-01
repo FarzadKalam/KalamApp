@@ -46,7 +46,7 @@ import { useCurrencyConfig } from '../utils/currency';
 import { buildClientFallbackSystemCode } from '../utils/systemCode';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import GoalsManager from '../components/goals/GoalsManager';
-import { ensureDefaultHrTaskGoals, executeGoalProgress, normalizeGoalRecord } from '../utils/goals';
+import { ensureDefaultHrTaskGoals, executeGoalProgress, normalizeGoalRecord, resolveGoalAssignedMembers } from '../utils/goals';
 import FormulaEditorModal from '../components/formulas/FormulaEditorModal';
 import ActivityPerformanceRulesManager from '../components/hr/ActivityPerformanceRulesManager';
 import AdaptiveSelectField from '../components/AdaptiveSelectField';
@@ -67,16 +67,22 @@ import {
   type ActivityPerformanceRule,
 } from '../utils/activityPerformanceRuntime';
 import {
-  buildCommissionCalculatedKey,
-  buildCommissionPreviewRows,
+  buildCommissionDraftRows,
+  buildCommissionDraftSourceKey,
+  recomputeCommissionDraftRow,
   type CommissionBasis,
+  type CommissionDecisionStatus,
+  type CommissionDraftLine,
+  type CommissionDraftRow,
   type CommissionPercentMode,
-  type CommissionPreviewRow,
+  type CommissionPersistedDraft,
+  type CommissionPostedAllocation,
 } from '../utils/commissionRuntime';
 import type { GoalRecord } from '../utils/goalTypes';
 import { resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../utils/popupContainer';
+import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { employeesModule } from '../modules/employeesConfig';
-import { fetchCurrentUserRolePermissions, type ModulePermissionConfig } from '../utils/permissions';
+import { fetchCurrentUserRecordAccessContext, fetchCurrentUserRolePermissions, type ModulePermissionConfig } from '../utils/permissions';
 
 type TaskRecord = {
   id: string;
@@ -195,6 +201,8 @@ type CommissionCalculationFormValues = {
   basis: CommissionBasis;
   percent_mode: CommissionPercentMode;
 };
+
+type CommissionReviewBucket = 'current_period' | 'backlog' | 'excluded';
 
 type CommissionLedgerRow = {
   id: string;
@@ -441,6 +449,7 @@ const RELATED_MODULE_FA: Record<string, string> = {
 const COMMISSION_BASIS_OPTIONS: Array<{ label: string; value: CommissionBasis }> = [
   { label: 'بر اساس فاکتورهای تایید شده', value: 'approved_invoices' },
   { label: 'بر اساس فاکتورهای تسویه شده', value: 'settled_invoices' },
+  { label: 'بر اساس تسویه کامل و وصول آخرین بخش', value: 'full_settlement_only' },
   { label: 'بر اساس فاکتورهای پیش پرداخت و تسویه شده', value: 'prepaid_and_settled_invoices' },
   { label: 'بر اساس فاکتورهای تسویه شده و چک های وصول شده', value: 'settled_and_collected_cheques' },
 ];
@@ -476,15 +485,50 @@ const isMissingSourceKeyError = (error: any) => {
   return text.includes('source_key') && (text.includes('column') || text.includes('could not find') || text.includes('schema cache'));
 };
 
-const buildCommissionSourceKey = (row: Pick<CommissionPreviewRow, 'employee_id' | 'invoice_id' | 'basis' | 'percent_mode' | 'item_keys'>) =>
+const isMissingCommissionDraftsError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('commission_drafts') && (text.includes('does not exist') || text.includes('could not find'));
+};
+
+const getCommissionLineBucket = (
+  row: CommissionDraftRow,
+  line: CommissionDraftLine,
+): CommissionReviewBucket => {
+  if (line.decision_status === 'exclude') return 'excluded';
+  if (line.is_from_previous_period || line.decision_status === 'defer_to_next_period') return 'backlog';
+  if (line.selected_amount > 0 || line.remaining_amount > 0) return 'current_period';
+  if (row.mode === 'pool' && row.event_pool_amount <= 0) return 'excluded';
+  return 'excluded';
+};
+
+const buildCommissionCalculationSourceKey = ({
+  employeeId,
+  basis,
+  percentMode,
+  periodStart,
+  periodEnd,
+}: {
+  employeeId: string;
+  basis: CommissionBasis;
+  percentMode: CommissionPercentMode;
+  periodStart: string;
+  periodEnd: string;
+}) =>
   [
-    'commission',
-    String(row.employee_id || '').trim(),
-    String(row.invoice_id || '').trim(),
-    String(row.basis || '').trim(),
-    String(row.percent_mode || '').trim(),
-    [...(row.item_keys || [])].sort().join('|'),
+    'commission_calculation',
+    String(employeeId || '').trim(),
+    String(basis || '').trim(),
+    String(percentMode || '').trim(),
+    String(periodStart || '').trim(),
+    String(periodEnd || '').trim(),
   ].join(':');
+
+const commissionLedgerStatusMeta: Record<string, { color: string; label: string }> = {
+  draft: { color: 'gold', label: 'پیش نویس' },
+  proposed: { color: 'blue', label: 'آماده فیش حقوقی' },
+  included_in_payroll: { color: 'green', label: 'نهایی' },
+  voided: { color: 'red', label: 'باطل شده' },
+};
 
 const parseDate = (value: string | null | undefined): dayjs.Dayjs | null => {
   if (!value) return null;
@@ -992,10 +1036,11 @@ const HRPage: React.FC = () => {
   const [savingActivityPerformance, setSavingActivityPerformance] = useState(false);
   const [goalTouchRows, setGoalTouchRows] = useState<EmployeeGoalTouchRow[]>([]);
   const [goalTouchLoading, setGoalTouchLoading] = useState(false);
-  const [commissionRows, setCommissionRows] = useState<CommissionPreviewRow[]>([]);
+  const [commissionRows, setCommissionRows] = useState<CommissionDraftRow[]>([]);
   const [commissionLoading, setCommissionLoading] = useState(false);
   const [calculatedCommissionRows, setCalculatedCommissionRows] = useState<CommissionLedgerRow[]>([]);
   const [calculatedCommissionLoading, setCalculatedCommissionLoading] = useState(false);
+  const [commissionReviewTab, setCommissionReviewTab] = useState<CommissionReviewBucket>('current_period');
   const [payrollPeriodSlips, setPayrollPeriodSlips] = useState<PayrollPeriodSlipRow[]>([]);
   const [payrollLedgerRows, setPayrollLedgerRows] = useState<PayrollDashboardLedgerRow[]>([]);
   const [payrollStatusLoading, setPayrollStatusLoading] = useState(false);
@@ -1008,10 +1053,12 @@ const HRPage: React.FC = () => {
   const [savingPayrollWizardFieldKey, setSavingPayrollWizardFieldKey] = useState<string | null>(null);
   const [creatingPayrollSlip, setCreatingPayrollSlip] = useState(false);
   const [savingGoalLedger, setSavingGoalLedger] = useState(false);
+  const [hrActiveGoalId, setHrActiveGoalId] = useState<string | null>(null);
   const [savingOvertimeLedgerKey, setSavingOvertimeLedgerKey] = useState<string | null>(null);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionModalSaving, setCommissionModalSaving] = useState(false);
   const [commissionForm] = Form.useForm<CommissionCalculationFormValues>();
+  const [commissionInitialValues, setCommissionInitialValues] = useState<Partial<CommissionCalculationFormValues> | null>(null);
   const [lineQuantityById, setLineQuantityById] = useState<Record<string, number>>({});
   const [orderQuantityById, setOrderQuantityById] = useState<Record<string, number>>({});
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
@@ -1707,12 +1754,14 @@ const HRPage: React.FC = () => {
   }, [payrollLedgerRows]);
 
   useEffect(() => {
-    if (activeTab !== 'goal_fulfillment') return;
+    // Handle both 'goals' and 'goal_fulfillment' tab keys for backwards compatibility
+    const isGoalTab = activeTab === 'goals' || activeTab === 'goal_fulfillment';
+    if (!isGoalTab) return;
 
     const run = async () => {
       setGoalTouchLoading(true);
       try {
-        const [goalsResult, formulasResult] = await Promise.all([
+        const [goalsResult, formulasResult, roleContext, directory] = await Promise.all([
           supabase
             .from('goals')
             .select('*')
@@ -1723,29 +1772,66 @@ const HRPage: React.FC = () => {
             .select('id, name, expression_config, output_type, config')
             .eq('is_active', true)
             .eq('context_type', 'goal'),
+          fetchCurrentUserRecordAccessContext(supabase),
+          fetchAssigneeDirectory(supabase),
         ]);
         if (goalsResult.error) throw goalsResult.error;
         if (formulasResult.error) throw formulasResult.error;
 
         const rewardFormulas = (formulasResult.data || []) as GoalRewardFormula[];
+        const directoryUserById = new Map(
+          (directory.users || []).map((item) => [String(item.id || '').trim(), item] as const)
+        );
 
         const selectedProfiles = visibleSummaries
           .map((row) => row.profile)
           .filter((profile) => profile.source_table === 'employees' && profile.source_id);
+        const selectedMembersByUserId = new Map(
+          selectedProfiles
+            .map((profile) => {
+              const memberUserId = String(profile.related_profile_id || profile.id || '').trim();
+              if (!memberUserId) return null;
+              const directoryUser = directoryUserById.get(memberUserId);
+              return [memberUserId, {
+                employeeId: String(profile.source_id || ''),
+                employeeName: profile.full_name || String(profile.source_id || '-'),
+                userId: memberUserId,
+                roleId: directoryUser?.role_id ? String(directoryUser.role_id) : null,
+              }] as const;
+            })
+            .filter((entry): entry is readonly [string, { employeeId: string; employeeName: string; userId: string; roleId: string | null }] => !!entry)
+        );
         const nextRows: EmployeeGoalTouchRow[] = [];
 
-        for (const profile of selectedProfiles) {
-          const profileUserId = String(profile.related_profile_id || profile.id || '').trim();
-          if (!profileUserId) continue;
-          for (const rawGoal of (goalsResult.data || [])) {
+        for (const rawGoal of (goalsResult.data || [])) {
+          const goal = normalizeGoalRecord(rawGoal as GoalRecord);
+          const assignedMembers = resolveGoalAssignedMembers(goal, directory)
+            .map((member) => {
+              const selectedMember = selectedMembersByUserId.get(member.userId);
+              if (!selectedMember) return null;
+              return {
+                ...member,
+                employeeId: selectedMember.employeeId,
+                employeeName: selectedMember.employeeName,
+                roleId: member.roleId || selectedMember.roleId,
+              };
+            })
+            .filter((member): member is { userId: string; roleId: string | null; label: string; employeeId: string; employeeName: string } => !!member);
+
+          for (const member of assignedMembers) {
             try {
-              const goal = normalizeGoalRecord(rawGoal as GoalRecord);
               const snapshot = await executeGoalProgress(goal, {
-                userId: profileUserId,
-                roleId: null,
-                permissions: null,
+                userId: roleContext.userId,
+                roleId: roleContext.roleId,
+                orgId: roleContext.orgId,
+                allowedRoleIds: roleContext.allowedRoleIds,
+                allowedUserIds: roleContext.allowedUserIds,
+                permissions: roleContext.permissions,
+                subjectUserId: member.userId,
+                subjectRoleId: member.roleId,
+                subjectLabel: member.label,
               });
-              if (!snapshot || snapshot.achievedValue <= 0) continue;
+              if (!snapshot) continue;
               const rewardEntries = evaluateGoalRewardRules({
                 snapshot,
                 formulas: rewardFormulas,
@@ -1753,14 +1839,14 @@ const HRPage: React.FC = () => {
               const sourceKeys = rewardEntries
                 .filter((entry) => entry.formula_id && toNumber(entry.amount) !== 0)
                 .map((entry) => buildGoalRewardSourceKey({
-                  employeeId: String(profile.source_id || ''),
+                  employeeId: member.employeeId,
                   goalId: goal.id,
                   formulaId: entry.formula_id,
                   triggerType: entry.trigger_type,
                   outputType: entry.output_type,
                 }));
               const matchingLedger = payrollLedgerRows.find((entry) => (
-                String(entry.employee_id || '') === String(profile.source_id || '') &&
+                String(entry.employee_id || '') === member.employeeId &&
                 String(entry.source_type || '') === 'goal_reward' &&
                 sourceKeys.includes(String(entry.source_key || entry.details?.source_key || ''))
               ));
@@ -1768,9 +1854,9 @@ const HRPage: React.FC = () => {
                 ? payrollSlipById.get(String(matchingLedger.payroll_slip_id))
                 : null;
               nextRows.push({
-                key: `${profile.source_id}_${goal.id}`,
-                employeeId: String(profile.source_id || ''),
-                employeeName: profile.full_name || String(profile.source_id || '-'),
+                key: `${member.employeeId}_${goal.id}`,
+                employeeId: member.employeeId,
+                employeeName: member.employeeName,
                 goalId: goal.id,
                 goalName: goal.name,
                 achievedValue: snapshot.achievedValue,
@@ -1836,7 +1922,7 @@ const HRPage: React.FC = () => {
         .limit(1000);
       if (error) throw error;
 
-      setCalculatedCommissionRows((data || []).map((row: any) => {
+      const mappedRows = (data || []).map((row: any) => {
         const employeeIdValue = row?.employee_id ? String(row.employee_id) : null;
         return {
           id: String(row?.id),
@@ -1855,8 +1941,79 @@ const HRPage: React.FC = () => {
           updated_by: row?.updated_by || null,
           assignee_id: row?.assignee_id || row?.details?.assignee_id || null,
           details: row?.details || null,
-        };
-      }));
+        } as CommissionLedgerRow;
+      });
+      const grouped = new Map<string, CommissionLedgerRow>();
+      mappedRows.forEach((row) => {
+        const basis = String(row.details?.basis || '').trim();
+        const percentMode = String(row.details?.percent_mode || '').trim();
+        const calculationKey = String(
+          row.details?.calculation_key
+          || [
+            row.employee_id || '',
+            row.period_start || '',
+            row.period_end || '',
+            basis,
+            percentMode,
+            row.status || '',
+            row.created_at || '',
+          ].join(':')
+        ).trim();
+        if (!calculationKey) {
+          grouped.set(row.id, row);
+          return;
+        }
+        const current = grouped.get(calculationKey);
+        const invoiceId = String(row.details?.invoice_id || row.source_record_id || '').trim();
+        const itemCount = toNumber(row.details?.item_count);
+        const invoiceCount = toNumber(row.details?.invoice_count) || (invoiceId ? 1 : 0);
+        if (!current) {
+          grouped.set(calculationKey, {
+            ...row,
+            id: calculationKey,
+            source_record_id: null,
+            title: row.title || `محاسبه پورسانت ${row.employee_name}`,
+            details: {
+              ...(row.details || {}),
+              calculation_key: calculationKey,
+              invoice_count: invoiceCount,
+              item_count: itemCount,
+              invoice_ids: invoiceId ? [invoiceId] : [],
+            },
+          });
+          return;
+        }
+        const currentInvoiceIds = new Set<string>(Array.isArray(current.details?.invoice_ids) ? current.details?.invoice_ids : []);
+        if (invoiceId) currentInvoiceIds.add(invoiceId);
+        grouped.set(calculationKey, {
+          ...current,
+          amount: current.amount + row.amount,
+          created_at: current.created_at && row.created_at
+            ? (new Date(current.created_at).getTime() >= new Date(row.created_at).getTime() ? current.created_at : row.created_at)
+            : current.created_at || row.created_at,
+          updated_at: current.updated_at && row.updated_at
+            ? (new Date(current.updated_at).getTime() >= new Date(row.updated_at).getTime() ? current.updated_at : row.updated_at)
+            : current.updated_at || row.updated_at,
+          details: {
+            ...(current.details || {}),
+            base_amount: toNumber(current.details?.base_amount) + toNumber(row.details?.base_amount),
+            selected_amount: toNumber(current.details?.selected_amount) + toNumber(row.details?.selected_amount || row.amount),
+            deferred_amount: toNumber(current.details?.deferred_amount) + toNumber(row.details?.deferred_amount),
+            excluded_amount: toNumber(current.details?.excluded_amount) + toNumber(row.details?.excluded_amount),
+            invoice_count: currentInvoiceIds.size || (toNumber(current.details?.invoice_count) + invoiceCount),
+            item_count: toNumber(current.details?.item_count) + itemCount,
+            invoice_ids: Array.from(currentInvoiceIds),
+          },
+        });
+      });
+
+      setCalculatedCommissionRows(
+        Array.from(grouped.values()).sort((a, b) => {
+          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return bTime - aTime;
+        }),
+      );
     } catch (error) {
       if (isMissingPayrollLedgerError(error)) {
         setCalculatedCommissionRows([]);
@@ -2237,12 +2394,6 @@ const HRPage: React.FC = () => {
     };
   }, [visibleSummaries]);
 
-  const goalFulfillmentTotals = useMemo(() => ({
-    touchedGoals: goalTouchRows.length,
-    achievedLevels: goalTouchRows.filter((row) => row.activeLevelLabel !== 'در حال پیشروی').length,
-    rewardSuggestion: goalTouchRows.reduce((sum, row) => sum + row.rewardSuggestion, 0),
-  }), [goalTouchRows]);
-
   const goalCards = useMemo(() => {
     const grouped = new Map<string, {
       key: string;
@@ -2269,6 +2420,71 @@ const HRPage: React.FC = () => {
     });
     return Array.from(grouped.values());
   }, [goalTouchRows]);
+
+  useEffect(() => {
+    if (goalCards.length === 0) {
+      setHrActiveGoalId(null);
+      return;
+    }
+    if (!hrActiveGoalId || !goalCards.some((card) => card.goalId === hrActiveGoalId)) {
+      setHrActiveGoalId(goalCards[0].goalId);
+    }
+  }, [goalCards, hrActiveGoalId]);
+
+  const activeGoalCard = useMemo(
+    () => goalCards.find((card) => card.goalId === hrActiveGoalId) || goalCards[0] || null,
+    [goalCards, hrActiveGoalId],
+  );
+
+  const goalFulfillmentTotals = useMemo(() => ({
+    totalGoals: goalCards.length,
+    assignedMembers: goalTouchRows.length,
+    rewardSuggestion: goalTouchRows.reduce((sum, row) => sum + row.rewardSuggestion, 0),
+  }), [goalCards.length, goalTouchRows]);
+
+  const commissionRowsByBucket = useMemo(() => {
+    const empty: Record<CommissionReviewBucket, any[]> = {
+      current_period: [],
+      backlog: [],
+      excluded: [],
+    };
+    commissionRows.forEach((row) => {
+      (['current_period', 'backlog', 'excluded'] as CommissionReviewBucket[]).forEach((bucket) => {
+        const bucketLines = row.lines.filter((line) => getCommissionLineBucket(row, line) === bucket);
+        if (bucketLines.length === 0) return;
+        empty[bucket].push({
+          ...row,
+          key: `${row.key}:${bucket}`,
+          lines: bucketLines,
+          item_count: bucketLines.length,
+          entitled_amount: bucketLines.reduce((sum, line) => sum + line.entitled_amount, 0),
+          posted_amount: bucketLines.reduce((sum, line) => sum + line.posted_amount, 0),
+          remaining_amount: bucketLines.reduce((sum, line) => sum + line.remaining_amount, 0),
+          selected_amount: bucketLines.reduce((sum, line) => sum + line.selected_amount, 0),
+          exclusion_reason: bucketLines.find((line) => line.exclusion_reason)?.exclusion_reason || row.exclusion_reason,
+          sourceRowKey: row.key,
+          bucket,
+        });
+      });
+    });
+    return empty;
+  }, [commissionRows]);
+
+  const commissionDraftTotals = useMemo(() => ({
+    selected: commissionRows.reduce((sum, row) => sum + row.selected_amount, 0),
+    deferred: commissionRows.reduce(
+      (sum, row) => sum + row.lines
+        .filter((line) => line.decision_status === 'defer_to_next_period')
+        .reduce((lineSum, line) => lineSum + line.remaining_amount, 0),
+      0,
+    ),
+    excluded: commissionRows.reduce(
+      (sum, row) => sum + row.lines
+        .filter((line) => line.decision_status === 'exclude')
+        .reduce((lineSum, line) => lineSum + line.entitled_amount, 0),
+      0,
+    ),
+  }), [commissionRows]);
 
   const payrollLedgerTotalsByEmployeeId = useMemo(() => {
     const map = new Map<string, {
@@ -2307,12 +2523,14 @@ const HRPage: React.FC = () => {
     const rowsByBasis = {
       approved_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'approved_invoices'),
       settled_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'settled_invoices'),
+      full_settlement_only: calculatedCommissionRows.filter((row) => row.details?.basis === 'full_settlement_only'),
       prepaid_and_settled_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'prepaid_and_settled_invoices'),
       settled_and_collected_cheques: calculatedCommissionRows.filter((row) => row.details?.basis === 'settled_and_collected_cheques'),
     };
     return {
       approved: rowsByBasis.approved_invoices.reduce((sum, row) => sum + row.amount, 0),
       settled: rowsByBasis.settled_invoices.reduce((sum, row) => sum + row.amount, 0),
+      fullSettlement: rowsByBasis.full_settlement_only.reduce((sum, row) => sum + row.amount, 0),
       prepaid: rowsByBasis.prepaid_and_settled_invoices.reduce((sum, row) => sum + row.amount, 0),
       collectedCheque: rowsByBasis.settled_and_collected_cheques.reduce((sum, row) => sum + row.amount, 0),
       invoices: new Set(calculatedCommissionRows.map((row) => row.details?.invoice_id || row.source_record_id).filter(Boolean)).size,
@@ -2525,7 +2743,7 @@ const HRPage: React.FC = () => {
       visibleSummaries.find((row) => row.profile.source_table === 'employees')?.profile.id ||
       profiles.find((profile) => profile.source_table === 'employees')?.id ||
       '';
-    commissionForm.setFieldsValue({
+    setCommissionInitialValues({
       period_range: [
         toNativeGregorianDateString(selectedRange[0]),
         toNativeGregorianDateString(selectedRange[1]),
@@ -2535,10 +2753,21 @@ const HRPage: React.FC = () => {
       percent_mode: 'product_default',
     });
     setCommissionRows([]);
+    setCommissionReviewTab('current_period');
     setCommissionModalOpen(true);
-  }, [commissionForm, profiles, selectedEmployeeIds, selectedRange, visibleSummaries]);
+  }, [profiles, selectedEmployeeIds, selectedRange, visibleSummaries]);
 
-  const getCommissionPeriodValues = useCallback((values: Partial<CommissionCalculationFormValues>) => {
+  useEffect(() => {
+    if (!commissionModalOpen || !commissionInitialValues) return;
+    commissionForm.setFieldsValue(commissionInitialValues as any);
+  }, [commissionForm, commissionInitialValues, commissionModalOpen]);
+
+  const getCommissionPeriodValues = useCallback((values: {
+    period_range?: PersianDateRangeValue | null;
+    employee_profile_id?: string;
+    basis?: CommissionBasis;
+    percent_mode?: CommissionPercentMode;
+  }) => {
     const periodStart = String(values.period_range?.[0] || toNativeGregorianDateString(selectedRange[0]) || '').trim();
     const periodEnd = String(values.period_range?.[1] || toNativeGregorianDateString(selectedRange[1]) || '').trim();
     const startDate = parseDateValue(periodStart);
@@ -2566,7 +2795,7 @@ const HRPage: React.FC = () => {
       setCommissionLoading(true);
       const employeeIdValue = String(selectedProfile.source_id || selectedProfile.id);
       const assigneeId = String(selectedProfile.related_profile_id || selectedProfile.id || '').trim();
-      const [invoicesResult, existingResult] = await Promise.all([
+      const [invoicesResult, existingResult, draftsResult] = await Promise.all([
         supabase
           .from('invoices')
           .select('id, name, status, invoice_date, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags')
@@ -2581,9 +2810,18 @@ const HRPage: React.FC = () => {
           .eq('employee_id', employeeIdValue)
           .neq('status', 'voided')
           .limit(5000),
+        supabase
+          .from('commission_drafts')
+          .select('id, source_key, employee_id, assignee_id, period_start, period_end, source_basis, percent_mode, eligibility_event_type, eligibility_event_at, invoice_id, invoice_item_key, entitled_amount, posted_amount, remaining_amount, decision_status, decision_reason, deferred_from_period, deferred_to_period, manual_decision_by, manual_decision_at, draft_status, details')
+          .eq('employee_id', employeeIdValue)
+          .eq('source_basis', values.basis)
+          .eq('percent_mode', values.percent_mode)
+          .neq('draft_status', 'canceled')
+          .limit(5000),
       ]);
       if (invoicesResult.error) throw invoicesResult.error;
       if (existingResult.error && !isMissingPayrollLedgerError(existingResult.error)) throw existingResult.error;
+      if (draftsResult.error && !isMissingCommissionDraftsError(draftsResult.error)) throw draftsResult.error;
 
       const invoices = ((invoicesResult.data || []) as any[]).map((invoice) => ({
         ...invoice,
@@ -2629,16 +2867,40 @@ const HRPage: React.FC = () => {
         }),
       }));
 
-      const alreadyCalculatedKeys = new Set<string>();
+      const postedAllocations: CommissionPostedAllocation[] = [];
       (existingResult.data || []).forEach((entry: any) => {
-        const keys = Array.isArray(entry?.details?.calculated_keys) ? entry.details.calculated_keys : [];
-        keys.forEach((key: any) => {
-          const text = String(key || '').trim();
-          if (text) alreadyCalculatedKeys.add(text);
-        });
+        const details = entry?.details || {};
+        const entryBasis = String(details?.basis || values.basis || '').trim() as CommissionBasis;
+        const entryPercentMode = String(details?.percent_mode || values.percent_mode || '').trim() as CommissionPercentMode;
+        const invoiceId = String(details?.invoice_id || entry?.source_record_id || '').trim();
+        const lines = Array.isArray(details?.lines) ? details.lines : [];
+        if (lines.length > 0) {
+          lines.forEach((line: any) => {
+            const itemKey = String(line?.item_key || line?.invoice_item_key || '').trim();
+            if (!invoiceId || !itemKey) return;
+            postedAllocations.push({
+              basis: entryBasis,
+              percent_mode: entryPercentMode,
+              invoice_id: invoiceId,
+              invoice_item_key: itemKey,
+              posted_amount: toNumber(line?.commission_amount ?? line?.selected_amount ?? 0),
+            });
+          });
+          return;
+        }
+        const itemKeys = Array.isArray(details?.item_keys) ? details.item_keys.map((itemKey: any) => String(itemKey || '').trim()).filter(Boolean) : [];
+        if (invoiceId && itemKeys.length === 1) {
+          postedAllocations.push({
+            basis: entryBasis,
+            percent_mode: entryPercentMode,
+            invoice_id: invoiceId,
+            invoice_item_key: itemKeys[0],
+            posted_amount: toNumber(entry?.amount),
+          });
+        }
       });
 
-      const previewRows = buildCommissionPreviewRows({
+      const previewRows = buildCommissionDraftRows({
         invoices: enrichedInvoices,
         employeeIdByAssigneeId: { [assigneeId]: employeeIdValue },
         employeeDefaultCommissionByEmployeeId: { [employeeIdValue]: toNumber(selectedProfile.commission_percentage) },
@@ -2646,13 +2908,26 @@ const HRPage: React.FC = () => {
         percentMode: values.percent_mode,
         periodStart,
         periodEnd,
-        alreadyCalculatedKeys,
+        postedAllocations,
+        existingDrafts: ((draftsResult.data || []) as any[]).map((row) => ({
+          ...row,
+          employee_id: String(row.employee_id || employeeIdValue),
+          assignee_id: row.assignee_id ? String(row.assignee_id) : null,
+          period_start: String(row.period_start || periodStart),
+          period_end: String(row.period_end || periodEnd),
+          invoice_id: String(row.invoice_id || ''),
+          invoice_item_key: String(row.invoice_item_key || ''),
+          source_basis: String(row.source_basis || values.basis) as CommissionBasis,
+          percent_mode: String(row.percent_mode || values.percent_mode) as CommissionPercentMode,
+          entitled_amount: toNumber(row.entitled_amount),
+          posted_amount: toNumber(row.posted_amount),
+          remaining_amount: toNumber(row.remaining_amount),
+          decision_status: String(row.decision_status || 'auto') as CommissionDecisionStatus,
+        })) as CommissionPersistedDraft[],
         includeNotCalculated: true,
-        groupByPercent: true,
       });
-      setCommissionRows(values.basis === 'settled_invoices'
-        ? previewRows.filter((row) => row.eligible_ratio > 0 || row.already_calculated)
-        : previewRows);
+      setCommissionRows(previewRows);
+      setCommissionReviewTab(previewRows.some((row) => row.selected_amount > 0) ? 'current_period' : 'backlog');
     } catch (err: any) {
       if (err?.errorFields) return;
       message.error(toFaErrorMessage(err, 'محاسبه پورسانت ناموفق بود'));
@@ -2662,14 +2937,412 @@ const HRPage: React.FC = () => {
     }
   }, [commissionForm, getCommissionPeriodValues, message, profiles]);
 
-  const hashText = (value: string) => {
-    let hash = 0;
-    for (let i = 0; i < value.length; i += 1) {
-      hash = ((hash << 5) - hash) + value.charCodeAt(i);
-      hash |= 0;
+  const updateCommissionRowLines = useCallback((
+    rowKey: string,
+    updater: (line: CommissionDraftLine) => CommissionDraftLine,
+  ) => {
+    setCommissionRows((current) => current.map((row) => (
+      row.key === rowKey
+        ? recomputeCommissionDraftRow({
+          ...row,
+          lines: row.lines.map((line) => updater(line)),
+        })
+        : row
+    )));
+  }, []);
+
+  const applyCommissionDecisionToRow = useCallback((rowKey: string, decision: CommissionDecisionStatus) => {
+    updateCommissionRowLines(rowKey, (line) => ({
+      ...line,
+      decision_status: decision,
+      decision_reason: decision === 'auto' ? null : line.decision_reason,
+    }));
+  }, [updateCommissionRowLines]);
+
+  const applyCommissionDecisionToLine = useCallback((
+    rowKey: string,
+    lineKey: string,
+    decision: CommissionDecisionStatus,
+  ) => {
+    updateCommissionRowLines(rowKey, (line) => (
+      line.key === lineKey
+        ? {
+          ...line,
+          decision_status: decision,
+          decision_reason: decision === 'auto' ? null : line.decision_reason,
+        }
+        : line
+    ));
+  }, [updateCommissionRowLines]);
+
+  const applyCommissionDecisionToBucket = useCallback((bucket: CommissionReviewBucket, decision: CommissionDecisionStatus) => {
+    setCommissionRows((current) => current.map((row) => {
+      const nextLines = row.lines.map((line) => (
+        getCommissionLineBucket(row, line) === bucket
+          ? {
+            ...line,
+            decision_status: decision,
+            decision_reason: decision === 'auto' ? null : line.decision_reason,
+          }
+          : line
+      ));
+      return recomputeCommissionDraftRow({ ...row, lines: nextLines });
+    }));
+  }, []);
+
+  const buildCommissionDraftPayloads = useCallback(async ({
+    periodStart,
+    periodEnd,
+    posting,
+  }: {
+    periodStart: string;
+    periodEnd: string;
+    posting: boolean;
+  }) => {
+    const authResult = await supabase.auth.getUser();
+    const currentUserId = authResult.data.user?.id || null;
+    return commissionRows
+      .flatMap((row) => row.lines.map((line) => ({ row, line })))
+      .filter(({ line }) => (
+        line.entitled_amount > 0
+        || line.remaining_amount > 0
+        || line.decision_status !== 'auto'
+        || Boolean(line.draft_id)
+      ))
+      .map(({ row, line }) => {
+        const postedAmount = posting ? line.posted_amount + line.selected_amount : line.posted_amount;
+        const remainingAmount = line.decision_status === 'exclude'
+          ? 0
+          : Math.max(0, line.remaining_amount - (posting ? line.selected_amount : 0));
+        return {
+          id: line.draft_id || undefined,
+          source_key: line.source_key || buildCommissionDraftSourceKey({
+            employeeId: line.employee_id,
+            basis: row.basis,
+            percentMode: row.percent_mode,
+            invoiceId: row.invoice_id,
+            itemKey: line.invoice_item_key,
+            sourcePeriodStart: line.source_period_start,
+            sourcePeriodEnd: line.source_period_end,
+          }),
+          employee_id: line.employee_id,
+          assignee_id: line.assignee_id || null,
+          period_start: line.source_period_start || periodStart,
+          period_end: line.source_period_end || periodEnd,
+          source_basis: row.basis,
+          percent_mode: row.percent_mode,
+          eligibility_event_type: line.eligibility_event_type || row.eligibility_event_type || null,
+          eligibility_event_at: line.eligibility_event_at || row.eligibility_event_at || null,
+          invoice_id: row.invoice_id,
+          invoice_item_key: line.invoice_item_key,
+          entitled_amount: line.entitled_amount,
+          posted_amount: postedAmount,
+          remaining_amount: remainingAmount,
+          decision_status: line.decision_status,
+          decision_reason: line.decision_reason || null,
+          deferred_from_period: line.decision_status === 'defer_to_next_period'
+            ? (line.deferred_from_period || line.source_period_start || periodStart)
+            : line.deferred_from_period || null,
+          deferred_to_period: line.decision_status === 'defer_to_next_period' ? null : line.deferred_to_period || null,
+          manual_decision_by: line.decision_status === 'auto' ? null : currentUserId,
+          manual_decision_at: line.decision_status === 'auto' ? null : new Date().toISOString(),
+          draft_status: posting && line.selected_amount > 0 && remainingAmount <= 0 ? 'posted' : 'draft',
+          details: {
+            invoice_name: row.invoice_name,
+            invoice_date: row.invoice_date,
+            invoice_status: row.invoice_status,
+            invoice_total_amount: row.invoice_total_amount,
+            invoice_received_amount: row.invoice_received_amount,
+            invoice_tags: row.invoice_tags,
+            product_id: line.product_id,
+            product_label: line.product_label,
+            quantity: line.quantity,
+            net_amount: line.net_amount,
+            commission_percent: line.commission_percent,
+            event_pool_amount: row.event_pool_amount,
+          },
+        };
+      });
+  }, [commissionRows]);
+
+  const persistCommissionDraftPayloads = useCallback(async (payloads: any[]) => {
+    if (payloads.length === 0) return;
+
+    const withIds = payloads.filter((payload) => String(payload?.id || '').trim());
+    const withoutIds = payloads.filter((payload) => !String(payload?.id || '').trim());
+
+    for (const payload of withIds) {
+      const draftId = String(payload.id || '').trim();
+      const { id: _ignoredId, ...updatePayload } = payload;
+      const { error } = await supabase
+        .from('commission_drafts')
+        .update(updatePayload)
+        .eq('id', draftId);
+      if (error) throw error;
     }
-    return Math.abs(hash).toString(36);
-  };
+
+    if (withoutIds.length === 0) return;
+
+    const sourceKeys = withoutIds
+      .map((payload) => String(payload?.source_key || '').trim())
+      .filter(Boolean);
+
+    const existingBySourceKey = new Map<string, string>();
+    if (sourceKeys.length > 0) {
+      const { data, error } = await supabase
+        .from('commission_drafts')
+        .select('id, source_key')
+        .in('source_key', sourceKeys);
+      if (error && !isMissingCommissionDraftsError(error)) throw error;
+      (data || []).forEach((row: any) => {
+        const sourceKey = String(row?.source_key || '').trim();
+        const id = String(row?.id || '').trim();
+        if (sourceKey && id) existingBySourceKey.set(sourceKey, id);
+      });
+    }
+
+    const inserts: any[] = [];
+    for (const payload of withoutIds) {
+      const sourceKey = String(payload?.source_key || '').trim();
+      const existingId = sourceKey ? existingBySourceKey.get(sourceKey) : null;
+      if (existingId) {
+        const { id: _ignoredId, ...updatePayload } = payload;
+        const { error } = await supabase
+          .from('commission_drafts')
+          .update(updatePayload)
+          .eq('id', existingId);
+        if (error) throw error;
+      } else {
+        const { id: _ignoredId, ...insertPayload } = payload;
+        inserts.push(insertPayload);
+      }
+    }
+
+    if (inserts.length > 0) {
+      const { error } = await supabase.from('commission_drafts').insert(inserts);
+      if (error) throw error;
+    }
+  }, []);
+
+  const buildCommissionCalculationLedgerPayload = useCallback(({
+    periodStart,
+    periodEnd,
+    status,
+  }: {
+    periodStart: string;
+    periodEnd: string;
+    status: 'draft' | 'proposed';
+  }) => {
+    const employeeIdValue = String(employeeId || '').trim();
+    const assigneeIdValue = String(selectedEmployeeSummary?.profile.related_profile_id || '').trim() || null;
+    const basis = commissionForm.getFieldValue('basis') as CommissionBasis;
+    const percentMode = commissionForm.getFieldValue('percent_mode') as CommissionPercentMode;
+    const activeRows = commissionRows.filter((row) => row.selected_amount > 0 || row.lines.some((line) => line.decision_status !== 'auto'));
+    const selectedLines = activeRows.flatMap((row) => row.lines.filter((line) => line.selected_amount > 0));
+    const invoiceIds = Array.from(new Set(activeRows.map((row) => String(row.invoice_id || '').trim()).filter(Boolean)));
+    const amount = activeRows.reduce((sum, row) => sum + row.selected_amount, 0);
+    const baseAmount = selectedLines.reduce((sum, line) => sum + line.net_amount, 0);
+    const weightedRateBase = selectedLines.reduce((sum, line) => sum + (line.commission_percent * line.net_amount), 0);
+    const deferredAmount = activeRows.reduce(
+      (sum, row) => sum + row.lines
+        .filter((line) => line.decision_status === 'defer_to_next_period')
+        .reduce((lineSum, line) => lineSum + line.remaining_amount, 0),
+      0,
+    );
+    const excludedAmount = activeRows.reduce(
+      (sum, row) => sum + row.lines
+        .filter((line) => line.decision_status === 'exclude')
+        .reduce((lineSum, line) => lineSum + line.entitled_amount, 0),
+      0,
+    );
+    const effectiveRate = baseAmount > 0 ? weightedRateBase / baseAmount : 0;
+    const calculationKey = buildCommissionCalculationSourceKey({
+      employeeId: employeeIdValue,
+      basis,
+      percentMode,
+      periodStart,
+      periodEnd,
+    });
+
+    return {
+      employee_id: employeeIdValue,
+      period_start: periodStart,
+      period_end: periodEnd,
+      entry_type: `commission_calculation_${basis}_${percentMode}`,
+      source_type: 'commission',
+      source_key: calculationKey,
+      source_module_id: `commission_calculation:${basis}:${percentMode}`,
+      source_record_id: null,
+      title: `محاسبه پورسانت ${selectedEmployeeSummary?.name || selectedEmployeeSummary?.profile.full_name || employeeIdValue}`,
+      amount,
+      quantity: selectedLines.length,
+      rate: effectiveRate,
+      status,
+      assignee_id: assigneeIdValue,
+      details: {
+        calculation_key: calculationKey,
+        basis,
+        percent_mode: percentMode,
+        assignee_id: assigneeIdValue,
+        employee_id: employeeIdValue,
+        employee_name: selectedEmployeeSummary?.name || selectedEmployeeSummary?.profile.full_name || employeeIdValue,
+        base_amount: baseAmount,
+        selected_amount: amount,
+        deferred_amount: deferredAmount,
+        excluded_amount: excludedAmount,
+        commission_percent: effectiveRate,
+        invoice_count: invoiceIds.length,
+        item_count: selectedLines.length,
+        row_count: activeRows.length,
+        rows: activeRows.map((row) => ({
+          invoice_id: row.invoice_id,
+          invoice_name: row.invoice_name,
+          invoice_date: row.invoice_date,
+          invoice_status: row.invoice_status,
+          basis: row.basis,
+          percent_mode: row.percent_mode,
+          base_amount: row.base_amount,
+          entitled_amount: row.entitled_amount,
+          posted_amount: row.posted_amount,
+          remaining_amount: row.remaining_amount,
+          selected_amount: row.selected_amount,
+          item_count: row.item_count,
+          source_period_start: row.source_period_start,
+          source_period_end: row.source_period_end,
+          lines: row.lines.map((line) => ({
+            source_key: line.source_key,
+            item_key: line.invoice_item_key,
+            product_label: line.product_label,
+            product_id: line.product_id,
+            quantity: line.quantity,
+            net_amount: line.net_amount,
+            commission_percent: line.commission_percent,
+            commission_amount: line.selected_amount,
+            entitled_amount: line.entitled_amount,
+            posted_amount: line.posted_amount,
+            remaining_amount: line.remaining_amount,
+            decision_status: line.decision_status,
+            source_period_start: line.source_period_start,
+            source_period_end: line.source_period_end,
+          })),
+        })),
+      },
+    };
+  }, [commissionForm, commissionRows, employeeId, selectedEmployeeSummary]);
+
+  const syncCommissionCalculationLedgerEntry = useCallback(async (payload: Record<string, any>) => {
+    const employeeIdValue = String(payload.employee_id || '').trim();
+    const periodStart = String(payload.period_start || '').trim();
+    const periodEnd = String(payload.period_end || '').trim();
+    const calculationKey = String(payload.source_key || payload.details?.calculation_key || '').trim();
+    const basis = String(payload.details?.basis || '').trim();
+    const percentMode = String(payload.details?.percent_mode || '').trim();
+    let existingResult: any = await supabase
+      .from('payroll_calculation_entries')
+      .select('id, source_key, status, details')
+      .eq('source_type', 'commission')
+      .eq('employee_id', employeeIdValue)
+      .eq('period_start', periodStart)
+      .eq('period_end', periodEnd)
+      .neq('status', 'voided');
+    if (existingResult.error && isMissingSourceKeyError(existingResult.error)) {
+      existingResult = await supabase
+        .from('payroll_calculation_entries')
+        .select('id, status, details')
+        .eq('source_type', 'commission')
+        .eq('employee_id', employeeIdValue)
+        .eq('period_start', periodStart)
+        .eq('period_end', periodEnd)
+        .neq('status', 'voided');
+    }
+    if (existingResult.error) {
+      if (isMissingPayrollLedgerError(existingResult.error)) return;
+      throw existingResult.error;
+    }
+
+    const existingRows = ((existingResult.data || []) as any[]).filter((row) => (
+      String(row?.details?.basis || '') === basis && String(row?.details?.percent_mode || '') === percentMode
+    ));
+    const matchedRow = existingRows.find((row) => (
+      String(row?.source_key || row?.details?.calculation_key || '').trim() === calculationKey
+    ));
+    const staleRowIds = existingRows
+      .filter((row) => String(row?.id || '') !== String(matchedRow?.id || ''))
+      .filter((row) => ['draft', 'proposed'].includes(String(row?.status || '')))
+      .map((row) => String(row?.id || '').trim())
+      .filter(Boolean);
+
+    if (matchedRow?.id && String(matchedRow.status || '') !== 'included_in_payroll') {
+      const { error } = await supabase
+        .from('payroll_calculation_entries')
+        .update({
+          entry_type: payload.entry_type,
+          source_key: payload.source_key,
+          source_module_id: payload.source_module_id,
+          source_record_id: payload.source_record_id,
+          title: payload.title,
+          amount: payload.amount,
+          quantity: payload.quantity,
+          rate: payload.rate,
+          status: payload.status,
+          assignee_id: payload.assignee_id,
+          details: payload.details,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', matchedRow.id);
+      if (error && !isMissingPayrollLedgerError(error)) throw error;
+    } else if (!matchedRow?.id) {
+      const { error } = await supabase.from('payroll_calculation_entries').insert(payload);
+      if (error && !isMissingPayrollLedgerError(error)) throw error;
+    }
+
+    if (staleRowIds.length > 0) {
+      const { error } = await supabase
+        .from('payroll_calculation_entries')
+        .update({
+          status: 'voided',
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', staleRowIds);
+      if (error && !isMissingPayrollLedgerError(error)) throw error;
+    }
+  }, []);
+
+  const handleSaveCommissionDraft = useCallback(async () => {
+    try {
+      const values = await commissionForm.validateFields();
+      const periodValues = getCommissionPeriodValues(values);
+      if (!periodValues) {
+        message.error('بازه زمانی محاسبه معتبر نیست.');
+        return;
+      }
+      const payloads = await buildCommissionDraftPayloads({
+        periodStart: periodValues.periodStart,
+        periodEnd: periodValues.periodEnd,
+        posting: false,
+      });
+      if (payloads.length === 0) {
+        message.info('پیش‌نویسی برای ذخیره وجود ندارد.');
+        return;
+      }
+      setCommissionModalSaving(true);
+      await persistCommissionDraftPayloads(payloads);
+      await syncCommissionCalculationLedgerEntry(buildCommissionCalculationLedgerPayload({
+        periodStart: periodValues.periodStart,
+        periodEnd: periodValues.periodEnd,
+        status: 'draft',
+      }));
+      message.success('پیش‌نویس پورسانت ذخیره شد.');
+      await handleBuildCommissionPreview();
+      await refreshPayrollPeriodState();
+      await fetchCalculatedCommissionRows();
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(toFaErrorMessage(err, 'ذخیره پیش‌نویس پورسانت ناموفق بود'));
+    } finally {
+      setCommissionModalSaving(false);
+    }
+  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, fetchCalculatedCommissionRows, getCommissionPeriodValues, handleBuildCommissionPreview, message, persistCommissionDraftPayloads, refreshPayrollPeriodState, syncCommissionCalculationLedgerEntry]);
 
   const handleSaveCommissionCalculation = useCallback(async () => {
     try {
@@ -2680,58 +3353,34 @@ const HRPage: React.FC = () => {
         return;
       }
       const { periodStart, periodEnd } = periodValues;
-      const rowsToSave = commissionRows.filter((row) => row.commission_status === 'calculated' && row.commission_amount > 0);
+      const rowsToSave = commissionRows
+        .map((row) => ({
+          row,
+          selectedLines: row.lines.filter((line) => line.selected_amount > 0 && getCommissionLineBucket(row, line) !== 'excluded'),
+        }))
+        .filter((entry) => entry.selectedLines.length > 0);
       if (rowsToSave.length === 0) {
         message.info('ردیف قابل ثبت برای پورسانت وجود ندارد.');
         return;
       }
 
       setCommissionModalSaving(true);
-      const payloads = rowsToSave.map((row) => {
-        const calculatedKeys = row.item_keys.map((itemKey) => buildCommissionCalculatedKey(row.basis, row.percent_mode, itemKey));
-        const groupHash = hashText(row.item_keys.join('|'));
-        return {
-          employee_id: row.employee_id,
-          period_start: periodStart,
-          period_end: periodEnd,
-          entry_type: `commission_${row.basis}_${row.percent_mode}_${groupHash}`,
-          source_type: 'commission',
-          source_key: buildCommissionSourceKey(row),
-          source_module_id: `commission:${row.basis}:${row.percent_mode}`,
-          source_record_id: row.invoice_id,
-          title: `پورسانت ${row.invoice_name}`,
-          amount: row.commission_amount,
-          quantity: row.base_amount,
-          rate: row.commission_percent,
-          status: 'proposed',
-          assignee_id: row.assignee_id || null,
-          details: {
-            basis: row.basis,
-            percent_mode: row.percent_mode,
-            assignee_id: row.assignee_id || null,
-            invoice_id: row.invoice_id,
-            invoice_name: row.invoice_name,
-            invoice_date: row.invoice_date,
-            invoice_status: row.invoice_status,
-            invoice_total_amount: row.invoice_total_amount,
-            invoice_received_amount: row.invoice_received_amount,
-            eligible_ratio: row.eligible_ratio,
-            eligible_amount: row.eligible_amount,
-            base_amount: row.base_amount,
-            commission_percent: row.commission_percent,
-            item_count: row.item_count,
-            item_keys: row.item_keys,
-            calculated_keys: calculatedKeys,
-            lines: row.lines,
-          },
-        };
+      const payload = buildCommissionCalculationLedgerPayload({
+        periodStart,
+        periodEnd,
+        status: 'proposed',
       });
-
-      const { error } = await supabase.from('payroll_calculation_entries').insert(payloads);
-      if (error) throw error;
-      message.success(`${toPersianNumber(payloads.length)} رکورد پورسانت ثبت شد.`);
+      await syncCommissionCalculationLedgerEntry(payload);
+      const draftPayloads = await buildCommissionDraftPayloads({
+        periodStart,
+        periodEnd,
+        posting: true,
+      });
+      await persistCommissionDraftPayloads(draftPayloads);
+      message.success('محاسبه پورسانت ثبت شد.');
       setCommissionModalOpen(false);
       setCommissionRows([]);
+      await refreshPayrollPeriodState();
       await fetchCalculatedCommissionRows();
     } catch (err: any) {
       if (err?.errorFields) return;
@@ -2739,7 +3388,7 @@ const HRPage: React.FC = () => {
     } finally {
       setCommissionModalSaving(false);
     }
-  }, [commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message]);
+  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message, persistCommissionDraftPayloads, refreshPayrollPeriodState, syncCommissionCalculationLedgerEntry]);
 
   const openPayrollConfigModal = (profile: ProfileRecord) => {
     setEditingProfile(profile);
@@ -3902,9 +4551,16 @@ const HRPage: React.FC = () => {
   const commissionBasisLabel: Record<CommissionBasis, string> = {
     approved_invoices: 'فاکتور تاییدشده',
     settled_invoices: 'فاکتور تسویه‌شده',
+    full_settlement_only: 'تسویه کامل',
     prepaid_and_settled_invoices: 'پیش‌پرداخت و تسویه‌شده',
     settled_and_collected_cheques: 'تسویه و چک وصول‌شده',
   };
+  const commissionDecisionOptions: Array<{ label: string; value: CommissionDecisionStatus }> = [
+    { label: 'خودکار', value: 'auto' },
+    { label: 'لحاظ شود', value: 'include' },
+    { label: 'لحاظ نشود', value: 'exclude' },
+    { label: 'انتقال به ماه بعد', value: 'defer_to_next_period' },
+  ];
   const renderProfileName = (id: string | null | undefined) => {
     if (!id) return '-';
     return profileByRelatedId.get(String(id))?.full_name || profileById.get(String(id))?.full_name || String(id);
@@ -3916,83 +4572,6 @@ const HRPage: React.FC = () => {
     const option = invoiceStatusOptions.find((item) => String(item.value) === normalized);
     return <Tag color={option?.color || 'default'}>{option?.label || normalized}</Tag>;
   };
-
-  const commissionInvoiceRows = (() => {
-    const grouped = new Map<string, CommissionPreviewRow[]>();
-    commissionRows.forEach((row) => {
-      grouped.set(row.invoice_id, [...(grouped.get(row.invoice_id) || []), row]);
-    });
-    return Array.from(grouped.entries()).map(([invoiceId, rows]) => {
-      const first = rows[0];
-      const commissionAmount = rows.reduce((sum, row) => sum + row.commission_amount, 0);
-      const baseAmount = rows.reduce((sum, row) => sum + row.base_amount, 0);
-      const itemCount = rows.reduce((sum, row) => sum + row.item_count, 0);
-      const hasCalculated = rows.some((row) => row.commission_status === 'calculated');
-      const allAlreadyCalculated = rows.length > 0 && rows.every((row) => row.already_calculated);
-      return {
-        key: invoiceId,
-        invoice_id: invoiceId,
-        employee_id: first?.employee_id || '',
-        invoice_name: first?.invoice_name || invoiceId,
-        invoice_status: first?.invoice_status || null,
-        invoice_total_amount: first?.invoice_total_amount || 0,
-        invoice_received_amount: first?.invoice_received_amount || 0,
-        invoice_date: first?.invoice_date || null,
-        eligible_ratio: first?.eligible_ratio || 0,
-        commission_amount: commissionAmount,
-        base_amount: baseAmount,
-        item_count: itemCount,
-        commission_status: hasCalculated ? 'calculated' : 'not_calculated',
-        exclusion_reason: allAlreadyCalculated ? 'قبلا محاسبه شده' : rows.find((row) => row.exclusion_reason)?.exclusion_reason || null,
-        groups: rows,
-      };
-    });
-  })();
-
-  const commissionGroupColumns = [
-    {
-      title: 'درصد',
-      dataIndex: 'commission_percent',
-      key: 'commission_percent',
-      render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span>,
-    },
-    {
-      title: 'اقلام',
-      key: 'items',
-      render: (_: unknown, row: CommissionPreviewRow) => (
-        <div className="text-xs leading-6">
-          {row.lines.slice(0, 3).map((line) => (
-            <div key={line.key}>
-              {line.product_label} - {formatMoney(line.net_amount)}
-            </div>
-          ))}
-          {row.lines.length > 3 ? <div className="text-gray-400">+{toPersianNumber(row.lines.length - 3)} ردیف</div> : null}
-        </div>
-      ),
-    },
-    {
-      title: 'مبلغ نهایی ردیف‌ها',
-      dataIndex: 'base_amount',
-      key: 'base_amount',
-      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
-    },
-    {
-      title: 'سهم بازاریاب',
-      dataIndex: 'commission_amount',
-      key: 'commission_amount',
-      render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span>,
-    },
-    {
-      title: 'وضعیت پورسانت',
-      key: 'commission_status',
-      render: (_: unknown, row: CommissionPreviewRow) => (
-        <Tag color={row.commission_status === 'calculated' ? 'green' : 'default'}>
-          {row.commission_status === 'calculated' ? 'محاسبه می‌شود' : 'محاسبه نمی‌شود'}
-          {row.exclusion_reason ? ` - ${row.exclusion_reason}` : ''}
-        </Tag>
-      ),
-    },
-  ];
 
   const commissionInvoiceColumns = [
     {
@@ -4038,31 +4617,51 @@ const HRPage: React.FC = () => {
       render: (_: unknown, row: any) => (
         <div className="text-sm">
           <div className="text-xs text-gray-500">{toPersianNumber(row.item_count)} قلم</div>
-          <div className="persian-number font-bold text-green-700">{formatMoney(row.commission_amount)}</div>
+          <div className="persian-number font-bold text-green-700">{formatMoney(row.selected_amount)}</div>
         </div>
       ),
     },
     {
-      title: 'نسبت احراز',
-      dataIndex: 'eligible_ratio',
-      key: 'eligible_ratio',
-      render: (val: number) => <span className="persian-number">{toPersianNumber((val * 100).toFixed(1))}%</span>,
+      title: 'قبلاً ثبت‌شده',
+      dataIndex: 'posted_amount',
+      key: 'posted_amount',
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
     },
     {
-      title: 'وضعیت پورسانت',
-      key: 'commission_status',
+      title: 'مانده',
+      dataIndex: 'remaining_amount',
+      key: 'remaining_amount',
+      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'منشأ',
+      key: 'origin',
       render: (_: unknown, row: any) => (
-        <Tag color={row.commission_status === 'calculated' ? 'green' : 'default'}>
-          {row.commission_status === 'calculated' ? 'دارای ردیف قابل ثبت' : 'محاسبه نمی‌شود'}
-          {row.exclusion_reason ? ` - ${row.exclusion_reason}` : ''}
-        </Tag>
+        <Space size="small" wrap>
+          <Tag color={row.is_from_previous_period ? 'orange' : 'blue'}>
+            {row.is_from_previous_period ? 'مانده ماه‌های قبل' : 'احرازشده این دوره'}
+          </Tag>
+          {row.eligibility_event_type ? <Tag>{row.eligibility_event_type}</Tag> : null}
+        </Space>
       ),
     },
     {
-      title: 'تاریخ',
-      dataIndex: 'invoice_date',
-      key: 'invoice_date',
+      title: 'رویداد احراز',
+      dataIndex: 'eligibility_event_at',
+      key: 'eligibility_event_at',
       render: (val: string | null) => val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD')) : '-',
+    },
+    {
+      title: 'عملیات',
+      key: 'actions',
+      render: (_: unknown, row: any) => (
+        <Space size="small" wrap>
+          <Button size="small" onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'include')}>لحاظ</Button>
+          <Button size="small" onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'defer_to_next_period')}>انتقال</Button>
+          <Button size="small" danger onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'exclude')}>عدم لحاظ</Button>
+          <Button size="small" onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'auto')}>خودکار</Button>
+        </Space>
+      ),
     },
   ];
 
@@ -4074,15 +4673,16 @@ const HRPage: React.FC = () => {
       render: (val: string) => <span className="font-bold text-leather-700">{val}</span>,
     },
     {
-      title: 'عنوان',
+      title: 'محاسبه',
       dataIndex: 'title',
       key: 'title',
       render: (val: string | null, row: CommissionLedgerRow) => (
-        row.source_record_id ? (
-          <a href={`/invoices/${row.source_record_id}`} className="text-leather-700 hover:underline">
-            {val || row.details?.invoice_name || 'پورسانت فاکتور'}
-          </a>
-        ) : (val || 'پورسانت')
+        <div>
+          <div className="font-bold text-gray-800 dark:text-gray-100">{val || 'محاسبه پورسانت'}</div>
+          <div className="mt-1 text-xs text-gray-500">
+            {toPersianNumber(safeJalaliFormat(row.period_start, 'YYYY/MM/DD'))} تا {toPersianNumber(safeJalaliFormat(row.period_end, 'YYYY/MM/DD'))}
+          </div>
+        </div>
       ),
     },
     {
@@ -4094,9 +4694,27 @@ const HRPage: React.FC = () => {
       },
     },
     {
-      title: 'مبلغ نهایی',
+      title: 'درصد',
+      key: 'percent_mode',
+      render: (_: unknown, row: CommissionLedgerRow) => {
+        const percentMode = row.details?.percent_mode as CommissionPercentMode | undefined;
+        const label = COMMISSION_PERCENT_MODE_OPTIONS.find((item) => item.value === percentMode)?.label || percentMode || '-';
+        return <Tag color="purple">{label}</Tag>;
+      },
+    },
+    {
+      title: 'جمع مبنا',
       key: 'base_amount',
       render: (_: unknown, row: CommissionLedgerRow) => <span className="persian-number">{formatMoney(toNumber(row.details?.base_amount))}</span>,
+    },
+    {
+      title: 'فاکتور / ردیف',
+      key: 'counts',
+      render: (_: unknown, row: CommissionLedgerRow) => (
+        <span className="persian-number text-xs text-gray-600">
+          {toPersianNumber(toNumber(row.details?.invoice_count))} / {toPersianNumber(toNumber(row.details?.item_count))}
+        </span>
+      ),
     },
     {
       title: 'پورسانت',
@@ -4108,7 +4726,10 @@ const HRPage: React.FC = () => {
       title: 'وضعیت',
       dataIndex: 'status',
       key: 'status',
-      render: (val: string | null) => <Tag color={val === 'included_in_payroll' ? 'green' : val === 'voided' ? 'red' : 'blue'}>{val || '-'}</Tag>,
+      render: (val: string | null) => {
+        const meta = commissionLedgerStatusMeta[String(val || '')] || { color: 'default', label: val || '-' };
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
     },
     {
       title: 'مسئول',
@@ -4382,14 +5003,14 @@ const HRPage: React.FC = () => {
       <Row gutter={[12, 12]} className="mb-4">
         <Col xs={24} md={8}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">اهداف لمس‌شده</div>
-            <div className="text-2xl font-black">{toPersianNumber(goalFulfillmentTotals.touchedGoals)}</div>
+            <div className="text-xs text-gray-500 mb-1">اهداف فعال</div>
+            <div className="text-2xl font-black">{toPersianNumber(goalFulfillmentTotals.totalGoals)}</div>
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">سطح‌های محقق‌شده</div>
-            <div className="text-2xl font-black">{toPersianNumber(goalFulfillmentTotals.achievedLevels)}</div>
+            <div className="text-xs text-gray-500 mb-1">اعضای منتسب</div>
+            <div className="text-2xl font-black">{toPersianNumber(goalFulfillmentTotals.assignedMembers)}</div>
           </Card>
         </Col>
         <Col xs={24} md={8}>
@@ -4400,7 +5021,13 @@ const HRPage: React.FC = () => {
         </Col>
       </Row>
       <Card className="mb-4">
-        <GoalProgressSlider moduleId="tasks" placement="dashboard" />
+        <GoalProgressSlider
+          moduleId={null}
+          placement="dashboard"
+          autoPlay={false}
+          showPlaybackControls={false}
+          onActiveCardChange={(card) => setHrActiveGoalId(card?.goal.id || null)}
+        />
       </Card>
       <Card>
         <div className="flex flex-wrap gap-2 mb-4">
@@ -4412,94 +5039,94 @@ const HRPage: React.FC = () => {
         </div>
         {goalTouchLoading ? (
           <div className="py-10 flex items-center justify-center"><Spin /></div>
-        ) : goalCards.length === 0 ? (
-          <Empty description="برای نیروهای انتخاب‌شده هنوز هدف لمس‌شده‌ای پیدا نشد." />
+        ) : !activeGoalCard ? (
+          <Empty description="برای نیروهای انتخاب‌شده هنوز عضو منتسبی داخل هدف‌ها پیدا نشد." />
         ) : (
-          <div className="flex snap-x gap-4 overflow-x-auto pb-2">
-            {goalCards.map((card) => (
-              <div key={card.key} className="min-w-[min(920px,calc(100vw-48px))] snap-start rounded-xl border border-gray-200 p-4 dark:border-gray-800">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-lg font-black text-gray-800 dark:text-gray-100">{card.goalName}</div>
-                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
-                      <Tag>{card.moduleLabel}</Tag>
-                      <span>{card.periodLabel}</span>
-                      <span>جمع پاداش: <span className="persian-number font-bold text-green-700">{formatMoney(card.rewardTotal)}</span></span>
-                    </div>
-                  </div>
-                  <Button
-                    type="primary"
-                    loading={savingGoalLedger}
-                    disabled={!card.rows.some((row) => row.rewardEntries.length > 0 && row.payrollStatus !== 'included_in_payroll')}
-                    onClick={() => handleSaveGoalRewardRows(card.rows)}
-                  >
-                    افزودن کارت به فیش حقوقی
-                  </Button>
-                </div>
-                <div className="space-y-3">
-                  {card.rows.map((row) => {
-                    const mainPercent = row.targetValue > 0 ? Math.min(100, (row.achievedValue / row.targetValue) * 100) : 0;
-                    const subBase = row.subTargetValue || row.targetValue;
-                    const subPercent = subBase > 0 ? Math.min(100, (row.subAchievedValue / subBase) * 100) : 0;
-                    const isIncluded = row.payrollStatus === 'included_in_payroll';
-                    const isProposed = row.payrollStatus === 'proposed';
-                    return (
-                      <div key={row.key} className="rounded-lg border border-gray-100 p-3 dark:border-gray-800">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                          <div className="font-bold text-leather-700">{row.employeeName}</div>
-                          <Space size="small" wrap>
-                            <Tag color={row.activeLevelLabel === 'در حال پیشروی' ? 'blue' : 'gold'}>{row.activeLevelLabel}</Tag>
-                            {isIncluded ? (
-                              <Tag color="green" icon={<CheckCircleOutlined />}>
-                                ثبت شده در فیش {row.payrollSlipName || ''}
-                              </Tag>
-                            ) : isProposed ? (
-                              <Tag color="cyan">آماده فیش حقوقی</Tag>
-                            ) : (
-                              <Tag>ثبت نشده</Tag>
-                            )}
-                            {row.payrollSlipId ? (
-                              <Button size="small" onClick={() => navigate(`/payroll_slips/${row.payrollSlipId}`)}>مشاهده فیش</Button>
-                            ) : (
-                              <Button
-                                size="small"
-                                disabled={!row.rewardEntries.length || isIncluded || isProposed}
-                                loading={savingGoalLedger}
-                                onClick={() => handleSaveGoalRewardRows([row])}
-                              >
-                                افزودن به فیش
-                              </Button>
-                            )}
-                          </Space>
-                        </div>
-                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                          <div>
-                            <div className="mb-1 text-xs text-gray-500">پیشرفت اصلی ({row.metricLabel})</div>
-                            <Progress percent={Number(mainPercent.toFixed(1))} />
-                            <div className="persian-number text-xs text-gray-500">
-                              {toPersianNumber(row.achievedValue)} از {toPersianNumber(row.targetValue)}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="mb-1 text-xs text-gray-500">پیشرفت فرعی - {row.subPeriodLabel}</div>
-                            <Progress percent={Number(subPercent.toFixed(1))} strokeColor="#16a34a" />
-                            <div className="persian-number text-xs text-gray-500">
-                              {toPersianNumber(row.subAchievedValue)} از {toPersianNumber(subBase)}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-                          <span>{row.rewardEntries.length ? row.rewardEntries.map((entry) => entry.title).join(' | ') : 'فرمول پاداش تعریف نشده'}</span>
-                          <span className={`persian-number font-black ${row.rewardSuggestion < 0 ? 'text-red-700' : 'text-green-700'}`}>
-                            {formatMoney(row.rewardSuggestion)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+          <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-lg font-black text-gray-800 dark:text-gray-100">{activeGoalCard.goalName}</div>
+                <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
+                  <Tag>{activeGoalCard.moduleLabel}</Tag>
+                  <span>{activeGoalCard.periodLabel}</span>
+                  <span>جمع پاداش: <span className="persian-number font-bold text-green-700">{formatMoney(activeGoalCard.rewardTotal)}</span></span>
                 </div>
               </div>
-            ))}
+              <Button
+                type="primary"
+                loading={savingGoalLedger}
+                disabled={!activeGoalCard.rows.some((row) => row.rewardEntries.length > 0 && row.payrollStatus !== 'included_in_payroll')}
+                onClick={() => handleSaveGoalRewardRows(activeGoalCard.rows)}
+              >
+                افزودن کارت به فیش حقوقی
+              </Button>
+            </div>
+            <div className="space-y-3">
+              {activeGoalCard.rows.map((row) => {
+                const mainPercent = row.targetValue > 0 ? Math.min(100, (row.achievedValue / row.targetValue) * 100) : 0;
+                const subBase = row.subTargetValue || row.targetValue;
+                const subPercent = subBase > 0 ? Math.min(100, (row.subAchievedValue / subBase) * 100) : 0;
+                const isIncluded = row.payrollStatus === 'included_in_payroll';
+                const isProposed = row.payrollStatus === 'proposed';
+                return (
+                  <div key={row.key} className="rounded-lg border border-gray-100 p-3 dark:border-gray-800">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-bold text-leather-700">{row.employeeName}</div>
+                      <Space size="small" wrap>
+                        <Tag color={row.activeLevelLabel === 'در حال پیشروی' ? 'blue' : 'gold'}>{row.activeLevelLabel}</Tag>
+                        {isIncluded ? (
+                          <Tag color="green" icon={<CheckCircleOutlined />}>
+                            ثبت شده در فیش {row.payrollSlipName || ''}
+                          </Tag>
+                        ) : isProposed ? (
+                          <Tag color="cyan">آماده فیش حقوقی</Tag>
+                        ) : (
+                          <Tag>ثبت نشده</Tag>
+                        )}
+                        {row.payrollSlipId ? (
+                          <Button size="small" onClick={() => navigate(`/payroll_slips/${row.payrollSlipId}`)}>مشاهده فیش</Button>
+                        ) : (
+                          <Button
+                            size="small"
+                            disabled={!row.rewardEntries.length || isIncluded || isProposed}
+                            loading={savingGoalLedger}
+                            onClick={() => handleSaveGoalRewardRows([row])}
+                          >
+                            افزودن به فیش
+                          </Button>
+                        )}
+                      </Space>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div>
+                        <div className="mb-1 text-xs text-gray-500">پیشرفت اصلی ({row.metricLabel})</div>
+                        <Progress percent={Number(mainPercent.toFixed(1))} />
+                        <div className="persian-number text-xs text-gray-500">
+                          {toPersianNumber(row.achievedValue)} از {toPersianNumber(row.targetValue)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 text-xs text-gray-500">پیشرفت فرعی - {row.subPeriodLabel}</div>
+                        <Progress percent={Number(subPercent.toFixed(1))} strokeColor="#16a34a" />
+                        <div className="persian-number text-xs text-gray-500">
+                          {toPersianNumber(row.subAchievedValue)} از {toPersianNumber(subBase)}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                      <span>
+                        {row.rewardEntries.length
+                          ? row.rewardEntries.map((entry) => `${entry.title}: ${formatMoney(toNumber(entry.amount))}`).join(' | ')
+                          : 'فرمول پاداش تعریف نشده'}
+                      </span>
+                      <span className={`persian-number font-black ${row.rewardSuggestion < 0 ? 'text-red-700' : 'text-green-700'}`}>
+                        {formatMoney(row.rewardSuggestion)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </Card>
@@ -4522,25 +5149,31 @@ const HRPage: React.FC = () => {
   const commissionsTabContent = (
     <>
       <Row gutter={[12, 12]} className="mb-4">
-        <Col xs={24} md={6}>
+        <Col xs={24} md={8} lg={4}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پورسانت بر مبنای تایید</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.approved)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={6}>
+        <Col xs={24} md={8} lg={4}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پورسانت بر مبنای تسویه</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.settled)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={6}>
+        <Col xs={24} md={8} lg={5}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">تسویه کامل</div>
+            <div className="text-2xl font-black">{formatMoney(commissionTotals.fullSettlement)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={12} lg={5}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پیش‌پرداخت و تسویه</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.prepaid)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={6}>
+        <Col xs={24} md={12} lg={6}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">مبنای وصول چک</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.collectedCheque)}</div>
@@ -4946,7 +5579,15 @@ const HRPage: React.FC = () => {
                         { title: 'عنوان', dataIndex: 'title', key: 'title', render: (val: string | null) => val || '-' },
                         { title: 'منبع', dataIndex: 'source_type', key: 'source_type', render: (val: string | null) => <Tag>{PAYROLL_LEDGER_SOURCE_LABELS[String(val || '')] || 'نامشخص'}</Tag> },
                         { title: 'مبلغ', dataIndex: 'amount', key: 'amount', render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span> },
-                        { title: 'وضعیت', dataIndex: 'status', key: 'status', render: (val: string | null) => <Tag color={val === 'included_in_payroll' ? 'green' : 'blue'}>{val === 'included_in_payroll' ? 'ثبت‌شده در فیش' : 'آماده فیش'}</Tag> },
+                        {
+                          title: 'وضعیت',
+                          dataIndex: 'status',
+                          key: 'status',
+                          render: (val: string | null) => {
+                            const meta = commissionLedgerStatusMeta[String(val || '')] || { color: 'default', label: val || '-' };
+                            return <Tag color={meta.color}>{meta.label}</Tag>;
+                          },
+                        },
                       ]}
                     />
                   )}
@@ -5147,21 +5788,32 @@ const HRPage: React.FC = () => {
 
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm text-gray-500">
-                جمع پورسانت قابل ثبت:{' '}
-                <span className="font-black text-green-700 persian-number">
-                  {formatMoney(commissionRows.filter((row) => row.commission_status === 'calculated').reduce((sum, row) => sum + row.commission_amount, 0))}
-                </span>
+              <div className="flex flex-wrap gap-4 text-sm text-gray-500">
+                <div>
+                  قابل ثبت:{' '}
+                  <span className="font-black text-green-700 persian-number">{formatMoney(commissionDraftTotals.selected)}</span>
+                </div>
+                <div>
+                  منتقل به ماه بعد:{' '}
+                  <span className="font-black text-amber-600 persian-number">{formatMoney(commissionDraftTotals.deferred)}</span>
+                </div>
+                <div>
+                  عدم لحاظ:{' '}
+                  <span className="font-black text-red-700 persian-number">{formatMoney(commissionDraftTotals.excluded)}</span>
+                </div>
               </div>
               <Space>
                 <Button onClick={handleBuildCommissionPreview} loading={commissionLoading}>محاسبه</Button>
+                <Button onClick={handleSaveCommissionDraft} loading={commissionModalSaving} disabled={commissionRows.length === 0}>
+                  ذخیره پیش‌نویس
+                </Button>
                 <Button
                   type="primary"
                   onClick={handleSaveCommissionCalculation}
                   loading={commissionModalSaving}
-                  disabled={!commissionRows.some((row) => row.commission_status === 'calculated' && row.commission_amount > 0)}
+                  disabled={commissionDraftTotals.selected <= 0}
                 >
-                  ثبت محاسبه
+                  ثبت نهایی
                 </Button>
               </Space>
             </div>
@@ -5170,40 +5822,153 @@ const HRPage: React.FC = () => {
             ) : commissionRows.length === 0 ? (
               <Empty description="برای مشاهده ردیف‌ها، محاسبه را اجرا کنید." />
             ) : (
-              <Table
-                rowKey="key"
-                columns={commissionInvoiceColumns}
-                dataSource={commissionInvoiceRows}
-                pagination={{ pageSize: 10, showSizeChanger: false }}
-                scroll={{ x: 1200 }}
-                expandable={{
-                  expandedRowRender: (invoiceRow: any) => (
-                    <Table
-                      rowKey="key"
-                      size="small"
-                      pagination={false}
-                      dataSource={invoiceRow.groups}
-                      columns={commissionGroupColumns}
-                      expandable={{
-                        expandedRowRender: (groupRow: CommissionPreviewRow) => (
+              <Tabs
+                activeKey={commissionReviewTab}
+                onChange={(key) => setCommissionReviewTab(key as CommissionReviewBucket)}
+                items={[
+                  {
+                    key: 'current_period',
+                    label: `پورسانت‌های این ماه (${toPersianNumber(commissionRowsByBucket.current_period.length)})`,
+                    children: (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="small" onClick={() => applyCommissionDecisionToBucket('current_period', 'include')}>لحاظ همه</Button>
+                          <Button size="small" onClick={() => applyCommissionDecisionToBucket('current_period', 'defer_to_next_period')}>انتقال همه</Button>
+                          <Button size="small" danger onClick={() => applyCommissionDecisionToBucket('current_period', 'exclude')}>عدم لحاظ همه</Button>
+                          <Button size="small" onClick={() => applyCommissionDecisionToBucket('current_period', 'auto')}>بازگشت به خودکار</Button>
+                        </div>
+                        {commissionRowsByBucket.current_period.length === 0 ? (
+                          <Empty description="ردیف احرازشده‌ای در این دوره باقی نمانده است." />
+                        ) : (
                           <Table
                             rowKey="key"
-                            size="small"
-                            pagination={false}
-                            dataSource={groupRow.lines}
-                            columns={[
-                              { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label' },
-                              { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
-                              { title: 'مبلغ نهایی ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
-                              { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span> },
-                              { title: 'سهم بازاریاب', dataIndex: 'commission_amount', key: 'commission_amount', render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span> },
-                            ]}
+                            columns={commissionInvoiceColumns}
+                            dataSource={commissionRowsByBucket.current_period}
+                            pagination={{ pageSize: 10, showSizeChanger: false }}
+                            scroll={{ x: 1400 }}
+                            expandable={{
+                              expandedRowRender: (invoiceRow: any) => (
+                                <Table
+                                  rowKey="key"
+                                  size="small"
+                                  pagination={false}
+                                  dataSource={invoiceRow.lines}
+                                  columns={[
+                                    { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label' },
+                                    { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
+                                    { title: 'مبلغ نهایی ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                    { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span> },
+                                    { title: 'احراز این دوره', dataIndex: 'entitled_amount', key: 'entitled_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                    { title: 'قبلاً ثبت‌شده', dataIndex: 'posted_amount', key: 'posted_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                    { title: 'قابل ثبت', dataIndex: 'selected_amount', key: 'selected_amount', render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span> },
+                                    {
+                                      title: 'تصمیم',
+                                      key: 'decision_status',
+                                      render: (_: unknown, line: CommissionDraftLine) => (
+                                        <AdaptiveSelectField
+                                          value={line.decision_status}
+                                          options={commissionDecisionOptions}
+                                          onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
+                                          getPopupContainer={resolveSelectPopupContainer}
+                                          modalContainer={resolveSelectPopupContainer}
+                                          overlayZIndexBase={15000}
+                                        />
+                                      ),
+                                    },
+                                  ]}
+                                />
+                              ),
+                            }}
                           />
-                        ),
-                      }}
-                    />
-                  ),
-                }}
+                        )}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'backlog',
+                    label: `معوق / بازمانده (${toPersianNumber(commissionRowsByBucket.backlog.length)})`,
+                    children: commissionRowsByBucket.backlog.length === 0 ? (
+                      <Empty description="ردیف معوق یا منتقل‌شده‌ای وجود ندارد." />
+                    ) : (
+                      <Table
+                        rowKey="key"
+                        columns={commissionInvoiceColumns}
+                        dataSource={commissionRowsByBucket.backlog}
+                        pagination={{ pageSize: 10, showSizeChanger: false }}
+                        scroll={{ x: 1400 }}
+                        expandable={{
+                          expandedRowRender: (invoiceRow: any) => (
+                            <Table
+                              rowKey="key"
+                              size="small"
+                              pagination={false}
+                              dataSource={invoiceRow.lines}
+                              columns={[
+                                { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
+                                { title: 'دوره احراز', key: 'sourcePeriod', render: (_: unknown, line: CommissionDraftLine) => <span className="persian-number">{toPersianNumber(safeJalaliFormat(line.source_period_start, 'YYYY/MM/DD'))}</span> },
+                                { title: 'مانده', dataIndex: 'remaining_amount', key: 'remaining_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                { title: 'وضعیت', key: 'decision', render: (_: unknown, line: CommissionDraftLine) => <Tag color={line.decision_status === 'defer_to_next_period' ? 'orange' : 'blue'}>{line.decision_status === 'defer_to_next_period' ? 'منتقل‌شده' : 'آماده تصمیم'}</Tag> },
+                                {
+                                  title: 'اقدام',
+                                  key: 'action',
+                                  render: (_: unknown, line: CommissionDraftLine) => (
+                                    <AdaptiveSelectField
+                                      value={line.decision_status}
+                                      options={commissionDecisionOptions}
+                                      onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
+                                      getPopupContainer={resolveSelectPopupContainer}
+                                      modalContainer={resolveSelectPopupContainer}
+                                      overlayZIndexBase={15000}
+                                    />
+                                  ),
+                                },
+                              ]}
+                            />
+                          ),
+                        }}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'excluded',
+                    label: `مستثنا / عدم‌لحاظ (${toPersianNumber(commissionRowsByBucket.excluded.length)})`,
+                    children: commissionRowsByBucket.excluded.length === 0 ? (
+                      <Empty description="ردیف مستثنا یا عدم‌لحاظی وجود ندارد." />
+                    ) : (
+                      <Table
+                        rowKey="key"
+                        columns={commissionInvoiceColumns}
+                        dataSource={commissionRowsByBucket.excluded}
+                        pagination={{ pageSize: 10, showSizeChanger: false }}
+                        scroll={{ x: 1400 }}
+                        expandable={{
+                          expandedRowRender: (invoiceRow: any) => (
+                            <Table
+                              rowKey="key"
+                              size="small"
+                              pagination={false}
+                              dataSource={invoiceRow.lines}
+                              columns={[
+                                { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
+                                { title: 'مبلغ نهایی', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                { title: 'علت', key: 'reason', render: (_: unknown, line: CommissionDraftLine) => <span>{line.exclusion_reason || invoiceRow.exclusion_reason || '-'}</span> },
+                                {
+                                  title: 'بازگردانی',
+                                  key: 'restore',
+                                  render: (_: unknown, line: CommissionDraftLine) => (
+                                    <Button size="small" onClick={() => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, 'auto')}>
+                                      بازگشت به خودکار
+                                    </Button>
+                                  ),
+                                },
+                              ]}
+                            />
+                          ),
+                        }}
+                      />
+                    ),
+                  },
+                ]}
               />
             )}
           </Card>

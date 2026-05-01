@@ -5,7 +5,7 @@ import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
 import PersianDatePicker from '../PersianDatePicker';
 import AdaptiveSelectField from '../AdaptiveSelectField';
-import { AdaptivePickerMode, resolveSelectPopupContainer } from '../../utils/popupContainer';
+import { AdaptivePickerMode, resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../../utils/popupContainer';
 import {
   getDefaultWorkflowOperator,
   getWorkflowOperatorOptions,
@@ -81,6 +81,10 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   adaptiveMode = 'auto',
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const resolvedPopupContainer = (trigger?: HTMLElement | null) => {
+    const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
+    return modalBodyHost || popupContainer(trigger) || resolveOverlayPopupContainer(trigger);
+  };
   const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
   const requiredConditionIdSet = useMemo(() => new Set(requiredConditionIds), [requiredConditionIds]);
   const lockedFieldKeySet = useMemo(
@@ -150,7 +154,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     disabled,
     placeholder: 'انتخاب مقدار',
     className: 'w-full',
-    getPopupContainer: popupContainer,
+    getPopupContainer: resolvedPopupContainer,
+    modalContainer: resolvedPopupContainer,
+    preferLocalPopupContainer: true,
     popupMatchSelectWidth: false,
     listHeight: 240,
     virtual: false,
@@ -204,7 +210,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           allowClear
           showSearch
           mode={expectsListValue ? 'multiple' : undefined}
-          getPopupContainer={popupContainer as any}
+          getPopupContainer={resolvedPopupContainer as any}
+          modalContainer={resolvedPopupContainer}
+          preferLocalPopupContainer
           onOptionsUpdate={dynamicFieldProps[field.dynamicOptionsCategory]?.onOptionsUpdate}
           protectedValues={dynamicFieldProps[field.dynamicOptionsCategory]?.protectedValues}
           overlayZIndexBase={overlayZIndexBase}
@@ -295,7 +303,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           disabled={disabled || isLocked}
           placeholder="تاریخ"
           overlayZIndexBase={overlayZIndexBase}
-          modalContainer={popupContainer}
+          modalContainer={resolvedPopupContainer}
           adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
@@ -311,7 +319,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           disabled={disabled || isLocked}
           placeholder="ساعت"
           overlayZIndexBase={overlayZIndexBase}
-          modalContainer={popupContainer}
+          modalContainer={resolvedPopupContainer}
           adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
@@ -327,7 +335,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           disabled={disabled || isLocked}
           placeholder="تاریخ و زمان"
           overlayZIndexBase={overlayZIndexBase}
-          modalContainer={popupContainer}
+          modalContainer={resolvedPopupContainer}
           adaptiveMode={adaptiveMode}
           pickerTitle={field?.labels?.fa || field.key}
         />
@@ -369,7 +377,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                   optionFilterProp="label"
                   disabled={disabled || isLocked}
                   options={isLocked ? fieldOptions : editableFieldOptions}
-                  getPopupContainer={popupContainer}
+                  getPopupContainer={resolvedPopupContainer}
+                  modalContainer={resolvedPopupContainer}
+                  preferLocalPopupContainer
                   popupMatchSelectWidth={false}
                   listHeight={240}
                   virtual={false}
@@ -395,7 +405,9 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
                 <AdaptiveSelectField
                   disabled={disabled || isLocked}
                   options={getOperatorOptions?.(field) || getWorkflowOperatorOptions(field)}
-                  getPopupContainer={popupContainer}
+                  getPopupContainer={resolvedPopupContainer}
+                  modalContainer={resolvedPopupContainer}
+                  preferLocalPopupContainer
                   popupMatchSelectWidth={false}
                   listHeight={220}
                   virtual={false}

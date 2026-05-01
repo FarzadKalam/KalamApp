@@ -5,15 +5,17 @@ import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import {
   buildGoalFallbackProgressSnapshot,
+  canUserViewGoalResults,
   canViewGoalPlacement,
   dedupeGoalsForDisplay,
   ensureDefaultSalesInvoiceGoal,
   executeGoalProgress,
-  isGoalVisibleToUser,
   normalizeGoalRecord,
+  resolveGoalAssignedMembers,
 } from '../../utils/goals';
 import { type FiscalYearSnapshot } from '../../utils/goalPeriods';
 import { fetchCurrentUserRecordAccessContext, resolveModuleGoalAccessPermissions, type PermissionMap } from '../../utils/permissions';
+import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import {
   GOAL_PERIOD_UNIT_OPTIONS,
   type GoalPeriodUnit,
@@ -21,12 +23,16 @@ import {
 } from '../../utils/goalTypes';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import GoalEditorModal from './GoalEditorModal';
+import GoalResultsModal from './GoalResultsModal';
 
 type GoalProgressSliderProps = {
   moduleId?: string | null;
   placement: 'module_list' | 'dashboard';
   className?: string;
   hideWhenEmpty?: boolean;
+  autoPlay?: boolean;
+  showPlaybackControls?: boolean;
+  onActiveCardChange?: (card: GoalProgressSnapshot | null) => void;
 };
 
 const GOAL_PROGRESS_CACHE_TTL_MS = 60_000;
@@ -160,6 +166,9 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   placement,
   className = '',
   hideWhenEmpty = false,
+  autoPlay = true,
+  showPlaybackControls = true,
+  onActiveCardChange,
 }) => {
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<GoalProgressSnapshot[]>([]);
@@ -169,6 +178,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const [subperiodSelections, setSubperiodSelections] = useState<Record<string, GoalPeriodUnit>>({});
   const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
   const [editingGoal, setEditingGoal] = useState<GoalProgressSnapshot['goal'] | null>(null);
+  const [resultsGoal, setResultsGoal] = useState<GoalProgressSnapshot['goal'] | null>(null);
   const [isAutoPlayPaused, setIsAutoPlayPaused] = useState(false);
   const rowCacheRef = useRef<Map<string, any[]>>(new Map());
   const fiscalYearRef = useRef<FiscalYearSnapshot | null>(null);
@@ -321,11 +331,13 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         const { data, error } = await query;
         if (error) throw error;
 
+        const directory = await fetchAssigneeDirectory(supabase);
+
         const visibleGoals = dedupeGoalsForDisplay(
           (data || [])
             .map((item) => normalizeGoalRecord(item))
             .filter((goal) => resolveModuleGoalAccessPermissions(roleContext.permissions, goal.module_id).canViewGoal)
-            .filter((goal) => isGoalVisibleToUser(goal, roleContext.userId, roleContext.roleId))
+            .filter((goal) => canUserViewGoalResults(goal, roleContext.userId, roleContext.roleId))
         );
 
         if (visibleGoals.length > 0 && cardsRef.current.length === 0) {
@@ -359,6 +371,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 fiscalYear: fiscalYearRef.current,
                 selectedSubperiodUnit,
                 cache: rowCacheRef.current,
+                fallbackSubjects: resolveGoalAssignedMembers(goal, directory),
               });
             } catch {
               return buildGoalFallbackProgressSnapshot(goal, {
@@ -485,17 +498,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   }, [activeIndex, visibleIndex]);
 
   useEffect(() => {
-    if (cards.length <= 1 || isAutoPlayPaused) return;
+    if (!autoPlay || cards.length <= 1 || isAutoPlayPaused) return;
     const handle = window.setInterval(() => {
       setActiveIndex((current) => (current + 1) % cards.length);
     }, 6500);
     return () => window.clearInterval(handle);
-  }, [cards.length, isAutoPlayPaused]);
+  }, [autoPlay, cards.length, isAutoPlayPaused]);
 
   const activeCard = cards[visibleIndex] || null;
-  const canEditActiveGoal = activeCard
-    ? resolveModuleGoalAccessPermissions(rolePermissions, activeCard.goal.module_id).canEditGoal
-    : false;
+  const canViewActiveGoalResults = !!activeCard;
+
+  useEffect(() => {
+    onActiveCardChange?.(activeCard);
+  }, [activeCard, onActiveCardChange]);
 
   const handleSubperiodChange = async (goalId: string, unit: GoalPeriodUnit) => {
     const nextSelections = {
@@ -572,6 +587,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     />
   ) : null;
 
+  const resultsModal = resultsGoal ? (
+    <GoalResultsModal
+      open={!!resultsGoal}
+      goal={resultsGoal}
+      onClose={() => setResultsGoal(null)}
+      onEdit={(goal) => {
+        setResultsGoal(null);
+        setEditingGoal(goal);
+      }}
+      canEdit={resolveModuleGoalAccessPermissions(rolePermissions, resultsGoal.module_id).canEditGoal}
+    />
+  ) : null;
+
   if (loading) {
     if (placement === 'module_list') {
       return null;
@@ -597,19 +625,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     return (
       <>
       <div
-        role={canEditActiveGoal ? 'button' : undefined}
-        tabIndex={canEditActiveGoal ? 0 : undefined}
+        role={canViewActiveGoalResults ? 'button' : undefined}
+        tabIndex={canViewActiveGoalResults ? 0 : undefined}
         onClick={() => {
-          if (canEditActiveGoal && activeCard) setEditingGoal(activeCard.goal);
+          if (canViewActiveGoalResults && activeCard) setResultsGoal(activeCard.goal);
         }}
         onKeyDown={(event) => {
-          if (!canEditActiveGoal || !activeCard) return;
+          if (!canViewActiveGoalResults || !activeCard) return;
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            setEditingGoal(activeCard.goal);
+            setResultsGoal(activeCard.goal);
           }
         }}
-        className={`relative overflow-hidden rounded-lg border border-gray-200 bg-gradient-to-br px-2.5 py-1 shadow-sm dark:border-gray-800 ${canEditActiveGoal ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
+        className={`relative overflow-hidden rounded-lg border border-gray-200 bg-gradient-to-br px-2.5 py-1 shadow-sm dark:border-gray-800 ${canViewActiveGoalResults ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
       >
         <div className={`flex h-7 items-center gap-2 transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
           <div className="min-w-0 w-[108px] shrink-0 md:w-[132px]">
@@ -654,21 +682,24 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 }}
                 className="!h-5 !w-5 !min-w-5"
               />
-              <Button
-                size="small"
-                shape="circle"
-                icon={isAutoPlayPaused ? <CaretRightOutlined /> : <PauseOutlined />}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setIsAutoPlayPaused((current) => !current);
-                }}
-                className="!h-5 !w-5 !min-w-5"
-              />
+              {showPlaybackControls ? (
+                <Button
+                  size="small"
+                  shape="circle"
+                  icon={isAutoPlayPaused ? <CaretRightOutlined /> : <PauseOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setIsAutoPlayPaused((current) => !current);
+                  }}
+                  className="!h-5 !w-5 !min-w-5"
+                />
+              ) : null}
             </div>
           ) : null}
         </div>
       </div>
       {editorModal}
+      {resultsModal}
       </>
     );
   }
@@ -676,19 +707,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   return (
     <>
     <div
-      role={canEditActiveGoal ? 'button' : undefined}
-      tabIndex={canEditActiveGoal ? 0 : undefined}
+      role={canViewActiveGoalResults ? 'button' : undefined}
+      tabIndex={canViewActiveGoalResults ? 0 : undefined}
       onClick={() => {
-        if (canEditActiveGoal && activeCard) setEditingGoal(activeCard.goal);
+        if (canViewActiveGoalResults && activeCard) setResultsGoal(activeCard.goal);
       }}
       onKeyDown={(event) => {
-        if (!canEditActiveGoal || !activeCard) return;
+        if (!canViewActiveGoalResults || !activeCard) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          setEditingGoal(activeCard.goal);
+          setResultsGoal(activeCard.goal);
         }
       }}
-      className={`relative overflow-hidden rounded-[1.7rem] border border-gray-200 bg-gradient-to-br p-4 shadow-sm dark:border-gray-800 ${canEditActiveGoal ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
+      className={`relative overflow-hidden rounded-[1.7rem] border border-gray-200 bg-gradient-to-br p-4 shadow-sm dark:border-gray-800 ${canViewActiveGoalResults ? 'cursor-pointer hover:border-leather-300' : ''} ${shellClasses.shell} ${className}`}
     >
       <div className={`transition-all duration-200 ease-out ${isSwitching ? 'translate-x-1 opacity-40' : 'translate-x-0 opacity-100'}`}>
       <div className="flex items-start justify-between gap-3">
@@ -707,6 +738,11 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
           <div className="truncate text-base font-black text-gray-800 dark:text-gray-100 md:text-lg">
             {activeCard.goal.name}
           </div>
+          {activeCard.isSharedView && activeCard.subjectLabel ? (
+            <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              بیشترین تحقق: {activeCard.subjectLabel}
+            </div>
+          ) : null}
         </div>
 
         {cards.length > 1 ? (
@@ -729,15 +765,17 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 setActiveIndex((current) => (current + 1) % cards.length);
               }}
             />
-            <Button
-              size="small"
-              shape="circle"
-              icon={isAutoPlayPaused ? <CaretRightOutlined /> : <PauseOutlined />}
-              onClick={(event) => {
-                event.stopPropagation();
-                setIsAutoPlayPaused((current) => !current);
-              }}
-            />
+            {showPlaybackControls ? (
+              <Button
+                size="small"
+                shape="circle"
+                icon={isAutoPlayPaused ? <CaretRightOutlined /> : <PauseOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setIsAutoPlayPaused((current) => !current);
+                }}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -848,6 +886,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       </div>
     </div>
     {editorModal}
+    {resultsModal}
     </>
   );
 };
