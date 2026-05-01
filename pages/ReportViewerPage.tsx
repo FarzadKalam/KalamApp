@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Button, Empty, Progress, Select, Spin, Statistic, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { BarChartOutlined, EditOutlined, EyeOutlined, FileExcelOutlined, FilePdfOutlined, PieChartOutlined, PrinterOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import { BarChartOutlined, CopyOutlined, EditOutlined, EyeOutlined, FileExcelOutlined, PieChartOutlined, PrinterOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import PrintSection from '../components/moduleShow/PrintSection';
 import SimpleBarChart from '../components/reports/SimpleBarChart';
@@ -34,7 +34,6 @@ import { escapeCsvCell, formatListCellValue } from '../utils/listPrintExport';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { printInIframe } from '../utils/printTemplates/printInIframe';
-import { prepareGeneratedPdfWindow, printAsPdf } from '../utils/printTemplates/printAsPdf';
 import { readCurrencyConfig } from '../utils/currency';
 
 const { Title, Text } = Typography;
@@ -65,6 +64,8 @@ type GroupedDetailRow = ReportRow & {
   __group_labels: Record<string, string>;
   __group_values: Record<string, any>;
   __group_row_spans: Record<string, number>;
+  __is_group_summary?: boolean;
+  __group_summary?: GroupedRow | null;
 };
 
 type ExportCell = {
@@ -261,6 +262,36 @@ const getGroupingValueKey = (value: any, label: string) => {
   return String(value);
 };
 
+const REPORT_RESULT_CACHE_PREFIX = 'kalamapp:report-result:v1:';
+
+const buildReportResultCacheKey = (report: ReportDefinitionRecord, normalizedConfig: ReturnType<typeof normalizeReportConfig>) =>
+  `${REPORT_RESULT_CACHE_PREFIX}${report.id}:${report.updated_at || ''}:${JSON.stringify({
+    module_id: report.module_id,
+    config: normalizedConfig,
+  })}`;
+
+const formatLastUpdatedAt = (value?: string | null) =>
+  value ? new Date(value).toLocaleString('fa-IR') : '-';
+
+const getGroupSummaryMetricText = (
+  summary: GroupedRow,
+  config: ReturnType<typeof normalizeReportConfig>,
+  metricFieldKeys: string[],
+  fieldMap: Record<string, any>,
+  currencyLabel = ''
+) => {
+  const parts = [`تعداد: ${toPersianNumber(summary.row_count)}`];
+  if (config.metric_type === 'sum' || config.metric_type === 'avg') {
+    metricFieldKeys.forEach((fieldKey) => {
+      const value = config.metric_type === 'avg'
+        ? Number(summary.metrics[fieldKey] || 0) / Math.max(1, Number(summary.metric_counts[fieldKey] || 0))
+        : Number(summary.metrics[fieldKey] || 0);
+      parts.push(`${config.metric_type === 'avg' ? 'میانگین' : 'جمع'} ${fieldMap[fieldKey]?.labels?.fa || fieldKey}: ${formatMetricValue(value, String(fieldMap[fieldKey]?.type || '').toLowerCase(), currencyLabel)}`);
+    });
+  }
+  return parts.join(' | ');
+};
+
 
 const ReportViewerPage: React.FC = () => {
   const { reportId } = useParams();
@@ -284,6 +315,7 @@ const ReportViewerPage: React.FC = () => {
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
 
   const config = useMemo(() => normalizeReportConfig(report?.config), [report?.config]);
   const moduleId = String(report?.module_id || '').trim();
@@ -355,7 +387,7 @@ const ReportViewerPage: React.FC = () => {
 
       const { data, error } = await supabase
         .from('report_definitions')
-        .select('id, name, description, module_id, config, is_active')
+        .select('id, name, description, module_id, config, is_active, updated_at')
         .eq('id', reportId)
         .maybeSingle();
       if (error) throw error;
@@ -395,8 +427,27 @@ const ReportViewerPage: React.FC = () => {
     }
   }, [message, reportId]);
 
-  const executeReport = useCallback(async () => {
+  const executeReport = useCallback(async (forceRefresh = false) => {
     if (!report || !moduleConfig) return;
+    const cacheKey = buildReportResultCacheKey(report, config);
+    if (!forceRefresh) {
+      try {
+        const cached = sessionStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setRows(Array.isArray(parsed.rows) ? parsed.rows : []);
+          setGroupedRows(Array.isArray(parsed.groupedRows) ? parsed.groupedRows : []);
+          setGroupedTreeRows(Array.isArray(parsed.groupedTreeRows) ? parsed.groupedTreeRows : []);
+          setChartRows(Array.isArray(parsed.chartRows) ? parsed.chartRows : []);
+          setLastUpdatedAt(String(parsed.lastUpdatedAt || ''));
+          return;
+        }
+      } catch {
+        sessionStorage.removeItem(cacheKey);
+      }
+    } else {
+      sessionStorage.removeItem(cacheKey);
+    }
     setExecuting(true);
     try {
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
@@ -458,8 +509,8 @@ const ReportViewerPage: React.FC = () => {
         const targetModule = MODULES[targetModuleId];
         const ids = Array.from(idSet);
         if (!targetModule || ids.length === 0) return;
-        for (let offset = 0; offset < ids.length; offset += 200) {
-          const chunk = ids.slice(offset, offset + 200);
+        for (let offset = 0; offset < ids.length; offset += 50) {
+          const chunk = ids.slice(offset, offset + 50);
           const { data: relatedRows, error: relatedRowsError } = await supabase
             .from(targetModule.table || targetModuleId)
             .select('*')
@@ -580,8 +631,7 @@ const ReportViewerPage: React.FC = () => {
         }
       }
 
-      setRows(nextRows);
-      setChartRows(chartDimensionField ? buildFlatGroupedRows(
+      const nextChartRows = chartDimensionField ? buildFlatGroupedRows(
         nextRows,
         [{ field: chartDimensionField, direction: 'asc' }],
         fieldMap,
@@ -589,11 +639,23 @@ const ReportViewerPage: React.FC = () => {
         config.metric_type,
         config.metric_fields,
         currencyLabel
-      ) : []);
+      ) : [];
+
+      setRows(nextRows);
+      setChartRows(nextChartRows);
 
       if (config.group_bys.length === 0) {
         setGroupedRows([]);
         setGroupedTreeRows([]);
+        const now = new Date().toISOString();
+        setLastUpdatedAt(now);
+        sessionStorage.setItem(cacheKey, JSON.stringify({
+          rows: nextRows,
+          groupedRows: [],
+          groupedTreeRows: [],
+          chartRows: nextChartRows,
+          lastUpdatedAt: now,
+        }));
         return;
       }
 
@@ -691,18 +753,30 @@ const ReportViewerPage: React.FC = () => {
           }
           return { ...item, children: children.length > 0 ? children : undefined };
         });
-      setGroupedRows(nextGroupedRows.filter((row) => row.group_depth === config.group_bys.length - 1));
-      setGroupedTreeRows(normalizeChildren(nextTreeRows));
+      const finalGroupedRows = nextGroupedRows.filter((row) => row.group_depth === config.group_bys.length - 1);
+      const finalGroupedTreeRows = normalizeChildren(nextTreeRows);
+      setGroupedRows(finalGroupedRows);
+      setGroupedTreeRows(finalGroupedTreeRows);
+      const now = new Date().toISOString();
+      setLastUpdatedAt(now);
+      sessionStorage.setItem(cacheKey, JSON.stringify({
+        rows: nextRows,
+        groupedRows: finalGroupedRows,
+        groupedTreeRows: finalGroupedTreeRows,
+        chartRows: nextChartRows,
+        lastUpdatedAt: now,
+      }));
     } catch {
       message.error('اجرای گزارش ناموفق بود.');
       setRows([]);
       setGroupedRows([]);
       setGroupedTreeRows([]);
       setChartRows([]);
+      setLastUpdatedAt(null);
     } finally {
       setExecuting(false);
     }
-  }, [chartDimensionField, config.conditions_all, config.conditions_any, config.columns, config.group_bys, config.metric_fields, config.metric_type, config.row_limit, currencyLabel, fieldMap, message, moduleConfig, moduleId, relationOptions, report, selectedTableBlocks]);
+  }, [chartDimensionField, config.conditions_all, config.conditions_any, config.columns, config.group_bys, config.metric_fields, config.metric_type, config.row_limit, config.show_group_summaries, currencyLabel, fieldMap, message, moduleConfig, moduleId, relationOptions, report, selectedTableBlocks]);
 
   useEffect(() => {
     void loadReport();
@@ -836,7 +910,7 @@ const ReportViewerPage: React.FC = () => {
   );
   const groupedDetailRows = useMemo<GroupedDetailRow[]>(() => {
     if (config.group_bys.length === 0) return [];
-    const eligibleRows = rows
+    const detailRows = rows
       .filter((row) => config.group_bys.every((grouping) => isGroupingFieldAvailableForRow(grouping.field, row)))
       .map((row, index): GroupedDetailRow => {
         const groupLabels: Record<string, string> = {};
@@ -864,6 +938,42 @@ const ReportViewerPage: React.FC = () => {
         return 0;
       });
 
+    const summaryByKey = new Map(
+      groupedRows.map((row) => [
+        config.group_bys
+          .map((item) => `${item.field}:${getGroupingValueKey(row.group_values[item.field], row.group_labels[item.field])}`)
+          .join('||'),
+        row,
+      ])
+    );
+    const eligibleRows: GroupedDetailRow[] = [];
+    let start = 0;
+    while (start < detailRows.length) {
+      let end = start + 1;
+      const currentKey = config.group_bys
+        .map((item) => `${item.field}:${getGroupingValueKey(detailRows[start].__group_values[item.field], detailRows[start].__group_labels[item.field])}`)
+        .join('||');
+      while (end < detailRows.length) {
+        const nextKey = config.group_bys
+          .map((item) => `${item.field}:${getGroupingValueKey(detailRows[end].__group_values[item.field], detailRows[end].__group_labels[item.field])}`)
+          .join('||');
+        if (nextKey !== currentKey) break;
+        end += 1;
+      }
+      eligibleRows.push(...detailRows.slice(start, end));
+      const summary = summaryByKey.get(currentKey);
+      if (config.show_group_summaries !== false && summary) {
+        eligibleRows.push({
+          ...detailRows[start],
+          __group_row_key: `${currentKey}:summary`,
+          __is_group_summary: true,
+          __group_summary: summary,
+          __group_row_spans: {},
+        });
+      }
+      start = end;
+    }
+
     config.group_bys.forEach((grouping, depth) => {
       let start = 0;
       while (start < eligibleRows.length) {
@@ -889,7 +999,7 @@ const ReportViewerPage: React.FC = () => {
     });
 
     return eligibleRows;
-  }, [config.group_bys, currencyLabel, fieldMap, relationOptions, rows]);
+  }, [config.group_bys, config.show_group_summaries, currencyLabel, fieldMap, groupedRows, relationOptions, rows]);
 
   const rawColumns = useMemo<ColumnsType<ReportRow>>(
     () =>
@@ -921,10 +1031,30 @@ const ReportViewerPage: React.FC = () => {
         title: field.labels?.fa || field.key,
         dataIndex: field.key,
         key: field.key,
-        render: (_value: unknown, row: GroupedDetailRow) => formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+        render: (_value: unknown, row: GroupedDetailRow, _index: number) => {
+          if (row.__is_group_summary) {
+            const isFirstDetailColumn = visibleDetailFields[0]?.key === field.key;
+            return {
+              children: isFirstDetailColumn ? (
+                <div className="rounded-lg bg-gray-100 px-3 py-2 text-sm font-bold text-gray-800 dark:bg-white/10 dark:text-gray-100">
+                  جمع گروه: {row.__group_summary ? getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel) : '-'}
+                </div>
+              ) : null,
+              props: { colSpan: isFirstDetailColumn ? Math.max(1, visibleDetailFields.length) : 0 },
+            };
+          }
+          return formatReportCellValue(field as any, row, relationOptions, currencyLabel);
+        },
       })),
+      ...(visibleDetailFields.length === 0 ? [{
+        title: 'جمع گروه',
+        key: '__group_summary',
+        render: (_value: unknown, row: GroupedDetailRow) => row.__is_group_summary && row.__group_summary
+          ? getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel)
+          : '',
+      }] : []),
     ],
-    [currencyLabel, groupByFields, relationOptions, visibleDetailFields]
+    [config, currencyLabel, fieldMap, groupByFields, metricFieldKeys, relationOptions, visibleDetailFields]
   );
 
   const chartItems = useMemo(() => {
@@ -944,7 +1074,7 @@ const ReportViewerPage: React.FC = () => {
     if (config.group_bys.length > 0) {
       return [
         ...groupByFields.map((field) => field.labels?.fa || field.key),
-        ...visibleDetailFields.map((field) => field.labels?.fa || field.key),
+        ...(visibleDetailFields.length > 0 ? visibleDetailFields.map((field) => field.labels?.fa || field.key) : ['جمع گروه']),
       ];
     }
     return visibleFields.map((field) => field.labels?.fa || field.key);
@@ -957,15 +1087,23 @@ const ReportViewerPage: React.FC = () => {
           value: row.__group_labels[field.key] || '-',
           rowSpan: row.__group_row_spans[field.key] || 0,
         })),
-        ...visibleDetailFields.map((field) => ({
-          value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
-        })),
+        ...(visibleDetailFields.length > 0
+          ? visibleDetailFields.map((field, index) => ({
+              value: row.__is_group_summary
+                ? (index === 0 && row.__group_summary ? `جمع گروه: ${getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel)}` : '')
+                : formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+            }))
+          : [{
+              value: row.__is_group_summary && row.__group_summary
+                ? `جمع گروه: ${getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel)}`
+                : '',
+            }]),
       ]);
     }
     return rows.map((row) => visibleFields.map((field) => ({
       value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
     })));
-  }, [config.group_bys.length, currencyLabel, groupByFields, groupedDetailRows, relationOptions, rows, visibleDetailFields, visibleFields]);
+  }, [config, currencyLabel, fieldMap, groupByFields, groupedDetailRows, metricFieldKeys, relationOptions, rows, visibleDetailFields, visibleFields]);
 
   const exportRows = useMemo(
     () => exportCellRows.map((line) => line.map((cell) => cell.rowSpan === 0 ? '' : cell.value)),
@@ -1024,7 +1162,7 @@ const ReportViewerPage: React.FC = () => {
     const printHeaders = config.group_bys.length > 0
       ? [
           ...selectedPrintGroupFields.map((field) => field.labels?.fa || field.key),
-          ...selectedPrintDetailFields.map((field) => field.labels?.fa || field.key),
+          ...(selectedPrintDetailFields.length > 0 ? selectedPrintDetailFields.map((field) => field.labels?.fa || field.key) : ['جمع گروه']),
         ]
       : selectedPrintVisibleFields.map((field) => field.labels?.fa || field.key);
     const printCellRows: ExportCell[][] = config.group_bys.length > 0
@@ -1033,9 +1171,17 @@ const ReportViewerPage: React.FC = () => {
             value: row.__group_labels[field.key] || '-',
             rowSpan: row.__group_row_spans[field.key] || 0,
           })),
-          ...selectedPrintDetailFields.map((field) => ({
-            value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
-          })),
+          ...(selectedPrintDetailFields.length > 0
+            ? selectedPrintDetailFields.map((field, index) => ({
+                value: row.__is_group_summary
+                  ? (index === 0 && row.__group_summary ? `جمع گروه: ${getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel)}` : '')
+                  : formatReportCellValue(field as any, row, relationOptions, currencyLabel),
+              }))
+            : [{
+                value: row.__is_group_summary && row.__group_summary
+                  ? `جمع گروه: ${getGroupSummaryMetricText(row.__group_summary, config, metricFieldKeys, fieldMap, currencyLabel)}`
+                  : '',
+              }]),
         ])
       : rows.map((row) => selectedPrintVisibleFields.map((field) => ({
           value: formatReportCellValue(field as any, row, relationOptions, currencyLabel),
@@ -1132,19 +1278,33 @@ const ReportViewerPage: React.FC = () => {
     });
   };
 
-  const handleExportPdf = (orientation: 'portrait' | 'landscape') => {
-    const title = report?.name || 'گزارش';
-    const targetWindow = prepareGeneratedPdfWindow(title);
-    void printAsPdf({
-      filename: `${title}.pdf`,
-      pageSize: `A4 ${orientation}`,
-      sourceHtml: buildReportPrintHtml(orientation),
-      targetWindow,
-      title,
-    }).catch(() => {
-      void printInIframe({ pageSize: `A4 ${orientation}`, sourceHtml: buildReportPrintHtml(orientation), title });
-    });
-  };
+  const handleCopyReport = useCallback(async () => {
+    if (!report) return;
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const { data, error } = await supabase
+        .from('report_definitions')
+        .insert([{
+          name: `${String(report.name || 'گزارش').trim()} (کپی)`,
+          description: report.description || null,
+          module_id: report.module_id,
+          report_type: report.report_type || 'module_report',
+          config: normalizeReportConfig(report.config),
+          is_active: report.is_active !== false,
+          created_by: userId,
+          updated_by: userId,
+        }])
+        .select('id')
+        .single();
+      if (error) throw error;
+      message.success('کپی گزارش ساخته شد.');
+      navigate(`/reports/${data.id}/edit`);
+    } catch (error) {
+      message.error(String((error as any)?.message || 'کپی گزارش ناموفق بود.'));
+    }
+  }, [message, navigate, report]);
+
   const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
     setSelectedPrintFields((prev) => {
       const current = prev[templateId] || [];
@@ -1212,9 +1372,14 @@ const ReportViewerPage: React.FC = () => {
           <div>
             <Title level={3} className="!mb-1">{report?.name}</Title>
             <Text className="text-gray-500">{report?.description || 'بدون توضیح'}</Text>
+            {lastUpdatedAt && (
+              <div className="mt-2 text-xs font-medium text-gray-500">
+                آخرین بروزرسانی: {formatLastUpdatedAt(lastUpdatedAt)}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button icon={<ReloadOutlined />} loading={executing} onClick={() => void executeReport()}>اجرای دوباره</Button>
+            <Button icon={<ReloadOutlined />} loading={executing} onClick={() => void executeReport(true)}>بروزرسانی</Button>
             <Button icon={<FileExcelOutlined />} onClick={() => void handleExportExcel()}>خروجی Excel</Button>
             <Select
               className="min-w-[150px]"
@@ -1227,7 +1392,7 @@ const ReportViewerPage: React.FC = () => {
             />
             <Button icon={<EyeOutlined />} onClick={() => setIsPrintModalOpen(true)}>تنظیم چاپ</Button>
             <Button icon={<PrinterOutlined />} onClick={() => handlePrint(printTemplate)}>چاپ</Button>
-            <Button icon={<FilePdfOutlined />} onClick={() => handleExportPdf(printTemplate)}>PDF</Button>
+            <Button icon={<CopyOutlined />} onClick={() => void handleCopyReport()}>کپی</Button>
             {canEditReport && <Button icon={<EditOutlined />} onClick={() => navigate(`/reports/${report?.id}/edit`)}>ویرایش</Button>}
           </div>
         </div>

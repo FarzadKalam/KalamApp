@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Button, Card, Col, Empty, Popconfirm, Row, Spin, Tag, Typography } from 'antd';
-import { BarChartOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { BarChartOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
@@ -83,6 +83,32 @@ const ReportsHubPage: React.FC = () => {
       await loadReports();
     } catch {
       message.error('حذف گزارش ناموفق بود.');
+    }
+  };
+
+  const handleCopy = async (report: ReportDefinitionRecord) => {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const { data, error } = await supabase
+        .from('report_definitions')
+        .insert([{
+          name: `${String(report.name || 'گزارش').trim()} (کپی)`,
+          description: report.description || null,
+          module_id: report.module_id,
+          report_type: report.report_type || 'module_report',
+          config: normalizeReportConfig(report.config),
+          is_active: report.is_active !== false,
+          created_by: userId,
+          updated_by: userId,
+        }])
+        .select('id')
+        .single();
+      if (error) throw error;
+      message.success('کپی گزارش ساخته شد.');
+      navigate(`/reports/${data.id}/edit`);
+    } catch {
+      message.error('کپی گزارش ناموفق بود.');
     }
   };
 
@@ -200,6 +226,11 @@ const ReportsHubPage: React.FC = () => {
                       {access.canUseBuilder && (
                         <Button icon={<EditOutlined />} onClick={() => navigate(`/reports/${report.id}/edit`)}>
                           ویرایش
+                        </Button>
+                      )}
+                      {access.canUseBuilder && (
+                        <Button icon={<CopyOutlined />} onClick={() => void handleCopy(report)}>
+                          کپی
                         </Button>
                       )}
                       {access.canDeleteReports && (

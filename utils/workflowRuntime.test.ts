@@ -317,6 +317,28 @@ describe('send_to_next_stages workflow action', () => {
 });
 
 describe('evaluateWorkflowConditions', () => {
+  it('matches contains against any selected value in arrays', async () => {
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [
+        { id: 'contains-1', field: 'status_tags', operator: 'contains', value: ['ready', 'urgent'] } as any,
+      ],
+      conditionsAny: [],
+      currentRecord: { status_tags: ['draft', 'ready_to_ship'] },
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+  });
+
+  it('matches contains against relation-like objects', async () => {
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [
+        { id: 'contains-2', field: 'product', operator: 'contains', value: ['چرم'] } as any,
+      ],
+      conditionsAny: [],
+      currentRecord: { product: { id: 'product-1', label: 'کیف چرم طبیعی' } },
+      moduleId: 'invoices',
+    })).resolves.toBe(true);
+  });
+
   it('requires all negative any-conditions on the same field to pass together', async () => {
     await expect(evaluateWorkflowConditions({
       conditionsAll: [{ id: 'all-1', field: 'is_overdue', operator: 'is_true' } as any],

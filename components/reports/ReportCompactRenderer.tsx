@@ -322,8 +322,8 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         const targetModule = MODULES[targetModuleId];
         const ids = Array.from(idSet);
         if (!targetModule || ids.length === 0) return;
-        for (let offset = 0; offset < ids.length; offset += 200) {
-          const chunk = ids.slice(offset, offset + 200);
+        for (let offset = 0; offset < ids.length; offset += 50) {
+          const chunk = ids.slice(offset, offset + 50);
           const { data: relatedRows, error: relatedRowsError } = await supabase
             .from(targetModule.table || targetModuleId)
             .select('*')

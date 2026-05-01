@@ -94,16 +94,26 @@ const hydrateWorkflowCurrentRecord = async (
 const toComparable = (value: any): any => {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) return value.map((item) => toComparable(item));
-  if (typeof value === 'object') return value;
+  if (typeof value === 'object') {
+    const preferred = value?.id ?? value?.value ?? value?.label ?? value?.name ?? value?.title ?? value?.full_name ?? value?.display;
+    if (preferred !== undefined && preferred !== null) return toComparable(preferred);
+    return JSON.stringify(value);
+  }
   if (typeof value === 'boolean') return value;
-  const num = Number(String(value).replace(/,/g, '').trim());
-  if (!Number.isNaN(num) && String(value).trim() !== '') return num;
-  return String(value).trim();
+  const text = toEnglishDigits(String(value).replace(/,/g, '').trim());
+  const num = Number(text);
+  if (!Number.isNaN(num) && text !== '') return num;
+  return text;
 };
 
 const asArray = (value: any): any[] => {
   if (Array.isArray(value)) return value;
   if (value === null || value === undefined || value === '') return [];
+  if (typeof value === 'object') {
+    const nested = value?.values ?? value?.items ?? value?.selected;
+    if (Array.isArray(nested)) return nested;
+    return [value];
+  }
   if (typeof value === 'string' && value.includes(',')) {
     return value
       .split(',')
@@ -113,10 +123,34 @@ const asArray = (value: any): any[] => {
   return [value];
 };
 
+const extractComparableListValues = (value: any): any[] => {
+  if (Array.isArray(value)) return value.flatMap((item) => extractComparableListValues(item));
+  if (value && typeof value === 'object') {
+    const nested = value?.values ?? value?.items ?? value?.selected;
+    if (Array.isArray(nested)) return nested.flatMap((item) => extractComparableListValues(item));
+    return [
+      value?.id,
+      value?.value,
+      value?.label,
+      value?.name,
+      value?.title,
+      value?.full_name,
+      value?.display,
+    ].filter((item) => item !== undefined && item !== null && item !== '');
+  }
+  return [value];
+};
+
 const normalizeListValues = (value: any) =>
   asArray(value)
+    .flatMap((item) => extractComparableListValues(item))
     .map((item) => String(toComparable(item) ?? '').trim())
     .filter(Boolean);
+
+const normalizeSearchText = (value: any) =>
+  String(toComparable(value) ?? '')
+    .trim()
+    .toLocaleLowerCase('fa-IR');
 
 const isEmptyValue = (value: any) => {
   if (Array.isArray(value)) return value.length === 0;
@@ -636,12 +670,18 @@ const evaluateResolvedCondition = async (
     case 'neq':
       return !(await evaluateResolvedCondition({ ...condition, operator: 'eq' }, currentValue, previousValue));
     case 'contains': {
-      if (Array.isArray(currentValue)) {
-        return normalizeListValues(currentValue).some((item) =>
-          item.toLowerCase().includes(String(ev ?? '').toLowerCase())
-        );
-      }
-      return String(cv ?? '').toLowerCase().includes(String(ev ?? '').toLowerCase());
+      const actualList = normalizeListValues(currentValue);
+      const expectedList = normalizeListValues(expectedValue);
+      const normalizedActual = actualList.length > 0 ? actualList : [String(cv ?? '')].filter(Boolean);
+      const normalizedExpected = expectedList.length > 0 ? expectedList : [String(ev ?? '')].filter(Boolean);
+      if (normalizedExpected.length === 0) return false;
+      return normalizedActual.some((actual) => {
+        const actualText = normalizeSearchText(actual);
+        return normalizedExpected.some((expected) => {
+          const expectedText = normalizeSearchText(expected);
+          return !!expectedText && actualText.includes(expectedText);
+        });
+      });
     }
     case 'not_contains':
       return !(await evaluateResolvedCondition({ ...condition, operator: 'contains' }, currentValue, previousValue));

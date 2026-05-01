@@ -302,6 +302,7 @@ const ReportBuilderPage: React.FC = () => {
         group_bys: groupBys.slice(0, 3),
         metric_type: metricType,
         metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+        show_group_summaries: true,
         chart_dimension_field: chartDimensionField || groupBys[0]?.field || null,
         default_view: defaultView,
         schedule: {
@@ -570,9 +571,12 @@ const ReportBuilderPage: React.FC = () => {
             </div>
 
             <div className="rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
-              <div className="mb-4 font-black text-gray-800 dark:text-gray-100">معیار آماری</div>
+              <div className="mb-1 font-black text-gray-800 dark:text-gray-100">محاسبات گروهی و نمودار</div>
+              <div className="mb-4 text-sm text-gray-500">
+                این تنظیمات برای کارت‌های آماری، نمودار و ردیف جمع زیر هر گروه استفاده می‌شود.
+              </div>
               <div className="space-y-4">
-                <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی', value: 'sum' }, { label: 'میانگین فیلدهای عددی', value: 'avg' }]} onChange={(value) => {
+                <Select className="w-full" value={metricType} options={[{ label: 'تعداد رکوردها', value: 'count' }, { label: 'جمع فیلدهای عددی/مبلغی', value: 'sum' }, { label: 'میانگین فیلدهای عددی/مبلغی', value: 'avg' }]} onChange={(value) => {
                   setMetricType(value as 'count' | 'sum' | 'avg');
                   if (value !== 'sum' && value !== 'avg') setMetricFields([]);
                 }} />

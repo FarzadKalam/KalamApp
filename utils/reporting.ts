@@ -32,6 +32,7 @@ export interface ReportDefinitionConfig {
   group_bys: ReportGroupingDefinition[];
   metric_type: ReportMetricType;
   metric_fields: string[];
+  show_group_summaries: boolean;
   chart_dimension_field: string | null;
   default_view: ReportDefaultView;
   schedule: ReportScheduleConfig;
@@ -185,6 +186,7 @@ export const createDefaultReportConfig = (): ReportDefinitionConfig => ({
   group_bys: [],
   metric_type: 'count',
   metric_fields: [],
+  show_group_summaries: true,
   chart_dimension_field: null,
   default_view: 'table_and_chart',
   schedule: createDefaultReportScheduleConfig(),
@@ -284,6 +286,7 @@ export const normalizeReportConfig = (value: Partial<ReportDefinitionConfig> | n
     group_bys: groupBys,
     metric_type: metricType,
     metric_fields: metricType === 'sum' || metricType === 'avg' ? metricFields.slice(0, 4) : [],
+    show_group_summaries: (value as any)?.show_group_summaries === false ? false : true,
     chart_dimension_field: chartDimensionField,
     default_view: value?.default_view === 'table' ? 'table' : 'table_and_chart',
     schedule: normalizeReportScheduleConfig((value as any)?.schedule),
