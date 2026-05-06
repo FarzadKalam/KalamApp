@@ -99,6 +99,19 @@ export const buildImagePreviewUrl = (rawUrl: string | null | undefined, preset: 
   return parsed.toString();
 };
 
+export const getImagePreviewCandidates = (
+  rawUrl: string | null | undefined,
+  preset: ImagePreviewPreset = 'card',
+): string[] => {
+  const normalized = String(rawUrl || '').trim();
+  if (!normalized) return [];
+  const previewUrl = buildImagePreviewUrl(normalized, preset);
+  if (!previewUrl || previewUrl === normalized) {
+    return [normalized];
+  }
+  return [previewUrl, normalized];
+};
+
 export const isImageFileLike = (
   url?: string | null,
   fileName?: string | null,

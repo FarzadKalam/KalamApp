@@ -14,9 +14,10 @@ import {
   PaperClipOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
-import { buildImagePreviewUrl, isImageFileLike } from '../../utils/imagePreview';
+import { isImageFileLike } from '../../utils/imagePreview';
 import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
+import ResilientImage from '../common/ResilientImage';
 
 interface SharedNoteCardProps {
   authorName: string;
@@ -318,7 +319,6 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       );
     }
 
-    const thumbUrl = buildImagePreviewUrl(attachment.url, 'thumb');
     return (
       <button
         key={`${attachment.url}-${label}`}
@@ -328,8 +328,9 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         title={label}
         onClick={() => setPreviewAttachment(attachment)}
       >
-        <img
-          src={thumbUrl}
+        <ResilientImage
+          src={attachment.url}
+          preset="thumb"
           alt={label}
           loading="lazy"
           className="h-full w-full object-cover"
@@ -351,7 +352,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
           className="inline-flex h-9 w-9 overflow-hidden rounded-md border opacity-95"
           style={{ borderColor: token.colorBorderSecondary }}
         >
-          <img src={buildImagePreviewUrl(attachment.url, 'thumb')} alt={label} className="h-full w-full object-cover" />
+          <ResilientImage src={attachment.url} preset="thumb" alt={label} className="h-full w-full object-cover" />
         </span>
       );
     }
@@ -539,8 +540,9 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   >
     {previewAttachment ? (
       <div className="flex max-h-[72vh] items-center justify-center overflow-auto rounded-md bg-gray-50 p-2 dark:bg-black/20">
-        <img
-          src={buildImagePreviewUrl(previewAttachment.url, 'gallery')}
+        <ResilientImage
+          src={previewAttachment.url}
+          preset="gallery"
           alt={getAttachmentLabel(previewAttachment)}
           className="max-h-[68vh] max-w-full object-contain"
         />

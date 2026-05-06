@@ -25,7 +25,16 @@ const normalizeAttachment = (value: any): NoteAttachment | null => {
   const name = String(value?.name || value?.file_name || fallbackName).trim() || fallbackName;
   const mimeType = String(value?.mimeType || value?.mime_type || '').trim() || null;
 
-  return { name, url, mimeType };
+  return {
+    name,
+    url,
+    mimeType,
+    assetId: String(value?.assetId || value?.asset_id || '').trim() || null,
+    entryId: String(value?.entryId || value?.entry_id || '').trim() || null,
+    moduleId: String(value?.moduleId || value?.module_id || '').trim() || null,
+    recordId: String(value?.recordId || value?.record_id || '').trim() || null,
+    fileType: String(value?.fileType || value?.file_type || '').trim() || null,
+  };
 };
 
 const extractStructuredContent = (value: unknown): ParsedNoteContent | null => {

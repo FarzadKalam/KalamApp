@@ -47,6 +47,7 @@ import { supabase } from '../../supabaseClient';
 import { buildZipArchive } from '../../utils/zipArchive';
 import FileExtensionTile from './FileExtensionTile';
 import TagInput from '../TagInput';
+import ResilientImage from '../common/ResilientImage';
 
 const { Text } = Typography;
 
@@ -251,24 +252,14 @@ const PreviewImage: React.FC<{ src: string; alt: string; className: string; pres
   className,
   preset,
 }) => {
-  const [retry, setRetry] = useState(0);
-  const previewUrl = useMemo(() => {
-    const url = buildImagePreviewUrl(src, preset);
-    if (retry === 0) return url;
-    const joiner = url.includes('?') ? '&' : '?';
-    return `${url}${joiner}fm_retry=${retry}`;
-  }, [preset, retry, src]);
-
   return (
-    <img
-      src={previewUrl}
+    <ResilientImage
+      src={src}
+      preset={preset}
       alt={alt}
       className={className}
       loading="lazy"
       decoding="async"
-      onError={() => {
-        if (retry < 3) window.setTimeout(() => setRetry((value) => value + 1), 700 * (retry + 1));
-      }}
     />
   );
 });
@@ -838,8 +829,9 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     const displayFileName = getDisplayFileName(item);
     if (item.file_type === 'image') {
       return (
-        <img
-          src={buildImagePreviewUrl(item.file_url, 'gallery')}
+        <ResilientImage
+          src={item.file_url}
+          preset="gallery"
           alt={displayFileName}
           className="max-h-[68vh] w-full rounded-lg border border-gray-200 object-contain dark:border-gray-700"
         />

@@ -9,7 +9,6 @@ import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
-import QrScanPopover from './QrScanPopover';
 import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import type { NoteAttachment } from '../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/noteAttachments';
@@ -51,6 +50,8 @@ import {
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
+import { extractBotMessageAttachments } from '../utils/messageAttachments';
+import AdaptiveScopePicker from './messaging/AdaptiveScopePicker';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 
@@ -983,6 +984,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [taskProcessModalTask, setTaskProcessModalTask] = useState<any | null>(null);
   const [taskProcessHostKey] = useState(0);
   const [selectedConversationNotes, setSelectedConversationNotes] = useState<any[] | null>(null);
+  const [selectedConversationNotesKey, setSelectedConversationNotesKey] = useState<string | null>(null);
+  const [loadingSelectedConversationNotes, setLoadingSelectedConversationNotes] = useState(false);
+  const [noteViewportReady, setNoteViewportReady] = useState(true);
+  const [botViewportReady, setBotViewportReady] = useState(true);
   const [seenNoteIds, setSeenNoteIds] = useState<Set<string>>(() => loadSeenSet(SEEN_NOTES_STORAGE_KEY));
   const [seenTaskIds, setSeenTaskIds] = useState<Set<string>>(() => loadSeenSet(SEEN_TASKS_STORAGE_KEY));
   const [seenResponsibilityIds, setSeenResponsibilityIds] = useState<Set<string>>(() => loadSeenSet(SEEN_RESP_STORAGE_KEY));
@@ -1050,6 +1055,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const noteConversationMessageIdsRef = useRef<Set<string>>(new Set());
   const botConversationKeyRef = useRef<string | null>(null);
   const botConversationMessageIdsRef = useRef<Set<string>>(new Set());
+  const selectedConversationFetchSeqRef = useRef(0);
+  const botMessagesFetchSeqRef = useRef(0);
+  const botMessagesRef = useRef<CounterpartyBotMessageRow[]>([]);
+  const botMessagesGroupIdRef = useRef<string | null>(null);
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -1248,6 +1257,10 @@ useEffect(() => {
   }, [seenVoipCallIds]);
 
   useEffect(() => {
+    botMessagesRef.current = botMessages;
+  }, [botMessages]);
+
+  useEffect(() => {
     if (variant !== 'chat') {
       setVoipCalls([]);
     }
@@ -1322,6 +1335,8 @@ useEffect(() => {
       const { data, error } = await supabase
         .from('notification_read_states')
         .select('section, source_type, source_id, read_at, dismissed_at, updated_at')
+        .eq('org_id', profile.org_id)
+        .eq('user_id', profile.id)
         .in('section', relevantNotificationStateSections)
         .order('updated_at', { ascending: false })
         .limit(1000);
@@ -2523,22 +2538,86 @@ useEffect(() => {
     return enrichedRows;
   };
 
-  const fetchBotMessages = async (groupId?: string | null) => {
+  const fetchBotMessages = async (
+    groupId?: string | null,
+    options?: { showLoading?: boolean; forceFull?: boolean },
+  ) => {
     const targetGroupId = String(groupId || selectedBotGroupId || '').trim();
+    const requestSeq = ++botMessagesFetchSeqRef.current;
+    if (options?.showLoading) {
+      setBotViewportReady(false);
+      setLoadingBotMessages(true);
+    }
     if (!targetGroupId) {
-      setBotMessages([]);
+      if (requestSeq === botMessagesFetchSeqRef.current) {
+        setBotMessages([]);
+        if (options?.showLoading) setLoadingBotMessages(false);
+      }
       return [] as CounterpartyBotMessageRow[];
     }
-    const { data, error } = await supabase
-      .from('counterparty_bot_messages')
-      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
-      .eq('bot_group_id', targetGroupId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-    if (error) throw error;
-    const rows = ((data || []) as CounterpartyBotMessageRow[]).reverse();
-    setBotMessages(rows);
-    return rows;
+    try {
+      const currentRows = botMessagesRef.current;
+      const canRefreshIncrementally = (
+        !options?.forceFull
+        && !options?.showLoading
+        && targetGroupId === String(botMessagesGroupIdRef.current || '').trim()
+        && currentRows.length > 0
+      );
+
+      if (canRefreshIncrementally) {
+        const latestMessage = currentRows[currentRows.length - 1];
+        const latestCreatedAt = String(latestMessage?.created_at || '').trim();
+        if (latestCreatedAt) {
+          const { data, error } = await supabase
+            .from('counterparty_bot_messages')
+            .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+            .eq('bot_group_id', targetGroupId)
+            .gte('created_at', latestCreatedAt)
+            .order('created_at', { ascending: true })
+            .limit(80);
+          if (!error) {
+            const nextRows = (data || []) as CounterpartyBotMessageRow[];
+            if (requestSeq === botMessagesFetchSeqRef.current) {
+              if (nextRows.length > 0) {
+                const merged = [...currentRows];
+                const seen = new Set(merged.map((row) => String(row?.id || '').trim()).filter(Boolean));
+                nextRows.forEach((row) => {
+                  const rowId = String(row?.id || '').trim();
+                  if (rowId && seen.has(rowId)) return;
+                  if (rowId) seen.add(rowId);
+                  merged.push(row);
+                });
+                botMessagesGroupIdRef.current = targetGroupId;
+                botMessagesRef.current = merged;
+                setBotMessages(merged);
+                return merged;
+              }
+              return currentRows;
+            }
+            return currentRows;
+          }
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('counterparty_bot_messages')
+        .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+        .eq('bot_group_id', targetGroupId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      const rows = ((data || []) as CounterpartyBotMessageRow[]).reverse();
+      if (requestSeq === botMessagesFetchSeqRef.current) {
+        botMessagesGroupIdRef.current = targetGroupId;
+        botMessagesRef.current = rows;
+        setBotMessages(rows);
+      }
+      return rows;
+    } finally {
+      if (options?.showLoading && requestSeq === botMessagesFetchSeqRef.current) {
+        setLoadingBotMessages(false);
+      }
+    }
   };
 
   const fetchBotNotificationMessages = async (groups: CounterpartyBotGroupRow[] = botGroups) => {
@@ -2770,8 +2849,23 @@ useEffect(() => {
     }
     botShouldStickToBottomRef.current = true;
     botForceScrollToBottomRef.current = true;
-    void fetchBotMessages(selectedBotGroupId);
+    void fetchBotMessages(selectedBotGroupId, { showLoading: true });
   }, [activeDrawerSection, open, selectedBotGroupId]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeDrawerSection === 'notes') {
+      noteShouldStickToBottomRef.current = true;
+      noteForceScrollToBottomRef.current = true;
+      setNoteViewportReady(false);
+      return;
+    }
+    if (activeDrawerSection === 'bot_messages') {
+      botShouldStickToBottomRef.current = true;
+      botForceScrollToBottomRef.current = true;
+      setBotViewportReady(false);
+    }
+  }, [activeDrawerSection, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -3216,9 +3310,18 @@ useEffect(() => {
     }
     return Array.from(resolved);
   }, [directoryUsers]);
+  const selectedConversationKey = useMemo(() => {
+    if (!selectedNoteUserId) return null;
+    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return SYSTEM_MESSAGES_USER_ID;
+    if (selectedChatGroupId) return `group:${selectedChatGroupId}`;
+    return `direct:${selectedNoteUserId}`;
+  }, [selectedChatGroupId, selectedNoteUserId]);
+  const isSelectedConversationLoaded = !selectedConversationKey || (
+    selectedConversationNotesKey === selectedConversationKey && !loadingSelectedConversationNotes
+  );
   const filteredNotes = useMemo(() => {
-    const sourceNotes = selectedNoteUserId && selectedConversationNotes !== null
-      ? selectedConversationNotes
+    const sourceNotes = selectedConversationKey
+      ? (selectedConversationNotesKey === selectedConversationKey ? (selectedConversationNotes || []) : [])
       : notes;
     if (!selectedNoteUserId) {
       const currentUserId = String(profile.id || '').trim();
@@ -3239,7 +3342,7 @@ useEffect(() => {
     return sourceNotes.filter((note: any) =>
       isDirectConversationNote(note, currentUserId, targetUserId, noteLookup)
     );
-  }, [noteLookup, notes, profile.id, selectedChatGroupId, selectedConversationNotes, selectedNoteUserId]);
+  }, [noteLookup, notes, profile.id, selectedChatGroupId, selectedConversationKey, selectedConversationNotes, selectedConversationNotesKey, selectedNoteUserId]);
   const inferredDirectUsers = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
     if (!currentUserId) return [] as Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
@@ -3551,45 +3654,7 @@ useEffect(() => {
     return String(value).slice(BOT_GROUP_FORWARD_PREFIX.length) || null;
   };
 
-  const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow): Array<{ name: string; url: string; mimeType?: string | null }> => {
-    const list: Array<{ name: string; url: string; mimeType?: string | null }> = [];
-    const fileUrl = String(row?.file_url || '').trim();
-    const fileName = String(row?.file_name || '').trim();
-    const mimeType = String(row?.mime_type || '').trim() || null;
-    if (fileUrl) {
-      list.push({
-        name: fileName || 'فایل',
-        url: fileUrl,
-        mimeType,
-      });
-    }
-    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-    const payloadMediaUrl = String((payload as any)?.media_url || (payload as any)?.file_url || '').trim();
-    if (payloadMediaUrl && !list.some((entry) => entry.url === payloadMediaUrl)) {
-      list.push({
-        name: String((payload as any)?.file_name || row?.file_name || 'فایل').trim(),
-        url: payloadMediaUrl,
-        mimeType: String((payload as any)?.mime_type || row?.mime_type || '').trim() || null,
-      });
-    }
-    const payloadAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];
-    payloadAttachments.forEach((item: any) => {
-      const url = String(item?.url || '').trim();
-      if (!url) return;
-      const name = String(item?.name || item?.file_name || 'فایل').trim();
-      if (!list.some((entry) => entry.url === url)) {
-        list.push({ name, url, mimeType: String(item?.mimeType || item?.mime_type || '').trim() || null });
-      }
-    });
-    return list;
-  }, []);
-
-  const buildForwardBodyText = useCallback((text: string, attachments: Array<{ name: string; url: string }>) => {
-    const baseText = String(text || '').trim();
-    if (!attachments.length) return baseText;
-    const attachmentLines = attachments.map((item) => `${item.name}: ${item.url}`);
-    return [baseText, ...attachmentLines].filter(Boolean).join('\n');
-  }, []);
+  const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow) => extractBotMessageAttachments(row), []);
 
   const buildAttachmentNameText = useCallback((attachments: Array<{ name?: string; url?: string }>) => {
     const lines = (attachments || [])
@@ -4053,7 +4118,10 @@ useEffect(() => {
   }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen]);
 
   useEffect(() => {
-    setSelectedConversationNotes(null);
+    setSelectedConversationNotes([]);
+    setSelectedConversationNotesKey(null);
+    setLoadingSelectedConversationNotes(Boolean(selectedNoteUserId));
+    setNoteViewportReady(!selectedNoteUserId);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
     noteShouldStickToBottomRef.current = true;
@@ -4064,23 +4132,36 @@ useEffect(() => {
   }, [selectedNoteUserId]);
 
   useEffect(() => {
+    setBotViewportReady(!selectedBotGroupId);
     botShouldStickToBottomRef.current = true;
     botForceScrollToBottomRef.current = true;
     setBotNewIncomingCount(0);
     botConversationKeyRef.current = null;
     botConversationMessageIdsRef.current = new Set();
+    setBotMessages([]);
+    botMessagesRef.current = [];
+    botMessagesGroupIdRef.current = null;
   }, [selectedBotGroupId]);
 
   useEffect(() => {
     if (!open || !profile.id || !selectedNoteUserId) {
       setSelectedConversationNotes(null);
+      setSelectedConversationNotesKey(null);
+      setLoadingSelectedConversationNotes(false);
+      setNoteViewportReady(true);
       return;
     }
 
     let cancelled = false;
+    const requestSeq = ++selectedConversationFetchSeqRef.current;
+    const requestConversationKey = selectedChatGroupId
+      ? `group:${selectedChatGroupId}`
+      : (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? SYSTEM_MESSAGES_USER_ID : `direct:${selectedNoteUserId}`);
 
     const fetchSelectedConversationNotes = async () => {
       try {
+        setLoadingSelectedConversationNotes(true);
+        setNoteViewportReady(false);
         let nextNotes: any[] = [];
 
         if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
@@ -4129,16 +4210,20 @@ useEffect(() => {
           nextNotes = Array.from(unique.values());
         }
 
-        if (cancelled) return;
+        if (cancelled || requestSeq !== selectedConversationFetchSeqRef.current) return;
         setSelectedConversationNotes(
           nextNotes.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
         );
+        setSelectedConversationNotesKey(requestConversationKey);
+        setLoadingSelectedConversationNotes(false);
         noteShouldStickToBottomRef.current = true;
         noteForceScrollToBottomRef.current = true;
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && requestSeq === selectedConversationFetchSeqRef.current) {
           console.warn('Failed to fetch selected conversation history.', error);
-          setSelectedConversationNotes(null);
+          setSelectedConversationNotes([]);
+          setSelectedConversationNotesKey(requestConversationKey);
+          setLoadingSelectedConversationNotes(false);
         }
       }
     };
@@ -4150,35 +4235,17 @@ useEffect(() => {
     };
   }, [open, profile.id, selectedChatGroupId, selectedNoteUserId]);
 
-  useEffect(() => {
-    if (!open || activeDrawerSection !== 'notes') return;
-    noteShouldStickToBottomRef.current = true;
-    noteForceScrollToBottomRef.current = true;
-    if (typeof window !== 'undefined') {
-      window.requestAnimationFrame(() => scrollNotesToBottom('auto'));
-    } else {
-      scrollNotesToBottom('auto');
-    }
-  }, [activeDrawerSection, open]);
-
-  useEffect(() => {
-    if (!open || activeDrawerSection !== 'bot_messages') return;
-    botShouldStickToBottomRef.current = true;
-    botForceScrollToBottomRef.current = true;
-    if (typeof window !== 'undefined') {
-      window.requestAnimationFrame(() => scrollBotMessagesToBottom('auto'));
-    } else {
-      scrollBotMessagesToBottom('auto');
-    }
-  }, [activeDrawerSection, open, selectedBotGroupId]);
-
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
+    if (!isSelectedConversationLoaded) return;
     const shouldForceScroll = noteForceScrollToBottomRef.current;
     if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
     scrollNotesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     noteForceScrollToBottomRef.current = false;
-  }, [activeDrawerSection, displayedChatNotes, open]);
+    if (!noteViewportReady) {
+      setNoteViewportReady(true);
+    }
+  }, [activeDrawerSection, displayedChatNotes, isSelectedConversationLoaded, noteViewportReady, open]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
@@ -4194,11 +4261,15 @@ useEffect(() => {
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
+    if (loadingBotMessages) return;
     const shouldForceScroll = botForceScrollToBottomRef.current;
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
     scrollBotMessagesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     botForceScrollToBottomRef.current = false;
-  }, [activeDrawerSection, botMessages, open, selectedBotGroupId]);
+    if (!botViewportReady) {
+      setBotViewportReady(true);
+    }
+  }, [activeDrawerSection, botMessages, botViewportReady, loadingBotMessages, open, selectedBotGroupId]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
@@ -4460,6 +4531,15 @@ useEffect(() => {
     setNoteSmsNotificationEnabled(false);
   };
 
+  const handleNoteScopeModuleChange = (value: string | null) => {
+    setNoteModuleId(value);
+    setNoteRecordId(null);
+  };
+
+  const handleNoteScopeRecordChange = (value: string | null) => {
+    setNoteRecordId(value);
+  };
+
   const submitNote = async () => {
     if (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0) return;
     if (noteSending) return;
@@ -4576,11 +4656,12 @@ useEffect(() => {
       ? parseNoteContent(forwardingNote.content)
       : { text: String(forwardingNote?.content_text || '').trim(), attachments: getBotMessageAttachments(forwardingNote as CounterpartyBotMessageRow) };
 
-    const forwardText = buildForwardBodyText(parsedContent.text || '', parsedContent.attachments || []);
     const customForwardMessageText = String(forwardMessageText || '').trim();
+    const baseForwardText = String(parsedContent.text || '').trim();
     const finalForwardText = customForwardMessageText
-      ? `${customForwardMessageText}\n\n${forwardText}`
-      : forwardText;
+      ? [customForwardMessageText, baseForwardText].filter(Boolean).join('\n\n')
+      : baseForwardText;
+    const forwardedAttachments = parsedContent.attachments || [];
     const payloads = targetIds.flatMap((targetId) => {
       if (isBotGroupForwardSelection(targetId)) {
         return [];
@@ -4592,7 +4673,7 @@ useEffect(() => {
         return [{
           module_id: scope.module_id,
           record_id: scope.record_id,
-          content: serializeNoteContent(finalForwardText, []),
+          content: serializeNoteContent(finalForwardText, forwardedAttachments),
           reply_to: null,
           mention_user_ids: groupPayload.mentionUserIds,
           mention_role_ids: groupPayload.mentionRoleIds,
@@ -4606,7 +4687,7 @@ useEffect(() => {
       return [{
         module_id: scope.module_id,
         record_id: scope.record_id,
-        content: serializeNoteContent(finalForwardText, []),
+        content: serializeNoteContent(finalForwardText, forwardedAttachments),
         reply_to: null,
         mention_user_ids: [targetId],
         mention_role_ids: [],
@@ -4634,7 +4715,6 @@ useEffect(() => {
       for (const botGroupId of botTargets) {
         const targetGroup = botGroups.find((row) => String(row.id) === botGroupId);
         if (!targetGroup) continue;
-        const forwardedAttachments = parsedContent.attachments || [];
         const isRubikaTarget = String(targetGroup.channel_type || '').trim() === 'rubika';
         const forwardedAttachmentNameText = buildAttachmentNameText(forwardedAttachments);
         const rubikaLinkedMessage = isRubikaTarget && forwardedAttachments.length > 0
@@ -5172,6 +5252,8 @@ useEffect(() => {
     const withMobileUserRail = layout === 'mobile';
     const data = displayedChatNotes;
     const noteMap = new Map(notes.map((note: any) => [note.id, note]));
+    const showConversationSkeleton = loadingNotes || !isSelectedConversationLoaded;
+    const hideConversationUntilSettled = !showConversationSkeleton && !noteViewportReady;
     const panelTitle = selectedChatGroup?.name || (selectedNoteUser ? selectedNoteUser.display_name : 'یادداشت‌های من');
     const panelSubtitle = selectedChatGroup || selectedNoteUser
       ? activeConversationRoleLabel
@@ -5384,9 +5466,9 @@ useEffect(() => {
           <div
             ref={notesScrollContainerRef}
             onScroll={handleNotesScroll}
-            className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10]`}
+            className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideConversationUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
           >
-            {loadingNotes ? (
+            {showConversationSkeleton ? (
               <div className="space-y-3">
                 <Skeleton active paragraph={{ rows: 2 }} />
                 <Skeleton active paragraph={{ rows: 2 }} />
@@ -5519,51 +5601,16 @@ useEffect(() => {
           <SharedNoteComposer
             header={(
               <div className="flex flex-col gap-2">
-                <div
-                  dir="rtl"
-                  className={withMobileUserRail ? 'flex items-center gap-2' : 'flex items-center flex-wrap gap-2'}
-                >
-                  <Select
-                    placeholder="ماژول"
-                    value={noteModuleId}
-                    onChange={(val) => {
-                      setNoteModuleId(val);
-                      setNoteRecordId(null);
-                    }}
-                    options={moduleOptions}
-                    size="small"
-                    className={withMobileUserRail ? 'min-w-[112px] max-w-[112px] shrink-0' : 'min-w-[120px]'}
-                    styles={{ popup: { root: { minWidth: 220 } } }}
-                  />
-                  <div className="flex min-w-0 items-center gap-1">
-                    <Select
-                      placeholder="رکورد"
-                      value={noteRecordId}
-                      onChange={setNoteRecordId}
-                      options={noteRecordOptions}
-                      size="small"
-                      showSearch
-                      optionFilterProp="label"
-                      disabled={!noteModuleId}
-                      className="min-w-0 flex-1"
-                      style={{ width: '100%' }}
-                      styles={{ popup: { root: { minWidth: 280 } } }}
-                    />
-                    <div className="shrink-0">
-                      <QrScanPopover
-                        label=""
-                        buttonProps={{ type: 'default', shape: 'circle', size: 'small' }}
-                        buttonClassName="text-[rgba(var(--brand-700-rgb),0.85)] dark:text-[rgba(var(--brand-300-rgb),0.9)] hover:text-leather-500"
-                        onScan={({ moduleId, recordId }) => {
-                          if (moduleId && recordId) {
-                            setNoteModuleId(moduleId);
-                            setNoteRecordId(recordId);
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
+                <AdaptiveScopePicker
+                  moduleId={noteModuleId}
+                  recordId={noteRecordId}
+                  moduleOptions={moduleOptions}
+                  recordOptions={noteRecordOptions}
+                  onModuleChange={handleNoteScopeModuleChange}
+                  onRecordChange={handleNoteScopeRecordChange}
+                  compact={withMobileUserRail}
+                  disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
+                />
               </div>
             )}
             value={noteText}
@@ -5883,38 +5930,15 @@ useEffect(() => {
           )}
         </div>
       <div className="border-t border-[rgba(var(--brand-200-rgb),0.18)] dark:border-[rgba(var(--brand-300-rgb),0.12)] bg-white/90 dark:bg-white/[0.02] px-4 py-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Select
-              placeholder="ماژول"
-              value={noteModuleId}
-              onChange={(val) => {
-                setNoteModuleId(val);
-                setNoteRecordId(null);
-              }}
-              options={moduleOptions}
-              size="small"
-              className="min-w-[110px]"
-            />
-            <Select
-              placeholder="رکورد"
-              value={noteRecordId}
-              onChange={setNoteRecordId}
-              options={noteRecordOptions}
-              size="small"
-              showSearch
-              optionFilterProp="label"
-              className="flex-1"
-            />
-            <QrScanPopover
-              label=""
-              buttonProps={{ type: 'default', shape: 'circle', size: 'small' }}
-              buttonClassName="text-[rgba(var(--brand-700-rgb),0.85)] dark:text-[rgba(var(--brand-300-rgb),0.9)] hover:text-leather-500"
-              onScan={({ moduleId, recordId }) => {
-                if (moduleId && recordId) {
-                  setNoteModuleId(moduleId);
-                  setNoteRecordId(recordId);
-                }
-              }}
+          <div className="mb-2">
+            <AdaptiveScopePicker
+              moduleId={noteModuleId}
+              recordId={noteRecordId}
+              moduleOptions={moduleOptions}
+              recordOptions={noteRecordOptions}
+              onModuleChange={handleNoteScopeModuleChange}
+              onRecordChange={handleNoteScopeRecordChange}
+              disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
             />
           </div>
           <div className="flex flex-col gap-2">
@@ -6450,6 +6474,8 @@ useEffect(() => {
       acc[groupId] = (acc[groupId] || 0) + 1;
       return acc;
     }, {});
+    const showBotTimelineSkeleton = loadingBotMessages;
+    const hideBotTimelineUntilSettled = !showBotTimelineSkeleton && !botViewportReady && Boolean(selectedGroup);
     const filteredBotGroups = botGroups.filter((row) => {
       if (!normalizedGroupSearch) return true;
       const title = String(row.group_title || '').trim().toLowerCase();
@@ -6604,7 +6630,7 @@ useEffect(() => {
         setBotMentionPickerOpen(false);
         const groups = await fetchBotGroups();
         await fetchBotNotificationMessages(groups);
-        await fetchBotMessages(selectedGroup.id);
+        await fetchBotMessages(selectedGroup.id, { forceFull: true });
         message.success('پیام بات ارسال شد.');
       } catch (error: any) {
         if (optimisticBotMessageId) {
@@ -6771,9 +6797,9 @@ useEffect(() => {
           <div
             ref={botMessagesScrollContainerRef}
             onScroll={handleBotMessagesScroll}
-            className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10]`}
+            className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideBotTimelineUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
           >
-            {loadingBotMessages ? (
+            {showBotTimelineSkeleton ? (
               <div className="space-y-3">
                 <Skeleton active paragraph={{ rows: 2 }} />
                 <Skeleton active paragraph={{ rows: 2 }} />
@@ -6842,7 +6868,7 @@ useEffect(() => {
                         if (error) throw error;
                         setEditingBotMessageId(null);
                         setEditingBotMessageValue('');
-                        await fetchBotMessages(selectedGroup?.id || null);
+                        await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
                       } : undefined}
                       onCancelEdit={() => {
                         setEditingBotMessageId(null);
@@ -6858,7 +6884,7 @@ useEffect(() => {
                         await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
                         const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', row.id);
                         if (error) throw error;
-                        await fetchBotMessages(selectedGroup?.id || null);
+                        await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
                       } : undefined}
                     />
                   </div>

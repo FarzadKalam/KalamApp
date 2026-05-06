@@ -35,6 +35,7 @@ import {
   type FileManagerTreeResult,
 } from '../utils/fileManagerQueries';
 import type { FileFolderRow } from '../utils/fileManagerTypes';
+import { canonicalizeFileManagerItems } from '../utils/fileManagerCanonical';
 import { sendCounterpartyBotGroupMessage } from '../utils/botGateway';
 import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import { logAndTouchRecord } from '../utils/recordActivity';
@@ -205,54 +206,7 @@ const NOTE_ATTACHMENT_ID_PREFIX = 'note-attachment:';
 
 const normalizeManagerText = (value: unknown) => String(value || '').trim();
 
-const getManagerItemDedupKey = (
-  item: Pick<RecordFileItem, 'asset_id' | 'file_url' | 'module_id' | 'record_id' | 'folder_id' | 'is_shortcut' | 'source_module_id' | 'source_record_id'>,
-) => {
-  const moduleId = normalizeManagerText(item.module_id);
-  const recordId = normalizeManagerText(item.record_id);
-  const assetId = normalizeManagerText(item.asset_id);
-  const fileUrl = normalizeManagerText(item.file_url);
-  const folderId = normalizeManagerText(item.folder_id) || '__root__';
-  const sourceModuleId = normalizeManagerText(item.source_module_id);
-  const sourceRecordId = normalizeManagerText(item.source_record_id);
-
-  if (item.is_shortcut) {
-    if (assetId) {
-      return ['shortcut-asset', moduleId, recordId, assetId, folderId, sourceModuleId, sourceRecordId].join(':');
-    }
-    return ['shortcut-url', moduleId, recordId, fileUrl, folderId, sourceModuleId, sourceRecordId].join(':');
-  }
-
-  if (assetId) {
-    return ['origin-asset', moduleId, recordId, assetId].join(':');
-  }
-  return ['origin-url', moduleId, recordId, fileUrl].join(':');
-};
-
-const getManagerItemDedupScore = (item: Pick<RecordFileItem, 'entry_id' | 'asset_id' | 'folder_id' | 'file_name' | 'source_kind'>) => {
-  let score = 0;
-  if (normalizeManagerText(item.entry_id)) score += 8;
-  if (normalizeManagerText(item.asset_id)) score += 4;
-  if (normalizeManagerText(item.folder_id)) score += 2;
-  if (normalizeManagerText(item.file_name)) score += 1;
-  if (item.source_kind === 'entry') score += 8;
-  if (item.source_kind === 'legacy') score += 4;
-  if (item.source_kind === 'note_attachment') score += 2;
-  return score;
-};
-
-const dedupeManagerItems = (items: RecordFileItem[]) => {
-  const byKey = new Map<string, RecordFileItem>();
-  items.forEach((item) => {
-    const key = getManagerItemDedupKey(item);
-    if (!key) return;
-    const existing = byKey.get(key);
-    if (!existing || getManagerItemDedupScore(item) > getManagerItemDedupScore(existing)) {
-      byKey.set(key, item);
-    }
-  });
-  return Array.from(byKey.values());
-};
+const dedupeManagerItems = (items: RecordFileItem[]) => canonicalizeFileManagerItems(items, { dedupeById: true });
 
 const buildRecursiveFallbackFolderCounts = (
   recordFolderId: string,

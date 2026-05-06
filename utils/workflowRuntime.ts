@@ -26,7 +26,7 @@ import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './inte
 import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { NoteAttachment, serializeNoteContent } from './noteContent';
-import { fetchAssigneeDirectory } from './referenceData';
+import { fetchAssigneeDirectory, fetchRecordTagsMap } from './referenceData';
 import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { getRecordTitle } from './recordTitle';
@@ -60,6 +60,42 @@ export const createWorkflowEvaluationContext = (moduleId: string): WorkflowEvalu
   relatedRecordCache: new Map(),
   tagsCache: new Map(),
 });
+
+export const prefetchWorkflowRecordTags = async ({
+  moduleId,
+  records,
+  context,
+}: {
+  moduleId: string;
+  records: Array<Record<string, any> | null | undefined>;
+  context: WorkflowEvaluationContext;
+}) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId || !context) return;
+
+  const recordIds = Array.from(
+    new Set(
+      (records || [])
+        .map((record) => String(record?.id || '').trim())
+        .filter(Boolean)
+    )
+  ).filter((recordId) => !context.tagsCache.has(`${normalizedModuleId}:${recordId}`));
+
+  if (recordIds.length === 0) return;
+
+  try {
+    const map = await fetchRecordTagsMap(supabase, normalizedModuleId, recordIds);
+    recordIds.forEach((recordId) => {
+      const tags = Array.isArray(map?.[recordId]) ? map[recordId] : [];
+      const tagIds = tags
+        .map((item: any) => String(item?.id || item?.tag_id || '').trim())
+        .filter(Boolean);
+      context.tagsCache.set(`${normalizedModuleId}:${recordId}`, tagIds);
+    });
+  } catch {
+    // noop
+  }
+};
 
 const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
 

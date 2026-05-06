@@ -27,7 +27,7 @@ import {
   type GoalRecord,
   type GoalTone,
 } from './goalTypes';
-import { evaluateWorkflowConditions } from './workflowRuntime';
+import { createWorkflowEvaluationContext, evaluateWorkflowConditions, prefetchWorkflowRecordTags } from './workflowRuntime';
 
 export const GOAL_ALL_USERS_VALUE = '__all_users__';
 
@@ -440,6 +440,12 @@ const loadScopedRows = async (
 };
 
 const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
+  const context = createWorkflowEvaluationContext(goal.module_id);
+  await prefetchWorkflowRecordTags({
+    moduleId: goal.module_id,
+    records: rows,
+    context,
+  });
   const filtered: any[] = [];
   for (const row of rows) {
     try {
@@ -448,6 +454,7 @@ const filterGoalRows = async (goal: GoalRecord, rows: any[]) => {
         conditionsAny: goal.conditions_any,
         currentRecord: row,
         moduleId: goal.module_id,
+        context,
       });
       if (passed) filtered.push(row);
     } catch {

@@ -11,6 +11,7 @@ import {
   detectFileManagerTables,
   resolveRecordFolderLabel,
 } from './fileManagerService';
+import { canonicalizeFileManagerItems } from './fileManagerCanonical';
 import { loadLegacyRecordFiles } from './fileManagerCompat';
 import { fetchRecordReferenceLabels } from './recordReference';
 import { detectRecordFilesTable } from './recordFilesAvailability';
@@ -256,54 +257,6 @@ const mapFileEntryRow = (row: any): FileManagerListItem => {
   };
 };
 
-const getItemDedupKey = (item: FileManagerListItem) => {
-  const moduleId = normalizeText(item.module_id);
-  const recordId = normalizeText(item.record_id);
-  const assetId = normalizeText(item.asset_id);
-  const fileUrl = normalizeText(item.file_url);
-  const entryType = normalizeText(item.entry_type || 'origin');
-  const folderId = normalizeText(item.folder_id) || '__root__';
-  const sourceModuleId = normalizeText(item.source_module_id);
-  const sourceRecordId = normalizeText(item.source_record_id);
-
-  if (entryType === 'shortcut') {
-    if (assetId) {
-      return ['shortcut-asset', moduleId, recordId, assetId, folderId, sourceModuleId, sourceRecordId].join(':');
-    }
-    return ['shortcut-url', moduleId, recordId, fileUrl, folderId, sourceModuleId, sourceRecordId].join(':');
-  }
-
-  if (assetId) {
-    return ['origin-asset', moduleId, recordId, assetId].join(':');
-  }
-  return ['origin-url', moduleId, recordId, fileUrl].join(':');
-};
-
-const getItemDedupScore = (item: FileManagerListItem) => {
-  let score = 0;
-  if (normalizeText(item.entry_id)) score += 8;
-  if (normalizeText(item.asset_id)) score += 4;
-  if (normalizeText(item.folder_id)) score += 2;
-  if (normalizeText(item.file_name)) score += 1;
-  if (item.source_kind === 'entry') score += 8;
-  if (item.source_kind === 'legacy') score += 4;
-  if (item.source_kind === 'note_attachment') score += 2;
-  return score;
-};
-
-const dedupeItems = (items: FileManagerListItem[]) => {
-  const byId = new Map<string, FileManagerListItem>();
-  items.forEach((item) => {
-    const key = getItemDedupKey(item);
-    if (!key) return;
-    const existing = byId.get(key);
-    if (!existing || getItemDedupScore(item) > getItemDedupScore(existing)) {
-      byId.set(key, item);
-    }
-  });
-  return Array.from(byId.values());
-};
-
 const isFileLikeUrl = (value: unknown) => {
   const text = normalizeText(value);
   if (!text) return false;
@@ -530,7 +483,7 @@ export const loadRecordFileItems = async (
 
   return setTimedFileManagerCache(
     cacheKey,
-    dedupeItems([...entryItems, ...legacyItems, ...syntheticItems])
+    canonicalizeFileManagerItems([...entryItems, ...legacyItems, ...syntheticItems], { dedupeById: true })
       .sort((left, right) => String(left.created_at || '').localeCompare(String(right.created_at || ''))),
   );
 };
