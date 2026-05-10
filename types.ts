@@ -274,6 +274,7 @@ export type RelatedTabRelationType =
   | 'customer_products'
   | 'customer_payments'
   | 'customer_payments_from_field'
+  | 'operational_financial_overview'
   | 'product_customers'
   | 'supplier_payments'
   | 'supplier_products';

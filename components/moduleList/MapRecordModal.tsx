@@ -10,6 +10,7 @@ import { getFieldLabelFa } from '../../utils/fieldLabel';
 import { buildRelationValueMap, formatRecordFieldValue, type RelationValueMap } from '../../utils/recordDisplayFormatter';
 import { getRecordTitle } from '../../utils/recordTitle';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
+import ResilientImage from '../common/ResilientImage';
 
 type MapRecordModalProps = {
   moduleId: string;
@@ -344,7 +345,7 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
                 <div className="space-y-3">
                   <div className="overflow-hidden rounded-[1.25rem] border border-gray-200 bg-gray-100 dark:border-gray-800 dark:bg-gray-900">
                     {previewImageUrl ? (
-                      <img src={previewImageUrl} alt={previewTitle} className="h-56 w-full object-cover sm:h-[18rem]" />
+                      <ResilientImage src={previewImageUrl} preset="gallery" alt={previewTitle} className="h-56 w-full object-cover sm:h-[18rem]" />
                     ) : (
                       <div className="flex h-56 items-center justify-center text-gray-400 dark:text-gray-600 sm:h-[18rem]">
                         <EnvironmentOutlined className="text-4xl" />

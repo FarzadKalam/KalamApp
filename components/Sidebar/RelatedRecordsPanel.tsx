@@ -18,6 +18,12 @@ import { getTaskStatusOption } from '../../utils/processTaskStatusOptions';
 import { getModuleCardSummaryFields } from '../../utils/recordCardHelpers';
 import { getRecordDisplayLabel } from '../../utils/recordLabel';
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../../utils/selectCompat';
+import {
+  fetchOperationalFinancialOverview,
+  OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL,
+  OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL,
+  OPERATIONAL_FINANCIAL_STATUS_LABEL,
+} from '../../utils/operationalFinancialOverview';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
@@ -29,6 +35,7 @@ const SALES_PRODUCT_STATUSES = new Set(['confirmed', 'final', 'settled', 'comple
 const PURCHASE_PRODUCT_STATUSES = new Set(['final', 'settled', 'completed']);
 const PAYMENT_RELATION_TYPES = new Set(['customer_payments', 'customer_payments_from_field', 'supplier_payments']);
 const PRODUCT_AGGREGATE_RELATION_TYPES = new Set(['customer_products', 'supplier_products']);
+const OPERATIONAL_FINANCIAL_RELATION_TYPES = new Set(['operational_financial_overview']);
 const PAYMENT_VISIBLE_KEYS = [
   'payment_type',
   'cheque_id',
@@ -494,6 +501,20 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           return;
         }
 
+        if (tab.relationType === 'operational_financial_overview') {
+          const entityType = currentModuleId === 'customers'
+            ? 'customer'
+            : currentModuleId === 'suppliers'
+              ? 'supplier'
+              : 'employee';
+          const overview = await fetchOperationalFinancialOverview({
+            entityType,
+            entityId: currentRecordId,
+          });
+          setItems(overview.recentItems);
+          return;
+        }
+
         if (tab.targetModule && tab.foreignKey) {
           const { data } = await applyTabFilters(
             supabase
@@ -553,6 +574,12 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         return;
       }
 
+      if (OPERATIONAL_FINANCIAL_RELATION_TYPES.has(String(tab.relationType || ''))) {
+        setRelationValueMap({});
+        setPaymentRelationValueMap({});
+        return;
+      }
+
       const summaryFields = getModuleCardSummaryFields(targetConfig, ['status', 'full_name'], 8);
       const fields = Array.from(
         new Map(
@@ -605,6 +632,18 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           item?.manual_code,
         ].map(formatValue).join(' ').toLowerCase().includes(term);
       });
+    }
+
+    if (OPERATIONAL_FINANCIAL_RELATION_TYPES.has(String(tab.relationType || ''))) {
+      return items.filter((item: any) => [
+        item?.sourceLabel,
+        item?.invoiceLabel,
+        item?.bankLabel,
+        item?.description,
+        OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[item?.rowType as keyof typeof OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL],
+        OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[String(item?.paymentType || '')] || item?.paymentType,
+        OPERATIONAL_FINANCIAL_STATUS_LABEL[String(item?.status || '')] || item?.status,
+      ].map(formatValue).join(' ').toLowerCase().includes(term));
     }
 
     return items.filter((item: any) => {
@@ -703,6 +742,61 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
                         </span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              </Link>
+            );
+          }}
+        />
+      ) : OPERATIONAL_FINANCIAL_RELATION_TYPES.has(String(tab.relationType || '')) ? (
+        <List
+          dataSource={filteredItems}
+          renderItem={(item: any) => {
+            const amount = Number(item?.debit || 0) > 0 ? Number(item?.debit || 0) : Number(item?.credit || 0);
+            const href = item?.invoiceRelation?.moduleId && item?.invoiceRelation?.recordId
+              ? `/${item.invoiceRelation.moduleId}/${item.invoiceRelation.recordId}`
+              : '#';
+            return (
+              <Link to={href} className="block">
+                <div className="mb-3 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-gradient-to-b from-white to-gray-50 p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:from-[#1d1d1d] dark:to-[#171717]">
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-extrabold text-gray-800 dark:text-gray-100">
+                        {toPersianNumber(String(item?.sourceLabel || OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[item?.rowType as keyof typeof OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL] || '-'))}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-300">
+                        {toPersianNumber(String(item?.invoiceLabel || '-'))}
+                      </div>
+                    </div>
+                    <Tag
+                      className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[11px] !font-semibold"
+                      color={Number(item?.credit || 0) > 0 ? 'green' : 'blue'}
+                    >
+                      {OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[item?.rowType as keyof typeof OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL] || item?.rowType}
+                    </Tag>
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 dark:border-gray-800">
+                      <span className="text-gray-500 dark:text-gray-400">مبلغ</span>
+                      <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
+                        {formatRecordDisplayValue(amount, { key: 'amount', type: FieldType.PRICE })}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 dark:border-gray-800">
+                      <span className="text-gray-500 dark:text-gray-400">تاریخ</span>
+                      <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{toPersianNumber(String(item?.date || '-'))}</span>
+                    </div>
+                    <div className="grid grid-cols-[92px_1fr] gap-2 items-start border-b border-gray-100 pb-1.5 dark:border-gray-800">
+                      <span className="text-gray-500 dark:text-gray-400">وضعیت</span>
+                      <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">
+                        {OPERATIONAL_FINANCIAL_STATUS_LABEL[String(item?.status || '')] || item?.status || '-'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-[92px_1fr] gap-2 items-start">
+                      <span className="text-gray-500 dark:text-gray-400">حساب</span>
+                      <span className="min-w-0 break-words text-gray-700 dark:text-gray-200">{toPersianNumber(String(item?.bankLabel || '-'))}</span>
+                    </div>
                   </div>
                 </div>
               </Link>

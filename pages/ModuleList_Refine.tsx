@@ -4202,6 +4202,7 @@ export const ModuleListRefine: React.FC<{
         printableFields={listPrintManager.printableFieldsForTemplate}
         selectedPrintFields={listPrintManager.selectedPrintFields}
         onTogglePrintField={listPrintManager.handleTogglePrintField}
+        onMovePrintField={listPrintManager.handleMovePrintField}
         onSavePrintFields={listPrintManager.handleSavePrintFields}
         savingPrintFields={listPrintManager.savingPrintFields}
         onRefreshPreview={listPrintManager.refreshTemplates}

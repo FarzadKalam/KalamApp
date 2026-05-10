@@ -39,6 +39,7 @@ export interface PrintTemplateVariableOption {
   group: string;
   description?: string;
   insertHtml?: string;
+  scopes?: Array<'record' | 'list'>;
 }
 
 export interface SystemTemplateFieldOption {
@@ -94,6 +95,21 @@ const getReducedPrintFontSize = (baseSize: number) => {
   return Number.isInteger(nextSize) ? `${nextSize}px` : `${nextSize.toFixed(1)}px`;
 };
 const getLongTextPrintStyle = (baseSize: number) => `font-size:${getReducedPrintFontSize(baseSize)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}`;
+
+const getModuleBlockTitleMap = (module: any) =>
+  new Map(
+    (Array.isArray(module?.blocks) ? module.blocks : [])
+      .filter((block: any) => block?.id)
+      .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
+  );
+
+const getFieldGroupLabel = (module: any, field: any) => {
+  const blockId = String(field?.blockId || '').trim();
+  const isBlockField = String(field?.location || '').trim().toLowerCase() === 'block' && blockId;
+  if (!isBlockField) return 'فیلدهای عمومی';
+  const blockTitle = getModuleBlockTitleMap(module).get(blockId) || blockId;
+  return `بخش: ${blockTitle}`;
+};
 
 const shouldIncludeSystemField = (selectedFieldKeys: string[] = [], fieldKey: string) => {
   if (!selectedFieldKeys.length) return true;
@@ -672,26 +688,29 @@ export const savePrintTemplatesStore = async (params: {
   }
 };
 
-const buildUniqueFieldOptions = (moduleId: string): PrintTemplateVariableOption[] => {
-  const module = MODULES[moduleId];
+export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplateVariableOption[] => {
   if (!module) return [];
 
   const seen = new Set<string>();
   return module.fields
-    .filter((field) => {
+    .filter((field: any) => {
       if (!field?.key) return false;
       const path = `record.${field.key}`;
       if (seen.has(path)) return false;
       seen.add(path);
       return true;
     })
-    .map((field) => ({
+    .map((field: any) => ({
       label: field.labels?.fa || field.key,
       value: `record.${field.key}`,
       kind: 'field' as const,
-      group: 'فیلدهای رکورد',
+      group: getFieldGroupLabel(module, field),
       description: `فیلد ${field.labels?.fa || field.key}`,
     }));
+};
+
+const buildUniqueFieldOptions = (moduleId: string): PrintTemplateVariableOption[] => {
+  return buildPrintTemplateVariablesForModule(MODULES[moduleId]);
 };
 
 const buildBlockOptions = (moduleId: string): PrintTemplateVariableOption[] => {
@@ -707,18 +726,22 @@ const buildBlockOptions = (moduleId: string): PrintTemplateVariableOption[] => {
       group: 'بلاک‌ها',
       description: `بلاک کامل ${block.titles?.fa || block.id}`,
       insertHtml: buildBlockSnippetTemplate(moduleId, block.id),
+      scopes: ['record'],
     }));
 };
+
+const isOperationalFinancialOverviewModule = (moduleId: string) =>
+  /^operational_financial_overview_(customer|supplier|employee)$/i.test(String(moduleId || '').trim());
 
 export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariableOption[] => {
   const commonFields: PrintTemplateVariableOption[] = [
     { label: 'عنوان مفرد ماژول', value: 'module.title', kind: 'field', group: 'سیستم' },
     { label: 'عنوان جمع ماژول', value: 'module.title_plural', kind: 'field', group: 'سیستم' },
-    { label: 'عنوان رکورد', value: 'record.name', kind: 'field', group: 'فیلدهای رکورد' },
-    { label: 'کد سیستمی', value: 'record.system_code', kind: 'field', group: 'فیلدهای رکورد' },
-    { label: 'تعداد پیوست‌های رکورد', value: 'record.attachment_count', kind: 'field', group: 'فیلدهای رکورد' },
-    { label: 'تاریخ ایجاد', value: 'record.created_at', kind: 'field', group: 'فیلدهای رکورد' },
-    { label: 'تاریخ آخرین ویرایش', value: 'record.updated_at', kind: 'field', group: 'فیلدهای رکورد' },
+    { label: 'عنوان رکورد', value: 'record.name', kind: 'field', group: 'فیلدهای عمومی' },
+    { label: 'کد سیستمی', value: 'record.system_code', kind: 'field', group: 'فیلدهای عمومی' },
+    { label: 'تعداد پیوست‌های رکورد', value: 'record.attachment_count', kind: 'field', group: 'فیلدهای عمومی' },
+    { label: 'تاریخ ایجاد', value: 'record.created_at', kind: 'field', group: 'فیلدهای عمومی' },
+    { label: 'تاریخ آخرین ویرایش', value: 'record.updated_at', kind: 'field', group: 'فیلدهای عمومی' },
     { label: 'نام کامل سازمان', value: 'company.company_full_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام سازمان', value: 'company.company_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام تجاری سازمان', value: 'company.trade_name', kind: 'field', group: 'اطلاعات سازمان' },
@@ -747,6 +770,25 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'تصویر رکورد', value: 'system.record_image', kind: 'field', group: 'سیستم' },
     { label: 'کد QR رکورد', value: 'system.record_qr', kind: 'field', group: 'سیستم' },
   ];
+  const commonListFields: PrintTemplateVariableOption[] = [
+    { label: 'عنوان لیست', value: 'system.list_title', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'تعداد رکوردهای انتخاب‌شده', value: 'system.selected_count', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'تاریخ چاپ لیست', value: 'system.print_date', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'شماره صفحه', value: 'system.page_index', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'تعداد صفحات', value: 'system.page_count', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'جدول لیست', value: 'system.list_table', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'کاتالوگ لیست', value: 'system.list_catalog_a4', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'جدول جمع‌بندی لیست', value: 'system.list_summary_table', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+  ];
+  const operationalFinancialSummaryFields: PrintTemplateVariableOption[] = isOperationalFinancialOverviewModule(moduleId)
+    ? [
+        { label: 'جمع بدهکار', value: 'summary.totalDebit', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
+        { label: 'جمع بستانکار', value: 'summary.totalCredit', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
+        { label: 'مانده نهایی', value: 'summary.finalBalance', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
+        { label: 'مقدار مطلق مانده نهایی', value: 'summary.finalBalanceAmount', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
+        { label: 'ماهیت مانده نهایی', value: 'summary.finalBalanceSide', kind: 'field', group: 'جمع‌بندی وضعیت مالی', scopes: ['list'] },
+      ]
+    : [];
 
   const moduleFields = buildUniqueFieldOptions(moduleId);
   const moduleBlocks = buildBlockOptions(moduleId);
@@ -805,7 +847,7 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
           ]
       : [];
 
-  const merged = [...commonFields, ...moduleFields, ...moduleBlocks, ...moduleSpecificExtras];
+  const merged = [...commonFields, ...commonListFields, ...moduleFields, ...moduleBlocks, ...moduleSpecificExtras, ...operationalFinancialSummaryFields];
   const seen = new Set<string>();
   return merged.filter((item) => {
     if (seen.has(item.value)) return false;
@@ -816,6 +858,10 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
 
 export const getSystemTemplateFieldOptions = (moduleId: string): SystemTemplateFieldOption[] => {
   const module = MODULES[moduleId];
+  return buildSystemTemplateFieldOptionsForModule(module);
+};
+
+export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTemplateFieldOption[] => {
   if (!module) return [];
 
   const recordFields: SystemTemplateFieldOption[] = (module.fields || [])
@@ -823,7 +869,7 @@ export const getSystemTemplateFieldOptions = (moduleId: string): SystemTemplateF
     .map((field: any) => ({
       key: `record.${field.key}`,
       label: field.labels?.fa || field.key,
-      group: 'فیلدهای رکورد',
+      group: getFieldGroupLabel(module, field),
       kind: 'record' as const,
     }));
 
@@ -1116,6 +1162,7 @@ const buildListA4DefaultTemplate = (
     contentHtml: `
 <div style="direction:rtl; color:#111827; font-family:inherit;">
   {{system.list_table}}
+  {{system.list_summary_table}}
 </div>
 `.trim(),
     footerHtml: `
@@ -1244,6 +1291,7 @@ const buildListCatalogA4PortraitDefaultTemplate = (
     contentHtml: `
 <div style="direction:rtl; color:#111827; font-family:inherit;">
   {{system.list_catalog_a4}}
+  {{system.list_summary_table}}
 </div>
 `.trim(),
     footerHtml: `

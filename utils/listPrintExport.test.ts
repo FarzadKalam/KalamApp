@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { FieldType } from '../types';
-import { formatListCellValue } from './listPrintExport';
+import { FieldLocation, FieldType } from '../types';
+import { buildListPrintableFields, formatListCellValue } from './listPrintExport';
 
 describe('formatListCellValue assignee display', () => {
   it('renders relation fields as labels instead of UUIDs', () => {
@@ -53,5 +53,29 @@ describe('formatListCellValue assignee display', () => {
     );
 
     expect(value).toBe('نقش فروش');
+  });
+
+  it('includes non-list block fields in list printable fields and keeps visible columns as defaults', () => {
+    const fields = buildListPrintableFields(
+      {
+        id: 'billboards',
+        fields: [
+          { key: 'name', labels: { fa: 'عنوان' }, type: FieldType.TEXT, location: FieldLocation.HEADER, isTableColumn: true },
+          { key: 'width', labels: { fa: 'طول' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', isTableColumn: false },
+          { key: 'address', labels: { fa: 'آدرس کامل' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', isTableColumn: false },
+        ],
+        blocks: [
+          { id: 'baseInfo', titles: { fa: 'اطلاعات پایه' } },
+        ],
+      },
+      undefined,
+      ['name'],
+      {}
+    );
+
+    expect(fields.find((field) => field.key === 'address')?.group).toBe('بخش: اطلاعات پایه');
+    expect(fields.find((field) => field.key === 'address')?.defaultSelected).toBe(false);
+    expect(fields.find((field) => field.key === 'name')?.defaultSelected).toBe(true);
+    expect(fields.map((field) => field.key)).toEqual(expect.arrayContaining(['name', 'width', 'address']));
   });
 });

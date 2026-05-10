@@ -13,9 +13,9 @@ import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
 import TaskActionButtons from "../tasks/TaskActionButtons";
 import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
-import { buildImagePreviewUrl } from "../../utils/imagePreview";
 import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules";
 import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
+import ResilientImage from "../common/ResilientImage";
 
 export interface RenderCardItemProps {
   item: any;
@@ -96,10 +96,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     return cardFieldStateMap[fieldKey]?.visible !== false;
   }, [cardFieldStateMap]);
   const imageUrl = imageField && isCardFieldVisible(imageField) ? cardItem[imageField] : null;
-  const imagePreviewUrl = React.useMemo(
-    () => buildImagePreviewUrl(imageUrl ? String(imageUrl) : '', isTasks ? 'card' : 'avatar'),
-    [imageUrl, isTasks]
-  );
   const title = getRecordTitle(cardItem, moduleConfig, { fallback: "-" });
   const processRecordKeyByModule: Record<string, string> = {
     projects: 'project_id',
@@ -381,7 +377,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Avatar
             shape="square"
             size={minimal ? 36 : 52}
-            src={imagePreviewUrl || undefined}
+            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={title} className="h-full w-full object-cover" /> : undefined}
             icon={<AppstoreOutlined />}
             className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
           />
@@ -527,12 +523,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 
       {isTasks && imageUrl ? (
         <div className={`mb-2 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 ${minimal ? 'h-24' : 'h-32'}`}>
-          <img
-            src={imagePreviewUrl || String(imageUrl)}
-            alt={title}
-            className="h-full w-full object-cover"
-            loading="lazy"
-          />
+          <ResilientImage src={String(imageUrl)} preset="card" alt={title} className="h-full w-full object-cover" loading="lazy" />
         </div>
       ) : null}
 
@@ -541,7 +532,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Avatar
             shape="square"
             size={minimal ? 40 : 54}
-            src={imagePreviewUrl || undefined}
+            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={title} className="h-full w-full object-cover" /> : undefined}
             icon={<AppstoreOutlined />}
             className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
           />

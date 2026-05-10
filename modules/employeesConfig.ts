@@ -273,6 +273,14 @@ export const employeesModule: ModuleDefinition = {
       disableCreate: true,
     },
     {
+      id: 'employee_financial_overview',
+      title: 'وضعیت مالی',
+      icon: 'WalletOutlined',
+      relationType: 'operational_financial_overview',
+      targetModule: 'employees',
+      disableCreate: true,
+    },
+    {
       id: 'employee_advances',
       title: 'مساعده‌ها',
       icon: 'WalletOutlined',

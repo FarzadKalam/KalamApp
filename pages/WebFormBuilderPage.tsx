@@ -24,11 +24,14 @@ import { supabase } from "../supabaseClient";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import {
   buildWebFormPublicUrl,
+  findDuplicateWebFormTargetKeys,
+  formatWebFormTargetFieldLabel,
   getMissingWebFormRequiredFields,
+  getSuggestedWebFormTargetFields,
+  getWebFormTargetFields,
   getWebFormModuleDefaultValues,
   getWebFormDuplicateFieldOptions,
   getWebFormModuleOptions,
-  getWebFormTargetFields,
   inferWebFormFieldType,
   isWebFormTargetModule,
   isWebFormVirtualTargetField,
@@ -38,8 +41,10 @@ import {
   type WebFormAccessScope,
   type WebFormDisplayMode,
   type WebFormDuplicateStrategy,
+  type WebFormTargetFieldItem,
 } from "../utils/webForms";
 import { fetchRelationOptionsForField } from "../utils/relationOptions";
+import { toFaErrorMessage } from "../utils/errorMessageFa";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -101,53 +106,44 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
+const buildBuilderFieldValueFromTarget = (
+  item: WebFormTargetFieldItem,
+  index: number,
+  targetModuleId?: string | null,
+): BuilderFieldValue => ({
+  label: item.label,
+  target_field_key: item.value,
+  default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
+  sort_order: (index + 1) * 10,
+  is_required: item.isModuleRequired,
+  is_hidden: isHiddenManagedWebFormField(targetModuleId, item.value),
+});
+
 const buildSuggestedFields = (
   targetModuleId?: string | null,
   accessScope?: WebFormAccessScope | string | null,
+  duplicateMatchField?: string | null,
 ): BuilderFieldValue[] => {
   const normalizedTargetModuleId = String(targetModuleId || "").trim();
   if (!normalizedTargetModuleId) return [];
 
-  const targetFields = getWebFormTargetFields(normalizedTargetModuleId, { accessScope }).filter((item) => !item.isVirtual);
-  const managedFields = targetFields.filter((item) => item.isManaged);
-  const preferredKeys = ["first_name", "last_name", "full_name", "name", "title", "mobile", "mobile_1", "phone", "work_date", "start_date", "end_date", "notes", "description"];
+  const suggestedTargets = getSuggestedWebFormTargetFields(normalizedTargetModuleId, { accessScope });
+  const duplicateKey = String(duplicateMatchField || "").trim();
+  const orderedTargets = duplicateKey && !suggestedTargets.some((item) => item.value === duplicateKey)
+    ? [
+        ...suggestedTargets,
+        ...getWebFormTargetFields(normalizedTargetModuleId, { accessScope }).filter((item) => item.value === duplicateKey),
+      ]
+    : suggestedTargets;
 
-  const preferredFields = [...targetFields]
-    .sort((a, b) => {
-      const aRequired = a.field?.validation?.required ? 0 : 1;
-      const bRequired = b.field?.validation?.required ? 0 : 1;
-      if (aRequired !== bRequired) return aRequired - bRequired;
-      const aPreferred = preferredKeys.indexOf(a.value);
-      const bPreferred = preferredKeys.indexOf(b.value);
-      const aScore = aPreferred >= 0 ? aPreferred : 999;
-      const bScore = bPreferred >= 0 ? bPreferred : 999;
-      return aScore - bScore;
-    })
-    .slice(0, 6)
-    .map((item) => item.value);
-
-  const orderedKeys = [...new Set([...managedFields.map((item) => item.value), ...preferredFields])];
-
-  return orderedKeys
-    .map((fieldKey, index) => {
-      const item = targetFields.find((candidate) => candidate.value === fieldKey);
-      if (!item) return null;
-      return {
-        label: item.label,
-        target_field_key: item.value,
-        default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
-        sort_order: (index + 1) * 10,
-        is_required: item.field?.validation?.required === true,
-        is_hidden: isHiddenManagedWebFormField(normalizedTargetModuleId, item.value),
-      };
-    })
-    .filter(Boolean) as BuilderFieldValue[];
+  return orderedTargets.map((item, index) => buildBuilderFieldValueFromTarget(item, index, normalizedTargetModuleId));
 };
 
 const mergeManagedFields = (
   fields: BuilderFieldValue[] | undefined,
   targetModuleId?: string | null,
   accessScope?: WebFormAccessScope | string | null,
+  duplicateMatchField?: string | null,
 ): BuilderFieldValue[] => {
   const currentFields = Array.isArray(fields) ? fields : [];
   const currentByTargetFieldKey = new Map(
@@ -156,8 +152,9 @@ const mergeManagedFields = (
       .filter((item) => item.targetFieldKey)
       .map((item) => [item.targetFieldKey, item]),
   );
+  const duplicateTargetKey = String(duplicateMatchField || "").trim();
   const managedTargets = getWebFormTargetFields(targetModuleId, { accessScope })
-    .filter((item) => !item.isVirtual && item.isManaged);
+    .filter((item) => !item.isVirtual && (item.isManaged || item.value === duplicateTargetKey));
 
   if (managedTargets.length === 0) return currentFields;
 
@@ -172,12 +169,8 @@ const mergeManagedFields = (
     if (!existing) {
       nextSortOrder += 10;
       nextFields.push({
-        label: targetField.label,
-        target_field_key: targetField.value,
-        default_value: targetField.hasModuleDefault ? targetField.moduleDefaultValue : undefined,
+        ...buildBuilderFieldValueFromTarget(targetField, 0, targetModuleId),
         sort_order: nextSortOrder,
-        is_required: targetField.isModuleRequired,
-        is_hidden: isHiddenManagedWebFormField(targetModuleId, targetField.value),
       });
       return;
     }
@@ -196,6 +189,22 @@ const mergeManagedFields = (
   });
 
   return nextFields;
+};
+
+const getWebFormSaveErrorMessage = (error: any) => {
+  const rawText = [
+    String(error?.message || ""),
+    String(error?.details || ""),
+    String(error?.hint || ""),
+  ].join(" ").toLowerCase();
+
+  if (rawText.includes("idx_web_forms_org_slug_unique") || rawText.includes("(org_id, lower(route_slug))")) {
+    return "اسلاگ تکراری است.";
+  }
+  if (rawText.includes("idx_web_form_fields_form_key_unique") || rawText.includes("(web_form_id, field_key)")) {
+    return "یک فیلد مقصد دوبار در فرم آمده است.";
+  }
+  return toFaErrorMessage(error, "ذخیره وب فرم ناموفق بود.");
 };
 
 const WebFormBuilderPage: React.FC = () => {
@@ -229,7 +238,10 @@ const WebFormBuilderPage: React.FC = () => {
   const watchedSlug = Form.useWatch("route_slug", form);
   const currentPublicUrl = useMemo(() => buildWebFormPublicUrl(watchedSlug), [watchedSlug]);
   const targetFieldItems = useMemo(() => getWebFormTargetFields(targetModuleId, { accessScope }), [accessScope, targetModuleId]);
-  const duplicateFieldOptions = useMemo(() => getWebFormDuplicateFieldOptions(targetModuleId), [targetModuleId]);
+  const duplicateFieldOptions = useMemo(
+    () => getWebFormDuplicateFieldOptions(targetModuleId, { accessScope }),
+    [accessScope, targetModuleId]
+  );
   const targetFieldMap = useMemo(
     () => Object.fromEntries(targetFieldItems.map((item) => [item.value, item])),
     [targetFieldItems]
@@ -427,17 +439,17 @@ const WebFormBuilderPage: React.FC = () => {
     const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
     if (!seededFieldsRef.current) {
       if (!isEditMode && currentFields.length === 0) {
-        form.setFieldValue("fields", buildSuggestedFields(targetModuleId, accessScope));
+        form.setFieldValue("fields", buildSuggestedFields(targetModuleId, accessScope, duplicateMatchField));
       }
       seededFieldsRef.current = true;
       return;
     }
 
-    const mergedFields = mergeManagedFields(currentFields, targetModuleId, accessScope);
+    const mergedFields = mergeManagedFields(currentFields, targetModuleId, accessScope, duplicateMatchField);
     if (JSON.stringify(currentFields) !== JSON.stringify(mergedFields)) {
       form.setFieldValue("fields", mergedFields);
     }
-  }, [accessScope, form, isEditMode, targetModuleId]);
+  }, [accessScope, duplicateMatchField, form, isEditMode, targetModuleId]);
 
   const handleValuesChange = (changedValues: Partial<BuilderFormValues>) => {
     if (Object.prototype.hasOwnProperty.call(changedValues, "route_slug")) {
@@ -447,8 +459,12 @@ const WebFormBuilderPage: React.FC = () => {
       form.setFieldValue("route_slug", slugify(String(changedValues.name || "")));
     }
     if (Object.prototype.hasOwnProperty.call(changedValues, "target_module_id")) {
+      const nextTargetModuleId = String(changedValues.target_module_id || "").trim();
       const currentDuplicateField = String(form.getFieldValue("duplicate_match_field") || "").trim();
-      if (currentDuplicateField && !duplicateFieldOptions.some((item) => item.value === currentDuplicateField)) {
+      const nextDuplicateOptions = getWebFormDuplicateFieldOptions(nextTargetModuleId, {
+        accessScope: form.getFieldValue("access_scope"),
+      });
+      if (currentDuplicateField && !nextDuplicateOptions.some((item) => item.value === currentDuplicateField)) {
         form.setFieldValue("duplicate_match_field", undefined);
         form.setFieldValue("duplicate_strategy", "allow");
       }
@@ -462,6 +478,12 @@ const WebFormBuilderPage: React.FC = () => {
       const nextDuplicateField = String(changedValues.duplicate_match_field || "").trim();
       if (!nextDuplicateField) {
         form.setFieldValue("duplicate_strategy", "allow");
+      } else {
+        const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
+        form.setFieldValue(
+          "fields",
+          mergeManagedFields(currentFields, form.getFieldValue("target_module_id"), form.getFieldValue("access_scope"), nextDuplicateField),
+        );
       }
     }
   };
@@ -665,6 +687,7 @@ const WebFormBuilderPage: React.FC = () => {
     setSaving(true);
     try {
       const cleanedSlug = slugify(values.route_slug || values.name || "");
+      const cleanedDuplicateMatchField = String(values.duplicate_match_field || "").trim();
       if (!cleanedSlug) {
         message.error("اسلاگ فرم الزامی است.");
         return;
@@ -672,6 +695,14 @@ const WebFormBuilderPage: React.FC = () => {
 
       if (!isWebFormTargetModule(values.target_module_id)) {
         message.error("بخش مقصد برای این وب فرم معتبر نیست.");
+        return;
+      }
+
+      const saveTargetFields = getWebFormTargetFields(values.target_module_id, { accessScope: values.access_scope });
+      const saveTargetFieldMap = new Map(saveTargetFields.map((item) => [item.value, item]));
+      const duplicateFieldChoices = getWebFormDuplicateFieldOptions(values.target_module_id, { accessScope: values.access_scope });
+      if (cleanedDuplicateMatchField && !duplicateFieldChoices.some((item) => item.value === cleanedDuplicateMatchField)) {
+        message.error("فیلد انتخاب‌شده برای تطبیق تکراری معتبر نیست.");
         return;
       }
 
@@ -685,7 +716,7 @@ const WebFormBuilderPage: React.FC = () => {
         slide_show_progress: values.slide_show_progress !== false,
         slide_allow_back: values.slide_allow_back !== false,
         slide_auto_advance: values.slide_auto_advance === true,
-        duplicate_match_field: String(values.duplicate_match_field || "").trim(),
+        duplicate_match_field: cleanedDuplicateMatchField,
         duplicate_strategy: values.duplicate_strategy || "allow",
         default_record_values: getWebFormModuleDefaultValues(values.target_module_id, { accessScope: values.access_scope }),
       };
@@ -712,12 +743,24 @@ const WebFormBuilderPage: React.FC = () => {
 
       if (!webFormId) throw new Error("WEB_FORM_SAVE_NO_ID");
 
-      const mergedFields = mergeManagedFields(values.fields || [], values.target_module_id, values.access_scope);
+      const mergedFields = mergeManagedFields(values.fields || [], values.target_module_id, values.access_scope, cleanedDuplicateMatchField);
+      const duplicateTargetKeys = findDuplicateWebFormTargetKeys(mergedFields as any);
+      if (duplicateTargetKeys.length > 0) {
+        const duplicateLabels = duplicateTargetKeys
+          .map((key) => saveTargetFieldMap.get(key)?.label || key)
+          .join("، ");
+        message.error(`یک فیلد مقصد دوبار در فرم آمده است: ${duplicateLabels}`);
+        return;
+      }
+      if (cleanedDuplicateMatchField && !mergedFields.some((field) => String(field?.target_field_key || "").trim() === cleanedDuplicateMatchField)) {
+        message.error("فیلد تطبیق تکراری باید داخل لیست فیلدهای فرم حضور داشته باشد.");
+        return;
+      }
 
       const cleanedFields = mergedFields
         .map((item, index) => {
           const targetFieldKey = String(item?.target_field_key || "").trim();
-          const targetFieldItem = targetFieldMap[targetFieldKey];
+          const targetFieldItem = saveTargetFieldMap.get(targetFieldKey);
           if (!targetFieldKey || !targetFieldItem) return null;
 
           const label = String(item?.label || targetFieldItem.label || "").trim() || targetFieldItem.label;
@@ -774,7 +817,7 @@ const WebFormBuilderPage: React.FC = () => {
         setSetupMissing(true);
       } else {
         console.error("Web form save failed", error);
-        message.error("ذخیره وب فرم ناموفق بود.");
+        message.error(getWebFormSaveErrorMessage(error));
       }
     } finally {
       setSaving(false);
@@ -894,7 +937,7 @@ const WebFormBuilderPage: React.FC = () => {
                         allowClear
                         showSearch
                         optionFilterProp="label"
-                        options={duplicateFieldOptions.map((item) => ({ label: item.label, value: item.value }))}
+                        options={duplicateFieldOptions.map((item) => ({ label: formatWebFormTargetFieldLabel(item), value: item.value }))}
                         placeholder="مثلا موبایل، کد ملی، عنوان یا نام"
                       />
                     </Form.Item>
@@ -922,7 +965,7 @@ const WebFormBuilderPage: React.FC = () => {
               className="rounded-3xl"
               title="فیلدهای فرم"
               extra={
-                  <Button type="link" disabled={!targetModuleId} onClick={() => form.setFieldValue("fields", buildSuggestedFields(targetModuleId, accessScope))}>
+                  <Button type="link" disabled={!targetModuleId} onClick={() => form.setFieldValue("fields", buildSuggestedFields(targetModuleId, accessScope, duplicateMatchField))}>
                   بارگذاری فیلدهای پیشنهادی
                 </Button>
               }
@@ -948,6 +991,7 @@ const WebFormBuilderPage: React.FC = () => {
                       const inferredType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
                       const optionCount = resolveTargetOptions(currentTargetFieldKey).length;
                       const isManagedField = targetFieldItem?.isManaged === true;
+                      const isDuplicateDependency = currentTargetFieldKey !== "" && currentTargetFieldKey === String(duplicateMatchField || "").trim();
 
                       return (
                         <Card
@@ -955,14 +999,14 @@ const WebFormBuilderPage: React.FC = () => {
                           size="small"
                           className="rounded-2xl border border-dashed"
                           title={<span>فیلد {index + 1}</span>}
-                          extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField} onClick={() => remove(field.name)}>حذف</Button>}
+                          extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField || isDuplicateDependency} onClick={() => remove(field.name)}>حذف</Button>}
                         >
                           <div className="grid gap-4 md:grid-cols-2">
                             <Form.Item label="فیلد مقصد" name={[field.name, "target_field_key"]} rules={[{ required: true, message: "فیلد مقصد را انتخاب کنید." }]}>
                               <Select
                                 showSearch
                                 optionFilterProp="label"
-                                options={targetFieldItems.map((item) => ({ label: item.label, value: item.value }))}
+                                options={targetFieldItems.map((item) => ({ label: formatWebFormTargetFieldLabel(item), value: item.value }))}
                                 placeholder="انتخاب فیلد"
                                 onChange={(value) => {
                                   const matched = targetFieldMap[String(value || "").trim()];
@@ -990,6 +1034,7 @@ const WebFormBuilderPage: React.FC = () => {
                               {targetFieldItem?.isModuleRequired ? <div className="mt-1 text-red-500">الزامی در ماژول مقصد</div> : null}
                               {targetFieldItem?.hasModuleDefault ? <div className="mt-1 text-blue-600">پیش‌فرض ماژول: {String(targetFieldItem.moduleDefaultValue)}</div> : null}
                               {isManagedField ? <div className="mt-1">این فیلد به‌خاطر تنظیمات ماژول باید در فرم باقی بماند.</div> : null}
+                              {isDuplicateDependency ? <div className="mt-1 text-amber-600">این فیلد برای تطبیق رکوردهای تکراری استفاده می‌شود.</div> : null}
                               {inferredType === "select" || inferredType === "multi_select" ? <div className="mt-1">تعداد گزینه‌ها: {optionCount}</div> : null}
                               {isWebFormVirtualTargetField(currentTargetFieldKey) ? <div className="mt-1">نوع ویژه: پیوست وب‌فرم</div> : null}
                               <div className="mt-1">Placeholder: {String(watchedFields?.[index]?.label || targetFieldItem?.label || "-")}</div>

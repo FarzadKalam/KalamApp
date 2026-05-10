@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { App, Button, Checkbox, Input, Modal, Select, Typography, Upload } from 'antd';
-import { PaperClipOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
@@ -515,7 +515,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         recordFilesTableExistsCache = false;
         setRecordFilesTableAvailability(false);
         setRecordFilesEnabled(false);
-        msg.warning('جدول record_files هنوز روی دیتابیس ایجاد نشده است. لطفا migration را اجرا کنید.');
+        console.warn('record_files table is unavailable; falling back to legacy file sources when possible.');
       } else {
         console.warn('Could not load record files', error);
         msg.error('بارگذاری فایل‌ها ناموفق بود');
@@ -2241,13 +2241,6 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       zIndex={13000}
       width={950}
     >
-      {browserReady && !recordFilesEnabled && !fileManagerEnabled && (
-        <div className="mb-3 flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100">
-          <span>حالت سازگاری فعال است: جدول `record_files` روی دیتابیس ایجاد نشده. فعلا فقط عکس‌های محصول از `product_images` خوانده می‌شود.</span>
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => void refreshCurrentScope(true)}>بررسی مجدد</Button>
-        </div>
-      )}
-
       <div className="mt-3">
         {!browserReady ? (
           <div className="flex h-56 items-center justify-center rounded-2xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-[#1a1a1a]">

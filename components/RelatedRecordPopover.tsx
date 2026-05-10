@@ -15,6 +15,7 @@ import { fetchRecordTagsMap } from '../utils/referenceData';
 import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
+import ResilientImage from './common/ResilientImage';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -612,7 +613,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
         {previewImageUrl && (
           <div className="mb-3 rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-black/20">
-            <img src={previewImageUrl} alt={previewTitle} className="w-full h-36 object-cover" />
+            <ResilientImage src={previewImageUrl} preset="card" alt={previewTitle} className="w-full h-36 object-cover" />
           </div>
         )}
 

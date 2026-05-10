@@ -63,6 +63,23 @@ export type WebFormFieldConfig = {
   [key: string]: any;
 };
 
+export type WebFormTargetFieldItem = {
+  label: string;
+  value: string;
+  field: ModuleField | null;
+  inferredType: WebFormFieldType;
+  isModuleRequired: boolean;
+  hasModuleDefault: boolean;
+  moduleDefaultValue: unknown;
+  isManaged: boolean;
+  isVirtual: boolean;
+  isKeyField: boolean;
+  isTableColumn: boolean;
+  isSuggested: boolean;
+  suggestionPriority: number;
+  isDuplicateComparable: boolean;
+};
+
 const WEB_FORM_EXCLUDED_MODULE_IDS = new Set<string>([
   ...ACCOUNTING_MINIMAL_MODULE_IDS,
   "journal_entries",
@@ -87,6 +104,16 @@ const WEB_FORM_SUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.STATUS,
 ]);
 
+const WEB_FORM_DUPLICATE_COMPARABLE_FIELD_TYPES = new Set<WebFormFieldType>([
+  "text",
+  "number",
+  "phone",
+  "date",
+  "time",
+  "datetime",
+  "select",
+]);
+
 export const WEB_FORM_RECORD_IMAGE_TARGET_KEY = "__record_image__";
 export const WEB_FORM_RECORD_FILE_TARGET_KEY = "__record_files__";
 
@@ -101,6 +128,11 @@ const WEB_FORM_VIRTUAL_TARGET_FIELDS = [
     moduleDefaultValue: undefined,
     isManaged: false,
     isVirtual: true,
+    isKeyField: false,
+    isTableColumn: false,
+    isSuggested: false,
+    suggestionPriority: 999,
+    isDuplicateComparable: false,
   },
   {
     label: "پیوست فایل",
@@ -112,8 +144,13 @@ const WEB_FORM_VIRTUAL_TARGET_FIELDS = [
     moduleDefaultValue: undefined,
     isManaged: false,
     isVirtual: true,
+    isKeyField: false,
+    isTableColumn: false,
+    isSuggested: false,
+    suggestionPriority: 999,
+    isDuplicateComparable: false,
   },
-] as const;
+] as const satisfies readonly WebFormTargetFieldItem[];
 
 const toRecord = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -170,6 +207,24 @@ const hasMeaningfulDefaultValue = (value: unknown) => {
   return true;
 };
 
+const getWebFormSuggestionPriority = (field: Pick<WebFormTargetFieldItem, "isModuleRequired" | "isKeyField" | "isTableColumn" | "isVirtual">) => {
+  if (field.isVirtual) return 999;
+  if (field.isModuleRequired) return 1;
+  if (field.isKeyField) return 2;
+  if (field.isTableColumn) return 3;
+  return 999;
+};
+
+const compareWebFormTargetFieldItems = (left: WebFormTargetFieldItem, right: WebFormTargetFieldItem) => {
+  const leftOrder = Number(left.field?.order ?? Number.MAX_SAFE_INTEGER);
+  const rightOrder = Number(right.field?.order ?? Number.MAX_SAFE_INTEGER);
+  if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+  return left.label.localeCompare(right.label, "fa");
+};
+
+export const formatWebFormTargetFieldLabel = (item: Pick<WebFormTargetFieldItem, "label" | "isModuleRequired">) =>
+  item.isModuleRequired ? `${item.label} *` : item.label;
+
 export const isWebFormVirtualTargetField = (fieldKey?: string | null) =>
   [WEB_FORM_RECORD_IMAGE_TARGET_KEY, WEB_FORM_RECORD_FILE_TARGET_KEY].includes(String(fieldKey || "").trim());
 
@@ -197,7 +252,7 @@ export const resolveWebFormFieldType = (
 export const getWebFormTargetFields = (
   moduleId?: string | null,
   options?: { accessScope?: WebFormAccessScope | string | null },
-) => {
+): WebFormTargetFieldItem[] => {
   const normalized = String(moduleId || "").trim();
   if (!isWebFormTargetModule(normalized)) return [];
   const allowRelation = String(options?.accessScope || "").trim() === "internal";
@@ -221,6 +276,14 @@ export const getWebFormTargetFields = (
             : rawModuleDefaultValue;
       const isModuleRequired = field.validation?.required === true;
       const hasModuleDefault = hasMeaningfulDefaultValue(moduleDefaultValue);
+      const isKeyField = field.isKey === true;
+      const isTableColumn = field.isTableColumn === true;
+      const suggestionPriority = getWebFormSuggestionPriority({
+        isModuleRequired,
+        isKeyField,
+        isTableColumn,
+        isVirtual: false,
+      });
       return {
         label: field.labels?.fa || field.key,
         value: field.key,
@@ -231,12 +294,30 @@ export const getWebFormTargetFields = (
         moduleDefaultValue,
         isManaged: isModuleRequired || hasModuleDefault,
         isVirtual: false,
+        isKeyField,
+        isTableColumn,
+        isSuggested: suggestionPriority < 999,
+        suggestionPriority,
+        isDuplicateComparable: WEB_FORM_DUPLICATE_COMPARABLE_FIELD_TYPES.has(inferWebFormFieldType(field)),
       };
     })
-    .sort((a, b) => a.label.localeCompare(b.label, "fa"));
+    .sort(compareWebFormTargetFieldItems);
 
   return [...moduleFields, ...WEB_FORM_VIRTUAL_TARGET_FIELDS];
 };
+
+export const getSuggestedWebFormTargetFields = (
+  moduleId?: string | null,
+  options?: { accessScope?: WebFormAccessScope | string | null },
+) =>
+  getWebFormTargetFields(moduleId, options)
+    .filter((item) => !item.isVirtual && (item.isManaged || item.isSuggested))
+    .sort((left, right) => {
+      if (left.suggestionPriority !== right.suggestionPriority) {
+        return left.suggestionPriority - right.suggestionPriority;
+      }
+      return compareWebFormTargetFieldItems(left, right);
+    });
 
 export const getWebFormModuleDefaultValues = (
   moduleId?: string | null,
@@ -254,10 +335,23 @@ export const getWebFormModuleDefaultValues = (
     return acc;
   }, {});
 
-export const getWebFormDuplicateFieldOptions = (moduleId?: string | null) =>
-  getWebFormTargetFields(moduleId).filter((item) =>
-    !item.isVirtual && ["text", "number", "phone", "date", "time", "datetime", "select"].includes(item.inferredType)
-  );
+export const getWebFormDuplicateFieldOptions = (
+  moduleId?: string | null,
+  options?: { accessScope?: WebFormAccessScope | string | null },
+) =>
+  getWebFormTargetFields(moduleId, options).filter((item) => !item.isVirtual && item.isDuplicateComparable);
+
+export const findDuplicateWebFormTargetKeys = (fields: Array<Partial<WebFormFieldRecord>> | undefined) => {
+  const counts = new Map<string, number>();
+  for (const field of fields || []) {
+    const key = String(field?.target_field_key || "").trim();
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([key]) => key);
+};
 
 export const getMissingWebFormRequiredFields = (
   moduleId: string | undefined,

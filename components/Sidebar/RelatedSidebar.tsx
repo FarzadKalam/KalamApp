@@ -5,7 +5,7 @@ import {
     RightOutlined, SkinOutlined, AppstoreOutlined,
     BgColorsOutlined, ScissorOutlined, ToolOutlined, ExperimentOutlined,
     DropboxOutlined, UsergroupAddOutlined, CreditCardOutlined, NodeIndexOutlined,
-    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined, PhoneOutlined, MessageOutlined
+    ShoppingOutlined, ShoppingCartOutlined, ProjectOutlined, PhoneOutlined, MessageOutlined, WalletOutlined
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
@@ -26,6 +26,7 @@ const iconMap: Record<string, React.ReactNode> = {
   'ProjectOutlined': <ProjectOutlined />,
   'PhoneOutlined': <PhoneOutlined />,
   'MessageOutlined': <MessageOutlined />,
+  'WalletOutlined': <WalletOutlined />,
   'BgColorsOutlined': <BgColorsOutlined />,
   'ScissorOutlined': <ScissorOutlined />,
   'ToolOutlined': <ToolOutlined />,
@@ -261,6 +262,53 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                             .limit(1),
                     });
                     return data?.[0]?.created_at || null;
+                }
+
+                if ((tab as RelatedTabConfig).relationType === 'operational_financial_overview') {
+                    if (moduleConfig.id === 'customers') {
+                        const [opsRes, invoicesRes, barterRes] = await Promise.all([
+                            supabase.from('cash_bank_operations').select('created_at').eq('customer_id', recordId).order('created_at', { ascending: false }).limit(1),
+                            supabase.from('invoices').select('created_at').eq('customer_id', recordId).order('created_at', { ascending: false }).limit(1),
+                            supabase.from('barters').select('created_at').eq('customer_id', recordId).order('created_at', { ascending: false }).limit(1),
+                        ]);
+                        return [opsRes.data?.[0]?.created_at, invoicesRes.data?.[0]?.created_at, barterRes.data?.[0]?.created_at]
+                            .filter(Boolean)
+                            .sort()
+                            .pop() || null;
+                    }
+
+                    if (moduleConfig.id === 'suppliers') {
+                        const [opsRes, invoicesRes, barterRes] = await Promise.all([
+                            supabase.from('cash_bank_operations').select('created_at').eq('supplier_id', recordId).order('created_at', { ascending: false }).limit(1),
+                            supabase.from('purchase_invoices').select('created_at').eq('supplier_id', recordId).order('created_at', { ascending: false }).limit(1),
+                            supabase.from('barters').select('created_at').eq('supplier_id', recordId).order('created_at', { ascending: false }).limit(1),
+                        ]);
+                        return [opsRes.data?.[0]?.created_at, invoicesRes.data?.[0]?.created_at, barterRes.data?.[0]?.created_at]
+                            .filter(Boolean)
+                            .sort()
+                            .pop() || null;
+                    }
+
+                    const { data: employeeRow } = await supabase
+                        .from('employees')
+                        .select('related_profile_id')
+                        .eq('id', recordId)
+                        .maybeSingle();
+                    const employeeScopeIds = Array.from(new Set([recordId, String(employeeRow?.related_profile_id || '').trim()].filter(Boolean)));
+                    const [opsRes, payrollRes, advanceRes, barterRes] = await Promise.all([
+                        employeeScopeIds.length > 1
+                            ? supabase.from('cash_bank_operations').select('created_at').in('employee_id', employeeScopeIds).order('created_at', { ascending: false }).limit(1)
+                            : supabase.from('cash_bank_operations').select('created_at').eq('employee_id', employeeScopeIds[0]).order('created_at', { ascending: false }).limit(1),
+                        supabase.from('payroll_slips').select('created_at').eq('employee_id', recordId).order('created_at', { ascending: false }).limit(1),
+                        supabase.from('employee_advances').select('created_at').eq('employee_id', recordId).order('created_at', { ascending: false }).limit(1),
+                        employeeScopeIds.length > 1
+                            ? supabase.from('barters').select('created_at').in('employee_id', employeeScopeIds).order('created_at', { ascending: false }).limit(1)
+                            : supabase.from('barters').select('created_at').eq('employee_id', employeeScopeIds[0]).order('created_at', { ascending: false }).limit(1),
+                    ]);
+                    return [opsRes.data?.[0]?.created_at, payrollRes.data?.[0]?.created_at, advanceRes.data?.[0]?.created_at, barterRes.data?.[0]?.created_at]
+                        .filter(Boolean)
+                        .sort()
+                        .pop() || null;
                 }
 
                 if ((tab as RelatedTabConfig).relationType === 'product_customers') {

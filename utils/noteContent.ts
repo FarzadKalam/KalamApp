@@ -6,7 +6,7 @@ export type NoteAttachment = {
   entryId?: string | null;
   moduleId?: string | null;
   recordId?: string | null;
-  fileType?: 'image' | 'video' | 'file' | string | null;
+  fileType?: 'image' | 'video' | 'audio' | 'voice' | 'file' | string | null;
 };
 
 export type ParsedNoteContent = {
@@ -16,6 +16,56 @@ export type ParsedNoteContent = {
 
 const isObject = (value: unknown): value is Record<string, any> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+const VIDEO_EXTENSIONS = /\.(mp4|mkv|mov|avi|webm|3gp|m4v)$/i;
+const AUDIO_EXTENSIONS = /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i;
+
+const normalizeAttachmentToken = (value: unknown) => String(value || '').trim().toLowerCase();
+
+const getAttachmentNameCandidates = (value: any) => [
+  String(value?.name || '').trim(),
+  String(value?.file_name || '').trim(),
+  String(value?.fileName || '').trim(),
+  String(value?.url || '').trim().split('?')[0].split('#')[0].split('/').pop() || '',
+  String(value?.file_url || '').trim().split('?')[0].split('#')[0].split('/').pop() || '',
+].filter(Boolean);
+
+export const resolveNoteAttachmentFileType = (value: any): NoteAttachment['fileType'] => {
+  const rawType = normalizeAttachmentToken(value?.fileType || value?.file_type);
+  const mimeType = normalizeAttachmentToken(value?.mimeType || value?.mime_type);
+  const names = getAttachmentNameCandidates(value);
+  const joinedNames = names.join(' ').toLowerCase();
+
+  if (rawType === 'voice') return 'voice';
+  if (rawType === 'audio') return 'audio';
+  if (rawType === 'image') return 'image';
+  if (rawType === 'video') return 'video';
+  if (rawType === 'file') return 'file';
+
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) {
+    if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3') return 'voice';
+    return 'audio';
+  }
+
+  if (IMAGE_EXTENSIONS.test(joinedNames)) return 'image';
+  if (VIDEO_EXTENSIONS.test(joinedNames)) return 'video';
+  if (AUDIO_EXTENSIONS.test(joinedNames)) {
+    if (/\.mp3$/i.test(joinedNames)) return 'voice';
+    return 'audio';
+  }
+
+  return 'file';
+};
+
+export const isAudioNoteAttachment = (value: any) => {
+  const type = resolveNoteAttachmentFileType(value);
+  return type === 'audio' || type === 'voice';
+};
+
+export const isImageNoteAttachment = (value: any) => resolveNoteAttachmentFileType(value) === 'image';
 
 const normalizeAttachment = (value: any): NoteAttachment | null => {
   const url = String(value?.url || value?.file_url || '').trim();
@@ -33,7 +83,7 @@ const normalizeAttachment = (value: any): NoteAttachment | null => {
     entryId: String(value?.entryId || value?.entry_id || '').trim() || null,
     moduleId: String(value?.moduleId || value?.module_id || '').trim() || null,
     recordId: String(value?.recordId || value?.record_id || '').trim() || null,
-    fileType: String(value?.fileType || value?.file_type || '').trim() || null,
+    fileType: resolveNoteAttachmentFileType(value),
   };
 };
 

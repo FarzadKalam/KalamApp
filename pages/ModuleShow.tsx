@@ -19,7 +19,7 @@ import FieldGroupsTabs from '../components/moduleShow/FieldGroupsTabs';
 import TablesSection from '../components/moduleShow/TablesSection';
 import PrintSection from '../components/moduleShow/PrintSection';
 import RecordImageBox from '../components/RecordImageBox';
-import CustomerFinancialOverviewPanel from '../components/accounting/CustomerFinancialOverviewPanel';
+import OperationalFinancialOverviewPanel from '../components/accounting/OperationalFinancialOverviewPanel';
 import AccountLedgerPanel from '../components/accounting/AccountLedgerPanel';
 import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece, type StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
@@ -4856,14 +4856,30 @@ const ModuleShow: React.FC = () => {
       if (Array.isArray(val)) return val.length > 0;
       return true;
     };
+    const blockTitleMap = new Map(
+      (Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [])
+        .filter((block: any) => block?.id)
+        .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
+    );
     return moduleConfig.fields
       .filter(f => f.type !== FieldType.IMAGE && f.type !== FieldType.JSON && f.type !== FieldType.READONLY_LOOKUP)
       .filter(f => !shouldHideManagedAssigneeField(moduleId, f.key))
       .filter(f => conditionalFieldRuntime.isFieldVisible(f))
       .filter(f => canViewField(f.key))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-      .map(f => ({ ...f, value: displayData[f.key] }))
-      .filter(f => hasValue(f.value));
+      .map((field) => {
+        const blockId = String((field as any)?.blockId || '').trim();
+        const isBlockField = field.location === FieldLocation.BLOCK && Boolean(blockId);
+        const blockTitle = blockTitleMap.get(blockId) || blockId;
+        const value = displayData[field.key];
+        return {
+          ...field,
+          value,
+          hasValue: hasValue(value),
+          group: isBlockField ? `بخش: ${blockTitle}` : 'فیلدهای عمومی',
+          scope: isBlockField ? 'module' : 'general',
+        };
+      });
   }, [canViewField, conditionalFieldRuntime, data, displayData, moduleConfig]);
 
   // ✅ استفاده از custom hook برای مدیریت print
@@ -5554,7 +5570,13 @@ const ModuleShow: React.FC = () => {
   const extraBlockContent = useMemo<Record<string, React.ReactNode>>(() => {
     const content: Record<string, React.ReactNode> = {};
     if (moduleId === 'customers' && id) {
-      content.financial_stats = <CustomerFinancialOverviewPanel customerId={id} customerData={data} />;
+      content.financial_stats = <OperationalFinancialOverviewPanel entityType="customer" entityId={id} entityData={data} />;
+    }
+    if (moduleId === 'suppliers' && id) {
+      content.financial_info = <OperationalFinancialOverviewPanel entityType="supplier" entityId={id} entityData={data} />;
+    }
+    if (moduleId === 'employees' && id) {
+      content.payroll_info = <OperationalFinancialOverviewPanel entityType="employee" entityId={id} entityData={data} />;
     }
     if (moduleId === 'projects' && projectProcessLinkedFields.length > 0) {
       content.process = (
@@ -6462,6 +6484,7 @@ const ModuleShow: React.FC = () => {
         printableFields={printManager.printableFieldsForTemplate || printableFields}
         selectedPrintFields={printManager.selectedPrintFields}
         onTogglePrintField={printManager.handleTogglePrintField}
+        onMovePrintField={printManager.handleMovePrintField}
         onSavePrintFields={printManager.handleSavePrintFields}
         savingPrintFields={printManager.savingPrintFields}
         onRefreshPreview={printManager.refreshTemplates}

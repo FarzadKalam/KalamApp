@@ -153,8 +153,8 @@ const SOURCE_KIND_META: Record<
   { label: string; color: string }
 > = {
   entry: { label: 'اصلی', color: 'success' },
-  legacy: { label: 'سازگاری', color: 'gold' },
-  synthetic: { label: 'سازگاری', color: 'gold' },
+  legacy: { label: '', color: 'gold' },
+  synthetic: { label: '', color: 'gold' },
   note_attachment: { label: 'پیوست یادداشت', color: 'purple' },
 };
 
@@ -235,7 +235,8 @@ const renderCompactTags = (tags?: Array<{ id: string; title: string; color?: str
 const getSourceKindMeta = (item: Pick<FileManagerBrowserItem, 'source_kind' | 'is_shortcut'>) => {
   if (item.is_shortcut) return null;
   const kind = item.source_kind || 'entry';
-  return SOURCE_KIND_META[kind] || null;
+  const meta = SOURCE_KIND_META[kind] || null;
+  return meta?.label ? meta : null;
 };
 
 const formatDateTime = (value?: string | null) => {

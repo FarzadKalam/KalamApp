@@ -4,6 +4,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   CopyOutlined,
+  CustomerServiceOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EnterOutlined,
@@ -13,7 +14,7 @@ import {
   LikeOutlined,
   PaperClipOutlined,
 } from '@ant-design/icons';
-import type { NoteAttachment } from '../../utils/noteContent';
+import { isAudioNoteAttachment, type NoteAttachment } from '../../utils/noteContent';
 import { isImageFileLike } from '../../utils/imagePreview';
 import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
@@ -248,6 +249,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
     if (!raw.trim()) return;
     void navigator.clipboard?.writeText(raw);
   };
+  const normalizedText = String(text || '').trim();
 
   const cardStyle: React.CSSProperties = variant === 'ai'
     ? {
@@ -303,6 +305,27 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   const renderAttachment = (attachment: NoteAttachment) => {
     const label = getAttachmentLabel(attachment);
     const isImage = isImageFileLike(attachment.url, label, attachment.mimeType);
+    const isAudio = isAudioNoteAttachment(attachment);
+    if (isAudio) {
+      return (
+        <div
+          key={`${attachment.url}-${label}`}
+          className="flex min-w-[220px] max-w-[320px] items-center gap-2 rounded-2xl border px-2 py-2"
+          style={attachmentStyle}
+        >
+          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-black/5 dark:bg-white/10">
+            <CustomerServiceOutlined />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[10px] font-medium">{label}</div>
+            <audio controls preload="none" src={attachment.url} className="mt-1 w-full max-w-[220px]">
+              مرورگر شما از پخش صوت پشتیبانی نمی‌کند.
+            </audio>
+          </div>
+          <Button type="text" size="small" icon={<DownloadOutlined />} onClick={() => downloadAttachment(attachment)} />
+        </div>
+      );
+    }
     if (!isImage) {
       return (
         <a
@@ -345,6 +368,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   const renderReplyAttachmentPreview = (attachment: NoteAttachment) => {
     const label = getAttachmentLabel(attachment);
     const isImage = isImageFileLike(attachment.url, label, attachment.mimeType);
+    const isAudio = isAudioNoteAttachment(attachment);
     if (isImage) {
       return (
         <span
@@ -353,6 +377,18 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
           style={{ borderColor: token.colorBorderSecondary }}
         >
           <ResilientImage src={attachment.url} preset="thumb" alt={label} className="h-full w-full object-cover" />
+        </span>
+      );
+    }
+    if (isAudio) {
+      return (
+        <span
+          key={`${attachment.url}-${label}`}
+          className="inline-flex max-w-[150px] items-center gap-1 rounded-full border px-2 py-1 text-[9px] opacity-95"
+          style={{ borderColor: token.colorBorderSecondary, color: token.colorTextSecondary }}
+        >
+          <CustomerServiceOutlined />
+          <span className="truncate">صوت: {label}</span>
         </span>
       );
     }
@@ -462,9 +498,11 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             </div>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] leading-5" style={bodyStyle}>
-            {renderText(text)}
-          </div>
+          normalizedText ? (
+            <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[12px] leading-5" style={bodyStyle}>
+              {renderText(text)}
+            </div>
+          ) : null
         )}
 
         {attachments.length > 0 ? (

@@ -8,9 +8,21 @@ export interface ListFieldDefinition {
   label: string;
   type?: FieldType | string;
   options?: any[];
+  group?: string;
+  defaultSelected?: boolean;
+}
+
+export interface ListPrintSummaryDefinition {
+  title?: string;
+  fields: ListFieldDefinition[];
+  values: Record<string, any>;
 }
 
 const ASSIGNEE_DISPLAY_FIELD_KEY = '__assignee_display__';
+const LIST_PRINT_EXCLUDED_FIELD_TYPES = new Set([
+  FieldType.JSON,
+  FieldType.READONLY_LOOKUP,
+]);
 
 const escapeHtml = (value: any) =>
   String(value ?? '')
@@ -158,17 +170,39 @@ export const buildListPrintableFields = (
 ): ListFieldDefinition[] => {
   const visibleSet = new Set((visibleFieldKeys || []).map((item) => String(item || '').trim()).filter(Boolean));
   const sourceFields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
-  const fieldsForList = sourceFields.some((field: any) => field?.isTableColumn === true)
+  const blocks = Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [];
+  const blockTitleMap = new Map(
+    blocks
+      .filter((block: any) => block?.id)
+      .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
+  );
+  const fieldsForDefaultSelection = sourceFields.some((field: any) => field?.isTableColumn === true)
     ? sourceFields.filter((field: any) => field?.isTableColumn === true)
     : sourceFields.filter((field: any) => !['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(String(field?.key || '')));
 
-  const mappedFields = fieldsForList
+  const defaultSelectionKeySet = new Set(
+    (visibleSet.size > 0 ? Array.from(visibleSet) : fieldsForDefaultSelection.map((field: any) => String(field?.key || '').trim()))
+      .filter(Boolean)
+  );
+
+  const mappedFields = sourceFields
     .filter((field: any) => (canViewField ? canViewField(String(field?.key || '')) !== false : true))
-    .filter((field: any) => visibleSet.size === 0 || visibleSet.has(String(field?.key || '')))
+    .filter((field: any) => {
+      const normalizedKey = String(field?.key || '').trim();
+      if (!normalizedKey) return false;
+      if (['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(normalizedKey)) return false;
+      if (LIST_PRINT_EXCLUDED_FIELD_TYPES.has(field?.type)) return false;
+      return true;
+    })
     .map((field: any) => ({
       key: String(field.key),
       label: String(field?.labels?.fa || field.key),
       type: field?.type,
+      group:
+        String(field?.location || '').trim().toLowerCase() === 'block' && String(field?.blockId || '').trim()
+          ? `بخش: ${blockTitleMap.get(String(field.blockId).trim()) || String(field.blockId).trim()}`
+          : 'فیلدهای عمومی',
+      defaultSelected: defaultSelectionKeySet.has(String(field?.key || '').trim()),
       options: [
         ...(Array.isArray(field?.options) ? field.options : []),
         ...(field?.dynamicOptionsCategory && Array.isArray(dynamicOptions?.[field.dynamicOptionsCategory])
@@ -184,6 +218,8 @@ export const buildListPrintableFields = (
       key: ASSIGNEE_DISPLAY_FIELD_KEY,
       label: getAssigneeLabel(moduleConfig?.id),
       type: FieldType.TEXT,
+      group: 'فیلدهای عمومی',
+      defaultSelected: defaultSelectionKeySet.has(ASSIGNEE_DISPLAY_FIELD_KEY),
       options: [],
     });
   }
@@ -334,6 +370,35 @@ export const buildListTableHtml = (
     ${rowsHtml}
   </tbody>
 </table>
+`.trim();
+};
+
+export const buildListSummaryTableHtml = (
+  summary: ListPrintSummaryDefinition | null | undefined,
+  relationOptions: Record<string, any[]> = {},
+  currencyLabel: string = '',
+) => {
+  if (!summary || !Array.isArray(summary.fields) || summary.fields.length === 0) return '';
+  const values = summary.values || {};
+  const title = String(summary.title || '').trim();
+  const rowsHtml = summary.fields
+    .map((field) => {
+      const valueHtml = formatListCellHtml(field, values, relationOptions, currencyLabel);
+      return `
+<tr>
+  <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; background:rgba(var(--brand-50-rgb),0.32); font-weight:800;">${escapeHtml(field.label)}</td>
+  <td style="border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; vertical-align:top; word-break:break-word;">${valueHtml}</td>
+</tr>`.trim();
+    })
+    .join('');
+
+  return `
+<div style="margin-top:10px; border:1px solid rgba(148,163,184,0.28); border-radius:14px; overflow:hidden; direction:rtl;">
+  ${title ? `<div style="padding:8px 10px; background:rgba(var(--brand-500-rgb),0.08); font-size:11px; font-weight:800; color:#0f172a;">${escapeHtml(title)}</div>` : ''}
+  <table style="width:100%; border-collapse:collapse; color:#111827; font-size:11px;">
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</div>
 `.trim();
 };
 

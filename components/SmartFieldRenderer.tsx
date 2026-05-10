@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Form, Input, InputNumber, Select, Switch, Upload, Image, Modal, App, Tag, Button, Space } from 'antd';
+import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Space } from 'antd';
 import {
   UploadOutlined,
   LoadingOutlined,
@@ -38,6 +38,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
 import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL, sanitizeMapStyle } from '../utils/mapConfig';
+import ResilientImage from './common/ResilientImage';
 import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../utils/maplibreRuntime';
 import { createThemeMapPinElement } from '../utils/mapPin';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
@@ -61,7 +62,6 @@ import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { normalizeProcessTargetModuleIds } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
-import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import {
@@ -2008,7 +2008,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             return value ? <Tag color="green">بله</Tag> : <Tag color="red">خیر</Tag>;
         }
         if (fieldType === FieldType.IMAGE && value) {
-            return <Image src={value} width={40} className="rounded border" />;
+            return <ResilientImage src={String(value)} preset="avatar" alt="image" className="h-10 w-10 rounded border object-cover" />;
         }
         if (fieldType === FieldType.PRICE) {
           const formatted = value ? formatPersianPrice(value, true) : '۰';
@@ -2573,7 +2573,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           return (
             <div className="flex flex-col gap-2">
               {value ? (
-                <img src={buildImagePreviewUrl(String(value), 'thumb')} alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
+                <ResilientImage src={String(value)} preset="thumb" alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
               ) : (
                 <div className="h-16 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[11px] text-gray-400">
                   تصویری انتخاب نشده است
@@ -2608,7 +2608,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           return (
             <div className="flex flex-col gap-2">
               {value ? (
-                <img src={buildImagePreviewUrl(String(value), 'thumb')} alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
+                <ResilientImage src={String(value)} preset="thumb" alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
               ) : (
                 <div className="h-16 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[11px] text-gray-400">
                   فایلی انتخاب نشده است
@@ -2659,7 +2659,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   {uploading ? (
                     <div><LoadingOutlined /><div style={{ marginTop: 8 }}>...</div></div>
                   ) : value ? (
-                    <img src={buildImagePreviewUrl(String(value), 'thumb')} alt="avatar" style={{ width: '100%', borderRadius: 8 }} />
+                    <ResilientImage src={String(value)} preset="thumb" alt="avatar" style={{ width: '100%', borderRadius: 8 }} />
                   ) : (
                     <div><UploadOutlined /><div style={{ marginTop: 8 }}>آپلود</div></div>
                   )}
@@ -2728,7 +2728,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 setIsGlobalImageGalleryOpen(false);
               }}
             >
-              <img src={buildImagePreviewUrl(item.url, 'thumb')} alt={item.label || 'image'} className="w-full h-28 object-cover" />
+              <ResilientImage src={item.url} preset="thumb" alt={item.label || 'image'} className="w-full h-28 object-cover" />
               <div className="px-2 py-1 text-[11px] text-gray-600 truncate">{item.label || 'تصویر'}</div>
             </button>
           ))}

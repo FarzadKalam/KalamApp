@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Checkbox, Input, Modal, Select, Tag } from 'antd';
 import {
+  AudioOutlined,
   CloseOutlined,
   EnterOutlined,
   PaperClipOutlined,
@@ -117,12 +118,22 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   const [pendingFileName, setPendingFileName] = useState('');
   const [draftValue, setDraftValue] = useState(value);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [recordingAudio, setRecordingAudio] = useState(false);
+  const [recordingError, setRecordingError] = useState('');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
 
   useEffect(() => {
     if (value === lastExternalValueRef.current) return;
     lastExternalValueRef.current = value;
     setDraftValue(value);
   }, [value]);
+
+  useEffect(() => () => {
+    mediaRecorderRef.current?.stop();
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
 
   const attachmentLabel = useMemo(() => [
     ...attachments.map((file) => ({
@@ -191,6 +202,70 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
     if (!activePrompt) return;
     const nextPreparedFiles = [...preparedFiles, activePrompt.original];
     moveToNextPrompt(nextPreparedFiles, pendingPrompts.slice(1));
+  };
+
+  const stopAudioRecording = () => {
+    try {
+      mediaRecorderRef.current?.stop();
+    } catch {
+      // noop
+    }
+  };
+
+  const startAudioRecording = async () => {
+    if (recordingAudio) {
+      stopAudioRecording();
+      return;
+    }
+    if (typeof window === 'undefined' || !navigator?.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setRecordingError('ضبط صدا در این مرورگر پشتیبانی نمی‌شود.');
+      return;
+    }
+
+    try {
+      setRecordingError('');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      const chunks: BlobPart[] = [];
+      recordingChunksRef.current = chunks;
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setRecordingError('ضبط صدا ناموفق بود.');
+      };
+      recorder.onstop = () => {
+        setRecordingAudio(false);
+        recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+        recordingStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size > 0) {
+          const extension = String((recorder.mimeType || 'audio/webm').split('/')[1] || 'webm').split(';')[0] || 'webm';
+          const file = new File([blob], `voice-${Date.now()}.${extension}`, {
+            type: recorder.mimeType || 'audio/webm',
+            lastModified: Date.now(),
+          });
+          handleFilesPicked([file]);
+        }
+        recordingChunksRef.current = [];
+      };
+
+      recorder.start();
+      setRecordingAudio(true);
+    } catch (error) {
+      console.warn('Could not start voice recording', error);
+      setRecordingError('دسترسی میکروفون یا ضبط صدا در دسترس نیست.');
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setRecordingAudio(false);
+    }
   };
 
   return (
@@ -280,6 +355,12 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             </div>
           ) : null}
 
+          {recordingError ? (
+            <div className="mt-2 text-[11px] text-rose-600 dark:text-rose-300">
+              {recordingError}
+            </div>
+          ) : null}
+
           <div className="mt-2 flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
               {allowMentions ? (
@@ -296,6 +377,15 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                   size="small"
                   icon={<PaperClipOutlined />}
                   onClick={() => setFilePickerOpen(true)}
+                />
+              ) : null}
+              {allowAttachments ? (
+                <Button
+                  type={recordingAudio ? 'primary' : 'text'}
+                  danger={recordingAudio}
+                  size="small"
+                  icon={<AudioOutlined />}
+                  onClick={() => void startAudioRecording()}
                 />
               ) : null}
               {extraActions}

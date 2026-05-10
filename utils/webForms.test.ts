@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildWebFormPublicPath,
+  findDuplicateWebFormTargetKeys,
   formatWebFormOptionsText,
+  formatWebFormTargetFieldLabel,
   getWebFormDuplicateFieldOptions,
   getWebFormModuleDefaultValues,
   getMissingWebFormRequiredFields,
+  getSuggestedWebFormTargetFields,
   getWebFormTargetFields,
   normalizeWebFormConfig,
   normalizeWebFormFieldRecord,
@@ -109,6 +112,23 @@ describe('web form utilities', () => {
     expect(values).not.toContain('follow_up_consent');
   });
 
+  it('ranks suggested fields by required, key, and table-column metadata', () => {
+    const leaveSuggested = getSuggestedWebFormTargetFields('leave_requests');
+    expect(leaveSuggested.slice(0, 2).map((item) => item.value)).toEqual(['start_date', 'end_date']);
+
+    const employeeSuggested = getSuggestedWebFormTargetFields('employees');
+    const firstNameField = employeeSuggested.find((item) => item.value === 'first_name');
+    const systemCodeField = employeeSuggested.find((item) => item.value === 'system_code');
+    const mobileField = employeeSuggested.find((item) => item.value === 'mobile_1');
+
+    expect(firstNameField?.isKeyField).toBe(true);
+    expect(firstNameField?.isSuggested).toBe(true);
+    expect(firstNameField?.suggestionPriority).toBe(2);
+    expect(systemCodeField?.isTableColumn).toBe(true);
+    expect(systemCodeField?.suggestionPriority).toBe(3);
+    expect(mobileField?.isTableColumn).toBe(true);
+  });
+
   it('adds upload targets and keeps relation fields internal-only', () => {
     const publicTargets = getWebFormTargetFields('customers', { accessScope: 'public' });
     const internalTargets = getWebFormTargetFields('customers', { accessScope: 'internal' });
@@ -138,7 +158,10 @@ describe('web form utilities', () => {
 
     const leaveTargets = getWebFormTargetFields('leave_requests');
     const leaveStatusField = leaveTargets.find((item) => item.value === 'status');
+    const leaveStartDateField = leaveTargets.find((item) => item.value === 'start_date');
     expect(leaveStatusField?.moduleDefaultValue).toBe('pending');
+    expect(leaveStartDateField?.isModuleRequired).toBe(true);
+    expect(formatWebFormTargetFieldLabel(leaveStartDateField!)).toBe('از تاریخ و زمان *');
     expect(getWebFormModuleDefaultValues('leave_requests')).toMatchObject({
       status: 'pending',
     });
@@ -193,5 +216,15 @@ describe('web form utilities', () => {
     );
 
     expect(isWebFormCurrentEmployeeDefaultField(customerField, 'invoices', 'internal')).toBe(false);
+  });
+
+  it('detects duplicate target-field mappings before save', () => {
+    expect(findDuplicateWebFormTargetKeys([
+      { target_field_key: 'mobile_1' },
+      { target_field_key: 'first_name' },
+      { target_field_key: 'mobile_1' },
+      { target_field_key: 'system_code' },
+      { target_field_key: 'system_code' },
+    ])).toEqual(['mobile_1', 'system_code']);
   });
 });

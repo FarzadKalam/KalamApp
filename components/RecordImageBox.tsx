@@ -1,10 +1,10 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Image, Upload } from 'antd';
+import { Button, Upload } from 'antd';
 import { FileOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import RecordFilesManager from './RecordFilesManager';
-import { buildImagePreviewUrl } from '../utils/imagePreview';
 import FileExtensionTile, { inferFileExtension } from './files/FileExtensionTile';
+import ResilientImage from './common/ResilientImage';
 
 interface RecordImageBoxProps {
   moduleId: string;
@@ -140,8 +140,10 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
   }, [imageUrl, moduleId, recordId]);
 
   const canOpenFilesGallery = Boolean(moduleId && recordId && canViewFilesManager);
-  const previewImageUrl = useMemo(() => buildImagePreviewUrl(preview.url, 'hero'), [preview.url]);
-
+  const previewAlt = useMemo(
+    () => preview.fileName || (preview.kind === 'image' ? 'image' : 'file'),
+    [preview.fileName, preview.kind],
+  );
   const handleCloseManager = () => {
     setGalleryOpen(false);
     onFilesManagerClose?.();
@@ -185,11 +187,11 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
         ].join(' ')}
       >
         {preview.kind === 'image' ? (
-          <Image
-            src={previewImageUrl}
+          <ResilientImage
+            src={preview.url}
+            preset="hero"
+            alt={previewAlt}
             className="h-full w-full object-cover"
-            wrapperStyle={{ width: '100%', height: '100%' }}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
         ) : preview.kind === 'file' ? (
           <FileExtensionTile fileName={preview.fileName} url={preview.url} mimeType={preview.mimeType} className="dark:from-gray-800 dark:to-gray-900 dark:text-gray-100" />

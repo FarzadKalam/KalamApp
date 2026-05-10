@@ -17,6 +17,14 @@ type BotAdminBody = {
   provider_message_id?: string;
   skipLog?: boolean;
   extraPayload?: Record<string, any>;
+  attachments?: Array<{
+    url?: string | null;
+    name?: string | null;
+    mimeType?: string | null;
+    mime_type?: string | null;
+    fileType?: string | null;
+    file_type?: string | null;
+  }>;
 };
 
 type InboundContact = {
@@ -981,6 +989,159 @@ const sendProviderMessage = async (
   throw lastError || new Error('Bot send failed');
 };
 
+const normalizeAttachmentKind = (attachment: Record<string, any> | null | undefined) => {
+  const rawType = String(
+    attachment?.fileType
+    || attachment?.file_type
+    || ''
+  ).trim().toLowerCase();
+  const mimeType = String(
+    attachment?.mimeType
+    || attachment?.mime_type
+    || ''
+  ).trim().toLowerCase();
+  const name = String(attachment?.name || '').trim().toLowerCase();
+
+  if (rawType === 'voice') return 'voice';
+  if (rawType === 'audio') return 'audio';
+  if (rawType === 'image') return 'image';
+  if (rawType === 'video') return 'video';
+
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) {
+    if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name)) return 'voice';
+    return 'audio';
+  }
+
+  if (/\.(png|jpe?g|gif|webp)$/i.test(name)) return 'image';
+  if (/\.(mp4|mkv|mov|avi|webm)$/i.test(name)) return 'video';
+  if (/\.(mp3)$/i.test(name)) return 'voice';
+  if (/\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(name)) return 'audio';
+  return 'file';
+};
+
+const resolveRubikaUploadFileType = (attachment: Record<string, any> | null | undefined) => {
+  const kind = normalizeAttachmentKind(attachment);
+  if (kind === 'image') return 'Image';
+  if (kind === 'video') return 'Video';
+  if (kind === 'voice') return 'Voice';
+  if (kind === 'audio') {
+    const name = String(attachment?.name || '').trim().toLowerCase();
+    const mimeType = String(attachment?.mimeType || attachment?.mime_type || '').trim().toLowerCase();
+    if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name)) return 'Music';
+    return 'File';
+  }
+  return 'File';
+};
+
+const requestRubikaSendFileUploadUrl = async (
+  settings: Record<string, any>,
+  type: string,
+) => {
+  const response = await fetch(buildProviderMethodUrl('rubika', settings, 'requestSendFile'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type }),
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`));
+  }
+  ensureRubikaSuccess(payload);
+  const uploadUrl = pick(payload?.upload_url, payload?.data?.upload_url, payload?.result?.upload_url);
+  if (!uploadUrl) throw new Error('Rubika requestSendFile آدرس آپلود برنگرداند.');
+  return {
+    uploadUrl,
+    providerResult: payload,
+  };
+};
+
+const uploadRubikaFileBytes = async ({
+  uploadUrl,
+  bytes,
+  fileName,
+  contentType,
+}: {
+  uploadUrl: string;
+  bytes: Uint8Array;
+  fileName: string;
+  contentType: string;
+}) => {
+  const form = new FormData();
+  form.append('file', new File([bytes], fileName, { type: contentType || 'application/octet-stream' }));
+  const response = await fetch(uploadUrl, {
+    method: 'POST',
+    body: form,
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`));
+  }
+  const fileId = pick(payload?.file_id, payload?.data?.file_id, payload?.result?.file_id);
+  if (!fileId) throw new Error('Rubika upload فایل، file_id برنگرداند.');
+  return {
+    fileId,
+    providerResult: payload,
+  };
+};
+
+const sendRubikaAttachmentMessage = async ({
+  settings,
+  chatId,
+  text,
+  attachment,
+}: {
+  settings: Record<string, any>;
+  chatId: string;
+  text?: string;
+  attachment: Record<string, any>;
+}) => {
+  const attachmentUrl = String(attachment?.url || '').trim();
+  if (!attachmentUrl) throw new Error('آدرس فایل برای ارسال به روبیکا خالی است.');
+  const downloaded = await downloadBinaryFromUrl(attachmentUrl);
+  if (!downloaded?.bytes?.length) {
+    throw new Error(`دانلود فایل برای ارسال به روبیکا ناموفق بود: ${String(attachment?.name || attachmentUrl)}`);
+  }
+
+  const uploadType = resolveRubikaUploadFileType(attachment);
+  const requestInfo = await requestRubikaSendFileUploadUrl(settings, uploadType);
+  const uploadInfo = await uploadRubikaFileBytes({
+    uploadUrl: requestInfo.uploadUrl,
+    bytes: downloaded.bytes,
+    fileName: safeFileName(String(attachment?.name || 'file').trim() || 'file'),
+    contentType: String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream'),
+  });
+
+  const requestBody: Record<string, any> = {
+    chat_id: chatId,
+    file_id: uploadInfo.fileId,
+  };
+  const normalizedText = String(text || '').trim();
+  if (normalizedText) requestBody.text = normalizedText;
+
+  const response = await fetch(buildProviderMethodUrl('rubika', settings, 'sendFile'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || payload?.data?.status || `HTTP ${response.status}`));
+  }
+  ensureRubikaSuccess(payload);
+  return {
+    kind: uploadType === 'Voice' ? 'voice' : normalizeAttachmentKind(attachment),
+    file_id: uploadInfo.fileId,
+    attachment_url: attachmentUrl,
+    file_name: String(attachment?.name || '').trim() || 'file',
+    mime_type: String(attachment?.mimeType || attachment?.mime_type || downloaded.contentType || '').trim() || null,
+    request_send_file_result: requestInfo.providerResult,
+    upload_result: uploadInfo.providerResult,
+    send_result: payload,
+  };
+};
+
 const buildProviderMethodUrl = (
   channel: BotChannel,
   settings: Record<string, any>,
@@ -1054,16 +1215,26 @@ const sendTestMessage = async (
   channel: BotChannel,
   chatId: string,
   text: string,
-  options?: { skipLog?: boolean; extraPayload?: Record<string, any>; fallbackText?: string }
+  options?: {
+    skipLog?: boolean;
+    extraPayload?: Record<string, any>;
+    fallbackText?: string;
+    attachments?: Array<Record<string, any>>;
+  }
 ) => {
   const shouldLog = options?.skipLog !== true;
+  const normalizedAttachments = Array.isArray(options?.attachments)
+    ? options!.attachments
+      .filter((item) => item && typeof item === 'object' && String(item.url || '').trim())
+    : [];
+  const normalizedText = String(text || '').trim();
   const logRow = shouldLog
     ? await createOutboundLog(supabaseUrl, serviceRoleKey, {
       channel_type: channel,
       provider: String(integration?.provider || `${channel}_bot`),
       recipient: chatId,
       title: 'Test Bot Message',
-      message_text: text,
+      message_text: normalizedText || (normalizedAttachments.length > 0 ? '[attachment-only]' : ''),
       metadata: {
         channel,
         source: 'settings_test_send',
@@ -1073,37 +1244,88 @@ const sendTestMessage = async (
     : null;
 
   try {
-    let payload: any;
-    let deliveredText = text;
+    let payload: any = null;
+    let deliveredText = normalizedText;
     let usedFallbackMode = false;
-    try {
-      payload = await sendProviderMessage(
-        channel,
-        integration?.settings || {},
-        chatId,
-        text,
-        options?.extraPayload
-      );
-    } catch (primaryError: any) {
-      const fallbackText = String(options?.fallbackText || '').trim();
-      if (
-        channel !== 'rubika'
-        || !options?.extraPayload
-        || !fallbackText
-        || fallbackText === String(text || '').trim()
-      ) {
-        throw primaryError;
-      }
+    const providerMessages: Array<Record<string, any>> = [];
 
-      payload = await sendProviderMessage(
-        channel,
-        integration?.settings || {},
-        chatId,
-        fallbackText,
-        undefined
-      );
-      deliveredText = fallbackText;
-      usedFallbackMode = true;
+    if (channel === 'rubika' && normalizedAttachments.length > 0) {
+      if (normalizedText) {
+        payload = await sendProviderMessage(
+          channel,
+          integration?.settings || {},
+          chatId,
+          normalizedText,
+          undefined
+        );
+        providerMessages.push({
+          message_type: 'text',
+          content_text: normalizedText,
+          provider_result: payload,
+        });
+      }
+      for (const attachment of normalizedAttachments) {
+        const sentAttachment = await sendRubikaAttachmentMessage({
+          settings: integration?.settings || {},
+          chatId,
+          attachment,
+        });
+        providerMessages.push({
+          message_type: String(sentAttachment.kind || 'file').trim() || 'file',
+          content_text: '',
+          file_url: String(attachment?.url || '').trim() || null,
+          file_name: sentAttachment.file_name,
+          mime_type: sentAttachment.mime_type,
+          attachment: {
+            url: String(attachment?.url || '').trim() || null,
+            name: sentAttachment.file_name,
+            mime_type: sentAttachment.mime_type,
+            file_type: String(sentAttachment.kind || 'file').trim() || 'file',
+          },
+          provider_result: sentAttachment.send_result,
+          provider_file_id: sentAttachment.file_id,
+          provider_upload: {
+            request_send_file_result: sentAttachment.request_send_file_result,
+            upload_result: sentAttachment.upload_result,
+          },
+        });
+        payload = sentAttachment.send_result;
+      }
+    } else {
+      try {
+        payload = await sendProviderMessage(
+          channel,
+          integration?.settings || {},
+          chatId,
+          normalizedText,
+          options?.extraPayload
+        );
+      } catch (primaryError: any) {
+        const fallbackText = String(options?.fallbackText || '').trim();
+        if (
+          channel !== 'rubika'
+          || !options?.extraPayload
+          || !fallbackText
+          || fallbackText === normalizedText
+        ) {
+          throw primaryError;
+        }
+
+        payload = await sendProviderMessage(
+          channel,
+          integration?.settings || {},
+          chatId,
+          fallbackText,
+          undefined
+        );
+        deliveredText = fallbackText;
+        usedFallbackMode = true;
+      }
+      providerMessages.push({
+        message_type: 'text',
+        content_text: deliveredText,
+        provider_result: payload,
+      });
     }
 
     if (logRow?.id) {
@@ -1126,6 +1348,8 @@ const sendTestMessage = async (
             request_extra_payload: options?.extraPayload || null,
             fallback_text: options?.fallbackText || null,
             fallback_used: usedFallbackMode,
+            request_attachments: normalizedAttachments,
+            provider_messages: providerMessages,
             response: payload,
           }
           : {
@@ -1134,11 +1358,18 @@ const sendTestMessage = async (
             request_extra_payload: options?.extraPayload || null,
             fallback_text: options?.fallbackText || null,
             fallback_used: usedFallbackMode,
+            request_attachments: normalizedAttachments,
+            provider_messages: providerMessages,
             response: payload,
           },
       });
     }
-    return payload;
+    return {
+      provider_result: payload,
+      provider_messages: providerMessages,
+      delivered_text: deliveredText,
+      fallback_used: usedFallbackMode,
+    };
   } catch (error: any) {
     if (logRow?.id) {
       await updateOutboundLog(supabaseUrl, serviceRoleKey, String(logRow.id), {
@@ -1334,6 +1565,7 @@ const importRubikaFileToStorage = async ({
         url: publicUrl,
         name: String(fileName || currentRow?.file_name || 'فایل').trim() || 'فایل',
         mime_type: String(downloaded.contentType || currentRow?.mime_type || '').trim() || null,
+        file_type: String((currentRow?.payload as any)?.file_type || (currentRow?.payload as any)?.message_type || 'file').trim() || 'file',
       },
     ];
     await patchCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId, {
@@ -1396,6 +1628,9 @@ Deno.serve(async (req) => {
     const fileName = String(body?.fileName || '').trim();
     const messageId = String(body?.messageId || '').trim();
     const providerMessageId = pick(body?.providerMessageId, body?.provider_message_id);
+    const attachments = Array.isArray(body?.attachments)
+      ? body.attachments.filter((item) => item && typeof item === 'object')
+      : [];
 
     if (!['telegram', 'bale', 'rubika'].includes(channel)) {
       return json(400, { success: false, message: 'channel معتبر نیست.' });
@@ -1442,8 +1677,8 @@ Deno.serve(async (req) => {
       if (!chatId) {
         return json(400, { success: false, message: 'chatId الزامی است.' });
       }
-      if (!text) {
-        return json(400, { success: false, message: 'text الزامی است.' });
+      if (!text && attachments.length === 0) {
+        return json(400, { success: false, message: 'text یا attachment الزامی است.' });
       }
       const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text, {
         skipLog: body?.skipLog === true,
@@ -1451,12 +1686,16 @@ Deno.serve(async (req) => {
         extraPayload: body?.extraPayload && typeof body.extraPayload === 'object'
           ? body.extraPayload
           : undefined,
+        attachments,
       });
       return json(200, {
         success: true,
         channel,
         message_sent: true,
-        provider_result: payload,
+        provider_result: payload?.provider_result || null,
+        provider_messages: Array.isArray(payload?.provider_messages) ? payload.provider_messages : [],
+        delivered_text: payload?.delivered_text || '',
+        fallback_used: payload?.fallback_used === true,
       });
     }
 

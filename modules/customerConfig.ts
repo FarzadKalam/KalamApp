@@ -298,10 +298,12 @@ export const customerModule: ModuleDefinition = {
       foreignKey: 'customer_id'
     },
     {
-      id: 'customer_payments',
-      title: 'پرداختی‌های مشتری',
+      id: 'customer_financial_overview',
+      title: 'وضعیت مالی',
       icon: 'CreditCardOutlined',
-      relationType: 'customer_payments'
+      relationType: 'operational_financial_overview',
+      targetModule: 'customers',
+      disableCreate: true,
     },
     {
       id: 'customer_products',

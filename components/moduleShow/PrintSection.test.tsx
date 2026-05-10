@@ -124,4 +124,42 @@ describe('PrintSection', () => {
 
     expect(screen.getByRole('button', { name: 'دکمه پشت مودال' })).toBeInTheDocument();
   });
+
+  it('groups printable fields by section and marks empty values', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+
+    render(
+      <PrintSection
+        isPrintModalOpen
+        onClose={vi.fn()}
+        onPrint={vi.fn()}
+        printTemplates={[
+          {
+            id: 'custom:test',
+            title: 'قالب تست',
+            description: 'توضیحات',
+          },
+        ]}
+        selectedTemplateId="custom:test"
+        onSelectTemplate={vi.fn()}
+        renderPrintCard={() => <div data-testid="print-card">سند چاپی</div>}
+        printMode={false}
+        allowFieldSelectionTab
+        printableFields={[
+          { key: 'name', labels: { fa: 'عنوان' }, group: 'فیلدهای عمومی', hasValue: true },
+          { key: 'width', labels: { fa: 'طول' }, group: 'بخش: اطلاعات پایه', hasValue: true },
+          { key: 'address', labels: { fa: 'آدرس کامل' }, group: 'بخش: اطلاعات پایه', hasValue: false },
+        ]}
+        selectedPrintFields={{ 'custom:test': ['name', 'width'] }}
+      />
+    );
+
+    await user.click(await screen.findByRole('tab', { name: /فیلدهای قابل چاپ/i }));
+
+    expect(await screen.findByText('فیلدهای عمومی')).toBeInTheDocument();
+    expect(screen.getByText('بخش: اطلاعات پایه')).toBeInTheDocument();
+    expect(screen.getByText('بدون مقدار')).toBeInTheDocument();
+    expect(screen.getByText('آدرس کامل')).toBeInTheDocument();
+  });
 });

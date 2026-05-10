@@ -194,10 +194,13 @@ const PrintTemplatesTab: React.FC = () => {
       loadingRolePermissions
         ? []
         : filterPrintTemplateVariableOptions(
-            getPrintTemplateVariables(selectedModuleId),
+            getPrintTemplateVariables(selectedModuleId).filter((item) => {
+              const scopes = Array.isArray(item?.scopes) && item.scopes.length > 0 ? item.scopes : ['record', 'list'];
+              return scopes.includes(currentScope);
+            }),
             canViewSelectedModuleField
           ),
-    [loadingRolePermissions, rolePermissions, selectedModuleId]
+    [currentScope, loadingRolePermissions, rolePermissions, selectedModuleId]
   );
   const systemFieldOptions = useMemo(
     () =>

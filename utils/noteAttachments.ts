@@ -1,6 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from './storageClient';
-import type { NoteAttachment } from './noteContent';
+import { resolveNoteAttachmentFileType, type NoteAttachment } from './noteContent';
 import { createFileManagerOriginForUpload, createFileManagerShortcut, detectFileManagerTables } from './fileManagerService';
 import { fetchRecordReferenceLabels } from './recordReference';
 import { uploadFileWithProgress } from './uploadFileWithProgress';
@@ -50,7 +50,10 @@ export const uploadNoteAttachments = async (
     const fileUrl = String(data?.publicUrl || '').trim();
     if (!fileUrl) throw new Error('آدرس فایل بارگذاری‌شده دریافت نشد.');
 
-    const fileType = String(file.type || '').startsWith('image/') ? 'image' : 'file';
+    const fileType = resolveNoteAttachmentFileType({
+      name: file.name,
+      mimeType: file.type || null,
+    }) || 'file';
     const fileName = String(file.name || storedName).trim() || storedName;
 
     if (hasRelatedRecord) {
@@ -95,6 +98,7 @@ export const uploadNoteAttachments = async (
       name: fileName,
       url: fileUrl,
       mimeType: file.type || null,
+      fileType,
     });
   }
 

@@ -571,12 +571,17 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   );
   const hasVideo = Boolean(message?.video || payload?.video);
   const hasAudio = Boolean(message?.audio || payload?.audio);
+  const hasVoice = Boolean(message?.voice || payload?.voice);
   const mimeLower = String(mimeType || '').toLowerCase();
   const nameLower = String(fileName || '').toLowerCase();
   const looksLikeImage = mimeLower.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(nameLower) || payloadText.includes('"photo"');
   const looksLikeVideo = mimeLower.startsWith('video/') || /\.(mp4|mkv|mov|avi|webm|3gp)$/i.test(nameLower) || payloadText.includes('"video"');
+  const looksLikeVoice = mimeLower === 'audio/mpeg' || mimeLower === 'audio/mp3' || /\.mp3$/i.test(nameLower) || payloadText.includes('"voice"');
+  const looksLikeAudio = mimeLower.startsWith('audio/') || /\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(nameLower) || payloadText.includes('"audio"');
   const messageType =
     (hasPhoto || looksLikeImage) ? 'image'
+      : (hasVoice || looksLikeVoice) ? 'voice'
+        : (hasAudio || looksLikeAudio) ? 'audio'
       : (hasVideo || looksLikeVideo) ? 'file'
         : (hasDocument || hasAudio) ? 'file'
           : 'text';
@@ -1622,6 +1627,7 @@ Deno.serve(async (req) => {
           name: String(mediaStored?.fileName || mediaInfo.fileName || 'فایل').trim() || 'فایل',
           url: finalMediaUrl,
           mime_type: String(mediaStored?.mimeType || mediaInfo.mimeType || '').trim() || null,
+          file_type: String(mediaInfo.messageType || 'file').trim() || 'file',
         }]
         : [];
       await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {

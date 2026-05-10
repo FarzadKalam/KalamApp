@@ -4,12 +4,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { supabase } from '../../supabaseClient';
 import { toPersianNumber, safeJalaliFormat } from '../persianNumberFormatter';
 import { readCurrencyConfig } from '../currency';
-import { buildListCatalogHtml, buildListTableHtml, type ListFieldDefinition } from '../listPrintExport';
+import {
+  buildListCatalogHtml,
+  buildListSummaryTableHtml,
+  buildListTableHtml,
+  type ListFieldDefinition,
+  type ListPrintSummaryDefinition,
+} from '../listPrintExport';
 import {
   buildDefaultTemplatesForModule,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
-  savePrintTemplatesStore,
   type StoredPrintTemplate,
 } from './store';
 import type { PrintTemplate } from './index';
@@ -18,6 +23,8 @@ import { prepareGeneratedPdfWindow, printAsPdf, shouldUseGeneratedPdfPrint } fro
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
+import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
+import { getCachedAuthUser } from '../sessionCache';
 
 const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 
@@ -42,7 +49,9 @@ interface UseListPrintManagerProps {
   moduleConfig: any;
   rows: any[];
   printableFields: ListFieldDefinition[];
+  summary?: ListPrintSummaryDefinition | null;
   relationOptions?: Record<string, any[]>;
+  extraSystemValues?: Record<string, any>;
 }
 
 export const useListPrintManager = ({
@@ -50,15 +59,19 @@ export const useListPrintManager = ({
   moduleConfig,
   rows,
   printableFields,
+  summary = null,
   relationOptions = {},
+  extraSystemValues = {},
 }: UseListPrintManagerProps) => {
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [printMode, setPrintMode] = useState(false);
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [userPreferencesReady, setUserPreferencesReady] = useState(false);
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
   const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
-  const [templatesStoreMeta, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
+  const [, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
     rowId: null,
     provider: 'tiptap',
   });
@@ -69,6 +82,24 @@ export const useListPrintManager = ({
   const renderPrintCardRef = useRef<() => React.ReactNode>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
   const currencyLabel = readCurrencyConfig().label || '';
+
+  useEffect(() => {
+    let mounted = true;
+    getCachedAuthUser(supabase)
+      .then((user) => {
+        if (!mounted) return;
+        setCurrentUserId(String(user?.id || '').trim() || null);
+        setUserPreferencesReady(true);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setCurrentUserId(null);
+        setUserPreferencesReady(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const loadTemplates = useCallback(async (mounted = true) => {
     try {
@@ -164,16 +195,26 @@ export const useListPrintManager = ({
   );
 
   useEffect(() => {
-    if (!selectedTemplateId) return;
+    if (!selectedTemplateId || !userPreferencesReady) return;
     const allowedKeySet = new Set(
       printableFieldsForTemplate
         .map((field) => String(field?.key || '').trim())
         .filter(Boolean)
     );
+    const preferenceKeys = loadPrintFieldPreference({
+      userId: currentUserId,
+      moduleId,
+      templateId: selectedStoredTemplate?.id || selectedTemplateId,
+      scope: 'list',
+    });
     const rawDefaultKeys =
-      (Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
-        ? selectedStoredTemplate.selectedFieldKeys
-        : printableFieldsForTemplate.map((field) => field.key)) || [];
+      (Array.isArray(preferenceKeys) && preferenceKeys.length > 0
+        ? preferenceKeys
+        : Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate.selectedFieldKeys.length > 0
+          ? selectedStoredTemplate.selectedFieldKeys
+        : printableFieldsForTemplate
+            .filter((field) => field?.defaultSelected !== false)
+            .map((field) => field.key)) || [];
 
     const defaultKeys = isCatalogTemplate
       ? (() => {
@@ -199,13 +240,26 @@ export const useListPrintManager = ({
         [selectedTemplateId]: defaultKeys,
       };
     });
-  }, [isCatalogTemplate, printableFieldsForTemplate, selectedStoredTemplate?.selectedFieldKeys, selectedTemplateId]);
+  }, [
+    currentUserId,
+    isCatalogTemplate,
+    moduleId,
+    printableFieldsForTemplate,
+    selectedStoredTemplate?.id,
+    selectedStoredTemplate?.selectedFieldKeys,
+    selectedTemplateId,
+    userPreferencesReady,
+  ]);
 
   const selectedColumns = useMemo(() => {
     const selected = selectedPrintFields[selectedTemplateId] || [];
     if (selected.length === 0) return printableFieldsForTemplate;
-    const selectedSet = new Set(selected);
-    const filtered = printableFieldsForTemplate.filter((field) => selectedSet.has(field.key));
+    const fieldMap = new Map(
+      printableFieldsForTemplate.map((field) => [String(field?.key || '').trim(), field])
+    );
+    const filtered = selected
+      .map((key) => fieldMap.get(String(key || '').trim()))
+      .filter(Boolean) as ListFieldDefinition[];
     const resolved = filtered.length > 0 ? filtered : printableFieldsForTemplate;
     if (!isCatalogTemplate) return resolved;
 
@@ -235,6 +289,11 @@ export const useListPrintManager = ({
     return chunks;
   }, [rows, rowsPerPage]);
 
+  const renderedSummaryTable = useMemo(
+    () => buildListSummaryTableHtml(summary, relationOptions, currencyLabel),
+    [currencyLabel, relationOptions, summary]
+  );
+
   const resolveValue = useCallback((path: string, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
     if (path === 'system.list_title') return moduleConfig?.titles?.fa || moduleId;
     if (path === 'system.selected_count') return toPersianNumber(rows.length);
@@ -247,12 +306,30 @@ export const useListPrintManager = ({
     if (path === 'system.list_catalog_a4') {
       return buildListCatalogHtml(selectedColumns, pageRows, relationOptions, currencyLabel);
     }
+    if (path === 'system.list_summary_table') {
+      return renderedSummaryTable;
+    }
+    if (path.startsWith('system.summary.')) {
+      const summaryKey = path.replace(/^system\.summary\./, '');
+      return String(summary?.values?.[summaryKey] ?? '');
+    }
+    if (path.startsWith('summary.')) {
+      const summaryKey = path.replace(/^summary\./, '');
+      return String(summary?.values?.[summaryKey] ?? '');
+    }
+    if (path.startsWith('system.extra.')) {
+      const extraKey = path.replace(/^system\.extra\./, '');
+      if (extraKey === 'summary_html' && !Object.prototype.hasOwnProperty.call(extraSystemValues, extraKey)) {
+        return renderedSummaryTable;
+      }
+      return String(extraSystemValues?.[extraKey] ?? '');
+    }
     if (path.startsWith('company.')) {
       const key = path.replace(/^company\./, '');
       return String(companyInfo?.[key] || '');
     }
     return '';
-  }, [companyInfo, currencyLabel, moduleConfig?.titles?.fa, moduleId, relationOptions, rows.length, selectedColumns]);
+  }, [companyInfo, currencyLabel, extraSystemValues, moduleConfig?.titles?.fa, moduleId, relationOptions, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
 
   const renderTemplateSection = useCallback((html: string | undefined, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
     const filled = String(html || '').replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
@@ -286,8 +363,19 @@ export const useListPrintManager = ({
     });
   }, [printableFieldsForTemplate]);
 
+  const handleMovePrintField = useCallback((templateId: string, fieldName: string, direction: 'up' | 'down') => {
+    setSelectedPrintFields((prev) => {
+      const current = [...(prev[templateId] || [])];
+      const index = current.indexOf(fieldName);
+      if (index < 0) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.length) return prev;
+      [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
+      return { ...prev, [templateId]: current };
+    });
+  }, []);
+
   const handleSavePrintFields = useCallback(async () => {
-    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;
     setSavingPrintFields(true);
     try {
       const allowedKeySet = new Set(
@@ -299,31 +387,13 @@ export const useListPrintManager = ({
         selectedPrintFields[selectedTemplateId] || [],
         allowedKeySet
       );
-      const mergedTemplates = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || []);
-      const nextModuleTemplates = mergedTemplates.map((template) =>
-        template.id === selectedStoredTemplate.id
-          ? {
-              ...template,
-              selectedFieldKeys: selectedKeys,
-              updatedAt: new Date().toISOString(),
-            }
-          : template
-      );
-      const nextStore = {
-        ...templatesByModuleStore,
-        [moduleId]: nextModuleTemplates,
-      };
-      const saveResult = await savePrintTemplatesStore({
-        rowId: templatesStoreMeta.rowId,
-        provider: templatesStoreMeta.provider,
-        templatesByModule: nextStore,
+      savePrintFieldPreference({
+        userId: currentUserId,
+        moduleId,
+        templateId: selectedStoredTemplate?.id || selectedTemplateId,
+        scope: 'list',
+        selectedFieldKeys: selectedKeys,
       });
-      setTemplatesStoreMeta((prev) => ({
-        rowId: saveResult.rowId ?? prev.rowId,
-        provider: prev.provider,
-      }));
-      setTemplatesByModuleStore(nextStore);
-      setStoredTemplates(nextModuleTemplates.filter((tpl) => tpl.isActive !== false));
       return true;
     } catch (error) {
       console.error('Save list print fields failed', error);
@@ -331,7 +401,7 @@ export const useListPrintManager = ({
     } finally {
       setSavingPrintFields(false);
     }
-  }, [moduleId, printableFieldsForTemplate, selectedPrintFields, selectedStoredTemplate, selectedTemplateId, templatesByModuleStore, templatesStoreMeta.provider, templatesStoreMeta.rowId]);
+  }, [currentUserId, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedStoredTemplate?.id, selectedTemplateId]);
 
   const getPrintOutputName = useCallback(
     () =>
@@ -475,6 +545,7 @@ export const useListPrintManager = ({
     printTemplates,
     printableFieldsForTemplate,
     handleTogglePrintField,
+    handleMovePrintField,
     handleSavePrintFields,
     savingPrintFields,
     handlePrint,

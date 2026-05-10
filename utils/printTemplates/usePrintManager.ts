@@ -18,13 +18,13 @@ import {
   calculateSalesPackageTotal,
 } from '../salesCatalog';
 import {
+  buildSystemTemplateFieldOptionsForModule,
   buildDefaultTemplatesForModule,
   getModuleTitle,
   getSystemTemplateFieldOptions,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
   normalizeDynamicBlockTablesHtml,
-  savePrintTemplatesStore,
   type StoredPrintTemplate,
 } from './store';
 import { buildPrintOutputName } from './outputName';
@@ -33,11 +33,13 @@ import { normalizeRenderedImages } from './normalizeRenderedImages';
 import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
+import { getCachedAuthUser } from '../sessionCache';
 import {
   canViewPrintTemplateFieldPath,
   filterSystemTemplateFieldOptions,
   sanitizeSelectedPrintFieldKeys,
 } from './fieldAccess';
+import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 
 interface UsePrintManagerProps {
   moduleId: string;
@@ -68,6 +70,13 @@ const getReducedPrintFontSize = (baseSize: number) => {
 
 const getPathValue = (obj: any, path: string) =>
   path.split('.').reduce((acc, key) => (acc === null || acc === undefined ? undefined : acc[key]), obj);
+
+const hasPrintableValue = (value: any) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
 
 const toNumberSafe = (value: any): number => {
   if (value === null || value === undefined || value === '') return 0;
@@ -407,6 +416,8 @@ export const usePrintManager = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [printMode, setPrintMode] = useState(false);
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [userPreferencesReady, setUserPreferencesReady] = useState(false);
   const [sellerInfo, setSellerInfo] = useState<any>(null);
   const [customerInfo, setCustomerInfo] = useState<any>(null);
   const [supplierInfo, setSupplierInfo] = useState<any>(null);
@@ -414,7 +425,7 @@ export const usePrintManager = ({
   const [linkedAttachmentCount, setLinkedAttachmentCount] = useState<number | null>(null);
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
   const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
-  const [templatesStoreMeta, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
+  const [, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
     rowId: null,
     provider: 'tiptap',
   });
@@ -545,6 +556,24 @@ export const usePrintManager = ({
     const id = selectedTemplateId.replace('custom:', '');
     return availableTemplates.find((tpl) => tpl.id === id) || null;
   }, [availableTemplates, selectedTemplateId]);
+
+  useEffect(() => {
+    let mounted = true;
+    getCachedAuthUser(supabase)
+      .then((user) => {
+        if (!mounted) return;
+        setCurrentUserId(String(user?.id || '').trim() || null);
+        setUserPreferencesReady(true);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setCurrentUserId(null);
+        setUserPreferencesReady(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
   const isSystemRecordTemplate = useMemo(
     () =>
       Boolean(
@@ -579,14 +608,27 @@ export const usePrintManager = ({
     [canViewField]
   );
   const systemTemplateFieldOptions = useMemo(() => {
+    const resolveSystemFieldHasValue = (fieldKey: string) => {
+      const normalizedKey = String(fieldKey || '').trim();
+      if (!normalizedKey) return false;
+      if (!normalizedKey.startsWith('record.')) return true;
+      const recordPath = normalizedKey.replace(/^record\./, '');
+      return hasPrintableValue(getPathValue(data, recordPath));
+    };
+
     const baseOptions = filterSystemTemplateFieldOptions(
-      getSystemTemplateFieldOptions(moduleId),
+      moduleConfig
+        ? buildSystemTemplateFieldOptionsForModule(moduleConfig)
+        : getSystemTemplateFieldOptions(moduleId),
       canViewField
     )
       .map((item) => ({
         key: item.key,
         labels: { fa: item.label },
-        value: true,
+        value: item.key.startsWith('record.')
+          ? getPathValue(data, String(item.key || '').replace(/^record\./, ''))
+          : true,
+        hasValue: resolveSystemFieldHasValue(item.key),
         group: item.group,
         kind: item.kind,
       }));
@@ -596,6 +638,7 @@ export const usePrintManager = ({
         key: 'record.attachment_count',
         labels: { fa: 'تعداد پیوست‌ها' },
         value: true,
+        hasValue: true,
         group: 'فیلدهای رکورد',
         kind: 'record',
       },
@@ -603,6 +646,7 @@ export const usePrintManager = ({
         key: 'company.logo_url',
         labels: { fa: 'لوگوی سازمان' },
         value: true,
+        hasValue: true,
         group: 'اطلاعات سازمان',
         kind: 'record',
       },
@@ -610,6 +654,7 @@ export const usePrintManager = ({
         key: 'company.company_full_name',
         labels: { fa: 'نام کامل سازمان' },
         value: true,
+        hasValue: true,
         group: 'اطلاعات سازمان',
         kind: 'record',
       },
@@ -617,6 +662,7 @@ export const usePrintManager = ({
         key: 'company.trade_name',
         labels: { fa: 'نام تجاری سازمان' },
         value: true,
+        hasValue: true,
         group: 'اطلاعات سازمان',
         kind: 'record',
       },
@@ -624,6 +670,7 @@ export const usePrintManager = ({
         key: 'company.phone',
         labels: { fa: 'تلفن سازمان' },
         value: true,
+        hasValue: true,
         group: 'اطلاعات سازمان',
         kind: 'record',
       },
@@ -631,6 +678,7 @@ export const usePrintManager = ({
         key: 'company.address',
         labels: { fa: 'آدرس سازمان' },
         value: true,
+        hasValue: true,
         group: 'اطلاعات سازمان',
         kind: 'record',
       },
@@ -638,6 +686,7 @@ export const usePrintManager = ({
         key: 'system.company_signatory_name',
         labels: { fa: 'نام امضاکننده' },
         value: true,
+        hasValue: true,
         group: 'سیستم',
         kind: 'record',
       },
@@ -645,6 +694,7 @@ export const usePrintManager = ({
         key: 'system.company_signatory_title',
         labels: { fa: 'سمت امضاکننده' },
         value: true,
+        hasValue: true,
         group: 'سیستم',
         kind: 'record',
       },
@@ -652,6 +702,7 @@ export const usePrintManager = ({
         key: 'system.company_signature_image',
         labels: { fa: 'تصویر امضا' },
         value: true,
+        hasValue: true,
         group: 'سیستم',
         kind: 'record',
       },
@@ -659,6 +710,7 @@ export const usePrintManager = ({
         key: 'system.company_stamp_image',
         labels: { fa: 'تصویر مهر' },
         value: true,
+        hasValue: true,
         group: 'سیستم',
         kind: 'record',
       },
@@ -671,6 +723,7 @@ export const usePrintManager = ({
               key: 'system.record_image',
               labels: { fa: '\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F' },
               value: true,
+              hasValue: true,
               group: '\u0633\u06CC\u0633\u062A\u0645',
               kind: 'record',
             },
@@ -680,13 +733,14 @@ export const usePrintManager = ({
         key: 'system.record_qr',
         labels: { fa: '\u06A9\u062F QR \u0631\u06A9\u0648\u0631\u062F' },
         value: true,
+        hasValue: true,
         group: '\u0633\u06CC\u0633\u062A\u0645',
         kind: 'record',
       },
     ];
 
     return [...baseOptions, ...commonSystemOptions, ...mediaOptions];
-  }, [canViewField, moduleId, recordImageField]);
+  }, [canViewField, data, moduleConfig, moduleId, recordImageField]);
   const isSelectedTemplateSystem = Boolean(selectedStoredTemplate?.isSystem || selectedTemplateMeta?.isSystem);
   const printableFieldsForTemplate = useMemo(() => {
     if (!isSelectedTemplateSystem) return printableFields;
@@ -938,23 +992,37 @@ export const usePrintManager = ({
   }, [printMode]);
 
   useEffect(() => {
-    if (!selectedTemplateId) return;
+    if (!selectedTemplateId || !userPreferencesReady) return;
     const allowedKeySet = new Set(
       (printableFieldsForTemplate || [])
         .map((field: any) => String(field?.key || '').trim())
         .filter(Boolean)
     );
+    const preferenceKeys = loadPrintFieldPreference({
+      userId: currentUserId,
+      moduleId,
+      templateId: selectedStoredTemplate?.id || selectedTemplateId,
+      scope: 'record',
+    });
     const defaultKeys = isSelectedTemplateSystem
       ? (
           sanitizeSelectedPrintFieldKeys(
-            Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate?.selectedFieldKeys.length > 0
-              ? selectedStoredTemplate.selectedFieldKeys
-              : printableFieldsForTemplate.map((field: any) => field.key),
+            Array.isArray(preferenceKeys) && preferenceKeys.length > 0
+              ? preferenceKeys
+              : Array.isArray(selectedStoredTemplate?.selectedFieldKeys) && selectedStoredTemplate?.selectedFieldKeys.length > 0
+                ? selectedStoredTemplate.selectedFieldKeys
+              : printableFieldsForTemplate
+                  .filter((field: any) => field?.hasValue !== false)
+                  .map((field: any) => field.key),
             allowedKeySet
           ) || []
         )
       : sanitizeSelectedPrintFieldKeys(
-          (printableFieldsForTemplate || []).map((field: any) => field.key),
+          Array.isArray(preferenceKeys) && preferenceKeys.length > 0
+            ? preferenceKeys
+            : (printableFieldsForTemplate || [])
+                .filter((field: any) => field?.hasValue !== false)
+                .map((field: any) => field.key),
           allowedKeySet
         );
 
@@ -969,9 +1037,13 @@ export const usePrintManager = ({
     });
   }, [
     isSelectedTemplateSystem,
+    currentUserId,
     printableFieldsForTemplate,
     selectedStoredTemplate?.selectedFieldKeys,
+    selectedStoredTemplate?.id,
     selectedTemplateId,
+    moduleId,
+    userPreferencesReady,
   ]);
 
   const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
@@ -984,8 +1056,19 @@ export const usePrintManager = ({
     });
   }, []);
 
+  const handleMovePrintField = useCallback((templateId: string, fieldName: string, direction: 'up' | 'down') => {
+    setSelectedPrintFields((prev) => {
+      const current = [...(prev[templateId] || [])];
+      const index = current.indexOf(fieldName);
+      if (index < 0) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.length) return prev;
+      [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
+      return { ...prev, [templateId]: current };
+    });
+  }, []);
+
   const handleSavePrintFields = useCallback(async () => {
-    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate) return false;
     setSavingPrintFields(true);
     try {
       const allowedKeySet = new Set(
@@ -997,31 +1080,13 @@ export const usePrintManager = ({
         selectedPrintFields[selectedTemplateId] || [],
         allowedKeySet
       );
-      const mergedTemplates = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || []);
-      const nextModuleTemplates = mergedTemplates.map((template) =>
-        template.id === selectedStoredTemplate.id
-          ? {
-              ...template,
-              selectedFieldKeys: selectedKeys,
-              updatedAt: new Date().toISOString(),
-            }
-          : template
-      );
-      const nextStore = {
-        ...templatesByModuleStore,
-        [moduleId]: nextModuleTemplates,
-      };
-      const saveResult = await savePrintTemplatesStore({
-        rowId: templatesStoreMeta.rowId,
-        provider: templatesStoreMeta.provider,
-        templatesByModule: nextStore,
+      savePrintFieldPreference({
+        userId: currentUserId,
+        moduleId,
+        templateId: selectedStoredTemplate?.id || selectedTemplateId,
+        scope: 'record',
+        selectedFieldKeys: selectedKeys,
       });
-      setTemplatesStoreMeta((prev) => ({
-        rowId: saveResult.rowId ?? prev.rowId,
-        provider: prev.provider,
-      }));
-      setTemplatesByModuleStore(nextStore);
-      setStoredTemplates(nextModuleTemplates.filter((tpl) => tpl.isActive !== false));
       return true;
     } catch (error) {
       console.error('Save print field selection failed', error);
@@ -1030,14 +1095,12 @@ export const usePrintManager = ({
       setSavingPrintFields(false);
     }
   }, [
+    currentUserId,
     moduleId,
     printableFieldsForTemplate,
     selectedPrintFields,
-    selectedStoredTemplate,
+    selectedStoredTemplate?.id,
     selectedTemplateId,
-    templatesByModuleStore,
-    templatesStoreMeta.provider,
-    templatesStoreMeta.rowId,
   ]);
 
   const invoiceSummary = useMemo(() => {
@@ -2069,10 +2132,15 @@ export const usePrintManager = ({
   ]);
 
   const buildPrintCard = useCallback((pageCountOverride?: number | null) => {
-    const fieldsToDisplay = printableFieldsForTemplate.filter((field: any) => {
-      const selected = selectedPrintFields[selectedTemplateId] || [];
-      return selected.length === 0 || selected.includes(field.key);
-    });
+    const selected = selectedPrintFields[selectedTemplateId] || [];
+    const fieldMap = new Map(
+      printableFieldsForTemplate.map((field: any) => [String(field?.key || '').trim(), field])
+    );
+    const fieldsToDisplay = selected.length === 0
+      ? printableFieldsForTemplate.filter((field: any) => field?.hasValue !== false)
+      : selected
+          .map((key) => fieldMap.get(String(key || '').trim()))
+          .filter(Boolean);
 
     if (selectedTemplateId.startsWith('custom:')) {
       const metrics = getPaperSizeMetrics(selectedStoredTemplate?.paperSize, selectedStoredTemplate?.orientation || 'portrait');
@@ -2418,6 +2486,7 @@ export const usePrintManager = ({
     generateCurrentPdfBlob,
     preparePrint,
     handleTogglePrintField,
+    handleMovePrintField,
     handleSavePrintFields,
     refreshTemplates,
     previewMeta,

@@ -103,10 +103,12 @@ export const supplierModule: ModuleDefinition = {
       foreignKey: 'supplier_id'
     },
     {
-      id: 'supplier_payments',
-      title: 'پرداخت‌ها به تامین‌کننده',
+      id: 'supplier_financial_overview',
+      title: 'وضعیت مالی',
       icon: 'CreditCardOutlined',
-      relationType: 'supplier_payments'
+      relationType: 'operational_financial_overview',
+      targetModule: 'suppliers',
+      disableCreate: true,
     },
     {
       id: 'supplier_products',

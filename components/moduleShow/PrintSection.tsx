@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Modal, Select, Tabs } from 'antd';
+import { Button, Modal, Tabs } from 'antd';
 import { EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 
 interface PrintSectionProps {
   isPrintModalOpen: boolean;
@@ -20,6 +21,7 @@ interface PrintSectionProps {
   printableFields?: any[];
   selectedPrintFields?: Record<string, string[]>;
   onTogglePrintField?: (templateId: string, fieldName: string) => void;
+  onMovePrintField?: (templateId: string, fieldName: string, direction: 'up' | 'down') => void;
   onSavePrintFields?: () => void | Promise<boolean>;
   savingPrintFields?: boolean;
   allowFieldSelectionTab?: boolean;
@@ -61,6 +63,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   printableFields = [],
   selectedPrintFields = {},
   onTogglePrintField = () => {},
+  onMovePrintField = () => {},
   onSavePrintFields,
   savingPrintFields = false,
   allowFieldSelectionTab = false,
@@ -72,7 +75,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [savingPdfToRecord, setSavingPdfToRecord] = useState(false);
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
-  const mobileTemplateSelectWrapRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
   const pendingPrintRef = useRef(false);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
@@ -108,10 +110,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     printableFields.length > 0;
 
   const selectedFieldCount = (selectedPrintFields[selectedTemplateId] || []).length;
-  const selectedTemplate = useMemo(
-    () => printTemplates.find((template) => template.id === selectedTemplateId) || null,
-    [printTemplates, selectedTemplateId]
-  );
   const mobileTemplateOptions = useMemo(
     () =>
       printTemplates.map((template) => ({
@@ -123,6 +121,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       })),
     [printTemplates]
   );
+  const groupedPrintableFields = useMemo(() => {
+    const groups = new Map<string, any[]>();
+    printableFields.forEach((field) => {
+      const groupLabel = String(field?.group || 'سایر فیلدها').trim() || 'سایر فیلدها';
+      groups.set(groupLabel, [...(groups.get(groupLabel) || []), field]);
+    });
+    return Array.from(groups.entries()).map(([group, fields]) => ({ group, fields }));
+  }, [printableFields]);
+  const orderedSelectedFields = useMemo(() => {
+    const fieldMap = new Map(
+      printableFields.map((field) => [String(field?.key || '').trim(), field])
+    );
+    return (selectedPrintFields[selectedTemplateId] || [])
+      .map((key) => fieldMap.get(String(key || '').trim()))
+      .filter(Boolean);
+  }, [printableFields, selectedPrintFields, selectedTemplateId]);
   const paperFrame = getPaperFrame(previewMeta?.paperSize || 'A4', previewMeta?.orientation || 'portrait');
   const paperWidthPx = (paperFrame.mmWidth * 96) / 25.4;
   const paperHeightPx = (paperFrame.mmHeight * 96) / 25.4;
@@ -297,12 +311,9 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         >
         <div className="print-select-shell">
           {isMobile ? (
-            <div
-              ref={mobileTemplateSelectWrapRef}
-              className="print-template-mobile-select-wrap"
-            >
+            <div className="print-template-mobile-select-wrap">
               <div className="print-template-mobile-select-label">قالب چاپ</div>
-              <Select
+              <AdaptiveSelectField
                 value={selectedTemplateId || undefined}
                 onChange={(value) => {
                   onSelectTemplate(value);
@@ -311,26 +322,15 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                 showSearch
                 allowClear={false}
                 className="print-template-mobile-select"
-                classNames={{ popup: { root: 'print-template-mobile-popup' } }}
                 placeholder="انتخاب قالب چاپ"
-                size="large"
                 listHeight={320}
-                popupMatchSelectWidth
                 optionFilterProp="label"
-                getPopupContainer={(trigger) => trigger?.parentElement || mobileTemplateSelectWrapRef.current || document.body}
-                styles={{ popup: { root: { zIndex: 12020 } } }}
-                labelRender={() =>
-                  selectedTemplate ? (
-                    <div className="print-template-mobile-value">
-                      <div className="print-template-mobile-value-title">
-                        <span>{selectedTemplate.title}</span>
-                        {selectedTemplate.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                      </div>
-                    </div>
-                  ) : (
-                    <span>انتخاب قالب چاپ</span>
-                  )
-                }
+                adaptiveMode="auto"
+                pickerTitle="انتخاب قالب چاپ"
+                mobileSearchPlaceholder="جستجو در قالب‌های چاپ"
+                popupMatchSelectWidth
+                overlayZIndexBase={12020}
+                optionDisplayFallback={(option) => String(option?.title || option?.label || option?.value || '')}
                 filterOption={(input, option) => {
                   const search = input.trim().toLowerCase();
                   if (!search) return true;
@@ -355,6 +355,15 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                     </div>
                   );
                 }}
+                renderMobileOption={(option) => (
+                  <div className="print-template-mobile-option">
+                    <div className="print-template-mobile-option-title">
+                      <span>{String(option?.title || option?.label || option?.value || '')}</span>
+                      {option?.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
+                    </div>
+                    {option?.description ? <div className="print-template-mobile-option-desc">{String(option.description)}</div> : null}
+                  </div>
+                )}
               />
             </div>
           ) : null}
@@ -389,67 +398,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           ) : null}
 
           <div className="print-preview-shell">
-            {false ? (
-              <div className="print-template-mobile-select-wrap">
-                <div className="print-template-mobile-select-label">قالب چاپ</div>
-                <Select
-                  value={selectedTemplateId || undefined}
-                  onChange={(value) => {
-                    onSelectTemplate(value);
-                    setActiveTab('preview');
-                  }}
-                  showSearch
-                  className="print-template-mobile-select"
-                  classNames={{ popup: { root: 'print-template-mobile-popup' } }}
-                  placeholder="انتخاب قالب چاپ"
-                  size="large"
-                  optionLabelProp="label"
-                  filterOption={(input, option) => {
-                    const search = input.trim().toLowerCase();
-                    if (!search) return true;
-                    const title = String(option?.title || '').toLowerCase();
-                    const description = String(option?.description || '').toLowerCase();
-                    return title.includes(search) || description.includes(search);
-                  }}
-                  options={printTemplates.map((template) => ({
-                    value: template.id,
-                    label: template.title,
-                    title: template.title,
-                    description: template.description,
-                    isSystem: template.isSystem,
-                  }))}
-                  labelRender={() =>
-                    selectedTemplate ? (
-                      <div className="print-template-mobile-value">
-                        <div className="print-template-mobile-value-title">
-                          <span>{selectedTemplate.title}</span>
-                          {selectedTemplate.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                        </div>
-                        <div className="print-template-mobile-value-desc">{selectedTemplate.description}</div>
-                      </div>
-                    ) : (
-                      <span>انتخاب قالب چاپ</span>
-                    )
-                  }
-                  optionRender={(option) => {
-                    const data = option.data as {
-                      title?: string;
-                      description?: string;
-                      isSystem?: boolean;
-                    };
-                    return (
-                      <div className="print-template-mobile-option">
-                        <div className="print-template-mobile-option-title">
-                          <span>{data.title}</span>
-                          {data.isSystem ? <span className="print-template-system-tag">سیستمی</span> : null}
-                        </div>
-                        <div className="print-template-mobile-option-desc">{data.description}</div>
-                      </div>
-                    );
-                  }}
-                />
-              </div>
-            ) : null}
             <Tabs
               activeKey={activeTab}
               onChange={(key) => {
@@ -577,20 +525,65 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                  ذخیره تغییرات
                               </Button>
                             </div>
-                            <div className="print-fields-grid">
-                              {printableFields.map((field) => {
-                                const isSelected = (selectedPrintFields[selectedTemplateId] || []).includes(field.key);
-                                return (
-                                  <div
-                                    key={field.key}
-                                    onClick={() => onTogglePrintField(selectedTemplateId, field.key)}
-                                    className={`print-field-card ${isSelected ? 'selected' : ''}`}
-                                  >
-                                    <div className="print-field-checkbox">{isSelected ? String.fromCharCode(10003) : ''}</div>
-                                    <span>{field?.labels?.fa || field?.label || field?.key}</span>
+                            {orderedSelectedFields.length > 0 ? (
+                              <div className="print-selected-fields-panel">
+                                <div className="print-selected-fields-title">ترتیب چاپ فیلدهای انتخاب‌شده</div>
+                                <div className="print-selected-fields-list">
+                                  {orderedSelectedFields.map((field, index) => (
+                                    <div key={`selected-${field.key}`} className="print-selected-field-row">
+                                      <span className="print-selected-field-label">{field?.labels?.fa || field?.label || field?.key}</span>
+                                      <div className="print-selected-field-actions">
+                                        <Button
+                                          size="small"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            onMovePrintField(selectedTemplateId, field.key, 'up');
+                                          }}
+                                          disabled={index === 0}
+                                        >
+                                          بالا
+                                        </Button>
+                                        <Button
+                                          size="small"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            onMovePrintField(selectedTemplateId, field.key, 'down');
+                                          }}
+                                          disabled={index === orderedSelectedFields.length - 1}
+                                        >
+                                          پایین
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                            <div className="print-fields-groups">
+                              {groupedPrintableFields.map(({ group, fields }) => (
+                                <div key={group} className="print-fields-group">
+                                  <div className="print-fields-group-title">{group}</div>
+                                  <div className="print-fields-grid">
+                                    {fields.map((field) => {
+                                      const isSelected = (selectedPrintFields[selectedTemplateId] || []).includes(field.key);
+                                      const isEmpty = field?.hasValue === false;
+                                      return (
+                                        <div
+                                          key={field.key}
+                                          onClick={() => onTogglePrintField(selectedTemplateId, field.key)}
+                                          className={`print-field-card ${isSelected ? 'selected' : ''} ${isEmpty ? 'empty' : ''}`}
+                                        >
+                                          <div className="print-field-checkbox">{isSelected ? String.fromCharCode(10003) : ''}</div>
+                                          <div className="print-field-card-body">
+                                            <span>{field?.labels?.fa || field?.label || field?.key}</span>
+                                            {isEmpty ? <small>بدون مقدار</small> : null}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
-                                );
-                              })}
+                                </div>
+                              ))}
                             </div>
                           </div>
                         ),
@@ -746,18 +739,16 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           font-weight: 700;
           direction: rtl;
         }
-        .print-template-mobile-select .ant-select-selector {
-          min-height: 48px !important;
-          padding: 4px 11px !important;
-          border-radius: 14px !important;
-          border-color: rgba(148,163,184,0.28) !important;
-          background: #fff !important;
-          box-shadow: 0 10px 24px rgba(15,23,42,0.06) !important;
-          align-items: center;
+        .print-template-mobile-select.kalam-adaptive-picker__trigger {
+          width: 100%;
+          min-height: 48px;
+          padding: 10px 14px;
+          border-radius: 14px;
+          border: 1px solid rgba(148,163,184,0.28);
+          background: #fff;
+          box-shadow: 0 10px 24px rgba(15,23,42,0.06);
         }
-        .print-template-mobile-select .ant-select-selection-search-input,
-        .print-template-mobile-select .ant-select-selection-item,
-        .print-template-mobile-select .ant-select-selection-placeholder {
+        .print-template-mobile-select .kalam-adaptive-picker__trigger-text {
           direction: rtl;
           text-align: right;
         }
@@ -846,10 +837,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .dark .print-template-mobile-select-label {
           color: #cbd5e1;
         }
-        .dark .print-template-mobile-select .ant-select-selector {
-          background: rgba(15,23,42,0.92) !important;
-          border-color: rgba(71,85,105,0.42) !important;
-          box-shadow: none !important;
+        .dark .print-template-mobile-select.kalam-adaptive-picker__trigger {
+          background: rgba(15,23,42,0.92);
+          border-color: rgba(71,85,105,0.42);
+          box-shadow: none;
         }
         .dark .print-template-mobile-popup .ant-select-dropdown {
           background: #0f172a !important;
@@ -1048,8 +1039,27 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
           gap: 12px;
+        }
+        .print-fields-groups {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
           padding: 16px;
           overflow: auto;
+        }
+        .print-fields-group {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .print-fields-group-title {
+          font-size: 12px;
+          font-weight: 800;
+          color: #475569;
+          padding: 0 2px;
+        }
+        .dark .print-fields-group-title {
+          color: #cbd5e1;
         }
         .print-fields-pane {
           height: 100%;
@@ -1069,8 +1079,58 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           font-size: 12px;
           color: #64748b;
         }
+        .print-selected-fields-panel {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin: 12px 16px 0;
+          padding: 12px;
+          border-radius: 16px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(248,250,252,0.82);
+        }
+        .print-selected-fields-title {
+          font-size: 12px;
+          font-weight: 800;
+          color: #334155;
+        }
+        .print-selected-fields-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .print-selected-field-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 8px 10px;
+          border-radius: 12px;
+          background: rgba(255,255,255,0.92);
+          border: 1px solid rgba(226,232,240,0.95);
+        }
+        .print-selected-field-label {
+          min-width: 0;
+        }
+        .print-selected-field-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex: 0 0 auto;
+        }
         .dark .print-fields-meta {
           color: #cbd5e1;
+        }
+        .dark .print-selected-fields-panel {
+          background: rgba(15,23,42,0.7);
+          border-color: rgba(71,85,105,0.4);
+        }
+        .dark .print-selected-fields-title {
+          color: #e2e8f0;
+        }
+        .dark .print-selected-field-row {
+          background: rgba(30,41,59,0.92);
+          border-color: rgba(71,85,105,0.48);
         }
         .print-field-card {
           display: flex;
@@ -1087,10 +1147,23 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           border-color: rgba(var(--brand-500-rgb), 0.7);
           background: rgba(255,248,240,0.92);
         }
+        .print-field-card.empty {
+          opacity: 0.72;
+        }
         .dark .print-field-card {
           background: rgba(15,23,42,0.74);
           border-color: rgba(71,85,105,0.42);
           color: #e5e7eb;
+        }
+        .print-field-card-body {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 0;
+        }
+        .print-field-card-body small {
+          font-size: 11px;
+          color: #94a3b8;
         }
         .print-field-checkbox {
           width: 20px;
@@ -1200,9 +1273,22 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             gap: 10px;
             padding: 10px 12px 0;
           }
+          .print-selected-fields-panel {
+            margin: 12px 12px 0;
+          }
+          .print-selected-field-row {
+            flex-direction: column;
+            align-items: stretch;
+          }
+          .print-selected-field-actions {
+            justify-content: flex-end;
+          }
           .print-fields-grid {
             grid-template-columns: 1fr;
             gap: 10px;
+          }
+          .print-fields-groups {
+            gap: 12px;
             padding: 12px;
           }
         }

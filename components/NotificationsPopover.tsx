@@ -49,7 +49,6 @@ import {
 } from '../utils/notificationViewModels';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
-import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import { extractBotMessageAttachments } from '../utils/messageAttachments';
 import AdaptiveScopePicker from './messaging/AdaptiveScopePicker';
 
@@ -1059,6 +1058,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const botMessagesFetchSeqRef = useRef(0);
   const botMessagesRef = useRef<CounterpartyBotMessageRow[]>([]);
   const botMessagesGroupIdRef = useRef<string | null>(null);
+  const hydratingBotMessageIdsRef = useRef<Set<string>>(new Set());
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -2660,7 +2660,13 @@ useEffect(() => {
   const sendTextToBotGroup = useCallback(async (
     group: CounterpartyBotGroupRow,
     text: string,
-    options?: { payload?: Record<string, any>; messageType?: string; extraPayload?: Record<string, any>; fallbackText?: string }
+    options?: {
+      payload?: Record<string, any>;
+      messageType?: string;
+      extraPayload?: Record<string, any>;
+      fallbackText?: string;
+      attachments?: NoteAttachment[];
+    }
   ) => {
     const channel = String(group?.channel_type || '').trim();
     if (!['rubika', 'telegram', 'bale'].includes(channel)) {
@@ -2685,6 +2691,12 @@ useEffect(() => {
         skipLog: false,
         extraPayload: options?.extraPayload,
         fallbackText: options?.fallbackText,
+        attachments: (options?.attachments || []).map((item) => ({
+          url: item.url,
+          name: item.name,
+          mimeType: item.mimeType || null,
+          fileType: item.fileType || null,
+        })),
       },
     });
     if (proxyError) throw proxyError;
@@ -2692,36 +2704,56 @@ useEffect(() => {
       throw new Error(String(proxyData?.message || 'ارسال پیام بات ناموفق بود.'));
     }
     const providerResponse = proxyData?.provider_result || {};
-    const messageType = String(options?.messageType || 'text').trim() || 'text';
+    const providerMessages = Array.isArray(proxyData?.provider_messages) && proxyData.provider_messages.length > 0
+      ? proxyData.provider_messages
+      : [{
+        message_type: String(options?.messageType || 'text').trim() || 'text',
+        content_text: text,
+        provider_result: providerResponse,
+      }];
     const senderPayload = buildCurrentBotSenderPayload();
     const currentUserId = String(senderPayload.sender_user_id || '').trim() || null;
 
-    const { error: insertError } = await supabase
-      .from('counterparty_bot_messages')
-      .insert([{
+    const rowsToInsert = providerMessages.map((providerItem: any) => {
+      const providerResult = providerItem?.provider_result || {};
+      const attachment = providerItem?.attachment && typeof providerItem.attachment === 'object'
+        ? providerItem.attachment
+        : null;
+      const rowMessageType = String(providerItem?.message_type || options?.messageType || 'text').trim() || 'text';
+      return {
         bot_group_id: group.id,
         customer_id: group.customer_id,
         supplier_id: group.supplier_id,
         channel_type: group.channel_type,
         direction: 'outbound',
-        message_type: messageType,
+        message_type: rowMessageType,
         chat_id: chatId,
         provider_message_id: String(
-          providerResponse?.result?.message_id
-          || providerResponse?.message_id
-          || providerResponse?.data?.message_id
-          || providerResponse?.data?.message_update?.message_id
-          || providerResponse?.data?.messageUpdate?.messageId
+          providerResult?.result?.message_id
+          || providerResult?.message_id
+          || providerResult?.data?.message_id
+          || providerResult?.data?.message_update?.message_id
+          || providerResult?.data?.messageUpdate?.messageId
           || ''
         ) || null,
-        content_text: text,
+        content_text: String(providerItem?.content_text ?? text ?? '').trim() || null,
+        file_url: String(providerItem?.file_url || attachment?.url || '').trim() || null,
+        file_name: String(providerItem?.file_name || attachment?.name || '').trim() || null,
+        mime_type: String(providerItem?.mime_type || attachment?.mime_type || attachment?.mimeType || '').trim() || null,
         created_by: currentUserId,
         payload: {
           ...(options?.payload || {}),
+          attachments: attachment ? [attachment] : (options?.payload as any)?.attachments || [],
+          provider_file_id: String(providerItem?.provider_file_id || '').trim() || null,
+          provider_upload: providerItem?.provider_upload || null,
           ...senderPayload,
-          provider_response: providerResponse || {},
+          provider_response: providerResult || {},
         },
-      }]);
+      };
+    });
+    const { error: insertError } = await supabase
+      .from('counterparty_bot_messages')
+      .insert(rowsToInsert);
     if (insertError) throw insertError;
 
     const { error: patchError } = await supabase
@@ -3655,6 +3687,75 @@ useEffect(() => {
   };
 
   const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow) => extractBotMessageAttachments(row), []);
+  const hydrateBotMessagesMedia = useCallback(async (rows: CounterpartyBotMessageRow[]) => {
+    const pendingRows = (rows || []).filter((row) => {
+      if (String(row?.direction || '') !== 'inbound') return false;
+      if (String(selectedBotGroup?.channel_type || '').trim() !== 'rubika') return false;
+      const rowId = String(row?.id || '').trim();
+      if (!rowId || hydratingBotMessageIdsRef.current.has(rowId)) return false;
+      const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+      const fileId = String((payload as any)?.media_file_id || '').trim();
+      const hasUsableAttachment = getBotMessageAttachments(row).some((item) => String(item?.url || '').trim());
+      return Boolean(fileId && !hasUsableAttachment);
+    });
+    if (pendingRows.length === 0) return;
+
+    const activeConnection = await getActiveChannelSettings('rubika');
+    const connectionId = String(activeConnection?.id || '').trim();
+    if (!connectionId) return;
+
+    for (const row of pendingRows) {
+      const rowId = String(row?.id || '').trim();
+      const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+      const fileId = String((payload as any)?.media_file_id || '').trim();
+      if (!rowId || !fileId) continue;
+      hydratingBotMessageIdsRef.current.add(rowId);
+      try {
+        const { data, error } = await supabase.functions.invoke('bot-admin', {
+          body: {
+            action: 'import_rubika_file',
+            channel: 'rubika',
+            connectionId,
+            messageId: rowId,
+            fileId,
+            fileName: String(row.file_name || '').trim() || undefined,
+          },
+        });
+        if (error) throw error;
+        if (!data?.success || !String(data?.file_url || '').trim()) continue;
+        const nextPayload = {
+          ...(payload || {}),
+          attachments: [{
+            name: String(row.file_name || data.file_name || 'فایل').trim() || 'فایل',
+            url: String(data.file_url || '').trim(),
+            mime_type: String(data.mime_type || row.mime_type || '').trim() || null,
+            file_type: String(row.message_type || 'file').trim() || 'file',
+          }],
+        };
+        setBotMessages((prev) => prev.map((item) => String(item?.id || '') === rowId ? {
+          ...item,
+          file_url: String(data.file_url || '').trim() || item.file_url,
+          file_name: String(row.file_name || data.file_name || '').trim() || item.file_name,
+          mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
+          payload: nextPayload,
+        } : item));
+        setBotNotificationMessages((prev) => prev.map((item) => String(item?.id || '') === rowId ? {
+          ...item,
+          file_url: String(data.file_url || '').trim() || item.file_url,
+          file_name: String(row.file_name || data.file_name || '').trim() || item.file_name,
+          mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
+          payload: nextPayload,
+        } : item));
+      } catch (error) {
+        console.warn('Could not hydrate Rubika bot message attachment', error);
+      } finally {
+        hydratingBotMessageIdsRef.current.delete(rowId);
+      }
+    }
+  }, [getBotMessageAttachments, selectedBotGroup?.channel_type]);
+  useEffect(() => {
+    void hydrateBotMessagesMedia(botMessages);
+  }, [botMessages, hydrateBotMessagesMedia]);
 
   const buildAttachmentNameText = useCallback((attachments: Array<{ name?: string; url?: string }>) => {
     const lines = (attachments || [])
@@ -3667,55 +3768,6 @@ useEffect(() => {
       .filter(Boolean);
     if (lines.length === 0) return '';
     return `پیوست‌ها:\n${lines.join('\n')}`;
-  }, []);
-
-  const buildRubikaLinkedAttachmentMessage = useCallback((
-    baseText: string,
-    attachments: Array<{ name?: string; url?: string }>
-  ) => {
-    const normalizedBaseText = String(baseText || '').trim();
-    const lines: Array<{ text: string; linkUrl?: string }> = [];
-    if (normalizedBaseText) {
-      lines.push({ text: normalizedBaseText });
-    }
-    (attachments || []).forEach((item, index) => {
-      const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
-      const url = String(item?.url || '').trim();
-      lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
-    });
-
-    if (lines.length === 0) {
-      return { text: '', metadata: undefined as Record<string, any> | undefined };
-    }
-
-    let text = '';
-    let cursor = 0;
-    const metaDataParts: Array<Record<string, any>> = [];
-    lines.forEach((line, index) => {
-      if (index > 0) {
-        text += '\n';
-        cursor += 1;
-      }
-      const segment = String(line.text || '');
-      const startIndex = cursor;
-      text += segment;
-      cursor += segment.length;
-      if (line.linkUrl) {
-        metaDataParts.push({
-          type: 'Link',
-          from_index: startIndex,
-          length: segment.length,
-          link_url: line.linkUrl,
-        });
-      }
-    });
-
-    return {
-      text,
-      metadata: metaDataParts.length > 0
-        ? { meta_data_parts: metaDataParts }
-        : undefined,
-    };
   }, []);
 
   const responsibilityViews = useMemo(() => {
@@ -4717,23 +4769,17 @@ useEffect(() => {
         if (!targetGroup) continue;
         const isRubikaTarget = String(targetGroup.channel_type || '').trim() === 'rubika';
         const forwardedAttachmentNameText = buildAttachmentNameText(forwardedAttachments);
-        const rubikaLinkedMessage = isRubikaTarget && forwardedAttachments.length > 0
-          ? buildRubikaLinkedAttachmentMessage(String(parsedContent.text || '').trim(), forwardedAttachments)
-          : null;
-        const linkedRubikaText = String(rubikaLinkedMessage?.text || '').trim();
         const rubikaTextWithPrefix = customForwardMessageText
-          ? [customForwardMessageText, linkedRubikaText || 'پیوست ارسال شد'].filter(Boolean).join('\n\n')
-          : (linkedRubikaText || 'پیوست ارسال شد');
+          ? [customForwardMessageText, String(parsedContent.text || '').trim()].filter(Boolean).join('\n\n')
+          : String(parsedContent.text || '').trim();
         const targetText = isRubikaTarget && forwardedAttachments.length > 0
           ? rubikaTextWithPrefix
           : finalForwardText;
         await sendTextToBotGroup(targetGroup, targetText, {
-          extraPayload: isRubikaTarget
-            ? (rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined)
-            : undefined,
           fallbackText: isRubikaTarget && forwardedAttachments.length > 0
             ? [customForwardMessageText, String(parsedContent.text || '').trim(), forwardedAttachmentNameText].filter(Boolean).join('\n')
             : undefined,
+          attachments: isRubikaTarget ? forwardedAttachments : undefined,
           payload: {
             attachments: forwardedAttachments,
             forwarded_from: {
@@ -6506,18 +6552,29 @@ useEffect(() => {
       const avatarUrl = String(directoryUser?.avatar_url || (payload as any)?.sender_avatar_url || '').trim() || null;
       return {
         name,
+        metaLabel: null as string | null,
         avatarUrl,
         fallback: String(name || 'ک').trim().slice(0, 1) || 'ک',
       };
     };
     const resolveInboundBotAuthor = (row: CounterpartyBotMessageRow | null | undefined) => {
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-      const name = String((payload as any)?.sender_display_name || '').trim()
-        || String((payload as any)?.sender_id || '').trim()
-        || String((payload as any)?.username || '').trim()
-        || 'کاربر گروه';
+      const senderDisplayName = String((payload as any)?.sender_display_name || '').trim();
+      const usernameRaw = String((payload as any)?.username || '').trim().replace(/^@+/, '');
+      const username = usernameRaw ? `@${usernameRaw}` : '';
+      const senderId = String((payload as any)?.sender_id || '').trim();
+      const chatUserId = String((payload as any)?.user_id || (payload as any)?.object_guid || row?.chat_id || '').trim();
+      const name = senderDisplayName
+        || username
+        || (senderId ? `ID: ${senderId}` : '')
+        || (chatUserId ? `Chat: ${chatUserId}` : '')
+        || 'کاربر';
+      const metaLabel = senderDisplayName
+        ? (username || (senderId ? `ID: ${senderId}` : '') || (chatUserId ? `Chat: ${chatUserId}` : ''))
+        : null;
       return {
         name,
+        metaLabel,
         avatarUrl: null as string | null,
         fallback: String(name || 'ب').trim().slice(0, 1) || 'ب',
       };
@@ -6575,29 +6632,27 @@ useEffect(() => {
           .join('\n');
         const attachmentNameText = buildAttachmentNameText(outboundAttachments);
         const isRubikaGroup = String(selectedGroup.channel_type || '').trim() === 'rubika';
-        const rubikaLinkedMessage = isRubikaGroup && outboundAttachments.length > 0
-          ? buildRubikaLinkedAttachmentMessage(String(renderedText || '').trim(), outboundAttachments)
-          : null;
-        const finalText = isRubikaGroup && outboundAttachments.length > 0
-          ? (String(rubikaLinkedMessage?.text || '').trim() || 'پیوست ارسال شد')
+        const finalText = isRubikaGroup && attachments.length > 0
+          ? String(renderedText || '').trim()
           : [renderedText, attachmentText].filter(Boolean).join('\n');
-        if (!String(finalText || '').trim()) {
-          message.warning('متن پیام خالی است.');
+        if (!String(finalText || '').trim() && attachments.length === 0) {
+          message.warning('پیام خالی است.');
           return;
         }
         const senderPayload = buildCurrentBotSenderPayload();
         optimisticBotMessageId = `optimistic-bot-${Date.now()}`;
+        const primaryAttachment = attachments[0] || null;
         const optimisticBotMessage: CounterpartyBotMessageRow = {
           id: optimisticBotMessageId,
           bot_group_id: selectedGroup.id,
           direction: 'outbound',
-          message_type: attachments.length > 0 ? 'file' : 'text',
+          message_type: String(primaryAttachment?.fileType || (attachments.length > 0 ? 'file' : 'text')).trim() || 'text',
           chat_id: chatId,
           provider_message_id: null,
-          content_text: finalText,
-          file_url: null,
-          file_name: null,
-          mime_type: null,
+          content_text: String(renderedText || '').trim() || null,
+          file_url: String(primaryAttachment?.url || '').trim() || null,
+          file_name: String(primaryAttachment?.name || '').trim() || null,
+          mime_type: String(primaryAttachment?.mimeType || '').trim() || null,
           payload: {
             attachments,
             reply_to_message_id: botReplyToId || null,
@@ -6611,12 +6666,10 @@ useEffect(() => {
         botShouldStickToBottomRef.current = true;
         botForceScrollToBottomRef.current = true;
         await sendTextToBotGroup(selectedGroup, finalText, {
-          extraPayload: isRubikaGroup
-            ? (rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined)
-            : undefined,
           fallbackText: isRubikaGroup && attachments.length > 0
             ? [String(renderedText || '').trim(), attachmentNameText].filter(Boolean).join('\n')
             : undefined,
+          attachments: isRubikaGroup ? attachments : undefined,
           payload: {
             attachments,
             reply_to_message_id: botReplyToId || null,
@@ -6817,8 +6870,14 @@ useEffect(() => {
                 const replyToId = String(payload?.reply_to_message_id || '').trim();
                 const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
                 const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
-                const replyAttachments = replyTarget ? getBotMessageAttachments(replyTarget).map((item) => ({ name: item.name, url: item.url, mimeType: item.mimeType } as any)) : [];
-                const body = String(row.content_text || '').trim() || (row.file_name ? `فایل: ${row.file_name}` : 'پیام بدون متن');
+                const replyAttachments = replyTarget ? getBotMessageAttachments(replyTarget).map((item) => ({
+                  name: item.name,
+                  url: item.url,
+                  mimeType: item.mimeType,
+                  fileType: item.fileType,
+                } as any)) : [];
+                const body = String(row.content_text || '').trim()
+                  || (parsedAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
                 const isEditing = editingBotMessageId === row.id;
                 const author = resolveBotMessageAuthor(row);
                 const botReadReceipts = normalizeReadReceipts(payload);
@@ -6831,7 +6890,12 @@ useEffect(() => {
                       authorName={author.name}
                       createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
                       text={body}
-                      attachments={parsedAttachments.map((item) => ({ name: item.name, url: item.url, mimeType: item.mimeType } as any))}
+                      attachments={parsedAttachments.map((item) => ({
+                        name: item.name,
+                        url: item.url,
+                        mimeType: item.mimeType,
+                        fileType: item.fileType,
+                      } as any))}
                       avatarUrl={author.avatarUrl}
                       avatarFallback={author.fallback}
                       mentionUsers={[]}
@@ -6845,6 +6909,7 @@ useEffect(() => {
                       animateOnMount={shouldAnimateChatEntry(row.created_at)}
                       statusNode={renderReadReceiptStatus(botReadReceipts, [])}
                       unreadIndicator={isUnreadBotMessage}
+                      footer={!outgoing && author.metaLabel ? author.metaLabel : undefined}
                       isEdited={Boolean(payload?.is_edited)}
                       isEditing={isEditing}
                       editingValue={editingBotMessageValue}

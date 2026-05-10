@@ -9,7 +9,7 @@ import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import TaskActionButtons from './TaskActionButtons';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
-import { buildImagePreviewUrl } from '../../utils/imagePreview';
+import ResilientImage from '../common/ResilientImage';
 
 interface TaskSummaryCardProps {
   task: any;
@@ -89,7 +89,6 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
 
   const canEditProducedQty = !['todo', 'pending'].includes(String(task?.status || '').toLowerCase());
   const taskMainFileUrl = String(task?.image_url || '').trim();
-  const taskMainPreviewUrl = buildImagePreviewUrl(taskMainFileUrl, 'card');
   const taskMainFileName = taskMainFileUrl.split('?')[0].split('/').pop() || 'file';
   const assigneeId = String(getResolvedAssigneeId(task) || '');
   const assigneeLabel = task.assignee_type === 'role'
@@ -153,12 +152,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
                 controls
               />
             ) : isImageUrl(taskMainFileUrl) ? (
-              <img
-                src={taskMainPreviewUrl || taskMainFileUrl}
-                alt={String(task?.name || 'task-image')}
-                className="h-full w-full object-cover"
-                loading="lazy"
-              />
+              <ResilientImage src={taskMainFileUrl} preset="card" alt={String(task?.name || 'task-image')} className="h-full w-full object-cover" loading="lazy" />
             ) : (
               <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-gray-50 to-gray-200 text-gray-600 dark:from-gray-800 dark:to-gray-900 dark:text-gray-200">
                 <FileOutlined className="text-xl opacity-70" />
