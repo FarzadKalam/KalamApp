@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../supabaseClient', () => ({
   supabase: {
     from: mocks.from,
+    auth: {
+      getUser: vi.fn(async () => ({ data: { user: null } })),
+    },
   },
   supabaseSignUpClient: {
     from: mocks.from,
@@ -313,6 +316,116 @@ describe('send_to_next_stages workflow action', () => {
       id: 'task-second-next',
       payload: expect.objectContaining({ task_report: 'گزارش منتقل شد' }),
     });
+  });
+});
+
+describe('formula-based workflow actions', () => {
+  beforeEach(() => {
+    mocks.from.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it('updates the current record with a calculated formula value', async () => {
+    const updates: Array<{ id: string; payload: Record<string, any> }> = [];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return {
+          update: vi.fn((payload: Record<string, any>) => ({
+            eq: vi.fn(async (_field: string, id: string) => {
+              updates.push({ id, payload });
+              return { data: null, error: null };
+            }),
+          })),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-formula-update',
+        type: 'update_record',
+        config: {
+          field: 'score',
+          value_mode: 'formula',
+          formula_expression_text: '{{weight}} * 10 + {{bonus}}',
+          formula_expression_config: {
+            type: 'binary',
+            operator: 'add',
+            left: {
+              type: 'binary',
+              operator: 'multiply',
+              left: { type: 'field', path: 'weight', fallback: 0 },
+              right: { type: 'constant', value: 10 },
+            },
+            right: { type: 'field', path: 'bonus', fallback: 0 },
+          },
+        },
+      },
+      'customers',
+      { id: 'record-1', weight: 3, bonus: 5 }
+    );
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toEqual({
+      id: 'record-1',
+      payload: expect.objectContaining({ score: 35 }),
+    });
+  });
+
+  it('creates a related record with a calculated formula mapping', async () => {
+    const inserts: Array<Record<string, any>> = [];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        return {
+          insert: vi.fn((payload: Record<string, any>) => {
+            inserts.push(payload);
+            return {
+              select: vi.fn(() => ({
+                maybeSingle: vi.fn(async () => ({ data: { id: 'invoice-1' }, error: null })),
+              })),
+            };
+          }),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-formula-create',
+        type: 'create_related_record',
+        config: {
+          source_module_id: 'customers',
+          target_module_id: 'invoices',
+          relation_field_key: 'customer_id',
+          field_mappings: [
+            {
+              id: 'mapping-1',
+              field: 'total_amount',
+              mode: 'formula',
+              formula_expression_text: '{{amount}} * {{count}}',
+              formula_expression_config: {
+                type: 'binary',
+                operator: 'multiply',
+                left: { type: 'field', path: 'amount', fallback: 0 },
+                right: { type: 'field', path: 'count', fallback: 0 },
+              },
+            },
+          ],
+        },
+      },
+      'customers',
+      { id: 'customer-1', amount: 2500, count: 4 }
+    );
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toEqual(expect.objectContaining({
+      customer_id: 'customer-1',
+      total_amount: 10000,
+    }));
   });
 });
 

@@ -1060,10 +1060,10 @@ const ConnectionsTab: React.FC = () => {
         throw new Error('شناسه یکتای حافظه مالیاتی را وارد کنید.');
       }
       if (!settings.private_key && !currentValues.has_private_key) {
-        throw new Error('کلید خصوصی امضا را وارد و ذخیره کنید.');
+        throw new Error('کلید خصوصی امضای سامانه مودیان را وارد و ذخیره کنید.');
       }
       if (settings.integration_mode === 'certificate_v2' && !settings.certificate_pem && !currentValues.has_certificate) {
-        throw new Error('گواهی امضا را وارد و ذخیره کنید.');
+        throw new Error('برای مسیر نسخه ۲، گواهی امضا را وارد و ذخیره کنید.');
       }
 
       const { data: saveData, error: saveError } = await supabase.functions.invoke('taxpayer_system', {

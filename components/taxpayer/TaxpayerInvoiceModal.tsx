@@ -122,10 +122,10 @@ const resolveInvokeErrorMessage = async (error: any, fallback: string) => {
         : typeof context.text === 'function'
           ? await context.text()
           : null;
-      if (typeof payload === 'string' && payload.trim()) return payload.trim();
+      if (typeof payload === 'string' && payload.trim()) return toFaErrorMessage(payload.trim(), fallback);
       if (payload && typeof payload === 'object') {
         const direct = String(payload.message || payload.error || '').trim();
-        if (direct) return direct;
+        if (direct) return toFaErrorMessage(direct, fallback);
       }
     } catch {
       // Ignore context parse errors and fall back to the generic formatter below.
@@ -247,7 +247,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
       });
       if (error) throw error;
       if (!data?.success) throw new Error(String(data?.message || 'ارسال به سامانه مودیان ناموفق بود.'));
-      message.success(data.message || 'فاکتور برای سامانه مودیان ارسال شد.');
+      message.success(data.message || 'فاکتور با موفقیت به سامانه مودیان ارسال شد.');
       await fetchHistory();
       await onRefresh?.();
     } catch (err: any) {
@@ -269,7 +269,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
       });
       if (error) throw error;
       if (!data?.success) throw new Error(String(data?.message || 'استعلام وضعیت ناموفق بود.'));
-      message.success(data.message || 'استعلام وضعیت انجام شد.');
+      message.success(data.message || 'استعلام وضعیت سامانه مودیان با موفقیت انجام شد.');
       await fetchHistory();
     } catch (err: any) {
       const errorMessage = await resolveInvokeErrorMessage(err, 'خطا در استعلام وضعیت سامانه مودیان');
@@ -380,11 +380,11 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
               return (
                 <Space direction="vertical" size={4} className="w-full">
                   <Typography.Paragraph className="!mb-0 whitespace-pre-wrap text-xs">
-                    {record.error_message || 'No error text was recorded.'}
+                    {record.error_message || 'متن خطایی برای این ارسال ثبت نشده است.'}
                   </Typography.Paragraph>
-                  {debug.stage ? <Typography.Text className="text-xs">Stage: {debug.stage}</Typography.Text> : null}
-                  {debug.requestTraceId ? <Typography.Text className="text-xs">Request Trace: {debug.requestTraceId}</Typography.Text> : null}
-                  {debug.packetUid ? <Typography.Text className="text-xs">Packet UID: {debug.packetUid}</Typography.Text> : null}
+                  {debug.stage ? <Typography.Text className="text-xs">مرحله: {debug.stage}</Typography.Text> : null}
+                  {debug.requestTraceId ? <Typography.Text className="text-xs">شناسه رهگیری درخواست: {debug.requestTraceId}</Typography.Text> : null}
+                  {debug.packetUid ? <Typography.Text className="text-xs">شناسه بسته: {debug.packetUid}</Typography.Text> : null}
                 </Space>
               );
             },

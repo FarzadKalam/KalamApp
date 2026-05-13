@@ -2389,7 +2389,17 @@ const HRPage: React.FC = () => {
   }, [scheduleRows, selectedEmployeeIdSet]);
 
   const visibleRequestRows = useMemo(() => {
-    return requestRows.filter((row) => !row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)));
+    return requestRows.filter((row) =>
+      ['leave_requests', 'overtime_requests', 'mission_requests'].includes(String(row.moduleId || ''))
+      && (!row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)))
+    );
+  }, [requestRows, selectedEmployeeIdSet]);
+
+  const visibleCompensationRows = useMemo(() => {
+    return requestRows.filter((row) =>
+      ['employee_bonus_requests', 'employee_penalty_requests'].includes(String(row.moduleId || ''))
+      && (!row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)))
+    );
   }, [requestRows, selectedEmployeeIdSet]);
 
   const totals = useMemo(() => {
@@ -5091,14 +5101,39 @@ const HRPage: React.FC = () => {
             <div className="text-xs text-orange-600 mt-1">در انتظار: {toPersianNumber(supportStats.requests.missionPending)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={12} xl={8}>
+      </Row>
+      <Card>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <Button onClick={() => navigate('/leave_requests')}>مرخصی‌ها</Button>
+          <Button onClick={() => navigate('/overtime_requests')}>اضافه‌کاری‌ها</Button>
+          <Button onClick={() => navigate('/mission_requests')}>ماموریت‌ها</Button>
+        </div>
+        {visibleRequestRows.length === 0 ? (
+          <Empty description="درخواستی برای این بازه یافت نشد." />
+        ) : (
+          <Table
+            rowKey="key"
+            columns={requestColumns}
+            dataSource={visibleRequestRows}
+            pagination={{ pageSize: 15, showSizeChanger: false }}
+            scroll={{ x: 1200 }}
+          />
+        )}
+      </Card>
+    </>
+  );
+
+  const compensationTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={12}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پاداش‌ها</div>
             <div className="text-lg font-black">{toPersianNumber(supportStats.requests.bonusTotal)}</div>
             <div className="text-xs text-orange-600 mt-1">در انتظار: {toPersianNumber(supportStats.requests.bonusPending)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={12} xl={8}>
+        <Col xs={24} md={12}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">جریمه‌ها</div>
             <div className="text-lg font-black">{toPersianNumber(supportStats.requests.penaltyTotal)}</div>
@@ -5108,19 +5143,16 @@ const HRPage: React.FC = () => {
       </Row>
       <Card>
         <div className="flex flex-wrap gap-2 mb-4">
-          <Button onClick={() => navigate('/leave_requests')}>مرخصی‌ها</Button>
-          <Button onClick={() => navigate('/overtime_requests')}>اضافه‌کاری‌ها</Button>
-          <Button onClick={() => navigate('/mission_requests')}>ماموریت‌ها</Button>
           <Button onClick={() => navigate('/employee_bonus_requests')}>پاداش‌ها</Button>
           <Button onClick={() => navigate('/employee_penalty_requests')}>جریمه‌ها</Button>
         </div>
-        {visibleRequestRows.length === 0 ? (
-          <Empty description="درخواستی برای این بازه یافت نشد." />
+        {visibleCompensationRows.length === 0 ? (
+          <Empty description="آیتم پاداش یا جریمه‌ای برای این بازه یافت نشد." />
         ) : (
           <Table
             rowKey="key"
             columns={requestColumns}
-            dataSource={visibleRequestRows}
+            dataSource={visibleCompensationRows}
             pagination={{ pageSize: 15, showSizeChanger: false }}
             scroll={{ x: 1200 }}
           />
@@ -5574,6 +5606,7 @@ const HRPage: React.FC = () => {
               { key: 'attendance', label: 'تردد', children: attendanceTabContent },
               { key: 'schedules', label: 'برنامه حضور', children: schedulesTabContent },
               { key: 'requests', label: 'درخواست‌ها', children: requestsTabContent },
+              { key: 'compensation', label: 'پاداش / جریمه', children: compensationTabContent },
               { key: 'goals', label: 'تحقق اهداف', children: goalFulfillmentTabContent },
               { key: 'commissions', label: 'پورسانت‌ها', children: commissionsTabContent },
               { key: 'payroll', label: 'فیش حقوقی', children: payrollTabContent },

@@ -29,6 +29,7 @@ import { NoteAttachment, serializeNoteContent } from './noteContent';
 import { fetchAssigneeDirectory, fetchRecordTagsMap } from './referenceData';
 import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
+import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
 
@@ -1700,6 +1701,11 @@ const resolveConfiguredActionValue = async (
     };
     return resolveConditionFieldValue(sourceField, currentRecord, moduleId, context);
   }
+  if (valueMode === 'formula') {
+    const expressionConfig = config?.formula_expression_config;
+    if (!expressionConfig || typeof expressionConfig !== 'object') return null;
+    return evaluateFormulaExpression(expressionConfig, currentRecord || {}).value;
+  }
   return config?.value ?? null;
 };
 
@@ -2196,6 +2202,12 @@ export const executeWorkflowAction = async (
         const sourceField = String(mapping?.source_field || '').trim();
         payload[targetField] = sourceField
           ? await resolveConditionFieldValue(sourceField, currentRecord, moduleId, mappingContext)
+          : null;
+        continue;
+      }
+      if (mapping?.mode === 'formula') {
+        payload[targetField] = mapping?.formula_expression_config && typeof mapping.formula_expression_config === 'object'
+          ? evaluateFormulaExpression(mapping.formula_expression_config, currentRecord || {}).value
           : null;
         continue;
       }

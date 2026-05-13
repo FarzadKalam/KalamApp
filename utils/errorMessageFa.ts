@@ -144,17 +144,35 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   if (contains(normalized, 'private key has not been saved')) {
     return 'کلید خصوصی سامانه مودیان ذخیره نشده است.';
   }
+  if (contains(normalized, 'stored private key format is invalid')) {
+    return 'فرمت کلید خصوصی ذخیره‌شده معتبر نیست.';
+  }
+  if (contains(normalized, 'the private key must be pkcs#8')) {
+    return 'فرمت کلید خصوصی باید PKCS#8 باشد.';
+  }
   if (contains(normalized, 'certificate is required for taxpayer-system v2 mode')) {
     return 'برای مسیر نسخه ۲ سامانه مودیان، گواهی امضا الزامی است.';
+  }
+  if (contains(normalized, 'server public key is missing')) {
+    return 'کلید عمومی سرور سامانه مودیان دریافت نشد.';
+  }
+  if (contains(normalized, 'nonce response did not include nonce') || contains(normalized, 'nonce response')) {
+    return 'پاسخ nonce سامانه مودیان معتبر نبود.';
+  }
+  if (contains(normalized, 'get_token succeeded but no access token was returned') || contains(normalized, 'no access token was returned')) {
+    return 'توکن دسترسی سامانه مودیان دریافت نشد.';
   }
   if (contains(normalized, 'sales invoice was not found')) {
     return 'فاکتور فروش پیدا نشد.';
   }
-  if (contains(normalized, 'invoice has no rows to send')) {
-    return 'فاکتور ردیفی برای ارسال ندارد.';
+  if (contains(normalized, 'invoice has no rows to send') || contains(normalized, 'invoice has no rows') || contains(normalized, 'rows to send')) {
+    return 'فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.';
   }
   if (contains(normalized, 'customer identity data is incomplete')) {
     return 'اطلاعات هویتی مشتری کامل نیست.';
+  }
+  if (contains(normalized, 'fiscal memory id must be exactly 6 characters')) {
+    return 'شناسه یکتای حافظه مالیاتی باید دقیقا ۶ کاراکتر باشد.';
   }
   if (contains(normalized, 'product/service identifier is missing')) {
     return 'شناسه کالا/خدمت برای یکی از ردیف‌های فاکتور ثبت نشده است.';
@@ -164,6 +182,15 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   }
   if (contains(normalized, 'quantity is invalid')) {
     return 'تعداد یکی از ردیف‌های فاکتور معتبر نیست.';
+  }
+  if (contains(normalized, 'settlement method is required for taxpayer-system invoices')) {
+    return 'برای ارسال فاکتور به سامانه مودیان، انتخاب روش تسویه الزامی است.';
+  }
+  if (contains(normalized, 'only irr and irt are supported for taxpayer-system invoices')) {
+    return 'برای فاکتورهای سامانه مودیان فقط واحد پولی ریال یا تومان پشتیبانی می‌شود.';
+  }
+  if (contains(normalized, 'legacy serial must be decimal')) {
+    return 'سریال قبلی باید به‌صورت عدد ده‌دهی، بخش هگز ۱۰ کاراکتری سریال، یا شناسه مالیاتی کامل ۲۲ کاراکتری وارد شود.';
   }
   if (contains(normalized, 'invoice_id is required')) {
     return 'شناسه فاکتور الزامی است.';

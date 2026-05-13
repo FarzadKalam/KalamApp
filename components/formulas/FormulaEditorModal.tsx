@@ -3,17 +3,22 @@ import { App, Button, Form, Input, List, Modal, Select, Space, Typography } from
 import { PlusOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
-import { parseSimpleFormulaExpression } from '../../utils/formulaRuntime';
+import { parseSimpleFormulaExpression, type FormulaExpressionNode } from '../../utils/formulaRuntime';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
 
 type FormulaEditorModalProps = {
   open: boolean;
   onCancel: () => void;
   onSaved?: (formula: { id: string; name: string }) => void;
+  onInlineSaved?: (formula: { name: string; expressionText: string; expressionConfig: FormulaExpressionNode }) => void;
   defaultScope?: string;
   defaultContextType?: string;
   defaultOutputType?: string;
   initialFormulaId?: string | null;
+  variableOptions?: Array<{ label: string; token: string }>;
+  inlineMode?: boolean;
+  inlineInitialName?: string | null;
+  inlineInitialExpressionText?: string | null;
 };
 
 type FormulaEditorValues = {
@@ -72,10 +77,15 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
   open,
   onCancel,
   onSaved,
+  onInlineSaved,
   defaultScope = 'activity_performance',
   defaultContextType = 'task',
   defaultOutputType = 'money',
   initialFormulaId = null,
+  variableOptions,
+  inlineMode = false,
+  inlineInitialName = null,
+  inlineInitialExpressionText = null,
 }) => {
   const { message } = App.useApp();
   const [form] = Form.useForm<FormulaEditorValues>();
@@ -87,15 +97,15 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
   useEffect(() => {
     if (!open) return;
     form.setFieldsValue({
-      name: '',
+      name: inlineMode ? String(inlineInitialName || '').trim() : '',
       output_type: defaultOutputType,
-      expression_text: '',
+      expression_text: inlineMode ? String(inlineInitialExpressionText || '').trim() : '',
       description: '',
     });
-  }, [defaultOutputType, form, open, initialFormulaId]);
+  }, [defaultOutputType, form, inlineInitialExpressionText, inlineInitialName, inlineMode, open, initialFormulaId]);
 
   useEffect(() => {
-    if (!open || !isEditMode) return;
+    if (!open || !isEditMode || inlineMode) return;
     let cancelled = false;
     const run = async () => {
       try {
@@ -125,10 +135,10 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [defaultOutputType, form, initialFormulaId, isEditMode, message, open]);
+  }, [defaultOutputType, form, initialFormulaId, inlineMode, isEditMode, message, open]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || inlineMode) return;
     let cancelled = false;
     const run = async () => {
       try {
@@ -150,11 +160,15 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [defaultContextType, open]);
+  }, [defaultContextType, inlineMode, open]);
 
   const variables = useMemo(
-    () => VARIABLE_OPTIONS_BY_CONTEXT[defaultContextType] || VARIABLE_OPTIONS_BY_CONTEXT.generic,
-    [defaultContextType],
+    () => (
+      Array.isArray(variableOptions) && variableOptions.length > 0
+        ? variableOptions
+        : (VARIABLE_OPTIONS_BY_CONTEXT[defaultContextType] || VARIABLE_OPTIONS_BY_CONTEXT.generic)
+    ),
+    [defaultContextType, variableOptions],
   );
 
   const insertText = (token: string) => {
@@ -183,6 +197,15 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
       };
 
       setSaving(true);
+      if (inlineMode) {
+        onInlineSaved?.({
+          name: values.name.trim(),
+          expressionText,
+          expressionConfig: expression,
+        });
+        onCancel();
+        return;
+      }
       const query = isEditMode
         ? supabase
             .from('calculation_formulas')
@@ -211,12 +234,12 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
 
   return (
     <Modal
-      title={isEditMode ? 'ویرایش فرمول' : 'مدیریت و ساخت فرمول'}
+      title={inlineMode ? 'فرمول محاسبه' : (isEditMode ? 'ویرایش فرمول' : 'مدیریت و ساخت فرمول')}
       open={open}
       onCancel={onCancel}
       onOk={handleSave}
       confirmLoading={saving || loadingFormula}
-      okText={isEditMode ? 'ذخیره تغییرات' : 'ذخیره فرمول'}
+      okText={inlineMode ? 'ثبت فرمول' : (isEditMode ? 'ذخیره تغییرات' : 'ذخیره فرمول')}
       cancelText="انصراف"
       destroyOnHidden
       width={1120}
@@ -224,27 +247,33 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <div className="rounded-2xl border border-gray-200 p-3 dark:border-gray-800">
           <div className="mb-3 font-black text-gray-800 dark:text-gray-100">فرمول‌های ذخیره‌شده</div>
-          <List
-            size="small"
-            dataSource={savedFormulas}
-            locale={{ emptyText: 'هنوز فرمولی در این زمینه ذخیره نشده است.' }}
-            renderItem={(item) => (
-              <List.Item
-                className="cursor-pointer rounded-xl px-2 hover:bg-gray-50 dark:hover:bg-white/5"
-                onClick={() => {
-                  form.setFieldsValue({
-                    name: item.name,
-                    expression_text: String(item?.config?.expression_text || item?.formula || ''),
-                  } as any);
-                }}
-              >
-                <div>
-                  <div className="font-medium">{item.name}</div>
-                  <div className="text-xs text-gray-500">{String(item?.config?.expression_text || '').trim() || 'فرمول ذخیره‌شده'}</div>
-                </div>
-              </List.Item>
-            )}
-          />
+          {inlineMode ? (
+            <div className="text-xs leading-7 text-gray-500">
+              در این حالت فرمول فقط داخل همین اقدام ذخیره می‌شود و رکورد جداگانه‌ای در ماژول فرمول‌ها ساخته نخواهد شد.
+            </div>
+          ) : (
+            <List
+              size="small"
+              dataSource={savedFormulas}
+              locale={{ emptyText: 'هنوز فرمولی در این زمینه ذخیره نشده است.' }}
+              renderItem={(item) => (
+                <List.Item
+                  className="cursor-pointer rounded-xl px-2 hover:bg-gray-50 dark:hover:bg-white/5"
+                  onClick={() => {
+                    form.setFieldsValue({
+                      name: item.name,
+                      expression_text: String(item?.config?.expression_text || item?.formula || ''),
+                    } as any);
+                  }}
+                >
+                  <div>
+                    <div className="font-medium">{item.name}</div>
+                    <div className="text-xs text-gray-500">{String(item?.config?.expression_text || '').trim() || 'فرمول ذخیره‌شده'}</div>
+                  </div>
+                </List.Item>
+              )}
+            />
+          )}
           <div className="mt-4 border-t border-gray-100 pt-3 dark:border-gray-800">
             <div className="mb-2 text-xs font-bold text-gray-500">فرمول‌های رایج</div>
             <Space wrap>
@@ -304,7 +333,9 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
             </Form.Item>
 
             <Typography.Text type="secondary" className="text-xs leading-7">
-              زمینه این فرمول از محلی که دکمه «افزودن فرمول» را زده‌اید تعیین می‌شود. اینجا فقط نام، خروجی و متن فرمول را می‌سازید.
+              {inlineMode
+                ? 'متغیرهای این فرمول از همان فیلدهای قابل استفاده در گردش کار یا اتوماسیون گرفته می‌شوند و خروجی آن به عنوان مقدار نهایی فیلد اعمال خواهد شد.'
+                : 'زمینه این فرمول از محلی که دکمه «افزودن فرمول» را زده‌اید تعیین می‌شود. اینجا فقط نام، خروجی و متن فرمول را می‌سازید.'}
             </Typography.Text>
           </Form>
         </div>

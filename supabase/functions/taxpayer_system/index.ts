@@ -61,7 +61,7 @@ const taxErrorMessage = (value: any) => {
   }
   if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
   if (typeof value === 'string' && value.trim()) return value.trim();
-  return payload ? JSON.stringify(payload) : 'Taxpayer system request failed.';
+  return payload ? JSON.stringify(payload) : 'درخواست به سامانه مودیان ناموفق بود.';
 };
 const readTaxResponse = async (response: Response) => {
   const raw = await response.text();
@@ -72,7 +72,7 @@ const readTaxResponse = async (response: Response) => {
 
 const secretKey = async () => {
   const secret = String(Deno.env.get('TAXPAYER_SECRET_ENCRYPTION_KEY') || '').trim();
-  if (!secret) throw new Error('TAXPAYER_SECRET_ENCRYPTION_KEY is not configured.');
+  if (!secret) throw new Error('کلید رمزنگاری سامانه مودیان در تنظیمات سرور ثبت نشده است.');
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
   return crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 };
@@ -85,7 +85,7 @@ const encryptSecret = async (plain: string) => {
 };
 const decryptSecret = async (encrypted: string) => {
   const [v, iv, cipher] = String(encrypted || '').split(':');
-  if (v !== 'v1' || !iv || !cipher) throw new Error('Stored private key format is invalid.');
+  if (v !== 'v1' || !iv || !cipher) throw new Error('فرمت کلید خصوصی ذخیره‌شده معتبر نیست.');
   const key = await secretKey();
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(iv) }, key, unb64(cipher));
   return new TextDecoder().decode(plain);
@@ -98,7 +98,7 @@ const pemBody = (pem: string, label: string) => {
 };
 const pemToDer = (pem: string, label: string) => unb64(pemBody(pem, label)).buffer;
 const importPrivateKey = (privateKeyPem: string) => {
-  if (/BEGIN RSA PRIVATE KEY/i.test(privateKeyPem)) throw new Error('The private key must be PKCS#8. Raw/base64 or BEGIN PRIVATE KEY is accepted, BEGIN RSA PRIVATE KEY is not.');
+  if (/BEGIN RSA PRIVATE KEY/i.test(privateKeyPem)) throw new Error('فرمت کلید خصوصی باید PKCS#8 باشد. مقدار Raw/Base64 یا BEGIN PRIVATE KEY قابل قبول است، اما BEGIN RSA PRIVATE KEY پشتیبانی نمی‌شود.');
   return crypto.subtle.importKey('pkcs8', pemToDer(privateKeyPem, 'PRIVATE KEY'), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
 };
 const signText = async (privateKeyPem: string, text: string) => {
@@ -116,9 +116,9 @@ const d = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,
 const p = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
 const inv = [0,4,3,2,1,5,6,7,8,9];
 const check = (input: string) => { let c = 0; String(input).split('').reverse().forEach((ch, i) => { c = d[c][p[(i + 1) % 8][Number(ch)]]; }); return inv[c]; };
-const epochDays = (date: string) => { const [y,m,day] = String(date || '').slice(0,10).split('-').map(Number); if (!y || !m || !day) throw new Error('Invoice date is invalid.'); return Math.floor((Date.UTC(y,m-1,day)-Date.UTC(1970,0,1))/86400000); };
+const epochDays = (date: string) => { const [y,m,day] = String(date || '').slice(0,10).split('-').map(Number); if (!y || !m || !day) throw new Error('تاریخ فاکتور معتبر نیست.'); return Math.floor((Date.UTC(y,m-1,day)-Date.UTC(1970,0,1))/86400000); };
 const taxId = (fid: string, date: string, serial: bigint) => {
-  const f = fiscal(fid); if (f.length !== 6) throw new Error('Fiscal memory id must be exactly 6 characters.');
+  const f = fiscal(fid); if (f.length !== 6) throw new Error('شناسه یکتای حافظه مالیاتی باید دقیقا ۶ کاراکتر باشد.');
   const days = epochDays(date);
   const fInput = f.split('').map((ch) => /^\d$/.test(ch) ? ch : String(ch.charCodeAt(0))).join('');
   const input = `${fInput}${String(days).padStart(6,'0')}${String(serial).padStart(12,'0')}`;
@@ -130,9 +130,9 @@ const rial = (value: any, currency: string) => {
   const c = String(currency || 'IRT').toUpperCase();
   if (c === 'IRT') return Math.round(n * 10);
   if (c === 'IRR') return Math.round(n);
-  throw new Error('Only IRR and IRT are supported for taxpayer-system invoices.');
+  throw new Error('برای فاکتورهای سامانه مودیان فقط واحد پولی ریال یا تومان پشتیبانی می‌شود.');
 };
-const setm = (value: string) => value === 'cash' ? 1 : value === 'credit' ? 2 : value === 'mixed' ? 3 : (() => { throw new Error('Settlement method is required for taxpayer-system invoices.'); })();
+const setm = (value: string) => value === 'cash' ? 1 : value === 'credit' ? 2 : value === 'mixed' ? 3 : (() => { throw new Error('برای ارسال فاکتور به سامانه مودیان، انتخاب روش تسویه الزامی است.'); })();
 const rowAmounts = (row: any) => {
   const q = Number(row?.quantity || 0), price = Number(row?.unit_price || 0), base = q * price, di = Number(row?.discount || 0), vi = Number(row?.vat || 0);
   const dis = String(row?.discount_type || 'amount') === 'percent' ? base * di / 100 : di;
@@ -146,41 +146,41 @@ const parseLegacySerial = (value: any) => {
   const normalized = input.replace(/[^0-9A-Z]/g, '');
   const serialHex = normalized.length === 22 ? normalized.slice(11, 21) : normalized;
   if (/^[0-9A-F]{1,10}$/.test(serialHex)) return Number.parseInt(serialHex, 16);
-  throw new Error('Legacy serial must be decimal, the 10-digit hex serial, or a full 22-character tax id.');
+  throw new Error('سریال قبلی باید به‌صورت عدد ده‌دهی، بخش هگز ۱۰ کاراکتری سریال، یا شناسه مالیاتی کامل ۲۲ کاراکتری وارد شود.');
 };
 
 const select = async (urlBase: string, key: string, table: string, params: Record<string,string>) => {
   const url = new URL(`${urlBase.replace(/\/+$/,'')}/rest/v1/${table}`);
   Object.entries(params).forEach(([k,v]) => url.searchParams.set(k,v));
   const res = await fetch(url, { headers: h(key) });
-  const raw = await res.text(); if (!res.ok) throw new Error(raw || `select ${table} failed`);
+  const raw = await res.text(); if (!res.ok) throw new Error(raw || `خواندن اطلاعات از جدول ${table} ناموفق بود.`);
   return raw ? JSON.parse(raw) : [];
 };
 const insert = async (urlBase: string, key: string, table: string, rows: any[]) => {
   const res = await fetch(`${urlBase.replace(/\/+$/,'')}/rest/v1/${table}`, { method: 'POST', headers: { ...h(key), Prefer: 'return=representation' }, body: JSON.stringify(rows) });
-  const raw = await res.text(); if (!res.ok) throw new Error(raw || `insert ${table} failed`);
+  const raw = await res.text(); if (!res.ok) throw new Error(raw || `ثبت اطلاعات در جدول ${table} ناموفق بود.`);
   return raw ? JSON.parse(raw) : [];
 };
 const patch = async (urlBase: string, key: string, table: string, id: string, body: any) => {
   const url = new URL(`${urlBase.replace(/\/+$/,'')}/rest/v1/${table}`); url.searchParams.set('id', `eq.${id}`);
   const res = await fetch(url, { method: 'PATCH', headers: { ...h(key), Prefer: 'return=representation' }, body: JSON.stringify(body) });
-  const raw = await res.text(); if (!res.ok) throw new Error(raw || `patch ${table} failed`);
+  const raw = await res.text(); if (!res.ok) throw new Error(raw || `به‌روزرسانی اطلاعات در جدول ${table} ناموفق بود.`);
   return raw ? JSON.parse(raw) : [];
 };
 const rpc = async (urlBase: string, key: string, fn: string, body: any) => {
   const res = await fetch(`${urlBase.replace(/\/+$/,'')}/rest/v1/rpc/${fn}`, { method: 'POST', headers: h(key), body: JSON.stringify(body) });
-  const raw = await res.text(); if (!res.ok) throw new Error(raw || `rpc ${fn} failed`);
+  const raw = await res.text(); if (!res.ok) throw new Error(raw || `اجرای تابع ${fn} ناموفق بود.`);
   return raw ? JSON.parse(raw) : null;
 };
 const upsertSettings = async (urlBase: string, key: string, row: any) => {
   const res = await fetch(`${urlBase.replace(/\/+$/,'')}/rest/v1/taxpayer_settings?on_conflict=org_id`, { method: 'POST', headers: { ...h(key), Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([row]) });
-  const raw = await res.text(); if (!res.ok) throw new Error(raw || 'Saving taxpayer settings failed.');
+  const raw = await res.text(); if (!res.ok) throw new Error(raw || 'ذخیره تنظیمات سامانه مودیان ناموفق بود.');
   return first(raw ? JSON.parse(raw) : null);
 };
 
 const verifyUser = async (urlBase: string, key: string, token: string) => {
   const res = await fetch(`${urlBase.replace(/\/+$/,'')}/auth/v1/user`, { headers: { apikey: key, Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error('Unauthorized');
+  if (!res.ok) throw new Error('نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.');
   const user = await res.json();
   const profile = first(await select(urlBase, key, 'profiles', { id: `eq.${user.id}`, select: 'id,org_id', limit: '1' }));
   return { ...user, org_id: profile?.org_id || null };
@@ -292,7 +292,7 @@ const serverKeyInfo = (info: any) => {
 const serverKey = (info: any) => serverKeyInfo(info).key;
 const encryptLegacyPacket = async (settings: any, packet: any) => {
   const keyInfo = serverKeyInfo(settings.server_information || {});
-  if (!keyInfo.key) throw new Error('Server public key is missing in GET_SERVER_INFORMATION response.');
+  if (!keyInfo.key) throw new Error('کلید عمومی سرور در پاسخ اطلاعات سرور سامانه مودیان دریافت نشد.');
   const rawKey = crypto.getRandomValues(new Uint8Array(32));
   const aesKey = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(16));
@@ -314,7 +314,7 @@ const invokeLegacyGetServerInformation = async (settings: any, privateKey: strin
 const getLegacyToken = async (settings: any, privateKey: string) => {
   const tokenRes = await invokeLegacySync(settings, privateKey, 'GET_TOKEN', { username: settings.fiscal_id });
   const token = String(tokenRes?.result?.data?.token || tokenRes?.data?.token || tokenRes?.result?.token || tokenRes?.token || tokenRes?.access_token || '').trim();
-  if (!token) throw new Error('GET_TOKEN succeeded but no access token was returned.');
+  if (!token) throw new Error('توکن دسترسی سامانه مودیان دریافت نشد.');
   return { token };
 };
 const buildLegacyEncryptedInvoicePacket = async (settings: any, privateKey: string, payload: any, uid: string) => {
@@ -359,7 +359,7 @@ const createJws = async (privateKey: string, payload: any, certificatePem?: stri
 const getV2Authorization = async (settings: any, privateKey: string, certificatePem: string) => {
   const nonce = await readTaxResponse(await fetch(v2Url(settings, 'nonce')));
   const nonceValue = String(nonce?.nonce || nonce?.data?.nonce || nonce?.result?.nonce || nonce?.result?.data?.nonce || '').trim();
-  if (!nonceValue) throw new Error('v2 nonce response did not include nonce.');
+  if (!nonceValue) throw new Error('پاسخ nonce سامانه مودیان معتبر نبود.');
   const jws = await createJws(privateKey, { nonce: nonceValue, clientId: settings.fiscal_id }, certificatePem);
   return `Bearer ${jws}`;
 };
@@ -374,7 +374,7 @@ const v2Request = async (settings: any, privateKey: string, certificatePem: stri
 const invokeV2GetServerInformation = (settings: any, privateKey: string, certificatePem: string) => v2Request(settings, privateKey, certificatePem, 'GET', 'server-information');
 const createJwe = async (settings: any, payload: string) => {
   const keyInfo = serverKeyInfo(settings.server_information || {});
-  if (!keyInfo.key) throw new Error('Server public key is missing in v2 server-information response.');
+  if (!keyInfo.key) throw new Error('کلید عمومی سرور در پاسخ server-information نسخه ۲ سامانه مودیان دریافت نشد.');
   const protectedHeader = b64url(JSON.stringify({ alg: 'RSA-OAEP-256', enc: 'A256GCM', kid: keyInfo.id }));
   const cek = crypto.getRandomValues(new Uint8Array(32));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -410,13 +410,13 @@ const asyncResultRow = (response: any) =>
 
 const requireSettings = async (urlBase: string, key: string, orgId: string) => {
   const [s, c] = await Promise.all([settingsRow(urlBase, key, orgId), companyRow(urlBase, key, orgId)]);
-  if (!s?.is_active) throw new Error('Taxpayer-system connection is not active.');
+  if (!s?.is_active) throw new Error('اتصال سامانه مودیان غیرفعال است.');
   const seller = String(c?.economic_code || c?.national_id || '').trim();
-  if (!seller) throw new Error('Seller economic code is missing in company settings.');
-  if (!s?.private_key_encrypted) throw new Error('Private key has not been saved.');
+  if (!seller) throw new Error('کد اقتصادی فروشنده در تنظیمات شرکت ثبت نشده است.');
+  if (!s?.private_key_encrypted) throw new Error('کلید خصوصی سامانه مودیان ذخیره نشده است.');
   const mode = modeOf(s);
-  if (fiscal(s.fiscal_id).length !== 6) throw new Error('Fiscal memory id must be exactly 6 characters.');
-  if (mode === 'certificate_v2' && !String(s?.certificate_pem || '').trim()) throw new Error('Certificate is required for taxpayer-system v2 mode.');
+  if (fiscal(s.fiscal_id).length !== 6) throw new Error('شناسه یکتای حافظه مالیاتی باید دقیقا ۶ کاراکتر باشد.');
+  if (mode === 'certificate_v2' && !String(s?.certificate_pem || '').trim()) throw new Error('برای مسیر نسخه ۲ سامانه مودیان، گواهی امضا الزامی است.');
   return {
     settings: { ...s, integration_mode: mode, fiscal_id: fiscal(s.fiscal_id), seller_economic_code: seller, base_url: baseUrlForMode(mode, s.base_url), legacy_last_serial: Number(s?.legacy_last_serial || 0) || 0 },
     company: c,
@@ -427,7 +427,7 @@ const requireSettings = async (urlBase: string, key: string, orgId: string) => {
 
 const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoiceId: string) => {
   const invoice = first(await select(urlBase, key, 'invoices', { id: `eq.${invoiceId}`, org_id: `eq.${orgId}`, select: '*', limit: '1' }));
-  if (!invoice?.id) throw new Error('Sales invoice was not found.');
+  if (!invoice?.id) throw new Error('فاکتور فروش پیدا نشد.');
   const customer = invoice.customer_id ? first(await select(urlBase, key, 'customers', { id: `eq.${invoice.customer_id}`, select: '*', limit: '1' })) : null;
   const ids = Array.from(new Set((Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : []).map((x: any) => String(x?.product_id || '').trim()).filter(Boolean)));
   let products: Record<string,any> = {};
@@ -441,44 +441,44 @@ const invoicePayload = (args: any) => {
   const { invoice, customer, products, company, settings, txid, serial, settlement } = args;
   const invDate = String(invoice.invoice_date || '').slice(0,10);
   const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
-  if (!items.length) throw new Error('Invoice has no rows to send.');
+  if (!items.length) throw new Error('فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.');
   const currency = String(company?.currency_code || 'IRT');
   const settlementCode = setm(settlement);
   const buyerType = String(customer?.person_type || 'real') === 'legal' ? 2 : 1;
   const buyerId = buyerType === 2 ? String(customer?.national_id || '').trim() : String(customer?.national_code || '').trim();
-  if (!customer?.id || !buyerId) throw new Error('Customer identity data is incomplete.');
+  if (!customer?.id || !buyerId) throw new Error('اطلاعات هویتی مشتری برای ارسال به سامانه مودیان کامل نیست.');
   let tprdis=0, tdis=0, tadis=0, tvam=0, tbill=0;
   const body = items.map((item: any, i: number) => {
     const product = products[String(item?.product_id || '')] || {};
     const sstid = String(product?.product_identifier || '').trim();
-    if (!sstid) throw new Error(`Product/service identifier is missing for row ${i + 1}.`);
+    if (!sstid) throw new Error(`شناسه کالا/خدمت در ردیف ${i + 1} فاکتور ثبت نشده است.`);
     const mu = String(item?.measure_unit_code ?? item?.mu ?? product?.taxpayer_measure_unit_code ?? '').trim();
-    if (!mu) throw new Error(`Taxpayer measure unit code is missing for row ${i + 1}.`);
+    if (!mu) throw new Error(`کد واحد اندازه‌گیری مودیان در ردیف ${i + 1} فاکتور ثبت نشده است.`);
     const qty = Number(item?.quantity || 0);
-    if (!(qty > 0)) throw new Error(`Quantity is invalid for row ${i + 1}.`);
+    if (!(qty > 0)) throw new Error(`تعداد در ردیف ${i + 1} فاکتور معتبر نیست.`);
     const a = rowAmounts(item);
     const base = rial(a.base,currency), dis = rial(a.dis,currency), after = rial(a.after,currency), vat = rial(a.vat,currency), total = rial(a.total,currency);
     tprdis += base; tdis += dis; tadis += after; tvam += vat; tbill += total;
-    return { sstid, sstt: String(item?.description || product?.name || 'Product/Service'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop: settlementCode === 1 ? vat : null, tsstam: total };
+    return { sstid, sstt: String(item?.description || product?.name || 'کالا/خدمت'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop: settlementCode === 1 ? vat : null, tsstam: total };
   });
   const received = rial(invoice.total_received_amount || 0, currency);
   const cap = settlementCode === 1 ? tbill : settlementCode === 2 ? null : Math.min(Math.max(received, 0), tbill);
   const insp = settlementCode === 2 ? tbill : settlementCode === 1 ? null : Math.max(tbill - (cap || 0), 0);
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
-  return { packetType: 'INVOICE.V01', data: { header: { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: indatim, inty: Number(invoice.taxpayer_invoice_type || 1), inp: Number(invoice.taxpayer_invoice_pattern || 1), ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb: String(customer?.economic_code || '').trim() || undefined, bpc: String(customer?.postal_code || '') || undefined, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop: tvam, tax17: null }, body, payments: [] } };
+  return { packetType: 'INVOICE.V01', data: { header: { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: indatim, inty: Number(invoice.taxpayer_invoice_type || 1), inp: Number(invoice.taxpayer_invoice_pattern || 1), ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb: String(customer?.economic_code || '').trim() || null, bpc: String(customer?.postal_code || '') || null, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop: tvam, tax17: null }, body, payments: [] } };
 };
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (req.method !== 'POST') return json(405, { success: false, message: 'Method Not Allowed' });
+  if (req.method !== 'POST') return json(405, { success: false, message: 'روش درخواست معتبر نیست.' });
   const urlBase = Deno.env.get('SUPABASE_URL'); const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (!urlBase || !key) return json(500, { success: false, message: 'Missing Supabase environment variables' });
+  if (!urlBase || !key) return json(500, { success: false, message: 'تنظیمات سرور Supabase کامل نیست.' });
   try {
     const auth = req.headers.get('Authorization') || '';
-    if (!auth.startsWith('Bearer ')) return json(401, { success: false, message: 'Missing bearer token' });
+    if (!auth.startsWith('Bearer ')) return json(401, { success: false, message: 'نشست کاربری معتبر نیست. دوباره وارد شوید.' });
     const user = await verifyUser(urlBase, key, auth.replace(/^Bearer\s+/i, '').trim());
     const orgId = String(user.org_id || '').trim();
-    if (!orgId) return json(403, { success: false, message: 'User organization is missing.' });
+    if (!orgId) return json(403, { success: false, message: 'سازمان کاربر مشخص نیست.' });
     const body = await req.json();
     const action = String(body?.action || '').trim();
 
@@ -525,12 +525,12 @@ Deno.serve(async (req) => {
         : await invokeLegacyGetServerInformation(settings, privateKey);
       await upsertSettings(urlBase,key,{ id: settings.id, org_id: orgId, server_information: info || {}, updated_by: user.id, updated_at: new Date().toISOString() });
       if (action === 'test_connection' && settings.integration_mode === 'no_certificate_legacy') await getLegacyToken({ ...settings, server_information: info || {} }, privateKey);
-      return json(200, { success: true, message: settings.integration_mode === 'certificate_v2' ? 'v2 server information received and nonce authentication succeeded.' : 'Server information received and GET_TOKEN succeeded.', server_information: info });
+      return json(200, { success: true, message: settings.integration_mode === 'certificate_v2' ? 'ارتباط با سامانه مودیان برقرار است و احراز هویت نسخه ۲ با موفقیت انجام شد.' : 'ارتباط با سامانه مودیان برقرار است و دریافت توکن با موفقیت انجام شد.', server_information: info });
     }
 
     if (action === 'send_invoice') {
       const invoiceId = String(body?.invoice_id || '').trim();
-      if (!invoiceId) return json(400, { success: false, message: 'invoice_id is required.' });
+      if (!invoiceId) return json(400, { success: false, message: 'شناسه فاکتور الزامی است.' });
       const { settings, company, privateKey, certificatePem } = await requireSettings(urlBase,key,orgId);
       let currentSettings = settings;
       if (!serverKey(currentSettings.server_information || {})) {
@@ -564,7 +564,7 @@ Deno.serve(async (req) => {
         const row = asyncResultRow(res);
         if (row?.errorCode || row?.errorMessage || row?.errorDetail) throw new Error([row?.errorCode, row?.errorMessage || row?.errorDetail].filter(Boolean).join(' - '));
         sub = first(await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ uid: String(row?.uid || uid || '').trim() || null, reference_number: String(row?.referenceNumber || row?.reference_number || '').trim() || null, status: 'sent', response_payload: { ...(res || {}), _kalam_debug: { ...packetDebug, stage: 'send', send_debug: sendResult.debug } }, sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })) || sub;
-        return json(200, { success: true, message: 'Invoice was sent to taxpayer system.', submission: sub });
+        return json(200, { success: true, message: 'فاکتور با موفقیت به سامانه مودیان ارسال شد.', submission: sub });
       } catch (e: any) {
         const message = String(e?.message || e);
         await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ status: 'failed', error_message: message, response_payload: { _kalam_debug: { ...debugPayload, stage: 'failed', kalam_debug: e?.kalamDebug || null } }, updated_at: new Date().toISOString() });
@@ -575,7 +575,7 @@ Deno.serve(async (req) => {
     if (action === 'inquire_submission') {
       const id = String(body?.submission_id || '').trim();
       const sub = first(await select(urlBase,key,'taxpayer_invoice_submissions',{ id: 'eq.' + id, org_id: 'eq.' + orgId, select: '*', limit: '1' }));
-      if (!sub?.uid && !sub?.reference_number && !sub?.taxid) throw new Error('Submission uid/reference number/taxid is missing.');
+      if (!sub?.uid && !sub?.reference_number && !sub?.taxid) throw new Error('شناسه لازم برای استعلام این ارسال در دسترس نیست.');
       const { settings, privateKey, certificatePem } = await requireSettings(urlBase,key,orgId);
       let res;
       if (settings.integration_mode === 'certificate_v2') {
@@ -598,12 +598,12 @@ Deno.serve(async (req) => {
       const row = first(res?.result?.data) || first(res?.data) || first(res?.result) || res;
       const status = String(row?.status || row?.invoiceStatus || row?.processingStatus || row?.state || 'inquired');
       const updated = first(await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ status, inquiry_payload: res || {}, last_inquiry_at: new Date().toISOString(), updated_at: new Date().toISOString() }));
-      return json(200, { success: true, message: 'Submission inquiry completed.', submission: updated || sub });
+      return json(200, { success: true, message: 'استعلام وضعیت ارسال با موفقیت انجام شد.', submission: updated || sub });
     }
 
-    return json(400, { success: false, message: 'Unsupported action.' });
+    return json(400, { success: false, message: 'عملیات درخواستی برای سامانه مودیان پشتیبانی نمی‌شود.' });
   } catch (error: any) {
     console.error('[taxpayer-system]', String(error?.message || error));
-    return json(400, { success: false, message: String(error?.message || 'Taxpayer system error') });
+    return json(400, { success: false, message: String(error?.message || 'خطا در عملیات سامانه مودیان') });
   }
 });

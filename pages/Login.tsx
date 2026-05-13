@@ -831,7 +831,7 @@ const Login = () => {
         </Card>
 
         <div className="mt-4 text-center text-[11px]" style={{ color: token.colorTextTertiary }}>
-          نسخه {import.meta.env.VITE_APP_VERSION || '1.0.2'}
+          نسخه آزمایشی {import.meta.env.VITE_APP_VERSION || '1.0.2'}
         </div>
       </div>
     </div>

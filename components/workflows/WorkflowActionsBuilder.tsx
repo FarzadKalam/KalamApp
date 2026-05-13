@@ -10,6 +10,7 @@ import {
 import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import MessageComposerModal from '../MessageComposerModal';
 import PersianDatePicker from '../PersianDatePicker';
 import { MODULES } from '../../moduleRegistry';
@@ -54,9 +55,12 @@ interface WorkflowActionsBuilderProps {
 type CreateRelatedFieldMapping = {
   id: string;
   field: string;
-  mode: 'static' | 'from_source' | 'from_related';
+  mode: 'static' | 'from_source' | 'from_related' | 'formula';
   value?: any;
   source_field?: string;
+  formula_name?: string;
+  formula_expression_text?: string;
+  formula_expression_config?: any;
 };
 
 const RUBIKA_RELATED_RECIPIENT_CHECKBOXES: Array<{
@@ -156,6 +160,17 @@ const getRequiredTargetFields = (targetModuleId: string, relationFieldKey?: stri
   });
 };
 
+const FORMULA_COMPATIBLE_FIELD_TYPES = new Set<FieldType>([
+  FieldType.NUMBER,
+  FieldType.PRICE,
+  FieldType.PERCENTAGE,
+  FieldType.STOCK,
+  FieldType.PERCENTAGE_OR_AMOUNT,
+]);
+
+const canFieldUseFormula = (field?: ModuleField | null) =>
+  !!field && FORMULA_COMPATIBLE_FIELD_TYPES.has(field.type);
+
 const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   value,
   onChange,
@@ -177,6 +192,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
+  const [formulaModalTarget, setFormulaModalTarget] = useState<
+    | { mode: 'action'; actionId: string; fieldKey: string }
+    | { mode: 'mapping'; actionId: string; mappingId: string; fieldKey: string }
+    | null
+  >(null);
   const popupContainer = useCallback(
     (node?: HTMLElement | null) => popupContainerProp?.(node) || resolveOverlayPopupContainer(node),
     [popupContainerProp]
@@ -346,6 +366,13 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           };
         }),
     [currentModuleFields, variableFields]
+  );
+  const formulaVariableOptions = useMemo(
+    () => templateVariableOptions.map((item) => ({
+      label: item.label,
+      token: item.token,
+    })),
+    [templateVariableOptions]
   );
   const noteAttachmentFieldOptions = useMemo(() => {
     const optionsByValue = new Map<string, { label: string; value: string }>();
@@ -785,6 +812,27 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         />
       );
     }
+    if (valueMode === 'formula') {
+      const hasFormula = !!String(action?.config?.formula_expression_text || '').trim();
+      return (
+        <div className="space-y-2">
+          <Button
+            block
+            disabled={disabled || !canFieldUseFormula(targetField)}
+            onClick={() => setFormulaModalTarget({ mode: 'action', actionId: action.id, fieldKey: targetFieldKey })}
+          >
+            {hasFormula ? 'ویرایش فرمول' : 'ساخت فرمول'}
+          </Button>
+          <div className="rounded-md border border-dashed border-gray-300 px-2 py-1 text-xs text-gray-500 dark:border-gray-700">
+            {hasFormula
+              ? String(action?.config?.formula_expression_text || '').trim()
+              : (canFieldUseFormula(targetField)
+                ? 'هنوز فرمولی ثبت نشده است.'
+                : 'فرمول فقط برای فیلدهای عددی/مبلغی فعال است.')}
+          </div>
+        </div>
+      );
+    }
     return renderTypedValueInput(targetField, action?.config?.value, (nextVal) =>
       updateActionConfig(action.id, { value: nextVal })
     );
@@ -1187,7 +1235,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               value={config.field}
               disabled={disabled || (actionType === 'send_to_next_stages' && targetOptions.length === 0)}
               options={targetOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { field: nextVal, value: null })}
+              onChange={(nextVal) => updateActionConfig(action.id, {
+                field: nextVal,
+                value: null,
+                source_field: '',
+                formula_name: '',
+                formula_expression_text: '',
+                formula_expression_config: null,
+                value_mode: 'static',
+              })}
               placeholder={actionType === 'send_to_next_stages' && targetOptions.length === 0 ? 'مرحله بعدی برای ارسال اطلاعات پیدا نشد' : 'فیلد مقصد'}
             />
           </div>
@@ -1201,11 +1257,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 { label: 'مقدار ثابت', value: 'static' },
                 { label: 'از فیلد رکورد جاری', value: 'from_source' },
                 { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
+                ...(canFieldUseFormula(
+                  (actionType === 'send_to_next_stages'
+                    ? (Array.isArray(nextStageFields) ? nextStageFields : [])
+                    : currentModuleFields
+                  ).find((field) => field.key === String(config.field || '').trim())
+                ) ? [{ label: 'محاسبه با فرمول', value: 'formula' }] : []),
               ]}
               onChange={(nextVal) => updateActionConfig(action.id, {
                 value_mode: nextVal,
                 value: null,
                 source_field: '',
+                formula_name: '',
+                formula_expression_text: '',
+                formula_expression_config: null,
               })}
               placeholder="نوع مقدار"
             />
@@ -1216,6 +1281,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 ? 'فیلد رکورد مرتبط'
                 : (config.value_mode || 'static') === 'from_source'
                   ? 'فیلد رکورد جاری'
+                  : (config.value_mode || 'static') === 'formula'
+                    ? 'فرمول محاسبه'
                   : 'مقدار نهایی'}
             </div>
             {renderUpdateValueInput(action)}
@@ -1416,7 +1483,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           updateRelatedFieldMappings(action.id, (current) =>
                             current.map((item) =>
                               item.id === mapping.id
-                                ? { ...item, field: nextVal, value: '', source_field: '' }
+                                ? {
+                                    ...item,
+                                    field: nextVal,
+                                    value: '',
+                                    source_field: '',
+                                    mode: 'static',
+                                    formula_name: '',
+                                    formula_expression_text: '',
+                                    formula_expression_config: null,
+                                  }
                                 : item
                             )
                           )
@@ -1434,12 +1510,21 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           { label: 'مقدار ثابت', value: 'static' },
                           { label: 'از فیلد رکورد جاری', value: 'from_source' },
                           { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
+                          ...(canFieldUseFormula(targetField) ? [{ label: 'محاسبه با فرمول', value: 'formula' }] : []),
                         ]}
                         onChange={(nextVal) =>
                           updateRelatedFieldMappings(action.id, (current) =>
                             current.map((item) =>
                               item.id === mapping.id
-                                ? { ...item, mode: nextVal, value: '', source_field: '' }
+                                ? {
+                                    ...item,
+                                    mode: nextVal,
+                                    value: '',
+                                    source_field: '',
+                                    formula_name: '',
+                                    formula_expression_text: '',
+                                    formula_expression_config: null,
+                                  }
                                 : item
                             )
                           )
@@ -1453,6 +1538,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           ? 'فیلد رکورد مرتبط'
                           : mapping.mode === 'from_source'
                             ? 'فیلد رکورد جاری'
+                            : mapping.mode === 'formula'
+                              ? 'فرمول محاسبه'
                             : 'مقدار فیلد'}
                       </div>
                       {mapping.mode === 'from_source' || mapping.mode === 'from_related' ? (
@@ -1470,6 +1557,24 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           }
                           placeholder={mapping.mode === 'from_related' ? 'فیلد از رکورد مرتبط' : 'فیلد از رکورد جاری'}
                         />
+                      ) : mapping.mode === 'formula' ? (
+                        <div className="space-y-2">
+                          <Button
+                            block
+                            disabled={disabled || !canFieldUseFormula(targetField)}
+                            onClick={() => setFormulaModalTarget({
+                              mode: 'mapping',
+                              actionId: action.id,
+                              mappingId: mapping.id,
+                              fieldKey: String(mapping.field || ''),
+                            })}
+                          >
+                            {String(mapping?.formula_expression_text || '').trim() ? 'ویرایش فرمول' : 'ساخت فرمول'}
+                          </Button>
+                          <div className="rounded-md border border-dashed border-gray-300 px-2 py-1 text-xs text-gray-500 dark:border-gray-700">
+                            {String(mapping?.formula_expression_text || '').trim() || 'هنوز فرمولی ثبت نشده است.'}
+                          </div>
+                        </div>
                       ) : (
                         renderTypedValueInput(targetField, mapping.value, (nextVal) =>
                           updateRelatedFieldMappings(action.id, (current) =>
@@ -1576,6 +1681,58 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           }}
           onInsertVariable={(token) => {
             appendTemplateTextToActionField(templateModalTarget.actionId, templateModalTarget.fieldKey, token);
+          }}
+        />
+      ) : null}
+      {formulaModalTarget ? (
+        <FormulaEditorModal
+          open
+          inlineMode
+          defaultScope="workflow"
+          defaultContextType="generic"
+          defaultOutputType="number"
+          variableOptions={formulaVariableOptions}
+          inlineInitialName={
+            formulaModalTarget.mode === 'action'
+              ? String(safeValue.find((item) => item.id === formulaModalTarget.actionId)?.config?.formula_name || '').trim()
+              : String(
+                  getRelatedFieldMappings(
+                    safeValue.find((item) => item.id === formulaModalTarget.actionId) || { id: '', type: 'create_related_record', config: {} } as WorkflowAction
+                  ).find((item) => item.id === formulaModalTarget.mappingId)?.formula_name || ''
+                ).trim()
+          }
+          inlineInitialExpressionText={
+            formulaModalTarget.mode === 'action'
+              ? String(safeValue.find((item) => item.id === formulaModalTarget.actionId)?.config?.formula_expression_text || '').trim()
+              : String(
+                  getRelatedFieldMappings(
+                    safeValue.find((item) => item.id === formulaModalTarget.actionId) || { id: '', type: 'create_related_record', config: {} } as WorkflowAction
+                  ).find((item) => item.id === formulaModalTarget.mappingId)?.formula_expression_text || ''
+                ).trim()
+          }
+          onCancel={() => setFormulaModalTarget(null)}
+          onInlineSaved={(formula) => {
+            if (formulaModalTarget.mode === 'action') {
+              updateActionConfig(formulaModalTarget.actionId, {
+                formula_name: formula.name,
+                formula_expression_text: formula.expressionText,
+                formula_expression_config: formula.expressionConfig,
+              });
+            } else {
+              updateRelatedFieldMappings(formulaModalTarget.actionId, (current) =>
+                current.map((item) =>
+                  item.id === formulaModalTarget.mappingId
+                    ? {
+                        ...item,
+                        formula_name: formula.name,
+                        formula_expression_text: formula.expressionText,
+                        formula_expression_config: formula.expressionConfig,
+                      }
+                    : item
+                )
+              );
+            }
+            setFormulaModalTarget(null);
           }}
         />
       ) : null}
