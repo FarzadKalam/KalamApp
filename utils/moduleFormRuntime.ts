@@ -100,6 +100,14 @@ export const normalizeModuleFormValues = (
     };
   }
 
+  if (moduleId === 'employee_bonus_requests' || moduleId === 'employee_penalty_requests') {
+    return {
+      ...values,
+      status: values.status || 'pending',
+      amount: Number(values.amount || 0),
+    };
+  }
+
   return values;
 };
 

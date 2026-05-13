@@ -33,7 +33,10 @@ const AdaptiveScopePicker: React.FC<AdaptiveScopePickerProps> = ({
   compact = false,
   disabled = false,
 }) => (
-  <div dir="rtl" className={compact ? 'flex items-center gap-2' : 'flex items-center flex-wrap gap-2'}>
+  <div
+    dir="rtl"
+    className={compact ? 'flex min-w-0 w-full items-center gap-2 overflow-hidden' : 'flex min-w-0 w-full items-center flex-wrap gap-2 overflow-hidden'}
+  >
     <AdaptiveSelectField
       placeholder={modulePlaceholder}
       value={moduleId || undefined}
@@ -41,10 +44,10 @@ const AdaptiveScopePicker: React.FC<AdaptiveScopePickerProps> = ({
       options={moduleOptions}
       size="small"
       disabled={disabled}
-      className={compact ? 'min-w-[112px] max-w-[112px] shrink-0' : 'min-w-[120px]'}
+      className={compact ? 'min-w-[112px] max-w-[112px] shrink-0' : 'min-w-[120px] max-w-full'}
       styles={{ popup: { root: { minWidth: 220 } } }}
     />
-    <div className="flex min-w-0 items-center gap-1">
+    <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
       <AdaptiveSelectField
         placeholder={recordPlaceholder}
         value={recordId || undefined}
@@ -54,7 +57,7 @@ const AdaptiveScopePicker: React.FC<AdaptiveScopePickerProps> = ({
         showSearch
         optionFilterProp="label"
         disabled={disabled || !moduleId}
-        className="min-w-0 flex-1"
+        className="min-w-0 flex-1 max-w-full"
         style={{ width: '100%' }}
         styles={{ popup: { root: { minWidth: 280 } } }}
       />

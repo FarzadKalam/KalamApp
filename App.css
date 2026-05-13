@@ -1203,6 +1203,20 @@ html.dark .ant-modal-confirm .ant-modal-content {
   min-width: 0;
 }
 
+.kalam-select-field.ant-select-single .ant-select-selection-wrap,
+.kalam-select-field.ant-select-single .ant-select-selection-search,
+.kalam-select-field.ant-select-single .ant-select-selection-item,
+.kalam-select-field.ant-select-single .ant-select-selection-placeholder {
+  min-width: 0;
+}
+
+.kalam-select-field.ant-select-single .ant-select-selection-item,
+.kalam-select-field.ant-select-single .ant-select-selection-placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kalam-multi-value-tag.ant-tag {
   border-color: rgba(var(--brand-500-rgb), 0.2) !important;
   background: rgba(var(--brand-50-rgb), 0.88) !important;
@@ -1556,8 +1570,10 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
   height: var(--app-viewport-height, 100dvh) !important;
   max-height: var(--app-viewport-height, 100dvh) !important;
   backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
   transform: translate3d(0, 0, 0);
   will-change: transform;
+  isolation: isolate;
 }
 
 .notifications-drawer.ant-drawer-top .ant-drawer-content,
@@ -1576,6 +1592,16 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
 .notifications-drawer .ant-drawer-content-wrapper,
 .notifications-drawer .ant-drawer-content {
   backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Suppress transitions briefly when resuming from background (prevents flicker on mobile browsers) */
+.page-resuming .notifications-drawer .ant-drawer-content-wrapper,
+.page-resuming .notifications-drawer .ant-drawer-mask {
+  transition: none !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  will-change: auto !important;
 }
 
 .dark .notifications-drawer .ant-drawer-content,

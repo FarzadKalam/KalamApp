@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Modal, Tabs } from 'antd';
-import { EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Button, Checkbox, Modal, Tabs } from 'antd';
+import { DownOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
 import AdaptiveSelectField from '../AdaptiveSelectField';
@@ -21,6 +21,7 @@ interface PrintSectionProps {
   printableFields?: any[];
   selectedPrintFields?: Record<string, string[]>;
   onTogglePrintField?: (templateId: string, fieldName: string) => void;
+  onTogglePrintFieldGroup?: (templateId: string, groupName: string) => void;
   onMovePrintField?: (templateId: string, fieldName: string, direction: 'up' | 'down') => void;
   onSavePrintFields?: () => void | Promise<boolean>;
   savingPrintFields?: boolean;
@@ -63,6 +64,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   printableFields = [],
   selectedPrintFields = {},
   onTogglePrintField = () => {},
+  onTogglePrintFieldGroup = () => {},
   onMovePrintField = () => {},
   onSavePrintFields,
   savingPrintFields = false,
@@ -73,6 +75,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [sendingInternal, setSendingInternal] = useState(false);
   const [savingPdfToRecord, setSavingPdfToRecord] = useState(false);
+  const [orderPanelOpen, setOrderPanelOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
@@ -182,6 +185,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       await handleRefresh();
     }
   };
+
+  useEffect(() => {
+    if (!isPrintModalOpen) {
+      setOrderPanelOpen(false);
+    }
+  }, [isPrintModalOpen]);
 
   const getTouchDistance = (touches: any) => {
     if (touches.length < 2) return null;
@@ -521,48 +530,69 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                           <div className="print-fields-pane">
                             <div className="print-fields-toolbar">
                                <div className="print-fields-meta">فقط گزینه‌های انتخاب‌شده در چاپ نهایی نمایش داده می‌شوند.</div>
-                              <Button size="small" type="primary" onClick={handleSaveFields} loading={savingPrintFields}>
-                                 ذخیره تغییرات
-                              </Button>
-                            </div>
-                            {orderedSelectedFields.length > 0 ? (
-                              <div className="print-selected-fields-panel">
-                                <div className="print-selected-fields-title">ترتیب چاپ فیلدهای انتخاب‌شده</div>
-                                <div className="print-selected-fields-list">
-                                  {orderedSelectedFields.map((field, index) => (
-                                    <div key={`selected-${field.key}`} className="print-selected-field-row">
-                                      <span className="print-selected-field-label">{field?.labels?.fa || field?.label || field?.key}</span>
-                                      <div className="print-selected-field-actions">
-                                        <Button
-                                          size="small"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            onMovePrintField(selectedTemplateId, field.key, 'up');
-                                          }}
-                                          disabled={index === 0}
-                                        >
-                                          بالا
-                                        </Button>
-                                        <Button
-                                          size="small"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            onMovePrintField(selectedTemplateId, field.key, 'down');
-                                          }}
-                                          disabled={index === orderedSelectedFields.length - 1}
-                                        >
-                                          پایین
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
+                              <div className="print-fields-toolbar-actions">
+                                <Button
+                                  size="small"
+                                  onClick={() => setOrderPanelOpen((prev) => !prev)}
+                                  disabled={orderedSelectedFields.length === 0}
+                                  icon={orderPanelOpen ? <UpOutlined /> : <DownOutlined />}
+                                >
+                                  ترتیب فیلدها
+                                </Button>
+                                <Button size="small" type="primary" onClick={handleSaveFields} loading={savingPrintFields}>
+                                   ذخیره تغییرات
+                                </Button>
                               </div>
-                            ) : null}
+                            </div>
+                            <div className="print-fields-scroll">
+                              {orderPanelOpen && orderedSelectedFields.length > 0 ? (
+                                <div className="print-selected-fields-panel">
+                                  <div className="print-selected-fields-title">ترتیب چاپ فیلدهای انتخاب‌شده</div>
+                                  <div className="print-selected-fields-list">
+                                    {orderedSelectedFields.map((field, index) => (
+                                      <div key={`selected-${field.key}`} className="print-selected-field-row">
+                                        <span className="print-selected-field-label">{field?.labels?.fa || field?.label || field?.key}</span>
+                                        <div className="print-selected-field-actions">
+                                          <Button
+                                            size="small"
+                                            icon={<UpOutlined />}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              onMovePrintField(selectedTemplateId, field.key, 'up');
+                                            }}
+                                            disabled={index === 0}
+                                          />
+                                          <Button
+                                            size="small"
+                                            icon={<DownOutlined />}
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              onMovePrintField(selectedTemplateId, field.key, 'down');
+                                            }}
+                                            disabled={index === orderedSelectedFields.length - 1}
+                                          />
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
                             <div className="print-fields-groups">
                               {groupedPrintableFields.map(({ group, fields }) => (
                                 <div key={group} className="print-fields-group">
-                                  <div className="print-fields-group-title">{group}</div>
+                                  <div className="print-fields-group-header">
+                                    <div className="print-fields-group-title">{group}</div>
+                                    <Checkbox
+                                      checked={fields.every((field) => (selectedPrintFields[selectedTemplateId] || []).includes(field.key))}
+                                      indeterminate={
+                                        fields.some((field) => (selectedPrintFields[selectedTemplateId] || []).includes(field.key)) &&
+                                        !fields.every((field) => (selectedPrintFields[selectedTemplateId] || []).includes(field.key))
+                                      }
+                                      onChange={() => onTogglePrintFieldGroup(selectedTemplateId, group)}
+                                    >
+                                      قابل چاپ
+                                    </Checkbox>
+                                  </div>
                                   <div className="print-fields-grid">
                                     {fields.map((field) => {
                                       const isSelected = (selectedPrintFields[selectedTemplateId] || []).includes(field.key);
@@ -584,6 +614,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                   </div>
                                 </div>
                               ))}
+                            </div>
                             </div>
                           </div>
                         ),
@@ -1045,20 +1076,32 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           flex-direction: column;
           gap: 14px;
           padding: 16px;
-          overflow: auto;
         }
         .print-fields-group {
           display: flex;
           flex-direction: column;
           gap: 10px;
         }
+        .print-fields-group-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 0 2px;
+        }
         .print-fields-group-title {
           font-size: 12px;
           font-weight: 800;
           color: #475569;
-          padding: 0 2px;
         }
         .dark .print-fields-group-title {
+          color: #cbd5e1;
+        }
+        .print-fields-group-header .ant-checkbox-wrapper {
+          font-size: 12px;
+          color: #64748b;
+        }
+        .dark .print-fields-group-header .ant-checkbox-wrapper {
           color: #cbd5e1;
         }
         .print-fields-pane {
@@ -1066,6 +1109,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           display: flex;
           flex-direction: column;
           min-height: 0;
+          overflow: hidden;
+        }
+        .print-fields-scroll {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow: auto;
         }
         .print-fields-toolbar {
           display: flex;
@@ -1074,6 +1123,12 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           gap: 12px;
           padding: 12px 16px 0;
           direction: rtl;
+        }
+        .print-fields-toolbar-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex: 0 0 auto;
         }
         .print-fields-meta {
           font-size: 12px;
@@ -1135,10 +1190,10 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .print-field-card {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           cursor: pointer;
-          padding: 12px;
-          border-radius: 14px;
+          padding: 9px 10px;
+          border-radius: 12px;
           border: 1px solid rgba(148,163,184,0.24);
           background: rgba(255,255,255,0.78);
           transition: 0.18s ease;
@@ -1158,25 +1213,27 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .print-field-card-body {
           display: flex;
           flex-direction: column;
-          gap: 2px;
+          gap: 1px;
           min-width: 0;
+          font-size: 13px;
         }
         .print-field-card-body small {
-          font-size: 11px;
+          font-size: 10px;
           color: #94a3b8;
         }
         .print-field-checkbox {
-          width: 20px;
-          height: 20px;
-          flex: 0 0 20px;
-          border-radius: 6px;
-          border: 2px solid rgba(148,163,184,0.48);
+          width: 16px;
+          height: 16px;
+          flex: 0 0 16px;
+          border-radius: 5px;
+          border: 1.5px solid rgba(148,163,184,0.48);
           display: flex;
           align-items: center;
           justify-content: center;
           color: #fff;
           background: transparent;
           font-weight: 700;
+          font-size: 11px;
         }
         .print-field-card.selected .print-field-checkbox {
           border-color: rgba(var(--brand-500-rgb), 1);
@@ -1273,10 +1330,21 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             gap: 10px;
             padding: 10px 12px 0;
           }
+          .print-fields-toolbar-actions {
+            width: 100%;
+            justify-content: stretch;
+          }
+          .print-fields-toolbar-actions .ant-btn {
+            flex: 1 1 0;
+          }
           .print-selected-fields-panel {
             margin: 12px 12px 0;
           }
           .print-selected-field-row {
+            flex-direction: column;
+            align-items: stretch;
+          }
+          .print-fields-group-header {
             flex-direction: column;
             align-items: stretch;
           }

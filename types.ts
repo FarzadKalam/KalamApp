@@ -205,6 +205,7 @@ export interface BlockDefinition {
   type: BlockType;
   titles: { fa: string; en?: string };
   order: number;
+  printable?: boolean;
   icon?: string;
   visibleIf?: any;
   hideInCreateForm?: boolean;

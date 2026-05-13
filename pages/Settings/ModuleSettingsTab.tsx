@@ -1164,6 +1164,23 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                   }))
                                 }
                               />
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-gray-500 dark:text-gray-400">قابل چاپ</span>
+                                <Switch
+                                  size="small"
+                                  checked={block.printable !== false}
+                                  onChange={(checked) =>
+                                    updateSchema((prev) => ({
+                                      ...prev,
+                                      blocks: prev.blocks.map((item) =>
+                                        item.id === block.id
+                                          ? { ...item, printable: checked }
+                                          : item
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </div>
                               <Tag>{block.id}</Tag>
                               <Tag color="blue">{blockTypeLabels[block.type] || block.type}</Tag>
                               <Popconfirm

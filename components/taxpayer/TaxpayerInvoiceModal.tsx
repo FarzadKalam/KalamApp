@@ -10,6 +10,7 @@ import {
   TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
 } from '../../utils/taxpayerSystem';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { FieldNature, FieldType, ModuleField } from '../../types';
 
 type TaxpayerSubmission = {
@@ -145,6 +146,34 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
   const invoiceStatus = String(invoiceRecord?.status || '').trim();
   const canSendInvoice = ['confirmed', 'final', 'settled', 'completed'].includes(invoiceStatus);
   const settlementMethod = String(formValues.taxpayer_settlement_method || '').trim();
+  const overlayZIndexBase = 1400;
+  const popupContainer = useCallback((triggerNode?: HTMLElement | null) => {
+    const modalBodyHost = triggerNode?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
+    return modalBodyHost || resolveOverlayPopupContainer(triggerNode);
+  }, []);
+  const renderEditableField = useCallback((field: ModuleField) => (
+    <div key={field.key} className="space-y-1">
+      <Typography.Text className="block">{field.labels.fa}</Typography.Text>
+      <SmartFieldRenderer
+        field={field}
+        value={formValues[field.key]}
+        onChange={(value) => {
+          setFormValues((prev) => ({
+            ...prev,
+            [field.key]: String(value || ''),
+          }));
+        }}
+        forceEditMode
+        compactMode
+        options={field.options}
+        moduleId="invoices"
+        allValues={formValues}
+        overlayZIndexBase={overlayZIndexBase}
+        popupContainer={popupContainer}
+        preferLocalPopupContainer
+      />
+    </div>
+  ), [formValues, popupContainer]);
 
   useEffect(() => {
     if (!open) return;
@@ -326,25 +355,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
           />
         ) : null}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {TAXPAYER_FIELDS.map((field) => (
-            <div key={field.key}>
-              <Typography.Text className="block mb-1">{field.labels.fa}</Typography.Text>
-              <SmartFieldRenderer
-                field={field}
-                value={formValues[field.key]}
-                onChange={(value) => {
-                  setFormValues((prev) => ({
-                    ...prev,
-                    [field.key]: String(value || ''),
-                  }));
-                }}
-                forceEditMode
-                options={field.options}
-                moduleId="invoices"
-                allValues={formValues}
-              />
-            </div>
-          ))}
+          {TAXPAYER_FIELDS.map(renderEditableField)}
         </div>
         <div className="flex flex-wrap gap-2">
           <Space wrap>

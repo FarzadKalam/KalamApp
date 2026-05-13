@@ -19,18 +19,24 @@ import {
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { getMarketingPanelUrl, getMarketingSiteBasePath } from '../utils/hostRouting';
 
 type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo';
 
-const PANEL_URL = 'https://app.tazesystem.ir';
-const SITE_BASE = '/tazesystem';
+const PANEL_URL = getMarketingPanelUrl();
+const SITE_BASE = getMarketingSiteBasePath();
+const sitePath = (path = '/') => {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  if (!SITE_BASE) return normalized;
+  return normalized === '/' ? SITE_BASE : `${SITE_BASE}${normalized}`;
+};
 
 const nav = [
-  ['امکانات', `${SITE_BASE}/features`],
-  ['تعرفه‌ها', `${SITE_BASE}/pricing`],
-  ['آموزش‌ها', `${SITE_BASE}/learn`],
-  ['بلاگ', `${SITE_BASE}/blog`],
-  ['تازه‌ها', `${SITE_BASE}/updates`],
+  ['امکانات', sitePath('/features')],
+  ['تعرفه‌ها', sitePath('/pricing')],
+  ['آموزش‌ها', sitePath('/learn')],
+  ['بلاگ', sitePath('/blog')],
+  ['تازه‌ها', sitePath('/updates')],
 ] as const;
 
 const featureCards = [
@@ -68,7 +74,7 @@ const SectionTitle = ({ eyebrow, title, text }: { eyebrow: string; title: string
 const Header = () => (
   <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/95 backdrop-blur">
     <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5">
-      <Link to={SITE_BASE} className="flex items-center gap-3 text-zinc-950">
+      <Link to={sitePath('/')} className="flex items-center gap-3 text-zinc-950">
         <img src="/tazesystem_logo.png" alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-lg object-contain" />
         <div className="leading-tight">
           <div className="text-lg font-black">تازه سیستم</div>
@@ -80,7 +86,7 @@ const Header = () => (
       </nav>
       <div className="flex items-center gap-2">
         <a href={PANEL_URL} className="hidden rounded-lg px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-100 sm:inline-flex">ورود به پنل</a>
-        <Link to={`${SITE_BASE}/demo`} className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-black text-white hover:bg-zinc-800">درخواست دمو</Link>
+        <Link to={sitePath('/demo')} className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-black text-white hover:bg-zinc-800">درخواست دمو</Link>
       </div>
     </div>
   </header>
@@ -90,7 +96,7 @@ const Footer = () => (
   <footer className="border-t border-zinc-200 bg-white">
     <div className="mx-auto grid max-w-7xl gap-10 px-5 py-12 md:grid-cols-[1.4fr_1fr_1fr_1.1fr]">
       <div>
-        <Link to={SITE_BASE} className="inline-flex items-center gap-3 text-zinc-950">
+        <Link to={sitePath('/')} className="inline-flex items-center gap-3 text-zinc-950">
           <img src="/tazesystem_logo.png" alt="تازه سیستم" className="h-10 w-10 rounded-lg object-contain" />
           <span className="text-lg font-black">تازه سیستم</span>
         </Link>
@@ -99,12 +105,12 @@ const Footer = () => (
           {['اینماد', 'ساماندهی', 'درگاه پرداخت'].map((item) => <span key={item} className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">{item}: در حال دریافت</span>)}
         </div>
       </div>
-      <FooterColumn title="محصول" items={[['امکانات', `${SITE_BASE}/features`], ['تعرفه‌ها', `${SITE_BASE}/pricing`], ['درخواست دمو', `${SITE_BASE}/demo`], ['ورود به پنل', PANEL_URL]]} />
-      <FooterColumn title="منابع" items={[['بلاگ', `${SITE_BASE}/blog`], ['آموزش‌ها', `${SITE_BASE}/learn`], ['تازه‌های محصول', `${SITE_BASE}/updates`], ['درباره ما', `${SITE_BASE}/about`]]} />
+      <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['درخواست دمو', sitePath('/demo')], ['ورود به پنل', PANEL_URL]]} />
+      <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['درباره ما', sitePath('/about')]]} />
       <div>
         <h3 className="text-sm font-bold text-zinc-950">ارتباط</h3>
         <div className="mt-4 grid gap-3 text-sm text-zinc-600">
-          <Link to={`${SITE_BASE}/contact`}>تماس با ما</Link>
+          <Link to={sitePath('/contact')}>تماس با ما</Link>
           <a href="mailto:hello@tazesystem.ir">hello@tazesystem.ir</a>
           <a href="tel:+982100000000">۰۲۱-۰۰۰۰۰۰۰۰</a>
           <span>حریم خصوصی | شرایط استفاده | SLA</span>
@@ -227,7 +233,7 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => (
               <ul className="mt-6 space-y-3">
                 {features.map((item) => <li key={item} className="flex items-center gap-2 text-sm"><CheckCircleOutlined className={highlighted ? 'text-teal-300' : 'text-teal-600'} /><span>{item}</span></li>)}
               </ul>
-              <Link to="/tazesystem/demo" className={`mt-7 inline-flex w-full items-center justify-center rounded-lg px-4 py-3 text-sm font-black ${highlighted ? 'bg-white text-zinc-950 hover:bg-zinc-100' : 'bg-zinc-950 text-white hover:bg-zinc-800'}`}>درخواست دمو</Link>
+              <Link to={sitePath('/demo')} className={`mt-7 inline-flex w-full items-center justify-center rounded-lg px-4 py-3 text-sm font-black ${highlighted ? 'bg-white text-zinc-950 hover:bg-zinc-100' : 'bg-zinc-950 text-white hover:bg-zinc-800'}`}>درخواست دمو</Link>
             </div>
           );
         })}
@@ -237,10 +243,10 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => (
           <h3 className="text-xl font-black text-zinc-950">نسخه لوکال کامل</h3>
           <p className="mt-2 max-w-3xl text-sm leading-7 text-zinc-600">نصب روی سرور سازمان شما، همه ماژول‌ها، کنترل کامل داده، قرارداد اختصاصی و پشتیبانی سالانه. قیمت پیشنهادی از ۲۹۰ میلیون تومان شروع می‌شود.</p>
         </div>
-        <Link to="/tazesystem/demo" className="mt-5 inline-flex rounded-lg border border-zinc-950 px-5 py-3 text-sm font-black text-zinc-950 hover:bg-zinc-950 hover:text-white lg:mt-0">مشاوره نسخه لوکال</Link>
+        <Link to={sitePath('/demo')} className="mt-5 inline-flex rounded-lg border border-zinc-950 px-5 py-3 text-sm font-black text-zinc-950 hover:bg-zinc-950 hover:text-white lg:mt-0">مشاوره نسخه لوکال</Link>
       </div>
       <p className="mt-5 text-center text-sm leading-7 text-zinc-500">هزینه پیامک، VoIP، مصرف AI مازاد، فضای اضافه، مهاجرت داده و توسعه اختصاصی جداگانه محاسبه می‌شود.</p>
-      {!detailed && <div className="mt-6 text-center"><Link to="/tazesystem/pricing" className="inline-flex items-center gap-2 text-sm font-black text-zinc-950">مقایسه کامل پلن‌ها <ArrowLeftOutlined /></Link></div>}
+      {!detailed && <div className="mt-6 text-center"><Link to={sitePath('/pricing')} className="inline-flex items-center gap-2 text-sm font-black text-zinc-950">مقایسه کامل پلن‌ها <ArrowLeftOutlined /></Link></div>}
     </div>
   </section>
 );
@@ -254,8 +260,8 @@ const HomePage = () => (
           <h1 className="mt-6 max-w-2xl text-4xl font-black leading-[1.35] text-zinc-950 md:text-6xl">سیستم عامل هوشمند کسب‌وکار شما</h1>
           <p className="mt-5 max-w-xl text-lg leading-9 text-zinc-600">مشتری، پروژه، فرآیند، چت، فایل، فاکتور، منابع انسانی و گزارش مدیریتی را در یک پنل فارسی و قابل سفارشی‌سازی مدیریت کنید.</p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link to="/tazesystem/demo" className="rounded-lg bg-zinc-950 px-6 py-3.5 text-sm font-black text-white hover:bg-zinc-800">درخواست دمو</Link>
-            <Link to="/tazesystem/features" className="rounded-lg border border-zinc-300 bg-white px-6 py-3.5 text-sm font-black text-zinc-950 hover:border-zinc-950">مشاهده امکانات</Link>
+            <Link to={sitePath('/demo')} className="rounded-lg bg-zinc-950 px-6 py-3.5 text-sm font-black text-white hover:bg-zinc-800">درخواست دمو</Link>
+            <Link to={sitePath('/features')} className="rounded-lg border border-zinc-300 bg-white px-6 py-3.5 text-sm font-black text-zinc-950 hover:border-zinc-950">مشاهده امکانات</Link>
           </div>
           <div className="mt-8 grid max-w-xl gap-3 sm:grid-cols-3">
             {['۱ پنل برای CRM، پروژه و مالی', '۴ مسیر ابری و لوکال', 'AI-ready برای دانش سازمان'].map((item) => <div key={item} className="rounded-lg border border-zinc-200 bg-white p-4 text-sm font-bold leading-7 text-zinc-700">{item}</div>)}

@@ -45,8 +45,10 @@ import { voipCallReportsConfig } from './modules/voipCallReportsConfig';
 import { counterpartyBotGroupsConfig } from './modules/counterpartyBotGroupsConfig';
 import { expenseDocumentsConfig } from './modules/expenseDocumentsConfig';
 import { employeeAdvancesConfig } from './modules/employeeAdvancesConfig';
+import { employeeBonusRequestsModule } from './modules/employeeBonusRequestsConfig';
 import { payrollSlipsConfig } from './modules/payrollSlipsConfig';
 import { employeeContractsConfig } from './modules/employeeContractsConfig';
+import { employeePenaltyRequestsModule } from './modules/employeePenaltyRequestsConfig';
 import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
 import { surveysModule } from './modules/surveysConfig';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
@@ -188,6 +190,8 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   counterparty_bot_groups: counterpartyBotGroupsConfig,
   expense_documents: expenseDocumentsConfig,
   employee_advances: employeeAdvancesConfig,
+  employee_bonus_requests: employeeBonusRequestsModule,
+  employee_penalty_requests: employeePenaltyRequestsModule,
   payroll_slips: payrollSlipsConfig,
   employee_contracts: employeeContractsConfig,
   recruitment_applicants: recruitmentApplicantsConfig,

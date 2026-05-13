@@ -363,6 +363,48 @@ export const useListPrintManager = ({
     });
   }, [printableFieldsForTemplate]);
 
+  const handleTogglePrintFieldGroup = useCallback((templateId: string, groupName: string) => {
+    setSelectedPrintFields((prev) => {
+      const current = prev[templateId] || [];
+      const currentSet = new Set(current);
+      const groupFields = (printableFieldsForTemplate || []).filter(
+        (field) => String(field?.group || '').trim() === String(groupName || '').trim()
+      );
+      if (!groupFields.length) return prev;
+
+      const groupKeys = groupFields
+        .map((field) => String(field?.key || '').trim())
+        .filter(Boolean);
+      const allSelected = groupKeys.every((key) => currentSet.has(key));
+
+      if (allSelected) {
+        return {
+          ...prev,
+          [templateId]: current.filter((key) => !groupKeys.includes(String(key || '').trim())),
+        };
+      }
+
+      let next = [...current];
+      for (const field of groupFields) {
+        const fieldKey = String(field?.key || '').trim();
+        if (!fieldKey || next.includes(fieldKey)) continue;
+        if (String(templateId).includes('_catalog_a4_portrait')) {
+          if (next.length >= 6) break;
+          const isImageField = String(field?.type || '').toLowerCase() === 'image';
+          if (isImageField) {
+            const hasImageAlready = next.some((key) => {
+              const matchedField = printableFieldsForTemplate.find((item) => item.key === key);
+              return String(matchedField?.type || '').toLowerCase() === 'image';
+            });
+            if (hasImageAlready) continue;
+          }
+        }
+        next.push(fieldKey);
+      }
+      return { ...prev, [templateId]: next };
+    });
+  }, [printableFieldsForTemplate]);
+
   const handleMovePrintField = useCallback((templateId: string, fieldName: string, direction: 'up' | 'down') => {
     setSelectedPrintFields((prev) => {
       const current = [...(prev[templateId] || [])];
@@ -545,6 +587,7 @@ export const useListPrintManager = ({
     printTemplates,
     printableFieldsForTemplate,
     handleTogglePrintField,
+    handleTogglePrintFieldGroup,
     handleMovePrintField,
     handleSavePrintFields,
     savingPrintFields,

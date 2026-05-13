@@ -4861,9 +4861,19 @@ const ModuleShow: React.FC = () => {
         .filter((block: any) => block?.id)
         .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
     );
+    const printableBlockMap = new Map(
+      (Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [])
+        .filter((block: any) => block?.id)
+        .map((block: any) => [String(block.id), block?.printable !== false])
+    );
     return moduleConfig.fields
       .filter(f => f.type !== FieldType.IMAGE && f.type !== FieldType.JSON && f.type !== FieldType.READONLY_LOOKUP)
       .filter(f => !shouldHideManagedAssigneeField(moduleId, f.key))
+      .filter((field) => {
+        const blockId = String((field as any)?.blockId || '').trim();
+        if (field.location !== FieldLocation.BLOCK || !blockId) return true;
+        return printableBlockMap.get(blockId) !== false;
+      })
       .filter(f => conditionalFieldRuntime.isFieldVisible(f))
       .filter(f => canViewField(f.key))
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -6484,6 +6494,7 @@ const ModuleShow: React.FC = () => {
         printableFields={printManager.printableFieldsForTemplate || printableFields}
         selectedPrintFields={printManager.selectedPrintFields}
         onTogglePrintField={printManager.handleTogglePrintField}
+        onTogglePrintFieldGroup={printManager.handleTogglePrintFieldGroup}
         onMovePrintField={printManager.handleMovePrintField}
         onSavePrintFields={printManager.handleSavePrintFields}
         savingPrintFields={printManager.savingPrintFields}

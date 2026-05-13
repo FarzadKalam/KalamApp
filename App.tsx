@@ -38,6 +38,7 @@ import {
   MODULE_SETTINGS_UPDATED_EVENT,
 } from "./utils/moduleSettingsRuntime";
 import { resolveOverlayPopupContainer } from "./utils/popupContainer";
+import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
 
 // تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
 
@@ -69,6 +70,7 @@ const loadReportsHubPage = () => import("./pages/ReportsHubPage");
 const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
 const loadReportViewerPage = () => import("./pages/ReportViewerPage");
 const loadPublicSite = () => import("./pages/PublicSite");
+const loadSaasPortalPage = () => import("./pages/SaasPortalPage");
 const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
 const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
@@ -103,6 +105,7 @@ const ReportsHubPage = lazy(loadReportsHubPage);
 const ReportBuilderPage = lazy(loadReportBuilderPage);
 const ReportViewerPage = lazy(loadReportViewerPage);
 const PublicSite = lazy(loadPublicSite);
+const SaasPortalPage = lazy(loadSaasPortalPage);
 const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
 const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
@@ -138,6 +141,7 @@ const routePreloaders = [
   loadReportBuilderPage,
   loadReportViewerPage,
   loadPublicSite,
+  loadSaasPortalPage,
   loadWorkSchedulesPage,
   loadRecycleBinPage,
   loadShareTargetPage,
@@ -164,7 +168,33 @@ const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }
   <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
 );
 
+const MarketingSiteHostApp: React.FC = () => (
+  <BrowserRouter>
+    <ConfigProvider direction="rtl" locale={faIR}>
+      <JalaliLocaleListener />
+      <AntdApp
+        message={{ top: 72, duration: 3.5, maxCount: 4 }}
+        notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
+      >
+        <PwaInstallPrompt />
+        <LazyRouteBoundary>
+          <Routes>
+            <Route path="/*" element={<PublicSite />} />
+          </Routes>
+        </LazyRouteBoundary>
+      </AntdApp>
+    </ConfigProvider>
+  </BrowserRouter>
+);
+
 function App() {
+  const marketingHost = isMarketingHost();
+  const saasAppHost = isSaasAppHost();
+
+  if (marketingHost) {
+    return <MarketingSiteHostApp />;
+  }
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
   const [branding, setBranding] = useState<BrandingConfig>(getInitialBranding);
   const [moduleSettingsVersion, setModuleSettingsVersion] = useState(0);
@@ -291,7 +321,7 @@ function App() {
   }, [moduleSettingsReady]);
 
   useEffect(() => {
-    const publicPaths = ["/inquiry", "/login", "/tazesystem"];
+    const publicPaths = saasAppHost ? ["/", "/login", "/inquiry"] : ["/inquiry", "/login", "/tazesystem"];
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       const eventName = String(event);
@@ -350,7 +380,7 @@ function App() {
     return () => {
       subscription?.subscription?.unsubscribe();
     };
-  }, [loadBranding, loadModuleSettings]);
+  }, [loadBranding, loadModuleSettings, saasAppHost]);
 
   const resources = useMemo(
     () =>
@@ -511,6 +541,9 @@ function App() {
       >
         <Routes>
           <Route path="/tazesystem/*" element={<LazyRouteBoundary><PublicSite /></LazyRouteBoundary>} />
+          {saasAppHost ? (
+            <Route path="/" element={<LazyRouteBoundary><SaasPortalPage /></LazyRouteBoundary>} />
+          ) : null}
           <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
@@ -534,6 +567,7 @@ function App() {
             }
           >
             <Route index element={<Dashboard />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/profile/:id" element={<ProfilePage />} />
             <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />

@@ -5,6 +5,7 @@ export type PayrollLedgerEntry = {
   employee_id: string | null;
   entry_type: string;
   source_type: string;
+  source_record_id?: string | null;
   source_key?: string | null;
   title: string | null;
   amount: number | string | null;
@@ -42,9 +43,9 @@ export const fetchPayrollLedgerEntries = async (
     .eq('period_end', periodEnd)
     .in('status', ['draft', 'proposed']);
 
-  let { data, error } = await runQuery('id, employee_id, entry_type, source_type, source_key, title, amount, details');
+  let { data, error } = await runQuery('id, employee_id, entry_type, source_type, source_record_id, source_key, title, amount, details');
   if (error && isMissingSourceKeyError(error)) {
-    const fallback = await runQuery('id, employee_id, entry_type, source_type, title, amount, details');
+    const fallback = await runQuery('id, employee_id, entry_type, source_type, source_record_id, title, amount, details');
     data = fallback.data;
     error = fallback.error;
   }

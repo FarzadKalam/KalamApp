@@ -176,6 +176,11 @@ export const buildListPrintableFields = (
       .filter((block: any) => block?.id)
       .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
   );
+  const printableBlockMap = new Map(
+    blocks
+      .filter((block: any) => block?.id)
+      .map((block: any) => [String(block.id), block?.printable !== false])
+  );
   const fieldsForDefaultSelection = sourceFields.some((field: any) => field?.isTableColumn === true)
     ? sourceFields.filter((field: any) => field?.isTableColumn === true)
     : sourceFields.filter((field: any) => !['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(String(field?.key || '')));
@@ -192,6 +197,9 @@ export const buildListPrintableFields = (
       if (!normalizedKey) return false;
       if (['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(normalizedKey)) return false;
       if (LIST_PRINT_EXCLUDED_FIELD_TYPES.has(field?.type)) return false;
+      if (String(field?.location || '').trim().toLowerCase() === 'block' && String(field?.blockId || '').trim()) {
+        return printableBlockMap.get(String(field.blockId).trim()) !== false;
+      }
       return true;
     })
     .map((field: any) => ({

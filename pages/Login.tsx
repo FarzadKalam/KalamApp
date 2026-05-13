@@ -7,6 +7,7 @@ import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { normalizeDigitsToEnglish } from '../utils/persianNumericInput';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { getDefaultAuthenticatedAppPath } from '../utils/hostRouting';
 import { consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 
@@ -103,7 +104,7 @@ const Login = () => {
     if (redirectTo.startsWith('/') && !redirectTo.startsWith('//')) {
       return redirectTo;
     }
-    return '/';
+    return getDefaultAuthenticatedAppPath();
   }, [location.search]);
 
   const normalizedPhone = useMemo(() => normalizeIranMobile(phone), [phone]);

@@ -24,7 +24,7 @@ import RelatedRecordPopover from './RelatedRecordPopover';
 import ProductionStagesField from './ProductionStagesField';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
-import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
+import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { getActiveChannelSettings } from '../utils/channelSettings';
@@ -2929,6 +2929,37 @@ useEffect(() => {
     return () => clearInterval(interval);
   }, [open, profile.id, profile.role_id, variant]);
 
+  // Refresh data when the page becomes visible again (e.g., returning from another app/tab)
+  // Also briefly suppresses transitions to prevent flicker on mobile browsers
+  useEffect(() => {
+    if (!profile.id) return;
+    let visibilityDebounceTimer: number | null = null;
+    let resumeClassTimer: number | null = null;
+    const handleVisibilityChange = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      // Add CSS class to suppress transitions/animations briefly (prevents drawer flicker)
+      document.body.classList.add('page-resuming');
+      if (resumeClassTimer !== null) window.clearTimeout(resumeClassTimer);
+      resumeClassTimer = window.setTimeout(() => {
+        document.body.classList.remove('page-resuming');
+        resumeClassTimer = null;
+      }, 400);
+      // Debounce data refresh
+      if (visibilityDebounceTimer !== null) window.clearTimeout(visibilityDebounceTimer);
+      visibilityDebounceTimer = window.setTimeout(() => {
+        visibilityDebounceTimer = null;
+        void refreshAll(false, { force: true });
+      }, 600);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (visibilityDebounceTimer !== null) window.clearTimeout(visibilityDebounceTimer);
+      if (resumeClassTimer !== null) window.clearTimeout(resumeClassTimer);
+      document.body.classList.remove('page-resuming');
+    };
+  }, [profile.id, profile.role_id, variant]);
+
   useEffect(() => {
     if (!profile.id) return;
     if (realtimeDisabledRef.current) return;
@@ -3147,10 +3178,11 @@ useEffect(() => {
   const responsibilitiesCount = responsibilities.filter((r: any) => (
     !isNotificationRead('responsibilities', getResponsibilitySourceType(r), String(r?.id || ''), seenResponsibilityIds.has(String(r?.id || '')))
   )).length;
-  const botMessagesCount = botNotificationMessages.filter((row) => (
-    String(row?.direction || '').trim() === 'inbound'
-    && !isNotificationRead('bot_messages', 'counterparty_bot_message', String(row?.id || '').trim(), false)
-  )).length;
+  const botMessagesCount = botNotificationMessages.filter((row) => {
+    const id = String(row?.id || '').trim();
+    return String(row?.direction || '').trim() === 'inbound'
+      && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
+  }).length;
   const smsMessagesCount = smsMessages.filter((row: any) => (
     String(row?.direction || '').trim() === 'inbound'
     && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), false)
@@ -4031,6 +4063,9 @@ useEffect(() => {
         });
         return changed ? next : prev;
       });
+      markNotificationEntriesRead(
+        unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }))
+      );
     }
     if (messageIds.size === 0) return;
 
@@ -4041,9 +4076,6 @@ useEffect(() => {
     );
     setBotMessages((prev) => prev.map(applyReceipt));
     setBotNotificationMessages((prev) => prev.map(applyReceipt));
-    markNotificationEntriesRead(
-      unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }))
-    );
     void persistBotReadReceipts(receiptRows, readAt);
   }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, persistBotReadReceipts, profile.id]);
 
@@ -4134,6 +4166,7 @@ useEffect(() => {
     drawerCloseSnapshotRef.current = null;
     if (!snapshot) return;
 
+    // Reset lightweight UI state immediately
     setMobileNoteSearchOpen(false);
     setMobileBotSearchOpen(false);
     setNoteMessageSearch('');
@@ -4142,31 +4175,34 @@ useEffect(() => {
     setForwardTargetUserIds([]);
     setNoteNewIncomingCount(0);
     setBotNewIncomingCount(0);
-
-    if (snapshot.variant === 'chat') {
-      if (snapshot.activeDrawerSection === 'notes' && snapshot.selectedNoteUserId) {
-        markNotesAsSeen(snapshot.displayedChatNotes);
-      }
-      if (snapshot.activeDrawerSection === 'bot_messages' && snapshot.selectedBotGroupId) {
-        markBotMessagesAsSeen(snapshot.botMessages);
-      }
-      if (snapshot.activeDrawerSection === 'sms_messages') {
-        markSmsMessagesAsSeen(snapshot.displayedSmsMessages);
-      }
-    } else {
-      if (snapshot.activeDrawerSection === 'tasks') {
-        markTasksAsSeen(snapshot.tasks);
-      }
-      if (snapshot.activeDrawerSection === 'responsibilities') {
-        markResponsibilitiesAsSeen(snapshot.responsibilities);
-      }
-      if (snapshot.activeDrawerSection === 'voip_calls') {
-        markVoipCallsAsSeen(snapshot.displayedVoipCalls);
-      }
-    }
-
     setPreviewRecord(null);
     setTaskProcessModalTask(null);
+
+    // Defer heavy mark-as-seen work so the drawer close animation finishes first
+    // and weak devices don't freeze on the close gesture
+    window.setTimeout(() => {
+      if (snapshot.variant === 'chat') {
+        if (snapshot.activeDrawerSection === 'notes' && snapshot.selectedNoteUserId) {
+          markNotesAsSeen(snapshot.displayedChatNotes);
+        }
+        if (snapshot.activeDrawerSection === 'bot_messages' && snapshot.selectedBotGroupId) {
+          markBotMessagesAsSeen(snapshot.botMessages);
+        }
+        if (snapshot.activeDrawerSection === 'sms_messages') {
+          markSmsMessagesAsSeen(snapshot.displayedSmsMessages);
+        }
+      } else {
+        if (snapshot.activeDrawerSection === 'tasks') {
+          markTasksAsSeen(snapshot.tasks);
+        }
+        if (snapshot.activeDrawerSection === 'responsibilities') {
+          markResponsibilitiesAsSeen(snapshot.responsibilities);
+        }
+        if (snapshot.activeDrawerSection === 'voip_calls') {
+          markVoipCallsAsSeen(snapshot.displayedVoipCalls);
+        }
+      }
+    }, 80);
   }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen]);
 
   useEffect(() => {
@@ -5031,7 +5067,7 @@ useEffect(() => {
           if (String(row?.direction || '') !== 'inbound') return false;
           return !prevBotMessageIdsRef.current.has(id)
             && !dismissedUiNotificationIds.has(`bot:${id}`)
-            && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, false)
+            && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))
             && !isNotificationDismissed('bot_messages', 'counterparty_bot_message', id);
         })
         .map((row) => {
@@ -5171,7 +5207,7 @@ useEffect(() => {
         const sourceType = item.responsibility ? getResponsibilitySourceType(item.responsibility) : 'responsibility';
         return !isNotificationRead('responsibilities', sourceType, entityId, seenResponsibilityIds.has(entityId));
       }
-      if (kind === 'bot') return !isNotificationRead('bot_messages', 'counterparty_bot_message', entityId, false);
+      if (kind === 'bot') return !isNotificationRead('bot_messages', 'counterparty_bot_message', entityId, seenBotMessageIds.has(entityId));
       if (kind === 'sms') return !isNotificationRead('sms_messages', 'inbound_sms', entityId, false);
       if (kind === 'voip_call') return !isNotificationRead('voip_calls', 'voip_call', entityId, seenVoipCallIds.has(entityId));
       return false;
@@ -5293,6 +5329,13 @@ useEffect(() => {
     setUiNotificationOverlayItems([], overlaySource);
   }, [overlaySource]);
 
+  useEffect(() => {
+    setUiNotificationOverlaySuppressed(open, overlaySource);
+    return () => {
+      setUiNotificationOverlaySuppressed(false, overlaySource);
+    };
+  }, [open, overlaySource]);
+
   const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
     const withUserSidebar = layout === 'desktop';
     const withMobileUserRail = layout === 'mobile';
@@ -5306,7 +5349,7 @@ useEffect(() => {
       : `${toPersianNumber(String(myNoteStats.noteCount || 0))} یادداشت`;
 
     return (
-      <div dir="ltr" className="flex flex-1 min-h-0 bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
+      <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
         {withUserSidebar ? (
           <div dir="rtl" className="order-last w-[208px] border-l border-slate-200/55 bg-white/72 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="px-4 py-3 border-b border-slate-200/45 bg-white/55 dark:border-white/[0.07] dark:bg-white/[0.025]">
@@ -5424,7 +5467,7 @@ useEffect(() => {
           </div>
         ) : null}
 
-        <div className="flex flex-col flex-1 min-h-0 bg-white/82 dark:bg-[#1a1518]">
+        <div className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden bg-white/82 dark:bg-[#1a1518]">
           <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex items-center gap-3">
@@ -6516,7 +6559,7 @@ useEffect(() => {
       const groupId = String(row?.bot_group_id || '').trim();
       const id = String(row?.id || '').trim();
       if (!groupId || !id || String(row?.direction || '').trim() !== 'inbound') return acc;
-      if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, false)) return acc;
+      if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))) return acc;
       acc[groupId] = (acc[groupId] || 0) + 1;
       return acc;
     }, {});
@@ -6883,7 +6926,7 @@ useEffect(() => {
                 const botReadReceipts = normalizeReadReceipts(payload);
                 const botMessageId = String(row.id || '').trim();
                 const isPersistedBotMessage = isUuidValue(botMessageId);
-                const isUnreadBotMessage = !outgoing && !isNotificationRead('bot_messages', 'counterparty_bot_message', botMessageId, false);
+                const isUnreadBotMessage = !outgoing && !isNotificationRead('bot_messages', 'counterparty_bot_message', botMessageId, seenBotMessageIds.has(botMessageId));
                 return (
                   <div key={row.id}>
                     <SharedNoteCard
@@ -7892,7 +7935,7 @@ useEffect(() => {
               <Button
                 type="text"
                 size="small"
-                icon={<ReloadOutlined spin={refreshing} className="text-white" />}
+                icon={<ReloadOutlined spin={refreshing} style={{ color: 'white' }} />}
                 onClick={handleManualRefresh}
               />
             </div>
@@ -7922,7 +7965,7 @@ useEffect(() => {
               <Button
                 type="text"
                 size="small"
-                icon={<ReloadOutlined spin={refreshing} className="text-white" />}
+                icon={<ReloadOutlined spin={refreshing} style={{ color: 'white' }} />}
                 onClick={handleManualRefresh}
               />
             </div>

@@ -1056,6 +1056,23 @@ export const usePrintManager = ({
     });
   }, []);
 
+  const handleTogglePrintFieldGroup = useCallback((templateId: string, groupName: string) => {
+    setSelectedPrintFields((prev) => {
+      const current = prev[templateId] || [];
+      const currentSet = new Set(current);
+      const groupKeys = (printableFieldsForTemplate || [])
+        .filter((field: any) => String(field?.group || '').trim() === String(groupName || '').trim())
+        .map((field: any) => String(field?.key || '').trim())
+        .filter(Boolean);
+      if (!groupKeys.length) return prev;
+      const allSelected = groupKeys.every((key) => currentSet.has(key));
+      const next = allSelected
+        ? current.filter((key) => !groupKeys.includes(String(key || '').trim()))
+        : [...current, ...groupKeys.filter((key) => !currentSet.has(key))];
+      return { ...prev, [templateId]: next };
+    });
+  }, [printableFieldsForTemplate]);
+
   const handleMovePrintField = useCallback((templateId: string, fieldName: string, direction: 'up' | 'down') => {
     setSelectedPrintFields((prev) => {
       const current = [...(prev[templateId] || [])];
@@ -1226,45 +1243,55 @@ export const usePrintManager = ({
 
   const buildCompactFieldsTableHtml = useCallback(() => {
     const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
-    const regularRows: string[] = [];
-    const longTextRows: string[] = [];
-    fields
+    const collectRows = (ignoreTemplateSelection = false) => {
+      const regularRows: string[] = [];
+      const longTextRows: string[] = [];
+      const canUseField = (fieldKey: string) =>
+        ignoreTemplateSelection
+          ? canViewPrintFieldPath(`record.${fieldKey}`)
+          : isSystemFieldVisible(`record.${fieldKey}`);
+
+      fields
         .filter(
           (field: any) =>
             field?.key &&
             !PRINT_COLUMN_IGNORE_KEYS.has(String(field.key)) &&
             !(isNonInvoiceSystemSummaryTemplate && String(field.key) === 'name') &&
             String(field?.type || '').toLowerCase() !== 'image' &&
-            isSystemFieldVisible(`record.${String(field.key)}`)
+            canUseField(String(field.key))
         )
-      .forEach((field: any) => {
-        const raw = data?.[field.key];
-        if (raw === null || raw === undefined || raw === '') return;
-        let displayValue = '';
-        try {
-          displayValue = String(formatPrintValue(field, raw) || '').trim();
-        } catch {
-          displayValue = '';
-        }
-        if (!displayValue) displayValue = localizePlainText(raw);
-        if (!displayValue || displayValue === '-') return;
-        if (isLongTextType(field?.type)) {
-          longTextRows.push(`
+        .forEach((field: any) => {
+          const raw = data?.[field.key];
+          if (raw === null || raw === undefined || raw === '') return;
+          let displayValue = '';
+          try {
+            displayValue = String(formatPrintValue(field, raw) || '').trim();
+          } catch {
+            displayValue = '';
+          }
+          if (!displayValue) displayValue = localizePlainText(raw);
+          if (!displayValue || displayValue === '-') return;
+          if (isLongTextType(field?.type)) {
+            longTextRows.push(`
           <div style="margin-top:8px;">
             <div style="margin:0 0 3px 0; font-size:10px; color:#64748b;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</div>
             <div style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; background:#fff; font-size:${getReducedPrintFontSize(11)}; line-height:1.9; ${MULTILINE_PRINT_STYLE}">${displayValue}</div>
           </div>
         `);
-          return;
-        }
-        regularRows.push(`
+            return;
+          }
+          regularRows.push(`
           <tr>
             <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${getFieldLabelFa(field, { moduleId, fallback: field.key })}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px;">${displayValue}</td>
           </tr>
         `);
-      })
-    ;
+        });
+
+      return { regularRows, longTextRows };
+    };
+
+    let { regularRows, longTextRows } = collectRows(false);
 
     const hasAssigneeField = fields.some((field: any) => String(field?.key || '').trim() === 'assignee_id');
     const resolvedAssigneeId = getResolvedAssigneeId(data);
@@ -1285,6 +1312,20 @@ export const usePrintManager = ({
         `);
     }
 
+    if (!regularRows.length && !longTextRows.length && hasTemplateSelectionState && isNonInvoiceSystemSummaryTemplate) {
+      const fallbackRows = collectRows(true);
+      regularRows = fallbackRows.regularRows;
+      longTextRows = fallbackRows.longTextRows;
+      if (!hasAssigneeField && responsibleValue && canViewPrintFieldPath('record.assignee_id')) {
+        regularRows.unshift(`
+          <tr>
+            <td style="width:38%; border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px; background:rgba(var(--brand-50-rgb),0.28); font-weight:700;">${getAssigneeLabel(moduleId)}</td>
+            <td style="border:1px solid var(--table-border-color, #d1d5db); padding:5px 6px;">${localizePlainText(responsibleValue)}</td>
+          </tr>
+        `);
+      }
+    }
+
     const rowsHtml = regularRows.slice(0, 24).join('');
     const longTextRowsHtml = longTextRows.join('');
     if (!rowsHtml && !longTextRowsHtml) {
@@ -1302,7 +1343,7 @@ export const usePrintManager = ({
     ]
       .filter(Boolean)
       .join('');
-  }, [data, formatPrintValue, isNonInvoiceSystemSummaryTemplate, isSystemFieldVisible, moduleConfig?.fields, moduleId, relationOptions]);
+  }, [canViewPrintFieldPath, data, formatPrintValue, hasTemplateSelectionState, isNonInvoiceSystemSummaryTemplate, isSystemFieldVisible, moduleConfig?.fields, moduleId, relationOptions]);
 
   const buildInvoiceItemsTable = useCallback((items: any[]) => {
     if (!Array.isArray(items) || items.length === 0) {
@@ -2486,6 +2527,7 @@ export const usePrintManager = ({
     generateCurrentPdfBlob,
     preparePrint,
     handleTogglePrintField,
+    handleTogglePrintFieldGroup,
     handleMovePrintField,
     handleSavePrintFields,
     refreshTemplates,

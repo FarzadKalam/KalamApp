@@ -406,8 +406,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
 
   return (
   <>
-  <div id={messageDomId} dir="ltr" className={`group/message flex w-full scroll-mt-24 ${isMine ? 'justify-end' : 'justify-start'}`}>
-    <div className={`flex max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
+  <div id={messageDomId} dir="ltr" className={`group/message flex w-full max-w-full scroll-mt-24 overflow-hidden ${isMine ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex min-w-0 max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
       <Avatar
         size={26}
         src={avatarUrl || undefined}

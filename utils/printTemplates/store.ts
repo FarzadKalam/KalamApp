@@ -103,6 +103,16 @@ const getModuleBlockTitleMap = (module: any) =>
       .map((block: any) => [String(block.id), String(block?.titles?.fa || block.id)])
   );
 
+const isFieldPrintableFromBlockConfig = (module: any, field: any) => {
+  const blockId = String(field?.blockId || '').trim();
+  const isBlockField = String(field?.location || '').trim().toLowerCase() === 'block' && blockId;
+  if (!isBlockField) return true;
+  const block = (Array.isArray(module?.blocks) ? module.blocks : []).find(
+    (item: any) => String(item?.id || '').trim() === blockId
+  );
+  return block?.printable !== false;
+};
+
 const getFieldGroupLabel = (module: any, field: any) => {
   const blockId = String(field?.blockId || '').trim();
   const isBlockField = String(field?.location || '').trim().toLowerCase() === 'block' && blockId;
@@ -695,6 +705,7 @@ export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplate
   return module.fields
     .filter((field: any) => {
       if (!field?.key) return false;
+      if (!isFieldPrintableFromBlockConfig(module, field)) return false;
       const path = `record.${field.key}`;
       if (seen.has(path)) return false;
       seen.add(path);
@@ -866,6 +877,7 @@ export const buildSystemTemplateFieldOptionsForModule = (module: any): SystemTem
 
   const recordFields: SystemTemplateFieldOption[] = (module.fields || [])
     .filter((field: any) => field?.key)
+    .filter((field: any) => isFieldPrintableFromBlockConfig(module, field))
     .map((field: any) => ({
       key: `record.${field.key}`,
       label: field.labels?.fa || field.key,
@@ -1099,12 +1111,12 @@ const buildCompactA4DefaultTemplate = (moduleId: string, now: string): StoredPri
 `,
     contentHtml: `
 <div style="direction:rtl; color:#111827; font-family:inherit;">
-  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px;">
+  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px;">
     {{system.record_image}}
     {{system.record_qr}}
   </div>
   {{system.compact_fields_table}}
-  <div style="margin-top:10px;">{{system.compact_tables_blocks}}</div>
+  <div style="margin-top:8px;">{{system.compact_tables_blocks}}</div>
   {{system.package_summary_table}}
 </div>
 `,

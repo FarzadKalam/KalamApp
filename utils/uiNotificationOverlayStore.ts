@@ -17,12 +17,14 @@ export interface UiNotificationOverlayItem {
 const listeners = new Set<() => void>();
 let notificationsBySource: Record<string, UiNotificationOverlayItem[]> = {};
 let notifications: UiNotificationOverlayItem[] = [];
+const suppressedSources = new Set<string>();
+const EMPTY_NOTIFICATIONS: UiNotificationOverlayItem[] = [];
 
 const emit = () => {
   listeners.forEach((listener) => listener());
 };
 
-const snapshot = () => notifications;
+const snapshot = () => (suppressedSources.size > 0 ? EMPTY_NOTIFICATIONS : notifications);
 
 const normalizeItems = (items: UiNotificationOverlayItem[]) => {
   const unique = new Map<string, UiNotificationOverlayItem>();
@@ -79,6 +81,20 @@ export const setUiNotificationOverlayItems = (items: UiNotificationOverlayItem[]
   }
   notificationsBySource[source] = normalizedItems;
   recompute();
+  emit();
+};
+
+export const setUiNotificationOverlaySuppressed = (suppressed: boolean, source = 'default') => {
+  const normalizedSource = String(source || 'default').trim() || 'default';
+  const hadSource = suppressedSources.has(normalizedSource);
+  if (suppressed) {
+    if (hadSource) return;
+    suppressedSources.add(normalizedSource);
+    emit();
+    return;
+  }
+  if (!hadSource) return;
+  suppressedSources.delete(normalizedSource);
   emit();
 };
 
