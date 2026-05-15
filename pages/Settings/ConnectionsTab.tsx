@@ -59,7 +59,13 @@ type BotInboundContact = {
   phone_number?: string | null;
   last_message_text?: string | null;
   last_seen_at?: string | null;
+  last_payload?: Record<string, any> | null;
+  provider_debug?: Record<string, any> | null;
+  provider_result_count?: number | null;
+  capture_diagnostic?: Record<string, any> | null;
 };
+
+const RUBIKA_OFFICIAL_API_BASE_URL = 'https://botapi.rubika.ir';
 
 type FormValues = {
   sms: {
@@ -253,7 +259,7 @@ const DEFAULT_VALUES: FormValues = {
   rubika_bot: {
     provider: 'rubika_bot_api',
     bot_token: '',
-    api_base_url: 'https://botapi.rubika.ir',
+    api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
     webhook_secret: '',
     bot_name: '',
     is_active: false,
@@ -658,6 +664,7 @@ const ConnectionsTab: React.FC = () => {
           ...DEFAULT_VALUES.rubika_bot,
           provider: String(byType.rubika_bot?.provider || DEFAULT_VALUES.rubika_bot.provider),
           ...(byType.rubika_bot?.settings || {}),
+          api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
           is_active: byType.rubika_bot?.is_active ?? DEFAULT_VALUES.rubika_bot.is_active,
         },
         portal: {
@@ -761,14 +768,18 @@ const ConnectionsTab: React.FC = () => {
         ...(form.getFieldValue('taxpayer_system') || {}),
         ...(values.taxpayer_system || {}),
       };
+      const normalizedRubikaValues = {
+        ...(values.rubika_bot || {}),
+        api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
+      };
       const ensuredTelegramSecret = String(values.telegram_bot?.webhook_secret || '').trim() || createWebhookSecret('telegram');
       const ensuredBaleSecret = String(values.bale_bot?.webhook_secret || '').trim() || createWebhookSecret('bale');
-      const ensuredRubikaSecret = String(values.rubika_bot?.webhook_secret || '').trim() || createWebhookSecret('rubika');
+      const ensuredRubikaSecret = String(normalizedRubikaValues?.webhook_secret || '').trim() || createWebhookSecret('rubika');
 
       form.setFieldsValue({
         telegram_bot: { ...(values.telegram_bot || {}), webhook_secret: ensuredTelegramSecret },
         bale_bot: { ...(values.bale_bot || {}), webhook_secret: ensuredBaleSecret },
-        rubika_bot: { ...(values.rubika_bot || {}), webhook_secret: ensuredRubikaSecret },
+        rubika_bot: { ...normalizedRubikaValues, webhook_secret: ensuredRubikaSecret, api_base_url: RUBIKA_OFFICIAL_API_BASE_URL },
       });
       setSaving(true);
 
@@ -848,14 +859,14 @@ const ConnectionsTab: React.FC = () => {
         {
           id: rowIds.rubika_bot,
           connection_type: 'rubika_bot',
-          provider: values.rubika_bot?.provider || 'rubika_bot_api',
+          provider: normalizedRubikaValues?.provider || 'rubika_bot_api',
           settings: {
-            bot_token: values.rubika_bot?.bot_token || '',
-            api_base_url: values.rubika_bot?.api_base_url || '',
+            bot_token: normalizedRubikaValues?.bot_token || '',
+            api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
             webhook_secret: ensuredRubikaSecret,
-            bot_name: values.rubika_bot?.bot_name || '',
+            bot_name: normalizedRubikaValues?.bot_name || '',
           },
-          is_active: values.rubika_bot?.is_active === true,
+          is_active: normalizedRubikaValues?.is_active === true,
         },
         {
           id: rowIds.portal,
@@ -950,7 +961,7 @@ const ConnectionsTab: React.FC = () => {
       }
 
       const rubikaConnectionId = String(nextIds.rubika_bot || '').trim();
-      if (values.rubika_bot?.is_active === true && rubikaConnectionId) {
+      if (normalizedRubikaValues?.is_active === true && rubikaConnectionId) {
         const { data: rubikaCaptureData, error: rubikaCaptureError } = await supabase.functions.invoke('bot-admin', {
           body: {
             action: 'start_capture',
@@ -959,7 +970,9 @@ const ConnectionsTab: React.FC = () => {
           },
         });
         if (rubikaCaptureError || !rubikaCaptureData?.success) {
-          message.warning('تنظیمات ذخیره شد، اما فعال‌سازی دوباره دریافت پیام‌های روبیکا کامل نشد. یک بار «شروع خواندن پیام‌های ورودی بات» را بزنید.');
+          message.warning('تنظیمات ذخیره شد، اما ثبت دوباره endpoint روبیکا کامل نشد. وضعیت بخش «خواندن آخرین چت‌آیدی روبیکا» را بررسی کنید.');
+        } else if (rubikaCaptureData?.provider_result?.warning) {
+          message.warning(`تنظیمات ذخیره شد، اما راه‌اندازی دریافت روبیکا هشدار داد: ${String(rubikaCaptureData.provider_result.warning)}`);
         }
       }
 
@@ -1316,7 +1329,9 @@ const ConnectionsTab: React.FC = () => {
     try {
       const botValues = form.getFieldValue(formKey) || {};
       const botToken = String(botValues?.bot_token || '').trim();
-      const apiBaseUrl = String(botValues?.api_base_url || '').trim();
+      const apiBaseUrl = channel === 'rubika'
+        ? RUBIKA_OFFICIAL_API_BASE_URL
+        : String(botValues?.api_base_url || '').trim();
       const chatId = String(botTestChatIds[channel] || '').trim();
       const text = String(botTestTexts[channel] || '').trim();
 
@@ -1400,7 +1415,16 @@ const ConnectionsTab: React.FC = () => {
         setBotInboundCursor((prev) => ({ ...prev, [channel]: data?.cursor ?? null }));
       }
 
-      const row = data?.found && data?.contact ? (data.contact as BotInboundContact) : null;
+      const row = data?.found && data?.contact
+        ? ({
+          ...(data.contact as BotInboundContact),
+          provider_debug: data?.provider_debug || null,
+          provider_result_count: Number(data?.provider_result_count || 0) || 0,
+          capture_diagnostic: data?.capture_diagnostic && typeof data.capture_diagnostic === 'object'
+            ? data.capture_diagnostic
+            : null,
+        } as BotInboundContact)
+        : null;
       if (row) {
         setBotInboundPreview((prev) => ({ ...prev, [channel]: row }));
         setBotInboundWaiting((prev) => ({ ...prev, [channel]: false }));
@@ -1447,6 +1471,9 @@ const ConnectionsTab: React.FC = () => {
       setBotInboundCursor((prev) => ({ ...prev, [channel]: data?.cursor ?? null }));
       setBotInboundCountdown((prev) => ({ ...prev, [channel]: 60 }));
       setBotInboundWaiting((prev) => ({ ...prev, [channel]: true }));
+      if (data?.provider_result?.warning) {
+        message.warning(`راه‌اندازی دریافت ${channel === 'rubika' ? 'روبیکا' : channel} با هشدار همراه بود: ${String(data.provider_result.warning)}`);
+      }
       message.info('در حال انتظار برای اولین پیام جدید بات هستیم. حالا یک پیام جدید یا /start بفرستید.');
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در شروع خواندن پیام‌های ورودی بات'));
@@ -1569,6 +1596,14 @@ const ConnectionsTab: React.FC = () => {
                 </div>
                 <div>نام نمایشی: {contact.display_name || 'نامشخص'}</div>
                 <div>آخرین پیام: {contact.last_message_text || 'بدون متن'}</div>
+                {channel === 'rubika' ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-2 py-2 text-[11px] text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-200">
+                    <div>تعداد آپدیت‌های provider: {contact.provider_result_count ?? 0}</div>
+                    <div>وضعیت provider: {String(contact.provider_debug?.status || contact.capture_diagnostic?.provider_http_status || '-')}</div>
+                    <div>پیام provider: {String(contact.provider_debug?.message || contact.capture_diagnostic?.warning || '-')}</div>
+                    <div>webhook: {String(contact.capture_diagnostic?.webhook_url || '-')}</div>
+                  </div>
+                ) : null}
               </div>
             }
           />
@@ -2234,7 +2269,7 @@ const ConnectionsTab: React.FC = () => {
                     </Form.Item>
 
                     <Form.Item label="API Base URL" name={['rubika_bot', 'api_base_url']} className="md:col-span-3">
-                      <Input />
+                      <Input readOnly disabled placeholder={RUBIKA_OFFICIAL_API_BASE_URL} />
                     </Form.Item>
                   </div>
                   <div className="rounded-xl border border-dashed border-amber-300 dark:border-amber-700 p-3 bg-amber-50/30 dark:bg-white/5 mt-3">

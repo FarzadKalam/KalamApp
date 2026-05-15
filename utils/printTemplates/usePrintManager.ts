@@ -2283,7 +2283,13 @@ export const usePrintManager = ({
                 breakAfter: pageIndex < effectivePageCount - 1 ? 'page' : 'auto',
                 breakInside: 'avoid',
                 pageBreakInside: 'avoid',
-              },
+                '--print-header-height': showHeader ? headerHeightCss : '0px',
+                '--print-footer-height': showFooter ? footerHeightCss : '0px',
+                '--print-margin-top': `${pageMargins.top}mm`,
+                '--print-margin-bottom': `${pageMargins.bottom}mm`,
+                '--print-margin-left': `${pageMargins.left}mm`,
+                '--print-margin-right': `${pageMargins.right}mm`,
+              } as unknown as React.CSSProperties,
             },
             showHeader
               ? React.createElement(

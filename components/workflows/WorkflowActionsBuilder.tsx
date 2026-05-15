@@ -13,6 +13,7 @@ import AdaptiveSelectField from '../AdaptiveSelectField';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import MessageComposerModal from '../MessageComposerModal';
 import PersianDatePicker from '../PersianDatePicker';
+import { STORY_GRADIENT_PRESET_LIST } from '../../utils/storyGradients';
 import { MODULES } from '../../moduleRegistry';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
@@ -135,6 +136,18 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'copy_process_template':
     case 'execute_process':
       return { template_id: '' };
+    case 'publish_story':
+      return {
+        slide_type: 'gradient',
+        gradient_key: 'brand_indigo',
+        text_template: '',
+        expires_hours: 24,
+        is_org_wide: true,
+        viewer_role_ids: [],
+        notify_sms: false,
+        sms_template: '',
+        sms_recipient_role_ids: [],
+      };
     default:
       return {};
   }
@@ -1604,6 +1617,109 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               })
             )}
           </div>
+        </div>
+      );
+    }
+
+    if (actionType === 'publish_story') {
+      return (
+        <div className="space-y-3">
+          {/* نوع اسلاید */}
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">نوع اسلاید</div>
+            <Select
+              {...commonSelectProps}
+              value={config.slide_type || 'gradient'}
+              disabled={disabled}
+              options={[
+                { label: 'گرادینت رنگی', value: 'gradient' },
+              ]}
+              onChange={(v) => updateActionConfig(action.id, { slide_type: v })}
+            />
+          </div>
+
+          {/* انتخاب گرادینت */}
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">گرادینت پس‌زمینه</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {STORY_GRADIENT_PRESET_LIST.map((g) => (
+                <button
+                  key={g.key}
+                  type="button"
+                  title={g.label}
+                  onClick={() => !disabled && updateActionConfig(action.id, { gradient_key: g.key })}
+                  style={{
+                    width: 28, height: 28, borderRadius: 6,
+                    background: g.gradient, cursor: disabled ? 'not-allowed' : 'pointer',
+                    border: config.gradient_key === g.key ? '2px solid #3730A3' : '2px solid transparent',
+                    padding: 0,
+                    transition: 'border 0.15s',
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* قالب متن */}
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">متن استوری (می‌توانید از متغیرهایی مثل {'{{field_name}}'} استفاده کنید)</div>
+            <Input
+              disabled={disabled}
+              value={config.text_template || ''}
+              onChange={(e) => updateActionConfig(action.id, { text_template: e.target.value })}
+              placeholder="متن استوری..."
+              style={{ direction: 'rtl' }}
+            />
+          </div>
+
+          {/* مدت انقضا */}
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">انقضا (ساعت، خالی = بدون انقضا)</div>
+            <InputNumber
+              disabled={disabled}
+              min={1}
+              max={8760}
+              value={config.expires_hours ?? null}
+              onChange={(v) => updateActionConfig(action.id, { expires_hours: v })}
+              placeholder="مثلاً ۲۴"
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          {/* مخاطبان */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">نمایش برای همه اعضا:</span>
+            <Switch
+              disabled={disabled}
+              checked={config.is_org_wide !== false}
+              onChange={(v) => updateActionConfig(action.id, { is_org_wide: v })}
+              size="small"
+            />
+          </div>
+
+          {/* اطلاع‌رسانی پیامکی */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">اطلاع‌رسانی پیامکی:</span>
+            <Switch
+              disabled={disabled}
+              checked={!!config.notify_sms}
+              onChange={(v) => updateActionConfig(action.id, { notify_sms: v })}
+              size="small"
+            />
+          </div>
+
+          {config.notify_sms && (
+            <div className="space-y-1 border border-gray-200 rounded-lg p-2">
+              <div className="text-xs text-gray-500">متن پیامک</div>
+              <Input
+                disabled={disabled}
+                value={config.sms_template || ''}
+                onChange={(e) => updateActionConfig(action.id, { sms_template: e.target.value })}
+                placeholder="متن پیامک اطلاع‌رسانی..."
+                style={{ direction: 'rtl' }}
+              />
+            </div>
+          )}
         </div>
       );
     }

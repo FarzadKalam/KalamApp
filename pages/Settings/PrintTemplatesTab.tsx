@@ -878,7 +878,7 @@ const PrintTemplatesTab: React.FC = () => {
               placeholder="توضیح کوتاه قالب"
             />
 
-            <div className="sticky top-0 z-30 mb-4 pb-2">
+            <div className="sticky top-0 z-[90] mb-4 pb-2">
               <div className="mb-2 flex justify-end">
                 <Button
                   size="small"

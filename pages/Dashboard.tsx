@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Col, Empty, Grid, Row, Spin, Statistic, Table, Tag } from 'antd';
 import {
   AppstoreOutlined,
@@ -26,6 +26,7 @@ import {
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
   resolvePreferredRoleModuleIds,
+  resolveStoriesPermissions,
   type CurrentUserRecordAccessContext,
   type PermissionMap,
 } from '../utils/permissions';
@@ -42,6 +43,11 @@ import OccasionsWidget from '../components/dashboard/OccasionsWidget';
 import TaskCalendarWidget from '../components/dashboard/TaskCalendarWidget';
 import ReportsSliderWidget from '../components/dashboard/ReportsSliderWidget';
 import OurProcessesWidget from '../components/dashboard/OurProcessesWidget';
+import StoryBar from '../components/stories/StoryBar';
+import StoryViewerModal from '../components/stories/StoryViewerModal';
+import StoryEditorModal from '../components/stories/StoryEditorModal';
+import { notifyStorySms } from '../utils/storyNotification';
+import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -719,6 +725,55 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
   }
 };
 
+// پیش‌بارگذاری استوری‌ها در موازات bootstrap داشبورد
+const fetchInitialStories = async (orgId: string, userId: string): Promise<OrgStoryWithMeta[]> => {
+  try {
+    const now = new Date().toISOString();
+    const { data: rawStories } = await supabase
+      .from('org_stories')
+      .select('*')
+      .eq('org_id', orgId)
+      .eq('is_active', true)
+      .lte('published_at', now)
+      .or(`expires_at.is.null,expires_at.gt.${now}`)
+      .order('is_pinned', { ascending: false })
+      .order('published_at', { ascending: false });
+
+    if (!rawStories?.length) return [];
+
+    const storyIds = rawStories.map((s: any) => s.id);
+    const [{ data: views }, { data: reactions }] = await Promise.all([
+      supabase.from('org_story_views').select('*').in('story_id', storyIds),
+      supabase.from('org_story_reactions').select('*').in('story_id', storyIds),
+    ]);
+
+    const viewedIds = new Set(
+      (views ?? []).filter((v: any) => v.user_id === userId).map((v: any) => v.story_id)
+    );
+
+    return (rawStories as any[])
+      .map((story) => {
+        const storyReactions = (reactions ?? []).filter((r: any) => r.story_id === story.id);
+        const myReaction = storyReactions.find((r: any) => r.user_id === userId) ?? null;
+        const viewerCount = (views ?? []).filter((v: any) => v.story_id === story.id).length;
+        return {
+          ...story,
+          isViewedByMe: viewedIds.has(story.id),
+          myReaction,
+          reactions: storyReactions,
+          viewerCount,
+        };
+      })
+      .sort((a: any, b: any) => {
+        if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+        if (a.isViewedByMe !== b.isViewedByMe) return a.isViewedByMe ? 1 : -1;
+        return new Date(b.published_at).getTime() - new Date(a.published_at).getTime();
+      });
+  } catch {
+    return [];
+  }
+};
+
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const currency = useCurrencyConfig();
@@ -732,6 +787,19 @@ const Dashboard: React.FC = () => {
   const [quickActions, setQuickActions] = useState<DashboardQuickAction[]>([]);
   const [cards, setCards] = useState<DashboardCardItem[]>([]);
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
+
+  // ─── استوری‌ها ───────────────────────────────
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [storiesPermissions, setStoriesPermissions] = useState<ReturnType<typeof resolveStoriesPermissions> | null>(null);
+  const [storyViewerOpen, setStoryViewerOpen] = useState(false);
+  const [storyViewerIndex, setStoryViewerIndex] = useState(0);
+  const [storyViewerList, setStoryViewerList] = useState<OrgStoryWithMeta[]>([]);
+  const [storyEditorOpen, setStoryEditorOpen] = useState(false);
+  const [editingStory, setEditingStory] = useState<OrgStory | null>(null);
+  const [storyRefreshKey, setStoryRefreshKey] = useState(0);
+  const [initialStories, setInitialStories] = useState<OrgStoryWithMeta[]>([]);
   const quickActionDesktopColumns = useMemo(() => {
     const count = quickActions.length;
     if (count <= 0) return 1;
@@ -759,12 +827,37 @@ const Dashboard: React.FC = () => {
     const loadDashboard = async () => {
       setLoading(true);
       try {
-        const result = await buildDashboardBootstrap();
+        // مرحله ۱: session سریع است (معمولاً کش شده)
+        const snapshot = await fetchSessionBootstrap(supabase);
+        const userId = snapshot.user?.id ? String(snapshot.user.id) : null;
+        const snapshotOrgId = snapshot.orgId ? String(snapshot.orgId) : null;
+
+        // مرحله ۲: bootstrap و استوری‌ها را موازی fetch می‌کنیم
+        const [result, fetchedStories] = await Promise.all([
+          buildDashboardBootstrap(),
+          userId && snapshotOrgId
+            ? fetchInitialStories(snapshotOrgId, userId)
+            : Promise.resolve([]),
+        ]);
+
         if (!isMounted) return;
         setWidgetPermissions(result.widgetPermissions || {});
         setQuickActions(result.quickActions || []);
         setCards(result.cards || []);
         setRecentSections(result.recentSections || []);
+
+        if (userId) {
+          setCurrentUserId(userId);
+          setOrgId(snapshotOrgId);
+          const profile = (snapshot as any).profile;
+          setCurrentUserName(
+            String(profile?.full_name || profile?.display_name || snapshot.user?.email || '')
+          );
+          setStoriesPermissions(
+            resolveStoriesPermissions(snapshot.permissions as PermissionMap | null)
+          );
+          setInitialStories(fetchedStories);
+        }
       } catch (error) {
         console.error('Error loading dashboard:', error);
         if (!isMounted) return;
@@ -796,8 +889,67 @@ const Dashboard: React.FC = () => {
   const showOurProcessesWidget = canShowWidget('our_processes');
   const showActivityCalendarWidget = canShowWidget('activity_calendar');
 
+  // ─── handler‌های استوری ───────────────────────
+  const handleOpenStory = useCallback((story: OrgStoryWithMeta, allStories: OrgStoryWithMeta[]) => {
+    const idx = allStories.findIndex((s) => s.id === story.id);
+    setStoryViewerList(allStories);
+    setStoryViewerIndex(Math.max(0, idx));
+    setStoryViewerOpen(true);
+  }, []);
+
+  const handleEditStory = useCallback((story: OrgStoryWithMeta) => {
+    setEditingStory(story as OrgStory);
+    setStoryViewerOpen(false);
+    setStoryEditorOpen(true);
+  }, []);
+
+  const handleDeleteStory = useCallback(async (storyId: string) => {
+    await supabase.from('org_stories').delete().eq('id', storyId);
+    setStoryRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleTogglePin = useCallback(async (storyId: string, isPinned: boolean) => {
+    await supabase
+      .from('org_stories')
+      .update({ is_pinned: !isPinned, updated_at: new Date().toISOString() })
+      .eq('id', storyId);
+    setStoryRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleMarkViewed = useCallback(async (storyId: string) => {
+    if (!currentUserId) return;
+    await supabase.rpc('record_story_view', { p_story_id: storyId, p_user_id: currentUserId });
+  }, [currentUserId]);
+
+  const handleReact = useCallback(async (storyId: string, emoji: string) => {
+    if (!currentUserId) return;
+    const existing = storyViewerList.find((s) => s.id === storyId)?.myReaction;
+    if (existing) {
+      await supabase.from('org_story_reactions').delete().eq('story_id', storyId).eq('user_id', currentUserId);
+    } else {
+      await supabase.from('org_story_reactions').upsert({ story_id: storyId, user_id: currentUserId, emoji });
+    }
+  }, [currentUserId, storyViewerList]);
+
   return (
+    <>
     <div className="min-h-screen bg-gray-50 dark:bg-dark-bg p-4 md:p-6">
+
+      {/* ─── باکس استوری‌ها — جداگانه بالای کارت سازمان ─── */}
+      {orgId && currentUserId && storiesPermissions?.canView && (
+        <div className="mb-3">
+          <StoryBar
+            key={storyRefreshKey}
+            orgId={orgId}
+            currentUserId={currentUserId}
+            canPublish={storiesPermissions.canPublish}
+            onAddStory={() => { setEditingStory(null); setStoryEditorOpen(true); }}
+            onOpenStory={handleOpenStory}
+            initialStories={storyRefreshKey === 0 ? initialStories : undefined}
+          />
+        </div>
+      )}
+
       <div className="mb-6">
         <div className="bg-white dark:bg-dark-surface rounded-lg shadow-sm p-6 border border-gray-200 dark:border-dark-border">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-stretch xl:justify-between">
@@ -969,6 +1121,46 @@ const Dashboard: React.FC = () => {
         </Row>
       )}
     </div>
+
+      {/* ─── Story Modals ─── */}
+      {/* ─── StoryViewerModal ─── */}
+      {storyViewerOpen && storyViewerList.length > 0 && currentUserId && (
+        <StoryViewerModal
+          open={storyViewerOpen}
+          stories={storyViewerList}
+          initialIndex={storyViewerIndex}
+          currentUserId={currentUserId}
+          canEditOwn={storiesPermissions?.canEditOwn ?? false}
+          canDeleteOwn={storiesPermissions?.canDeleteOwn ?? false}
+          canEditOthers={storiesPermissions?.canEditOthers ?? false}
+          canDeleteOthers={storiesPermissions?.canDeleteOthers ?? false}
+          canPin={storiesPermissions?.canPin ?? false}
+          canViewReactions={storiesPermissions?.canViewReactions ?? false}
+          onClose={() => setStoryViewerOpen(false)}
+          onEdit={handleEditStory}
+          onDelete={handleDeleteStory}
+          onTogglePin={handleTogglePin}
+          onMarkViewed={handleMarkViewed}
+          onReact={handleReact}
+        />
+      )}
+
+      {/* ─── StoryEditorModal ─── */}
+      {storyEditorOpen && orgId && currentUserId && (
+        <StoryEditorModal
+          open={storyEditorOpen}
+          orgId={orgId}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          editingStory={editingStory}
+          onClose={() => { setStoryEditorOpen(false); setEditingStory(null); }}
+          onSaved={() => setStoryRefreshKey((k) => k + 1)}
+          onNotifySms={(storyId, text, recipientIds) => {
+            notifyStorySms(storyId, text, recipientIds);
+          }}
+        />
+      )}
+    </>
   );
 };
 

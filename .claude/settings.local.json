@@ -6,7 +6,13 @@
       "Bash(grep -r \"taxpayer\" /d/Kalamapp --include=\"*.tsx\" --include=\"*.ts\" ! -path \"*/node_modules/*\" ! -path \"*/dist/*\" -l)",
       "Bash(xargs grep:*)",
       "Bash(grep -r \"TaxpayerInvoiceModal\" /d/Kalamapp --include=\"*.tsx\" --include=\"*.ts\" ! -path \"*/node_modules/*\" ! -path \"*/dist/*\")",
-      "Bash(grep -E \"\\\\.\\(tsx?|css\\)$\")"
+      "Bash(grep -E \"\\\\.\\(tsx?|css\\)$\")",
+      "Bash(ls components/dashboard/ ls database*.sql)",
+      "Bash(head -20 ls database*.sql)",
+      "Bash(ls d:/Kalamapp/database*.sql)",
+      "Bash(node_modules/.bin/tsc --noEmit --project tsconfig.json)",
+      "Bash(npm run:*)",
+      "Bash(node_modules/.bin/tsc --noEmit --skipLibCheck)"
     ]
   }
 }

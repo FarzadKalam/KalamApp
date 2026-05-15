@@ -15,7 +15,21 @@ export type WorkflowActionType =
   | 'send_to_next_stages'
   | 'create_related_record'
   | 'copy_process_template'
-  | 'execute_process';
+  | 'execute_process'
+  | 'publish_story';
+
+// Config اقدام انتشار استوری
+export type PublishStoryActionConfig = {
+  slide_type: 'gradient' | 'template';
+  gradient_key: string;
+  text_template: string;     // متن با متغیر مثل {{field_name}} یا {{creator_name}}
+  expires_hours: number | null;
+  is_org_wide: boolean;
+  viewer_role_ids: string[];
+  notify_sms: boolean;
+  sms_template: string;
+  sms_recipient_role_ids: string[];
+};
 
 export const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
@@ -96,6 +110,7 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ایجاد رکورد مرتبط', value: 'create_related_record' },
   { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },
   { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
+  { label: 'انتشار استوری', value: 'publish_story' },
 ];
 
 export const createProcessNextStageFieldKey = (

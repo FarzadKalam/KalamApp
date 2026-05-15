@@ -12,7 +12,7 @@ import {
 type BotChannel = 'rubika' | 'telegram' | 'bale';
 
 const COUNTERPARTY_BOT_STATUS_LABELS: Record<string, string> = {
-  pending_join_link: 'در انتظار ثبت لینک',
+  pending_join_link: 'در انتظار پیام در گروه',
   pending_join: 'انتظار برای پیام در گروه',
   active: 'فعال',
   disabled: 'غیرفعال',
@@ -54,7 +54,6 @@ export type CounterpartyBotStatusModalProps = {
   watching: boolean;
   countdown: number;
   channel: BotChannel;
-  joinLink: string;
   groupTitle: string;
   currentStatus: string;
   activationCode: string;
@@ -69,8 +68,6 @@ export type CounterpartyBotStatusModalProps = {
   onStartBindWatch: () => void;
   onCopyActivationCode: () => void;
   onChangeChannel: (channel: BotChannel) => void;
-  onChangeJoinLink: (value: string) => void;
-  onChangeGroupTitle: (value: string) => void;
   onChangeAllowedUserIds: (value: string[]) => void;
   onChangeAllowedRoleIds: (value: string[]) => void;
 };
@@ -82,7 +79,6 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   watching,
   countdown,
   channel,
-  joinLink,
   groupTitle,
   currentStatus,
   activationCode,
@@ -97,8 +93,6 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   onStartBindWatch,
   onCopyActivationCode,
   onChangeChannel,
-  onChangeJoinLink,
-  onChangeGroupTitle,
   onChangeAllowedUserIds,
   onChangeAllowedRoleIds,
 }) => {
@@ -137,9 +131,9 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
       ) : (
         <div className="space-y-3 text-gray-700 dark:text-gray-200">
           <div className="text-xs text-gray-500 dark:text-gray-400">
-            برای اتصال اولیه، روی «شروع bind» بزنید و کد فعال‌سازی را در همان گروه با `/` ارسال کنید
-            (مثل: `/KALAM-...`). اگر پیام‌ها دیده نمی‌شوند، در @BotFather روبیکا گزینه
-            «دریافت همه پیام‌های کانال و گروه» را فعال کنید.
+            برای اتصال اولیه، روی «انتظار برای پیام در گروه» بزنید و کد فعال‌سازی را در همان گروه ارسال کنید
+            (مثل: <span className="font-mono">/KALAM-...</span>). سیستم بعد از دریافت همان پیام، گروه را به همین
+            طرف‌حساب متصل می‌کند و نام گروه به‌صورت خودکار ثبت می‌شود.
           </div>
           <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-700/40 dark:bg-blue-900/20 dark:text-blue-300">
             وضعیت فعلی: {COUNTERPARTY_BOT_STATUS_LABELS[currentStatus] || currentStatus || 'نامشخص'}
@@ -174,19 +168,11 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
             />
           </div>
           <div>
-            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">لینک جوین گروه</div>
-            <Input
-              value={joinLink}
-              placeholder="https://..."
-              onChange={(event) => onChangeJoinLink(String(event.target.value || '').trim())}
-            />
-          </div>
-          <div>
             <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نام گروه شناسایی‌شده</div>
             <Input
               value={groupTitle}
-              placeholder="نام گروه بات"
-              onChange={(event) => onChangeGroupTitle(String(event.target.value || ''))}
+              placeholder="بعد از اولین پیام گروه به‌صورت خودکار ثبت می‌شود"
+              readOnly
             />
           </div>
           <div>

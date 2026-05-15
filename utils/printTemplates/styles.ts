@@ -150,5 +150,98 @@ export const printStyles = `
     .invoice-custom-print-shell .print-template-page-counter { color: #334155 !important; }
     .invoice-custom-print-shell .print-template-body-measure { display: none !important; }
     .print-card { border: none; box-shadow: none; border-radius: 0; }
+
+    /* ── Fix text clipping: native browser pagination for custom print templates ── */
+
+    /* Hide duplicate pages 2+ — the first page will flow naturally across all printed sheets */
+    body.print-mode #print-root .print-template-page:not(:first-child) {
+      display: none !important;
+    }
+
+    /* First page: let height grow naturally so content is never clipped by overflow */
+    body.print-mode #print-root .print-template-page:first-child {
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+      display: block !important;
+      break-inside: auto !important;
+      page-break-inside: auto !important;
+      break-after: auto !important;
+      page-break-after: auto !important;
+    }
+
+    /* Header: fixed to top of every printed page using CSS variables for positioning */
+    body.print-mode #print-root .print-template-header {
+      position: fixed !important;
+      top: var(--print-margin-top, 8mm) !important;
+      right: var(--print-margin-right, 8mm) !important;
+      left: var(--print-margin-left, 8mm) !important;
+      width: auto !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+      flex: none !important;
+      background: #fff !important;
+      z-index: 1 !important;
+    }
+    body.print-mode #print-root .print-template-header-inner {
+      overflow: visible !important;
+      max-height: none !important;
+    }
+
+    /* Footer: fixed to bottom of every printed page */
+    body.print-mode #print-root .print-template-footer {
+      position: fixed !important;
+      bottom: var(--print-margin-bottom, 8mm) !important;
+      right: var(--print-margin-right, 8mm) !important;
+      left: var(--print-margin-left, 8mm) !important;
+      width: auto !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+      flex: none !important;
+      margin-top: 0 !important;
+      background: #fff !important;
+      z-index: 1 !important;
+    }
+    body.print-mode #print-root .print-template-footer-inner {
+      overflow: visible !important;
+      max-height: none !important;
+    }
+
+    /* Body: remove all clipping; padding reserves space taken by fixed header/footer */
+    body.print-mode #print-root .print-template-body {
+      overflow: visible !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      flex: none !important;
+      padding-top: var(--print-header-height, 0px) !important;
+      padding-bottom: var(--print-footer-height, 0px) !important;
+    }
+
+    /* Remove the translateY viewport trick — content flows as a single continuous stream */
+    body.print-mode #print-root .print-template-body-segment {
+      transform: none !important;
+    }
+
+    /* Remove the white edge-guard overlay; not needed with natural pagination */
+    body.print-mode #print-root .print-template-body-edge-guard {
+      display: none !important;
+    }
+
+    /* Prevent browser from breaking in the middle of paragraphs, list items, headings, table rows */
+    body.print-mode #print-root .print-template-body-inner p,
+    body.print-mode #print-root .print-template-body-inner li,
+    body.print-mode #print-root .print-template-body-inner h1,
+    body.print-mode #print-root .print-template-body-inner h2,
+    body.print-mode #print-root .print-template-body-inner h3,
+    body.print-mode #print-root .print-template-body-inner tr {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
   }
 `;

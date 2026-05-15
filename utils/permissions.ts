@@ -35,6 +35,7 @@ export const ACCOUNTING_PERMISSION_KEY = '__accounting';
 export const REPORTS_PERMISSION_KEY = '__reports';
 export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
 export const VOIP_PERMISSION_KEY = '__voip';
+export const STORIES_PERMISSION_KEY = '__stories';
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
   { key: '__ready_texts_add', label: 'متن‌های آماده: افزودن' },
@@ -110,6 +111,16 @@ export const REPORTS_PERMISSION_FIELDS = [
 export const VOIP_PERMISSION_FIELDS = [
   { key: 'all_call_notifications', label: 'مشاهده اعلان همه تماس‌ها' },
 ];
+
+export const STORIES_PERMISSION_FIELDS = [
+  { key: 'publish', label: 'انتشار استوری' },
+  { key: 'edit_own', label: 'ویرایش استوری خود' },
+  { key: 'delete_own', label: 'حذف استوری خود' },
+  { key: 'edit_others', label: 'ویرایش استوری دیگران' },
+  { key: 'delete_others', label: 'حذف استوری دیگران' },
+  { key: 'pin', label: 'پین کردن استوری' },
+  { key: 'view_reactions', label: 'مشاهده واکنش‌ها و بازدیدها' },
+] as const;
 
 export const MOBILE_FOOTER_DEFAULT_MODULES = ['products', 'production_orders', 'invoices', 'customers'] as const;
 export const DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES = [
@@ -330,6 +341,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
       slot_7: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[6],
       slot_8: DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES[7],
     },
+  };
+
+  defaults[STORIES_PERMISSION_KEY] = {
+    view: true,
+    edit: false,
+    delete: false,
+    record_scope: 'all',
+    fields: createFieldsMap([...STORIES_PERMISSION_FIELDS]),
   };
 
   return defaults;
@@ -694,6 +713,25 @@ export const fetchCurrentUserRecordAccessContext = async (
     ...context,
     allowedRoleIds: scoped.allowedRoleIds,
     allowedUserIds: scoped.allowedUserIds,
+  };
+};
+
+export const resolveStoriesPermissions = (permissions: PermissionMap | null | undefined) => {
+  const perm = permissions?.[STORIES_PERMISSION_KEY] || {};
+  const fields = perm.fields || {};
+  const canViewRoot = perm.view !== false;
+  const canEditRoot = perm.edit !== false;
+  const canDeleteRoot = perm.delete !== false;
+
+  return {
+    canView: canViewRoot,
+    canPublish: canViewRoot && canEditRoot && fields.publish !== false,
+    canEditOwn: canViewRoot && canEditRoot && fields.edit_own !== false,
+    canDeleteOwn: canViewRoot && canDeleteRoot && fields.delete_own !== false,
+    canEditOthers: canViewRoot && canEditRoot && fields.edit_others !== false,
+    canDeleteOthers: canViewRoot && canDeleteRoot && fields.delete_others !== false,
+    canPin: canViewRoot && canEditRoot && fields.pin !== false,
+    canViewReactions: canViewRoot && fields.view_reactions !== false,
   };
 };
 
