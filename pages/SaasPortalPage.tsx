@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Input, Select } from 'antd';
+import { Alert, Button, ConfigProvider, Input, Select, theme as antdTheme } from 'antd';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -9,6 +9,16 @@ import {
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
+import {
+  getOwnerSetupErrorMessage,
+  isBrandPaletteKey,
+  isValidOwnerEmail,
+  isValidOwnerPassword,
+  normalizeOwnerEmail,
+  normalizeSaasSlug,
+  SAAS_BRAND_PALETTE_OPTIONS,
+  SAAS_DEFAULT_BRAND_PALETTE_KEY,
+} from '../utils/saasOnboarding';
 
 // ─── Types ───────────────────────────────────────────
 type WizardStep = 'phone' | 'otp' | 'info' | 'provisioning' | 'done' | 'error';
@@ -45,6 +55,8 @@ const DISCOVERY_OPTIONS = [
   { value: 'instagram', label: 'اینستاگرام' },
   { value: 'linkedin', label: 'لینکدین' },
   { value: 'friend', label: 'معرفی دوست یا همکار' },
+  { value: 'phone_call', label: 'تماس تلفنی' },
+  { value: 'tazesystem_members', label: 'معرفی توسط اعضای تازه سیستم' },
   { value: 'ad', label: 'تبلیغات' },
   { value: 'other', label: 'سایر' },
 ];
@@ -66,14 +78,13 @@ const PROVISIONING_MESSAGES = [
   'تقریباً تمام شد...',
 ];
 
-// ─── Helpers ─────────────────────────────────────────
-const normalizeSlug = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+const SAAS_WIZARD_STEP_STORAGE_KEY = 'kalam_saas_wizard_step';
+const SAAS_WIZARD_PHONE_STORAGE_KEY = 'kalam_saas_wizard_phone';
+const SAAS_WIZARD_OTP_STORAGE_KEY = 'kalam_saas_wizard_otp';
+const SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_saas_wizard_cooldown_until';
+const SAAS_WIZARD_FORM_STORAGE_KEY = 'kalam_saas_wizard_form';
 
+// ─── Helpers ─────────────────────────────────────────
 // ─── Sub-components ───────────────────────────────────
 
 const Logo = () => (
@@ -119,11 +130,15 @@ const SaasPortalPage: React.FC = () => {
 
   // Org info
   const [fullName, setFullName] = useState('');
+  const [ownerEmail, setOwnerEmail] = useState('');
+  const [ownerPassword, setOwnerPassword] = useState('');
+  const [ownerPasswordConfirm, setOwnerPasswordConfirm] = useState('');
   const [orgName, setOrgName] = useState('');
   const [industry, setIndustry] = useState('');
   const [userCount, setUserCount] = useState('');
   const [discoverySource, setDiscoverySource] = useState('');
   const [slug, setSlug] = useState('');
+  const [brandPaletteKey, setBrandPaletteKey] = useState(SAAS_DEFAULT_BRAND_PALETTE_KEY);
   const [slugState, setSlugState] = useState<SlugState>('idle');
   const [slugMessage, setSlugMessage] = useState('');
 
@@ -136,6 +151,114 @@ const SaasPortalPage: React.FC = () => {
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const slugTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const provisionMsgTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const savedStep = String(window.sessionStorage.getItem(SAAS_WIZARD_STEP_STORAGE_KEY) || 'phone').trim() as WizardStep;
+    const savedPhone = window.sessionStorage.getItem(SAAS_WIZARD_PHONE_STORAGE_KEY) || '';
+    const savedOtp = window.sessionStorage.getItem(SAAS_WIZARD_OTP_STORAGE_KEY) || '';
+    const savedCooldownUntil = Number(window.sessionStorage.getItem(SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY) || '0');
+    const savedFormRaw = window.sessionStorage.getItem(SAAS_WIZARD_FORM_STORAGE_KEY) || '';
+
+    if (savedPhone) setPhone(savedPhone);
+    if (savedOtp) setOtpCode(savedOtp);
+    if (savedCooldownUntil > Date.now()) {
+      setOtpCooldown(Math.ceil((savedCooldownUntil - Date.now()) / 1000));
+    }
+
+    if (savedFormRaw) {
+      try {
+        const savedForm = JSON.parse(savedFormRaw);
+        setFullName(String(savedForm?.fullName || ''));
+        setOwnerEmail(String(savedForm?.ownerEmail || ''));
+        setOrgName(String(savedForm?.orgName || ''));
+        setIndustry(String(savedForm?.industry || ''));
+        setUserCount(String(savedForm?.userCount || ''));
+        setDiscoverySource(String(savedForm?.discoverySource || ''));
+        setSlug(String(savedForm?.slug || ''));
+        setBrandPaletteKey(isBrandPaletteKey(String(savedForm?.brandPaletteKey || '')) ? savedForm.brandPaletteKey : SAAS_DEFAULT_BRAND_PALETTE_KEY);
+      } catch {
+        // Ignore invalid cached wizard state.
+      }
+    }
+
+    const restoreStep = async () => {
+      if (!savedStep || savedStep === 'phone') return;
+      if (savedStep === 'otp') {
+        setStep('otp');
+        return;
+      }
+      const { data } = await supabase.auth.getSession();
+      if (data?.session?.user?.id) {
+        setStep(savedStep);
+      } else {
+        setStep('phone');
+      }
+    };
+
+    void restoreStep();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.setItem(SAAS_WIZARD_STEP_STORAGE_KEY, step);
+  }, [step]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.setItem(SAAS_WIZARD_PHONE_STORAGE_KEY, phone);
+  }, [phone]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (otpCode) {
+      window.sessionStorage.setItem(SAAS_WIZARD_OTP_STORAGE_KEY, otpCode);
+    } else {
+      window.sessionStorage.removeItem(SAAS_WIZARD_OTP_STORAGE_KEY);
+    }
+  }, [otpCode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (otpCooldown > 0) {
+      window.sessionStorage.setItem(
+        SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY,
+        String(Date.now() + otpCooldown * 1000)
+      );
+    } else {
+      window.sessionStorage.removeItem(SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY);
+    }
+  }, [otpCooldown]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.setItem(
+      SAAS_WIZARD_FORM_STORAGE_KEY,
+      JSON.stringify({
+        fullName,
+        ownerEmail,
+        orgName,
+        industry,
+        userCount,
+        discoverySource,
+        slug,
+        brandPaletteKey,
+      })
+    );
+  }, [brandPaletteKey, discoverySource, fullName, industry, orgName, ownerEmail, slug, userCount]);
+
+  const clearWizardState = () => {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.removeItem(SAAS_WIZARD_STEP_STORAGE_KEY);
+    window.sessionStorage.removeItem(SAAS_WIZARD_PHONE_STORAGE_KEY);
+    window.sessionStorage.removeItem(SAAS_WIZARD_OTP_STORAGE_KEY);
+    window.sessionStorage.removeItem(SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY);
+    window.sessionStorage.removeItem(SAAS_WIZARD_FORM_STORAGE_KEY);
+  };
+
+  const inputClassName = 'rounded-xl !bg-white !text-slate-900 placeholder:!text-slate-400';
+  const selectClassName = 'w-full [&_.ant-select-selector]:!rounded-xl [&_.ant-select-selector]:!bg-white [&_.ant-select-selector]:!text-slate-900';
 
   // ── Cooldown timer ──
   useEffect(() => {
@@ -155,7 +278,7 @@ const SaasPortalPage: React.FC = () => {
   // ── Slug live-check ──
   useEffect(() => {
     if (slugTimer.current) clearTimeout(slugTimer.current);
-    const normalized = normalizeSlug(slug);
+    const normalized = normalizeSaasSlug(slug);
     if (!normalized || normalized.length < 2) {
       setSlugState('idle');
       setSlugMessage('');
@@ -222,6 +345,7 @@ const SaasPortalPage: React.FC = () => {
       const { data: ctx } = await supabase.rpc('get_current_saas_context');
       if (ctx?.org_id && ctx?.slug) {
         // کاربر قبلاً دمو گرفته — ریدایرکت به سازمانش
+        clearWizardState();
         window.location.href = `https://${ctx.slug}${TAZE_SUFFIX}`;
         return;
       }
@@ -236,17 +360,36 @@ const SaasPortalPage: React.FC = () => {
 
   const handleProvision = useCallback(async () => {
     if (!fullName.trim()) { setError('نام و نام خانوادگی الزامی است.'); return; }
+    if (!isValidOwnerEmail(ownerEmail)) { setError('ایمیل مدیر اصلی معتبر نیست.'); return; }
+    if (!isValidOwnerPassword(ownerPassword)) { setError('رمز عبور باید حداقل ۶ کاراکتر باشد.'); return; }
+    if (ownerPassword !== ownerPasswordConfirm) { setError('تکرار رمز عبور با رمز عبور یکسان نیست.'); return; }
     if (!orgName.trim()) { setError('نام سازمان الزامی است.'); return; }
-    const normalizedSlug = normalizeSlug(slug);
+    const normalizedSlug = normalizeSaasSlug(slug);
     if (!normalizedSlug || normalizedSlug.length < 3) { setError('آدرس اختصاصی باید حداقل ۳ حرف باشد.'); return; }
     if (slugState === 'taken') { setError('این آدرس قبلاً انتخاب شده است.'); return; }
     if (slugState === 'checking') { setError('صبر کنید تا بررسی آدرس تکمیل شود.'); return; }
 
     setError('');
-    setStep('provisioning');
-    setProvisionMsgIdx(0);
+    setLoading(true);
 
     try {
+      const normalizedEmail = normalizeOwnerEmail(ownerEmail);
+      const { data: ownerSetupData, error: ownerSetupError } = await supabase.functions.invoke('user-admin', {
+        body: {
+          action: 'setup_owner_credentials',
+          fullName: fullName.trim(),
+          email: normalizedEmail,
+          password: ownerPassword,
+        },
+      });
+      if (ownerSetupError) throw ownerSetupError;
+      if (ownerSetupData?.success === false) {
+        throw new Error(String(ownerSetupData?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.'));
+      }
+
+      setStep('provisioning');
+      setProvisionMsgIdx(0);
+
       const { data, error: rpcErr } = await supabase.rpc('provision_self_service_demo', {
         p_full_name: fullName.trim(),
         p_mobile: normalizedPhone,
@@ -254,6 +397,9 @@ const SaasPortalPage: React.FC = () => {
         p_employee_count_band: userCount || null,
         p_discovery_source: discoverySource || null,
         p_requested_slug: normalizedSlug,
+        p_owner_email: normalizedEmail,
+        p_industry: industry || null,
+        p_brand_palette_key: brandPaletteKey,
       });
 
       if (rpcErr) throw rpcErr;
@@ -262,6 +408,7 @@ const SaasPortalPage: React.FC = () => {
       if (!result?.success) throw new Error('provisioning failed');
 
       setProvisionResult(result);
+      clearWizardState();
 
       // کمی صبر تا کاربر progress رو ببینه
       await new Promise((r) => setTimeout(r, 1800));
@@ -276,27 +423,80 @@ const SaasPortalPage: React.FC = () => {
     } catch (err: any) {
       const msg = String(err?.message || '');
       let userMsg = 'خطا در راه‌اندازی سازمان. لطفاً با پشتیبانی تماس بگیرید.';
-      if (msg.includes('slug') || msg.includes('available')) {
+      let inlineInfoError = false;
+      if (
+        msg.includes('already registered')
+        || msg.includes('already exists')
+        || msg.includes('email_conflict')
+        || msg.includes('invalid email')
+        || (msg.includes('password') && msg.includes('least'))
+      ) {
+        userMsg = getOwnerSetupErrorMessage(err);
+        setStep('info');
+        inlineInfoError = true;
+      } else if (msg.includes('slug') || msg.includes('available')) {
         userMsg = 'این آدرس قبلاً انتخاب شده. آدرس دیگری انتخاب کنید.';
         setStep('info');
+        inlineInfoError = true;
       } else if (msg.includes('demo') && msg.includes('limit')) {
         userMsg = 'شما قبلاً از نسخه دمو استفاده کرده‌اید. برای اطلاعات بیشتر با ما تماس بگیرید.';
+        setStep('error');
+      } else if (msg.includes('marketing_leads') && msg.includes('description')) {
+        userMsg = 'زیرساخت نسخه SaaS روی سرور کامل نیست و migration سازگار با لیدهای بازاریابی باید اجرا شود.';
         setStep('error');
       } else {
         setStep('error');
       }
+      if (inlineInfoError) {
+        setError(userMsg);
+      }
       setProvisionError(userMsg);
+    } finally {
+      setLoading(false);
     }
-  }, [fullName, orgName, slug, slugState, normalizedPhone, userCount, discoverySource]);
+  }, [brandPaletteKey, discoverySource, fullName, industry, normalizedPhone, orgName, ownerEmail, ownerPassword, ownerPasswordConfirm, slug, slugState, userCount]);
 
   // ── Render ──
   return (
-    <div
-      className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center px-4 py-12"
-      style={{ fontFamily: 'Vazirmatn, sans-serif' }}
+    <ConfigProvider
+      direction="rtl"
+      theme={{
+        algorithm: antdTheme.defaultAlgorithm,
+        token: {
+          colorBgBase: '#f8fafc',
+          colorBgContainer: '#ffffff',
+          colorText: '#0f172a',
+          colorTextPlaceholder: '#94a3b8',
+          colorBorder: '#cbd5e1',
+          colorPrimary: '#0f172a',
+          borderRadius: 12,
+          fontFamily: 'Vazirmatn, sans-serif',
+        },
+        components: {
+          Input: {
+            colorBgContainer: '#ffffff',
+            colorText: '#0f172a',
+            colorTextPlaceholder: '#94a3b8',
+            activeBorderColor: '#0f172a',
+            hoverBorderColor: '#334155',
+          },
+          Select: {
+            colorBgContainer: '#ffffff',
+            colorText: '#0f172a',
+            colorTextPlaceholder: '#94a3b8',
+            activeBorderColor: '#0f172a',
+            hoverBorderColor: '#334155',
+            optionSelectedBg: '#e2e8f0',
+          },
+        },
+      }}
     >
-      <div className="w-full max-w-md">
-        <Logo />
+      <div
+        className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center px-4 py-12"
+        style={{ fontFamily: 'Vazirmatn, sans-serif' }}
+      >
+        <div className="w-full max-w-md">
+          <Logo />
 
         {/* ─ Step: Phone ─ */}
         {step === 'phone' && (
@@ -317,7 +517,7 @@ const SaasPortalPage: React.FC = () => {
                   onChange={(e) => setPhone(e.target.value)}
                   onPressEnter={handleSendOtp}
                   size="large"
-                  className="rounded-xl"
+                  className={inputClassName}
                   dir="ltr"
                   inputMode="tel"
                 />
@@ -355,7 +555,7 @@ const SaasPortalPage: React.FC = () => {
                 onChange={(e) => setOtpCode(e.target.value)}
                 onPressEnter={handleVerifyOtp}
                 size="large"
-                className="rounded-xl !text-center !text-xl !tracking-widest"
+                className={`${inputClassName} !text-center !text-xl !tracking-widest`}
                 maxLength={6}
                 dir="ltr"
                 inputMode="numeric"
@@ -398,6 +598,13 @@ const SaasPortalPage: React.FC = () => {
               اطلاعات زیر برای راه‌اندازی فضای اختصاصی شما استفاده می‌شود.
             </p>
             {error && <Alert type="error" message={error} className="mb-4 rounded-xl" showIcon />}
+            <Alert
+              type="info"
+              showIcon
+              className="mb-4 rounded-xl"
+              message="حساب مدیر اصلی"
+              description="این ایمیل و رمز عبور برای ورود مدیر اصلی به پنل اختصاصی سازمان استفاده می‌شود. ورود با پیامک همچنان قابل پشتیبانی است، اما این حساب باید از همین مرحله کامل شود."
+            />
             <div className="space-y-4">
 
               <div>
@@ -407,8 +614,61 @@ const SaasPortalPage: React.FC = () => {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   size="large"
-                  className="rounded-xl"
+                  className={inputClassName}
                 />
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">ایمیل مدیر اصلی <span className="text-red-500">*</span></label>
+                  <Input
+                    placeholder="owner@company.com"
+                    value={ownerEmail}
+                    onChange={(e) => setOwnerEmail(e.target.value)}
+                    size="large"
+                    className={inputClassName}
+                    dir="ltr"
+                    inputMode="email"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">پالت ظاهری سازمان</label>
+                  <Select
+                    placeholder="انتخاب کنید..."
+                    value={brandPaletteKey}
+                    onChange={(value) => setBrandPaletteKey(isBrandPaletteKey(String(value || '')) ? value : SAAS_DEFAULT_BRAND_PALETTE_KEY)}
+                    options={SAAS_BRAND_PALETTE_OPTIONS}
+                    size="large"
+                    className={selectClassName}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">رمز عبور <span className="text-red-500">*</span></label>
+                  <Input.Password
+                    placeholder="حداقل ۶ کاراکتر"
+                    value={ownerPassword}
+                    onChange={(e) => setOwnerPassword(e.target.value)}
+                    size="large"
+                    className={inputClassName}
+                    autoComplete="new-password"
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">تکرار رمز عبور <span className="text-red-500">*</span></label>
+                  <Input.Password
+                    placeholder="تکرار رمز عبور"
+                    value={ownerPasswordConfirm}
+                    onChange={(e) => setOwnerPasswordConfirm(e.target.value)}
+                    size="large"
+                    className={inputClassName}
+                    autoComplete="new-password"
+                    dir="ltr"
+                  />
+                </div>
               </div>
 
               <div>
@@ -418,7 +678,7 @@ const SaasPortalPage: React.FC = () => {
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
                   size="large"
-                  className="rounded-xl"
+                  className={inputClassName}
                 />
               </div>
 
@@ -430,23 +690,23 @@ const SaasPortalPage: React.FC = () => {
                   onChange={setIndustry}
                   options={INDUSTRY_OPTIONS}
                   size="large"
-                  className="w-full rounded-xl"
+                  className={selectClassName}
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-2">آدرس اختصاصی <span className="text-red-500">*</span></label>
-                <div className="flex items-center gap-0 rounded-xl border border-gray-300 overflow-hidden focus-within:border-slate-900 focus-within:ring-1 focus-within:ring-slate-900 bg-white">
+                <div className="flex flex-row items-center gap-0 rounded-xl border border-gray-300 overflow-hidden focus-within:border-slate-900 focus-within:ring-1 focus-within:ring-slate-900 bg-white" dir="ltr">
                   <Input
                     placeholder="mycompany"
                     value={slug}
-                    onChange={(e) => setSlug(normalizeSlug(e.target.value))}
+                    onChange={(e) => setSlug(normalizeSaasSlug(e.target.value))}
                     size="large"
-                    className="!rounded-none !border-none !shadow-none flex-1 !bg-transparent ltr-text"
+                    className="!rounded-none !border-none !shadow-none flex-1 !bg-transparent !text-left !text-slate-900 ltr-text"
                     dir="ltr"
                     maxLength={40}
                   />
-                  <span className="bg-slate-50 px-3 text-sm text-slate-400 font-mono whitespace-nowrap border-r border-gray-200 h-10 flex items-center" dir="ltr">
+                  <span className="bg-slate-50 px-3 text-sm text-slate-400 font-mono whitespace-nowrap border-l border-gray-200 h-10 flex items-center" dir="ltr">
                     .tazesystem.ir
                   </span>
                 </div>
@@ -469,25 +729,25 @@ const SaasPortalPage: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">تعداد تیم</label>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">تعداد نفرات</label>
                   <Select
                     placeholder="انتخاب..."
                     value={userCount || undefined}
                     onChange={setUserCount}
                     options={USER_COUNT_OPTIONS}
                     size="large"
-                    className="w-full"
+                    className={selectClassName}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">از کجا شنیدید؟</label>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">نحوه آشنایی</label>
                   <Select
                     placeholder="انتخاب..."
                     value={discoverySource || undefined}
                     onChange={setDiscoverySource}
                     options={DISCOVERY_OPTIONS}
                     size="large"
-                    className="w-full"
+                    className={selectClassName}
                   />
                 </div>
               </div>
@@ -497,7 +757,17 @@ const SaasPortalPage: React.FC = () => {
                 block
                 size="large"
                 onClick={handleProvision}
-                disabled={!fullName.trim() || !orgName.trim() || !normalizeSlug(slug) || slugState === 'taken' || slugState === 'checking'}
+                loading={loading}
+                disabled={
+                  !fullName.trim()
+                  || !isValidOwnerEmail(ownerEmail)
+                  || !isValidOwnerPassword(ownerPassword)
+                  || ownerPassword !== ownerPasswordConfirm
+                  || !orgName.trim()
+                  || !normalizeSaasSlug(slug)
+                  || slugState === 'taken'
+                  || slugState === 'checking'
+                }
                 className="!mt-2 !rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               >
                 راه‌اندازی فضای من <ArrowLeftOutlined />
@@ -544,6 +814,9 @@ const SaasPortalPage: React.FC = () => {
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-6 font-mono text-sm text-emerald-800 ltr-text">
               {provisionResult.slug}{TAZE_SUFFIX}
             </div>
+            <p className="text-xs text-slate-500 mb-2">
+              برای ورود مدیر اصلی از ایمیل <span className="font-bold ltr-text">{normalizeOwnerEmail(ownerEmail)}</span> استفاده کنید.
+            </p>
             <p className="text-xs text-slate-400 mb-4">در حال هدایت به پنل شما...</p>
             <Button
               type="primary"
@@ -578,8 +851,9 @@ const SaasPortalPage: React.FC = () => {
             </Button>
           </div>
         )}
+        </div>
       </div>
-    </div>
+    </ConfigProvider>
   );
 };
 

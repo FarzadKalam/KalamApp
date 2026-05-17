@@ -173,6 +173,12 @@ const getInitialBranding = (): BrandingConfig => {
 
 const SilentRouteFallback = () => null;
 
+const isSaasOnboardingPath = (pathname?: string, saasAppHost = false) => {
+  if (!saasAppHost) return false;
+  const normalized = String(pathname || "").trim();
+  return normalized === "/" || normalized === "/demo";
+};
+
 const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
 );
@@ -289,7 +295,15 @@ function App() {
     const bootstrapModuleSettings = async () => {
       try {
         const { data } = await supabase.auth.getSession();
+        const onboardingPath = isSaasOnboardingPath(window.location.pathname, saasAppHost);
         if (data?.session?.user?.id) {
+          if (onboardingPath) {
+            void primeSessionBootstrap(supabase);
+            if (isMounted) {
+              setModuleSettingsReady(true);
+            }
+            return;
+          }
           await loadModuleSettings();
         } else {
           applyModuleSettingsStoreToRegistry(null);
@@ -312,7 +326,7 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [loadModuleSettings]);
+  }, [loadModuleSettings, saasAppHost]);
 
   useEffect(() => {
     const handleModuleSettingsUpdated = () => {
@@ -353,6 +367,7 @@ function App() {
       const eventName = String(event);
       const pathname = window.location.pathname;
       const isPublic = publicPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+      const isPublicSaasOnboarding = isSaasOnboardingPath(pathname, saasAppHost);
       const nextUserId = session?.user?.id || null;
       const previousUserId = authLifecycleRef.current.userId;
       const userChanged = previousUserId !== nextUserId;
@@ -368,9 +383,13 @@ function App() {
           return;
         }
         void primeSessionBootstrap(supabase);
-        void primeReferenceData(supabase);
         void loadBranding();
-        void loadModuleSettings();
+        if (!isPublicSaasOnboarding) {
+          void primeReferenceData(supabase);
+          void loadModuleSettings();
+        } else {
+          setModuleSettingsReady(true);
+        }
         return;
       }
 
@@ -381,9 +400,13 @@ function App() {
         clearCurrentUserRoleContextCache();
         clearReferenceDataCache();
         void primeSessionBootstrap(supabase);
-        void primeReferenceData(supabase, { force: true });
         void loadBranding(true);
-        void loadModuleSettings();
+        if (!isPublicSaasOnboarding) {
+          void primeReferenceData(supabase, { force: true });
+          void loadModuleSettings();
+        } else {
+          setModuleSettingsReady(true);
+        }
         return;
       }
 

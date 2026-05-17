@@ -3,10 +3,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SaasPortalPage from './SaasPortalPage';
 
-const { authState, rpcState, supabaseMock } = vi.hoisted(() => {
+const { authState, functionState, rpcState, supabaseMock } = vi.hoisted(() => {
   const authState = {
     signInWithOtp: vi.fn(),
     verifyOtp: vi.fn(),
+  };
+
+  const functionState = {
+    invoke: vi.fn(),
   };
 
   const rpcState = vi.fn();
@@ -16,11 +20,15 @@ const { authState, rpcState, supabaseMock } = vi.hoisted(() => {
       signInWithOtp: (...args: any[]) => authState.signInWithOtp(...args),
       verifyOtp: (...args: any[]) => authState.verifyOtp(...args),
     },
+    functions: {
+      invoke: (...args: any[]) => functionState.invoke(...args),
+    },
     rpc: (...args: any[]) => rpcState(...args),
   };
 
   return {
     authState,
+    functionState,
     rpcState,
     supabaseMock,
   };
@@ -36,8 +44,11 @@ describe('SaasPortalPage OTP flow', () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
+    sessionStorage.clear();
+    localStorage.clear();
     authState.signInWithOtp.mockResolvedValue({ error: null });
     authState.verifyOtp.mockResolvedValue({ error: null });
+    functionState.invoke.mockResolvedValue({ data: { success: true }, error: null });
     rpcState.mockResolvedValue({ data: null, error: null });
   });
 
@@ -91,6 +102,72 @@ describe('SaasPortalPage OTP flow', () => {
 
     await waitFor(() => {
       expect(document.body.textContent || '').toContain('سامانه پیامکی پاسخ دیرهنگام');
+    });
+  });
+
+  it('configures owner credentials and sends branding fields during provisioning', async () => {
+    functionState.invoke.mockResolvedValue({ data: { success: true }, error: null });
+    rpcState.mockImplementation(async (fn: string, payload: any) => {
+      if (fn === 'get_current_saas_context') return { data: null, error: null };
+      if (fn === 'check_saas_slug_availability') {
+        return { data: { available: true, normalized_slug: payload?.p_slug || 'mycompany' }, error: null };
+      }
+      if (fn === 'provision_self_service_demo') {
+        return {
+          data: {
+            success: true,
+            slug: 'mycompany',
+            redirect_host: 'mycompany.tazesystem.ir',
+            trial_days: 15,
+          },
+          error: null,
+        };
+      }
+      return { data: null, error: null };
+    });
+
+    renderPage();
+
+    fireEvent.change(screen.getByPlaceholderText('۰۹۱۲...'), { target: { value: '09121234567' } });
+    fireEvent.click(screen.getByText('دریافت کد تایید'));
+    await screen.findByText('تایید و ادامه');
+
+    fireEvent.change(screen.getByPlaceholderText('کد تایید'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByText('تایید و ادامه'));
+    await screen.findByText('اطلاعات سازمان');
+
+    fireEvent.change(screen.getByPlaceholderText('علی رضایی'), { target: { value: 'علی رضایی' } });
+    fireEvent.change(screen.getByPlaceholderText('owner@company.com'), { target: { value: 'owner@testco.ir' } });
+    fireEvent.change(screen.getByPlaceholderText('حداقل ۶ کاراکتر'), { target: { value: 'secret1' } });
+    fireEvent.change(screen.getByPlaceholderText('تکرار رمز عبور'), { target: { value: 'secret1' } });
+    fireEvent.change(screen.getByPlaceholderText('شرکت نمونه'), { target: { value: 'تست کو' } });
+    fireEvent.change(screen.getByPlaceholderText('mycompany'), { target: { value: 'testco' } });
+
+    await waitFor(() => {
+      expect(document.body.textContent || '').toContain('قابل استفاده است');
+    });
+
+    fireEvent.click(screen.getByText('راه‌اندازی فضای من'));
+
+    await waitFor(() => {
+      expect(functionState.invoke).toHaveBeenCalledWith('user-admin', {
+        body: {
+          action: 'setup_owner_credentials',
+          fullName: 'علی رضایی',
+          email: 'owner@testco.ir',
+          password: 'secret1',
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(rpcState).toHaveBeenCalledWith('provision_self_service_demo', expect.objectContaining({
+        p_full_name: 'علی رضایی',
+        p_business_name: 'تست کو',
+        p_requested_slug: 'testco',
+        p_owner_email: 'owner@testco.ir',
+        p_brand_palette_key: 'kalam_sky',
+      }));
     });
   });
 });

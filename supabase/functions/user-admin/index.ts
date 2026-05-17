@@ -7,7 +7,8 @@ type UserAdminAction =
   | 'delete_user'
   | 'send_phone_otp'
   | 'verify_phone_otp'
-  | 'repair_legacy_phone_login';
+  | 'repair_legacy_phone_login'
+  | 'setup_owner_credentials';
 
 type UserAdminBody = {
   action?: UserAdminAction | string;
@@ -67,6 +68,12 @@ const toLocalIranMobile = (value?: string | null) => {
   const normalized = normalizeIranMobileE164(value);
   return normalized ? normalized.replace(/^\+98/, '0') : null;
 };
+
+const normalizeEmail = (value?: string | null) =>
+  String(value || '').trim().toLowerCase();
+
+const isValidEmail = (value?: string | null) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
 
 const isPrivilegedRole = (role?: string | null) =>
   ['super_admin', 'admin', 'manager'].includes(String(role || '').trim().toLowerCase());
@@ -742,6 +749,57 @@ Deno.serve(async (request) => {
         success: true,
         repaired: true,
         targetUserId: repairResult.targetUserId || null,
+      });
+    }
+    if (action === 'setup_owner_credentials') {
+      const targetUserId = String(caller?.id || '').trim();
+      const fullName = String(body?.fullName || '').trim();
+      const email = normalizeEmail(body?.email);
+      const password = String(body?.password || '').trim();
+
+      if (!targetUserId) {
+        return json(401, { success: false, message: 'نشست کاربر معتبر نیست.' });
+      }
+      if (!fullName) {
+        return json(400, { success: false, message: 'نام و نام خانوادگی مدیر اصلی الزامی است.' });
+      }
+      if (!isValidEmail(email)) {
+        return json(400, { success: false, message: 'ایمیل مدیر اصلی معتبر نیست.' });
+      }
+      if (password.length < 6) {
+        return json(400, { success: false, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد.' });
+      }
+
+      const duplicateProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
+        email,
+        excludeUserId: targetUserId,
+      });
+      if (duplicateProfile?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این ایمیل قبلاً کاربر ثبت شده است.',
+          reason_code: 'email_conflict',
+        });
+      }
+
+      await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+        email,
+        password,
+        user_metadata: {
+          full_name: fullName,
+        },
+        email_confirm: true,
+      });
+
+      const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
+        id: targetUserId,
+        full_name: fullName,
+        email,
+      });
+
+      return json(200, {
+        success: true,
+        profile,
       });
     }
     if (!callerProfile?.id) {

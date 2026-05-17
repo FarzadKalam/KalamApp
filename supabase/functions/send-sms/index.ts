@@ -54,13 +54,19 @@ const json = (status: number, payload: Record<string, any>) =>
   });
 
 const authHookSuccess = () =>
-  new Response(null, {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      'X-Kalam-Function-Build': FUNCTION_BUILD,
-    },
-  });
+  new Response(
+    JSON.stringify({
+      ok: true,
+    }),
+    {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json',
+        'X-Kalam-Function-Build': FUNCTION_BUILD,
+      },
+    }
+  );
 
 const authHookError = (status: number, message: string) =>
   new Response(

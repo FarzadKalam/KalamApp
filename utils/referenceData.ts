@@ -323,7 +323,10 @@ export const fetchAssigneeDirectory = async (
     const snapshot = await fetchSessionBootstrap(supabaseClient, options);
     const orgId = String(snapshot.orgId || '').trim();
 
-    let usersQuery = supabaseClient.from('profiles').select('*').limit(300);
+    let usersQuery = supabaseClient
+      .from('profiles')
+      .select('id, full_name, email, mobile_1, avatar_url, role_id')
+      .limit(300);
     const preferTreeSchema = assigneeDirectoryCache.supportsRoleTreeSchema !== false;
 
     if (orgId) {
