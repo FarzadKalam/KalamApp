@@ -3,8 +3,8 @@ import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin }
 import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
-  DashboardOutlined, 
-  TeamOutlined, 
+  DashboardOutlined,
+  TeamOutlined,
   SettingOutlined,
   SearchOutlined,
   UserOutlined,
@@ -27,6 +27,7 @@ import {
   ToolOutlined,
   ReloadOutlined,
   ArrowLeftOutlined,
+  CloudServerOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -38,6 +39,7 @@ import {
   ACCOUNTING_PERMISSION_KEY,
   REPORTS_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
+  SAAS_ADMIN_PERMISSION_KEY,
   resolveFilesAccessPermissions,
   resolvePreferredRoleModuleIds,
   type PermissionMap,
@@ -274,6 +276,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
   const canViewSettingsRoot = rolePermissions?.[SETTINGS_PERMISSION_KEY]?.view !== false;
+  const canViewSaasAdmin = Boolean(rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.view);
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
   const canViewCashBank =
     canViewAccountingDashboard &&
@@ -487,9 +490,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
         ]
       },
+      ...(canViewSaasAdmin ? [{
+        key: 'taze_system',
+        icon: <CloudServerOutlined />,
+        label: 'تازه سیستم',
+        children: [
+          { key: '/taze-system', label: 'داشبورد SaaS' },
+          { key: '/taze-system/orgs', label: 'سازمان‌ها' },
+          { key: '/taze-system/requests', label: 'درخواست‌های دمو' },
+          { key: '/taze-system/plans', label: 'پلن‌ها' },
+        ],
+      }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, canViewSaasAdmin, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -512,6 +526,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return filesAccess.canViewRecycleBin;
         case '/settings':
           return canViewSettingsRoot;
+        case '/taze-system':
+        case '/taze-system/orgs':
+        case '/taze-system/requests':
+        case '/taze-system/plans':
+          return canViewSaasAdmin;
         case '/accounting/account-review':
           return canViewModule('journal_entries') && canViewModule('chart_of_accounts');
         default: {
@@ -546,6 +565,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     canViewCashBank,
     canViewReportsHub,
     canViewSettingsRoot,
+    canViewSaasAdmin,
     filesAccess.canViewGallery,
     filesAccess.canViewRecycleBin,
     rolePermissions,

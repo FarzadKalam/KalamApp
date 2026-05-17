@@ -924,7 +924,22 @@ const Dashboard: React.FC = () => {
   const handleReact = useCallback(async (storyId: string, emoji: string) => {
     if (!currentUserId) return;
     const existing = storyViewerList.find((s) => s.id === storyId)?.myReaction;
-    if (existing) {
+    const isToggleOff = existing?.emoji === emoji;
+
+    // به‌روزرسانی خوش‌بینانه state
+    setStoryViewerList((prev) =>
+      prev.map((s) => {
+        if (s.id !== storyId) return s;
+        return {
+          ...s,
+          myReaction: isToggleOff
+            ? null
+            : { id: '', story_id: storyId, user_id: currentUserId, user_name: null, emoji, created_at: new Date().toISOString() },
+        };
+      })
+    );
+
+    if (isToggleOff) {
       await supabase.from('org_story_reactions').delete().eq('story_id', storyId).eq('user_id', currentUserId);
     } else {
       await supabase.from('org_story_reactions').upsert({ story_id: storyId, user_id: currentUserId, emoji });

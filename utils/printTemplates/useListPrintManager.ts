@@ -6,6 +6,7 @@ import { toPersianNumber, safeJalaliFormat } from '../persianNumberFormatter';
 import { readCurrencyConfig } from '../currency';
 import {
   buildListCatalogHtml,
+  buildListCatalogFullPageHtml,
   buildListSummaryTableHtml,
   buildListTableHtml,
   type ListFieldDefinition,
@@ -13,6 +14,7 @@ import {
 } from '../listPrintExport';
 import {
   buildDefaultTemplatesForModule,
+  getModuleTitle,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
   type StoredPrintTemplate,
@@ -306,6 +308,12 @@ export const useListPrintManager = ({
     if (path === 'system.list_catalog_a4') {
       return buildListCatalogHtml(selectedColumns, pageRows, relationOptions, currencyLabel);
     }
+    if (path === 'system.list_catalog_fullpage') {
+      return buildListCatalogFullPageHtml(
+        selectedColumns, pageRows, relationOptions, currencyLabel, companyInfo,
+        getModuleTitle(moduleId) || 'فهرست',
+      );
+    }
     if (path === 'system.list_summary_table') {
       return renderedSummaryTable;
     }
@@ -326,6 +334,9 @@ export const useListPrintManager = ({
     }
     if (path.startsWith('company.')) {
       const key = path.replace(/^company\./, '');
+      if (key === 'company_name_en') {
+        return String(companyInfo?.company_name_en || companyInfo?.trade_name || companyInfo?.company_full_name || '');
+      }
       return String(companyInfo?.[key] || '');
     }
     return '';

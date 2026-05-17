@@ -15,6 +15,7 @@ import {
   UserOutlined,
   DownOutlined,
   UpOutlined,
+  CheckOutlined,
 } from '@ant-design/icons';
 import maplibregl from 'maplibre-gl';
 import { ModuleField, FieldType, FieldNature, BlockType } from '../types';
@@ -29,6 +30,7 @@ import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import QrScanPopover from './QrScanPopover';
 import RecordFilesManager from './RecordFilesManager';
+import FileManagerPickerModal from './files/FileManagerPickerModal';
 import PhoneFieldInput from './PhoneFieldInput';
 import PhoneActionsPopover from './PhoneActionsPopover';
 import DateObject from 'react-date-object';
@@ -454,6 +456,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scannedCode, setScannedCode] = useState('');
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [isImagePickerOpen, setIsImagePickerOpen] = useState(false);
   const [isGlobalImageGalleryOpen, setIsGlobalImageGalleryOpen] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
   const [locationDraft, setLocationDraft] = useState<LocationLatLng | null>(null);
@@ -2605,35 +2608,52 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           );
         }
         if (canShowFilesGallery) {
+          const isEditable = !!forceEditMode && !isReadonly;
           return (
             <div className="flex flex-col gap-2">
+              {/* Image preview */}
               {value ? (
-                <ResilientImage src={String(value)} preset="thumb" alt="image" style={{ width: '100%', borderRadius: 8, border: '1px solid #f0f0f0', maxHeight: 120, objectFit: 'cover' }} />
+                <ResilientImage
+                  src={String(value)}
+                  preset="thumb"
+                  alt="image"
+                  style={{ width: '100%', borderRadius: 10, border: '1px solid #e2e8f0', maxHeight: 140, objectFit: 'cover', display: 'block' }}
+                />
               ) : (
-                <div className="h-16 rounded border border-dashed border-gray-300 bg-gray-50 flex items-center justify-center text-[11px] text-gray-400">
-                  فایلی انتخاب نشده است
+                <div className="rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 dark:bg-white/5 dark:border-gray-700 flex items-center justify-center text-[11px] text-gray-400 dark:text-gray-500" style={{ height: 72 }}>
+                  تصویری انتخاب نشده
                 </div>
               )}
-              <div className="flex items-center gap-2">
+
+              {/* Action buttons */}
+              <div className="flex gap-2">
                 <Button
-                  size="small"
+                  size="middle"
                   icon={<UploadOutlined />}
                   onClick={() => setIsGalleryOpen(true)}
-                  disabled={!forceEditMode || isReadonly}
+                  disabled={!isEditable}
+                  className="flex-1"
                 >
-                  مدیریت و انتخاب فایل
+                  آپلود / مدیریت فایل‌ها
                 </Button>
-                {!!value && (
-                  <Button
-                    size="small"
-                    danger
-                    onClick={() => onChange(null)}
-                    disabled={!forceEditMode || isReadonly}
-                  >
-                    حذف فایل
-                  </Button>
-                )}
+                <Button
+                  size="middle"
+                  icon={<CheckOutlined />}
+                  onClick={() => setIsImagePickerOpen(true)}
+                  disabled={!isEditable}
+                  className="flex-1"
+                  type="dashed"
+                >
+                  انتخاب از فایل‌ها
+                </Button>
               </div>
+              {!!value && isEditable && (
+                <Button size="small" danger onClick={() => onChange(null)} block>
+                  حذف تصویر
+                </Button>
+              )}
+
+              {/* Full file manager (upload + manage) */}
               <RecordFilesManager
                 open={isGalleryOpen}
                 onClose={() => setIsGalleryOpen(false)}
@@ -2641,8 +2661,25 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 recordId={recordId}
                 mainImage={value}
                 onMainImageChange={(url) => onChange(url)}
-                canEdit={!!canEditFilesManager && !!forceEditMode && !isReadonly}
-                canDelete={!!canDeleteFilesManager && !!forceEditMode && !isReadonly}
+                canEdit={!!canEditFilesManager && isEditable}
+                canDelete={!!canDeleteFilesManager && isEditable}
+              />
+
+              {/* Picker modal: select a single image from existing files */}
+              <FileManagerPickerModal
+                open={isImagePickerOpen}
+                onClose={() => setIsImagePickerOpen(false)}
+                moduleId={String(moduleId || '')}
+                recordId={recordId}
+                title="انتخاب تصویر برای فیلد"
+                multiple={false}
+                fileTypes={['image']}
+                onSelect={(attachments) => {
+                  const url = String(attachments[0]?.url || '').trim();
+                  if (url) onChange(url);
+                  setIsImagePickerOpen(false);
+                }}
+                zIndex={13200}
               />
             </div>
           );

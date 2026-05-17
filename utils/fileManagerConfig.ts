@@ -108,6 +108,11 @@ export const FILE_SYSTEM_MODULE_DEFINITIONS: Record<string, FileSystemModuleDefi
     rootTitle: 'وظایف',
     rootColorToken: 'system-task',
   },
+  org_knowledge: {
+    moduleId: 'org_knowledge',
+    rootTitle: 'دانش سازمان',
+    rootColorToken: DEFAULT_ROOT_COLOR_TOKEN,
+  },
 };
 
 export const getFileSystemModuleDefinition = (moduleId?: string | null): FileSystemModuleDefinition => {

@@ -109,6 +109,36 @@ const readJsonSafe = async (response: Response) => {
   }
 };
 
+const createReasonedError = (message: string, reasonCode?: string, status = 400) => {
+  const error: any = new Error(String(message || 'Auth operation failed'));
+  if (reasonCode) error.reasonCode = reasonCode;
+  error.statusCode = status;
+  return error;
+};
+
+const extractAuthMessage = (parsed: any, fallback: string) =>
+  String(
+    parsed?.msg ||
+    parsed?.message ||
+    parsed?.error_description ||
+    parsed?.error?.message ||
+    parsed?.error ||
+    parsed ||
+    fallback
+  );
+
+const inferOtpReasonCode = (parsed: any, status: number, fallbackCode: string) => {
+  const raw = `${extractAuthMessage(parsed, '').toLowerCase()} ${String(parsed?.code || '').trim().toLowerCase()}`.trim();
+  if (raw.includes('otp_disabled')) return 'otp_disabled';
+  if (raw.includes('phone_provider_disabled')) return 'phone_provider_disabled';
+  if (raw.includes('hook_timeout') || raw.includes('hook timeout') || raw.includes('sms hook failed') || raw.includes('context deadline exceeded')) return 'hook_timeout';
+  if (raw.includes('invalid otp') || raw.includes('token is invalid')) return 'invalid_otp';
+  if (raw.includes('token has expired') || raw.includes('otp expired') || raw.includes('token is expired')) return 'otp_expired';
+  if (raw.includes('rate limit') || status === 429) return 'otp_rate_limited';
+  if (raw.includes('duplicate key value') || raw.includes('users_phone_key')) return 'phone_conflict';
+  return fallbackCode;
+};
+
 const unwrapAuthUserPayload = (payload: any) => {
   if (payload?.user && typeof payload.user === 'object') return payload.user;
   return payload || null;
@@ -510,7 +540,11 @@ const resendOtp = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ارسال کد تایید ناموفق بود'));
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'ارسال کد تایید ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, 'otp_resend_failed'),
+      response.status,
+    );
   }
   return parsed || null;
 };
@@ -531,7 +565,11 @@ const sendSmsOtp = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ارسال کد تایید ناموفق بود'));
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'ارسال کد تایید ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, 'otp_request_failed'),
+      response.status,
+    );
   }
   return parsed || null;
 };
@@ -558,7 +596,11 @@ const verifyPhoneOtp = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'تایید کد پیامکی ناموفق بود'));
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'تایید کد پیامکی ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, type === 'phone_change' ? 'phone_change_verify_failed' : 'otp_verify_failed'),
+      response.status,
+    );
   }
   return parsed || null;
 };
@@ -1037,15 +1079,19 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error('user-admin error', error);
     const message = String(error instanceof Error ? error.message : error || 'خطای نامشخص');
+    const reasonCode = String((error as any)?.reasonCode || '').trim() || null;
+    const statusCode = Number((error as any)?.statusCode || 0);
     if (message.includes('users_phone_key') || message.includes('duplicate key value violates unique constraint')) {
       return json(409, {
         success: false,
         message: 'این شماره موبایل قبلا برای کاربر دیگری در احراز هویت ثبت شده است.',
+        reason_code: 'phone_conflict',
       });
     }
-    return json(500, {
+    return json(statusCode >= 400 && statusCode < 600 ? statusCode : 500, {
       success: false,
       message: String(error instanceof Error ? error.message : error || 'خطای نامشخص'),
+      reason_code: reasonCode,
     });
   }
 });

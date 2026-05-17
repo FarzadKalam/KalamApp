@@ -25,6 +25,8 @@ import {
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
   normalizeDynamicBlockTablesHtml,
+  getDefaultFooterSignatures,
+  buildFooterSignaturesHtml,
   type StoredPrintTemplate,
 } from './store';
 import { buildPrintOutputName } from './outputName';
@@ -40,6 +42,7 @@ import {
   sanitizeSelectedPrintFieldKeys,
 } from './fieldAccess';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
+import { parseLocationValue } from '../location';
 
 interface UsePrintManagerProps {
   moduleId: string;
@@ -200,6 +203,19 @@ const getPaperSizeMetrics = (
   const width = orientation === 'landscape' ? base.h : base.w;
   const height = orientation === 'landscape' ? base.w : base.h;
   return { widthMm: width, heightMm: height };
+};
+
+const isCatalogFullPageTemplateId = (templateId: string) => /_catalog_fullpage_(list_)?landscape$/i.test(String(templateId || '').trim());
+const getResolvedTemplatePageMargins = (template?: Pick<StoredPrintTemplate, 'id' | 'pageMarginTop' | 'pageMarginRight' | 'pageMarginBottom' | 'pageMarginLeft'> | null) => {
+  if (isCatalogFullPageTemplateId(template?.id || '')) {
+    return { top: 0, right: 0, bottom: 0, left: 0 };
+  }
+  return {
+    top: Number(template?.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
+    right: Number(template?.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
+    bottom: Number(template?.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
+    left: Number(template?.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
+  };
 };
 
 const getAttachmentCount = (record: any) => {
@@ -683,6 +699,14 @@ export const usePrintManager = ({
         kind: 'record',
       },
       {
+        key: 'company.slogan',
+        labels: { fa: 'شعار سازمان' },
+        value: true,
+        hasValue: true,
+        group: 'اطلاعات سازمان',
+        kind: 'record',
+      },
+      {
         key: 'system.company_signatory_name',
         labels: { fa: 'نام امضاکننده' },
         value: true,
@@ -731,12 +755,28 @@ export const usePrintManager = ({
         : []),
       {
         key: 'system.record_qr',
-        labels: { fa: '\u06A9\u062F QR \u0631\u06A9\u0648\u0631\u062F' },
+        labels: { fa: 'کد QR رکورد' },
         value: true,
         hasValue: true,
-        group: '\u0633\u06CC\u0633\u062A\u0645',
+        group: 'سیستم',
         kind: 'record',
       },
+      {
+        key: 'system.catalog_qr_section',
+        labels: { fa: 'QR کاتالوگ (سایدبار)' },
+        value: true,
+        hasValue: !!data?.catalog_link,
+        group: 'سیستم',
+        kind: 'record',
+      },
+      ...(moduleId === 'billboards' ? [{
+        key: 'system.catalog_map_section',
+        labels: { fa: 'نقشه کاتالوگ (سایدبار)' },
+        value: true,
+        hasValue: !!data?.location_image,
+        group: 'سیستم',
+        kind: 'record',
+      }] : []),
     ];
 
     return [...baseOptions, ...commonSystemOptions, ...mediaOptions];
@@ -839,12 +879,7 @@ export const usePrintManager = ({
       const showFooter = selectedStoredTemplate.showFooter !== false;
       const headerHeight = Number(selectedStoredTemplate.headerHeight || 84);
       const footerHeight = Number(selectedStoredTemplate.footerHeight || 62);
-      const pageMargins = {
-        top: Number(selectedStoredTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
-        right: Number(selectedStoredTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
-        bottom: Number(selectedStoredTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
-        left: Number(selectedStoredTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
-      };
+      const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
       const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
       const pageBodyHeightPx = getTemplatePageBodyHeightPx({
         innerHeightMm,
@@ -1775,6 +1810,47 @@ export const usePrintManager = ({
     return html || '';
   }, [buildBlockTableHtml, moduleConfig?.blocks]);
 
+  // Ordered sidebar fields: record fields in user-selected order (templateSelectedKeySet preserves insertion order)
+  // Used by compact_fields_sidebar resolver to respect both selection AND ordering.
+  const orderedSidebarFieldDefs = useMemo(() => {
+    const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
+    const fieldByKey = new Map<string, any>(fields.map((f: any) => [String(f?.key || ''), f]));
+    // Sort fallback: use module config order by field.order property
+    const sortedFields = [...fields].sort((a: any, b: any) => (Number(a?.order ?? 999) - Number(b?.order ?? 999)));
+    // If we have a user-defined order (templateSelectedKeySet), use that; else use sorted module order
+    const orderedKeys = templateSelectedKeySet.size > 0
+      ? [...templateSelectedKeySet].filter(k => k.startsWith('record.')).map(k => k.replace(/^record\./, ''))
+      : sortedFields.map((f: any) => String(f?.key || '')).filter(Boolean);
+    return orderedKeys
+      .map(key => fieldByKey.get(key))
+      .filter((f: any): f is any =>
+        Boolean(f?.key) &&
+        !PRINT_COLUMN_IGNORE_KEYS.has(String(f.key)) &&
+        String(f?.type || '').toLowerCase() !== 'image' &&
+        !isLongTextType(f?.type) &&
+        !/code/i.test(String(f.key))
+      );
+  }, [moduleConfig?.fields, templateSelectedKeySet]);
+
+  // Ordered code fields: fields whose key contains "code", sorted by order property
+  const orderedCodeFieldDefs = useMemo(() => {
+    const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
+    const fieldByKey = new Map<string, any>(fields.map((f: any) => [String(f?.key || ''), f]));
+    const selectedRecordKeys = templateSelectedKeySet.size > 0
+      ? [...templateSelectedKeySet]
+          .filter((key) => key.startsWith('record.'))
+          .map((key) => key.replace(/^record\./, ''))
+      : [];
+    const sourceFields = selectedRecordKeys.length > 0
+      ? selectedRecordKeys.map((key) => fieldByKey.get(key)).filter(Boolean)
+      : [...fields].sort((a: any, b: any) => (Number(a?.order ?? 999) - Number(b?.order ?? 999)));
+    return sourceFields.filter((f: any) =>
+      f?.key &&
+      /code/i.test(String(f.key)) &&
+      isSystemFieldVisible(`record.${String(f.key)}`)
+    );
+  }, [isSystemFieldVisible, moduleConfig?.fields, templateSelectedKeySet]);
+
   const resolveVariableValue = useCallback(
     (path: string): string => {
       const normalizeOptionalDisplay = (value: any) => {
@@ -1815,6 +1891,35 @@ export const usePrintManager = ({
         return resolveRecordFieldDisplay('recipient_manual') || resolveRecordFieldDisplay('recipient_profile_id');
       }
       if (path === 'system.compact_fields_table') return buildCompactFieldsTableHtml();
+      if (path === 'system.compact_fields_inline') {
+        // Renders selected fields as inline text: "ابعاد: ۴×۳ · اجاره: ۵ م · وضعیت: آزاد"
+        const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
+        const parts: string[] = [];
+        fields
+          .filter(
+            (field: any) =>
+              field?.key &&
+              !PRINT_COLUMN_IGNORE_KEYS.has(String(field.key)) &&
+              String(field?.type || '').toLowerCase() !== 'image' &&
+              !isLongTextType(field?.type) &&
+              isSystemFieldVisible(`record.${field.key}`)
+          )
+          .forEach((field: any) => {
+            const raw = data?.[field.key];
+            if (raw === null || raw === undefined || raw === '') return;
+            let displayValue = '';
+            try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+            if (!displayValue) displayValue = localizePlainText(raw);
+            if (!displayValue || displayValue === '-') return;
+            const label = getFieldLabelFa(field, { moduleId, fallback: field.key });
+            parts.push(`<span style="white-space:nowrap;">${label}: ${displayValue}</span>`);
+          });
+        return parts.join(' <span style="color:rgba(255,255,255,0.35); margin:0 2px;">·</span> ');
+      }
+      if (path === 'system.record_image_url') {
+        // Returns just the image URL (no HTML wrapper) — for use in src="" attributes
+        return recordImageUrl || '';
+      }
       if (path === 'system.compact_tables_blocks') return buildCompactTablesBlocksHtml();
       if (path === 'system.package_summary_table') return buildPackageSummaryTableHtml();
       if (path === 'system.record_image') {
@@ -1824,6 +1929,74 @@ export const usePrintManager = ({
       if (path === 'system.record_qr') {
         if (!isSystemFieldVisible('system.record_qr') || !recordQrSvgMarkup) return '';
         return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;">${recordQrSvgMarkup}</div>`;
+      }
+      if (path === 'system.catalog_qr_section') {
+        // Compact square QR box — designed for side-by-side placement in catalogFullPageLayout
+        const publicLink = String(data?.catalog_link || '').trim();
+        if (!publicLink) return '';
+        try {
+          const qrSvg = renderToStaticMarkup(
+            React.createElement(QRCode, { value: publicLink, type: 'svg', size: 56, bordered: false })
+          );
+          const safeLink = publicLink.replace(/"/g, '&quot;');
+          const displayLink = publicLink.length > 32 ? publicLink.slice(0, 30) + '…' : publicLink;
+          return `<div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2mm; gap:1mm; background:#fff; box-sizing:border-box; overflow:hidden;"><div style="font-size:6px; font-weight:800; color:rgb(var(--brand-600-rgb,37,99,235)); letter-spacing:0.4px; text-align:center; flex-shrink:0;">QR کاتالوگ</div><div style="background:#fff; border:1.5px solid rgb(var(--brand-200-rgb,191,219,254)); border-radius:8px; padding:3px; box-shadow:0 1px 6px rgba(59,130,246,0.1); flex-shrink:0;">${qrSvg}</div><a href="${safeLink}" target="_blank" style="display:block; font-size:5px; color:rgb(var(--brand-500-rgb,59,130,246)); text-decoration:none; text-align:center; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; border:1px solid rgb(var(--brand-100-rgb,219,234,254)); border-radius:4px; padding:1px 3px; background:rgb(var(--brand-50-rgb,239,246,255)); box-sizing:border-box; flex-shrink:0;">${displayLink}</a></div>`;
+        } catch {
+          return '';
+        }
+      }
+      if (path === 'system.catalog_map_section') {
+        // Compact square map box — full-cover image, designed for side-by-side placement
+        const mapImageUrl = String(data?.location_image || '').trim();
+        if (!mapImageUrl) return '';
+        const locationRaw = data?.location;
+        let googleUrl = '#';
+        let locationText = '';
+        try {
+          const parsed = locationRaw ? parseLocationValue(String(locationRaw)) : null;
+          if (parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
+            googleUrl = `https://www.google.com/maps?q=${parsed.lat},${parsed.lng}`;
+            locationText = `${parsed.lat.toFixed(4)}, ${parsed.lng.toFixed(4)}`;
+          }
+        } catch { /* ignore */ }
+        const safeImg = mapImageUrl.replace(/"/g, '&quot;');
+        return `<a href="${googleUrl}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><div style="position:absolute; inset:0; background-image:url('${safeImg}'); background-size:cover; background-position:center;"></div><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${locationText}</div>` : ''}</div></a>`;
+      }
+      if (path === 'system.compact_fields_sidebar') {
+        // Renders fields in user-selected order (orderedSidebarFieldDefs respects templateSelectedKeySet order)
+        const rows: string[] = [];
+        orderedSidebarFieldDefs.forEach((field: any, idx: number) => {
+            const raw = data?.[field.key];
+            if (raw === null || raw === undefined || raw === '') return;
+            let displayValue = '';
+            try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
+            if (!displayValue) displayValue = localizePlainText(raw);
+            if (!displayValue || displayValue === '-') return;
+            // Move currency label from start to end (e.g. "تومان ۱,۰۰۰" → "۱,۰۰۰ تومان")
+            for (const unit of ['تومان', 'ریال', 'IRR', 'IRT']) {
+              if (displayValue.startsWith(unit + ' ') || displayValue.startsWith(unit + '\u00a0')) {
+                displayValue = displayValue.slice(unit.length + 1).trim() + ' ' + unit;
+                break;
+              }
+            }
+            const label = getFieldLabelFa(field, { moduleId, fallback: field.key });
+            const rowBg = idx % 2 === 0 ? 'background:rgba(var(--brand-50-rgb,239,246,255),0.55);' : 'background:#fff;';
+            rows.push(`<div style="display:flex; justify-content:space-between; align-items:center; gap:2mm; padding:1.5mm 2mm; border-radius:4px; margin-bottom:0.8mm; ${rowBg}"><span style="font-size:7.5px; color:#64748b; white-space:nowrap; flex-shrink:0; max-width:45%; overflow:hidden; text-overflow:ellipsis;">${label}</span><span style="font-size:9px; color:#1e293b; font-weight:800; text-align:left; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${displayValue}</span></div>`);
+          });
+        return rows.join('');
+      }
+      if (path === 'system.catalog_code_fields') {
+        // Returns only selected visible code fields for image overlay, with stable RTL label ordering.
+        const parts: string[] = [];
+        orderedCodeFieldDefs.forEach((field: any) => {
+            const raw = data?.[field.key];
+            if (!raw) return;
+            const label = getFieldLabelFa(field, { moduleId, fallback: field.key });
+            parts.push(
+              `<span style="display:inline-flex; align-items:baseline; gap:4px; direction:rtl; unicode-bidi:isolate;"><span>${label}:</span><span style="direction:ltr; unicode-bidi:isolate; font-family:monospace;">${String(raw)}</span></span>`
+            );
+          });
+        return parts.join(' <span style="color:rgba(255,255,255,0.38); margin:0 4px;">·</span> ');
       }
       if (path === 'system.company_signature_image') {
         if (!isSystemFieldVisible('system.company_signature_image')) return '';
@@ -1844,6 +2017,10 @@ export const usePrintManager = ({
       if (path === 'system.company_signatory_title') {
         if (!isSystemFieldVisible('system.company_signatory_title')) return '';
         return localizePlainText(sellerInfo?.official_signatory_title || 'مدیرعامل');
+      }
+      if (path === 'system.footer_signatures') {
+        const signatures = selectedStoredTemplate?.footerSignatures || getDefaultFooterSignatures(moduleId);
+        return buildFooterSignaturesHtml(signatures);
       }
       if (path === 'invoice.items_table') return buildInvoiceItemsTable(data?.invoiceItems || []);
       if (path.startsWith('block.')) return buildBlockTableHtml(path.replace(/^block\./, ''));
@@ -1900,6 +2077,12 @@ export const usePrintManager = ({
       }
       if (root === 'company' && nestedPath === 'currency_label') {
         return localizePlainText(source?.currency_label || source?.currency_code || 'ریال');
+      }
+      if (root === 'company' && nestedPath === 'company_name_en') {
+        return String(source?.company_name_en || source?.trade_name || source?.company_full_name || source?.company_name || '').trim();
+      }
+      if (root === 'company' && nestedPath === 'slogan') {
+        return String(source?.slogan || source?.trade_name || '').trim();
       }
       if ((root === 'company' || root === 'customer' || root === 'supplier') && nestedPath === 'address') {
         return getAddressDisplay(source);
@@ -1991,6 +2174,8 @@ export const usePrintManager = ({
       supplierInfo,
       canViewPrintFieldPath,
       isSystemFieldVisible,
+      orderedSidebarFieldDefs,
+      orderedCodeFieldDefs,
     ]
   );
 
@@ -2086,12 +2271,7 @@ export const usePrintManager = ({
       const showFooter = selectedStoredTemplate.showFooter !== false;
       const headerHeight = Number(selectedStoredTemplate.headerHeight || 84);
       const footerHeight = Number(selectedStoredTemplate.footerHeight || 62);
-      const pageMargins = {
-        top: Number(selectedStoredTemplate.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
-        right: Number(selectedStoredTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
-        bottom: Number(selectedStoredTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
-        left: Number(selectedStoredTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
-      };
+      const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
 
       const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
       const pageBodyHeightPx = getTemplatePageBodyHeightPx({
@@ -2193,12 +2373,7 @@ export const usePrintManager = ({
       const headerHeightCss = toCssMm(headerHeight);
       const footerHeightCss = toCssMm(footerHeight);
       const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'}`;
-      const pageMargins = {
-        top: Number(selectedStoredTemplate?.pageMarginTop ?? DEFAULT_PAGE_MARGINS.top),
-        right: Number(selectedStoredTemplate?.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
-        bottom: Number(selectedStoredTemplate?.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
-        left: Number(selectedStoredTemplate?.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
-      };
+      const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
       const innerWidthMm = Math.max(20, metrics.widthMm - pageMargins.left - pageMargins.right);
       const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
       const pageBodyHeightPx = getTemplatePageBodyHeightPx({
@@ -2209,7 +2384,50 @@ export const usePrintManager = ({
         footerHeight,
       });
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
+      const isCatalogFullPageTemplate = isCatalogFullPageTemplateId(selectedStoredTemplate?.id || '');
       const pageBodyHeightCss = toCssMm(pageBodyHeightPx);
+      const sectionPadding = isCatalogFullPageTemplate ? '0' : PRINT_SECTION_CONTENT_PADDING;
+
+      if (isCatalogFullPageTemplate) {
+        return React.createElement(
+          'div',
+          {
+            className: 'invoice-custom-print-shell',
+            style: {
+              ...paper,
+              background: '#fff',
+              position: 'relative',
+              boxSizing: 'border-box',
+              overflow: 'visible',
+              color: '#111827',
+            },
+            'data-page-size': pageSize,
+            'data-native-single-page': 'true',
+          },
+          React.createElement(
+            'div',
+            {
+              className: 'print-template-page',
+              style: {
+                position: 'relative',
+                width: `${metrics.widthMm}mm`,
+                height: `${metrics.heightMm}mm`,
+                minHeight: `${metrics.heightMm}mm`,
+                maxHeight: `${metrics.heightMm}mm`,
+                background: '#fff',
+                boxSizing: 'border-box',
+                overflow: 'hidden',
+                display: 'block',
+                direction: 'rtl',
+                padding: `${pageMargins.top}mm ${pageMargins.right}mm ${pageMargins.bottom}mm ${pageMargins.left}mm`,
+                '--print-native-page-height': `${metrics.heightMm}mm`,
+              } as unknown as React.CSSProperties,
+              dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
+            }
+          )
+        );
+      }
+
       const measuredCurrentPageCount = bodyMeasureRef.current
         ? getMeasuredPrintPageCount(getMeasuredPrintBodyHeight(bodyMeasureRef.current), pageBodyStepPx)
         : 0;
@@ -2237,6 +2455,7 @@ export const usePrintManager = ({
             color: '#111827',
           },
           'data-page-size': pageSize,
+          'data-native-single-page': isCatalogFullPageTemplate ? 'true' : 'false',
         },
         React.createElement(
           'div',
@@ -2256,7 +2475,7 @@ export const usePrintManager = ({
           React.createElement('div', {
             ref: bodyMeasureRef,
             className: 'print-template-body-measure',
-            style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
+            style: { padding: sectionPadding, boxSizing: 'border-box' },
             dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
           })
         ),
@@ -2289,6 +2508,7 @@ export const usePrintManager = ({
                 '--print-margin-bottom': `${pageMargins.bottom}mm`,
                 '--print-margin-left': `${pageMargins.left}mm`,
                 '--print-margin-right': `${pageMargins.right}mm`,
+                '--print-native-page-height': `${metrics.heightMm}mm`,
               } as unknown as React.CSSProperties,
             },
             showHeader
@@ -2310,7 +2530,7 @@ export const usePrintManager = ({
                   },
                   React.createElement('div', {
                     className: 'print-template-header-inner',
-                    style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
+                    style: { padding: sectionPadding, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
                     dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.headerHtml || '' },
                   })
                 )
@@ -2338,7 +2558,7 @@ export const usePrintManager = ({
                 },
                 React.createElement('div', {
                   className: 'print-template-body-inner',
-                  style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
+                  style: { padding: sectionPadding, boxSizing: 'border-box' },
                   dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
                 })
               ),
@@ -2350,7 +2570,9 @@ export const usePrintManager = ({
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  height: toCssMm(PRINT_BODY_EDGE_GUARD_PX),
+                  // Cover from pageBodyStepPx to pageBodyHeightPx so no text line
+                  // can be partially visible across the page boundary.
+                  height: toCssMm(pageBodyHeightPx - pageBodyStepPx),
                   background: '#fff',
                   pointerEvents: 'none',
                   zIndex: 2,
@@ -2383,7 +2605,7 @@ export const usePrintManager = ({
                     { className: 'print-template-footer-stack', style: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%' } },
                     React.createElement('div', {
                       className: 'print-template-footer-inner',
-                      style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
+                      style: { padding: sectionPadding, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
                       dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.footerHtml || '' },
                     }),
                     effectivePageCount > 1

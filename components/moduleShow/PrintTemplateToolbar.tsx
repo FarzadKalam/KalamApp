@@ -24,15 +24,15 @@ import type { PrintTemplateVariableOption } from '../../utils/printTemplates/sto
 
 interface PrintTemplateToolbarProps {
   editor: any | null;
-  variableOptions: PrintTemplateVariableOption[];
-  activeSectionLabel: string;
-  pageMargins: {
+  variableOptions?: PrintTemplateVariableOption[];
+  activeSectionLabel?: string;
+  pageMargins?: {
     top: number;
     right: number;
     bottom: number;
     left: number;
   };
-  onChangePageMargins: (nextMargins: { top: number; right: number; bottom: number; left: number }) => void;
+  onChangePageMargins?: (nextMargins: { top: number; right: number; bottom: number; left: number }) => void;
 }
 
 const btnStyle = (active?: boolean) => ({
@@ -73,7 +73,7 @@ const getBrandPalette = () => {
 
 const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
   editor,
-  variableOptions,
+  variableOptions = [],
   activeSectionLabel,
   pageMargins,
   onChangePageMargins,
@@ -206,7 +206,7 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
     editor.chain().focus().setFontSize(`${next}px`).run();
   };
 
-  const marginPopoverContent = (
+  const marginPopoverContent = pageMargins && onChangePageMargins ? (
     <div className="margin-popover-grid">
       {[
         { key: 'top', label: 'بالا' },
@@ -233,7 +233,7 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
         </label>
       ))}
     </div>
-  );
+  ) : null;
 
   const stepLineHeight = (delta: number) => {
     if (!editor) return;
@@ -246,9 +246,11 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
 
   return (
     <div className="print-template-toolbar-root">
-      <div className="print-template-toolbar-top">
-        <div className="print-template-toolbar-section-badge">بخش فعال: {activeSectionLabel}</div>
-      </div>
+      {activeSectionLabel && (
+        <div className="print-template-toolbar-top">
+          <div className="print-template-toolbar-section-badge">بخش فعال: {activeSectionLabel}</div>
+        </div>
+      )}
 
       <div className="print-template-toolbar-row">
         {iconBtn('بولد', <BoldOutlined />, () => editor?.chain().focus().toggleBold().run(), !editor, editor?.isActive('bold'))}
@@ -334,58 +336,62 @@ const PrintTemplateToolbar: React.FC<PrintTemplateToolbarProps> = ({
             ))}
           </div>
         </div>
-        <Popover trigger="click" placement="bottomLeft" content={marginPopoverContent}>
-          <Tooltip title="فاصله اطراف صفحه">
-            <Button size="small" icon={<ExpandOutlined />} />
-          </Tooltip>
-        </Popover>
+        {pageMargins && onChangePageMargins && (
+          <Popover trigger="click" placement="bottomLeft" content={marginPopoverContent}>
+            <Tooltip title="فاصله اطراف صفحه">
+              <Button size="small" icon={<ExpandOutlined />} />
+            </Tooltip>
+          </Popover>
+        )}
       </div>
 
-      <div className="print-template-toolbar-row variables-row">
-        <Input
-          size="small"
-          placeholder="جست‌وجوی متغیر"
-          value={variableSearch}
-          onChange={(e) => setVariableSearch(e.target.value)}
-          className="toolbar-search"
-        />
-        <div className="toolbar-variable-popovers">
-          {groupedVariables.map((group) => (
-            <Popover
-              key={`${group.kind}-${group.group}`}
-              trigger="click"
-              placement="bottomRight"
-              overlayClassName="print-variable-popover"
-              content={
-                <div className="popover-variable-list">
-                  {group.items.length === 0 ? (
-                    <div className="popover-empty">موردی پیدا نشد</div>
-                  ) : (
-                    group.items.map((item) => (
-                      <button
-                        key={item.value}
-                        type="button"
-                        className={`popover-variable-item ${item.kind === 'block' ? 'block-item' : ''}`}
-                        onClick={() => insertVariable(item)}
-                        disabled={!editor}
-                      >
-                        <span className="popover-variable-title">{item.label}</span>
-                        <span className="popover-variable-value">{item.description || item.value}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              }
-            >
-              <button type="button" className={`variable-group-pill ${group.kind === 'block' ? 'block-pill' : ''}`}>
-                <span>{group.group}</span>
-                <Badge count={group.items.length} style={{ backgroundColor: group.kind === 'block' ? '#8b5cf6' : '#0f766e' }} />
-                <DownOutlined className="text-[10px]" />
-              </button>
-            </Popover>
-          ))}
+      {variableOptions.length > 0 && (
+        <div className="print-template-toolbar-row variables-row">
+          <Input
+            size="small"
+            placeholder="جست‌وجوی متغیر"
+            value={variableSearch}
+            onChange={(e) => setVariableSearch(e.target.value)}
+            className="toolbar-search"
+          />
+          <div className="toolbar-variable-popovers">
+            {groupedVariables.map((group) => (
+              <Popover
+                key={`${group.kind}-${group.group}`}
+                trigger="click"
+                placement="bottomRight"
+                overlayClassName="print-variable-popover"
+                content={
+                  <div className="popover-variable-list">
+                    {group.items.length === 0 ? (
+                      <div className="popover-empty">موردی پیدا نشد</div>
+                    ) : (
+                      group.items.map((item) => (
+                        <button
+                          key={item.value}
+                          type="button"
+                          className={`popover-variable-item ${item.kind === 'block' ? 'block-item' : ''}`}
+                          onClick={() => insertVariable(item)}
+                          disabled={!editor}
+                        >
+                          <span className="popover-variable-title">{item.label}</span>
+                          <span className="popover-variable-value">{item.description || item.value}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                }
+              >
+                <button type="button" className={`variable-group-pill ${group.kind === 'block' ? 'block-pill' : ''}`}>
+                  <span>{group.group}</span>
+                  <Badge count={group.items.length} style={{ backgroundColor: group.kind === 'block' ? '#8b5cf6' : '#0f766e' }} />
+                  <DownOutlined className="text-[10px]" />
+                </button>
+              </Popover>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <input ref={fileInputRef} type="file" accept="image/*" onChange={handleLocalImagePick} style={{ display: 'none' }} />
 

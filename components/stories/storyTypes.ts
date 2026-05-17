@@ -21,6 +21,9 @@ export interface StorySlide {
   gradient_key?: string;     // کلید از STORY_GRADIENT_PRESETS
   text_layers: StoryTextLayer[];
   duration_ms: number;       // مدت نمایش (پیش‌فرض ۵۰۰۰ میلی‌ثانیه)
+  link_url?: string;         // لینک اسلاید (اختیاری)
+  link_type?: 'internal' | 'external'; // نوع لینک
+  link_label?: string;       // برچسب دکمه لینک
 }
 
 export interface OrgStory {

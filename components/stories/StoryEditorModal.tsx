@@ -584,6 +584,70 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
 
           <Divider style={{ margin: '10px 0' }} />
 
+          {/* لینک اسلاید */}
+          {activeSlide && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <Typography.Text strong>لینک اسلاید</Typography.Text>
+                {activeSlide.link_url && (
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    onClick={() => updateActiveSlide((s) => ({ ...s, link_url: undefined, link_type: undefined, link_label: undefined }))}
+                  >
+                    حذف لینک
+                  </Button>
+                )}
+              </div>
+              <Row gutter={6} style={{ marginBottom: 8 }}>
+                <Col span={7}>
+                  <Select
+                    size="small"
+                    value={activeSlide.link_type ?? 'external'}
+                    onChange={(v) => updateActiveSlide((s) => ({ ...s, link_type: v }))}
+                    style={{ width: '100%' }}
+                    getPopupContainer={popupContainer}
+                    options={[
+                      { label: 'خارجی', value: 'external' },
+                      { label: 'داخلی', value: 'internal' },
+                    ]}
+                  />
+                </Col>
+                <Col span={17}>
+                  <Input
+                    size="small"
+                    value={activeSlide.link_url ?? ''}
+                    onChange={(e) =>
+                      updateActiveSlide((s) => ({
+                        ...s,
+                        link_url: e.target.value || undefined,
+                        link_type: s.link_type ?? 'external',
+                      }))
+                    }
+                    placeholder={activeSlide.link_type === 'internal' ? '/module/customers/123' : 'https://...'}
+                    style={{ direction: 'ltr' }}
+                  />
+                </Col>
+              </Row>
+              <Row gutter={6} style={{ marginBottom: 4 }}>
+                <Col span={24}>
+                  <Input
+                    size="small"
+                    value={activeSlide.link_label ?? ''}
+                    onChange={(e) =>
+                      updateActiveSlide((s) => ({ ...s, link_label: e.target.value || undefined }))
+                    }
+                    placeholder="برچسب دکمه (اختیاری) — پیش‌فرض: مشاهده بیشتر"
+                    style={{ direction: 'rtl' }}
+                  />
+                </Col>
+              </Row>
+            </>
+          )}
+
+          <Divider style={{ margin: '10px 0' }} />
+
           {/* منشن کاربران */}
           <Form.Item label="منشن کاربران" style={{ marginBottom: 10 }}>
             <AdaptiveSelectField

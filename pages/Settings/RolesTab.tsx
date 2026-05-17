@@ -24,6 +24,8 @@ import {
   REPORTS_PERMISSION_FIELDS,
   VOIP_PERMISSION_KEY,
   VOIP_PERMISSION_FIELDS,
+  SAAS_ADMIN_PERMISSION_KEY,
+  SAAS_ADMIN_PERMISSION_FIELDS,
   MOBILE_FOOTER_PERMISSION_KEY,
   DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES,
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
@@ -1361,6 +1363,61 @@ const RolesTab: React.FC = () => {
                       VOIP_PERMISSION_KEY,
                       VOIP_PERMISSION_FIELDS,
                       getModulePerms(VOIP_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
+                  key={SAAS_ADMIN_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">تازه سیستم — مدیریت SaaS</span>
+                        <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 rounded px-1.5 py-0.5 font-mono">فقط داخلی</span>
+                      </div>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(SAAS_ADMIN_PERMISSION_KEY).view === true}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              SAAS_ADMIN_PERMISSION_KEY,
+                              'view',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(SAAS_ADMIN_PERMISSION_KEY).edit === true}
+                          disabled={getModulePerms(SAAS_ADMIN_PERMISSION_KEY).view !== true}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              SAAS_ADMIN_PERMISSION_KEY,
+                              'edit',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          ویرایش
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی‌های اضافی
+                    </Divider>
+                    {renderFieldSwitches(
+                      SAAS_ADMIN_PERMISSION_KEY,
+                      SAAS_ADMIN_PERMISSION_FIELDS,
+                      getModulePerms(SAAS_ADMIN_PERMISSION_KEY).view !== true
                     )}
                   </div>
                 </Panel>

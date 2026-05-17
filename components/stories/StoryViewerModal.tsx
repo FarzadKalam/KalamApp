@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   CloseOutlined,
   DeleteOutlined,
@@ -10,12 +11,14 @@ import {
   PushpinOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Dropdown, Modal, Popover, Space, Spin, Typography } from 'antd';
+import { Avatar, Button, Dropdown, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
+import { LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import type { OrgStoryWithMeta, StorySlide } from './storyTypes';
 import { getGradientPreset } from '../../utils/storyGradients';
 import { STORY_REACTION_EMOJIS } from '../../utils/storyGradients';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 interface StoryViewerModalProps {
   open: boolean;
@@ -67,6 +70,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   onMarkViewed,
   onReact,
 }) => {
+  const navigate = useNavigate();
   const [storyIndex, setStoryIndex] = useState(initialIndex);
   const [slideIndex, setSlideIndex] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -74,6 +78,9 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [viewersOpen, setViewersOpen] = useState(false);
   const [viewersList, setViewersList] = useState<ViewerEntry[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
+  const [localMyReaction, setLocalMyReaction] = useState<string | null>(
+    () => stories[initialIndex]?.myReaction?.emoji ?? null
+  );
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressRef = useRef(0);
@@ -90,6 +97,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     progressRef.current = 0;
     setViewersOpen(false);
     setViewersList([]);
+    setLocalMyReaction(stories[storyIndex]?.myReaction?.emoji ?? null);
   }, [storyIndex]);
 
   // ثبت بازدید هنگام نمایش
@@ -172,20 +180,23 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
       const userIds = viewData.map((v: { user_id: string }) => v.user_id);
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('id, display_name, avatar_url')
+        .select('id, full_name, display_name, avatar_url')
         .in('id', userIds);
 
       const profileMap = new Map(
-        (profileData ?? []).map((p: { id: string; display_name: string | null; avatar_url: string | null }) => [p.id, p])
+        (profileData ?? []).map((p: { id: string; full_name: string | null; display_name: string | null; avatar_url: string | null }) => [p.id, p])
       );
 
       setViewersList(
-        viewData.map((v: { user_id: string; viewed_at: string }) => ({
-          user_id: v.user_id,
-          user_name: profileMap.get(v.user_id)?.display_name ?? null,
-          avatar_url: profileMap.get(v.user_id)?.avatar_url ?? null,
-          viewed_at: v.viewed_at,
-        }))
+        viewData.map((v: { user_id: string; viewed_at: string }) => {
+          const profile = profileMap.get(v.user_id);
+          return {
+            user_id: v.user_id,
+            user_name: profile?.full_name || profile?.display_name || null,
+            avatar_url: profile?.avatar_url ?? null,
+            viewed_at: v.viewed_at,
+          };
+        })
       );
     } finally {
       setViewersLoading(false);
@@ -195,6 +206,17 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   if (!currentStory || !currentSlide) return null;
 
   const isOwnStory = currentStory.creator_id === currentUserId;
+
+  const handleSlideLink = () => {
+    if (!currentSlide.link_url) return;
+    setPaused(true);
+    if (currentSlide.link_type === 'internal') {
+      navigate(currentSlide.link_url);
+      onClose();
+    } else {
+      window.open(currentSlide.link_url, '_blank', 'noopener,noreferrer');
+    }
+  };
   const canEdit = isOwnStory ? canEditOwn : canEditOthers;
   const canDelete = isOwnStory ? canDeleteOwn : canDeleteOthers;
 
@@ -388,11 +410,20 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           </div>
 
           {menuItems.length > 0 && (
-            <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
+            <Dropdown
+              menu={{ items: menuItems }}
+              trigger={['click']}
+              placement="bottomRight"
+              getPopupContainer={(trigger) =>
+                (trigger?.closest('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null)
+                ?? resolveOverlayPopupContainer(trigger)
+              }
+            >
               <Button
                 type="text"
                 icon={<EllipsisOutlined />}
                 style={{ color: '#fff', zIndex: 20 }}
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
               />
             </Dropdown>
@@ -456,6 +487,45 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           </div>
         ))}
 
+        {/* ─── دکمه لینک اسلاید ─── */}
+        {currentSlide.link_url && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 80,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 20,
+            }}
+          >
+            <Tooltip title={currentSlide.link_url} placement="top">
+              <button
+                onClick={(e) => { e.stopPropagation(); handleSlideLink(); }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: 'rgba(255,255,255,0.18)',
+                  backdropFilter: 'blur(8px)',
+                  border: '1px solid rgba(255,255,255,0.45)',
+                  borderRadius: 24,
+                  padding: '7px 18px',
+                  color: '#fff',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  direction: 'rtl',
+                  whiteSpace: 'nowrap',
+                  textShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                }}
+              >
+                <LinkOutlined style={{ fontSize: 14 }} />
+                {currentSlide.link_label || 'مشاهده بیشتر'}
+              </button>
+            </Tooltip>
+          </div>
+        )}
+
         {/* ─── فوتر: واکنش + بازدید ─── */}
         <div
           style={{
@@ -474,18 +544,27 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             {STORY_REACTION_EMOJIS.map((emoji) => (
               <button
                 key={emoji}
-                onClick={(e) => { e.stopPropagation(); onReact(currentStory.id, emoji); }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const next = localMyReaction === emoji ? null : emoji;
+                  setLocalMyReaction(next);
+                  onReact(currentStory.id, emoji);
+                }}
                 style={{
-                  background: currentStory.myReaction?.emoji === emoji
+                  background: localMyReaction === emoji
                     ? 'rgba(255,255,255,0.35)'
                     : 'rgba(0,0,0,0.25)',
-                  border: 'none',
+                  border: localMyReaction === emoji
+                    ? '1.5px solid rgba(255,255,255,0.7)'
+                    : '1.5px solid transparent',
                   borderRadius: 20,
                   padding: '4px 8px',
                   cursor: 'pointer',
                   fontSize: 18,
                   backdropFilter: 'blur(4px)',
                   transition: 'all 0.15s',
+                  transform: localMyReaction === emoji ? 'scale(1.15)' : 'scale(1)',
                 }}
               >
                 {emoji}

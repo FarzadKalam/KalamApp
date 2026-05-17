@@ -12,7 +12,19 @@
       "Bash(ls d:/Kalamapp/database*.sql)",
       "Bash(node_modules/.bin/tsc --noEmit --project tsconfig.json)",
       "Bash(npm run:*)",
-      "Bash(node_modules/.bin/tsc --noEmit --skipLibCheck)"
+      "Bash(node_modules/.bin/tsc --noEmit --skipLibCheck)",
+      "Bash(grep -n \"isSaasAppHost\" /d/Kalamapp/utils/*.ts)",
+      "Bash(node -e \"const m = require\\('./moduleRegistry'\\); console.log\\(Object.keys\\(m.MODULES\\).slice\\(0,5\\)\\)\")",
+      "Bash(wc -l d:/Kalamapp/components/moduleShow/*.tsx d:/Kalamapp/pages/ModuleShow.tsx d:/Kalamapp/utils/printTemplates/*.ts)",
+      "Bash(ls -la d:/Kalamapp/*.sql)",
+      "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")",
+      "Bash(grep -l \"PrintToolbar\\\\|PrintTemplate\" d:/Kalamapp/components/moduleShow/*.tsx)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(grep -r \"CREATE TABLE.*billboard\\\\|ALTER TABLE.*billboard\\\\|ADD COLUMN.*billboard\" /d/Kalamapp/database*)",
+      "Bash(grep -rn \"Vazirmatn\\\\|vazirmatn\\\\|font-face\" src/ App.css index.css *.css)",
+      "Bash(head -20 grep -rn \"Vazirmatn\" App.css ls *.css)",
+      "Bash(ls d:\\\\Kalamapp\\\\database_v1_phase*.sql)",
+      "Bash(ls -la /d/Kalamapp/*.tsx /d/Kalamapp/*.ts)"
     ]
   }
 }

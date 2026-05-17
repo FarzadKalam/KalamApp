@@ -153,6 +153,50 @@ export const printStyles = `
 
     /* ── Fix text clipping: native browser pagination for custom print templates ── */
 
+    /* Keep true single-page catalog templates on their exact paper box. */
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-page:not(:first-child) {
+      display: none !important;
+    }
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-page:first-child {
+      height: var(--print-native-page-height, auto) !important;
+      min-height: var(--print-native-page-height, auto) !important;
+      max-height: var(--print-native-page-height, auto) !important;
+      overflow: hidden !important;
+      display: flex !important;
+      break-inside: avoid !important;
+      page-break-inside: avoid !important;
+      break-after: auto !important;
+      page-break-after: auto !important;
+    }
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-body {
+      overflow: hidden !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      flex: 1 1 auto !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+    }
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-body-segment {
+      transform: none !important;
+    }
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-body-edge-guard {
+      display: none !important;
+    }
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-header,
+    body.print-mode #print-root .invoice-custom-print-shell[data-native-single-page="true"] .print-template-footer {
+      position: static !important;
+      inset: auto !important;
+      width: 100% !important;
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: hidden !important;
+      flex: none !important;
+      margin-top: 0 !important;
+      z-index: auto !important;
+    }
+
     /* Hide duplicate pages 2+ — the first page will flow naturally across all printed sheets */
     body.print-mode #print-root .print-template-page:not(:first-child) {
       display: none !important;
@@ -212,15 +256,18 @@ export const printStyles = `
       max-height: none !important;
     }
 
-    /* Body: remove all clipping; padding reserves space taken by fixed header/footer */
+    /* Body: remove all clipping; padding reserves space taken by fixed header/footer.
+       A 3mm safety buffer is added to each side so that even if the browser rounds
+       mm↔px conversions slightly differently than the preview, no line can slip
+       behind the fixed header or footer. */
     body.print-mode #print-root .print-template-body {
       overflow: visible !important;
       height: auto !important;
       min-height: 0 !important;
       max-height: none !important;
       flex: none !important;
-      padding-top: var(--print-header-height, 0px) !important;
-      padding-bottom: var(--print-footer-height, 0px) !important;
+      padding-top: calc(var(--print-header-height, 0px) + 3mm) !important;
+      padding-bottom: calc(var(--print-footer-height, 0px) + 3mm) !important;
     }
 
     /* Remove the translateY viewport trick — content flows as a single continuous stream */
@@ -233,13 +280,16 @@ export const printStyles = `
       display: none !important;
     }
 
-    /* Prevent browser from breaking in the middle of paragraphs, list items, headings, table rows */
+    /* Prevent browser from breaking in the middle of paragraphs, list items, headings,
+       table rows, or table cells. */
     body.print-mode #print-root .print-template-body-inner p,
     body.print-mode #print-root .print-template-body-inner li,
     body.print-mode #print-root .print-template-body-inner h1,
     body.print-mode #print-root .print-template-body-inner h2,
     body.print-mode #print-root .print-template-body-inner h3,
-    body.print-mode #print-root .print-template-body-inner tr {
+    body.print-mode #print-root .print-template-body-inner tr,
+    body.print-mode #print-root .print-template-body-inner td,
+    body.print-mode #print-root .print-template-body-inner th {
       break-inside: avoid;
       page-break-inside: avoid;
     }

@@ -36,6 +36,10 @@ export const REPORTS_PERMISSION_KEY = '__reports';
 export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
 export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
+export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
+export const SAAS_ADMIN_PERMISSION_FIELDS = [
+  { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
+];
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
   { key: '__ready_texts_add', label: 'متن‌های آماده: افزودن' },
