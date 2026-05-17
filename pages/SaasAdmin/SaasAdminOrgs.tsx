@@ -6,6 +6,8 @@ import {
   Card,
   Drawer,
   Input,
+  InputNumber,
+  Popconfirm,
   Select,
   Space,
   Spin,
@@ -22,6 +24,9 @@ import {
   SearchOutlined,
   EyeOutlined,
   WifiOutlined,
+  ClockCircleOutlined,
+  StopOutlined,
+  CheckCircleOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 
@@ -81,6 +86,9 @@ const SaasAdminOrgs: React.FC = () => {
   const [selectedOrg, setSelectedOrg] = useState<OrgRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [extendDays, setExtendDays] = useState<number>(30);
+  const [extending, setExtending] = useState(false);
+  const [settingStatus, setSettingStatus] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -130,6 +138,46 @@ const SaasAdminOrgs: React.FC = () => {
       messageApi.error(err?.message || 'خطا در retry DNS');
     } finally {
       setRetrying(null);
+    }
+  };
+
+  const handleExtendTrial = async () => {
+    if (!selectedOrg) return;
+    setExtending(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_saas_extend_org_trial', {
+        p_org_id: selectedOrg.org_id,
+        p_days: extendDays,
+      });
+      if (error) throw error;
+      if (data?.success === false) throw new Error(data?.message || 'تمدید ناموفق بود.');
+      messageApi.success(`Trial به مدت ${extendDays} روز تمدید شد.`);
+      void load();
+      setDrawerOpen(false);
+    } catch (err: any) {
+      messageApi.error(err?.message || 'خطا در تمدید trial');
+    } finally {
+      setExtending(false);
+    }
+  };
+
+  const handleSetStatus = async (newStatus: string) => {
+    if (!selectedOrg) return;
+    setSettingStatus(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_saas_set_org_status', {
+        p_org_id: selectedOrg.org_id,
+        p_status: newStatus,
+      });
+      if (error) throw error;
+      if (data?.success === false) throw new Error(data?.message || 'عملیات ناموفق بود.');
+      messageApi.success('وضعیت سازمان به‌روز شد.');
+      void load();
+      setDrawerOpen(false);
+    } catch (err: any) {
+      messageApi.error(err?.message || 'خطا در تغییر وضعیت');
+    } finally {
+      setSettingStatus(false);
     }
   };
 
@@ -330,6 +378,57 @@ const SaasAdminOrgs: React.FC = () => {
                 retry DNS
               </Button>
             )}
+
+            <Divider orientation="right" plain>عملیات ادمین</Divider>
+
+            {/* تمدید Trial */}
+            <div className="flex items-center gap-2">
+              <InputNumber
+                min={1}
+                max={365}
+                value={extendDays}
+                onChange={(v) => setExtendDays(Number(v ?? 30))}
+                addonAfter="روز"
+                className="flex-1"
+              />
+              <Button
+                icon={<ClockCircleOutlined />}
+                loading={extending}
+                type="primary"
+                ghost
+                onClick={handleExtendTrial}
+              >
+                تمدید Trial
+              </Button>
+            </div>
+
+            {/* تعلیق / فعال‌سازی */}
+            <div className="flex gap-2 mt-2">
+              {selectedOrg.status !== 'suspended' ? (
+                <Popconfirm
+                  title="تعلیق سازمان"
+                  description="دسترسی کاربران این سازمان مسدود می‌شود. ادامه می‌دهید?"
+                  okText="بله، تعلیق شود"
+                  cancelText="انصراف"
+                  okButtonProps={{ danger: true, loading: settingStatus }}
+                  onConfirm={() => handleSetStatus('suspended')}
+                >
+                  <Button block danger icon={<StopOutlined />} loading={settingStatus}>
+                    تعلیق سازمان
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Button
+                  block
+                  type="primary"
+                  icon={<CheckCircleOutlined />}
+                  loading={settingStatus}
+                  onClick={() => handleSetStatus('active')}
+                >
+                  رفع تعلیق (فعال)
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </Drawer>

@@ -333,7 +333,7 @@ begin
   insert into public.org_roles (org_id, title, permissions, is_system)
   values (
     target_org_id,
-    'admin',
+    'ادمین',
     '{}'::jsonb,
     true
   )

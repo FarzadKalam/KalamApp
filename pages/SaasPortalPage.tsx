@@ -8,6 +8,7 @@ import {
   RocketOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
+import { seedCurrentOrgDemoData } from '../utils/demoDataAdmin';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import {
   getOwnerSetupErrorMessage,
@@ -409,6 +410,9 @@ const SaasPortalPage: React.FC = () => {
 
       setProvisionResult(result);
       clearWizardState();
+
+      // بارگذاری داده‌های اولیه دمو در پس‌زمینه (خطا نادیده گرفته می‌شود)
+      seedCurrentOrgDemoData().catch(() => null);
 
       // کمی صبر تا کاربر progress رو ببینه
       await new Promise((r) => setTimeout(r, 1800));

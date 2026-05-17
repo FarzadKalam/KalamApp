@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin } from 'antd';
+import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin, Popconfirm, Tooltip } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
@@ -53,6 +53,16 @@ import {
   searchGlobalRecords,
   type GlobalSearchGroup,
 } from '../utils/globalSearch';
+import {
+  clearCurrentOrgDemoData,
+  getCurrentOrgDemoSeedStatus,
+  getDemoDataAdminErrorMessage,
+} from '../utils/demoDataAdmin';
+import {
+  getOrgSaasStatus,
+  requestTrialRenewal,
+  resolveTrialDaysLeft,
+} from '../utils/orgSaasStatus';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -80,6 +90,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [searchResults, setSearchResults] = useState<GlobalSearchGroup[]>([]);
   const [searchTouched, setSearchTouched] = useState(false);
   const [refreshingPage, setRefreshingPage] = useState(false);
+  const [isDemoOrg, setIsDemoOrg] = useState(false);
+  const [hasDemoBatch, setHasDemoBatch] = useState(false);
+  const [clearingDemoData, setClearingDemoData] = useState(false);
+  const [orgTrialDaysLeft, setOrgTrialDaysLeft] = useState<number | null>(null);
+  const [orgIsReadonly, setOrgIsReadonly] = useState(false);
+  const [orgTrialEndsAt, setOrgTrialEndsAt] = useState<string | null>(null);
+  const [renewalRequesting, setRenewalRequesting] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
@@ -273,6 +290,61 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       window.removeEventListener('focusout', handleResize);
     };
   }, []);
+
+  useEffect(() => {
+    const orgId = currentUserProfile?.org_id;
+    if (!orgId) {
+      setIsDemoOrg(false);
+      setHasDemoBatch(false);
+      setOrgTrialDaysLeft(null);
+      setOrgIsReadonly(false);
+      setOrgTrialEndsAt(null);
+      return;
+    }
+    let cancelled = false;
+
+    Promise.all([
+      getCurrentOrgDemoSeedStatus().catch(() => null),
+      getOrgSaasStatus().catch(() => null),
+    ]).then(([seedRes, saasRes]) => {
+      if (cancelled) return;
+      setIsDemoOrg(Boolean(seedRes?.is_demo ?? saasRes?.is_demo));
+      setHasDemoBatch(Boolean(seedRes?.has_seeded_batch));
+      if (saasRes) {
+        setOrgIsReadonly(Boolean(saasRes.is_readonly));
+        setOrgTrialEndsAt(saasRes.trial_ends_at ?? null);
+        setOrgTrialDaysLeft(resolveTrialDaysLeft(saasRes.trial_ends_at ?? null));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [currentUserProfile?.org_id]);
+
+  const handleClearDemoData = useCallback(async () => {
+    setClearingDemoData(true);
+    try {
+      await clearCurrentOrgDemoData();
+      setHasDemoBatch(false);
+      messageApi.success('داده‌های دمو با موفقیت حذف شد.');
+    } catch (err) {
+      messageApi.error(getDemoDataAdminErrorMessage(err, 'حذف داده‌های دمو ناموفق بود.'));
+    } finally {
+      setClearingDemoData(false);
+    }
+  }, [messageApi]);
+
+  const handleRequestRenewal = useCallback(async () => {
+    setRenewalRequesting(true);
+    try {
+      const res = await requestTrialRenewal();
+      if (res.success) {
+        messageApi.success(res.message);
+      } else {
+        messageApi.error(res.message);
+      }
+    } finally {
+      setRenewalRequesting(false);
+    }
+  }, [messageApi]);
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
   const canViewSettingsRoot = rolePermissions?.[SETTINGS_PERMISSION_KEY]?.view !== false;
@@ -1073,6 +1145,29 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
+            {isDemoOrg && hasDemoBatch && (
+              <Popconfirm
+                title="حذف داده‌های دمو"
+                description="تمام رکوردهای نمونه‌ای که هنگام راه‌اندازی ایجاد شدند پاک می‌شوند. این عمل قابل بازگشت نیست."
+                okText="بله، حذف شود"
+                cancelText="انصراف"
+                okButtonProps={{ danger: true, loading: clearingDemoData }}
+                onConfirm={handleClearDemoData}
+                placement="bottomLeft"
+              >
+                <Tooltip title="حذف داده‌های دمو" placement="bottom">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    loading={clearingDemoData}
+                    className="text-orange-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 border border-orange-300 dark:border-orange-600 rounded-lg px-2"
+                  >
+                    {!isMobile && <span className="text-xs">حذف دمو</span>}
+                  </Button>
+                </Tooltip>
+              </Popconfirm>
+            )}
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
             <NotificationsPopover isMobile={isMobile} variant="chat" requestedTab="notes" />
             <NotificationsPopover isMobile={isMobile} variant="alerts" />
@@ -1088,6 +1183,26 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             </Dropdown>
           </div>
         </Header>
+
+        {/* ── Trial countdown banner ── */}
+        {isDemoOrg && !orgIsReadonly && orgTrialDaysLeft !== null && orgTrialDaysLeft <= 7 && (
+          <div className={`sticky top-16 z-[950] flex items-center justify-between gap-3 px-4 py-2 text-xs font-semibold ${orgTrialDaysLeft <= 2 ? 'bg-red-500 text-white' : 'bg-amber-400 text-amber-900'}`}>
+            <span>
+              {orgTrialDaysLeft === 0
+                ? 'دوره آزمایشی شما امروز منقضی می‌شود.'
+                : `${orgTrialDaysLeft} روز تا پایان دوره آزمایشی باقی مانده است.`}
+            </span>
+            <Button
+              size="small"
+              type="text"
+              loading={renewalRequesting}
+              onClick={handleRequestRenewal}
+              className={`font-bold border ${orgTrialDaysLeft <= 2 ? 'border-white text-white hover:bg-red-400' : 'border-amber-700 text-amber-900 hover:bg-amber-500'}`}
+            >
+              درخواست تمدید
+            </Button>
+          </div>
+        )}
 
         {breadcrumb && breadcrumb.moduleTitle && (
           <div className="sticky top-16 z-[900] bg-white/90 dark:bg-dark-surface/90 backdrop-blur border-b border-gray-200 dark:border-dark-border px-2 md:px-4 py-2 mb-3">
@@ -1119,6 +1234,37 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         >
           {children}
         </Content>
+
+        {/* ── Expired trial blocking overlay ── */}
+        {orgIsReadonly && isDemoOrg && (
+          <div className="fixed inset-0 z-[2000] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm p-6">
+            <div className="max-w-sm w-full rounded-3xl bg-white dark:bg-dark-surface shadow-2xl p-8 text-center space-y-5">
+              <div className="text-5xl">⏰</div>
+              <h2 className="text-xl font-black text-gray-800 dark:text-gray-100">دوره آزمایشی پایان یافت</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                دوره آزمایشی رایگان شما به پایان رسیده است. برای ادامه استفاده، درخواست تمدید ارسال کنید تا تیم ما با شما تماس بگیرد.
+              </p>
+              {orgTrialEndsAt && (
+                <p className="text-xs text-gray-400">
+                  پایان آزمایشی: {new Date(orgTrialEndsAt).toLocaleDateString('fa-IR')}
+                </p>
+              )}
+              <Button
+                type="primary"
+                size="large"
+                block
+                loading={renewalRequesting}
+                onClick={handleRequestRenewal}
+                className="bg-leather-600 border-leather-600 h-12 text-base font-bold rounded-2xl"
+              >
+                درخواست تمدید اشتراک
+              </Button>
+              <p className="text-[11px] text-gray-400">
+                داده‌های شما محفوظ است. بعد از تمدید به همه چیز دسترسی خواهید داشت.
+              </p>
+            </div>
+          </div>
+        )}
 
         {!isKeyboardVisible && rolePermissionsReady && (
           <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-dark-surface/95 backdrop-blur-xl border-t border-gray-200 dark:border-dark-border rounded-t-2xl flex items-center justify-around z-[1000] shadow-2xl transition-colors pb-[env(safe-area-inset-bottom)]">

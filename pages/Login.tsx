@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { getDefaultAuthenticatedAppPath } from '../utils/hostRouting';
+import { getDefaultAuthenticatedAppPath, isSaasAppHost } from '../utils/hostRouting';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
@@ -342,6 +342,31 @@ const Login = () => {
     }
   };
 
+  // اگر روی app.tazesystem.ir هستیم و tenant resolved_host داره، به subdomain خودش ریدایرکت می‌کنیم
+  const resolveTenantRedirect = async (): Promise<string | null> => {
+    if (!isSaasAppHost()) return null;
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user?.id) return null;
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('org_id')
+        .eq('id', userData.user.id)
+        .maybeSingle();
+      if (!profile?.org_id) return null;
+      const { data: settings } = await supabase
+        .from('saas_org_settings')
+        .select('resolved_host, status')
+        .eq('org_id', profile.org_id)
+        .maybeSingle();
+      const host = String(settings?.resolved_host || '').trim().toLowerCase();
+      if (!host || host === 'app.tazesystem.ir') return null;
+      return `https://${host}`;
+    } catch {
+      return null;
+    }
+  };
+
   const ensureInvitedOrExistingProfile = async (phoneNumber: string) => {
     const { data: userData, error: userError } = await supabase.auth.getUser();
     if (userError || !userData?.user?.id) {
@@ -436,7 +461,12 @@ const Login = () => {
       await trackSuccessfulLogin('password');
 
       message.success('خوش آمدید! در حال ورود...');
+      const tenantUrl = await resolveTenantRedirect();
+      if (tenantUrl) {
+        window.location.href = `${tenantUrl}${postLoginRedirect}`;
+      } else {
         navigate(postLoginRedirect, { replace: true });
+      }
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_user_inactive__')) {
@@ -527,7 +557,12 @@ const Login = () => {
       setOtpCooldown(0);
 
       message.success('ورود با موفقیت انجام شد.');
+      const tenantUrlOtp = await resolveTenantRedirect();
+      if (tenantUrlOtp) {
+        window.location.href = `${tenantUrlOtp}${postLoginRedirect}`;
+      } else {
         navigate(postLoginRedirect, { replace: true });
+      }
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_phone_repaired_retry__')) {
