@@ -120,6 +120,20 @@ export const marketingLeadsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
+      key: 'persona_id',
+      labels: { fa: 'پرسونا', en: 'Persona' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'base_info',
+      order: 0.95,
+      relationConfig: {
+        targetModule: 'personas',
+        targetField: 'display_name',
+        filter: { persona_type: 'customer' },
+      },
+      nature: FieldNature.STANDARD,
+    },
+    {
       key: 'prefix',
       labels: { fa: 'پیشوند', en: 'Prefix' },
       type: FieldType.SELECT,

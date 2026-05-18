@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Checkbox, Input, Modal, Select, Tag } from 'antd';
 import {
   AudioOutlined,
+  CaretRightOutlined,
   CloseOutlined,
+  DeleteOutlined,
   EnterOutlined,
   PaperClipOutlined,
   SendOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
 import FileManagerPickerModal from '../files/FileManagerPickerModal';
@@ -48,6 +51,13 @@ type PendingFilePrompt = {
   suggestedName: string;
 };
 
+type PendingVoiceClip = {
+  file: File;
+  url: string;
+  durationMs: number;
+  levels: number[];
+};
+
 const formatFileSize = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return '';
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
@@ -78,6 +88,13 @@ const renameFile = (file: File, nextBaseName: string) => {
     type: file.type,
     lastModified: file.lastModified,
   });
+};
+
+const formatDuration = (valueMs: number) => {
+  const totalSeconds = Math.max(0, Math.floor((Number(valueMs) || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
 const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
@@ -120,9 +137,18 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [recordingAudio, setRecordingAudio] = useState(false);
   const [recordingError, setRecordingError] = useState('');
+  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
+  const [recordingLevels, setRecordingLevels] = useState<number[]>(() => Array.from({ length: 20 }, () => 0.16));
+  const [pendingVoiceClip, setPendingVoiceClip] = useState<PendingVoiceClip | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
+  const recordingStartedAtRef = useRef<number>(0);
+  const recordingTimerRef = useRef<number | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const recordingAnimationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (value === lastExternalValueRef.current) return;
@@ -133,7 +159,21 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   useEffect(() => () => {
     mediaRecorderRef.current?.stop();
     recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
-  }, []);
+    if (recordingTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(recordingTimerRef.current);
+    }
+    if (recordingAnimationFrameRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(recordingAnimationFrameRef.current);
+    }
+    audioSourceRef.current?.disconnect();
+    analyserRef.current?.disconnect();
+    if (audioContextRef.current) {
+      void audioContextRef.current.close().catch(() => undefined);
+    }
+    if (pendingVoiceClip?.url) {
+      URL.revokeObjectURL(pendingVoiceClip.url);
+    }
+  }, [pendingVoiceClip]);
 
   const attachmentLabel = useMemo(() => [
     ...attachments.map((file) => ({
@@ -204,6 +244,34 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
     moveToNextPrompt(nextPreparedFiles, pendingPrompts.slice(1));
   };
 
+  const resetRecordingMonitoring = () => {
+    if (recordingTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (recordingAnimationFrameRef.current !== null && typeof window !== 'undefined') {
+      window.cancelAnimationFrame(recordingAnimationFrameRef.current);
+      recordingAnimationFrameRef.current = null;
+    }
+    audioSourceRef.current?.disconnect();
+    audioSourceRef.current = null;
+    analyserRef.current?.disconnect();
+    analyserRef.current = null;
+    if (audioContextRef.current) {
+      void audioContextRef.current.close().catch(() => undefined);
+      audioContextRef.current = null;
+    }
+  };
+
+  const clearPendingVoiceClip = () => {
+    setPendingVoiceClip((prev) => {
+      if (prev?.url) {
+        URL.revokeObjectURL(prev.url);
+      }
+      return null;
+    });
+  };
+
   const stopAudioRecording = () => {
     try {
       mediaRecorderRef.current?.stop();
@@ -224,6 +292,9 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
     try {
       setRecordingError('');
+      clearPendingVoiceClip();
+      setRecordingDurationMs(0);
+      setRecordingLevels(Array.from({ length: 20 }, () => 0.16));
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordingStreamRef.current = stream;
       const recorder = new MediaRecorder(stream);
@@ -241,6 +312,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
       };
       recorder.onstop = () => {
         setRecordingAudio(false);
+        resetRecordingMonitoring();
         recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
         recordingStreamRef.current = null;
         mediaRecorderRef.current = null;
@@ -251,21 +323,70 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             type: recorder.mimeType || 'audio/webm',
             lastModified: Date.now(),
           });
-          handleFilesPicked([file]);
+          const nextUrl = URL.createObjectURL(blob);
+          setPendingVoiceClip({
+            file,
+            url: nextUrl,
+            durationMs: Math.max(0, Date.now() - recordingStartedAtRef.current),
+            levels: recordingLevels.slice(),
+          });
         }
         recordingChunksRef.current = [];
+        setRecordingDurationMs(0);
       };
 
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextCtor) {
+        const context = new AudioContextCtor();
+        const source = context.createMediaStreamSource(stream);
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 128;
+        analyser.smoothingTimeConstant = 0.75;
+        source.connect(analyser);
+        audioContextRef.current = context;
+        audioSourceRef.current = source;
+        analyserRef.current = analyser;
+
+        const timeData = new Uint8Array(analyser.frequencyBinCount);
+        const updateLevels = () => {
+          if (!analyserRef.current) return;
+          analyserRef.current.getByteTimeDomainData(timeData);
+          let sum = 0;
+          for (let index = 0; index < timeData.length; index += 1) {
+            const centered = (timeData[index] - 128) / 128;
+            sum += centered * centered;
+          }
+          const rms = Math.sqrt(sum / timeData.length);
+          const normalizedLevel = Math.min(1, Math.max(0.08, rms * 3.8));
+          setRecordingLevels((prev) => [...prev.slice(1), normalizedLevel]);
+          recordingAnimationFrameRef.current = window.requestAnimationFrame(updateLevels);
+        };
+        recordingAnimationFrameRef.current = window.requestAnimationFrame(updateLevels);
+      }
+
       recorder.start();
+      recordingStartedAtRef.current = Date.now();
+      if (typeof window !== 'undefined') {
+        recordingTimerRef.current = window.setInterval(() => {
+          setRecordingDurationMs(Date.now() - recordingStartedAtRef.current);
+        }, 200);
+      }
       setRecordingAudio(true);
     } catch (error) {
       console.warn('Could not start voice recording', error);
       setRecordingError('دسترسی میکروفون یا ضبط صدا در دسترس نیست.');
+      resetRecordingMonitoring();
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
       mediaRecorderRef.current = null;
       setRecordingAudio(false);
     }
+  };
+
+  const attachPendingVoiceClip = () => {
+    if (!pendingVoiceClip) return;
+    onFilesSelected([pendingVoiceClip.file]);
+    clearPendingVoiceClip();
   };
 
   return (
@@ -352,6 +473,80 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               <EnterOutlined />
               <span>پاسخ به یادداشت انتخاب شده</span>
               <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClearReply} />
+            </div>
+          ) : null}
+
+          {recordingAudio ? (
+            <div className="mt-2 rounded-2xl border border-rose-200/70 bg-rose-50/80 px-3 py-2 dark:border-rose-400/20 dark:bg-rose-500/10">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 dark:text-rose-200">
+                  <span className="inline-flex h-2.5 w-2.5 rounded-full bg-rose-500 animate-pulse" />
+                  <span>در حال ضبط پیام صوتی</span>
+                </div>
+                <div className="text-xs font-mono text-rose-700 dark:text-rose-200">
+                  {formatDuration(recordingDurationMs)}
+                </div>
+              </div>
+              <div className="mt-2 flex h-11 items-end gap-1 rounded-xl bg-white/80 px-2 py-1 dark:bg-black/20">
+                {recordingLevels.map((level, index) => (
+                  <span
+                    key={`recording-level-${index}`}
+                    className="flex-1 rounded-full bg-gradient-to-t from-rose-500 via-rose-400 to-amber-300 transition-all duration-100"
+                    style={{ height: `${Math.max(18, Math.round(level * 100))}%` }}
+                  />
+                ))}
+              </div>
+              <div className="mt-2 flex justify-end">
+                <Button
+                  type="primary"
+                  danger
+                  size="small"
+                  icon={<StopOutlined />}
+                  onClick={stopAudioRecording}
+                >
+                  پایان ضبط
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {!recordingAudio && pendingVoiceClip ? (
+            <div className="mt-2 rounded-2xl border border-slate-200/70 bg-slate-50/85 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.03]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  پیش‌نمایش پیام صوتی
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  {formatDuration(pendingVoiceClip.durationMs)}
+                </div>
+              </div>
+              <div className="mt-2 flex h-10 items-end gap-1 rounded-xl bg-white/80 px-2 py-1 dark:bg-black/20">
+                {pendingVoiceClip.levels.map((level, index) => (
+                  <span
+                    key={`voice-preview-level-${index}`}
+                    className="flex-1 rounded-full bg-gradient-to-t from-slate-500 via-slate-400 to-slate-200"
+                    style={{ height: `${Math.max(16, Math.round(level * 92))}%` }}
+                  />
+                ))}
+              </div>
+              <audio controls src={pendingVoiceClip.url} className="mt-2 w-full" />
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <Button
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={clearPendingVoiceClip}
+                >
+                  حذف
+                </Button>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<CaretRightOutlined />}
+                  onClick={attachPendingVoiceClip}
+                >
+                  افزودن به پیام
+                </Button>
+              </div>
             </div>
           ) : null}
 

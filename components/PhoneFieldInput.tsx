@@ -15,6 +15,7 @@ type PhoneFieldInputProps = {
   onChange: (value: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  compact?: boolean;
 };
 
 const PhoneFieldInput: React.FC<PhoneFieldInputProps> = ({
@@ -22,6 +23,7 @@ const PhoneFieldInput: React.FC<PhoneFieldInputProps> = ({
   onChange,
   disabled = false,
   placeholder,
+  compact = false,
 }) => {
   const meta = useMemo(() => getPhoneDisplayMeta(value), [value]);
 
@@ -59,12 +61,17 @@ const PhoneFieldInput: React.FC<PhoneFieldInputProps> = ({
   };
 
   return (
-    <div className="grid w-full grid-cols-[64px_minmax(0,1fr)] items-stretch gap-2" dir="ltr">
+    <div
+      className={compact
+        ? 'grid w-full grid-cols-1 items-stretch gap-2'
+        : 'grid w-full grid-cols-[64px_minmax(0,1fr)] items-stretch gap-2'}
+      dir="ltr"
+    >
       <Select
         showSearch
         value={meta.country.code}
         disabled={disabled}
-        className="phone-country-select h-8"
+        className={`phone-country-select h-8 ${compact ? 'w-full' : ''}`}
         popupMatchSelectWidth={280}
         options={countryOptions}
         optionLabelProp="shortLabel"

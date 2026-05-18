@@ -650,6 +650,8 @@ const ModuleShow: React.FC = () => {
   const [botStatusLastInboundText, setBotStatusLastInboundText] = useState('');
   const [botStatusAllowedUserIds, setBotStatusAllowedUserIds] = useState<string[]>([]);
   const [botStatusAllowedRoleIds, setBotStatusAllowedRoleIds] = useState<string[]>([]);
+  const [botStatusAiAutoReplyEnabled, setBotStatusAiAutoReplyEnabled] = useState(false);
+  const [botStatusAiCounterpartyGuide, setBotStatusAiCounterpartyGuide] = useState('');
   const botStatusWatchTimerRef = useRef<number | null>(null);
     const fetchProductionQuantity = useCallback(async () => {
       if (moduleId !== 'production_orders' || !id) return null;
@@ -2578,6 +2580,8 @@ const ModuleShow: React.FC = () => {
     let lastInboundText = '';
     let allowedUserIds: string[] = [];
     let allowedRoleIds: string[] = [];
+    let aiAutoReplyEnabled = false;
+    let aiCounterpartyGuide = '';
 
     let query = supabase
       .from('counterparty_bot_groups')
@@ -2611,6 +2615,8 @@ const ModuleShow: React.FC = () => {
       allowedRoleIds = Array.isArray(metadata?.allowed_role_ids)
         ? metadata.allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
         : [];
+      aiAutoReplyEnabled = Boolean(metadata?.ai_auto_reply_enabled);
+      aiCounterpartyGuide = String(metadata?.ai_counterparty_guide || '').trim();
       lastInboundAt = String(preferredRow?.last_inbound_at || '').trim();
     }
 
@@ -2638,6 +2644,8 @@ const ModuleShow: React.FC = () => {
     setBotStatusLastInboundText(lastInboundText);
     setBotStatusAllowedUserIds(allowedUserIds);
     setBotStatusAllowedRoleIds(allowedRoleIds);
+    setBotStatusAiAutoReplyEnabled(aiAutoReplyEnabled);
+    setBotStatusAiCounterpartyGuide(aiCounterpartyGuide);
   }, [botStatusChannel, data?.business_name_en, data?.company_name_en, data?.english_name, data?.full_name_en, data?.legal_name_en, data?.name_en]);
 
   const saveBotStatusSettings = useCallback(async (options?: { forceCapture?: boolean; captureSeconds?: number }) => {
@@ -2696,6 +2704,8 @@ const ModuleShow: React.FC = () => {
         last_capture_channel: nextChannel,
         allowed_user_ids: botStatusAllowedUserIds,
         allowed_role_ids: botStatusAllowedRoleIds,
+        ai_auto_reply_enabled: botStatusAiAutoReplyEnabled,
+        ai_counterparty_guide: String(botStatusAiCounterpartyGuide || '').trim() || null,
         activation_confirmation_sent: forceCapture ? false : Boolean(existingRowMetadata?.activation_confirmation_sent),
         last_capture_error: null,
         activation_updated_at: nowIso,
@@ -2728,7 +2738,7 @@ const ModuleShow: React.FC = () => {
       await updateCustomerBotLegacyFieldsWithFallback(context.counterpartyId, legacyPatch);
       setData((prev: any) => ({ ...prev, preferred_notification_channel: legacyPatch.preferred_notification_channel }));
     }
-  }, [botStatusActivationCode, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusGroupTitle, botStatusModalContext, botStatusWaitingForFirstMessage]);
+  }, [botStatusActivationCode, botStatusAiAutoReplyEnabled, botStatusAiCounterpartyGuide, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusGroupTitle, botStatusModalContext, botStatusWaitingForFirstMessage]);
 
   const handleCloseBotStatusModal = useCallback(() => {
     clearBotStatusWatchTimer();
@@ -5707,9 +5717,12 @@ const ModuleShow: React.FC = () => {
       && String(field.key || '').trim() === 'attachment_url';
 
     if (isEditing) {
+      const inlineEditorClassName = isHeader
+        ? `flex w-full min-w-0 flex-col gap-2 ${isSuperLongTextField ? 'items-stretch' : ''}`
+        : `flex w-full min-w-[150px] gap-1 ${isSuperLongTextField ? 'items-start' : 'items-center'}`;
       return (
-        <div className={`flex gap-1 min-w-[150px] w-full ${isSuperLongTextField ? 'items-start' : 'items-center'}`}>
-          <div className="flex-1">
+        <div className={inlineEditorClassName}>
+          <div className="min-w-0 flex-1">
             <SmartFieldRenderer
               field={field}
               value={tempValue}
@@ -5740,21 +5753,23 @@ const ModuleShow: React.FC = () => {
                 allValues={displayData}
             />
           </div>
-          <Button
-            size="small"
-            type="text"
-            icon={<CheckOutlined />}
-            onClick={() => saveEdit(field.key)}
-            disabled={isProcessTemplateFieldLocked}
-            className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
-          />
-          <Button
-            size="small"
-            type="text"
-            icon={<CloseOutlined />}
-            onClick={() => cancelEdit(field.key)}
-            className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
-          />
+          <div className={`flex shrink-0 gap-1 ${isHeader ? 'justify-end' : ''}`}>
+            <Button
+              size="small"
+              type="text"
+              icon={<CheckOutlined />}
+              onClick={() => saveEdit(field.key)}
+              disabled={isProcessTemplateFieldLocked}
+              className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
+            />
+            <Button
+              size="small"
+              type="text"
+              icon={<CloseOutlined />}
+              onClick={() => cancelEdit(field.key)}
+              className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
+            />
+          </div>
         </div>
       );
     }
@@ -5793,8 +5808,10 @@ const ModuleShow: React.FC = () => {
 
     if (isHeader) {
       return (
-        <div className="group flex items-center gap-2 cursor-pointer" onClick={() => !field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && startEdit(field.key, value)}>
-          {displayNode}
+        <div className="group flex w-full min-w-0 items-start gap-2 cursor-pointer" onClick={() => !field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && startEdit(field.key, value)}>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            {displayNode}
+          </div>
           {!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
         </div>
       );
@@ -6468,6 +6485,8 @@ const ModuleShow: React.FC = () => {
         lastInboundText={botStatusLastInboundText}
         allowedUserIds={botStatusAllowedUserIds}
         allowedRoleIds={botStatusAllowedRoleIds}
+        aiAutoReplyEnabled={botStatusAiAutoReplyEnabled}
+        aiCounterpartyGuide={botStatusAiCounterpartyGuide}
         userOptions={allUsers.map((user: any) => ({
           label: String(user?.full_name || user?.email || user?.mobile_1 || user?.id || '-').trim(),
           value: String(user?.id || '').trim(),
@@ -6483,6 +6502,8 @@ const ModuleShow: React.FC = () => {
         onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
         onChangeAllowedUserIds={setBotStatusAllowedUserIds}
         onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
+        onChangeAiAutoReplyEnabled={setBotStatusAiAutoReplyEnabled}
+        onChangeAiCounterpartyGuide={setBotStatusAiCounterpartyGuide}
       />
 
       <Modal

@@ -17,6 +17,7 @@ import { calculationFormulasModule } from './modules/calculationFormulasConfig';
 import { productionGroupOrdersModule } from './modules/productionGroupOrdersConfig';
 import { projectsModule } from './modules/projectsConfig';
 import { marketingLeadsModule } from './modules/marketingLeadsConfig';
+import { personasModule } from './modules/personasConfig';
 import { processTemplatesModule } from './modules/processTemplatesConfig';
 import { processRunsModule } from './modules/processRunsConfig';
 import { instructionsModule } from './modules/instructionsConfig';
@@ -163,6 +164,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   purchase_invoices: purchaseInvoicesConfig,
   projects: projectsModule,
   marketing_leads: marketingLeadsModule,
+  personas: personasModule,
   instructions: instructionsModule,
   process_templates: processTemplatesModule,
   process_runs: processRunsModule,

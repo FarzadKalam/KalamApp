@@ -475,6 +475,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'خرید و فروش',
         children: [
           { key: '/marketing_leads', label: 'بازاریابی' },
+          { key: '/personas', label: 'پرسونا', disabled: !canViewModule('personas') },
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
           { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },

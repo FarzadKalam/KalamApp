@@ -43,6 +43,19 @@ export const employeesModule: ModuleDefinition = {
       ],
     },
     { key: 'job_title', labels: { fa: 'عنوان شغلی', en: 'Job Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.6, isTableColumn: true },
+    {
+      key: 'persona_id',
+      labels: { fa: 'پرسونا', en: 'Persona' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 1.65,
+      relationConfig: {
+        targetModule: 'personas',
+        targetField: 'display_name',
+        filter: { persona_type: 'employee' },
+      },
+      isTableColumn: true,
+    },
     { key: 'mobile_1', labels: { fa: 'موبایل', en: 'Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 1.7, isTableColumn: true },
 
     {

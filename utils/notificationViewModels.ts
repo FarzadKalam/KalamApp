@@ -397,7 +397,6 @@ export const buildNoteConversations = ({
         isGroup: true,
       };
     })
-    .filter((group) => group.noteCount > 0 || group.unreadCount > 0)
     .sort((a, b) => {
       if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
       if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;

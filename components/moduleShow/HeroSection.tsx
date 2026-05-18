@@ -254,8 +254,8 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                   <div
                     key={f.key}
                     className={f.type === FieldType.SUPER_LONG_TEXT
-                      ? 'flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4 sm:col-span-2 xl:col-span-4'
-                      : 'flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4'}
+                      ? 'min-w-0 flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4 sm:col-span-2 xl:col-span-4'
+                      : 'min-w-0 flex flex-col gap-1 border-r last:border-0 border-gray-100 dark:border-gray-700 px-4'}
                   >
                     <span className="text-xs text-gray-400 uppercase tracking-wider">{f.labels.fa}</span>
                     {renderSmartField(f, true)}

@@ -16,6 +16,7 @@ type InstructionQuickCreateModalProps = {
   initialValues?: Record<string, any>;
   userOptions?: Array<{ label: string; value: string }>;
   roleOptions?: Array<{ label: string; value: string }>;
+  overlayZIndex?: number;
 };
 
 const InstructionQuickCreateModal: React.FC<InstructionQuickCreateModalProps> = ({
@@ -25,6 +26,7 @@ const InstructionQuickCreateModal: React.FC<InstructionQuickCreateModalProps> = 
   initialValues,
   userOptions = [],
   roleOptions = [],
+  overlayZIndex,
 }) => {
   const { message } = App.useApp();
   const [filesTarget, setFilesTarget] = useState<Record<string, any> | null>(null);
@@ -48,6 +50,7 @@ const InstructionQuickCreateModal: React.FC<InstructionQuickCreateModalProps> = 
         module={moduleConfig}
         visible={open}
         title="افزودن سریع دستورالعمل"
+        overlayZIndex={overlayZIndex}
         initialValues={{
           status: 'draft',
           ...(initialValues || {}),

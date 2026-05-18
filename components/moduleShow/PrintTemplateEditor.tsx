@@ -1392,6 +1392,9 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           overscroll-behavior: auto;
           touch-action: auto;
         }
+        .dark .print-template-editor-content {
+          color: #e5e7eb;
+        }
         .print-template-editor-root[data-fill-height='true'] .print-template-editor-content {
           min-height: 0;
           height: 100%;
@@ -1411,6 +1414,29 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
         .print-template-editor-content p {
           margin: 0 0 8px 0;
           font-size: 14px;
+        }
+        .dark .print-template-editor-content p,
+        .dark .print-template-editor-content div,
+        .dark .print-template-editor-content span,
+        .dark .print-template-editor-content li,
+        .dark .print-template-editor-content strong,
+        .dark .print-template-editor-content em,
+        .dark .print-template-editor-content u,
+        .dark .print-template-editor-content blockquote,
+        .dark .print-template-editor-content code,
+        .dark .print-template-editor-content pre,
+        .dark .print-template-editor-content h1,
+        .dark .print-template-editor-content h2,
+        .dark .print-template-editor-content h3,
+        .dark .print-template-editor-content h4,
+        .dark .print-template-editor-content h5,
+        .dark .print-template-editor-content h6,
+        .dark .print-template-editor-content td,
+        .dark .print-template-editor-content th {
+          color: #e5e7eb !important;
+        }
+        .dark .print-template-editor-content a {
+          color: #93c5fd !important;
         }
         .print-template-editor-content td p,
         .print-template-editor-content th p {

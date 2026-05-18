@@ -9243,6 +9243,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       <InstructionQuickCreateModal
         open={isInstructionQuickCreateOpen}
         onClose={() => setIsInstructionQuickCreateOpen(false)}
+        overlayZIndex={10120}
         onCreated={(record) => {
           const newInstruction = record as any;
           setInstructionsForEditor((prev) => {
