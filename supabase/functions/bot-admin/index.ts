@@ -33,6 +33,10 @@ type InboundContact = {
   phoneNumber: string;
   displayName: string;
   text: string;
+  senderId?: string;
+  chatTitle?: string;
+  chatType?: string | null;
+  isGroup?: boolean;
 };
 
 const corsHeaders = {
@@ -48,6 +52,8 @@ const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   bale: 'https://tapi.bale.ai',
   rubika: 'https://botapi.rubika.ir',
 };
+
+const RUBIKA_OFFICIAL_API_BASE_URL = DEFAULT_API_BASE_URL.rubika;
 
 const DEFAULT_SEND_PATH: Record<BotChannel, string> = {
   telegram: '/bot{token}/sendMessage',
@@ -74,11 +80,17 @@ const pick = (...values: any[]) => {
 };
 
 const normalizeBaseUrl = (value: string, channel: BotChannel) => {
+  if (channel === 'rubika') return RUBIKA_OFFICIAL_API_BASE_URL;
   const raw = String(value || DEFAULT_API_BASE_URL[channel] || '').trim();
   if (!raw) return '';
   if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
   return `https://${raw.replace(/\/+$/, '')}`;
 };
+
+const normalizeRubikaSettings = (settings: Record<string, any> | null | undefined) => ({
+  ...(settings && typeof settings === 'object' ? settings : {}),
+  api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
+});
 
 const pickWebhookPublicBase = (
   requestUrl: string,
@@ -143,8 +155,8 @@ const pickWebhookPublicBase = (
   return forceHttpsIfPublic(fallback);
 };
 
-const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: string) => {
-  const normalizedBase = normalizeBaseUrl(baseUrl, 'telegram');
+const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: string, channel: BotChannel) => {
+  const normalizedBase = normalizeBaseUrl(baseUrl, channel);
   const normalizedPath = String(pathTemplate)
     .replace('{token}', encodeURIComponent(token))
     .replace(/^\/*/, '/');
@@ -445,6 +457,36 @@ const getDisplayName = (obj: Record<string, any> | null | undefined) => {
   return pick(direct, combined);
 };
 
+const extractChatTitle = (payload: Record<string, any>, message: Record<string, any> | null) => {
+  const rubikaUpdate = payload?.update || null;
+  const rubikaRootMessage = payload?.new_message || null;
+  const rubikaNewMessage = rubikaUpdate?.new_message || rubikaRootMessage || null;
+  const rubikaInlineMessage = payload?.inline_message || null;
+  return pick(
+    message?.chat?.title,
+    message?.chat?.name,
+    message?.chat?.username,
+    message?.chat?.chat_title,
+    message?.chat?.group_title,
+    message?.chat_title,
+    message?.group_title,
+    rubikaRootMessage?.chat?.title,
+    rubikaRootMessage?.chat_title,
+    rubikaRootMessage?.group_title,
+    rubikaUpdate?.chat_title,
+    rubikaUpdate?.group_title,
+    rubikaNewMessage?.chat?.title,
+    rubikaNewMessage?.chat_title,
+    rubikaNewMessage?.group_title,
+    rubikaInlineMessage?.chat?.title,
+    rubikaInlineMessage?.chat_title,
+    rubikaInlineMessage?.group_title,
+    payload?.chat?.title,
+    payload?.chat_title,
+    payload?.group_title
+  );
+};
+
 const extractContact = (payload: Record<string, any>): InboundContact => {
   const rubikaUpdate = payload?.update || null;
   const rubikaRootMessage = payload?.new_message || null;
@@ -486,12 +528,19 @@ const extractContact = (payload: Record<string, any>): InboundContact => {
   const chatId = pick(
     message?.chat?.id,
     message?.chat_id,
+    message?.object_guid,
+    message?.objectGuid,
     callbackQuery?.message?.chat?.id,
     callbackQuery?.message?.chat_id,
     payload?.chat_id,
     rubikaUpdate?.chat_id,
+    rubikaUpdate?.object_guid,
     rubikaInlineMessage?.chat_id,
+    rubikaInlineMessage?.object_guid,
+    rubikaNewMessage?.chat_id,
+    rubikaNewMessage?.object_guid,
     payload?.chatId,
+    payload?.object_guid,
     payload?.conversation_id,
     payload?.conversationId,
     payload?.peer_id,
@@ -545,12 +594,43 @@ const extractContact = (payload: Record<string, any>): InboundContact => {
     payload?.caption
   );
 
+  const senderId = pick(
+    from?.id,
+    from?.user_id,
+    from?.userId,
+    from?.object_guid,
+    from?.objectGuid,
+    payload?.sender_id,
+    payload?.user_id,
+    payload?.userId
+  );
+  const chatTitle = extractChatTitle(payload, message);
+  const chatType = pick(
+    message?.chat?.type,
+    message?.chat_type,
+    payload?.chat?.type,
+    payload?.chat_type,
+    payload?.type,
+    payload?.event?.chat?.type
+  ).toLowerCase();
+  const normalizedChatType = String(chatType || '').trim().toLowerCase();
+  const chatIdLower = String(chatId || '').trim().toLowerCase();
+  const isGroup = ['group', 'supergroup', 'channel'].includes(normalizedChatType)
+    || chatIdLower.startsWith('g0')
+    || chatIdLower.startsWith('c0')
+    || chatIdLower.startsWith('ch')
+    || Boolean(String(chatTitle || '').trim());
+
   return {
     chatId,
     username,
     phoneNumber,
     displayName,
     text,
+    senderId,
+    chatTitle,
+    chatType: normalizedChatType || null,
+    isGroup,
   };
 };
 
@@ -664,13 +744,14 @@ const configureRubikaReceiveEndpoint = async (
   requestHeaders: Headers,
   settings: Record<string, any>
 ) => {
-  const token = pick(settings?.bot_token);
+  const normalizedSettings = normalizeRubikaSettings(settings);
+  const token = pick(normalizedSettings?.bot_token);
   if (!token) throw new Error('توکن بات تنظیم نشده است.');
-  const secret = pick(settings?.webhook_secret);
+  const secret = pick(normalizedSettings?.webhook_secret);
   if (!secret) throw new Error('Webhook Secret برای بات روبیکا تنظیم نشده است.');
 
-  const baseUrl = normalizeBaseUrl(settings?.api_base_url, 'rubika');
-  const webhookBase = pickWebhookPublicBase(requestUrl, supabaseUrl, requestHeaders, settings);
+  const baseUrl = normalizeBaseUrl(normalizedSettings?.api_base_url, 'rubika');
+  const webhookBase = pickWebhookPublicBase(requestUrl, supabaseUrl, requestHeaders, normalizedSettings);
   const normalizedSecret = encodeURIComponent(secret);
   const webhookCandidates = [
     `${webhookBase}/functions/v1/bot-webhook/rubika/${normalizedSecret}`,
@@ -699,6 +780,8 @@ const configureRubikaReceiveEndpoint = async (
       return {
         webhook_url: webhookUrl,
         http_status: response.status,
+        configured_at: new Date().toISOString(),
+        provider_http_status: response.status,
         response: payload,
       };
     }
@@ -755,9 +838,10 @@ const callRubikaGetUpdates = async (
   settings: Record<string, any>,
   cursor?: string | number | null
 ) => {
+  const normalizedSettings = normalizeRubikaSettings(settings);
   const token = pick(settings?.bot_token);
   if (!token) throw new Error('توکن بات تنظیم نشده است.');
-  const baseUrl = normalizeBaseUrl(settings?.api_base_url, 'rubika');
+  const baseUrl = normalizeBaseUrl(normalizedSettings?.api_base_url, 'rubika');
   const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/getUpdates`;
   const offsetId = pick(cursor);
   const requestBodies: Array<Record<string, any>> = [];
@@ -775,6 +859,20 @@ const callRubikaGetUpdates = async (
   let bestUpdates: any[] = [];
   let bestNextCursor: string | number | null = offsetId || null;
   let lastError: any = null;
+  const deriveRubikaCursorFromUpdates = (updates: any[]) => {
+    const numericIds = (Array.isArray(updates) ? updates : [])
+      .map((item: any) => Number(
+        item?.update_id
+        || item?.message_id
+        || item?.new_message?.message_id
+        || item?.updated_message?.message_id
+        || item?.message?.message_id
+        || 0
+      ))
+      .filter((value: number) => Number.isFinite(value) && value > 0);
+    if (!numericIds.length) return null;
+    return String(Math.max(...numericIds) + 1);
+  };
 
   for (const body of requestBodies) {
     try {
@@ -796,7 +894,8 @@ const callRubikaGetUpdates = async (
         (Array.isArray(payload?.data) ? payload.data : null) ||
         (Array.isArray(payload?.result) ? payload.result : null) ||
         [];
-      const nextCursor = pick(payload?.next_offset_id, payload?.data?.next_offset_id, payload?.result?.next_offset_id, offsetId);
+      const derivedCursor = deriveRubikaCursorFromUpdates(updates);
+      const nextCursor = pick(payload?.next_offset_id, payload?.data?.next_offset_id, payload?.result?.next_offset_id, derivedCursor, offsetId);
 
       if (!bestPayload) {
         bestPayload = payload;
@@ -831,6 +930,37 @@ const callRubikaGetUpdates = async (
   };
 };
 
+const getRubikaChatInfo = async (
+  settings: Record<string, any>,
+  chatId: string
+) => {
+  const normalizedSettings = normalizeRubikaSettings(settings);
+  const token = pick(normalizedSettings?.bot_token);
+  const normalizedChatId = String(chatId || '').trim();
+  if (!token || !normalizedChatId) return null;
+
+  try {
+    const endpoint = `${normalizeBaseUrl(normalizedSettings?.api_base_url, 'rubika')}/v3/${encodeURIComponent(token)}/getChat`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: normalizedChatId }),
+    });
+    const payload = await parseResponse(response);
+    if (!response.ok) return null;
+    ensureRubikaSuccess(payload);
+    const chat = payload?.chat || payload?.data?.chat || payload?.result?.chat || payload?.data || payload?.result || null;
+    if (!chat || typeof chat !== 'object') return null;
+    return {
+      title: pick(chat?.title, chat?.chat_title, chat?.group_title, chat?.name),
+      type: pick(chat?.type, chat?.chat_type).toLowerCase() || null,
+      raw: payload,
+    };
+  } catch {
+    return null;
+  }
+};
+
 const primeChannelCursor = async (
   integration: Record<string, any>,
   channel: BotChannel,
@@ -849,17 +979,20 @@ const primeChannelCursor = async (
 
 const pickLatestContact = (updates: any[]) => {
   if (!Array.isArray(updates) || updates.length === 0) return null;
+  let latestAny: { contact: InboundContact; payload: Record<string, any> } | null = null;
   for (let index = updates.length - 1; index >= 0; index -= 1) {
     const item = updates[index];
     const contact = extractContact(item || {});
     if (contact.chatId) {
-      return {
+      const candidate = {
         contact,
         payload: item,
       };
+      if (contact.isGroup === true) return candidate;
+      if (!latestAny) latestAny = candidate;
     }
   }
-  return null;
+  return latestAny;
 };
 
 const saveInboundContact = async (
@@ -916,11 +1049,27 @@ const pollChannelUpdates = async (
     };
   }
 
+  if (channel === 'rubika' && found.contact.chatId && !String(found.contact.chatTitle || '').trim()) {
+    const chatInfo = await getRubikaChatInfo(settings, found.contact.chatId);
+    if (chatInfo?.title) found.contact.chatTitle = String(chatInfo.title || '').trim();
+    if (!found.contact.chatType && chatInfo?.type) found.contact.chatType = chatInfo.type;
+    if (chatInfo?.type && !found.contact.isGroup) {
+      found.contact.isGroup = ['group', 'supergroup', 'channel'].includes(String(chatInfo.type || '').toLowerCase());
+    }
+  }
+
   const saved = await saveInboundContact(supabaseUrl, serviceRoleKey, integration, channel, found);
   return {
     found: true,
     cursor: result.nextCursor,
-    contact: saved,
+    contact: {
+      ...(saved && typeof saved === 'object' ? saved : {}),
+      chatTitle: found.contact.chatTitle || null,
+      chatType: found.contact.chatType || null,
+      isGroup: found.contact.isGroup === true,
+      sender_id: found.contact.senderId || null,
+      last_payload: found.payload,
+    },
     provider_result_count: Array.isArray(result.updates) ? result.updates.length : 0,
     provider_debug: debug,
   };
@@ -954,7 +1103,7 @@ const sendProviderMessage = async (
       ...baseBody,
       ...(extraPayload && typeof extraPayload === 'object' ? extraPayload : {}),
     };
-    const response = await fetch(buildSendMessageUrl(baseUrl, token, sendMessagePath), {
+    const response = await fetch(buildSendMessageUrl(baseUrl, token, sendMessagePath, channel), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1658,9 +1807,16 @@ Deno.serve(async (req) => {
           };
         }
       }
-      const baseline = channel === 'rubika'
-        ? { cursor: null, provider_result_count: 0 }
-        : await primeChannelCursor(integration, channel, cursor);
+      const baseline = await primeChannelCursor(integration, channel, cursor);
+      const captureDiagnostic = channel === 'rubika'
+        ? {
+          webhook_url: providerResult?.webhook_url || null,
+          provider_http_status: providerResult?.http_status || providerResult?.provider_http_status || null,
+          warning: providerResult?.warning || null,
+          configured_at: providerResult?.configured_at || null,
+          official_api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
+        }
+        : null;
       return json(200, {
         success: true,
         channel,
@@ -1668,6 +1824,7 @@ Deno.serve(async (req) => {
         capture_started: true,
         webhook_disabled: channel === 'telegram' || channel === 'bale',
         provider_result: providerResult,
+        capture_diagnostic: captureDiagnostic,
         cursor: baseline.cursor,
         found: false,
       });

@@ -40,11 +40,13 @@ import {
   getModuleTitle,
   getSystemTemplateFieldOptions,
   getPrintTemplateVariables,
+  getDefaultFooterSignatures,
   loadPrintTemplatesStore,
   materializeSystemTemplateForCopy,
   mergeTemplatesWithDefaults,
   normalizeDynamicBlockTablesHtml,
   savePrintTemplatesStore,
+  type PrintFooterSignature,
   type PrintTemplateVariableOption,
   type StoredPrintTemplate,
 } from '../../utils/printTemplates/store';
@@ -160,6 +162,7 @@ const PrintTemplatesTab: React.FC = () => {
   const [systemFieldsEditingTemplate, setSystemFieldsEditingTemplate] = useState<StoredPrintTemplate | null>(null);
   const [systemFieldsSearch, setSystemFieldsSearch] = useState('');
   const [systemFieldKeysDraft, setSystemFieldKeysDraft] = useState<string[]>([]);
+  const [footerSignaturesDraft, setFooterSignaturesDraft] = useState<PrintFooterSignature[]>([]);
   const [activeSection, setActiveSection] = useState<'header' | 'body' | 'footer'>('body');
   const [headerEditor, setHeaderEditor] = useState<any | null>(null);
   const [bodyEditor, setBodyEditor] = useState<any | null>(null);
@@ -446,8 +449,13 @@ const PrintTemplatesTab: React.FC = () => {
       Array.isArray(template.selectedFieldKeys) && template.selectedFieldKeys.length > 0
         ? sanitizeSelectedPrintFieldKeys(template.selectedFieldKeys, allKeys)
         : allKeys;
+    const signatures =
+      Array.isArray(template.footerSignatures) && template.footerSignatures.length > 0
+        ? template.footerSignatures
+        : getDefaultFooterSignatures(template.moduleId);
     setSystemFieldsEditingTemplate(template);
     setSystemFieldKeysDraft(selectedKeys);
+    setFooterSignaturesDraft(signatures.map((s) => ({ ...s })));
     setSystemFieldsSearch('');
     setSystemFieldsModalOpen(true);
   };
@@ -455,12 +463,14 @@ const PrintTemplatesTab: React.FC = () => {
   const saveSystemFieldsEditor = async () => {
     if (!systemFieldsEditingTemplate) return;
     const allowedKeys = systemFieldOptions.map((item) => item.key);
+    const validSignatures = footerSignaturesDraft.filter((s) => s.title.trim());
     const current = templatesByModule[selectedModuleId] || [];
     const nextModuleTemplates = current.map((template) =>
       template.id === systemFieldsEditingTemplate.id
         ? {
             ...template,
             selectedFieldKeys: sanitizeSelectedPrintFieldKeys(systemFieldKeysDraft, allowedKeys),
+            footerSignatures: validSignatures,
             updatedAt: nowIso(),
           }
         : template
@@ -475,6 +485,7 @@ const PrintTemplatesTab: React.FC = () => {
       setSystemFieldsEditingTemplate(null);
       setSystemFieldsSearch('');
       setSystemFieldKeysDraft([]);
+      setFooterSignaturesDraft([]);
     }
   };
 
@@ -878,7 +889,7 @@ const PrintTemplatesTab: React.FC = () => {
               placeholder="توضیح کوتاه قالب"
             />
 
-            <div className="sticky top-0 z-30 mb-4 pb-2">
+            <div className="sticky top-0 z-[90] mb-4 pb-2">
               <div className="mb-2 flex justify-end">
                 <Button
                   size="small"
@@ -1027,6 +1038,7 @@ const PrintTemplatesTab: React.FC = () => {
           setSystemFieldsEditingTemplate(null);
           setSystemFieldsSearch('');
           setSystemFieldKeysDraft([]);
+          setFooterSignaturesDraft([]);
         }}
         onOk={saveSystemFieldsEditor}
         okText="ذخیره"
@@ -1121,6 +1133,63 @@ const PrintTemplatesTab: React.FC = () => {
                   );
                 })}
               </Space>
+            )}
+          </div>
+
+          <div className="border border-slate-200 dark:border-slate-700 rounded-2xl p-4 bg-slate-50/60 dark:bg-slate-900/30">
+            <div className="flex items-center justify-between mb-3">
+              <Typography.Text strong>امضاهای پاورقی</Typography.Text>
+              {footerSignaturesDraft.length < 5 && (
+                <Button
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => setFooterSignaturesDraft((prev) => [...prev, { title: '', name: '' }])}
+                >
+                  افزودن امضا
+                </Button>
+              )}
+            </div>
+            {footerSignaturesDraft.length === 0 ? (
+              <Typography.Text type="secondary" className="text-[12px]">
+                هیچ امضایی تعریف نشده — پاورقی بدون بخش امضا نمایش داده می‌شود.
+              </Typography.Text>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {footerSignaturesDraft.map((sig, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      placeholder="عنوان (مثلاً خریدار)"
+                      value={sig.title}
+                      onChange={(e) =>
+                        setFooterSignaturesDraft((prev) =>
+                          prev.map((s, i) => (i === idx ? { ...s, title: e.target.value } : s))
+                        )
+                      }
+                      style={{ flex: 1 }}
+                      size="small"
+                    />
+                    <Input
+                      placeholder="نام (اختیاری)"
+                      value={sig.name}
+                      onChange={(e) =>
+                        setFooterSignaturesDraft((prev) =>
+                          prev.map((s, i) => (i === idx ? { ...s, name: e.target.value } : s))
+                        )
+                      }
+                      style={{ flex: 1 }}
+                      size="small"
+                    />
+                    <Button
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() =>
+                        setFooterSignaturesDraft((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>

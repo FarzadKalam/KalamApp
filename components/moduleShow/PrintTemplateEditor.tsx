@@ -983,6 +983,8 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
       StarterKit.configure({
         paragraph: false,
         heading: false,
+        link: false,
+        underline: false,
       }),
       StyledParagraph,
       StyledHeading,

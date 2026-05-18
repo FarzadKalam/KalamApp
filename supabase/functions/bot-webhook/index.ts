@@ -24,6 +24,8 @@ const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   rubika: 'https://botapi.rubika.ir',
 };
 
+const RUBIKA_OFFICIAL_API_BASE_URL = DEFAULT_API_BASE_URL.rubika;
+
 const DEFAULT_SEND_PATH: Record<BotChannel, string> = {
   telegram: '/bot{token}/sendMessage',
   bale: '/bot{token}/sendMessage',
@@ -71,6 +73,11 @@ const normalizeBaseUrl = (value: any) => {
   if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
   return `https://${raw.replace(/\/+$/, '')}`;
 };
+
+const normalizeBotSettings = (channel: BotChannel, settings: Record<string, any> | null | undefined) => ({
+  ...(settings && typeof settings === 'object' ? settings : {}),
+  ...(channel === 'rubika' ? { api_base_url: RUBIKA_OFFICIAL_API_BASE_URL } : {}),
+});
 
 const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: string) => {
   const normalizedBase = normalizeBaseUrl(baseUrl);
@@ -913,9 +920,10 @@ const tryRubikaGetFile = async ({
   settings: IntegrationSettings;
   fileId: string;
 }) => {
-  const token = String(settings?.bot_token || '').trim();
+  const normalizedSettings = normalizeBotSettings('rubika', settings);
+  const token = String(normalizedSettings?.bot_token || '').trim();
   if (!token || !fileId) return null;
-  const baseUrl = normalizeBaseUrl(settings?.api_base_url || DEFAULT_API_BASE_URL.rubika);
+  const baseUrl = normalizeBaseUrl(normalizedSettings?.api_base_url || DEFAULT_API_BASE_URL.rubika);
   if (!baseUrl) return null;
   const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/getFile`;
   const bodies: Array<Record<string, any>> = [{ file_id: fileId }];
@@ -1278,10 +1286,11 @@ const sendBotConnectionConfirmation = async ({
   chatId: string;
   counterpartyLabel: string;
 }) => {
-  const token = String(settings?.bot_token || '').trim();
+  const normalizedSettings = normalizeBotSettings(channel, settings);
+  const token = String(normalizedSettings?.bot_token || '').trim();
   if (!token) return;
-  const baseUrl = String(settings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
-  const sendPath = String(settings?.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
+  const baseUrl = String(normalizedSettings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
+  const sendPath = String(normalizedSettings?.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
   const text = `اتصال این گروه به "${counterpartyLabel || 'طرف‌حساب'}" با موفقیت انجام شد`;
 
   const response = await fetch(buildSendMessageUrl(baseUrl, token, sendPath), {
@@ -1385,20 +1394,16 @@ const syncCounterpartyBotGroupByInbound = async ({
   contact: Record<string, any>;
 }) => {
   try {
-    if (contact?.isGroup !== true) return { group: null, activatedNow: false };
     const rows = await loadOrgCounterpartyBotGroups(supabaseUrl, serviceRoleKey, orgId, channel);
     const chatId = String(contact?.chatId || '').trim();
-    const usernameToken = normalizeLinkToken(contact?.username);
-    const displayToken = normalizeLinkToken(contact?.displayName);
     const chatTitleToken = normalizePlainToken(contact?.chatTitle);
-    const textTokens = extractUrlTokens(contact?.text);
-    const inboundLinkTokens = new Set([usernameToken, displayToken, ...textTokens].filter(Boolean));
     const incomingTextUpper = String(contact?.text || '').trim().toUpperCase();
     const nowMs = Date.now();
     const isCaptureActive = (row: any) => {
       if (row?.metadata?.capture_mode !== true) return false;
       const status = String(row?.status || '').trim();
-      if (status !== 'pending_join' && status !== 'pending_join_link') return false;
+      const normalizedStatus = status === 'pending_join_link' ? 'pending_join' : status;
+      if (normalizedStatus !== 'pending_join') return false;
       const exp = String(row?.metadata?.capture_expires_at || '').trim();
       if (!exp) return true;
       const expMs = new Date(exp).getTime();
@@ -1409,12 +1414,6 @@ const syncCounterpartyBotGroupByInbound = async ({
     const matchedByChatId = rows.find((row: any) => String(row?.bot_chat_id || '').trim() === chatId);
     const captureActiveRows = rows.filter((row: any) => !String(row?.bot_chat_id || '').trim() && isCaptureActive(row));
     const matchedByCaptureSingle = captureActiveRows.length === 1 ? captureActiveRows[0] : null;
-    const matchedByLinkTokenRows = rows.filter((row: any) => {
-      if (String(row?.bot_chat_id || '').trim()) return false;
-      const linkToken = normalizeLinkToken(row?.group_join_link);
-      if (!linkToken) return false;
-      return inboundLinkTokens.has(linkToken);
-    });
     const matchedByActivationRows = rows.filter((row: any) => {
       if (String(row?.bot_chat_id || '').trim()) return false;
       if (row?.metadata?.capture_mode !== true) return false;
@@ -1429,11 +1428,20 @@ const syncCounterpartyBotGroupByInbound = async ({
       return rowTitle === chatTitleToken;
     });
 
-    const matchedByLinkToken = matchedByLinkTokenRows.length === 1 ? matchedByLinkTokenRows[0] : null;
     const matchedByActivation = matchedByActivationRows.length === 1 ? matchedByActivationRows[0] : null;
     const matchedByTitle = matchedByTitleRows.length === 1 ? matchedByTitleRows[0] : null;
+    const allowActivationOnlyBind = channel === 'rubika'
+      && Boolean(chatId)
+      && (
+        matchedByActivation !== null
+        || (matchedByCaptureSingle !== null && incomingTextUpper.length > 0)
+      );
 
-    const matched = matchedByChatId || matchedByActivation || matchedByLinkToken || matchedByTitle || matchedByCaptureSingle || null;
+    if (contact?.isGroup !== true && !allowActivationOnlyBind) {
+      return { group: null, activatedNow: false };
+    }
+
+    const matched = matchedByChatId || matchedByActivation || matchedByTitle || matchedByCaptureSingle || null;
     if (!matched) return { group: null, activatedNow: false };
     if (!chatId) return { group: null, activatedNow: false };
 
@@ -1446,6 +1454,17 @@ const syncCounterpartyBotGroupByInbound = async ({
         ...(matched?.metadata && typeof matched.metadata === 'object' ? matched.metadata : {}),
         capture_mode: false,
         activation_required: false,
+        last_capture_error: null,
+        last_bound_chat_id: chatId || null,
+        last_bound_chat_title: String(contact?.chatTitle || contact?.displayName || '').trim() || null,
+        last_bound_chat_type: String(contact?.chatType || '').trim() || null,
+        activation_match_mode: matchedByChatId
+          ? 'chat_id'
+          : matchedByActivation
+            ? 'activation_code'
+            : matchedByTitle
+              ? 'group_title'
+              : 'capture_single',
         activation_matched_at: new Date().toISOString(),
       },
     };

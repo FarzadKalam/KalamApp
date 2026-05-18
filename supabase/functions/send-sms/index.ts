@@ -54,13 +54,19 @@ const json = (status: number, payload: Record<string, any>) =>
   });
 
 const authHookSuccess = () =>
-  new Response(null, {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      'X-Kalam-Function-Build': FUNCTION_BUILD,
-    },
-  });
+  new Response(
+    JSON.stringify({
+      ok: true,
+    }),
+    {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json',
+        'X-Kalam-Function-Build': FUNCTION_BUILD,
+      },
+    }
+  );
 
 const authHookError = (status: number, message: string) =>
   new Response(
@@ -245,7 +251,7 @@ const getOtpProviderMode = (settings: SmsSettings) => {
 const getOtpTimeoutMs = (settings: SmsSettings, fallbackMs: number) => {
   const raw = String(Deno.env.get('MELIPAYAMAK_OTP_TIMEOUT_MS') || settings?.otp_timeout_ms || fallbackMs).trim();
   const parsed = Number(raw);
-  if (Number.isFinite(parsed) && parsed >= 500 && parsed <= 10000) return parsed;
+  if (Number.isFinite(parsed) && parsed >= 500 && parsed <= 4500) return parsed;
   return fallbackMs;
 };
 
@@ -256,6 +262,36 @@ const normalizeRecipientPhone = (value: string) => {
   if (/^989\d{9}$/.test(raw)) return `0${raw.slice(2)}`;
   if (/^00989\d{9}$/.test(raw)) return `0${raw.slice(4)}`;
   return raw;
+};
+
+const maskPhoneForLog = (value: string) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length < 7) return digits || 'unknown';
+  return `${digits.slice(0, 4)}***${digits.slice(-3)}`;
+};
+
+const logOtpAttempt = (stage: string, details: Record<string, unknown>) => {
+  try {
+    console.log(`[send-sms] otp ${stage} ${JSON.stringify(details)}`);
+  } catch {
+    console.log(`[send-sms] otp ${stage}`);
+  }
+};
+
+const getKnownProviderFailure = (value: unknown) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  return getMelipayamakStatusMessageFa(normalized) || getMelipayamakMessage(normalized);
+};
+
+const isSuccessfulProviderReceipt = (value: unknown) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return false;
+  if (getKnownProviderFailure(normalized)) return false;
+  if (isNumericLike(normalized)) {
+    return Number(normalized) > 0;
+  }
+  return true;
 };
 
 const renderOtpText = (otp: string, settings: SmsSettings) => {
@@ -842,14 +878,21 @@ const getSmsCreditWithProvider = async (settings: SmsSettings) => {
 
 const sendOtpViaSoap = async (phone: string, otp: string, settings: SmsSettings, timeoutMs = 4200) => {
   const soapUrl = String(Deno.env.get('MELIPAYAMAK_OTP_SOAP_URL') || settings?.otp_soap_url || DEFAULT_SMS_OTP_SOAP_URL).trim();
+  const recipient = normalizeRecipientPhone(String(phone || '').trim());
   const form = new URLSearchParams({
     username: String(settings.username || '').trim(),
     password: String(settings.password || settings.api_key || '').trim(),
     code: String(otp || '').trim(),
-    to: normalizeRecipientPhone(String(phone || '').trim()),
+    to: recipient,
     from: String(settings.sender_number || '').trim(),
   });
 
+  logOtpAttempt('soap:start', {
+    phone: maskPhoneForLog(phone),
+    timeout_ms: timeoutMs,
+    provider_mode: 'soap',
+    endpoint: soapUrl,
+  });
   const timeout = createTimeoutSignal(timeoutMs);
   let response: Response;
   try {
@@ -869,10 +912,24 @@ const sendOtpViaSoap = async (phone: string, otp: string, settings: SmsSettings,
   }
 
   const result = decodeSoapScalar(raw);
-  const providerMessage = getMelipayamakMessage(result);
-  if (providerMessage) {
-    throw new Error(`ارسال کد تایید توسط ملی پیامک ناموفق بود. ${providerMessage} کد/نتیجه: ${result}`);
+  const providerMessage = getKnownProviderFailure(result);
+  if (!isSuccessfulProviderReceipt(result)) {
+    logOtpAttempt('soap:failed', {
+      phone: maskPhoneForLog(phone),
+      provider_mode: 'soap',
+      provider_value: result || null,
+      provider_message: providerMessage,
+      raw,
+    });
+    throw new Error(`ارسال کد تایید توسط ملی پیامک ناموفق بود. ${providerMessage || 'پاسخ provider معتبر نبود.'} کد/نتیجه: ${result || raw}`);
   }
+
+  logOtpAttempt('soap:ok', {
+    phone: maskPhoneForLog(phone),
+    provider_mode: 'soap',
+    provider_value: result || null,
+    recipient,
+  });
 
   return {
     method: 'dedicated_otp_soap',
@@ -899,7 +956,12 @@ const sendOtpViaRest = async (phone: string, otp: string, settings: SmsSettings,
     code: Number(code),
   };
 
-  console.log('[send-sms] otp provider=rest:start');
+  logOtpAttempt('rest:start', {
+    phone: maskPhoneForLog(phone),
+    timeout_ms: timeoutMs,
+    provider_mode: 'rest',
+    endpoint: dedicatedUrl,
+  });
   const timeout = createTimeoutSignal(timeoutMs);
   let response: Response;
   try {
@@ -930,12 +992,38 @@ const sendOtpViaRest = async (phone: string, otp: string, settings: SmsSettings,
   const value = String(parsed?.Value ?? parsed?.value ?? '').trim();
 
   if (Number.isFinite(retStatus) && retStatus !== 1) {
-    const providerMessage = getMelipayamakMessage(value);
+    const providerMessage = getKnownProviderFailure(value);
     const detail = providerMessage || value || strRetStatus || raw;
+    logOtpAttempt('rest:failed', {
+      phone: maskPhoneForLog(phone),
+      provider_mode: 'rest',
+      ret_status: retStatus,
+      provider_value: value || null,
+      provider_status_text: strRetStatus || null,
+    });
     throw new Error(`ارسال کد تایید توسط ملی پیامک ناموفق بود. نتیجه: ${detail}`);
   }
 
-  console.log('[send-sms] otp provider=rest:ok');
+  if (!Number.isFinite(retStatus) && !isSuccessfulProviderReceipt(value || strRetStatus)) {
+    logOtpAttempt('rest:failed', {
+      phone: maskPhoneForLog(phone),
+      provider_mode: 'rest',
+      ret_status: null,
+      provider_value: value || null,
+      provider_status_text: strRetStatus || null,
+      raw,
+    });
+    throw new Error(`ارسال کد تایید توسط ملی پیامک ناموفق بود. پاسخ provider معتبر نبود. ${value || strRetStatus || raw}`);
+  }
+
+  logOtpAttempt('rest:ok', {
+    phone: maskPhoneForLog(phone),
+    provider_mode: 'rest',
+    ret_status: Number.isFinite(retStatus) ? retStatus : null,
+    provider_value: value || null,
+    provider_status_text: strRetStatus || null,
+    recipient,
+  });
   return {
     method: 'dedicated_otp_rest',
     raw,
@@ -957,7 +1045,12 @@ const sendOtpViaConsoleAdvanced = async (phone: string, otp: string, settings: S
     throw new Error('شماره موبایل یا متن OTP معتبر نیست.');
   }
 
-  console.log('[send-sms] otp provider=console_advanced:start');
+  logOtpAttempt('console_advanced:start', {
+    phone: maskPhoneForLog(phone),
+    timeout_ms: timeoutMs,
+    provider_mode: 'console_advanced',
+    endpoint,
+  });
   const timeout = createTimeoutSignal(timeoutMs);
   let response: Response;
   try {
@@ -992,10 +1085,21 @@ const sendOtpViaConsoleAdvanced = async (phone: string, otp: string, settings: S
   const status = String(parsed?.status ?? '').trim();
 
   if (recIds.length === 0) {
+    logOtpAttempt('console_advanced:failed', {
+      phone: maskPhoneForLog(phone),
+      provider_mode: 'console_advanced',
+      provider_status_text: status || null,
+      raw,
+    });
     throw new Error(`ارسال OTP با console advanced ناموفق بود. ${status || raw}`);
   }
 
-  console.log('[send-sms] otp provider=console_advanced:ok');
+  logOtpAttempt('console_advanced:ok', {
+    phone: maskPhoneForLog(phone),
+    provider_mode: 'console_advanced',
+    rec_id_count: recIds.length,
+    provider_status_text: status || null,
+  });
   return {
     method: 'console_advanced',
     raw,
@@ -1020,7 +1124,13 @@ const sendOtpViaConsoleShared = async (phone: string, otp: string, settings: Sms
     throw new Error('bodyId خدماتی OTP معتبر تنظیم نشده است.');
   }
 
-  console.log('[send-sms] otp provider=console_shared:start');
+  logOtpAttempt('console_shared:start', {
+    phone: maskPhoneForLog(phone),
+    timeout_ms: timeoutMs,
+    provider_mode: 'console_shared',
+    endpoint,
+    body_id: bodyId,
+  });
   const timeout = createTimeoutSignal(timeoutMs);
   let response: Response;
   try {
@@ -1054,10 +1164,21 @@ const sendOtpViaConsoleShared = async (phone: string, otp: string, settings: Sms
   const status = String(parsed?.status ?? '').trim();
 
   if (!recId || !isNumericLike(recId)) {
+    logOtpAttempt('console_shared:failed', {
+      phone: maskPhoneForLog(phone),
+      provider_mode: 'console_shared',
+      provider_status_text: status || null,
+      raw,
+    });
     throw new Error(`ارسال OTP با console shared ناموفق بود. ${status || raw}`);
   }
 
-  console.log('[send-sms] otp provider=console_shared:ok');
+  logOtpAttempt('console_shared:ok', {
+    phone: maskPhoneForLog(phone),
+    provider_mode: 'console_shared',
+    rec_id: recId,
+    provider_status_text: status || null,
+  });
   return {
     method: 'console_shared',
     raw,
@@ -1066,9 +1187,18 @@ const sendOtpViaConsoleShared = async (phone: string, otp: string, settings: Sms
   };
 };
 
-const sendOtpWithProvider = async (phone: string, otp: string, settings: SmsSettings) => {
-  const providerMode = getOtpProviderMode(settings);
-  const timeoutMs = getOtpTimeoutMs(settings, 4200);
+const sendOtpWithProvider = async (phone: string, otp: string, settings: SmsSettings, options?: { disableAutoFallback?: boolean }) => {
+  const requestedMode = getOtpProviderMode(settings);
+  const providerMode = options?.disableAutoFallback && requestedMode === 'auto' ? 'soap' : requestedMode;
+  const timeoutMs = getOtpTimeoutMs(settings, 2600);
+
+  logOtpAttempt('select_provider', {
+    phone: maskPhoneForLog(phone),
+    requested_mode: requestedMode,
+    effective_mode: providerMode,
+    timeout_ms: timeoutMs,
+    disable_auto_fallback: options?.disableAutoFallback === true,
+  });
 
   if (providerMode === 'console_shared') {
     return await sendOtpViaConsoleShared(phone, otp, settings, timeoutMs);
@@ -1083,10 +1213,11 @@ const sendOtpWithProvider = async (phone: string, otp: string, settings: SmsSett
   }
 
   if (providerMode === 'soap') {
-    console.log('[send-sms] otp provider=soap:start');
-    const result = await sendOtpViaSoap(phone, otp, settings, timeoutMs);
-    console.log('[send-sms] otp provider=soap:ok');
-    return result;
+    return await sendOtpViaSoap(phone, otp, settings, timeoutMs);
+  }
+
+  if (options?.disableAutoFallback) {
+    return await sendOtpViaSoap(phone, otp, settings, timeoutMs);
   }
 
   const sharedTimeoutMs = Math.min(Math.max(Math.floor(timeoutMs * 0.35), 1200), 2000);
@@ -1112,10 +1243,7 @@ const sendOtpWithProvider = async (phone: string, otp: string, settings: SmsSett
   }
 
   try {
-    console.log('[send-sms] otp provider=soap:start');
-    const result = await sendOtpViaSoap(phone, otp, settings, soapTimeoutMs);
-    console.log('[send-sms] otp provider=soap:ok');
-    return result;
+    return await sendOtpViaSoap(phone, otp, settings, soapTimeoutMs);
   } catch (soapError: any) {
     const message = String(soapError?.message || soapError);
     errors.push(`soap=${message}`);
@@ -1192,7 +1320,7 @@ Deno.serve(async (req) => {
 
         const settings = getHookSmsSettings(body?.overrideSettings);
         if (hookOtp) {
-          await sendOtpWithProvider(hookPhone, hookOtp, settings);
+          await sendOtpWithProvider(hookPhone, hookOtp, settings, { disableAutoFallback: true });
           return authHookSuccess();
         }
 

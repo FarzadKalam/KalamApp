@@ -269,6 +269,14 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   if (contains(normalized, 'invalid login credentials')) {
     return 'ایمیل یا رمز عبور درست نیست.';
   }
+  if (
+    contains(normalized, 'already registered')
+    || contains(normalized, 'email address already')
+    || contains(normalized, 'email has already been taken')
+    || contains(normalized, 'user already registered')
+  ) {
+    return 'این ایمیل قبلاً استفاده شده است.';
+  }
   if (contains(normalized, 'email not confirmed')) {
     return 'ایمیل هنوز تایید نشده است.';
   }

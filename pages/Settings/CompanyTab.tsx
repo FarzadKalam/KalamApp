@@ -116,6 +116,7 @@ const CompanyTab: React.FC = () => {
         company_name_en,
         palette_key,
         currency_code,
+        slogan,
         ...rest
       } = values;
 
@@ -130,6 +131,7 @@ const CompanyTab: React.FC = () => {
         company_full_name: fullName,
         trade_name: tradeName,
         company_name_en: englishName || null,
+        slogan: String(slogan || '').trim() || null,
         brand_palette_key: palette_key || DEFAULT_BRANDING.paletteKey,
         currency_code: currency.code,
         currency_label: currency.label,
@@ -230,6 +232,9 @@ const CompanyTab: React.FC = () => {
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">نام تجاری</span>} name="trade_name" rules={[{ required: true }]}>
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">شعار سازمان</span>} name="slogan">
+          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="مثلاً: کیفیت بی‌رقیب، خدمت بی‌نظیر" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">نام انگلیسی</span>} name="company_name_en">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />

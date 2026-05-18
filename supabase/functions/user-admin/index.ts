@@ -7,7 +7,8 @@ type UserAdminAction =
   | 'delete_user'
   | 'send_phone_otp'
   | 'verify_phone_otp'
-  | 'repair_legacy_phone_login';
+  | 'repair_legacy_phone_login'
+  | 'setup_owner_credentials';
 
 type UserAdminBody = {
   action?: UserAdminAction | string;
@@ -68,6 +69,12 @@ const toLocalIranMobile = (value?: string | null) => {
   return normalized ? normalized.replace(/^\+98/, '0') : null;
 };
 
+const normalizeEmail = (value?: string | null) =>
+  String(value || '').trim().toLowerCase();
+
+const isValidEmail = (value?: string | null) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
+
 const isPrivilegedRole = (role?: string | null) =>
   ['super_admin', 'admin', 'manager'].includes(String(role || '').trim().toLowerCase());
 
@@ -107,6 +114,36 @@ const readJsonSafe = async (response: Response) => {
   } catch {
     return raw || null;
   }
+};
+
+const createReasonedError = (message: string, reasonCode?: string, status = 400) => {
+  const error: any = new Error(String(message || 'Auth operation failed'));
+  if (reasonCode) error.reasonCode = reasonCode;
+  error.statusCode = status;
+  return error;
+};
+
+const extractAuthMessage = (parsed: any, fallback: string) =>
+  String(
+    parsed?.msg ||
+    parsed?.message ||
+    parsed?.error_description ||
+    parsed?.error?.message ||
+    parsed?.error ||
+    parsed ||
+    fallback
+  );
+
+const inferOtpReasonCode = (parsed: any, status: number, fallbackCode: string) => {
+  const raw = `${extractAuthMessage(parsed, '').toLowerCase()} ${String(parsed?.code || '').trim().toLowerCase()}`.trim();
+  if (raw.includes('otp_disabled')) return 'otp_disabled';
+  if (raw.includes('phone_provider_disabled')) return 'phone_provider_disabled';
+  if (raw.includes('hook_timeout') || raw.includes('hook timeout') || raw.includes('sms hook failed') || raw.includes('context deadline exceeded')) return 'hook_timeout';
+  if (raw.includes('invalid otp') || raw.includes('token is invalid')) return 'invalid_otp';
+  if (raw.includes('token has expired') || raw.includes('otp expired') || raw.includes('token is expired')) return 'otp_expired';
+  if (raw.includes('rate limit') || status === 429) return 'otp_rate_limited';
+  if (raw.includes('duplicate key value') || raw.includes('users_phone_key')) return 'phone_conflict';
+  return fallbackCode;
 };
 
 const unwrapAuthUserPayload = (payload: any) => {
@@ -510,7 +547,11 @@ const resendOtp = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ارسال کد تایید ناموفق بود'));
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'ارسال کد تایید ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, 'otp_resend_failed'),
+      response.status,
+    );
   }
   return parsed || null;
 };
@@ -531,7 +572,11 @@ const sendSmsOtp = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ارسال کد تایید ناموفق بود'));
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'ارسال کد تایید ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, 'otp_request_failed'),
+      response.status,
+    );
   }
   return parsed || null;
 };
@@ -558,7 +603,11 @@ const verifyPhoneOtp = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'تایید کد پیامکی ناموفق بود'));
+    throw createReasonedError(
+      extractAuthMessage(parsed, 'تایید کد پیامکی ناموفق بود'),
+      inferOtpReasonCode(parsed, response.status, type === 'phone_change' ? 'phone_change_verify_failed' : 'otp_verify_failed'),
+      response.status,
+    );
   }
   return parsed || null;
 };
@@ -700,6 +749,57 @@ Deno.serve(async (request) => {
         success: true,
         repaired: true,
         targetUserId: repairResult.targetUserId || null,
+      });
+    }
+    if (action === 'setup_owner_credentials') {
+      const targetUserId = String(caller?.id || '').trim();
+      const fullName = String(body?.fullName || '').trim();
+      const email = normalizeEmail(body?.email);
+      const password = String(body?.password || '').trim();
+
+      if (!targetUserId) {
+        return json(401, { success: false, message: 'نشست کاربر معتبر نیست.' });
+      }
+      if (!fullName) {
+        return json(400, { success: false, message: 'نام و نام خانوادگی مدیر اصلی الزامی است.' });
+      }
+      if (!isValidEmail(email)) {
+        return json(400, { success: false, message: 'ایمیل مدیر اصلی معتبر نیست.' });
+      }
+      if (password.length < 6) {
+        return json(400, { success: false, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد.' });
+      }
+
+      const duplicateProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
+        email,
+        excludeUserId: targetUserId,
+      });
+      if (duplicateProfile?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این ایمیل قبلاً کاربر ثبت شده است.',
+          reason_code: 'email_conflict',
+        });
+      }
+
+      await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+        email,
+        password,
+        user_metadata: {
+          full_name: fullName,
+        },
+        email_confirm: true,
+      });
+
+      const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
+        id: targetUserId,
+        full_name: fullName,
+        email,
+      });
+
+      return json(200, {
+        success: true,
+        profile,
       });
     }
     if (!callerProfile?.id) {
@@ -1037,15 +1137,19 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error('user-admin error', error);
     const message = String(error instanceof Error ? error.message : error || 'خطای نامشخص');
+    const reasonCode = String((error as any)?.reasonCode || '').trim() || null;
+    const statusCode = Number((error as any)?.statusCode || 0);
     if (message.includes('users_phone_key') || message.includes('duplicate key value violates unique constraint')) {
       return json(409, {
         success: false,
         message: 'این شماره موبایل قبلا برای کاربر دیگری در احراز هویت ثبت شده است.',
+        reason_code: 'phone_conflict',
       });
     }
-    return json(500, {
+    return json(statusCode >= 400 && statusCode < 600 ? statusCode : 500, {
       success: false,
       message: String(error instanceof Error ? error.message : error || 'خطای نامشخص'),
+      reason_code: reasonCode,
     });
   }
 });

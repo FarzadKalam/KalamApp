@@ -19,9 +19,9 @@ import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutline
 import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { getOtpErrorMessage, normalizeOtpToken } from '../../utils/otpAuth';
 import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
-import { normalizeDigitsToEnglish } from '../../utils/persianNumericInput';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
@@ -84,9 +84,6 @@ const toInviteDisplayPhone = (value?: string | null) => {
   if (!value) return '';
   return formatIranMobileForInput(value);
 };
-
-const normalizeOtpToken = (value: unknown): string =>
-  normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
 
 const UsersTab: React.FC = () => {
   const { message } = App.useApp();
@@ -457,7 +454,9 @@ const UsersTab: React.FC = () => {
     });
     if (error) throw error;
     if (data?.success === false) {
-      throw new Error(String(data?.message || 'خطا در عملیات کاربر'));
+      const nextError: any = new Error(String(data?.message || 'خطا در عملیات کاربر'));
+      if (data?.reason_code) nextError.code = String(data.reason_code);
+      throw nextError;
     }
     return data;
   };
@@ -610,7 +609,7 @@ const UsersTab: React.FC = () => {
       setPhoneOtpRequested(true);
       message.success('کد تایید شماره موبایل ارسال شد.');
     } catch (error) {
-      message.error(toFaErrorMessage(error as any, 'ارسال کد تایید ناموفق بود'));
+      message.error(getOtpErrorMessage(error as any, 'ارسال کد تایید ناموفق بود'));
     } finally {
       setPhoneOtpLoading(false);
     }
@@ -645,7 +644,7 @@ const UsersTab: React.FC = () => {
       setPhoneAuthState(await lookupPhoneLoginCandidate(normalizedFormPhone));
       message.success('شماره موبایل برای ورود پیامکی تایید شد.');
     } catch (error) {
-      message.error(toFaErrorMessage(error as any, 'تایید شماره ناموفق بود'));
+      message.error(getOtpErrorMessage(error as any, 'تایید شماره ناموفق بود'));
     } finally {
       setPhoneOtpLoading(false);
     }

@@ -662,9 +662,8 @@ const ModuleShow: React.FC = () => {
   const [botStatusModalSaving, setBotStatusModalSaving] = useState(false);
   const [botStatusModalContext, setBotStatusModalContext] = useState<BotStatusModalContext | null>(null);
   const [botStatusChannel, setBotStatusChannel] = useState<'rubika' | 'telegram' | 'bale'>('rubika');
-  const [botStatusJoinLink, setBotStatusJoinLink] = useState('');
   const [botStatusGroupTitle, setBotStatusGroupTitle] = useState('');
-  const [botStatusCurrentStatus, setBotStatusCurrentStatus] = useState('pending_join_link');
+  const [botStatusCurrentStatus, setBotStatusCurrentStatus] = useState('pending_join');
   const [botStatusActivationCode, setBotStatusActivationCode] = useState('');
   const [botStatusWaitingForFirstMessage, setBotStatusWaitingForFirstMessage] = useState(true);
   const [botStatusCountdown, setBotStatusCountdown] = useState(0);
@@ -2585,9 +2584,8 @@ const ModuleShow: React.FC = () => {
   ) => {
     const nextPreferred = String(preferredChannel || botStatusChannel || 'rubika').trim();
     let selectedChannel = ['rubika', 'telegram', 'bale'].includes(nextPreferred) ? nextPreferred : 'rubika';
-    let groupJoinLink = '';
     let groupTitle = '';
-    let currentStatus = 'pending_join_link';
+    let currentStatus = 'pending_join';
     let activationCode = createBotActivationCode(
       String(
         data?.company_name_en
@@ -2607,7 +2605,7 @@ const ModuleShow: React.FC = () => {
 
     let query = supabase
       .from('counterparty_bot_groups')
-      .select('id, channel_type, status, group_join_link, group_title, metadata, last_inbound_at')
+      .select('id, channel_type, status, group_title, metadata, last_inbound_at')
       .limit(50);
     query = context.targetType === 'customers'
       ? query.eq('customer_id', context.counterpartyId)
@@ -2620,9 +2618,9 @@ const ModuleShow: React.FC = () => {
     const preferredRow = rowMap.get(selectedChannel) || (rows || [])[0] || null;
     if (preferredRow) {
       selectedChannel = String(preferredRow.channel_type || selectedChannel).trim() || selectedChannel;
-      groupJoinLink = String(preferredRow.group_join_link || '').trim();
       groupTitle = String(preferredRow.group_title || '').trim();
-      currentStatus = String(preferredRow.status || '').trim() || 'pending_join_link';
+      const rawStatus = String(preferredRow.status || '').trim();
+      currentStatus = rawStatus === 'pending_join_link' ? 'pending_join' : (rawStatus || 'pending_join');
       const metadata = (preferredRow?.metadata && typeof preferredRow.metadata === 'object')
         ? preferredRow.metadata
         : {};
@@ -2656,7 +2654,6 @@ const ModuleShow: React.FC = () => {
     }
 
     setBotStatusChannel(selectedChannel as 'rubika' | 'telegram' | 'bale');
-    setBotStatusJoinLink(groupJoinLink);
     setBotStatusGroupTitle(groupTitle);
     setBotStatusCurrentStatus(currentStatus);
     setBotStatusActivationCode(activationCode);
@@ -2675,7 +2672,7 @@ const ModuleShow: React.FC = () => {
       : 'rubika';
     let existingQuery = supabase
       .from('counterparty_bot_groups')
-      .select('id, status, bot_chat_id, group_join_link, metadata')
+      .select('id, status, bot_chat_id, metadata')
       .eq('channel_type', nextChannel)
       .limit(1);
     existingQuery = context.targetType === 'customers'
@@ -2686,19 +2683,17 @@ const ModuleShow: React.FC = () => {
 
     const forceCapture = options?.forceCapture === true;
     const existingRow = Array.isArray(existingRows) ? existingRows[0] : null;
-    const existingStatus = String(existingRow?.status || '').trim();
+    const existingStatus = String(existingRow?.status || '').trim() === 'pending_join_link'
+      ? 'pending_join'
+      : String(existingRow?.status || '').trim();
     const existingChatId = String(existingRow?.bot_chat_id || '').trim();
-    const existingJoinLink = String(existingRow?.group_join_link || '').trim();
-    const hasJoinLink = Boolean(String(botStatusJoinLink || '').trim());
     const normalizedGroupTitle = String(botStatusGroupTitle || '').trim();
     const nextStatus = forceCapture
-      ? (hasJoinLink ? 'pending_join' : 'pending_join_link')
+      ? 'pending_join'
       : (
         (existingStatus === 'active' && existingChatId)
           ? 'active'
-          : ((hasJoinLink && existingChatId && existingJoinLink && existingJoinLink === String(botStatusJoinLink || '').trim())
-            ? 'active'
-            : (hasJoinLink ? 'pending_join' : 'pending_join_link'))
+          : 'pending_join'
       );
     const existingRowMetadata = (Array.isArray(existingRows) && existingRows[0]?.metadata && typeof existingRows[0].metadata === 'object')
       ? existingRows[0].metadata
@@ -2714,7 +2709,6 @@ const ModuleShow: React.FC = () => {
       target_type: context.targetType,
       channel_type: nextChannel,
       status: nextStatus,
-      group_join_link: botStatusJoinLink || null,
       group_title: normalizedGroupTitle || null,
       metadata: {
         ...existingRowMetadata,
@@ -2723,9 +2717,11 @@ const ModuleShow: React.FC = () => {
         capture_mode: captureEnabled,
         capture_started_at: captureEnabled ? nowIso : null,
         capture_expires_at: captureExpiresAt,
+        last_capture_channel: nextChannel,
         allowed_user_ids: botStatusAllowedUserIds,
         allowed_role_ids: botStatusAllowedRoleIds,
         activation_confirmation_sent: forceCapture ? false : Boolean(existingRowMetadata?.activation_confirmation_sent),
+        last_capture_error: null,
         activation_updated_at: nowIso,
       },
       updated_by: null,
@@ -2756,7 +2752,7 @@ const ModuleShow: React.FC = () => {
       await updateCustomerBotLegacyFieldsWithFallback(context.counterpartyId, legacyPatch);
       setData((prev: any) => ({ ...prev, preferred_notification_channel: legacyPatch.preferred_notification_channel }));
     }
-  }, [botStatusActivationCode, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusGroupTitle, botStatusJoinLink, botStatusModalContext, botStatusWaitingForFirstMessage]);
+  }, [botStatusActivationCode, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusGroupTitle, botStatusModalContext, botStatusWaitingForFirstMessage]);
 
   const handleCloseBotStatusModal = useCallback(() => {
     clearBotStatusWatchTimer();
@@ -2862,8 +2858,9 @@ const ModuleShow: React.FC = () => {
                 const isGroup = isGroupByType || isGroupByPrefix || Boolean(chatTitle);
                 const activationCode = String(botStatusActivationCode || '').trim().toUpperCase();
                 const hasActivationCode = !activationCode || String(polledText || '').toUpperCase().includes(activationCode);
+                const allowRubikaActivationBind = botStatusChannel === 'rubika' && hasActivationCode && Boolean(polledChatId);
 
-                if (isGroup && hasActivationCode) {
+                if ((isGroup && hasActivationCode) || allowRubikaActivationBind) {
                   let groupQuery = supabase
                     .from('counterparty_bot_groups')
                     .select('id, metadata, group_title')
@@ -2890,6 +2887,10 @@ const ModuleShow: React.FC = () => {
                           ...existingMetadata,
                           capture_mode: false,
                           capture_expires_at: null,
+                          last_capture_error: null,
+                          last_bound_chat_id: polledChatId,
+                          last_bound_chat_title: chatTitle || null,
+                          last_bound_chat_type: chatType || null,
                           activation_last_match_at: new Date().toISOString(),
                         },
                       })
@@ -6421,7 +6422,6 @@ const ModuleShow: React.FC = () => {
         watching={botStatusWatching}
         countdown={botStatusCountdown}
         channel={botStatusChannel}
-        joinLink={botStatusJoinLink}
         groupTitle={botStatusGroupTitle}
         currentStatus={botStatusCurrentStatus}
         activationCode={botStatusActivationCode}
@@ -6442,8 +6442,6 @@ const ModuleShow: React.FC = () => {
         onStartBindWatch={() => void handleStartBotBindWatch()}
         onCopyActivationCode={() => void handleCopyBotActivationCode()}
         onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
-        onChangeJoinLink={setBotStatusJoinLink}
-        onChangeGroupTitle={setBotStatusGroupTitle}
         onChangeAllowedUserIds={setBotStatusAllowedUserIds}
         onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
       />

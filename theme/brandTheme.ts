@@ -86,6 +86,17 @@ export const BRAND_PALETTE_PRESETS = {
       darkBorder: '#3A414A',
     },
   },
+  kalam_sky: {
+    label: 'آبی صورتی',
+    palette: {
+      primary: '#1AABDC',
+      secondary: '#0B3B5E',
+      accentPink: '#CB0F70',
+      darkBg: '#0C1C2A',
+      darkSurface: '#122434',
+      darkBorder: '#1D3550',
+    },
+  },
 } as const;
 
 export type BrandingPaletteKey = keyof typeof BRAND_PALETTE_PRESETS;

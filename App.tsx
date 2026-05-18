@@ -13,6 +13,7 @@ import { MODULES } from "./moduleRegistry";
 import Layout from "./components/Layout";
 import UploadProgressOverlay from "./components/UploadProgressOverlay";
 import PwaInstallPrompt from "./components/PwaInstallPrompt";
+import OfflineOverlay from "./components/OfflineOverlay";
 import "./App.css";
 import {
   BRANDING_APPLIED_EVENT,
@@ -76,6 +77,10 @@ const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
+const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
+const loadSaasAdminOrgs = () => import("./pages/SaasAdmin/SaasAdminOrgs");
+const loadSaasAdminRequests = () => import("./pages/SaasAdmin/SaasAdminRequests");
+const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 
 const ProfilePage = lazy(loadProfilePage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -111,6 +116,10 @@ const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
+const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
+const SaasAdminOrgs = lazy(loadSaasAdminOrgs);
+const SaasAdminRequests = lazy(loadSaasAdminRequests);
+const SaasAdminPlans = lazy(loadSaasAdminPlans);
 
 const routePreloaders = [
   loadProfilePage,
@@ -164,28 +173,51 @@ const getInitialBranding = (): BrandingConfig => {
 
 const SilentRouteFallback = () => null;
 
+const isSaasOnboardingPath = (pathname?: string, saasAppHost = false) => {
+  if (!saasAppHost) return false;
+  const normalized = String(pathname || "").trim();
+  return normalized === "/" || normalized === "/demo";
+};
+
 const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
 );
 
-const MarketingSiteHostApp: React.FC = () => (
-  <BrowserRouter>
-    <ConfigProvider direction="rtl" locale={faIR}>
-      <JalaliLocaleListener />
-      <AntdApp
-        message={{ top: 72, duration: 3.5, maxCount: 4 }}
-        notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
+const MarketingSiteHostApp: React.FC = () => {
+  useEffect(() => {
+    document.body.style.fontFamily = "Vazirmatn, sans-serif";
+    // تنظیم favicon اختصاصی تازه سیستم
+    const existing = document.querySelector<HTMLLinkElement>('link[rel*="icon"]');
+    const link: HTMLLinkElement = existing || document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/png";
+    link.href = "/tazesystem_logo.png";
+    if (!existing) document.head.appendChild(link);
+  }, []);
+
+  return (
+    <BrowserRouter>
+      <ConfigProvider
+        direction="rtl"
+        locale={faIR}
+        theme={{ token: { fontFamily: "Vazirmatn, sans-serif" } }}
       >
-        <PwaInstallPrompt />
-        <LazyRouteBoundary>
-          <Routes>
-            <Route path="/*" element={<PublicSite />} />
-          </Routes>
-        </LazyRouteBoundary>
-      </AntdApp>
-    </ConfigProvider>
-  </BrowserRouter>
-);
+        <JalaliLocaleListener />
+        <AntdApp
+          message={{ top: 72, duration: 3.5, maxCount: 4 }}
+          notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
+        >
+          <PwaInstallPrompt />
+          <LazyRouteBoundary>
+            <Routes>
+              <Route path="/*" element={<PublicSite />} />
+            </Routes>
+          </LazyRouteBoundary>
+        </AntdApp>
+      </ConfigProvider>
+    </BrowserRouter>
+  );
+};
 
 function App() {
   const marketingHost = isMarketingHost();
@@ -263,7 +295,15 @@ function App() {
     const bootstrapModuleSettings = async () => {
       try {
         const { data } = await supabase.auth.getSession();
+        const onboardingPath = isSaasOnboardingPath(window.location.pathname, saasAppHost);
         if (data?.session?.user?.id) {
+          if (onboardingPath) {
+            void primeSessionBootstrap(supabase);
+            if (isMounted) {
+              setModuleSettingsReady(true);
+            }
+            return;
+          }
           await loadModuleSettings();
         } else {
           applyModuleSettingsStoreToRegistry(null);
@@ -286,7 +326,7 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [loadModuleSettings]);
+  }, [loadModuleSettings, saasAppHost]);
 
   useEffect(() => {
     const handleModuleSettingsUpdated = () => {
@@ -327,6 +367,7 @@ function App() {
       const eventName = String(event);
       const pathname = window.location.pathname;
       const isPublic = publicPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+      const isPublicSaasOnboarding = isSaasOnboardingPath(pathname, saasAppHost);
       const nextUserId = session?.user?.id || null;
       const previousUserId = authLifecycleRef.current.userId;
       const userChanged = previousUserId !== nextUserId;
@@ -342,9 +383,13 @@ function App() {
           return;
         }
         void primeSessionBootstrap(supabase);
-        void primeReferenceData(supabase);
         void loadBranding();
-        void loadModuleSettings();
+        if (!isPublicSaasOnboarding) {
+          void primeReferenceData(supabase);
+          void loadModuleSettings();
+        } else {
+          setModuleSettingsReady(true);
+        }
         return;
       }
 
@@ -355,9 +400,13 @@ function App() {
         clearCurrentUserRoleContextCache();
         clearReferenceDataCache();
         void primeSessionBootstrap(supabase);
-        void primeReferenceData(supabase, { force: true });
         void loadBranding(true);
-        void loadModuleSettings();
+        if (!isPublicSaasOnboarding) {
+          void primeReferenceData(supabase, { force: true });
+          void loadModuleSettings();
+        } else {
+          setModuleSettingsReady(true);
+        }
         return;
       }
 
@@ -542,7 +591,10 @@ function App() {
         <Routes>
           <Route path="/tazesystem/*" element={<LazyRouteBoundary><PublicSite /></LazyRouteBoundary>} />
           {saasAppHost ? (
-            <Route path="/" element={<LazyRouteBoundary><SaasPortalPage /></LazyRouteBoundary>} />
+            <>
+              <Route path="/" element={<LazyRouteBoundary><SaasPortalPage /></LazyRouteBoundary>} />
+              <Route path="/demo" element={<LazyRouteBoundary><SaasPortalPage /></LazyRouteBoundary>} />
+            </>
           ) : null}
           <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
@@ -605,6 +657,12 @@ function App() {
               <Route path=":id/edit" element={<ModuleShowRouteResolver />} />
             </Route>
 
+            {/* SaaS Admin — فقط برای کاربران با permission __saas_admin */}
+            <Route path="/taze-system" element={<SaasAdminDashboard />} />
+            <Route path="/taze-system/orgs" element={<SaasAdminOrgs />} />
+            <Route path="/taze-system/requests" element={<SaasAdminRequests />} />
+            <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
+
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<ErrorComponent />} />
           </Route>
@@ -647,6 +705,7 @@ function App() {
           notification={{ placement: "topLeft", duration: 4.5, maxCount: 4 }}
         >
           <PwaInstallPrompt />
+          <OfflineOverlay />
           <RefineAppContent />
           <UploadProgressOverlay />
         </AntdApp>

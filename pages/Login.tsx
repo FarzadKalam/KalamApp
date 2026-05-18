@@ -4,22 +4,18 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
-import { normalizeIranMobile } from '../utils/phoneNumber';
-import { normalizeDigitsToEnglish } from '../utils/persianNumericInput';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { getDefaultAuthenticatedAppPath } from '../utils/hostRouting';
+import { getDefaultAuthenticatedAppPath, isSaasAppHost } from '../utils/hostRouting';
+import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
 import { consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
+import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
-const OTP_RESEND_SECONDS = 90;
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
 const OTP_REQUESTED_FOR_STORAGE_KEY = 'kalam_login_otp_requested_for';
 const OTP_CODE_STORAGE_KEY = 'kalam_login_otp_code';
 const OTP_COOLDOWN_UNTIL_STORAGE_KEY = 'kalam_login_otp_cooldown_until';
-
-const normalizeOtpToken = (value: unknown): string =>
-  normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
 
 const readRuntimeBrandSnapshot = () => {
   const branding = readRuntimeBranding();
@@ -27,53 +23,6 @@ const readRuntimeBrandSnapshot = () => {
     title: branding.appTitle || branding.brandName || DEFAULT_BRANDING.brandName,
     logoUrl: branding.logoUrl || null,
   };
-};
-
-const getOtpErrorMessage = (error: any) => {
-  const code = String(error?.code || '').trim().toLowerCase();
-  const raw = String(error?.message || '').trim().toLowerCase();
-
-  if (raw.includes('__otp_user_inactive__')) {
-    return 'حساب کاربری شما غیرفعال است و امکان ورود وجود ندارد.';
-  }
-  if (raw.includes('__otp_phone_not_found__')) {
-    return 'برای این شماره موبایل کاربر فعالی در سیستم پیدا نشد.';
-  }
-  if (raw.includes('__otp_phone_not_synced__')) {
-    return 'شماره این کاربر برای ورود پیامکی آماده نیست. همگام سازی شماره کاربران با بخش احراز هویت را انجام دهید.';
-  }
-  if (raw.includes('__otp_phone_identity_missing__')) {
-    return 'این کاربر هنوز ورود با شماره موبایل را در سامانه احراز هویت فعال نکرده است. برای کاربران قدیمی که با ایمیل ساخته شده‌اند باید هویت phone به صورت رسمی در Supabase ایجاد شود.';
-  }
-  if (raw.includes('__otp_phone_not_allowed__')) {
-    return 'برای این شماره موبایل هنوز کاربر سازمانی قابل استفاده برای ورود پیدا نشد. معمولاً یعنی شماره روی پروفایل کاربر ثبت/همگام نشده یا جایگاه سازمانی آن ناقص است.';
-  }
-  if (raw.includes('__otp_phone_profile_conflict__')) {
-    return 'این شماره موبایل قبلا روی یک کاربر دیگر ثبت شده است. باید همان کاربر موجود را از بخش کاربران یا پروفایل برای ورود پیامکی تایید یا همگام کنید.';
-  }
-  if (raw.includes('__otp_phone_repaired_retry__')) {
-    return 'تعارض قدیمی ورود پیامکی این شماره تعمیر شد و یک کد تازه برای شما ارسال شد. همان کد جدید را وارد کنید.';
-  }
-  if (raw.includes('__otp_phone_invite_inactive__')) {
-    return 'برای این شماره دسترسی تعریف شده، اما حساب دعوت‌شده غیرفعال است.';
-  }
-  if (code === 'otp_disabled' || raw.includes('otp_disabled')) {
-    return 'ورود با کد یکبارمصرف در حال حاضر برای این شماره در دسترس نیست. تنظیمات Phone Auth و سناریوی ثبت‌نام/ورود با شماره را بررسی کنید.';
-  }
-  if (code === 'phone_provider_disabled' || raw.includes('phone_provider_disabled')) {
-    return 'ورود با شماره موبایل در تنظیمات احراز هویت سرور فعال نشده است.';
-  }
-  if (raw.includes('user not found') || raw.includes('create_user')) {
-    return 'برای این شماره موبایل کاربر فعالی در سیستم پیدا نشد.';
-  }
-  if (code === 'otp_expired' || raw.includes('otp expired')) {
-    return 'کد تایید منقضی شده است. دوباره درخواست کد بدهید.';
-  }
-  if (raw.includes('invalid otp') || raw.includes('token has expired') || raw.includes('token is invalid')) {
-    return 'کد تایید واردشده معتبر نیست.';
-  }
-
-  return toFaErrorMessage(error, 'خطا در عملیات ورود با کد');
 };
 
 const Login = () => {
@@ -107,7 +56,7 @@ const Login = () => {
     return getDefaultAuthenticatedAppPath();
   }, [location.search]);
 
-  const normalizedPhone = useMemo(() => normalizeIranMobile(phone), [phone]);
+  const normalizedPhone = useMemo(() => normalizeOtpPhone(phone), [phone]);
   const canVerifyOtp = !!otpRequestedFor && normalizeOtpToken(otpCode).length >= 4;
 
   const clearOtpSessionState = () => {
@@ -393,6 +342,31 @@ const Login = () => {
     }
   };
 
+  // اگر روی app.tazesystem.ir هستیم و tenant resolved_host داره، به subdomain خودش ریدایرکت می‌کنیم
+  const resolveTenantRedirect = async (): Promise<string | null> => {
+    if (!isSaasAppHost()) return null;
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user?.id) return null;
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('org_id')
+        .eq('id', userData.user.id)
+        .maybeSingle();
+      if (!profile?.org_id) return null;
+      const { data: settings } = await supabase
+        .from('saas_org_settings')
+        .select('resolved_host, status')
+        .eq('org_id', profile.org_id)
+        .maybeSingle();
+      const host = String(settings?.resolved_host || '').trim().toLowerCase();
+      if (!host || host === 'app.tazesystem.ir') return null;
+      return `https://${host}`;
+    } catch {
+      return null;
+    }
+  };
+
   const ensureInvitedOrExistingProfile = async (phoneNumber: string) => {
     const { data: userData, error: userError } = await supabase.auth.getUser();
     if (userError || !userData?.user?.id) {
@@ -487,7 +461,12 @@ const Login = () => {
       await trackSuccessfulLogin('password');
 
       message.success('خوش آمدید! در حال ورود...');
+      const tenantUrl = await resolveTenantRedirect();
+      if (tenantUrl) {
+        window.location.href = `${tenantUrl}${postLoginRedirect}`;
+      } else {
         navigate(postLoginRedirect, { replace: true });
+      }
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_user_inactive__')) {
@@ -543,12 +522,8 @@ const Login = () => {
         throw new Error('__otp_phone_not_allowed__');
       }
 
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: normalizedPhone,
-      });
-      if (error) throw error;
-
-      setOtpRequestedFor(normalizedPhone);
+      const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone);
+      setOtpRequestedFor(requestedPhone);
       setOtpCode('');
       setOtpCooldown(OTP_RESEND_SECONDS);
       message.success('کد تایید ارسال شد.');
@@ -572,12 +547,7 @@ const Login = () => {
 
     setOtpLoading(true);
     try {
-      const { error } = await supabase.auth.verifyOtp({
-        phone: otpRequestedFor,
-        token: normalizedOtpToken,
-        type: 'sms',
-      });
-      if (error) throw error;
+      await verifySmsOtp(supabase.auth, otpRequestedFor, normalizedOtpToken);
       await ensureInvitedOrExistingProfile(otpRequestedFor);
       await ensureActiveSessionUser();
       await trackSuccessfulLogin('otp');
@@ -587,7 +557,12 @@ const Login = () => {
       setOtpCooldown(0);
 
       message.success('ورود با موفقیت انجام شد.');
+      const tenantUrlOtp = await resolveTenantRedirect();
+      if (tenantUrlOtp) {
+        window.location.href = `${tenantUrlOtp}${postLoginRedirect}`;
+      } else {
         navigate(postLoginRedirect, { replace: true });
+      }
     } catch (error: any) {
       const raw = String(error?.message || '');
       if (raw.includes('__otp_phone_repaired_retry__')) {

@@ -1,7 +1,11 @@
+import React from 'react';
+import { QRCode } from 'antd';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { FieldType } from '../types';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import { getAssigneeLabel } from './assigneeLabel';
 import { getResolvedAssigneeId } from './assigneeValue';
+import { buildCatalogFullPageLayout } from './printTemplates/catalogFullPageLayout';
 
 export interface ListFieldDefinition {
   key: string;
@@ -475,6 +479,132 @@ export const buildListCatalogHtml = (
   ${cardsHtml}
 </div>
 `.trim();
+};
+
+export interface CatalogFullPageCompanyInfo {
+  logo_url?: string;
+  company_full_name?: string;
+  company_name_en?: string;
+  slogan?: string;
+  trade_name?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  address?: string;
+}
+
+export const buildListCatalogFullPageHtml = (
+  fields: ListFieldDefinition[],
+  rows: Array<Record<string, any>>,
+  relationOptions: Record<string, any[]> = {},
+  currencyLabel: string = '',
+  companyInfo?: CatalogFullPageCompanyInfo | null,
+  _moduleLabel: string = '',
+): string => {
+  const today = toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD'));
+  const imageField = fields.find((f) => String(f?.type || '').toLowerCase() === 'image') || null;
+  const titleField =
+    fields.find((f) => ['address', 'name', 'title', 'business_name'].includes(String(f?.key || ''))) ||
+    fields.find((f) => f !== imageField) ||
+    null;
+  const detailFields = fields.filter((f) => f !== imageField && f !== titleField);
+
+  const companyLogoUrl = escapeHtml(companyInfo?.logo_url || '');
+  const companyName = escapeHtml(companyInfo?.company_full_name || '');
+  const slogan = escapeHtml(companyInfo?.slogan || companyInfo?.trade_name || '');
+  const companyPhone = escapeHtml(companyInfo?.phone || '');
+  const companyEmail = escapeHtml(companyInfo?.email || '');
+  const companyWebsite = escapeHtml(companyInfo?.website || '');
+  const companyAddress = escapeHtml(companyInfo?.address || '');
+  const watermarkText = escapeHtml(companyInfo?.company_name_en || companyInfo?.trade_name || companyInfo?.company_full_name || '');
+
+  if (!rows.length) {
+    return `<div style="direction:rtl; padding:18px; text-align:center; color:#64748b; font-family:inherit;">داده‌ای برای چاپ انتخاب نشده است.</div>`;
+  }
+
+  return rows
+    .map((row, index) => {
+      const imageUrl = imageField ? escapeHtml(String(row?.[imageField.key] || '').trim()) : '';
+      const titleValue = titleField
+        ? escapeHtml(formatListCellValue(titleField, row, relationOptions, currencyLabel))
+        : '';
+
+      // Sidebar fields: key-value rows (exclude image, title, code fields, long text)
+      let sidebarRowIdx = 0;
+      const sidebarRows = detailFields
+        .filter((f) => !/code/i.test(String(f?.key || '')))
+        .map((f) => {
+          let val = formatListCellValue(f, row, relationOptions, currencyLabel);
+          if (!String(val || '').trim() || val === '-') return '';
+          // Move currency unit from start to end ("تومان ۱,۰۰۰" → "۱,۰۰۰ تومان")
+          for (const unit of ['تومان', 'ریال']) {
+            if (val.startsWith(unit + ' ') || val.startsWith(unit + '\u00a0')) {
+              val = val.slice(unit.length + 1).trim() + ' ' + unit;
+              break;
+            }
+          }
+          const rowBg = sidebarRowIdx++ % 2 === 0 ? 'background:rgba(var(--brand-50-rgb,239,246,255),0.55);' : 'background:#fff;';
+          return `<div style="display:flex; justify-content:space-between; align-items:center; gap:2mm; padding:1.5mm 2mm; border-radius:4px; margin-bottom:0.8mm; ${rowBg} min-width:0;"><span style="font-size:7.5px; color:#64748b; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45%;">${escapeHtml(f.label)}</span><span style="font-size:9px; color:#1e293b; font-weight:800; text-align:left; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(val)}</span></div>`;
+        })
+        .filter(Boolean);
+      const sidebarFieldsHtml = sidebarRows.join('');
+
+      // Code fields: "Label: Value · Label2: Value2" for image overlay
+      const codeParts = detailFields
+        .filter((f) => /code/i.test(String(f?.key || '')))
+        .map((f) => {
+          const val = formatListCellValue(f, row, relationOptions, currencyLabel);
+          if (!String(val || '').trim() || val === '-') return '';
+          return `<span style="display:inline-flex; align-items:baseline; gap:4px; direction:rtl; unicode-bidi:isolate;"><span>${escapeHtml(f.label)}:</span><span style="direction:ltr; unicode-bidi:isolate; font-family:monospace;">${escapeHtml(val)}</span></span>`;
+        })
+        .filter(Boolean);
+      const codeFieldsHtml = codeParts.join(' <span style="color:rgba(255,255,255,0.38); margin:0 4px;">·</span> ');
+      const publicLink = String(row?.catalog_link || '').trim();
+      const qrSectionHtml = publicLink
+        ? `<div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2mm; gap:1mm; background:#fff; box-sizing:border-box; overflow:hidden;"><div style="font-size:6px; font-weight:800; color:rgb(var(--brand-600-rgb,37,99,235)); letter-spacing:0.4px; text-align:center; flex-shrink:0;">QR کاتالوگ</div><div style="background:#fff; border:1.5px solid rgb(var(--brand-200-rgb,191,219,254)); border-radius:8px; padding:3px; box-shadow:0 1px 6px rgba(59,130,246,0.1); flex-shrink:0;">${renderToStaticMarkup(React.createElement(QRCode, { value: publicLink, type: 'svg', size: 56, bordered: false }))}</div><a href="${escapeHtml(publicLink)}" target="_blank" style="display:block; font-size:5px; color:rgb(var(--brand-500-rgb,59,130,246)); text-decoration:none; text-align:center; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; border:1px solid rgb(var(--brand-100-rgb,219,234,254)); border-radius:4px; padding:1px 3px; background:rgb(var(--brand-50-rgb,239,246,255)); box-sizing:border-box; flex-shrink:0;">${escapeHtml(publicLink.length > 32 ? `${publicLink.slice(0, 30)}…` : publicLink)}</a></div>`
+        : '';
+      const mapImageUrl = String(row?.location_image || '').trim();
+      let mapSectionHtml = '';
+      if (mapImageUrl) {
+        let googleUrl = '#';
+        let locationText = '';
+        const locationRaw = row?.location;
+        let parsedLocation: any = null;
+        if (locationRaw && typeof locationRaw === 'object') parsedLocation = locationRaw;
+        if (locationRaw && typeof locationRaw === 'string') {
+          try {
+            parsedLocation = JSON.parse(locationRaw);
+          } catch {
+            parsedLocation = null;
+          }
+        }
+        if (parsedLocation && typeof parsedLocation.lat === 'number' && typeof parsedLocation.lng === 'number') {
+          googleUrl = `https://www.google.com/maps?q=${parsedLocation.lat},${parsedLocation.lng}`;
+          locationText = `${parsedLocation.lat.toFixed(4)}, ${parsedLocation.lng.toFixed(4)}`;
+        }
+        mapSectionHtml = `<a href="${escapeHtml(googleUrl)}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><div style="position:absolute; inset:0; background-image:url('${escapeHtml(mapImageUrl)}'); background-size:cover; background-position:center;"></div><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${escapeHtml(locationText)}</div>` : ''}</div></a>`;
+      }
+
+      return buildCatalogFullPageLayout({
+        imageUrl,
+        primaryTitle: titleValue,
+        codeFieldsHtml,
+        watermarkText,
+        sidebarFieldsHtml,
+        logoUrl: companyLogoUrl,
+        companyName,
+        slogan,
+        phone: companyPhone,
+        email: companyEmail,
+        website: companyWebsite,
+        companyAddress,
+        todayDate: today,
+        qrSectionHtml,
+        mapSectionHtml,
+        isFirstPage: index === 0,
+      });
+    })
+    .join('\n');
 };
 
 export const escapeCsvCell = (value: any) => {

@@ -19,8 +19,8 @@ import { profilesModule } from '../modules/profilesConfig'; // کانفیگ جد
 import { FieldType, ModuleField } from '../types';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate, type PhoneLoginCandidateCheck } from '../utils/phoneAuth';
+import { getOtpErrorMessage, normalizeOtpToken, verifyPhoneChangeOtp } from '../utils/otpAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
-import { normalizeDigitsToEnglish } from '../utils/persianNumericInput';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchCurrentUserRoleContext } from '../utils/permissions';
 import { fetchSessionBootstrap, getCachedAuthUser } from '../utils/sessionCache';
@@ -29,9 +29,6 @@ import PhoneActionsPopover from '../components/PhoneActionsPopover';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-
-const normalizeOtpToken = (value: unknown): string =>
-    normalizeDigitsToEnglish(String(value || '')).replace(/\D/g, '');
 
 const ProfilePage: React.FC = () => {
   const { id } = useParams();
@@ -434,7 +431,7 @@ const ProfilePage: React.FC = () => {
             setPhoneOtpRequested(true);
             message.success('کد تایید شماره موبایل ارسال شد.');
         } catch (err: any) {
-            message.error(toFaErrorMessage(err, 'ارسال کد تایید شماره ناموفق بود.'));
+            message.error(getOtpErrorMessage(err, 'ارسال کد تایید شماره ناموفق بود.'));
         } finally {
             setPhoneOtpLoading(false);
         }
@@ -454,18 +451,13 @@ const ProfilePage: React.FC = () => {
 
         setPhoneOtpLoading(true);
         try {
-            const { error } = await supabase.auth.verifyOtp({
-                phone: normalizedPhone,
-                token: normalizedOtpToken,
-                type: 'phone_change',
-            });
-            if (error) throw error;
+            await verifyPhoneChangeOtp(supabase.auth, normalizedPhone, normalizedOtpToken);
             setPhoneOtpCode('');
             setPhoneOtpRequested(false);
             message.success('شماره موبایل برای ورود پیامکی تایید شد.');
             await fetchProfile();
         } catch (err: any) {
-            message.error(toFaErrorMessage(err, 'تایید شماره موبایل ناموفق بود.'));
+            message.error(getOtpErrorMessage(err, 'تایید شماره موبایل ناموفق بود.'));
         } finally {
             setPhoneOtpLoading(false);
         }

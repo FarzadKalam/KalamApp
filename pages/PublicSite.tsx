@@ -1,4 +1,4 @@
-import React, { FormEvent, useMemo, useState } from 'react';
+import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import { App } from 'antd';
 import {
   ApiOutlined,
@@ -48,11 +48,22 @@ const featureCards = [
   ['داشبورد مدیریتی', 'مدیر از وضعیت سرنخ‌ها، پروژه‌ها، فعالیت‌ها، فاکتورها، هزینه‌ها و اجرای فرآیندها تصویر یکپارچه می‌گیرد.', <BarChartOutlined />],
 ] as const;
 
-const plans = [
-  ['ابری شروع', '۲,۹۰۰,۰۰۰', '۵ کاربر شامل', 'کاربر اضافه: ۳۵۰ هزار تومان', 'برای شروع نظم فروش، مشتری و پروژه', ['CRM و سرنخ‌ها', 'پروژه و فعالیت', 'فاکتور و هزینه ساده', '۲۰GB فایل', 'داشبورد پایه']],
-  ['ابری رشد', '۶,۹۰۰,۰۰۰', '۱۰ کاربر شامل', 'کاربر اضافه: ۴۹۰ هزار تومان', 'پیشنهادی برای شرکت‌های خدماتی و تبلیغاتی', ['همه امکانات شروع', 'فرآیندها و اتوماسیون', 'چت داخلی', 'بات، پیامک و VoIP', 'AI و دانش سازمانی محدود'], 'recommended'],
-  ['ابری سازمانی', '۱۳,۹۰۰,۰۰۰', '۲۰ کاربر شامل', 'کاربر اضافه: ۶۹۰ هزار تومان', 'برای سازمانی که سیستم را مرکز عملیات می‌خواهد', ['حسابداری و نقد و بانک', 'سامانه مودیان', 'گزارش‌ساز', 'دسترسی پیشرفته', '۳۰۰GB فایل']],
-] as const;
+type PublicPlan = {
+  id: string;
+  code: string | null;
+  title: string;
+  short_description: string | null;
+  price_monthly: number;
+  price_yearly: number | null;
+  included_users: number;
+  extra_user_price: number;
+  max_users: number | null;
+  storage_gb: number | null;
+  highlight_tag: string | null;
+  custom_price_label: string | null;
+  display_features: string[];
+  trial_days: number;
+};
 
 const faq = [
   ['آیا تازه سیستم جایگزین CRM است؟', 'بله، اما فقط CRM نیست. مشتری، سرنخ، پروژه، فعالیت، فرآیند، فایل، ارتباطات و گزارش مدیریتی کنار هم قرار می‌گیرند.'],
@@ -86,7 +97,7 @@ const Header = () => (
       </nav>
       <div className="flex items-center gap-2">
         <a href={PANEL_URL} className="hidden rounded-lg px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-100 sm:inline-flex">ورود به پنل</a>
-        <Link to={sitePath('/demo')} className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-black text-white hover:bg-zinc-800">درخواست دمو</Link>
+        <a href="https://app.tazesystem.ir/demo" className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-black text-white hover:bg-zinc-800">شروع رایگان</a>
       </div>
     </div>
   </header>
@@ -105,7 +116,7 @@ const Footer = () => (
           {['اینماد', 'ساماندهی', 'درگاه پرداخت'].map((item) => <span key={item} className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">{item}: در حال دریافت</span>)}
         </div>
       </div>
-      <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['درخواست دمو', sitePath('/demo')], ['ورود به پنل', PANEL_URL]]} />
+      <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['شروع رایگان', 'https://app.tazesystem.ir/demo'], ['ورود به پنل', PANEL_URL]]} />
       <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['درباره ما', sitePath('/about')]]} />
       <div>
         <h3 className="text-sm font-bold text-zinc-950">ارتباط</h3>
@@ -213,43 +224,157 @@ const DemoForm = ({ dark = false }: { dark?: boolean }) => {
   );
 };
 
-const PricingSection = ({ detailed = false }: { detailed?: boolean }) => (
-  <section className="bg-white px-5 py-20">
-    <div className="mx-auto max-w-7xl">
-      <SectionTitle eyebrow="تعرفه‌ها" title="پلنی انتخاب کنید که با تیم شما رشد کند" text="مدل قیمت‌گذاری تازه سیستم ترکیبی از هزینه پایه پکیج و کاربر اضافه است تا رشد تیم قابل پیش‌بینی بماند." />
-      <div className="grid gap-5 lg:grid-cols-3">
-        {plans.map(([name, price, users, extra, description, features, tag]) => {
-          const highlighted = tag === 'recommended';
-          return (
-            <div key={name} className={`rounded-lg border p-6 ${highlighted ? 'border-zinc-950 bg-zinc-950 text-white shadow-xl' : 'border-zinc-200 bg-white text-zinc-950'}`}>
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-black">{name}</h3>
-                {highlighted && <span className="rounded-lg bg-teal-400 px-3 py-1 text-xs font-black text-zinc-950">پیشنهادی</span>}
-              </div>
-              <p className={`mt-3 text-sm leading-7 ${highlighted ? 'text-zinc-200' : 'text-zinc-600'}`}>{description}</p>
-              <div className="mt-6"><span className="text-4xl font-black">{price}</span><span className={`mr-2 text-sm ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>تومان / ماه</span></div>
-              <div className={`mt-3 text-sm font-bold ${highlighted ? 'text-zinc-200' : 'text-zinc-700'}`}>{users}</div>
-              <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>{extra}</div>
-              <ul className="mt-6 space-y-3">
-                {features.map((item) => <li key={item} className="flex items-center gap-2 text-sm"><CheckCircleOutlined className={highlighted ? 'text-teal-300' : 'text-teal-600'} /><span>{item}</span></li>)}
-              </ul>
-              <Link to={sitePath('/demo')} className={`mt-7 inline-flex w-full items-center justify-center rounded-lg px-4 py-3 text-sm font-black ${highlighted ? 'bg-white text-zinc-950 hover:bg-zinc-100' : 'bg-zinc-950 text-white hover:bg-zinc-800'}`}>درخواست دمو</Link>
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-5 rounded-lg border border-zinc-200 bg-zinc-50 p-6 lg:flex lg:items-center lg:justify-between">
-        <div>
-          <h3 className="text-xl font-black text-zinc-950">نسخه لوکال کامل</h3>
-          <p className="mt-2 max-w-3xl text-sm leading-7 text-zinc-600">نصب روی سرور سازمان شما، همه ماژول‌ها، کنترل کامل داده، قرارداد اختصاصی و پشتیبانی سالانه. قیمت پیشنهادی از ۲۹۰ میلیون تومان شروع می‌شود.</p>
+const usePricingPlans = () => {
+  const [plans, setPlans] = useState<PublicPlan[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { data } = await supabase.rpc('get_public_plans');
+        if (Array.isArray(data) && data.length > 0) {
+          setPlans(data as PublicPlan[]);
+        }
+      } catch {
+        // fallback: بدون پلن نمایش می‌دهیم
+      } finally {
+        setLoaded(true);
+      }
+    })();
+  }, []);
+
+  return { plans, loaded };
+};
+
+const formatPriceFA = (n: number) =>
+  n.toLocaleString('fa-IR');
+
+const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
+  const { plans, loaded } = usePricingPlans();
+
+  return (
+    <section className="bg-white px-5 py-20">
+      <div className="mx-auto max-w-7xl">
+        <SectionTitle
+          eyebrow="تعرفه‌ها"
+          title="پلنی انتخاب کنید که با تیم شما رشد کند"
+          text="مدل قیمت‌گذاری تازه سیستم ترکیبی از هزینه پایه پکیج و کاربر اضافه است تا رشد تیم قابل پیش‌بینی بماند."
+        />
+
+        {!loaded ? (
+          <div className="grid gap-5 lg:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="animate-pulse rounded-lg border border-zinc-200 bg-zinc-100 h-96" />
+            ))}
+          </div>
+        ) : (
+          <div className={`grid gap-5 ${plans.length === 3 ? 'lg:grid-cols-3' : plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
+            {plans.map((plan) => {
+              const highlighted = !!plan.highlight_tag;
+              const features = Array.isArray(plan.display_features) ? plan.display_features : [];
+              return (
+                <div
+                  key={plan.id}
+                  className={`rounded-lg border p-6 ${highlighted ? 'border-zinc-950 bg-zinc-950 text-white shadow-xl' : 'border-zinc-200 bg-white text-zinc-950'}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xl font-black">{plan.title}</h3>
+                    {plan.highlight_tag && (
+                      <span className="rounded-lg bg-teal-400 px-3 py-1 text-xs font-black text-zinc-950">
+                        {plan.highlight_tag}
+                      </span>
+                    )}
+                  </div>
+                  <p className={`mt-3 text-sm leading-7 ${highlighted ? 'text-zinc-200' : 'text-zinc-600'}`}>
+                    {plan.short_description}
+                  </p>
+
+                  {/* قیمت */}
+                  <div className="mt-6">
+                    {plan.custom_price_label ? (
+                      <span className="text-2xl font-black">{plan.custom_price_label}</span>
+                    ) : (
+                      <>
+                        <span className="text-4xl font-black">{formatPriceFA(plan.price_monthly)}</span>
+                        <span className={`mr-2 text-sm ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>تومان / ماه</span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className={`mt-3 text-sm font-bold ${highlighted ? 'text-zinc-200' : 'text-zinc-700'}`}>
+                    {plan.included_users} کاربر شامل
+                  </div>
+                  {plan.extra_user_price > 0 && (
+                    <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                      کاربر اضافه: {formatPriceFA(plan.extra_user_price)} تومان
+                    </div>
+                  )}
+                  {plan.storage_gb && (
+                    <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                      {plan.storage_gb}GB فضای ذخیره‌سازی
+                    </div>
+                  )}
+                  {plan.trial_days > 0 && (
+                    <div className={`mt-1 text-xs font-bold ${highlighted ? 'text-teal-300' : 'text-teal-600'}`}>
+                      {plan.trial_days} روز آزمایشی رایگان
+                    </div>
+                  )}
+
+                  {features.length > 0 && (
+                    <ul className="mt-6 space-y-3">
+                      {features.map((item, idx) => (
+                        <li key={idx} className="flex items-center gap-2 text-sm">
+                          <CheckCircleOutlined className={highlighted ? 'text-teal-300' : 'text-teal-600'} />
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <a
+                    href="https://app.tazesystem.ir/demo"
+                    className={`mt-7 inline-flex w-full items-center justify-center rounded-lg px-4 py-3 text-sm font-black ${
+                      highlighted
+                        ? 'bg-white text-zinc-950 hover:bg-zinc-100'
+                        : 'bg-zinc-950 text-white hover:bg-zinc-800'
+                    }`}
+                  >
+                    شروع رایگان
+                  </a>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-5 rounded-lg border border-zinc-200 bg-zinc-50 p-6 lg:flex lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-xl font-black text-zinc-950">نسخه لوکال کامل</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-7 text-zinc-600">
+              نصب روی سرور سازمان شما، همه ماژول‌ها، کنترل کامل داده، قرارداد اختصاصی و پشتیبانی سالانه. قیمت پیشنهادی از ۲۹۰ میلیون تومان شروع می‌شود.
+            </p>
+          </div>
+          <a
+            href="https://app.tazesystem.ir/demo"
+            className="mt-5 inline-flex rounded-lg border border-zinc-950 px-5 py-3 text-sm font-black text-zinc-950 hover:bg-zinc-950 hover:text-white lg:mt-0"
+          >
+            مشاوره نسخه لوکال
+          </a>
         </div>
-        <Link to={sitePath('/demo')} className="mt-5 inline-flex rounded-lg border border-zinc-950 px-5 py-3 text-sm font-black text-zinc-950 hover:bg-zinc-950 hover:text-white lg:mt-0">مشاوره نسخه لوکال</Link>
+        <p className="mt-5 text-center text-sm leading-7 text-zinc-500">
+          هزینه پیامک، VoIP، مصرف AI مازاد، فضای اضافه، مهاجرت داده و توسعه اختصاصی جداگانه محاسبه می‌شود.
+        </p>
+        {!detailed && (
+          <div className="mt-6 text-center">
+            <Link to={sitePath('/pricing')} className="inline-flex items-center gap-2 text-sm font-black text-zinc-950">
+              مقایسه کامل پلن‌ها <ArrowLeftOutlined />
+            </Link>
+          </div>
+        )}
       </div>
-      <p className="mt-5 text-center text-sm leading-7 text-zinc-500">هزینه پیامک، VoIP، مصرف AI مازاد، فضای اضافه، مهاجرت داده و توسعه اختصاصی جداگانه محاسبه می‌شود.</p>
-      {!detailed && <div className="mt-6 text-center"><Link to={sitePath('/pricing')} className="inline-flex items-center gap-2 text-sm font-black text-zinc-950">مقایسه کامل پلن‌ها <ArrowLeftOutlined /></Link></div>}
-    </div>
-  </section>
-);
+    </section>
+  );
+};
 
 const HomePage = () => (
   <>
@@ -260,7 +385,7 @@ const HomePage = () => (
           <h1 className="mt-6 max-w-2xl text-4xl font-black leading-[1.35] text-zinc-950 md:text-6xl">سیستم عامل هوشمند کسب‌وکار شما</h1>
           <p className="mt-5 max-w-xl text-lg leading-9 text-zinc-600">مشتری، پروژه، فرآیند، چت، فایل، فاکتور، منابع انسانی و گزارش مدیریتی را در یک پنل فارسی و قابل سفارشی‌سازی مدیریت کنید.</p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link to={sitePath('/demo')} className="rounded-lg bg-zinc-950 px-6 py-3.5 text-sm font-black text-white hover:bg-zinc-800">درخواست دمو</Link>
+            <a href="https://app.tazesystem.ir/demo" className="rounded-lg bg-zinc-950 px-6 py-3.5 text-sm font-black text-white hover:bg-zinc-800">شروع رایگان</a>
             <Link to={sitePath('/features')} className="rounded-lg border border-zinc-300 bg-white px-6 py-3.5 text-sm font-black text-zinc-950 hover:border-zinc-950">مشاهده امکانات</Link>
           </div>
           <div className="mt-8 grid max-w-xl gap-3 sm:grid-cols-3">

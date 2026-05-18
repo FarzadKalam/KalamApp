@@ -2,9 +2,15 @@ import { MODULES } from '../../moduleRegistry';
 import { BlockType } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { getCachedAuthUser } from '../sessionCache';
+import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
 const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
+
+export interface PrintFooterSignature {
+  title: string;
+  name: string;
+}
 
 export interface StoredPrintTemplate {
   id: string;
@@ -28,6 +34,7 @@ export interface StoredPrintTemplate {
   orientation?: 'portrait' | 'landscape';
   isSystem?: boolean;
   selectedFieldKeys?: string[];
+  footerSignatures?: PrintFooterSignature[];
   createdAt: string;
   updatedAt: string;
 }
@@ -287,21 +294,38 @@ export const getModuleTitle = (moduleId: string, mode: 'plural' | 'singular' = '
   return String(module.titles?.fa || '').trim();
 };
 
-const buildPrintSignatureCell = (label: string, companySide = false) => `
-<td style="width:50%; border:none; ${companySide ? 'border-left:1px solid rgba(148,163,184,0.28);' : ''} padding:8px 10px; vertical-align:top; background:${companySide ? 'rgba(var(--brand-50-rgb),0.24)' : 'rgba(var(--brand-50-rgb),0.14)'};">
+const buildInvoiceFooterTemplate = () => buildDefaultFooterTemplateForModule('invoices');
+
+export const getDefaultFooterSignatures = (moduleId: string): PrintFooterSignature[] => {
+  if (INVOICE_MODULE_IDS.has(moduleId)) {
+    return [
+      { title: 'خریدار', name: '' },
+      { title: 'فروشنده', name: '' },
+    ];
+  }
+  return [{ title: 'مسئول', name: '' }];
+};
+
+export const buildFooterSignaturesHtml = (signatures: PrintFooterSignature[]): string => {
+  if (!signatures || signatures.length === 0) return '';
+  const totalWidth = Math.floor(100 / signatures.length);
+  return signatures
+    .map(
+      (sig, idx) => `
+<td style="width:${totalWidth}%; border:none; ${idx < signatures.length - 1 ? 'border-left:1px solid rgba(148,163,184,0.28);' : ''} padding:8px 10px; vertical-align:top; background:rgba(var(--brand-50-rgb),0.14);">
   <div style="display:flex; flex-direction:column; min-height:80px; justify-content:space-between; gap:6px;">
-    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); text-align:center;">${label}</div>
-    <div style="display:flex; align-items:flex-end; justify-content:center; gap:10px; min-height:54px;">
-      ${companySide ? '<div style="display:flex; align-items:center; justify-content:center; min-width:48px; min-height:48px;">{{system.company_stamp_image}}</div>' : ''}
-      ${companySide ? '<div style="display:flex; align-items:center; justify-content:center; min-width:72px; min-height:40px;">{{system.company_signature_image}}</div>' : '<div style="width:110px; border-bottom:1px dashed rgba(100,116,139,0.65);"></div>'}
+    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); text-align:center;">${sig.title}</div>
+    <div style="display:flex; align-items:flex-end; justify-content:center; min-height:54px;">
+      <div style="width:110px; border-bottom:1px dashed rgba(100,116,139,0.65);"></div>
     </div>
     <div style="text-align:center; line-height:1.9;">
-      ${companySide ? '<div style="font-weight:700;">{{system.company_signatory_name}}</div>' : '<div style="font-weight:700;">&nbsp;</div>'}
-      ${companySide ? '<div style="font-size:10px; color:#64748b;">{{system.company_signatory_title}}</div>' : '<div style="font-size:10px; color:#64748b;">&nbsp;</div>'}
+      <div style="font-weight:700;">${sig.name ? sig.name : '&nbsp;'}</div>
     </div>
   </div>
-</td>
-`.trim();
+</td>`.trim()
+    )
+    .join('\n');
+};
 
 const buildOfficialLetterHeaderTemplate = () => `
 <div style="width:100%; direction:rtl; color:#111827; font-size:12px; font-family:inherit;">
@@ -353,37 +377,12 @@ export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
 `;
 };
 
-const buildInvoiceFooterTemplate = () => `
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export const buildDefaultFooterTemplateForModule = (_moduleId = '') => `
 <table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('مهر و امضا سفارش دهنده', true)}
-      ${buildPrintSignatureCell('مهر و امضا سفارش گیرنده', false)}
-    </tr>
-  </tbody>
+  <tbody><tr>{{system.footer_signatures}}</tr></tbody>
 </table>
 `;
-
-const normalizeInvoiceFooterHtml = (html: string) =>
-  String(html || '')
-    .replace(/مهر و امضا(?:ی)?\s*(?:مدیر\s*عامل|سازمان|شرکت|صادرکننده)/g, 'مهر و امضا سفارش دهنده')
-    .replace(/امضا\s*\/\s*تایید\s*طرف\s*مقابل/g, 'مهر و امضا سفارش گیرنده')
-    .replace(/مهر و امضا(?:ی)?\s*طرف\s*مقابل/g, 'مهر و امضا سفارش گیرنده');
-
-export const buildDefaultFooterTemplateForModule = (moduleId = '') => {
-  if (isInvoiceModule(moduleId)) return buildInvoiceFooterTemplate();
-
-  return `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('مهر و امضا سازمان', true)}
-      ${buildPrintSignatureCell('امضا / تایید طرف مقابل', false)}
-    </tr>
-  </tbody>
-</table>
-`;
-};
 
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
   const invoiceConfig = getInvoiceTemplateConfig(moduleId);
@@ -574,6 +573,11 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     raw?.is_system === true ||
     String(id).startsWith('default_');
   const footerHtml = String(raw?.footerHtml || raw?.footer_html || '').trim();
+  const footerSignatures: PrintFooterSignature[] | undefined = Array.isArray(raw?.footerSignatures)
+    ? raw.footerSignatures
+        .map((s: any) => ({ title: String(s?.title || '').trim(), name: String(s?.name || '').trim() }))
+        .filter((s: PrintFooterSignature) => s.title)
+    : undefined;
 
   return {
     id,
@@ -583,9 +587,7 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     scope,
     headerHtml: String(raw?.headerHtml || raw?.header_html || '').trim() || buildDefaultHeaderTemplateForModule(moduleId),
     contentHtml,
-    footerHtml: isInvoiceModule(moduleId)
-      ? normalizeInvoiceFooterHtml(footerHtml || buildDefaultFooterTemplateForModule(moduleId))
-      : footerHtml || buildDefaultFooterTemplateForModule(moduleId),
+    footerHtml: footerHtml || buildDefaultFooterTemplateForModule(moduleId),
     isActive: raw?.isActive !== false,
     showHeader: raw?.showHeader !== false,
     showFooter: raw?.showFooter !== false,
@@ -599,6 +601,7 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     orientation,
     isSystem,
     selectedFieldKeys,
+    footerSignatures,
     createdAt,
     updatedAt,
   };
@@ -777,9 +780,16 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'تصویر امضای چاپ', value: 'system.company_signature_image', kind: 'field', group: 'سیستم' },
     { label: 'تصویر مهر چاپ', value: 'system.company_stamp_image', kind: 'field', group: 'سیستم' },
     { label: 'جدول فیلدهای دارای مقدار', value: 'system.compact_fields_table', kind: 'field', group: 'سیستم' },
+    { label: 'فیلدها بصورت خطی (کاتالوگ)', value: 'system.compact_fields_inline', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'URL تصویر رکورد', value: 'system.record_image_url', kind: 'field', group: 'سیستم', scopes: ['record'] },
     { label: 'جدول‌های دارای مقدار', value: 'system.compact_tables_blocks', kind: 'field', group: 'سیستم' },
     { label: 'تصویر رکورد', value: 'system.record_image', kind: 'field', group: 'سیستم' },
     { label: 'کد QR رکورد', value: 'system.record_qr', kind: 'field', group: 'سیستم' },
+    { label: 'QR کاتالوگ (سایدبار)', value: 'system.catalog_qr_section', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'نقشه کاتالوگ (سایدبار)', value: 'system.catalog_map_section', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'فیلدهای سایدبار کاتالوگ', value: 'system.compact_fields_sidebar', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'فیلدهای کد (روی تصویر)', value: 'system.catalog_code_fields', kind: 'field', group: 'سیستم', scopes: ['record'] },
+    { label: 'شعار سازمان', value: 'company.slogan', kind: 'field', group: 'اطلاعات سازمان' },
   ];
   const commonListFields: PrintTemplateVariableOption[] = [
     { label: 'عنوان لیست', value: 'system.list_title', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
@@ -789,6 +799,7 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'تعداد صفحات', value: 'system.page_count', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
     { label: 'جدول لیست', value: 'system.list_table', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
     { label: 'کاتالوگ لیست', value: 'system.list_catalog_a4', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
+    { label: 'کاتالوگ تمام‌صفحه لیست', value: 'system.list_catalog_fullpage', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
     { label: 'جدول جمع‌بندی لیست', value: 'system.list_summary_table', kind: 'field', group: 'لیست چاپی', scopes: ['list'] },
   ];
   const operationalFinancialSummaryFields: PrintTemplateVariableOption[] = isOperationalFinancialOverviewModule(moduleId)
@@ -1178,9 +1189,12 @@ const buildListA4DefaultTemplate = (
 </div>
 `.trim(),
     footerHtml: `
-<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; color:#64748b; direction:rtl;">
-  <span>{{company.currency_label}}</span>
-  <span>صفحه {{system.page_index}} از {{system.page_count}}</span>
+<div style="display:flex; align-items:center; gap:8px; font-size:9px; color:#64748b; direction:rtl; overflow:hidden; flex-wrap:nowrap;">
+  <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; font-size:8.5px;">{{company.address}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; direction:ltr;">{{company.phone}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; direction:ltr;">{{company.email}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; direction:ltr;">{{company.website}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; border-right:1px solid rgba(148,163,184,0.4); padding-right:8px; margin-right:4px;">صفحه {{system.page_index}} از {{system.page_count}}</span>
 </div>
 `.trim(),
     createdAt: now,
@@ -1257,6 +1271,75 @@ export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string)
   }
 };
 
+const buildCatalogFullPageContentHtml = (moduleId: string): string => {
+  const isBillboard = moduleId === 'billboards';
+  const primaryTitle = isBillboard ? '{{record.address}}' : '{{record.name}}';
+  return buildCatalogFullPageLayout({
+    imageUrl: '{{system.record_image_url}}',
+    primaryTitle,
+    codeFieldsHtml: '{{system.catalog_code_fields}}',
+    watermarkText: '{{company.company_name_en}}',
+    sidebarFieldsHtml: '{{system.compact_fields_sidebar}}',
+    logoUrl: '{{company.logo_url}}',
+    companyName: '{{company.company_full_name}}',
+    slogan: '{{company.slogan}}',
+    phone: '{{company.phone}}',
+    email: '{{company.email}}',
+    website: '{{company.website}}',
+    companyAddress: '{{company.address}}',
+    todayDate: '{{system.today_date}}',
+    qrSectionHtml: '{{system.catalog_qr_section}}',
+    mapSectionHtml: isBillboard ? '{{system.catalog_map_section}}' : '',
+    isFirstPage: true,
+  });
+};
+
+const buildCatalogFullPageRecordTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
+  id: `default_${moduleId}_catalog_fullpage_landscape`,
+  moduleId,
+  scope: 'record',
+  title: 'کاتالوگ تمام صفحه',
+  description: 'قالب کاتالوگی تک‌برگه A4 افقی با تصویر بزرگ — مناسب ارسال به مشتریان',
+  paperSize: 'A4',
+  orientation: 'landscape',
+  isActive: true,
+  isSystem: true,
+  showHeader: false,
+  showFooter: false,
+  pageMarginTop: 0,
+  pageMarginRight: 0,
+  pageMarginBottom: 0,
+  pageMarginLeft: 0,
+  headerHtml: '',
+  footerHtml: '',
+  contentHtml: buildCatalogFullPageContentHtml(moduleId),
+  createdAt: now,
+  updatedAt: now,
+});
+
+const buildCatalogFullPageListTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
+  id: `default_${moduleId}_catalog_fullpage_list_landscape`,
+  moduleId,
+  scope: 'list',
+  title: 'کاتالوگ تمام صفحه — لیست',
+  description: 'هر رکورد یک صفحه کامل A4 افقی کاتالوگی — مناسب ارسال فهرست محصولات/تابلوها به مشتریان',
+  paperSize: 'A4',
+  orientation: 'landscape',
+  isActive: true,
+  isSystem: true,
+  showHeader: false,
+  showFooter: false,
+  pageMarginTop: 0,
+  pageMarginRight: 0,
+  pageMarginBottom: 0,
+  pageMarginLeft: 0,
+  headerHtml: '',
+  footerHtml: '',
+  contentHtml: '{{system.list_catalog_fullpage}}',
+  createdAt: now,
+  updatedAt: now,
+});
+
 const buildListCatalogA4PortraitDefaultTemplate = (
   moduleId: string,
   now: string,
@@ -1307,9 +1390,12 @@ const buildListCatalogA4PortraitDefaultTemplate = (
 </div>
 `.trim(),
     footerHtml: `
-<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; color:#64748b; direction:rtl;">
-  <span>کاتالوگ چاپی</span>
-  <span>صفحه {{system.page_index}} از {{system.page_count}}</span>
+<div style="display:flex; align-items:center; gap:8px; font-size:9px; color:#64748b; direction:rtl; overflow:hidden; flex-wrap:nowrap;">
+  <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; font-size:8.5px;">{{company.address}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; direction:ltr;">{{company.phone}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; direction:ltr;">{{company.email}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; direction:ltr;">{{company.website}}</span>
+  <span style="white-space:nowrap; flex-shrink:0; border-right:1px solid rgba(148,163,184,0.4); padding-right:8px; margin-right:4px;">صفحه {{system.page_index}} از {{system.page_count}}</span>
 </div>
 `.trim(),
     createdAt: now,
@@ -1434,16 +1520,7 @@ const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
   </div>
 </div>
 `.trim(),
-  footerHtml: `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('مهر و امضا صادرکننده', true)}
-      ${buildPrintSignatureCell('امضا تحویل‌گیرنده', false)}
-    </tr>
-  </tbody>
-</table>
-`.trim(),
+  footerHtml: buildDefaultFooterTemplateForModule('stock_transfers').trim(),
   createdAt: now,
   updatedAt: now,
 });
@@ -1522,16 +1599,7 @@ const buildStockTransferVoucherPrintTemplate = (now: string): StoredPrintTemplat
   </div>
 </div>
 `.trim(),
-  footerHtml: `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('مهر و امضا انبار', true)}
-      ${buildPrintSignatureCell('امضا تحویل‌گیرنده', false)}
-    </tr>
-  </tbody>
-</table>
-`.trim(),
+  footerHtml: buildDefaultFooterTemplateForModule('stock_transfers').trim(),
   createdAt: now,
   updatedAt: now,
 });
@@ -1601,16 +1669,7 @@ const buildEmployeeContractPrintTemplate = (now: string): StoredPrintTemplate =>
   <div style="min-height:430px; padding:8px 4px; ${getLongTextPrintStyle(12)}">{{record.body}}</div>
 </div>
 `.trim(),
-  footerHtml: `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('امضا و مهر کارفرما', true)}
-      ${buildPrintSignatureCell('امضای کارمند', false)}
-    </tr>
-  </tbody>
-</table>
-`.trim(),
+  footerHtml: buildDefaultFooterTemplateForModule('employee_contracts').trim(),
   createdAt: now,
   updatedAt: now,
 });
@@ -1679,16 +1738,7 @@ const buildPayrollSlipPrintTemplate = (now: string): StoredPrintTemplate => ({
   </div>
 </div>
 `.trim(),
-  footerHtml: `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody>
-    <tr>
-      ${buildPrintSignatureCell('تایید و امضای سازمان', true)}
-      ${buildPrintSignatureCell('امضای دریافت کننده', false)}
-    </tr>
-  </tbody>
-</table>
-`.trim(),
+  footerHtml: buildDefaultFooterTemplateForModule('payroll_slips').trim(),
   createdAt: now,
   updatedAt: now,
 });
@@ -1704,6 +1754,8 @@ export const buildDefaultTemplatesForModule = (
   const listPortraitTemplate = buildListA4DefaultTemplate(moduleId, now, 'portrait');
   const listLandscapeTemplate = buildListA4DefaultTemplate(moduleId, now, 'landscape');
   const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(moduleId, now);
+  const catalogFullPageRecord = buildCatalogFullPageRecordTemplate(moduleId, now);
+  const catalogFullPageList = buildCatalogFullPageListTemplate(moduleId, now);
   const domainSpecificDefaults: StoredPrintTemplate[] = (
     moduleId === 'secretariat_documents'
       ? [buildSecretariatOfficialTemplate(now)]
@@ -1719,7 +1771,7 @@ export const buildDefaultTemplatesForModule = (
   );
 
   if (!isInvoiceModule(moduleId)) {
-    const defaults: StoredPrintTemplate[] = [...domainSpecificDefaults, compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
+    const defaults: StoredPrintTemplate[] = [...domainSpecificDefaults, catalogFullPageRecord, catalogFullPageList, compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
     return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
   }
 

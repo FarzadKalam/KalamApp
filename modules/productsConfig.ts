@@ -151,6 +151,7 @@ const fieldsArray: any[] = [
   { key: 'name', labels: { fa: 'نام', en: 'Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
   { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
   { key: 'manual_code', labels: { fa: 'کد دستی', en: 'Manual Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, nature: FieldNature.STANDARD, isTableColumn: true },
+  { key: 'catalog_link', labels: { fa: 'لینک عمومی کاتالوگ', en: 'Public Catalog Link' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3.5, nature: FieldNature.STANDARD, isTableColumn: false, printable: true },
   {
     key: 'status',
     labels: { fa: 'وضعیت', en: 'Status' },

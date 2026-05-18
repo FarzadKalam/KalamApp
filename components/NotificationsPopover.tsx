@@ -6792,7 +6792,7 @@ useEffect(() => {
     };
 
     return (
-      <div dir="ltr" className="flex flex-1 min-h-0 bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
+      <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
         {withDesktopSidebar ? (
           <div dir="rtl" className="order-last w-[208px] border-l border-slate-200/55 bg-white/72 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="px-4 py-3 border-b border-slate-200/45 bg-white/55 dark:border-white/[0.07] dark:bg-white/[0.025]">
@@ -6851,7 +6851,7 @@ useEffect(() => {
           </div>
         ) : null}
 
-        <div className="flex flex-col flex-1 min-h-0 bg-white/82 dark:bg-[#1a1518]">
+        <div className="flex flex-col flex-1 min-h-0 min-w-0 bg-white/82 dark:bg-[#1a1518]">
           <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="flex items-center gap-3">
               <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
@@ -7923,7 +7923,10 @@ useEffect(() => {
           type="text"
           shape="circle"
           icon={triggerIcon}
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            setUiNotificationOverlaySuppressed(true, overlaySource);
+            setOpen(true);
+          }}
         />
       </Badge>
 

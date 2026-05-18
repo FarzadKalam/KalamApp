@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Checkbox, Modal, Tabs } from 'antd';
+import { App, Button, Checkbox, Modal, Tabs } from 'antd';
 import { DownOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
@@ -71,6 +71,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   allowFieldSelectionTab = false,
   previewMeta,
 }) => {
+  const { message } = App.useApp();
   const [activeTab, setActiveTab] = useState('preview');
   const [refreshing, setRefreshing] = useState(false);
   const [sendingInternal, setSendingInternal] = useState(false);
@@ -180,10 +181,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
 
   const handleSaveFields = async () => {
     if (!onSavePrintFields) return;
-    await onSavePrintFields();
-    if (activeTab !== 'preview') {
-      await handleRefresh();
+    const result = await onSavePrintFields();
+    if (result !== false) {
+      message.success('تنظیمات فیلدهای چاپی ذخیره شد');
+    } else {
+      message.error('ذخیره تنظیمات ناموفق بود');
     }
+    await handleRefresh();
   };
 
   useEffect(() => {
