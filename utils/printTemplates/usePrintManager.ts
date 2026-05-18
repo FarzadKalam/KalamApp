@@ -32,6 +32,11 @@ import { generatePdfBlob, prepareGeneratedPdfWindow, printAsPdf, shouldUseGenera
 import { normalizeRenderedImages } from './normalizeRenderedImages';
 import type { createPrintPerformanceTracker } from './printPerformance';
 import { printInIframe } from './printInIframe';
+import {
+  annotatePrintFlowHtml,
+  buildSmartPrintPageOffsets,
+  collectPrintPageAnchors,
+} from './printPagination';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { getCachedAuthUser } from '../sessionCache';
 import {
@@ -59,7 +64,6 @@ const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; over
 const PRINT_BODY_FOOTER_SAFETY_PX = 0;
 const PRINT_BODY_PAGE_STEP_PX = 28;
 const PRINT_BODY_EDGE_GUARD_PX = 28;
-const PRINT_BODY_MEASURE_TAIL_BUFFER_PX = 220;
 const PRINT_SECTION_CONTENT_PADDING = '2px 10px';
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
@@ -157,14 +161,14 @@ const getMeasuredPrintBodyHeight = (bodyMeasure: HTMLElement) => {
   );
 };
 
-const getMeasuredPrintPageCount = (bodyHeight: number, pageBodyStepPx: number) => {
-  const safeStep = Math.max(80, pageBodyStepPx || 0);
-  const safeHeight = Math.max(1, bodyHeight || 0);
-  const bufferedHeight =
-    safeHeight > safeStep
-      ? safeHeight + PRINT_BODY_MEASURE_TAIL_BUFFER_PX
-      : safeHeight;
-  return Math.max(1, Math.ceil(bufferedHeight / safeStep));
+const getMeasuredPrintPageOffsets = (bodyMeasure: HTMLElement, pageBodyStepPx: number) => {
+  const bodyHeight = getMeasuredPrintBodyHeight(bodyMeasure);
+  const anchors = collectPrintPageAnchors(bodyMeasure);
+  return buildSmartPrintPageOffsets({
+    totalHeight: bodyHeight,
+    pageBodyStepPx,
+    anchors,
+  });
 };
 
 const getTemplatePageBodyHeightPx = ({
@@ -436,6 +440,8 @@ export const usePrintManager = ({
   const templatesLoadedRef = useRef(false);
   const dependenciesLoadedKeyRef = useRef<string | null>(null);
   const [renderedPageCount, setRenderedPageCount] = useState(1);
+  const renderedPageOffsetsRef = useRef<number[]>([0]);
+  const [renderedPageOffsets, setRenderedPageOffsets] = useState<number[]>([0]);
   const [forcedPrintPageCount, setForcedPrintPageCount] = useState<number | null>(null);
 
   const loadTemplates = useCallback(async (mounted = true) => {
@@ -855,8 +861,15 @@ export const usePrintManager = ({
       });
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
       const bodyMeasure = bodyMeasureRef.current;
-      const bodyHeight = getMeasuredPrintBodyHeight(bodyMeasure);
-      measuredPageCount = getMeasuredPrintPageCount(bodyHeight, pageBodyStepPx);
+      const measuredPageOffsets = getMeasuredPrintPageOffsets(bodyMeasure, pageBodyStepPx);
+      renderedPageOffsetsRef.current = measuredPageOffsets;
+      setRenderedPageOffsets((prev) =>
+        prev.length === measuredPageOffsets.length &&
+        prev.every((value, index) => value === measuredPageOffsets[index])
+          ? prev
+          : measuredPageOffsets
+      );
+      measuredPageCount = Math.max(1, measuredPageOffsets.length);
     }
     if (!bodyMeasureRef.current && previewPageCount > measuredPageCount) {
       measuredPageCount = previewPageCount;
@@ -2061,7 +2074,9 @@ export const usePrintManager = ({
 
     return {
       headerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedHeaderHtml)))),
-      contentHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedContentHtml)))),
+      contentHtml: annotatePrintFlowHtml(
+        localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedContentHtml))))
+      ),
       footerHtml: localizeHtmlNumbers(normalizeRenderedImages(renderBlockTemplateHtml(fillTemplateHtml(normalizedFooterHtml)))),
     };
   }, [fillTemplateHtml, localizeHtmlNumbers, moduleId, normalizeRenderedImages, renderBlockTemplateHtml, selectedStoredTemplate]);
@@ -2069,6 +2084,8 @@ export const usePrintManager = ({
   useEffect(() => {
     if (!selectedStoredTemplate) {
       setRenderedPageCount(1);
+      renderedPageOffsetsRef.current = [0];
+      setRenderedPageOffsets([0]);
       return;
     }
 
@@ -2103,8 +2120,15 @@ export const usePrintManager = ({
       });
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
 
-      const bodyHeight = getMeasuredPrintBodyHeight(bodyMeasure);
-      const nextPageCount = getMeasuredPrintPageCount(bodyHeight, pageBodyStepPx);
+      const nextPageOffsets = getMeasuredPrintPageOffsets(bodyMeasure, pageBodyStepPx);
+      renderedPageOffsetsRef.current = nextPageOffsets;
+      setRenderedPageOffsets((prev) =>
+        prev.length === nextPageOffsets.length &&
+        prev.every((value, index) => value === nextPageOffsets[index])
+          ? prev
+          : nextPageOffsets
+      );
+      const nextPageCount = Math.max(1, nextPageOffsets.length);
       setRenderedPageCount((prev) => (prev === nextPageCount ? prev : nextPageCount));
     };
 
@@ -2210,9 +2234,10 @@ export const usePrintManager = ({
       });
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
       const pageBodyHeightCss = toCssMm(pageBodyHeightPx);
-      const measuredCurrentPageCount = bodyMeasureRef.current
-        ? getMeasuredPrintPageCount(getMeasuredPrintBodyHeight(bodyMeasureRef.current), pageBodyStepPx)
-        : 0;
+      const measuredCurrentPageOffsets = bodyMeasureRef.current
+        ? getMeasuredPrintPageOffsets(bodyMeasureRef.current, pageBodyStepPx)
+        : [];
+      const measuredCurrentPageCount = measuredCurrentPageOffsets.length;
       const effectivePageCount = Math.max(
         1,
         measuredCurrentPageCount,
@@ -2222,7 +2247,14 @@ export const usePrintManager = ({
             ? forcedPrintPageCount
             : renderedPageCount
       );
-      const pageIndexes = Array.from({ length: effectivePageCount }, (_value, index) => index);
+      const effectivePageOffsets = measuredCurrentPageOffsets.length > 0
+        ? measuredCurrentPageOffsets
+        : renderedPageOffsetsRef.current.length > 0
+          ? renderedPageOffsetsRef.current
+          : renderedPageOffsets;
+      const pageStartOffsets = Array.from({ length: effectivePageCount }, (_value, index) =>
+        effectivePageOffsets[index] ?? index * pageBodyStepPx
+      );
 
       return React.createElement(
         'div',
@@ -2260,7 +2292,7 @@ export const usePrintManager = ({
             dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
           })
         ),
-        ...pageIndexes.map((pageIndex) =>
+        ...pageStartOffsets.map((pageStartOffset, pageIndex) =>
           React.createElement(
             'div',
             {
@@ -2328,7 +2360,7 @@ export const usePrintManager = ({
                 'div',
                 {
                   className: 'print-template-body-segment',
-                  style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageIndex * pageBodyStepPx}px)` },
+                  style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
                 },
                 React.createElement('div', {
                   className: 'print-template-body-inner',
@@ -2434,6 +2466,7 @@ export const usePrintManager = ({
     renderedCustomTemplate,
     forcedPrintPageCount,
     printMode,
+    renderedPageOffsets,
     renderedPageCount,
     printableFieldsForTemplate,
     selectedPrintFields,

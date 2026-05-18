@@ -71,6 +71,14 @@ export const printStyles = `
     line-height: 1.9;
     font-size: 14px;
   }
+  .invoice-custom-print-shell [data-print-flow-block] {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .invoice-custom-print-shell [data-print-flow-block="high"] {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
   .invoice-custom-print-shell table {
     --table-border-color: #d1d5db;
     border-collapse: collapse !important;
