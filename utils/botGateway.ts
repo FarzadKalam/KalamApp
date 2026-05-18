@@ -22,6 +22,14 @@ type SendBotMessageArgs = {
   moduleId?: string;
   recordId?: string;
   customerId?: string;
+  attachments?: Array<{
+    url?: string | null;
+    name?: string | null;
+    mimeType?: string | null;
+    fileType?: string | null;
+  }>;
+  fallbackText?: string;
+  extraPayload?: Record<string, any>;
 };
 
 type CounterpartyBotGroupTarget = {
@@ -39,6 +47,12 @@ type SendCounterpartyBotGroupMessageArgs = {
   messageType?: string;
   extraPayload?: Record<string, any>;
   fallbackText?: string;
+  attachments?: Array<{
+    url?: string | null;
+    name?: string | null;
+    mimeType?: string | null;
+    fileType?: string | null;
+  }>;
 };
 
 type SendCustomerBotMessageArgs = {
@@ -94,14 +108,27 @@ export const sendBotMessageViaGateway = async ({
   moduleId,
   recordId,
   customerId,
+  attachments,
+  fallbackText,
+  extraPayload,
 }: SendBotMessageArgs) => {
   const recipient = String(chatId || '').trim();
   const messageText = String(text || '').trim();
+  const normalizedAttachments = Array.isArray(attachments)
+    ? attachments
+      .map((item) => ({
+        url: String(item?.url || '').trim(),
+        name: String(item?.name || '').trim() || null,
+        mimeType: String(item?.mimeType || '').trim() || null,
+        fileType: String(item?.fileType || '').trim() || null,
+      }))
+      .filter((item) => item.url)
+    : [];
 
   if (!recipient) {
     throw new Error('شناسه چت/گیرنده بات مشخص نشده است.');
   }
-  if (!messageText) {
+  if (!messageText && normalizedAttachments.length === 0) {
     throw new Error('متن پیام بات خالی است.');
   }
 
@@ -136,6 +163,55 @@ export const sendBotMessageViaGateway = async ({
   });
 
   try {
+    if (channel === 'rubika' && normalizedAttachments.length > 0) {
+      const activeConnection = await getActiveChannelSettings(channel);
+      const connectionId = String(activeConnection?.id || '').trim();
+      if (!connectionId) {
+        throw new Error('تنظیمات فعال بات روبیکا پیدا نشد.');
+      }
+
+      const { data: proxyData, error: proxyError } = await supabase.functions.invoke('bot-admin', {
+        body: {
+          action: 'send_test_message',
+          channel,
+          connectionId,
+          chatId: recipient,
+          text: messageText,
+          skipLog: false,
+          extraPayload,
+          fallbackText,
+          attachments: normalizedAttachments,
+        },
+      });
+      if (proxyError) throw proxyError;
+      if (!proxyData?.success) {
+        throw new Error(String(proxyData?.message || 'ارسال پیام بات ناموفق بود.'));
+      }
+
+      const providerResponse = proxyData?.provider_result || {};
+      if (logRow?.id) {
+        await updateOutboundMessageStatus(String(logRow.id), 'sent', {
+          providerMessageId: String(
+            providerResponse?.result?.message_id
+            || providerResponse?.message_id
+            || providerResponse?.data?.message_id
+            || providerResponse?.data?.message_update?.message_id
+            || providerResponse?.data?.messageUpdate?.messageId
+            || ''
+          ),
+          metadata: {
+            channel,
+            response: providerResponse,
+            provider_messages: proxyData?.provider_messages || [],
+            attachments: normalizedAttachments,
+            fallbackText: fallbackText || null,
+          },
+        });
+      }
+
+      return providerResponse;
+    }
+
     const response = await fetch(buildSendMessageUrl(baseUrl, token, sendMessagePath), {
       method: 'POST',
       headers: {
@@ -197,6 +273,7 @@ export const sendCounterpartyBotGroupMessage = async ({
   messageType,
   extraPayload,
   fallbackText,
+  attachments,
 }: SendCounterpartyBotGroupMessageArgs) => {
   const channel = String(group?.channel_type || '').trim() as BotChannel;
   if (!['rubika', 'telegram', 'bale'].includes(channel)) {
@@ -229,6 +306,14 @@ export const sendCounterpartyBotGroupMessage = async ({
       skipLog: false,
       extraPayload,
       fallbackText,
+      attachments: (attachments || [])
+        .map((item) => ({
+          url: String(item?.url || '').trim(),
+          name: String(item?.name || '').trim() || null,
+          mimeType: String(item?.mimeType || '').trim() || null,
+          fileType: String(item?.fileType || '').trim() || null,
+        }))
+        .filter((item) => item.url),
     },
   });
   if (proxyError) throw proxyError;
@@ -245,6 +330,13 @@ export const sendCounterpartyBotGroupMessage = async ({
     || providerResponse?.data?.messageUpdate?.messageId
     || ''
   ).trim() || null;
+  const providerMessages = Array.isArray(proxyData?.provider_messages) && proxyData.provider_messages.length > 0
+    ? proxyData.provider_messages
+    : [{
+      message_type: String(messageType || 'text').trim() || 'text',
+      content_text: messageText,
+      provider_result: providerResponse,
+    }];
   const { data: authData } = await supabase.auth.getUser();
   const currentUserId = String(authData?.user?.id || '').trim() || null;
   const currentUserProfile = currentUserId
@@ -261,25 +353,47 @@ export const sendCounterpartyBotGroupMessage = async ({
     sender_avatar_url: String((currentUserProfile as any)?.avatar_url || '').trim() || null,
   };
 
-  const { error: insertError } = await supabase
-    .from('counterparty_bot_messages')
-    .insert([{
+  const rowsToInsert = providerMessages.map((providerItem: any) => {
+    const itemProviderResult = providerItem?.provider_result || {};
+    const attachment = providerItem?.attachment && typeof providerItem.attachment === 'object'
+      ? providerItem.attachment
+      : null;
+    return {
       bot_group_id: group.id || null,
       customer_id: group.customer_id || null,
       supplier_id: group.supplier_id || null,
       channel_type: channel,
       direction: 'outbound',
-      message_type: String(messageType || 'text').trim() || 'text',
+      message_type: String(providerItem?.message_type || messageType || 'text').trim() || 'text',
       chat_id: chatId,
-      provider_message_id: providerMessageId,
-      content_text: messageText,
+      provider_message_id: String(
+        itemProviderResult?.result?.message_id
+        || itemProviderResult?.message_id
+        || itemProviderResult?.data?.message_id
+        || itemProviderResult?.data?.message_update?.message_id
+        || itemProviderResult?.data?.messageUpdate?.messageId
+        || providerMessageId
+        || ''
+      ) || null,
+      content_text: String(providerItem?.content_text ?? messageText ?? '').trim() || null,
+      file_url: String(providerItem?.file_url || attachment?.url || '').trim() || null,
+      file_name: String(providerItem?.file_name || attachment?.name || '').trim() || null,
+      mime_type: String(providerItem?.mime_type || attachment?.mime_type || attachment?.mimeType || '').trim() || null,
       created_by: currentUserId,
       payload: {
         ...(payload || {}),
+        attachments: attachment ? [attachment] : ((payload as any)?.attachments || []),
+        provider_file_id: String(providerItem?.provider_file_id || '').trim() || null,
+        provider_upload: providerItem?.provider_upload || null,
         ...senderPayload,
-        provider_response: providerResponse || {},
+        provider_response: itemProviderResult || {},
       },
-    }]);
+    };
+  });
+
+  const { error: insertError } = await supabase
+    .from('counterparty_bot_messages')
+    .insert(rowsToInsert);
   if (insertError) throw insertError;
 
   return proxyData;

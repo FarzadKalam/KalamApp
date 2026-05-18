@@ -51,7 +51,7 @@ export const OPERATIONAL_CASH_BANK_SOURCE_MODULES: OperationalCashBankSourceModu
     dateField: 'request_date',
     accountField: 'source_account',
     sourceLinkField: 'employee_advance_id',
-    selectFields: ['id', 'request_date', 'assignee_id', 'payments'],
+    selectFields: ['id', 'request_date', 'employee_id', 'employee:employee_id(related_profile_id)', 'assignee_id', 'payments'],
   },
   {
     moduleId: 'payroll_slips',
@@ -60,7 +60,7 @@ export const OPERATIONAL_CASH_BANK_SOURCE_MODULES: OperationalCashBankSourceModu
     dateField: 'period_end',
     accountField: 'source_account',
     sourceLinkField: 'payroll_slip_id',
-    selectFields: ['id', 'period_end', 'assignee_id', 'payments'],
+    selectFields: ['id', 'period_end', 'employee_id', 'employee:employee_id(related_profile_id)', 'assignee_id', 'payments'],
   },
 ];
 
@@ -293,6 +293,9 @@ export const buildCashBankOperationPayloadFromPaymentRow = (args: {
   const accountId = resolvePaymentRowAccountId(row, source.accountField);
   const accountModule = accountId ? accountModuleById?.get(accountId) : null;
   const assigneeId = resolvePaymentRowAssigneeId(row, record);
+  const employeeId = source.moduleId === 'employee_advances' || source.moduleId === 'payroll_slips'
+    ? normalizeOperationalText(record?.employee?.related_profile_id) || null
+    : null;
   const paymentType = resolveOperationalCashBankPaymentType(row);
   const rowTags = normalizeRowTags(row?.tags);
   const payload = transformModulePayloadForSave(
@@ -310,7 +313,7 @@ export const buildCashBankOperationPayloadFromPaymentRow = (args: {
       assignee_id: assigneeId,
       assignee_type: assigneeId ? 'user' : null,
       assignee_role_id: null,
-      employee_id: assigneeId,
+      employee_id: employeeId,
       image_url: resolvePaymentRowAttachment(row),
       description: row?.description || null,
       attachment_url: resolvePaymentRowAttachment(row),

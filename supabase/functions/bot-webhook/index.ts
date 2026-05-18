@@ -545,6 +545,20 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     rubikaNewMessage?.file?.name,
     payload?.file?.name
   );
+  const rawFileType = pick(
+    message?.file_type,
+    message?.file?.type,
+    message?.file?.file_type,
+    message?.media?.type,
+    rubikaNewMessage?.file_type,
+    rubikaNewMessage?.file?.type,
+    rubikaUpdatedMessage?.file_type,
+    rubikaUpdatedMessage?.file?.type,
+    rubikaRootMessage?.file_type,
+    rubikaRootMessage?.file?.type,
+    payload?.file_type,
+    payload?.file?.type,
+  );
   const mimeType = pick(
     message?.mime_type,
     message?.file?.mime_type,
@@ -579,12 +593,28 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   const hasVideo = Boolean(message?.video || payload?.video);
   const hasAudio = Boolean(message?.audio || payload?.audio);
   const hasVoice = Boolean(message?.voice || payload?.voice);
+  const fileTypeLower = String(rawFileType || '').trim().toLowerCase();
   const mimeLower = String(mimeType || '').toLowerCase();
   const nameLower = String(fileName || '').toLowerCase();
-  const looksLikeImage = mimeLower.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(nameLower) || payloadText.includes('"photo"');
-  const looksLikeVideo = mimeLower.startsWith('video/') || /\.(mp4|mkv|mov|avi|webm|3gp)$/i.test(nameLower) || payloadText.includes('"video"');
-  const looksLikeVoice = mimeLower === 'audio/mpeg' || mimeLower === 'audio/mp3' || /\.mp3$/i.test(nameLower) || payloadText.includes('"voice"');
-  const looksLikeAudio = mimeLower.startsWith('audio/') || /\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(nameLower) || payloadText.includes('"audio"');
+  const looksLikeImage = fileTypeLower === 'image'
+    || fileTypeLower === 'gif'
+    || mimeLower.startsWith('image/')
+    || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(nameLower)
+    || payloadText.includes('"photo"');
+  const looksLikeVideo = fileTypeLower === 'video'
+    || mimeLower.startsWith('video/')
+    || /\.(mp4|mkv|mov|avi|webm|3gp)$/i.test(nameLower)
+    || payloadText.includes('"video"');
+  const looksLikeVoice = fileTypeLower === 'voice'
+    || mimeLower === 'audio/mpeg'
+    || mimeLower === 'audio/mp3'
+    || /\.mp3$/i.test(nameLower)
+    || payloadText.includes('"voice"');
+  const looksLikeAudio = fileTypeLower === 'music'
+    || fileTypeLower === 'audio'
+    || mimeLower.startsWith('audio/')
+    || /\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(nameLower)
+    || payloadText.includes('"audio"');
   const messageType =
     (hasPhoto || looksLikeImage) ? 'image'
       : (hasVoice || looksLikeVoice) ? 'voice'

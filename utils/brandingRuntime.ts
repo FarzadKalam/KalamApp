@@ -10,6 +10,9 @@ import {
   type BrandingSettingsPayload,
 } from "../theme/brandTheme";
 import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } from "./currency";
+import { getCachedAuthUser } from "./sessionCache";
+import { loadScopedCompanySettings } from "./companySettings";
+import { isLocalHost, isTazeSystemFamilyHost } from "./hostRouting";
 
 export const BRANDING_CACHE_KEY = "erp:branding-cache";
 
@@ -186,12 +189,7 @@ const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
 
 const loadAuthenticatedBranding = async (): Promise<RuntimeBrandingResult> => {
   const [companyResult, themeResult] = await Promise.all([
-    supabase
-      .from("company_settings")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle(),
+    loadScopedCompanySettings(supabase as any),
     supabase
       .from("integration_settings")
       .select("id, settings")
@@ -225,7 +223,18 @@ export const loadRuntimeBranding = async (
   }
 
   const pending = (async () => {
+    const hostname =
+      typeof window !== "undefined"
+        ? String(window.location.hostname || "").trim().toLowerCase()
+        : "";
+    const authUser = await getCachedAuthUser(supabase).catch(() => null);
+    const preferAuthenticatedBranding =
+      Boolean(authUser?.id) && (isLocalHost(hostname) || !isTazeSystemFamilyHost(hostname));
+
     try {
+      if (preferAuthenticatedBranding) {
+        return await loadAuthenticatedBranding();
+      }
       return await loadPublicBranding();
     } catch (publicError) {
       try {

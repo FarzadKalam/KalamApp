@@ -289,6 +289,23 @@ const isSourceBackedCashBankOperation = (op: any) => {
   );
 };
 
+const resolveOperationSourceModuleId = (operation: any) => {
+  const metadata = parseCashBankMetadata(operation?.metadata);
+  const metadataSourceTable = normalizeOperationalText(metadata?.source_table);
+  if (metadataSourceTable) return metadataSourceTable;
+  if (operation?.sales_invoice_id) return 'invoices';
+  if (operation?.purchase_invoice_id) return 'purchase_invoices';
+  if (operation?.employee_advance_id) return 'employee_advances';
+  if (operation?.payroll_slip_id) return 'payroll_slips';
+  if (operation?.expense_document_id) return 'expense_documents';
+  return 'cash_bank_operations';
+};
+
+export const isEmployeeFinancialOverviewOperation = (operation: any) => {
+  const sourceModuleId = resolveOperationSourceModuleId(operation);
+  return sourceModuleId === 'employee_advances' || sourceModuleId === 'payroll_slips';
+};
+
 const buildExistingSourceOperationKeys = (operations: any[]) => {
   const keys = new Set<string>();
   (operations || []).forEach((operation) => {
@@ -640,6 +657,7 @@ export const fetchOperationalFinancialOverview = async ({
       const operationType = normalizeOperationalText(operation?.operation_type);
       if (operationType === 'transfer') return false;
       if (String(operation?.payment_type || '').trim().toLowerCase() === 'cheque' && isFailedCheque(operation?.cheque_status)) return false;
+      if (entityType === 'employee' && !isEmployeeFinancialOverviewOperation(operation)) return false;
       return isSettledOperationStatus(operation?.status);
     })
     .forEach((operation) => {
@@ -648,15 +666,7 @@ export const fetchOperationalFinancialOverview = async ({
       const operationType = String(operation?.operation_type || '').trim();
       const { debit, credit } = buildOperationAmountPair(entityType, operationType, amount);
       const accountInfo = resolveOperationAccountInfo(operation, accountById);
-      const sourceModuleId = operation?.sales_invoice_id
-        ? 'invoices'
-        : operation?.purchase_invoice_id
-          ? 'purchase_invoices'
-          : operation?.employee_advance_id
-            ? 'employee_advances'
-            : operation?.payroll_slip_id
-              ? 'payroll_slips'
-              : 'cash_bank_operations';
+      const sourceModuleId = resolveOperationSourceModuleId(operation);
       const sourceRecordId = normalizeOperationalText(
         operation?.sales_invoice_id
         || operation?.purchase_invoice_id
@@ -700,7 +710,7 @@ export const fetchOperationalFinancialOverview = async ({
     });
 
   barters
-    .filter((barter) => normalizeStatus(barter?.status) !== 'canceled')
+    .filter((barter) => entityType !== 'employee' && normalizeStatus(barter?.status) !== 'canceled')
     .forEach((barter) => {
       const amount = Math.abs(toNumber(barter?.initial_amount));
       if (amount <= 0) return;

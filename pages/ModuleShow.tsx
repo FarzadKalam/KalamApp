@@ -92,9 +92,16 @@ import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
 import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
-import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import { insertRecordActivity, logAndTouchRecord } from '../utils/recordActivity';
+import { executeSaasModuleAction } from '../utils/saasAdminModules';
+import {
+  buildInstructionModuleConfig,
+  buildInstructionModuleOptions,
+  INSTRUCTIONS_MODULE_ID,
+  normalizeInstructionIdList,
+} from '../utils/instructionSupport';
+import { syncProcessTemplateStageInstructionLinks } from '../utils/processTemplateStageInstructions';
 
 const isStatementTimeoutError = (error: any) => {
   const code = String(error?.code || '').trim();
@@ -143,55 +150,6 @@ const CUSTOMER_BOT_CHANNEL_LABELS: Record<string, string> = {
   telegram: 'تلگرام',
   bale: 'بله',
   none: 'بدون پلتفرم',
-};
-
-const buildRubikaLinkedAttachmentMessage = (
-  baseText: string,
-  attachments: Array<{ name?: string; url?: string }>
-) => {
-  const normalizedBaseText = String(baseText || '').trim();
-  const lines: Array<{ text: string; linkUrl?: string }> = [];
-  if (normalizedBaseText) {
-    lines.push({ text: normalizedBaseText });
-  }
-  (attachments || []).forEach((item, index) => {
-    const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
-    const url = String(item?.url || '').trim();
-    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
-  });
-
-  if (lines.length === 0) {
-    return { text: '', metadata: undefined as Record<string, any> | undefined };
-  }
-
-  let text = '';
-  let cursor = 0;
-  const metaDataParts: Array<Record<string, any>> = [];
-  lines.forEach((line, index) => {
-    if (index > 0) {
-      text += '\n';
-      cursor += 1;
-    }
-    const segment = String(line.text || '');
-    const startIndex = cursor;
-    text += segment;
-    cursor += segment.length;
-    if (line.linkUrl) {
-      metaDataParts.push({
-        type: 'Link',
-        from_index: startIndex,
-        length: segment.length,
-        link_url: line.linkUrl,
-      });
-    }
-  });
-
-  return {
-    text,
-    metadata: metaDataParts.length > 0
-      ? { meta_data_parts: metaDataParts }
-      : undefined,
-  };
 };
 
 const buildEnglishActivationBase = (value: any) => {
@@ -394,6 +352,8 @@ const ModuleShow: React.FC = () => {
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [allRoles, setAllRoles] = useState<any[]>([]);
   const taskProcessCustomFields = useMemo(() => {
     if (moduleId !== 'tasks' || !data?.recurrence_info) return [] as any[];
     const recurrence = data.recurrence_info && typeof data.recurrence_info === 'object' ? data.recurrence_info : {};
@@ -407,25 +367,43 @@ const ModuleShow: React.FC = () => {
     }));
   }, [data?.recurrence_info, moduleId]);
   const moduleConfig = useMemo(() => {
-    if (moduleId !== 'tasks' || taskProcessCustomFields.length === 0) return baseModuleConfig;
-    const existingFieldKeys = new Set((baseModuleConfig?.fields || []).map((field: any) => String(field?.key || '').trim()));
-    const extraFields = taskProcessCustomFields.filter((field: any) => !existingFieldKeys.has(String(field?.key || '').trim()));
-    if (extraFields.length === 0) return baseModuleConfig;
-    const hasCustomBlock = (baseModuleConfig?.blocks || []).some((block: any) => String(block?.id || '') === 'process_task_custom_fields');
-    return {
-      ...baseModuleConfig,
-      fields: [...(baseModuleConfig?.fields || []), ...extraFields],
-      blocks: [
-        ...(baseModuleConfig?.blocks || []),
-        ...(hasCustomBlock ? [] : [{
-          id: 'process_task_custom_fields',
-          titles: { fa: 'فیلدهای اختصاصی فعالیت', en: 'Activity Custom Fields' },
-          type: BlockType.FIELD_GROUP,
-          order: 1.6,
-        }]),
-      ],
-    };
-  }, [baseModuleConfig, moduleId, taskProcessCustomFields]);
+    let nextConfig = baseModuleConfig;
+    if (moduleId === 'tasks' && taskProcessCustomFields.length > 0) {
+      const existingFieldKeys = new Set((nextConfig?.fields || []).map((field: any) => String(field?.key || '').trim()));
+      const extraFields = taskProcessCustomFields.filter((field: any) => !existingFieldKeys.has(String(field?.key || '').trim()));
+      if (extraFields.length > 0) {
+        const hasCustomBlock = (nextConfig?.blocks || []).some((block: any) => String(block?.id || '') === 'process_task_custom_fields');
+        nextConfig = {
+          ...nextConfig,
+          fields: [...(nextConfig?.fields || []), ...extraFields],
+          blocks: [
+            ...(nextConfig?.blocks || []),
+            ...(hasCustomBlock ? [] : [{
+              id: 'process_task_custom_fields',
+              titles: { fa: 'فیلدهای اختصاصی فعالیت', en: 'Activity Custom Fields' },
+              type: BlockType.FIELD_GROUP,
+              order: 1.6,
+            }]),
+          ],
+        };
+      }
+    }
+    if (moduleId === INSTRUCTIONS_MODULE_ID && nextConfig) {
+      nextConfig = buildInstructionModuleConfig(nextConfig, {
+        moduleOptions: buildInstructionModuleOptions(),
+        userOptions: allUsers.map((user: any) => ({
+          value: String(user?.id || ''),
+          label: String(user?.full_name || user?.email || user?.mobile_1 || user?.id || '').trim() || '-',
+        })).filter((option) => option.value),
+        roleOptions: allRoles.map((role: any) => ({
+          value: String(role?.id || ''),
+          label: String(role?.title || role?.name || role?.id || '').trim() || '-',
+        })).filter((option) => option.value),
+      });
+    }
+    return nextConfig;
+  }, [allRoles, allUsers, baseModuleConfig, moduleId, taskProcessCustomFields]);
+  const moduleTable = moduleConfig?.table || moduleId;
   const displayData = useMemo(
     () => normalizeModuleFormValues(moduleId, data || {}),
     [data, moduleId]
@@ -1188,8 +1166,6 @@ const ModuleShow: React.FC = () => {
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
   const [accessDenied, setAccessDenied] = useState(false);
 
-  const [allUsers, setAllUsers] = useState<any[]>([]);
-  const [allRoles, setAllRoles] = useState<any[]>([]);
   const [printShareModalOpen, setPrintShareModalOpen] = useState(false);
   const [printShareTemplateModalOpen, setPrintShareTemplateModalOpen] = useState(false);
   const [printShareTargetIds, setPrintShareTargetIds] = useState<string[]>([]);
@@ -1292,7 +1268,7 @@ const ModuleShow: React.FC = () => {
       try {
         // 👇 تغییر مهم: اضافه کردن صریح فیلدهای سیستمی به select
         const { data: record, error } = await supabase
-            .from(moduleId)
+            .from(moduleTable)
             .select(`
                 *,
                 created_at,
@@ -1566,7 +1542,7 @@ const ModuleShow: React.FC = () => {
       if (moduleId === 'production_orders' && id) {
         try {
           const { data: latestRecord, error: latestError } = await supabase
-            .from(moduleId)
+            .from(moduleTable)
             .select('*')
             .eq('id', id)
             .single();
@@ -1719,7 +1695,7 @@ const ModuleShow: React.FC = () => {
 
   const finalizeStatusUpdate = async (payload: any) => {
     if (!id) return;
-    const { error } = await supabase.from(moduleId).update(payload).eq('id', id);
+    const { error } = await supabase.from(moduleTable).update(payload).eq('id', id);
     if (error) throw error;
     setData((prev: any) => ({ ...prev, ...payload }));
   };
@@ -2237,7 +2213,7 @@ const ModuleShow: React.FC = () => {
         });
 
         const patch = { [processDraftFieldKey]: mappedDraft } as any;
-        await supabase.from(moduleId).update(patch).eq('id', data.id);
+        await supabase.from(moduleTable).update(patch).eq('id', data.id);
         setData((prev: any) => ({ ...prev, ...patch }));
         setAutoSyncedProcessTemplateId(data.process_template_id);
       } catch (err) {
@@ -2375,7 +2351,7 @@ const ModuleShow: React.FC = () => {
             }
 
             const { error: updateError } = await supabase
-              .from(moduleId)
+              .from(moduleTable)
               .update(updateData)
               .eq('id', id);
 
@@ -2442,7 +2418,7 @@ const ModuleShow: React.FC = () => {
             process_template_id: templateId,
             [processDraftFieldKey]: mappedDraft,
           };
-          const { error: updateError } = await supabase.from(moduleId).update(patch).eq('id', id);
+          const { error: updateError } = await supabase.from(moduleTable).update(patch).eq('id', id);
           if (updateError) throw updateError;
 
           setData((prev: any) => ({ ...(prev || {}), ...patch }));
@@ -3421,7 +3397,7 @@ const ModuleShow: React.FC = () => {
 
           try {
             const { error } = await supabase
-              .from(moduleId)
+              .from(moduleTable)
               .update(updatePayload)
               .eq('id', id);
             if (error) throw error;
@@ -3482,7 +3458,7 @@ const ModuleShow: React.FC = () => {
           ? { image_url: urlData.publicUrl, attachment_url: urlData.publicUrl }
           : { image_url: urlData.publicUrl };
       const { error: updateError } = await supabase
-        .from(moduleId)
+        .from(moduleTable)
         .update(imageUpdatePayload)
         .eq('id', id);
       if (updateError) throw updateError;
@@ -3916,15 +3892,9 @@ const ModuleShow: React.FC = () => {
           throw new Error(`تنظیمات فعال بات ${CUSTOMER_BOT_CHANNEL_LABELS[target.channel_type]} پیدا نشد.`);
         }
         const isRubikaTarget = String(target.channel_type || '').trim() === 'rubika';
-        const rubikaLinkedMessage = isRubikaTarget
-          ? buildRubikaLinkedAttachmentMessage(noteText, externalAttachment)
-          : null;
         const botMessageText = isRubikaTarget
-          ? (String(rubikaLinkedMessage?.text || '').trim() || 'PDF ارسال شد.')
+          ? (String(noteText || '').trim() || 'PDF ارسال شد.')
           : (externalText || 'PDF ارسال شد.');
-        const extraPayload = isRubikaTarget
-          ? (rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined)
-          : undefined;
         const fallbackText = isRubikaTarget
           ? [noteText, attachmentNameText].filter(Boolean).join('\n')
           : undefined;
@@ -3936,8 +3906,13 @@ const ModuleShow: React.FC = () => {
             chatId: target.bot_chat_id,
             text: botMessageText,
             skipLog: false,
-            extraPayload,
             fallbackText,
+            attachments: isRubikaTarget ? externalAttachment.map((item) => ({
+              url: item.url,
+              name: item.name,
+              mimeType: item.mimeType || null,
+              fileType: item.fileType || null,
+            })) : undefined,
           },
         });
         if (proxyError) throw proxyError;
@@ -4082,7 +4057,7 @@ const ModuleShow: React.FC = () => {
       const updatePayload = moduleId === 'cash_bank_operations'
         ? { image_url: url, attachment_url: url }
         : { image_url: url };
-      const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', id);
+      const { error } = await supabase.from(moduleTable).update(updatePayload).eq('id', id);
       if (error) throw error;
       setData((prev: any) => ({
         ...prev,
@@ -4275,7 +4250,7 @@ const ModuleShow: React.FC = () => {
           });
         }
       }
-      const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', id);
+      const { error } = await supabase.from(moduleTable).update(updatePayload).eq('id', id);
       if (error) throw error;
       if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && key === 'status') {
         const authUser = await getCachedAuthUser(supabase);
@@ -4401,6 +4376,9 @@ const ModuleShow: React.FC = () => {
         [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
           stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
         ),
+        instruction_ids: normalizeInstructionIdList(
+          stage?.instruction_ids || stage?.metadata?.instruction_ids
+        ),
         weight: Number(stage?.weight || stage?.metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
@@ -4462,6 +4440,7 @@ const ModuleShow: React.FC = () => {
         if (insertError) throw insertError;
       }
     }
+    await syncProcessTemplateStageInstructionLinks(supabase, templateId, nextStages);
   }, [isUuid]);
 
   const handleSmartFormSave = useCallback(async (
@@ -4470,6 +4449,23 @@ const ModuleShow: React.FC = () => {
   ) => {
     try {
       if (!id) return;
+      if (moduleConfig?.formAdapter?.save) {
+        const result = await moduleConfig.formAdapter.save({
+          mode: 'update',
+          recordId: String(id),
+          values,
+          currentValues: data || {},
+        });
+        msg.success('ذخیره شد');
+        setIsEditDrawerOpen(false);
+        const nextRecordId = String(result?.id || '').trim();
+        if (nextRecordId && nextRecordId !== String(id)) {
+          navigate(`/${moduleId}/${nextRecordId}`, { replace: true });
+          return;
+        }
+        void fetchRecord(true);
+        return;
+      }
       if (moduleId === 'process_templates') {
         values = syncProcessTemplateTargetModules(values);
       }
@@ -4498,9 +4494,9 @@ const ModuleShow: React.FC = () => {
 
       const changedKeys = Object.keys(values).filter((k) => !areValuesEqual(values[k], previous[k]));
 
-      let updateResult = await supabase.from(moduleId).update(persistedValues).eq('id', id);
+      let updateResult = await supabase.from(moduleTable).update(persistedValues).eq('id', id);
       if (updateResult.error && isMissingAuditColumnError(updateResult.error)) {
-        updateResult = await supabase.from(moduleId).update(values).eq('id', id);
+        updateResult = await supabase.from(moduleTable).update(values).eq('id', id);
       }
       if (updateResult.error) throw updateResult.error;
       if (moduleId === 'process_templates') {
@@ -4575,7 +4571,7 @@ const ModuleShow: React.FC = () => {
     } catch (err: any) {
       msg.error(toFaErrorMessage(err, 'عملیات ناموفق بود.'));
     }
-  }, [data, fetchRecord, id, logFieldChange, moduleId, msg, syncProcessTemplateStages]);
+  }, [data, fetchRecord, id, logFieldChange, moduleConfig, moduleId, msg, navigate, syncProcessTemplateStages]);
 
   const openResolvedAccountingEntries = useCallback((entries: ResolvedJournalEntry[]) => {
     const choices = buildAccountingEntryChoices(entries);
@@ -5625,6 +5621,7 @@ const ModuleShow: React.FC = () => {
     return <ModuleShowSkeleton />;
   }
   if (!data) return null;
+  const canInlineEdit = canEditModule && moduleConfig.disableInlineFieldEditing !== true;
 
   const renderSmartField = (field: any, isHeader = false) => {
     if (!canViewField(field.key)) return null;
@@ -5660,7 +5657,7 @@ const ModuleShow: React.FC = () => {
               const patch = { [field.key]: nextValue } as Record<string, any>;
               setData((prev: any) => ({ ...(prev || {}), ...patch }));
               void supabase
-                .from(moduleId)
+                .from(moduleTable)
                 .update(patch)
                 .eq('id', id)
                 .then(({ error }) => {
@@ -5796,9 +5793,9 @@ const ModuleShow: React.FC = () => {
 
     if (isHeader) {
       return (
-        <div className="group flex items-center gap-2 cursor-pointer" onClick={() => !field.readonly && canEditModule && !isProcessTemplateFieldLocked && startEdit(field.key, value)}>
+        <div className="group flex items-center gap-2 cursor-pointer" onClick={() => !field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && startEdit(field.key, value)}>
           {displayNode}
-          {!field.readonly && canEditModule && !isProcessTemplateFieldLocked && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
+          {!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && <EditOutlined className="text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity text-xs" />}
         </div>
       );
     }
@@ -5806,15 +5803,31 @@ const ModuleShow: React.FC = () => {
     return (
       <div
         className={`group flex justify-between min-h-[32px] hover:bg-gray-50 dark:hover:bg-white/5 px-3 rounded-lg -mx-3 transition-colors cursor-pointer border border-transparent hover:border-gray-100 dark:hover:border-gray-700 ${isSuperLongTextField ? 'items-start py-2' : 'items-center'}`}
-        onClick={() => !field.readonly && canEditModule && !isProcessTemplateFieldLocked && startEdit(field.key, value)}
+        onClick={() => !field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && startEdit(field.key, value)}
       >
         <div className="text-gray-800 dark:text-gray-200 flex-1 min-w-0">{displayNode}</div>
-        {!field.readonly && canEditModule && !isProcessTemplateFieldLocked && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
+        {!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}
       </div>
     );
   };
 
   const canUseAction = (actionId: string) => canViewField(`__action_${actionId}`);
+  const handleModuleRecordAction = async (actionId: string) => {
+    try {
+      const result = await executeSaasModuleAction(moduleId, actionId, data);
+      if (result?.message) {
+        msg.success(result.message);
+      }
+      const nextRecordId = String(result?.nextRecordId || '').trim();
+      if (nextRecordId && nextRecordId !== String(id || '').trim()) {
+        navigate(`/${moduleId}/${nextRecordId}`, { replace: true });
+        return;
+      }
+      void fetchRecord(true);
+    } catch (error: any) {
+      msg.error(toFaErrorMessage(error, 'اجرای عملیات ناموفق بود.'));
+    }
+  };
 
   const fieldGroups = moduleConfig.blocks?.filter(
     (b) => b.type === BlockType.FIELD_GROUP && checkVisibility(b) && canViewField(String(b.id))
@@ -5931,6 +5944,32 @@ const ModuleShow: React.FC = () => {
       }
     }
   }
+  (moduleConfig.recordActions || [])
+    .filter((action: any) => (action.placement || 'header') === 'header')
+    .filter((action: any) => !action.visible || action.visible(data))
+    .forEach((action: any) => {
+      headerActions.push({
+        id: action.id,
+        label: action.label,
+        variant: action.variant,
+        onClick: async () => {
+          if (action.confirmTitle) {
+            modal.confirm({
+              title: action.confirmTitle,
+              content: action.confirmDescription || undefined,
+              okText: 'تایید',
+              cancelText: 'انصراف',
+              okButtonProps: action.danger ? { danger: true } : undefined,
+              onOk: async () => {
+                await handleModuleRecordAction(action.id);
+              },
+            });
+            return;
+          }
+          await handleModuleRecordAction(action.id);
+        },
+      });
+    });
 
   const currentAssigneeId = getResolvedAssigneeId(data);
   const currentAssigneeType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));

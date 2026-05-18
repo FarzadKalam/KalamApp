@@ -147,6 +147,7 @@ const SaasPortalPage: React.FC = () => {
   const [provisionMsgIdx, setProvisionMsgIdx] = useState(0);
   const [provisionResult, setProvisionResult] = useState<ProvisionResult | null>(null);
   const [provisionError, setProvisionError] = useState('');
+  const [provisionWarning, setProvisionWarning] = useState('');
 
   const normalizedPhone = normalizeOtpPhone(phone);
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -372,6 +373,7 @@ const SaasPortalPage: React.FC = () => {
 
     setError('');
     setLoading(true);
+    setProvisionWarning('');
 
     try {
       const normalizedEmail = normalizeOwnerEmail(ownerEmail);
@@ -411,8 +413,14 @@ const SaasPortalPage: React.FC = () => {
       setProvisionResult(result);
       clearWizardState();
 
-      // بارگذاری داده‌های اولیه دمو در پس‌زمینه (خطا نادیده گرفته می‌شود)
-      seedCurrentOrgDemoData().catch(() => null);
+      try {
+        const seedResult = await seedCurrentOrgDemoData();
+        if (String(seedResult?.warning || '').trim()) {
+          setProvisionWarning(String(seedResult.warning).trim());
+        }
+      } catch {
+        setProvisionWarning('فضای شما ساخته شد، اما بخشی از داده‌های نمونه اولیه کامل نشد و می‌توانید بعداً دوباره تلاش کنید.');
+      }
 
       // کمی صبر تا کاربر progress رو ببینه
       await new Promise((r) => setTimeout(r, 1800));
@@ -821,6 +829,14 @@ const SaasPortalPage: React.FC = () => {
             <p className="text-xs text-slate-500 mb-2">
               برای ورود مدیر اصلی از ایمیل <span className="font-bold ltr-text">{normalizeOwnerEmail(ownerEmail)}</span> استفاده کنید.
             </p>
+            {provisionWarning && (
+              <Alert
+                type="warning"
+                showIcon
+                className="mb-4 rounded-xl text-right"
+                message={provisionWarning}
+              />
+            )}
             <p className="text-xs text-slate-400 mb-4">در حال هدایت به پنل شما...</p>
             <Button
               type="primary"

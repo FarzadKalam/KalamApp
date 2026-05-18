@@ -27,6 +27,7 @@ import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { getCachedAuthUser } from '../sessionCache';
+import { loadScopedCompanySettings } from '../companySettings';
 
 const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 
@@ -142,7 +143,7 @@ export const useListPrintManager = ({
     let mounted = true;
     const loadCompany = async () => {
       try {
-        const { data } = await supabase.from('company_settings').select('*').limit(1).maybeSingle();
+        const { data } = await loadScopedCompanySettings(supabase);
         if (mounted) {
           setCompanyInfo(data || null);
           companyLoadedRef.current = true;

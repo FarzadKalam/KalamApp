@@ -1964,7 +1964,18 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const sourceHeaderRecord = sourceHeader as Record<string, any> | null;
     const customerId = sourceHeaderRecord?.customer_id ? String(sourceHeaderRecord.customer_id) : null;
     const supplierId = sourceHeaderRecord?.supplier_id ? String(sourceHeaderRecord.supplier_id) : null;
+    const sourceEmployeeId = sourceHeaderRecord?.employee_id ? String(sourceHeaderRecord.employee_id) : null;
     const defaultAssigneeId = sourceHeaderRecord?.assignee_id ? String(sourceHeaderRecord.assignee_id) : null;
+    let sourceEmployeeProfileId: string | null = null;
+    if ((isEmployeeAdvancePayments || isPayrollPayments) && sourceEmployeeId) {
+      const { data: sourceEmployeeRecord, error: sourceEmployeeError } = await supabase
+        .from('employees')
+        .select('related_profile_id')
+        .eq('id', sourceEmployeeId)
+        .maybeSingle();
+      if (sourceEmployeeError) throw sourceEmployeeError;
+      sourceEmployeeProfileId = String(sourceEmployeeRecord?.related_profile_id || '').trim() || null;
+    }
     const partyId = isInvoicePayments ? customerId : isPurchaseInvoicePayments ? supplierId : null;
     const partyType = isInvoicePayments ? 'customer' : 'supplier';
     const sourceOperationDate = sourceHeaderRecord?.[sourceDateField] || getTodayLocalDateValue();
@@ -2339,7 +2350,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         assignee_id: assigneeId || null,
         assignee_type: assigneeId ? 'user' : null,
         assignee_role_id: null,
-        employee_id: assigneeId || null,
+        employee_id: isEmployeeAdvancePayments || isPayrollPayments ? sourceEmployeeProfileId : null,
         description: row?.description || null,
         image_url: attachmentUrl || null,
         attachment_url: attachmentUrl || null,
@@ -2444,7 +2455,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           assignee_id: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
           assignee_type: String(row?.responsible_id || defaultAssigneeId || '').trim() ? 'user' : null,
           assignee_role_id: null,
-          employee_id: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
+          employee_id: isEmployeeAdvancePayments || isPayrollPayments ? sourceEmployeeProfileId : null,
           description: row?.description || null,
           image_url: row?.attachment || null,
           attachment_url: row?.attachment || null,
@@ -2600,7 +2611,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             remaining_amount: amount,
             customer_id: partyType === 'customer' ? partyId : null,
             supplier_id: partyType === 'supplier' ? partyId : null,
-            employee_id: row?.responsible_id || null,
+            employee_id: null,
             source_invoice_id: isInvoicePayments ? recordId : null,
             source_purchase_invoice_id: isPurchaseInvoicePayments ? recordId : null,
             notes: row?.description || null,
@@ -2666,7 +2677,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 initial_amount: nextInitialAmount,
                 remaining_amount: nextRemaining,
                 status: nextStatus,
-                employee_id: row?.responsible_id || null,
+                employee_id: null,
                 metadata: nextMetadata,
                 updated_at: nowIso,
               })

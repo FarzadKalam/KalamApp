@@ -104,7 +104,9 @@ export enum LogicOperator {
   LESS_THAN = 'lt',
   CONTAINS = 'contains',
   IS_TRUE = 'is_true',
-  IS_FALSE = 'is_false'
+  IS_FALSE = 'is_false',
+  IN = 'in',
+  NOT_IN = 'not_in',
 }
 
 export enum FilterOperator {
@@ -303,14 +305,42 @@ export interface RelatedTabConfig {
   disableCreate?: boolean;
 }
 
+export interface ModuleFormAdapterContext {
+  mode: 'create' | 'update';
+  recordId?: string;
+  values: Record<string, any>;
+  currentValues?: Record<string, any> | null;
+}
+
+export interface ModuleFormAdapterResult {
+  id?: string | number | null;
+}
+
+export interface ModuleFormAdapter {
+  save: (context: ModuleFormAdapterContext) => Promise<ModuleFormAdapterResult | void>;
+}
+
+export interface ModuleRecordAction {
+  id: string;
+  label: string;
+  placement?: 'header';
+  variant?: 'primary' | 'default';
+  danger?: boolean;
+  confirmTitle?: string;
+  confirmDescription?: string;
+  visible?: (record: Record<string, any> | null | undefined) => boolean;
+}
+
 export interface ModuleDefinition {
   id: string;
   titles: { fa: string; en?: string; faSingular?: string };
   nature?: ModuleNature;
   table: string;
+  resource?: string;
   systemManaged?: boolean;
   disableCreate?: boolean;
   disableDetailView?: boolean;
+  disableInlineFieldEditing?: boolean;
   hideFullRecordAction?: boolean;
   listPreviewMode?: 'modal';
   quickPreview?: {
@@ -348,6 +378,8 @@ export interface ModuleDefinition {
     placement: 'form' | 'header';
     variant?: 'primary' | 'default';
   }[];
+  formAdapter?: ModuleFormAdapter;
+  recordActions?: ModuleRecordAction[];
 }
 
 // --- VIEW & FILTER INTERFACES ---

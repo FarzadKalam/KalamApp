@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildOperationAmountPair,
+  isEmployeeFinancialOverviewOperation,
   OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS,
   computeOperationalFinancialTotals,
 } from './operationalFinancialOverview';
@@ -24,6 +25,28 @@ describe('operationalFinancialOverview', () => {
     expect(totals.totalDebit).toBe(800000);
     expect(totals.totalCredit).toBe(400000);
     expect(totals.finalBalance).toBe(400000);
+  });
+
+  it('keeps only payroll and advance cash-bank operations in employee financial overview', () => {
+    expect(isEmployeeFinancialOverviewOperation({
+      payroll_slip_id: 'pay-1',
+      operation_type: 'payment',
+    })).toBe(true);
+
+    expect(isEmployeeFinancialOverviewOperation({
+      employee_advance_id: 'adv-1',
+      operation_type: 'payment',
+    })).toBe(true);
+
+    expect(isEmployeeFinancialOverviewOperation({
+      employee_id: 'emp-1',
+      operation_type: 'payment',
+    })).toBe(false);
+
+    expect(isEmployeeFinancialOverviewOperation({
+      metadata: { source_table: 'employee_advances' },
+      operation_type: 'payment',
+    })).toBe(true);
   });
 
   it('renders printable summary html with shared list formatters', () => {

@@ -78,8 +78,6 @@ const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
-const loadSaasAdminOrgs = () => import("./pages/SaasAdmin/SaasAdminOrgs");
-const loadSaasAdminRequests = () => import("./pages/SaasAdmin/SaasAdminRequests");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 
 const ProfilePage = lazy(loadProfilePage);
@@ -117,8 +115,6 @@ const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
-const SaasAdminOrgs = lazy(loadSaasAdminOrgs);
-const SaasAdminRequests = lazy(loadSaasAdminRequests);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 
 const routePreloaders = [
@@ -659,8 +655,8 @@ function App() {
 
             {/* SaaS Admin — فقط برای کاربران با permission __saas_admin */}
             <Route path="/taze-system" element={<SaasAdminDashboard />} />
-            <Route path="/taze-system/orgs" element={<SaasAdminOrgs />} />
-            <Route path="/taze-system/requests" element={<SaasAdminRequests />} />
+            <Route path="/taze-system/orgs" element={<Navigate to="/saas_orgs" replace />} />
+            <Route path="/taze-system/requests" element={<Navigate to="/saas_demo_requests" replace />} />
             <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
 
             <Route path="/settings" element={<SettingsPage />} />

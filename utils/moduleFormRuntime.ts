@@ -200,10 +200,11 @@ export const transformModulePayloadForSave = (
   const operationType = String(payload.operation_type || '').trim();
   const assigneeType = String(
     payload.assignee_type
-    || (payload.assignee_role_id ? 'role' : (payload.assignee_id || payload.employee_id ? 'user' : ''))
+    || (payload.assignee_role_id ? 'role' : (payload.assignee_id ? 'user' : ''))
   ).trim() || null;
   const assigneeId = String(payload.assignee_id || '').trim() || null;
   const assigneeRoleId = String(payload.assignee_role_id || '').trim() || null;
+  const employeeId = String(payload.employee_id || '').trim() || null;
   const imageUrl = String(payload.image_url || payload.attachment_url || '').trim() || null;
 
   if (operationType === 'transfer') {
@@ -246,7 +247,7 @@ export const transformModulePayloadForSave = (
   payload.assignee_type = assigneeType;
   payload.assignee_role_id = assigneeType === 'role' ? assigneeRoleId : null;
   payload.assignee_id = assigneeType === 'role' ? null : assigneeId;
-  payload.employee_id = assigneeType === 'role' ? null : assigneeId;
+  payload.employee_id = employeeId;
 
   delete payload.payment_account_id;
   delete payload.receipt_account_id;

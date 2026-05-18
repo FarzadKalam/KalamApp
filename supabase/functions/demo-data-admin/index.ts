@@ -181,7 +181,7 @@ const requireCallerOrgAccess = async (client: any, callerUserId: string) => {
 
   const { data: company } = await client
     .from('company_settings')
-    .select('company_full_name, trade_name, email, mobile, brand_palette_key')
+    .select('company_full_name, trade_name, email, mobile, brand_palette_key, industry')
     .eq('org_id', profile.org_id)
     .order('created_at', { ascending: true })
     .limit(1)

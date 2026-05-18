@@ -10,7 +10,6 @@ import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
-import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 
 const { Text, Title } = Typography;
 
@@ -55,50 +54,6 @@ const sanitizeFileName = (value: string) => {
     .replace(/[\\/:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')
     .trim();
-};
-
-const buildRubikaLinkedAttachmentMessage = (
-  baseText: string,
-  attachments: Array<{ name?: string; url?: string }>,
-) => {
-  const normalizedBaseText = String(baseText || '').trim();
-  const lines: Array<{ text: string; linkUrl?: string }> = [];
-  if (normalizedBaseText) lines.push({ text: normalizedBaseText });
-
-  (attachments || []).forEach((item, index) => {
-    const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
-    const url = String(item?.url || '').trim();
-    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
-  });
-
-  let text = '';
-  let cursor = 0;
-  const metaDataParts: Array<Record<string, any>> = [];
-
-  lines.forEach((line, index) => {
-    if (index > 0) {
-      text += '\n';
-      cursor += 1;
-    }
-    const segment = String(line.text || '');
-    const startIndex = cursor;
-    text += segment;
-    cursor += segment.length;
-
-    if (line.linkUrl) {
-      metaDataParts.push({
-        type: 'Link',
-        from_index: startIndex,
-        length: segment.length,
-        link_url: line.linkUrl,
-      });
-    }
-  });
-
-  return {
-    text,
-    metadata: metaDataParts.length > 0 ? { meta_data_parts: metaDataParts } : undefined,
-  };
 };
 
 const ShareTargetPage: React.FC = () => {
@@ -461,13 +416,12 @@ const ShareTargetPage: React.FC = () => {
         }
 
         const isRubikaTarget = target.channel_type === 'rubika';
-        const rubikaLinkedMessage = isRubikaTarget ? buildRubikaLinkedAttachmentMessage(String(messageText || '').trim(), outboundAttachments) : null;
         const externalText = [String(messageText || '').trim(), outboundAttachments.map((item) => `فایل: ${item.url}`).join('\n')]
           .filter(Boolean)
           .join('\n');
 
         const botMessageText = isRubikaTarget
-          ? (String(rubikaLinkedMessage?.text || '').trim() || 'فایل اشتراک‌گذاری‌شده ارسال شد.')
+          ? (String(messageText || '').trim() || 'فایل اشتراک‌گذاری‌شده ارسال شد.')
           : (externalText || 'فایل اشتراک‌گذاری‌شده ارسال شد.');
 
         const fallbackText = isRubikaTarget
@@ -482,8 +436,13 @@ const ShareTargetPage: React.FC = () => {
             chatId: target.bot_chat_id,
             text: botMessageText,
             skipLog: false,
-            extraPayload: isRubikaTarget && rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined,
             fallbackText,
+            attachments: isRubikaTarget ? uploadedAttachments.map((item) => ({
+              url: item.url,
+              name: item.name,
+              mimeType: item.mimeType || null,
+              fileType: item.mimeType?.startsWith('image/') ? 'image' : 'file',
+            })) : undefined,
           },
         });
 

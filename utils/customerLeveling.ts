@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getResolvedCurrentOrgId, loadScopedCompanySettings } from './companySettings';
 
 type CustomerRank = 'normal' | 'silver' | 'gold' | 'vip';
 
@@ -236,11 +237,7 @@ export type CustomerLevelingConfigLoadResult = {
 export const loadCustomerLevelingConfig = async (
   supabase: SupabaseClient
 ): Promise<CustomerLevelingConfigLoadResult> => {
-  const { data, error } = await supabase
-    .from('company_settings')
-    .select('*')
-    .limit(1)
-    .maybeSingle();
+  const { data, error } = await loadScopedCompanySettings(supabase);
 
   if (error && !isMissingCustomerLevelingColumnError(error)) {
     throw error;
@@ -297,9 +294,13 @@ export const saveCustomerLevelingConfig = async ({
         if (error) throw error;
         return { source: 'company_settings', companyRecordId };
       } else {
+        const currentOrgId = await getResolvedCurrentOrgId(supabase);
+        const insertPayload = currentOrgId
+          ? { ...payload, org_id: currentOrgId }
+          : payload;
         const { data, error } = await supabase
           .from('company_settings')
-          .insert([payload])
+          .insert([insertPayload])
           .select('id')
           .maybeSingle();
         if (error) throw error;

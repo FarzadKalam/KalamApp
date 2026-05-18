@@ -132,6 +132,7 @@ type ProfileRecord = {
   hire_date?: string | null;
   seniority_base_amount?: number | string | null;
   seniority_formula_id?: string | null;
+  monthly_paid_leave_hours?: number | string | null;
   insurance_subject?: boolean | null;
   employee_insurance_rate?: number | string | null;
   employer_insurance_rate?: number | string | null;
@@ -1064,6 +1065,7 @@ const HRPage: React.FC = () => {
   const [savingOvertimeLedgerKey, setSavingOvertimeLedgerKey] = useState<string | null>(null);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionModalSaving, setCommissionModalSaving] = useState(false);
+  const [commissionInvoicePaymentsById, setCommissionInvoicePaymentsById] = useState<Map<string, any[]>>(new Map());
   const [commissionForm] = Form.useForm<CommissionCalculationFormValues>();
   const [commissionInitialValues, setCommissionInitialValues] = useState<Partial<CommissionCalculationFormValues> | null>(null);
   const [lineQuantityById, setLineQuantityById] = useState<Record<string, number>>({});
@@ -1263,6 +1265,7 @@ const HRPage: React.FC = () => {
         hire_date: row?.hire_date || null,
         seniority_base_amount: row?.seniority_base_amount ?? 0,
         seniority_formula_id: row?.seniority_formula_id || null,
+        monthly_paid_leave_hours: row?.monthly_paid_leave_hours ?? 0,
         insurance_subject: row?.insurance_subject ?? true,
         employee_insurance_rate: row?.employee_insurance_rate ?? 7,
         employer_insurance_rate: row?.employer_insurance_rate ?? 23,
@@ -2976,6 +2979,15 @@ const HRPage: React.FC = () => {
         }
       });
 
+      // Build invoice payments map for cheque display
+      const paymentsMap = new Map<string, any[]>();
+      enrichedInvoices.forEach((invoice) => {
+        if (invoice.id && Array.isArray(invoice.payments) && invoice.payments.length > 0) {
+          paymentsMap.set(String(invoice.id), invoice.payments);
+        }
+      });
+      setCommissionInvoicePaymentsById(paymentsMap);
+
       const previewRows = buildCommissionDraftRows({
         invoices: enrichedInvoices,
         employeeIdByAssigneeId: { [assigneeId]: employeeIdValue },
@@ -3144,9 +3156,8 @@ const HRPage: React.FC = () => {
   const persistCommissionDraftPayloads = useCallback(async (payloads: any[]) => {
     if (payloads.length === 0) return;
 
+    // Update records that already have a known DB id
     const withIds = payloads.filter((payload) => String(payload?.id || '').trim());
-    const withoutIds = payloads.filter((payload) => !String(payload?.id || '').trim());
-
     for (const payload of withIds) {
       const draftId = String(payload.id || '').trim();
       const { id: _ignoredId, ...updatePayload } = payload;
@@ -3154,50 +3165,18 @@ const HRPage: React.FC = () => {
         .from('commission_drafts')
         .update(updatePayload)
         .eq('id', draftId);
-      if (error) throw error;
+      if (error && !isMissingCommissionDraftsError(error)) throw error;
     }
 
+    const withoutIds = payloads.filter((payload) => !String(payload?.id || '').trim());
     if (withoutIds.length === 0) return;
 
-    const sourceKeys = withoutIds
-      .map((payload) => String(payload?.source_key || '').trim())
-      .filter(Boolean);
-
-    const existingBySourceKey = new Map<string, string>();
-    if (sourceKeys.length > 0) {
-      const { data, error } = await supabase
-        .from('commission_drafts')
-        .select('id, source_key')
-        .in('source_key', sourceKeys);
-      if (error && !isMissingCommissionDraftsError(error)) throw error;
-      (data || []).forEach((row: any) => {
-        const sourceKey = String(row?.source_key || '').trim();
-        const id = String(row?.id || '').trim();
-        if (sourceKey && id) existingBySourceKey.set(sourceKey, id);
-      });
-    }
-
-    const inserts: any[] = [];
-    for (const payload of withoutIds) {
-      const sourceKey = String(payload?.source_key || '').trim();
-      const existingId = sourceKey ? existingBySourceKey.get(sourceKey) : null;
-      if (existingId) {
-        const { id: _ignoredId, ...updatePayload } = payload;
-        const { error } = await supabase
-          .from('commission_drafts')
-          .update(updatePayload)
-          .eq('id', existingId);
-        if (error) throw error;
-      } else {
-        const { id: _ignoredId, ...insertPayload } = payload;
-        inserts.push(insertPayload);
-      }
-    }
-
-    if (inserts.length > 0) {
-      const { error } = await supabase.from('commission_drafts').insert(inserts);
-      if (error) throw error;
-    }
+    // Use upsert on source_key to safely handle duplicates and race conditions
+    const upsertPayloads = withoutIds.map(({ id: _ignoredId, ...rest }) => rest);
+    const { error: upsertError } = await supabase
+      .from('commission_drafts')
+      .upsert(upsertPayloads, { onConflict: 'source_key', ignoreDuplicates: false });
+    if (upsertError && !isMissingCommissionDraftsError(upsertError)) throw upsertError;
   }, []);
 
   const buildCommissionCalculationLedgerPayload = useCallback(({
@@ -3270,41 +3249,53 @@ const HRPage: React.FC = () => {
         invoice_count: invoiceIds.length,
         item_count: selectedLines.length,
         row_count: activeRows.length,
-        rows: activeRows.map((row) => ({
-          invoice_id: row.invoice_id,
-          invoice_name: row.invoice_name,
-          invoice_date: row.invoice_date,
-          invoice_status: row.invoice_status,
-          basis: row.basis,
-          percent_mode: row.percent_mode,
-          base_amount: row.base_amount,
-          entitled_amount: row.entitled_amount,
-          posted_amount: row.posted_amount,
-          remaining_amount: row.remaining_amount,
-          selected_amount: row.selected_amount,
-          item_count: row.item_count,
-          source_period_start: row.source_period_start,
-          source_period_end: row.source_period_end,
-          lines: row.lines.map((line) => ({
-            source_key: line.source_key,
-            item_key: line.invoice_item_key,
-            product_label: line.product_label,
-            product_id: line.product_id,
-            quantity: line.quantity,
-            net_amount: line.net_amount,
-            commission_percent: line.commission_percent,
-            commission_amount: line.selected_amount,
-            entitled_amount: line.entitled_amount,
-            posted_amount: line.posted_amount,
-            remaining_amount: line.remaining_amount,
-            decision_status: line.decision_status,
-            source_period_start: line.source_period_start,
-            source_period_end: line.source_period_end,
-          })),
-        })),
+        rows: activeRows.map((row) => {
+          const invoicePayments = commissionInvoicePaymentsById.get(String(row.invoice_id || '')) || [];
+          const chequePayments = invoicePayments.filter((p: any) => String(p?.payment_type || '').toLowerCase() === 'cheque');
+          return {
+            invoice_id: row.invoice_id,
+            invoice_name: row.invoice_name,
+            invoice_date: row.invoice_date,
+            invoice_status: row.invoice_status,
+            basis: row.basis,
+            percent_mode: row.percent_mode,
+            base_amount: row.base_amount,
+            entitled_amount: row.entitled_amount,
+            posted_amount: row.posted_amount,
+            remaining_amount: row.remaining_amount,
+            selected_amount: row.selected_amount,
+            item_count: row.item_count,
+            source_period_start: row.source_period_start,
+            source_period_end: row.source_period_end,
+            has_cheque: chequePayments.length > 0,
+            cheque_payments: chequePayments.map((p: any) => ({
+              cheque_number: p?.cheque_number || p?.serial_no || null,
+              amount: p?.amount || 0,
+              due_date: p?.due_date || p?.maturity_date || null,
+              cheque_status: p?.cheque_status || p?.status || null,
+              bank_name: p?.bank_name || null,
+            })),
+            lines: row.lines.map((line) => ({
+              source_key: line.source_key,
+              item_key: line.invoice_item_key,
+              product_label: line.product_label,
+              product_id: line.product_id,
+              quantity: line.quantity,
+              net_amount: line.net_amount,
+              commission_percent: line.commission_percent,
+              commission_amount: line.selected_amount,
+              entitled_amount: line.entitled_amount,
+              posted_amount: line.posted_amount,
+              remaining_amount: line.remaining_amount,
+              decision_status: line.decision_status,
+              source_period_start: line.source_period_start,
+              source_period_end: line.source_period_end,
+            })),
+          };
+        }),
       },
     };
-  }, [commissionForm, commissionRows, employeeId, selectedEmployeeSummary]);
+  }, [commissionForm, commissionInvoicePaymentsById, commissionRows, employeeId, selectedEmployeeSummary]);
 
   const syncCommissionCalculationLedgerEntry = useCallback(async (payload: Record<string, any>) => {
     const employeeIdValue = String(payload.employee_id || '').trim();
@@ -3369,7 +3360,8 @@ const HRPage: React.FC = () => {
       if (error && !isMissingPayrollLedgerError(error)) throw error;
     } else if (!matchedRow?.id) {
       const { error } = await supabase.from('payroll_calculation_entries').insert(payload);
-      if (error && !isMissingPayrollLedgerError(error)) throw error;
+      // 23505 = unique_violation - ignore if same record was inserted concurrently
+      if (error && !isMissingPayrollLedgerError(error) && String(error?.code || '') !== '23505') throw error;
     }
 
     if (staleRowIds.length > 0) {
@@ -3883,12 +3875,26 @@ const HRPage: React.FC = () => {
       const ledgerNet = sumPayrollLedgerEntries(ledgerEntries);
       const ledgerBonusTotal = ledgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
       const ledgerDeductionTotal = ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
+
+      // محاسبه حقوق بر اساس نوع salary_type
+      const salaryType = String(row.profile?.salary_type || 'fixed_only');
+      const isHourly = salaryType.startsWith('hourly');
+      const hasFixed = salaryType.startsWith('fixed') || salaryType === 'fixed_only';
+      const presenceMinutesValue = calculatePresenceMinutes(payrollWizardAttendanceRows);
+      const presenceHours = presenceMinutesValue / 60;
+      const hourlyWageTotal = isHourly && payrollWizardHourlyRate > 0
+        ? Math.round(presenceHours * payrollWizardHourlyRate)
+        : 0;
+      // برای انواع ساعتی، حقوق پایه از محاسبه ساعتی می‌آید نه فیلد base_salary
+      const effectiveBaseSalary = isHourly ? hourlyWageTotal : (hasFixed ? row.baseSalary : 0);
+      const totalEarnings = effectiveBaseSalary + row.taskWageTotal + ledgerBonusTotal;
+
       const employeeInsuranceAmount = row.profile?.insurance_subject === false
         ? 0
-        : (row.netPayable * toNumber(row.profile?.employee_insurance_rate)) / 100;
+        : (totalEarnings * toNumber(row.profile?.employee_insurance_rate)) / 100;
       const employerInsuranceAmount = row.profile?.insurance_subject === false
         ? 0
-        : (row.netPayable * toNumber(row.profile?.employer_insurance_rate)) / 100;
+        : (totalEarnings * toNumber(row.profile?.employer_insurance_rate)) / 100;
       const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
       const payload = {
         name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
@@ -3898,17 +3904,18 @@ const HRPage: React.FC = () => {
         period_end: periodEnd,
         status: 'draft',
         assignee_id: row.profile.related_profile_id || null,
-        base_salary: row.baseSalary,
+        base_salary: effectiveBaseSalary,
         task_wage_total: row.taskWageTotal,
         bonus_total: ledgerBonusTotal,
         deduction_total: ledgerDeductionTotal + employeeInsuranceAmount,
         insurance_employee_amount: employeeInsuranceAmount,
         insurance_employer_amount: employerInsuranceAmount,
-        gross_amount: row.baseSalary + row.taskWageTotal + ledgerBonusTotal,
-        net_amount: row.netPayable + ledgerNet - employeeInsuranceAmount,
+        gross_amount: totalEarnings,
+        net_amount: totalEarnings + ledgerNet - employeeInsuranceAmount,
         lines: [
-          { line_type: 'earning', title: 'حقوق پایه', amount: row.baseSalary, description: `بازه ${periodStart} تا ${periodEnd}` },
-          { line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` },
+          ...(isHourly && hourlyWageTotal > 0 ? [{ line_type: 'earning', title: 'دستمزد ساعتی', amount: hourlyWageTotal, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} تومان/ساعت` }] : []),
+          ...(!isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: 'حقوق پایه', amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
+          ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` }] : []),
           ...ledgerLines,
           ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
         ],
@@ -4712,11 +4719,15 @@ const HRPage: React.FC = () => {
       title: 'فاکتور',
       dataIndex: 'invoice_name',
       key: 'invoice_name',
-      render: (val: string, row: any) => (
-        <a href={`/invoices/${row.invoice_id}`} className="text-leather-700 hover:underline">
-          {val}
-        </a>
-      ),
+      render: (val: string, row: any) => {
+        const hasCheque = (commissionInvoicePaymentsById.get(String(row.invoice_id || '')) || []).some((p: any) => String(p?.payment_type || '').toLowerCase() === 'cheque');
+        return (
+          <div className="flex flex-wrap items-center gap-1">
+            <a href={`/invoices/${row.invoice_id}`} className="text-leather-700 hover:underline">{val}</a>
+            {hasCheque && <Tag color="orange" className="text-xs">چک</Tag>}
+          </div>
+        );
+      },
     },
     {
       title: 'وضعیت فاکتور',
@@ -5361,6 +5372,72 @@ const HRPage: React.FC = () => {
             dataSource={calculatedCommissionRows}
             pagination={{ pageSize: 15, showSizeChanger: false }}
             scroll={{ x: 1200 }}
+            expandable={{
+              expandedRowRender: (ledgerRow: CommissionLedgerRow) => {
+                const invoiceRows: any[] = Array.isArray(ledgerRow.details?.rows) ? ledgerRow.details.rows : [];
+                if (invoiceRows.length === 0) return <div className="py-3 text-gray-400 text-sm text-center">جزئیات فاکتوری ثبت نشده است.</div>;
+                return (
+                  <div className="space-y-4 p-2">
+                    {invoiceRows.map((invRow: any, idx: number) => {
+                      const cheques: any[] = Array.isArray(invRow.cheque_payments) ? invRow.cheque_payments : [];
+                      const hasCheque = invRow.has_cheque || cheques.length > 0;
+                      const lines: any[] = Array.isArray(invRow.lines) ? invRow.lines : [];
+                      return (
+                        <div key={invRow.invoice_id || idx} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                          <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 flex flex-wrap items-center gap-2">
+                            <a href={`/invoices/${invRow.invoice_id}`} className="font-bold text-leather-700 hover:underline text-sm">
+                              {invRow.invoice_name || invRow.invoice_id || `فاکتور ${toPersianNumber(idx + 1)}`}
+                            </a>
+                            {invRow.invoice_status && renderInvoiceStatusTag(invRow.invoice_status)}
+                            {hasCheque && <Tag color="orange" className="text-xs">دارای چک</Tag>}
+                            <span className="mr-auto persian-number text-xs text-gray-500">
+                              سهم: <span className="font-bold text-green-700">{formatMoney(toNumber(invRow.selected_amount))}</span>
+                            </span>
+                          </div>
+                          {lines.length > 0 && (
+                            <Table
+                              rowKey={(line: any, lineIdx?: number) => line.source_key || line.item_key || String(lineIdx ?? 0)}
+                              size="small"
+                              pagination={false}
+                              dataSource={lines}
+                              className="commission-detail-lines"
+                              columns={[
+                                { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label', render: (val: string) => <span className="text-sm">{val || '-'}</span> },
+                                { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
+                                { title: 'مبلغ ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                { title: 'درصد پورسانت', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}٪</span> },
+                                { title: 'مبلغ پورسانت', dataIndex: 'commission_amount', key: 'commission_amount', render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span> },
+                                { title: 'تصمیم', dataIndex: 'decision_status', key: 'decision_status', render: (val: string) => {
+                                  const opt = commissionDecisionOptions.find((o) => o.value === val);
+                                  return opt ? <Tag>{opt.label}</Tag> : <Tag>{val || 'خودکار'}</Tag>;
+                                }},
+                              ]}
+                            />
+                          )}
+                          {hasCheque && cheques.length > 0 && (
+                            <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-orange-50 dark:bg-orange-900/10">
+                              <div className="text-xs font-bold text-orange-700 mb-2">اطلاعات چک‌های فاکتور</div>
+                              <div className="flex flex-wrap gap-3">
+                                {cheques.map((cheque: any, ci: number) => (
+                                  <div key={ci} className="bg-white dark:bg-gray-900 border border-orange-200 dark:border-orange-700 rounded-md px-3 py-2 text-xs space-y-1 min-w-[180px]">
+                                    {cheque.cheque_number && <div><span className="text-gray-500">شماره چک: </span><span className="persian-number font-bold">{toPersianNumber(cheque.cheque_number)}</span></div>}
+                                    {cheque.bank_name && <div><span className="text-gray-500">بانک: </span><span>{cheque.bank_name}</span></div>}
+                                    <div><span className="text-gray-500">مبلغ: </span><span className="persian-number font-bold text-green-700">{formatMoney(toNumber(cheque.amount))}</span></div>
+                                    {cheque.due_date && <div><span className="text-gray-500">سررسید: </span><span className="persian-number">{toPersianNumber(safeJalaliFormat(cheque.due_date, 'YYYY/MM/DD'))}</span></div>}
+                                    {cheque.cheque_status && <div><span className="text-gray-500">وضعیت: </span><Tag color={cheque.cheque_status === 'cleared' ? 'green' : cheque.cheque_status === 'bounced' ? 'red' : 'blue'} className="text-xs">{cheque.cheque_status}</Tag></div>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              },
+              rowExpandable: (ledgerRow: CommissionLedgerRow) => Array.isArray(ledgerRow.details?.rows) && (ledgerRow.details?.rows as any[]).length > 0,
+            }}
           />
         )}
       </Card>
@@ -5662,7 +5739,15 @@ const HRPage: React.FC = () => {
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حضور موثر</div><div className="persian-number text-2xl font-black">{toPersianNumber((calculatePresenceMinutes(payrollWizardAttendanceRows) / 60).toFixed(1))} ساعت</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ساعات موظف</div><div className="persian-number text-2xl font-black">{toPersianNumber((payrollWizardRequiredMinutes / 60).toFixed(1))} ساعت</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">نرخ ساعتی</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardHourlyRate)}</div></Card></Col>
-                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">اضافه‌کاری آماده فیش</div><div className="persian-number text-2xl font-black text-green-700">{formatMoney(payrollLedgerTotalsByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.attendance || 0)}</div></Card></Col>
+                  {String(payrollWizardSummary.profile?.salary_type || '').startsWith('hourly') ? (
+                    <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">دستمزد ساعتی محاسبه‌شده</div><div className="persian-number text-2xl font-black text-blue-700">{formatMoney(Math.round((calculatePresenceMinutes(payrollWizardAttendanceRows) / 60) * payrollWizardHourlyRate))}</div></Card></Col>
+                  ) : (
+                    <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حقوق پایه (ثابت)</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.baseSalary)}</div></Card></Col>
+                  )}
+                </Row>
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={12}><Card><div className="text-xs text-gray-500 mb-1">اضافه‌کاری آماده فیش</div><div className="persian-number text-2xl font-black text-green-700">{formatMoney(payrollLedgerTotalsByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.attendance || 0)}</div></Card></Col>
+                  <Col xs={24} md={12}><Card><div className="text-xs text-gray-500 mb-1">سقف مرخصی با حقوق</div><div className="persian-number text-2xl font-black">{toPersianNumber(toNumber(payrollWizardSummary.profile?.monthly_paid_leave_hours))} ساعت/ماه</div></Card></Col>
                 </Row>
 
                 <Card>
@@ -5687,10 +5772,10 @@ const HRPage: React.FC = () => {
                         { title: 'تاریخ', key: 'attendanceDate', render: (_: unknown, row: any) => row.attendanceDate ? toPersianNumber(safeJalaliFormat(row.attendanceDate, 'YYYY/MM/DD')) : '-' },
                         { title: 'ورود', dataIndex: 'checkInAt', key: 'checkInAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
                         { title: 'خروج', dataIndex: 'checkOutAt', key: 'checkOutAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
-                        { title: 'حضور', key: 'presence', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber((row.presenceMinutes / 60).toFixed(1))} ساعت</span> },
-                        { title: 'تاخیر', key: 'late', render: (_: unknown, row: any) => <span className="persian-number text-red-700">{toPersianNumber(row.lateMinutes)}</span> },
-                        { title: 'تعجیل', key: 'early', render: (_: unknown, row: any) => <span className="persian-number text-green-700">{toPersianNumber(row.earlyArrivalMinutes)}</span> },
-                        { title: 'اضافه‌کاری', key: 'overtime', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber(row.overtimeStayMinutes)}</span> },
+                        { title: 'حضور', key: 'presence', render: (_: unknown, row: any) => { const pm = calculatePresenceMinutes([row]); return <span className="persian-number">{toPersianNumber((pm / 60).toFixed(1))} ساعت</span>; } },
+                        { title: 'تاخیر (دقیقه)', key: 'late', render: (_: unknown, row: any) => { const grace = toNumber(payrollWizardSummary?.profile?.grace_minutes_for_late); const effective = Math.max(0, row.lateMinutes - grace); return <span className={`persian-number ${effective > 0 ? 'text-red-700 font-bold' : 'text-gray-500'}`}>{toPersianNumber(row.lateMinutes)}{grace > 0 ? ` (مجاز: ${toPersianNumber(grace)})` : ''}</span>; } },
+                        { title: 'تعجیل (دقیقه)', key: 'early', render: (_: unknown, row: any) => <span className="persian-number text-green-700">{toPersianNumber(row.earlyArrivalMinutes)}</span> },
+                        { title: 'اضافه‌کاری (دقیقه)', key: 'overtime', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber(row.overtimeStayMinutes)}</span> },
                         {
                           title: 'وضعیت فیش',
                           key: 'ledger',
@@ -5843,7 +5928,7 @@ const HRPage: React.FC = () => {
                         type: toNumber(entry.amount) < 0 ? 'deduction' : 'bonus',
                       })),
                       ...(payrollWizardInsurance.employee > 0 ? [{ key: 'insurance', title: 'بیمه سهم کارمند', amount: -payrollWizardInsurance.employee, type: 'deduction' as const }] : []),
-                    ]}
+                    ].filter((item) => item.amount !== 0)}
                     columns={[
                       { title: 'شرح', dataIndex: 'title', key: 'title' },
                       { title: 'نوع', dataIndex: 'type', key: 'type', render: (val: string) => <Tag color={val === 'deduction' ? 'red' : 'green'}>{val === 'deduction' ? 'کسورات' : 'مزایا'}</Tag> },
@@ -6013,37 +6098,58 @@ const HRPage: React.FC = () => {
                             pagination={{ pageSize: 10, showSizeChanger: false }}
                             scroll={{ x: 1400 }}
                             expandable={{
-                              expandedRowRender: (invoiceRow: any) => (
-                                <Table
-                                  rowKey="key"
-                                  size="small"
-                                  pagination={false}
-                                  dataSource={invoiceRow.lines}
-                                  columns={[
-                                    { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label' },
-                                    { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
-                                    { title: 'مبلغ نهایی ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
-                                    { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span> },
-                                    { title: 'احراز این دوره', dataIndex: 'entitled_amount', key: 'entitled_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
-                                    { title: 'قبلاً ثبت‌شده', dataIndex: 'posted_amount', key: 'posted_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
-                                    { title: 'قابل ثبت', dataIndex: 'selected_amount', key: 'selected_amount', render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span> },
-                                    {
-                                      title: 'تصمیم',
-                                      key: 'decision_status',
-                                      render: (_: unknown, line: CommissionDraftLine) => (
-                                        <AdaptiveSelectField
-                                          value={line.decision_status}
-                                          options={commissionDecisionOptions}
-                                          onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
-                                          getPopupContainer={resolveSelectPopupContainer}
-                                          modalContainer={resolveSelectPopupContainer}
-                                          overlayZIndexBase={15000}
-                                        />
-                                      ),
-                                    },
-                                  ]}
-                                />
-                              ),
+                              expandedRowRender: (invoiceRow: any) => {
+                                const invoiceCheques: any[] = (commissionInvoicePaymentsById.get(String(invoiceRow.invoice_id || '')) || []).filter((p: any) => String(p?.payment_type || '').toLowerCase() === 'cheque');
+                                return (
+                                  <div className="space-y-3">
+                                    <Table
+                                      rowKey="key"
+                                      size="small"
+                                      pagination={false}
+                                      dataSource={invoiceRow.lines}
+                                      columns={[
+                                        { title: 'کالا/خدمات', dataIndex: 'product_label', key: 'product_label' },
+                                        { title: 'تعداد', dataIndex: 'quantity', key: 'quantity', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}</span> },
+                                        { title: 'مبلغ نهایی ردیف', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                        { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (val: number) => <span className="persian-number">{toPersianNumber(val)}%</span> },
+                                        { title: 'احراز این دوره', dataIndex: 'entitled_amount', key: 'entitled_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                        { title: 'قبلاً ثبت‌شده', dataIndex: 'posted_amount', key: 'posted_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                        { title: 'قابل ثبت', dataIndex: 'selected_amount', key: 'selected_amount', render: (val: number) => <span className="persian-number font-bold text-green-700">{formatMoney(val)}</span> },
+                                        {
+                                          title: 'تصمیم',
+                                          key: 'decision_status',
+                                          render: (_: unknown, line: CommissionDraftLine) => (
+                                            <AdaptiveSelectField
+                                              value={line.decision_status}
+                                              options={commissionDecisionOptions}
+                                              onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
+                                              getPopupContainer={resolveSelectPopupContainer}
+                                              modalContainer={resolveSelectPopupContainer}
+                                              overlayZIndexBase={15000}
+                                            />
+                                          ),
+                                        },
+                                      ]}
+                                    />
+                                    {invoiceCheques.length > 0 && (
+                                      <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-700 rounded-lg">
+                                        <div className="text-xs font-bold text-orange-700 mb-2">چک‌های فاکتور</div>
+                                        <div className="flex flex-wrap gap-3">
+                                          {invoiceCheques.map((cheque: any, ci: number) => (
+                                            <div key={ci} className="bg-white dark:bg-gray-900 border border-orange-200 rounded-md px-3 py-2 text-xs space-y-1 min-w-[160px]">
+                                              {cheque.cheque_number && <div><span className="text-gray-500">شماره: </span><span className="persian-number font-bold">{toPersianNumber(cheque.cheque_number)}</span></div>}
+                                              {cheque.bank_name && <div><span className="text-gray-500">بانک: </span>{cheque.bank_name}</div>}
+                                              <div><span className="text-gray-500">مبلغ: </span><span className="persian-number font-bold text-green-700">{formatMoney(toNumber(cheque.amount))}</span></div>
+                                              {(cheque.due_date || cheque.maturity_date) && <div><span className="text-gray-500">سررسید: </span><span className="persian-number">{toPersianNumber(safeJalaliFormat(cheque.due_date || cheque.maturity_date, 'YYYY/MM/DD'))}</span></div>}
+                                              {(cheque.cheque_status || cheque.status) && <div><span className="text-gray-500">وضعیت: </span><Tag color={(cheque.cheque_status || cheque.status) === 'cleared' ? 'green' : (cheque.cheque_status || cheque.status) === 'bounced' ? 'red' : 'blue'} className="text-xs">{cheque.cheque_status || cheque.status}</Tag></div>}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              },
                             }}
                           />
                         )}
@@ -6063,34 +6169,55 @@ const HRPage: React.FC = () => {
                         pagination={{ pageSize: 10, showSizeChanger: false }}
                         scroll={{ x: 1400 }}
                         expandable={{
-                          expandedRowRender: (invoiceRow: any) => (
-                            <Table
-                              rowKey="key"
-                              size="small"
-                              pagination={false}
-                              dataSource={invoiceRow.lines}
-                              columns={[
-                                { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
-                                { title: 'دوره احراز', key: 'sourcePeriod', render: (_: unknown, line: CommissionDraftLine) => <span className="persian-number">{toPersianNumber(safeJalaliFormat(line.source_period_start, 'YYYY/MM/DD'))}</span> },
-                                { title: 'مانده', dataIndex: 'remaining_amount', key: 'remaining_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
-                                { title: 'وضعیت', key: 'decision', render: (_: unknown, line: CommissionDraftLine) => <Tag color={line.decision_status === 'defer_to_next_period' ? 'orange' : 'blue'}>{line.decision_status === 'defer_to_next_period' ? 'منتقل‌شده' : 'آماده تصمیم'}</Tag> },
-                                {
-                                  title: 'اقدام',
-                                  key: 'action',
-                                  render: (_: unknown, line: CommissionDraftLine) => (
-                                    <AdaptiveSelectField
-                                      value={line.decision_status}
-                                      options={commissionDecisionOptions}
-                                      onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
-                                      getPopupContainer={resolveSelectPopupContainer}
-                                      modalContainer={resolveSelectPopupContainer}
-                                      overlayZIndexBase={15000}
-                                    />
-                                  ),
-                                },
-                              ]}
-                            />
-                          ),
+                          expandedRowRender: (invoiceRow: any) => {
+                            const invoiceCheques: any[] = (commissionInvoicePaymentsById.get(String(invoiceRow.invoice_id || '')) || []).filter((p: any) => String(p?.payment_type || '').toLowerCase() === 'cheque');
+                            return (
+                              <div className="space-y-3">
+                                <Table
+                                  rowKey="key"
+                                  size="small"
+                                  pagination={false}
+                                  dataSource={invoiceRow.lines}
+                                  columns={[
+                                    { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
+                                    { title: 'دوره احراز', key: 'sourcePeriod', render: (_: unknown, line: CommissionDraftLine) => <span className="persian-number">{toPersianNumber(safeJalaliFormat(line.source_period_start, 'YYYY/MM/DD'))}</span> },
+                                    { title: 'مانده', dataIndex: 'remaining_amount', key: 'remaining_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+                                    { title: 'وضعیت', key: 'decision', render: (_: unknown, line: CommissionDraftLine) => <Tag color={line.decision_status === 'defer_to_next_period' ? 'orange' : 'blue'}>{line.decision_status === 'defer_to_next_period' ? 'منتقل‌شده' : 'آماده تصمیم'}</Tag> },
+                                    {
+                                      title: 'اقدام',
+                                      key: 'action',
+                                      render: (_: unknown, line: CommissionDraftLine) => (
+                                        <AdaptiveSelectField
+                                          value={line.decision_status}
+                                          options={commissionDecisionOptions}
+                                          onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
+                                          getPopupContainer={resolveSelectPopupContainer}
+                                          modalContainer={resolveSelectPopupContainer}
+                                          overlayZIndexBase={15000}
+                                        />
+                                      ),
+                                    },
+                                  ]}
+                                />
+                                {invoiceCheques.length > 0 && (
+                                  <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-700 rounded-lg">
+                                    <div className="text-xs font-bold text-orange-700 mb-2">چک‌های فاکتور</div>
+                                    <div className="flex flex-wrap gap-3">
+                                      {invoiceCheques.map((cheque: any, ci: number) => (
+                                        <div key={ci} className="bg-white dark:bg-gray-900 border border-orange-200 rounded-md px-3 py-2 text-xs space-y-1 min-w-[160px]">
+                                          {cheque.cheque_number && <div><span className="text-gray-500">شماره: </span><span className="persian-number font-bold">{toPersianNumber(cheque.cheque_number)}</span></div>}
+                                          {cheque.bank_name && <div><span className="text-gray-500">بانک: </span>{cheque.bank_name}</div>}
+                                          <div><span className="text-gray-500">مبلغ: </span><span className="persian-number font-bold text-green-700">{formatMoney(toNumber(cheque.amount))}</span></div>
+                                          {(cheque.due_date || cheque.maturity_date) && <div><span className="text-gray-500">سررسید: </span><span className="persian-number">{toPersianNumber(safeJalaliFormat(cheque.due_date || cheque.maturity_date, 'YYYY/MM/DD'))}</span></div>}
+                                          {(cheque.cheque_status || cheque.status) && <div><span className="text-gray-500">وضعیت: </span><Tag color={(cheque.cheque_status || cheque.status) === 'cleared' ? 'green' : (cheque.cheque_status || cheque.status) === 'bounced' ? 'red' : 'blue'} className="text-xs">{cheque.cheque_status || cheque.status}</Tag></div>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          },
                         }}
                       />
                     ),

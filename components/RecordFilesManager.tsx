@@ -37,7 +37,6 @@ import {
 import type { FileFolderRow } from '../utils/fileManagerTypes';
 import { canonicalizeFileManagerItems } from '../utils/fileManagerCanonical';
 import { sendCounterpartyBotGroupMessage } from '../utils/botGateway';
-import { escapeRubikaAutoLinkText } from '../utils/rubikaLinkText';
 import { logAndTouchRecord } from '../utils/recordActivity';
 import FileManagerBrowser, { type FileManagerBrowserItem } from './files/FileManagerBrowser';
 import TagInput from './TagInput';
@@ -144,50 +143,6 @@ const getFileType = (file: File): RecordFileType => {
 const safeFileName = (name: string): string => {
   const clean = name.replace(/[^a-zA-Z0-9._-]/g, '_');
   return clean.slice(-120);
-};
-
-const buildRubikaLinkedAttachmentMessage = (
-  baseText: string,
-  attachments: Array<{ name?: string; url?: string }>,
-) => {
-  const normalizedBaseText = String(baseText || '').trim();
-  const lines: Array<{ text: string; linkUrl?: string }> = [];
-  if (normalizedBaseText) lines.push({ text: normalizedBaseText });
-
-  (attachments || []).forEach((item, index) => {
-    const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
-    const url = String(item?.url || '').trim();
-    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
-  });
-
-  let text = '';
-  let cursor = 0;
-  const metaDataParts: Array<Record<string, any>> = [];
-
-  lines.forEach((line, index) => {
-    if (index > 0) {
-      text += '\n';
-      cursor += 1;
-    }
-    const segment = String(line.text || '');
-    const startIndex = cursor;
-    text += segment;
-    cursor += segment.length;
-
-    if (line.linkUrl) {
-      metaDataParts.push({
-        type: 'Link',
-        from_index: startIndex,
-        length: segment.length,
-        link_url: line.linkUrl,
-      });
-    }
-  });
-
-  return {
-    text,
-    metadata: metaDataParts.length > 0 ? { meta_data_parts: metaDataParts } : undefined,
-  };
 };
 
 const getDisplayFileName = (item: Pick<RecordFileItem, 'file_name' | 'file_url'>): string => {
@@ -1846,19 +1801,16 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         noteText,
         attachments.map((item) => `فایل: ${String(item.url || '').trim()}`).filter(Boolean).join('\n'),
       ].filter(Boolean).join('\n');
-      const rubikaLinkedMessage = isRubikaTarget
-        ? buildRubikaLinkedAttachmentMessage(noteText, attachments)
-        : null;
       await sendCounterpartyBotGroupMessage({
         group: target,
         text: isRubikaTarget
-          ? (String(rubikaLinkedMessage?.text || '').trim() || 'فایل ارسال شد.')
+          ? (String(noteText || '').trim() || 'فایل ارسال شد.')
           : (externalText || 'فایل ارسال شد.'),
         messageType: 'file',
-        extraPayload: isRubikaTarget && rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined,
         fallbackText: isRubikaTarget
           ? [noteText, attachments.map((item) => `🔗 ${item.name}`).join('\n')].filter(Boolean).join('\n')
           : undefined,
+        attachments: isRubikaTarget ? attachments : undefined,
         payload: {
           attachments,
           source_type: 'file_manager_share',

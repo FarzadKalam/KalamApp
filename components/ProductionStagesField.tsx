@@ -124,6 +124,13 @@ import {
   mapProcessTemplateStagesToDraft,
   syncProcessRunStageFromTask,
 } from '../utils/processRunRuntime';
+import {
+  getInstructionIdsFromStage,
+  normalizeInstructionIdList,
+  PROCESS_STAGE_INSTRUCTION_IDS_KEY,
+  instructionStatusOptions as INSTRUCTION_STATUS_OPTIONS,
+} from '../utils/instructionSupport';
+import InstructionQuickCreateModal from './instructions/InstructionQuickCreateModal';
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -199,9 +206,9 @@ type StageHandoverForm = {
   updatedAt?: string | null;
 };
 
-type DraftModalTabKey = 'stage' | 'fields' | 'automation';
+type DraftModalTabKey = 'stage' | 'fields' | 'automation' | 'instructions';
 
-const DRAFT_MODAL_STEP_KEYS: DraftModalTabKey[] = ['stage', 'fields', 'automation'];
+const DRAFT_MODAL_STEP_KEYS: DraftModalTabKey[] = ['stage', 'fields', 'automation', 'instructions'];
 
 const TASK_AUTOMATION_FIELD_PREFIX = '__task__';
 const NEXT_STAGE_TRANSFER_LABELS: Record<1 | 2, string> = {
@@ -542,6 +549,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [savingTaskCustomFields, setSavingTaskCustomFields] = useState<Record<string, boolean>>({});
   const [draftCustomFieldForm] = Form.useForm();
   const [draftCustomFieldOptionsForm] = Form.useForm<{ optionsText: string }>();
+  const [draftStageInstructionIds, setDraftStageInstructionIds] = useState<string[]>([]);
+  const [instructionsForEditor, setInstructionsForEditor] = useState<any[]>([]);
+  const [isLoadingInstructionsForEditor, setIsLoadingInstructionsForEditor] = useState(false);
+  const [isInstructionQuickCreateOpen, setIsInstructionQuickCreateOpen] = useState(false);
   const [automationDynamicOptions, setAutomationDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [automationRelationOptions, setAutomationRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [taskReportDrafts, setTaskReportDrafts] = useState<Record<string, string>>({});
@@ -818,8 +829,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         title: `اتوماسیون (${toPersianNumber(draftAutomationRules.length)})`,
         description: 'شرط‌ها و اقدام‌ها',
       },
+      {
+        key: 'instructions' as DraftModalTabKey,
+        title: `دستورالعمل‌ها (${toPersianNumber(draftStageInstructionIds.length)})`,
+        description: 'دستورالعمل‌های مرتبط با این مرحله',
+      },
     ],
-    [draftAutomationRules.length, draftCustomFields.length]
+    [draftAutomationRules.length, draftCustomFields.length, draftStageInstructionIds.length]
   );
   const draftModalStepIndex = useMemo(
     () => Math.max(0, DRAFT_MODAL_STEP_KEYS.indexOf(draftModalTabKey)),
@@ -913,6 +929,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       : 'project_start';
     const id = stage?.id || stage?.template_stage_id || stage?.process_run_stage_id || `draft_${index + 1}_${sortOrder}`;
 
+    const instructionIds = getInstructionIdsFromStage(stage);
+
     return {
       ...(stage || {}),
       id,
@@ -932,6 +950,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       duration_value: durationValue,
       duration_unit: durationUnit,
       duration_from: durationFrom,
+      [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: instructionIds,
       metadata: {
         ...metadata,
         description,
@@ -943,6 +962,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: durationValue,
         duration_unit: durationUnit,
         duration_from: durationFrom,
+        [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: instructionIds,
       },
     };
   }, []);
@@ -3504,6 +3524,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const stageAutomationRules = normalizeProcessAutomationRules(draftToCreate?.automation_rules);
       const stageCustomFields = getProcessTaskCustomFieldsFromStage(draftToCreate);
       const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(draftToCreate);
+      const stageInstructionIds = getInstructionIdsFromStage(draftToCreate);
       const stageProcessLinkMap = draftToCreate?.process_link_map && typeof draftToCreate.process_link_map === 'object'
         ? draftToCreate.process_link_map
         : {};
@@ -3655,13 +3676,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         ? values.recurrence_info
         : {};
 
-      if (resolvedStageCustomFields.length > 0) {
+      if (resolvedStageCustomFields.length > 0 || stageInstructionIds.length > 0) {
         payload.recurrence_info = {
           ...currentRecurrence,
           ...(taskType ? { task_type: taskType } : {}),
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
+          ...(stageInstructionIds.length > 0 ? { [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds } : {}),
         };
       }
 
@@ -3683,6 +3705,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
+          ...(stageInstructionIds.length > 0 ? { [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds } : {}),
         };
         if (effectiveProcessGroupMeta.id) {
           payload.recurrence_info = {
@@ -5983,6 +6006,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         (condition) => String(condition?.field || '').trim() !== '__task__task_type'
       ),
     })));
+    const stageInstructionIds = normalizeInstructionIdList(draftStageInstructionIds);
+
     return {
       ...(existingStage || {}),
       id: existingStage?.id || Date.now(),
@@ -6002,6 +6027,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       automation_rules: automationRules,
       process_task_custom_fields: processTaskCustomFields,
       process_task_status_options: stageStatusOptions,
+      [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds,
       metadata: {
         ...existingMetadata,
         description: stageDescription,
@@ -6013,9 +6039,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: durationValue,
         duration_unit: durationUnit,
         duration_from: durationFrom,
+        [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds,
       },
     };
-  }, [draftAutomationRules, draftCustomFields, draftLocal.length, getDraftStageEditorStatusOptions]);
+  }, [draftAutomationRules, draftCustomFields, draftLocal.length, draftStageInstructionIds, getDraftStageEditorStatusOptions]);
 
   const saveDraftStageFromEditor = useCallback(async (rawValues?: any) => {
     if (draftStageSavePromiseRef.current) {
@@ -6127,6 +6154,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setDraftCustomFields([]);
     setDraftStageStatusOptions([]);
     setDraftStageTaskTypeValue('');
+    setDraftStageInstructionIds([]);
+    setInstructionsForEditor([]);
     draftForm.resetFields();
   }, [draftForm]);
 
@@ -6166,6 +6195,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const nextEditingDraft = stage ? normalizeDraftStageForEditor(stage, 0) : null;
     draftEditorStageIdRef.current = nextEditingDraft?.id ?? null;
     setEditingDraft(nextEditingDraft);
+    setDraftStageInstructionIds(stage ? getInstructionIdsFromStage(stage) : []);
     setDraftModalTabKey(tab);
     setIsDraftModalOpen(true);
   }, [normalizeDraftStageForEditor]);
@@ -6622,6 +6652,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!isDraftModalOpen || taskTypeOptions.length === 0) return;
     setDraftAutomationRules((prev) => prev.map((rule) => normalizeAutomationRuleForEditor(rule)));
   }, [isDraftModalOpen, normalizeAutomationRuleForEditor, taskTypeOptions]);
+
+  useEffect(() => {
+    if (!isDraftModalOpen || draftModalTabKey !== 'instructions') return;
+    if (instructionsForEditor.length > 0) return;
+    setIsLoadingInstructionsForEditor(true);
+    supabase
+      .from('instructions')
+      .select('id, name, system_code, status, department, goal')
+      .order('name', { ascending: true })
+      .then(({ data, error }) => {
+        if (!error && Array.isArray(data)) {
+          setInstructionsForEditor(data);
+        }
+        setIsLoadingInstructionsForEditor(false);
+      });
+  }, [isDraftModalOpen, draftModalTabKey, instructionsForEditor.length]);
 
   const draftSegments = draftList.map((stage: any) => ({
     ...stage,
@@ -8730,6 +8776,119 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   </div>
           )}
 
+          {draftModalTabKey === 'instructions' && (
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600 dark:text-gray-300">
+                  دستورالعمل‌هایی که باید در این مرحله رعایت شوند را انتخاب کنید.
+                </div>
+                <Button
+                  type="primary"
+                  htmlType="button"
+                  icon={<PlusOutlined />}
+                  size="small"
+                  className="rounded-lg border-none bg-leather-600 !text-white shadow-sm hover:!bg-leather-500"
+                  onClick={() => setIsInstructionQuickCreateOpen(true)}
+                >
+                  افزودن دستورالعمل
+                </Button>
+              </div>
+
+              {isLoadingInstructionsForEditor ? (
+                <div className="flex items-center justify-center py-8">
+                  <Spin size="small" />
+                </div>
+              ) : instructionsForEditor.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={
+                    <span className="text-sm text-gray-500">
+                      هنوز دستورالعملی ثبت نشده است.{' '}
+                      <button
+                        type="button"
+                        className="cursor-pointer text-leather-600 underline"
+                        onClick={() => setIsInstructionQuickCreateOpen(true)}
+                      >
+                        ایجاد دستورالعمل جدید
+                      </button>
+                    </span>
+                  }
+                />
+              ) : (
+                <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+                  {instructionsForEditor.map((instruction) => {
+                    const instructionId = String(instruction?.id || '');
+                    const isSelected = draftStageInstructionIds.includes(instructionId);
+                    const statusOption = INSTRUCTION_STATUS_OPTIONS.find((o) => o.value === instruction?.status);
+                    return (
+                      <div
+                        key={instructionId}
+                        role="checkbox"
+                        aria-checked={isSelected}
+                        tabIndex={0}
+                        className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition ${
+                          isSelected
+                            ? 'border-leather-400 bg-leather-50/60 dark:border-leather-500 dark:bg-leather-900/20'
+                            : 'border-gray-200 bg-white hover:border-leather-300 dark:border-gray-700 dark:bg-white/5'
+                        }`}
+                        onClick={() => {
+                          setDraftStageInstructionIds((prev) =>
+                            prev.includes(instructionId)
+                              ? prev.filter((id) => id !== instructionId)
+                              : [...prev, instructionId]
+                          );
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === ' ' || event.key === 'Enter') {
+                            event.preventDefault();
+                            setDraftStageInstructionIds((prev) =>
+                              prev.includes(instructionId)
+                                ? prev.filter((id) => id !== instructionId)
+                                : [...prev, instructionId]
+                            );
+                          }
+                        }}
+                      >
+                        <div className={`mt-0.5 h-4 w-4 flex-shrink-0 rounded border-2 transition ${
+                          isSelected
+                            ? 'border-leather-500 bg-leather-500'
+                            : 'border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800'
+                        }`}>
+                          {isSelected ? (
+                            <CheckOutlined className="flex h-full w-full items-center justify-center text-[10px] text-white" />
+                          ) : null}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                              {String(instruction?.name || instruction?.system_code || 'دستورالعمل')}
+                            </span>
+                            {statusOption ? (
+                              <Tag color={String(statusOption.color || 'default')} className="m-0 text-xs">
+                                {statusOption.label}
+                              </Tag>
+                            ) : null}
+                            {instruction?.department ? (
+                              <Tag className="m-0 text-xs">{String(instruction.department)}</Tag>
+                            ) : null}
+                          </div>
+                          {instruction?.goal ? (
+                            <div className="mt-1 line-clamp-2 text-xs text-gray-500">
+                              {String(instruction.goal)}
+                            </div>
+                          ) : null}
+                          {instruction?.system_code ? (
+                            <div className="mt-0.5 text-xs text-gray-400">{String(instruction.system_code)}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
             <Button onClick={closeDraftStageModal} className="rounded-lg">انصراف</Button>
             <div className="flex items-center gap-2">
@@ -9081,6 +9240,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           />
         </>
       )}
+      <InstructionQuickCreateModal
+        open={isInstructionQuickCreateOpen}
+        onClose={() => setIsInstructionQuickCreateOpen(false)}
+        onCreated={(record) => {
+          const newInstruction = record as any;
+          setInstructionsForEditor((prev) => {
+            const exists = prev.some((item) => String(item?.id || '') === String(newInstruction?.id || ''));
+            return exists ? prev : [...prev, newInstruction];
+          });
+          if (newInstruction?.id) {
+            setDraftStageInstructionIds((prev) => {
+              const id = String(newInstruction.id);
+              return prev.includes(id) ? prev : [...prev, id];
+            });
+          }
+        }}
+      />
+
       <style>{`
         @media (max-width: 768px) {
           .process-stage-modal-root .ant-modal-wrap {

@@ -49,4 +49,32 @@ describe('operationalCashBankSources', () => {
     expect(resolveOperationalPaymentRowKey({ key: 1776804382545 }, 0)).toBe('key_1776804382545');
     expect(resolveOperationalPaymentRowKey({}, 3)).toBe('legacy_3');
   });
+
+  it('maps employee party to related_profile_id instead of assignee_id for payroll and advance sources', () => {
+    const source = OPERATIONAL_CASH_BANK_SOURCE_MODULES.find((item) => item.moduleId === 'employee_advances');
+    if (!source) throw new Error('employee advance source not found');
+
+    const { payload } = buildCashBankOperationPayloadFromPaymentRow({
+      source,
+      record: {
+        id: 'advance-1',
+        request_date: '2026-05-18',
+        employee_id: 'employee-1',
+        employee: { related_profile_id: 'profile-employee-1' },
+        assignee_id: 'profile-operator-1',
+      },
+      row: {
+        payment_type: 'cash',
+        status: 'paid',
+        source_account: 'cash-box-1',
+        amount: '500000',
+      },
+      rowKey: 'row-2',
+      accountModuleById: new Map([['cash-box-1', 'cash_boxes' as const]]),
+    });
+
+    expect(payload.assignee_id).toBe('profile-operator-1');
+    expect(payload.employee_id).toBe('profile-employee-1');
+    expect(payload.employee_advance_id).toBe('advance-1');
+  });
 });

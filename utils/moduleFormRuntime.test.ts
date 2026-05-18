@@ -97,4 +97,31 @@ describe('moduleFormRuntime', () => {
     expect(payload.petty_fund_id).toBeNull();
     expect(payload).not.toHaveProperty('receipt_account_id');
   });
+
+  it('does not mirror assignee_id into employee_id for cash bank operations', () => {
+    const payload = transformModulePayloadForSave(
+      'cash_bank_operations',
+      {
+        operation_type: 'payment',
+        assignee_id: 'profile-1',
+      },
+    );
+
+    expect(payload.assignee_id).toBe('profile-1');
+    expect(payload.employee_id).toBeNull();
+  });
+
+  it('preserves explicit employee_id when saving cash bank operations', () => {
+    const payload = transformModulePayloadForSave(
+      'cash_bank_operations',
+      {
+        operation_type: 'payment',
+        assignee_id: 'profile-1',
+        employee_id: 'employee-1',
+      },
+    );
+
+    expect(payload.assignee_id).toBe('profile-1');
+    expect(payload.employee_id).toBe('employee-1');
+  });
 });
