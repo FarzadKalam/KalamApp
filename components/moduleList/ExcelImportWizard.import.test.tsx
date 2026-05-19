@@ -270,6 +270,14 @@ const runImport = async () => {
   });
 };
 
+const runImportExpectFailures = async () => {
+  fireEvent.click(screen.getByText('وارد کردن اطلاعات'));
+  await waitFor(() => {
+    const content = document.body.textContent || '';
+    expect(content.includes('خطا: 1')).toBe(true);
+  });
+};
+
 const buildGroupedInvoiceCsv = (itemRows: string[]) =>
   [
     'شماره فاکتور,موضوع,تاريخ فاکتور,نام مخاطب,نام آیتم,مقدار / تعداد,لیست قیمت',
@@ -449,21 +457,16 @@ describe('ExcelImportWizard import scenarios', () => {
     });
   }, 15000);
 
-  it('autocreates supported relation targets when invoice customer does not exist', async () => {
+  it('does not autocreate invoice customers during grouped import', async () => {
     renderWizard('invoices', MODULES.invoices);
     await uploadCsv(
       buildGroupedInvoiceCsv(['INV-5,فاکتور مشتری جدید,2026-04-16,مشتری تازه,محصول تست,1,99000'])
     );
     await goToMappingStep();
-    await runImport();
+    await runImportExpectFailures();
 
-    expect(currentDb.customers).toHaveLength(2);
-    expect(currentDb.customers[1]).toMatchObject({
-      full_name: 'مشتری تازه',
-      rank: 'normal',
-    });
-    expect(currentDb.invoices).toHaveLength(1);
-    expect(currentDb.invoices[0].customer_id).toBe(currentDb.customers[1].id);
+    expect(currentDb.customers).toHaveLength(1);
+    expect(currentDb.invoices).toHaveLength(0);
   }, 15000);
 
   it('normalizes legacy marketing lead values before saving', async () => {

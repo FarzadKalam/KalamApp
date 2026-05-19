@@ -346,6 +346,18 @@ type HrRequestRecord = {
   notes: string | null;
 };
 
+type ApprovedLeaveRequest = {
+  id: string;
+  employeeId: string | null;
+  assigneeId?: string | null;
+  relatedProfileId?: string | null;
+  status: string | null;
+  leaveType: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  totalMinutes?: number | string | null;
+};
+
 type AttendanceComputedRow = {
   key: string;
   id: string;
@@ -371,6 +383,10 @@ type AttendanceComputedRow = {
   earlyArrivalMinutes: number;
   earlyLeaveMinutes: number;
   overtimeStayMinutes: number;
+  approvedLeaveMinutes: number;
+  isApprovedLeave: boolean;
+  approvedLeaveRequestId: string | null;
+  approvedLeaveType: string | null;
   deltaLabel: string;
   deltaColor: string;
 };
@@ -598,6 +614,36 @@ const toModuleLabel = (rawModule: string | null | undefined) => {
   return fromRegistry || key;
 };
 
+const REJECTED_LEAVE_STATUS_HINTS = ['draft', 'pending', 'review', 'rejected', 'canceled', 'cancelled', 'رد', 'لغو', 'پیش'];
+
+const isApprovedLeaveStatus = (value: string | null | undefined) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return false;
+  const normalized = raw
+    .replace(/\u200c/g, '')
+    .replace(/[\s_-]+/g, '')
+    .replace('أ', 'ا')
+    .replace('إ', 'ا')
+    .replace('آ', 'ا');
+  if (REJECTED_LEAVE_STATUS_HINTS.some((hint) => normalized.includes(hint))) return false;
+  return (
+    normalized.includes('approve')
+    || normalized.includes('confirm')
+    || normalized.includes('final')
+    || normalized.includes('complete')
+    || normalized.includes('تاييد')
+    || normalized.includes('تایید')
+    || normalized.includes('تکمیل')
+  );
+};
+
+const isMissingLeaveOptionalColumnError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('leave_requests')
+    && (text.includes('assignee_id') || text.includes('related_profile_id'))
+    && (text.includes('column') || text.includes('schema cache') || text.includes('could not find'));
+};
+
 const evaluateTaskPerformance = (task: TaskRecord, now: dayjs.Dayjs) => {
   const status = normalizeTaskStatus(task.status);
   const due = parseDate(resolveDueDate(task));
@@ -716,7 +762,8 @@ const normalizeSchedulePlan = (raw: any) => {
 
 const timeToMinutes = (value: string | null | undefined) => {
   if (!value) return null;
-  const [hh, mm] = String(value).split(':').map(Number);
+  const normalized = toEnglishDigits(String(value)).trim();
+  const [hh, mm] = normalized.split(':').map(Number);
   if ([hh, mm].some(Number.isNaN)) return null;
   return (hh * 60) + mm;
 };
@@ -738,6 +785,110 @@ const formatMinutesLabel = (minutes: number) => {
     ? `${toPersianNumber(hours)} ساعت و ${toPersianNumber(rest)} دقیقه`
     : `${toPersianNumber(hours)} ساعت`;
 };
+
+const toIsoDateKey = (value: dayjs.Dayjs | null | undefined): string | null => {
+  if (!value || !value.isValid()) return null;
+  return toGregorianDateString(value, 'YYYY-MM-DD', { setMidday: true }) || value.format('YYYY-MM-DD');
+};
+
+const toEnglishDigits = (value: string) =>
+  String(value || '')
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+const extractUuidList = (value: string | null | undefined) =>
+  Array.from(
+    new Set(
+      String(value || '')
+        .match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi) || [],
+    ),
+  );
+
+const removeUuidTokens = (value: string | null | undefined) =>
+  String(value || '')
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, ' ')
+    .replace(/\s*\|\s*/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+const buildApprovedLeaveNoteLabel = (requests: ApprovedLeaveRequest[]) => {
+  if (!requests.length) return null;
+  const hasHourlyOnly = requests.every((request) => String(request.leaveType || '').trim().toLowerCase() === 'hourly');
+  return hasHourlyOnly ? 'مرخصی ساعتی تاییدشده' : 'مرخصی تاییدشده';
+};
+
+const isLeaveRequestActiveOnDate = (request: ApprovedLeaveRequest | null | undefined, dateIso: string | null | undefined) => {
+  if (!request || !dateIso) return false;
+  const day = parseDate(`${dateIso}T12:00:00`);
+  const start = parseDate(request.startDate || null);
+  const end = parseDate(request.endDate || request.startDate || null);
+  if (!day || !start || !end) return false;
+  return day.valueOf() >= start.startOf('day').valueOf() && day.valueOf() <= end.endOf('day').valueOf();
+};
+
+const buildDateTimeFromIsoDateAndTime = (dateIso: string, timeValue: string | null | undefined) => {
+  const trimmed = String(timeValue || '').trim();
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return parseDate(`${dateIso}T${String(match[1]).padStart(2, '0')}:${match[2]}:${match[3] || '00'}`);
+};
+
+const getOverlapMinutes = (
+  startA: dayjs.Dayjs | null,
+  endA: dayjs.Dayjs | null,
+  startB: dayjs.Dayjs | null,
+  endB: dayjs.Dayjs | null,
+) => {
+  if (!startA || !endA || !startB || !endB) return 0;
+  const start = Math.max(startA.valueOf(), startB.valueOf());
+  const end = Math.min(endA.valueOf(), endB.valueOf());
+  if (end <= start) return 0;
+  return Math.floor((end - start) / (1000 * 60));
+};
+
+const getLeaveIntervalsForDay = (leaveRequests: ApprovedLeaveRequest[], dateIso: string) => {
+  const dayStart = parseDate(`${dateIso}T00:00:00`);
+  const dayEnd = parseDate(`${dateIso}T23:59:59`);
+  if (!dayStart || !dayEnd) return [];
+  return leaveRequests
+    .map((request) => {
+      const isHourly = String(request.leaveType || '').trim().toLowerCase() === 'hourly';
+      const requestStart = parseDate(request.startDate || null);
+      const requestEnd = parseDate(request.endDate || request.startDate || null);
+      if (!requestStart || !requestEnd) return null;
+      const start = isHourly
+        ? (requestStart.valueOf() < dayStart.valueOf() ? dayStart : requestStart)
+        : dayStart;
+      const end = isHourly
+        ? (requestEnd.valueOf() > dayEnd.valueOf() ? dayEnd : requestEnd)
+        : dayEnd;
+      if (end.valueOf() <= start.valueOf()) return null;
+      return { request, start, end };
+    })
+    .filter((item): item is { request: ApprovedLeaveRequest; start: dayjs.Dayjs; end: dayjs.Dayjs } => Boolean(item));
+};
+
+const getScheduledMinutesByShifts = (shifts: AttendanceScheduleShift[]) =>
+  shifts.reduce((sum, shift) => {
+    const start = timeToMinutes(shift.start);
+    const end = timeToMinutes(shift.end);
+    return sum + (start !== null && end !== null && end > start ? (end - start) : 0);
+  }, 0);
+
+const getLeaveCoveredScheduledMinutes = (
+  leaveIntervals: Array<{ request: ApprovedLeaveRequest; start: dayjs.Dayjs; end: dayjs.Dayjs }>,
+  attendanceDate: string,
+  shifts: AttendanceScheduleShift[],
+) =>
+  shifts.reduce((sum, shift) => {
+    const shiftStart = buildDateTimeFromIsoDateAndTime(attendanceDate, shift.start);
+    const shiftEnd = buildDateTimeFromIsoDateAndTime(attendanceDate, shift.end);
+    const covered = leaveIntervals.reduce(
+      (intervalSum, interval) => intervalSum + getOverlapMinutes(shiftStart, shiftEnd, interval.start, interval.end),
+      0,
+    );
+    return sum + covered;
+  }, 0);
 
 const normalizeAttendanceDateTimes = (values: Array<string | null | undefined>) =>
   Array.from(
@@ -1086,6 +1237,7 @@ const HRPage: React.FC = () => {
   const [attendanceRows, setAttendanceRows] = useState<AttendanceLogRecord[]>([]);
   const [scheduleRows, setScheduleRows] = useState<WorkScheduleDashboardRow[]>([]);
   const [requestRows, setRequestRows] = useState<HrRequestRecord[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<ApprovedLeaveRequest[]>([]);
   const [activeTab, setActiveTab] = useState('performance');
   const [showKpiManager, setShowKpiManager] = useState(false);
   const [formulaModalConfig, setFormulaModalConfig] = useState<{
@@ -1422,11 +1574,19 @@ const HRPage: React.FC = () => {
           .select('id, title, status, is_active, effective_from, effective_to, employee_id, weekly_plan, created_at, updated_at')
           .order('updated_at', { ascending: false })
           .limit(2000),
-        supabase
-          .from('leave_requests')
-          .select('id, employee_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
-          .order('created_at', { ascending: false })
-          .limit(5000),
+        (async () => {
+          const primary = await supabase
+            .from('leave_requests')
+            .select('id, employee_id, assignee_id, related_profile_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
+            .order('created_at', { ascending: false })
+            .limit(5000);
+          if (!primary.error || !isMissingLeaveOptionalColumnError(primary.error)) return primary;
+          return supabase
+            .from('leave_requests')
+            .select('id, employee_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
+            .order('created_at', { ascending: false })
+            .limit(5000);
+        })(),
         supabase
           .from('overtime_requests')
           .select('id, employee_id, status, work_date, start_time, end_time, total_minutes, notes, created_at, updated_at')
@@ -1453,6 +1613,7 @@ const HRPage: React.FC = () => {
       let nextAttendanceRows: AttendanceLogRecord[] = [];
       let nextScheduleRows: WorkScheduleDashboardRow[] = [];
       const nextRequestRows: HrRequestRecord[] = [];
+      let nextLeaveRequests: ApprovedLeaveRequest[] = [];
 
       if (attendanceStatsResult.status === 'fulfilled' && !attendanceStatsResult.value.error) {
         const rows = attendanceStatsResult.value.data || [];
@@ -1523,6 +1684,37 @@ const HRPage: React.FC = () => {
           if (to && to.valueOf() < monthStart.valueOf()) return false;
           return true;
         });
+        const employeeIdByAnyId = normalizedProfiles.reduce<Record<string, string>>((acc, profile) => {
+          const canonical = String(profile.id || '').trim();
+          const source = String(profile.source_id || '').trim();
+          const related = String(profile.related_profile_id || '').trim();
+          if (canonical) acc[canonical] = canonical;
+          if (source) acc[source] = canonical;
+          if (related) acc[related] = canonical;
+          return acc;
+        }, {});
+
+        nextLeaveRequests = rows.map((row: any) => ({
+          id: String(row?.id),
+          employeeId: (() => {
+            const candidates = [
+              String(row?.employee_id || '').trim(),
+              String(row?.assignee_id || '').trim(),
+              String(row?.related_profile_id || '').trim(),
+            ].filter(Boolean);
+            for (const candidate of candidates) {
+              if (employeeIdByAnyId[candidate]) return employeeIdByAnyId[candidate];
+            }
+            return candidates[0] || null;
+          })(),
+          assigneeId: row?.assignee_id ? String(row.assignee_id) : null,
+          relatedProfileId: row?.related_profile_id ? String(row.related_profile_id) : null,
+          status: row?.status || null,
+          leaveType: row?.leave_type || null,
+          startDate: row?.start_date || null,
+          endDate: row?.end_date || null,
+          totalMinutes: row?.total_minutes ?? null,
+        }));
         nextRequestRows.push(
           ...rows.map((row: any) => ({
             key: `leave_${String(row?.id)}`,
@@ -1625,6 +1817,7 @@ const HRPage: React.FC = () => {
       setSupportStats(nextSupportStats);
       setAttendanceRows(nextAttendanceRows);
       setScheduleRows(nextScheduleRows);
+      setLeaveRequests(nextLeaveRequests);
       setRequestRows(
         nextRequestRows.sort((a, b) => {
           const aDate = parseDate(a.dateFrom || a.dateTo || null)?.valueOf() || 0;
@@ -2198,6 +2391,49 @@ const HRPage: React.FC = () => {
     [profiles, selectedEmployeeIds],
   );
 
+  const approvedLeaveByEmployeeDate = useMemo(() => {
+    const byEmployeeDate = new Map<string, Map<string, ApprovedLeaveRequest[]>>();
+    leaveRequests
+      .filter((request) => request.employeeId && isApprovedLeaveStatus(request.status))
+      .forEach((request) => {
+        const start = parseDate(request.startDate || null);
+        const end = parseDate(request.endDate || request.startDate || null);
+        if (!start || !end || !request.employeeId) return;
+        const requestStart = start.startOf('day');
+        const requestEnd = end.endOf('day');
+        const rangeStart = requestStart.valueOf() < monthStart.valueOf() ? monthStart : requestStart;
+        const rangeEnd = requestEnd.valueOf() > monthEnd.valueOf() ? monthEnd : requestEnd;
+        let cursor = rangeStart.startOf('day');
+        const finalDay = rangeEnd.startOf('day');
+        while (cursor.valueOf() <= finalDay.valueOf()) {
+          const dateKey = toIsoDateKey(cursor);
+          if (!dateKey) {
+            cursor = cursor.add(1, 'day');
+            continue;
+          }
+          const employeeKey = String(request.employeeId);
+          const dateMap = byEmployeeDate.get(employeeKey) || new Map<string, ApprovedLeaveRequest[]>();
+          const list = dateMap.get(dateKey) || [];
+          list.push(request);
+          dateMap.set(dateKey, list);
+          byEmployeeDate.set(employeeKey, dateMap);
+          cursor = cursor.add(1, 'day');
+        }
+      });
+    return byEmployeeDate;
+  }, [leaveRequests, monthEnd, monthStart]);
+
+  const approvedLeaveById = useMemo(() => {
+    const map = new Map<string, ApprovedLeaveRequest>();
+    leaveRequests
+      .filter((request) => isApprovedLeaveStatus(request.status))
+      .forEach((request) => {
+        const id = String(request.id || '').trim();
+        if (id) map.set(id, request);
+      });
+    return map;
+  }, [leaveRequests]);
+
   const computeScheduleForEmployee = useCallback(
     (employeeId: string | null, targetDateIso: string | null) => {
       if (!employeeId || !targetDateIso) {
@@ -2230,9 +2466,12 @@ const HRPage: React.FC = () => {
       for (const schedule of candidates) {
         const rawColumns = Array.isArray((schedule.weekly_plan as any)?.columns) ? (schedule.weekly_plan as any).columns : [];
         const matchedColumn = rawColumns.find((column: any) => String(column?.employeeId || '') === String(employeeId));
-        if (!matchedColumn) continue;
+        const isLegacyDirectEmployeeSchedule = String(schedule.employee_id || '') === String(employeeId);
+        if (!matchedColumn && !isLegacyDirectEmployeeSchedule) continue;
 
-        const normalizedPlan = normalizeSchedulePlan(matchedColumn?.weeklyPlan);
+        const normalizedPlan = matchedColumn
+          ? normalizeSchedulePlan(matchedColumn?.weeklyPlan)
+          : normalizeSchedulePlan(schedule.weekly_plan);
         const currentDayPlan = normalizedPlan?.[dayKey];
         if (!currentDayPlan) continue;
 
@@ -2288,11 +2527,33 @@ const HRPage: React.FC = () => {
         const checkOutAt = getAttendanceCheckOutAt(row);
         const baseAt = checkInAt || checkOutAt || row.occurred_at || null;
         const parsedBaseAt = parseDate(baseAt);
-        const attendanceDate = parsedBaseAt?.format('YYYY-MM-DD') || null;
+        const attendanceBaseDate = getAttendanceDateBase(row) || baseAt;
+        const attendanceDate = toIsoDateKey(parseDate(attendanceBaseDate || null));
+        const approvedLeaveRequestsByEmployee = employeeId && attendanceDate
+          ? approvedLeaveByEmployeeDate.get(String(employeeId))?.get(attendanceDate) || []
+          : [];
+        const linkedLeaveIds = extractUuidList([row.notes, row.location_text].filter(Boolean).join(' '));
+        const approvedLeaveRequestsByLinkedId = linkedLeaveIds
+          .map((id) => approvedLeaveById.get(id) || null)
+          .filter((request): request is ApprovedLeaveRequest => Boolean(request && isLeaveRequestActiveOnDate(request, attendanceDate)));
+        const approvedLeaveRequests = Array.from(
+          new Map(
+            [...approvedLeaveRequestsByEmployee, ...approvedLeaveRequestsByLinkedId]
+              .map((request) => [String(request.id), request] as const),
+          ).values(),
+        );
+        const leaveIntervals = attendanceDate
+          ? getLeaveIntervalsForDay(approvedLeaveRequests, attendanceDate)
+          : [];
         const groupKey = `${employeeId || row.assignee_id || row.related_profile_id || 'unknown'}::${attendanceDate || row.id}`;
         const existing = dailyRows.get(groupKey);
         const sourceTypes = [existing?.row.sourceType, row.source_type].filter((item) => item && item !== '-');
-        const notes = [existing?.row.notes, row.notes].filter(Boolean).join(' | ') || null;
+        const rawNotes = [existing?.row.notes, row.notes].filter(Boolean).join(' | ') || null;
+        const cleanedNotes = removeUuidTokens(rawNotes);
+        const leaveNoteLabel = buildApprovedLeaveNoteLabel(approvedLeaveRequests);
+        const notes = leaveNoteLabel && (!cleanedNotes || cleanedNotes.length < 3)
+          ? leaveNoteLabel
+          : (cleanedNotes || null);
         const locationText = [existing?.row.locationText, row.location_text].filter(Boolean).join(' | ') || null;
         const checkIns = normalizeAttendanceDateTimes([...(existing?.checkIns || []), checkInAt || null]);
         const checkOuts = normalizeAttendanceDateTimes([...(existing?.checkOuts || []), checkOutAt || null]);
@@ -2305,7 +2566,35 @@ const HRPage: React.FC = () => {
           ? nextCheckOutAt
           : nextCheckInAt || baseAt;
         const schedule = computeScheduleForEmployee(employeeId, nextCheckInAt || nextCheckOutAt || baseAt);
+        const scheduledMinutes = attendanceDate ? getScheduledMinutesByShifts(schedule.shifts) : 0;
+        const requiredMinutes = scheduledMinutes;
+        const coveredScheduledMinutes = attendanceDate
+          ? Math.min(scheduledMinutes, getLeaveCoveredScheduledMinutes(leaveIntervals, attendanceDate, schedule.shifts))
+          : 0;
+        const coveredRequiredMinutes = scheduledMinutes > 0
+          ? coveredScheduledMinutes
+          : (leaveIntervals.length > 0 ? requiredMinutes : 0);
         const shiftDeltas = buildAttendanceShiftDeltas(schedule.shifts, checkIns, checkOuts);
+        const adjustedShiftDeltas = shiftDeltas.map((shift) => {
+          if (!attendanceDate || leaveIntervals.length === 0) return shift;
+          const shiftStart = buildDateTimeFromIsoDateAndTime(attendanceDate, shift.start);
+          const shiftEnd = buildDateTimeFromIsoDateAndTime(attendanceDate, shift.end);
+          const shiftCheckIn = parseDate(shift.checkInAt || null);
+          const shiftCheckOut = parseDate(shift.checkOutAt || null);
+          const lateExemptMinutes = leaveIntervals.reduce(
+            (sum, interval) => sum + getOverlapMinutes(shiftStart, shiftCheckIn, interval.start, interval.end),
+            0,
+          );
+          const earlyLeaveExemptMinutes = leaveIntervals.reduce(
+            (sum, interval) => sum + getOverlapMinutes(shiftCheckOut, shiftEnd, interval.start, interval.end),
+            0,
+          );
+          return {
+            ...shift,
+            lateMinutes: Math.max(0, shift.lateMinutes - lateExemptMinutes),
+            earlyLeaveMinutes: Math.max(0, shift.earlyLeaveMinutes - earlyLeaveExemptMinutes),
+          };
+        });
         const checkInMinutes = dateTimeToMinutes(nextCheckInAt);
         const checkOutMinutes = dateTimeToMinutes(nextCheckOutAt);
         const startMinutes = timeToMinutes(schedule.start);
@@ -2316,7 +2605,24 @@ const HRPage: React.FC = () => {
           earlyLeaveMinutes: checkOutMinutes !== null && endMinutes !== null ? Math.max(endMinutes - checkOutMinutes, 0) : 0,
           overtimeStayMinutes: checkOutMinutes !== null && endMinutes !== null ? Math.max(checkOutMinutes - endMinutes, 0) : 0,
         };
-        const shiftTotals = shiftDeltas.reduce(
+        const fallbackScheduledStart = attendanceDate ? buildDateTimeFromIsoDateAndTime(attendanceDate, schedule.start) : null;
+        const fallbackScheduledEnd = attendanceDate ? buildDateTimeFromIsoDateAndTime(attendanceDate, schedule.end) : null;
+        const fallbackCheckInAt = parseDate(nextCheckInAt || null);
+        const fallbackCheckOutAt = parseDate(nextCheckOutAt || null);
+        const fallbackLateExempt = leaveIntervals.reduce(
+          (sum, interval) => sum + getOverlapMinutes(fallbackScheduledStart, fallbackCheckInAt, interval.start, interval.end),
+          0,
+        );
+        const fallbackEarlyLeaveExempt = leaveIntervals.reduce(
+          (sum, interval) => sum + getOverlapMinutes(fallbackCheckOutAt, fallbackScheduledEnd, interval.start, interval.end),
+          0,
+        );
+        const adjustedFallbackDelta = {
+          ...fallbackDelta,
+          lateMinutes: Math.max(0, fallbackDelta.lateMinutes - fallbackLateExempt),
+          earlyLeaveMinutes: Math.max(0, fallbackDelta.earlyLeaveMinutes - fallbackEarlyLeaveExempt),
+        };
+        const shiftTotals = adjustedShiftDeltas.reduce(
           (acc, shift) => ({
             lateMinutes: acc.lateMinutes + shift.lateMinutes,
             earlyArrivalMinutes: acc.earlyArrivalMinutes + shift.earlyArrivalMinutes,
@@ -2325,17 +2631,37 @@ const HRPage: React.FC = () => {
           }),
           { lateMinutes: 0, earlyArrivalMinutes: 0, earlyLeaveMinutes: 0, overtimeStayMinutes: 0 },
         );
-        const totalsForDelta = shiftDeltas.length ? shiftTotals : fallbackDelta;
-        const lateMinutes = totalsForDelta.lateMinutes;
+        const totalsForDelta = adjustedShiftDeltas.length ? shiftTotals : adjustedFallbackDelta;
+        let lateMinutes = totalsForDelta.lateMinutes;
         const earlyArrivalMinutes = totalsForDelta.earlyArrivalMinutes;
-        const earlyLeaveMinutes = totalsForDelta.earlyLeaveMinutes;
+        let earlyLeaveMinutes = totalsForDelta.earlyLeaveMinutes;
         const overtimeStayMinutes = totalsForDelta.overtimeStayMinutes;
-        const { deltaLabel, deltaColor } = summarizeAttendanceDelta(
+        const hourlyApprovedMinutes = approvedLeaveRequests.reduce((sum, request) => {
+          if (String(request.leaveType || '').trim().toLowerCase() !== 'hourly') return sum;
+          return sum + Math.max(0, toNumber(request.totalMinutes ?? 0));
+        }, 0);
+        // Fallback for hourly leaves that are approved but do not carry a usable time interval.
+        if (leaveIntervals.length === 0 && hourlyApprovedMinutes > 0) {
+          const deductLate = Math.min(lateMinutes, hourlyApprovedMinutes);
+          lateMinutes -= deductLate;
+          const remaining = hourlyApprovedMinutes - deductLate;
+          if (remaining > 0) {
+            earlyLeaveMinutes = Math.max(0, earlyLeaveMinutes - remaining);
+          }
+        }
+        const deltaSummary = summarizeAttendanceDelta(
           lateMinutes,
           earlyArrivalMinutes,
           earlyLeaveMinutes,
           overtimeStayMinutes,
         );
+        const isApprovedLeave = leaveIntervals.length > 0 || hourlyApprovedMinutes > 0 || approvedLeaveRequests.length > 0;
+        const deltaLabel = isApprovedLeave
+          ? deltaSummary.deltaLabel === 'بدون اختلاف'
+            ? 'مرخصی تاییدشده'
+            : `مرخصی تاییدشده / ${deltaSummary.deltaLabel}`
+          : deltaSummary.deltaLabel;
+        const deltaColor = isApprovedLeave ? 'cyan' : deltaSummary.deltaColor;
 
         dailyRows.set(groupKey, {
           firstAtValue,
@@ -2362,22 +2688,150 @@ const HRPage: React.FC = () => {
             scheduledStart: schedule.start,
             scheduledEnd: schedule.end,
             scheduleShifts: schedule.shifts,
-            shiftDeltas,
+            shiftDeltas: adjustedShiftDeltas,
             lateMinutes,
             earlyArrivalMinutes,
             earlyLeaveMinutes,
             overtimeStayMinutes,
+            approvedLeaveMinutes: Math.max(coveredRequiredMinutes, leaveIntervals.length === 0 ? hourlyApprovedMinutes : coveredRequiredMinutes),
+            isApprovedLeave,
+            approvedLeaveRequestId: approvedLeaveRequests[0]?.id || null,
+            approvedLeaveType: approvedLeaveRequests[0]?.leaveType || null,
             deltaLabel,
             deltaColor,
           },
         });
       });
 
+    const timelineEmployeeIds = Array.from(
+      new Set(
+        (selectedEmployeeIds.length ? selectedEmployeeIds : profiles.map((profile) => profile.id))
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    timelineEmployeeIds.forEach((employeeId) => {
+      const profile = profileById.get(employeeId);
+      const employeeName = String(profile?.full_name || employeeId);
+      let cursor = monthStart.startOf('day');
+      const today = dayjs().endOf('day');
+      const finalDay = (monthEnd.valueOf() < today.valueOf() ? monthEnd : today).startOf('day');
+      while (cursor.valueOf() <= finalDay.valueOf()) {
+        const attendanceDate = toIsoDateKey(cursor);
+        if (!attendanceDate) {
+          cursor = cursor.add(1, 'day');
+          continue;
+        }
+        const groupKey = `${employeeId}::${attendanceDate}`;
+        if (dailyRows.has(groupKey)) {
+          cursor = cursor.add(1, 'day');
+          continue;
+        }
+
+        const schedule = computeScheduleForEmployee(employeeId, attendanceDate);
+        const scheduledMinutes = getScheduledMinutesByShifts(schedule.shifts);
+        const requiredMinutes = scheduledMinutes;
+        const approvedLeaveRequests = approvedLeaveByEmployeeDate.get(employeeId)?.get(attendanceDate) || [];
+        const leaveIntervals = getLeaveIntervalsForDay(approvedLeaveRequests, attendanceDate);
+        const coveredScheduledMinutes = Math.min(
+          scheduledMinutes,
+          getLeaveCoveredScheduledMinutes(leaveIntervals, attendanceDate, schedule.shifts),
+        );
+        const coveredRequiredMinutes = scheduledMinutes > 0
+          ? coveredScheduledMinutes
+          : (leaveIntervals.length > 0 ? requiredMinutes : 0);
+        const hasApprovedLeave = leaveIntervals.length > 0;
+        const hasAnySchedule = scheduledMinutes > 0 || schedule.shifts.length > 0;
+        if (!hasAnySchedule && !hasApprovedLeave) {
+          cursor = cursor.add(1, 'day');
+          continue;
+        }
+        if (!hasApprovedLeave) {
+          cursor = cursor.add(1, 'day');
+          continue;
+        }
+
+        const syntheticShiftDeltas = schedule.shifts.map((shift) => ({
+          ...shift,
+          checkInAt: null,
+          checkOutAt: null,
+          lateMinutes: 0,
+          earlyArrivalMinutes: 0,
+          earlyLeaveMinutes: 0,
+          overtimeStayMinutes: 0,
+        }));
+        const deltaLabel = hasApprovedLeave ? 'مرخصی تاییدشده' : 'بدون اختلاف';
+        const deltaColor = hasApprovedLeave ? 'cyan' : 'default';
+        const notes = hasApprovedLeave
+          ? (buildApprovedLeaveNoteLabel(approvedLeaveRequests) || 'مرخصی تاییدشده')
+          : null;
+        const middleAt = parseDate(`${attendanceDate}T12:00:00`)?.valueOf() || 0;
+        dailyRows.set(groupKey, {
+          firstAtValue: middleAt,
+          lastAtValue: middleAt,
+          checkIns: [],
+          checkOuts: [],
+          row: {
+            key: groupKey,
+            id: `${employeeId}_${attendanceDate}_synthetic`,
+            rawIds: [],
+            checkInRawId: null,
+            checkOutRawId: null,
+            employeeId,
+            employeeName,
+            logType: hasApprovedLeave ? 'leave' : 'daily',
+            occurredAt: `${attendanceDate}T12:00:00`,
+            attendanceDate,
+            checkInAt: null,
+            checkOutAt: null,
+            sourceType: hasApprovedLeave ? 'leave_request' : 'system',
+            notes,
+            locationText: null,
+            scheduleTitle: schedule.title,
+            scheduledStart: schedule.start,
+            scheduledEnd: schedule.end,
+            scheduleShifts: schedule.shifts,
+            shiftDeltas: syntheticShiftDeltas,
+            lateMinutes: 0,
+            earlyArrivalMinutes: 0,
+            earlyLeaveMinutes: 0,
+            overtimeStayMinutes: 0,
+            approvedLeaveMinutes: coveredRequiredMinutes,
+            isApprovedLeave: hasApprovedLeave,
+            approvedLeaveRequestId: approvedLeaveRequests[0]?.id || null,
+            approvedLeaveType: approvedLeaveRequests[0]?.leaveType || null,
+            deltaLabel,
+            deltaColor,
+          },
+        });
+
+        cursor = cursor.add(1, 'day');
+      }
+    });
+
     return Array.from(dailyRows.values())
-      .sort((a, b) => b.lastAtValue - a.lastAtValue)
+      .sort((a, b) => {
+        const aDate = parseDate(a.row.attendanceDate ? `${a.row.attendanceDate}T12:00:00` : null)?.valueOf() || 0;
+        const bDate = parseDate(b.row.attendanceDate ? `${b.row.attendanceDate}T12:00:00` : null)?.valueOf() || 0;
+        if (aDate !== bDate) return bDate - aDate;
+        return b.lastAtValue - a.lastAtValue;
+      })
       .map((item) => item.row)
       .filter((row) => !row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)));
-  }, [attendanceRows, computeScheduleForEmployee, profileById, profileByRelatedId, selectedEmployeeIdSet]);
+  }, [
+    attendanceRows,
+    approvedLeaveByEmployeeDate,
+    approvedLeaveById,
+    computeScheduleForEmployee,
+    monthEnd,
+    monthStart,
+    profileById,
+    profileByRelatedId,
+    profiles,
+    selectedEmployeeIdSet,
+    selectedEmployeeIds,
+  ]);
 
   const visibleScheduleRows = useMemo(() => {
     return scheduleRows.filter((schedule) => {
@@ -2624,8 +3078,17 @@ const HRPage: React.FC = () => {
         earlyArrivalMinutes: acc.earlyArrivalMinutes + row.earlyArrivalMinutes,
         earlyLeaveMinutes: acc.earlyLeaveMinutes + row.earlyLeaveMinutes,
         overtimeStayMinutes: acc.overtimeStayMinutes + row.overtimeStayMinutes,
+        approvedLeaveMinutes: acc.approvedLeaveMinutes + row.approvedLeaveMinutes,
+        approvedLeaveDays: acc.approvedLeaveDays + (row.isApprovedLeave ? 1 : 0),
       }),
-      { lateMinutes: 0, earlyArrivalMinutes: 0, earlyLeaveMinutes: 0, overtimeStayMinutes: 0 },
+      {
+        lateMinutes: 0,
+        earlyArrivalMinutes: 0,
+        earlyLeaveMinutes: 0,
+        overtimeStayMinutes: 0,
+        approvedLeaveMinutes: 0,
+        approvedLeaveDays: 0,
+      },
     );
     return {
       ...deltas,
@@ -4400,6 +4863,7 @@ const HRPage: React.FC = () => {
                 <div>تعجیل ورود: <span className="persian-number text-green-700">{formatMinutesLabel(shift.earlyArrivalMinutes)}</span></div>
                 <div>تعجیل خروج: <span className="persian-number text-orange-600">{formatMinutesLabel(shift.earlyLeaveMinutes)}</span></div>
                 <div>اضافه‌ماندن: <span className="persian-number text-blue-700">{formatMinutesLabel(shift.overtimeStayMinutes)}</span></div>
+                {row.approvedLeaveMinutes > 0 ? <div>مرخصی تاییدشده: <span className="persian-number text-cyan-700">{formatMinutesLabel(row.approvedLeaveMinutes)}</span></div> : null}
               </div>
             ))
           ) : (
@@ -4408,6 +4872,7 @@ const HRPage: React.FC = () => {
               <div>تعجیل ورود: <span className="persian-number text-green-700">{formatMinutesLabel(row.earlyArrivalMinutes)}</span></div>
               <div>تعجیل خروج: <span className="persian-number text-orange-600">{formatMinutesLabel(row.earlyLeaveMinutes)}</span></div>
               <div>اضافه‌ماندن: <span className="persian-number text-blue-700">{formatMinutesLabel(row.overtimeStayMinutes)}</span></div>
+              {row.approvedLeaveMinutes > 0 ? <div>مرخصی تاییدشده: <span className="persian-number text-cyan-700">{formatMinutesLabel(row.approvedLeaveMinutes)}</span></div> : null}
             </>
           )}
         </div>
@@ -4433,10 +4898,12 @@ const HRPage: React.FC = () => {
         <Space>
           <Button
             size="small"
+            disabled={row.rawIds.length === 0}
             onClick={(event) => {
               event.stopPropagation();
               const rawId = row.checkInRawId || row.checkOutRawId || row.id;
               const rawRow = attendanceRows.find((item) => String(item.id) === String(rawId)) || null;
+              if (!rawRow) return;
               openAttendanceModal('view', rawRow);
             }}
           >
@@ -4444,10 +4911,12 @@ const HRPage: React.FC = () => {
           </Button>
           <Button
             size="small"
+            disabled={row.rawIds.length === 0}
             onClick={(event) => {
               event.stopPropagation();
               const rawId = row.checkInRawId || row.checkOutRawId || row.id;
               const rawRow = attendanceRows.find((item) => String(item.id) === String(rawId)) || null;
+              if (!rawRow) return;
               openAttendanceModal('edit', rawRow);
             }}
           >
@@ -5022,6 +5491,9 @@ const HRPage: React.FC = () => {
         <Col xs={24} md={6}>
           <Card><div className="text-xs text-gray-500 mb-1">تعجیل / اضافه‌ماندن</div><div className="text-sm font-black"><div className="text-green-700">{formatMinutesLabel(attendanceInsights.earlyArrivalMinutes + attendanceInsights.earlyLeaveMinutes)}</div><div className="text-blue-700">{formatMinutesLabel(attendanceInsights.overtimeStayMinutes)}</div></div></Card>
         </Col>
+        <Col xs={24} md={6}>
+          <Card><div className="text-xs text-gray-500 mb-1">مرخصی تاییدشده</div><div className="text-lg font-black text-cyan-700">{formatMinutesLabel(attendanceInsights.approvedLeaveMinutes)}</div><div className="text-xs text-gray-500 mt-1">روزها: {toPersianNumber(attendanceInsights.approvedLeaveDays)}</div></Card>
+        </Col>
       </Row>
       <Card className="mb-4">
         <div className="flex flex-wrap gap-2 mb-4">
@@ -5042,9 +5514,10 @@ const HRPage: React.FC = () => {
               onClick: () => {
                 const rawId = row.checkInRawId || row.checkOutRawId || row.id;
                 const rawRow = attendanceRows.find((item) => String(item.id) === String(rawId)) || null;
+                if (!rawRow) return;
                 openAttendanceModal('view', rawRow);
               },
-              style: { cursor: 'pointer' },
+              style: { cursor: row.rawIds.length > 0 ? 'pointer' : 'default' },
             })}
           />
         )}
@@ -5774,6 +6247,7 @@ const HRPage: React.FC = () => {
                         { title: 'خروج', dataIndex: 'checkOutAt', key: 'checkOutAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
                         { title: 'حضور', key: 'presence', render: (_: unknown, row: any) => { const pm = calculatePresenceMinutes([row]); return <span className="persian-number">{toPersianNumber((pm / 60).toFixed(1))} ساعت</span>; } },
                         { title: 'تاخیر (دقیقه)', key: 'late', render: (_: unknown, row: any) => { const grace = toNumber(payrollWizardSummary?.profile?.grace_minutes_for_late); const effective = Math.max(0, row.lateMinutes - grace); return <span className={`persian-number ${effective > 0 ? 'text-red-700 font-bold' : 'text-gray-500'}`}>{toPersianNumber(row.lateMinutes)}{grace > 0 ? ` (مجاز: ${toPersianNumber(grace)})` : ''}</span>; } },
+                        { title: 'مرخصی تاییدشده (دقیقه)', key: 'approved_leave', render: (_: unknown, row: any) => <span className="persian-number text-cyan-700">{toPersianNumber(row.approvedLeaveMinutes || 0)}</span> },
                         { title: 'تعجیل (دقیقه)', key: 'early', render: (_: unknown, row: any) => <span className="persian-number text-green-700">{toPersianNumber(row.earlyArrivalMinutes)}</span> },
                         { title: 'اضافه‌کاری (دقیقه)', key: 'overtime', render: (_: unknown, row: any) => <span className="persian-number">{toPersianNumber(row.overtimeStayMinutes)}</span> },
                         {

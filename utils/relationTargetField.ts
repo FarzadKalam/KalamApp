@@ -65,8 +65,8 @@ export const getPreferredRelationTargetField = (
 };
 
 const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
-  customers: ['full_name', 'last_name', 'business_name', 'legal_name', 'first_name', 'system_code'],
-  suppliers: ['business_name', 'last_name', 'first_name', 'system_code'],
+  customers: ['full_name', 'last_name', 'business_name', 'legal_name', 'first_name', 'system_code', 'legacy_contact_code', 'mobile_1', 'accounting_code'],
+  suppliers: ['business_name', 'last_name', 'first_name', 'system_code', 'accounting_code'],
   profiles: ['full_name', 'last_name', 'first_name', 'system_code', 'email', 'mobile_1'],
   employees: ['full_name', 'prefix', 'first_name', 'last_name', 'legacy_system_code', 'system_code', 'national_code', 'mobile_1', 'phone'],
   cash_boxes: ['name', 'code'],
@@ -75,8 +75,9 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   org_roles: ['title', 'name'],
   work_schedules: ['title', 'name'],
   journal_entries: ['entry_no', 'source_record_title', 'description'],
-  products: ['name', 'system_code', 'status'],
-  billboards: ['address', 'name', 'system_code', 'status'],
+  products: ['name', 'system_code', 'manual_code', 'crm_code', 'accounting_code', 'product_identifier', 'status'],
+  product_bundles: ['name', 'bundle_number', 'status'],
+  billboards: ['address', 'name', 'system_code', 'manual_code', 'catalog_code', 'city_name', 'status'],
   production_orders: ['name', 'system_code', 'status'],
   shelves: ['name', 'system_code', 'shelf_number'],
   invoices: ['name', 'system_code', 'status'],
@@ -129,6 +130,15 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
   }
   if (moduleName === 'journal_entries') {
     return ['entry_no', 'source_record_title', 'description'];
+  }
+  if (moduleName === 'products') {
+    return ['name', 'system_code', 'manual_code', 'crm_code', 'accounting_code', 'product_identifier'];
+  }
+  if (moduleName === 'product_bundles') {
+    return ['name', 'bundle_number'];
+  }
+  if (moduleName === 'billboards') {
+    return ['address', 'name', 'system_code', 'manual_code', 'catalog_code', 'city_name'];
   }
   return ['name', 'title', 'business_name', 'shelf_number'];
 };

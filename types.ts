@@ -183,6 +183,7 @@ export interface ModuleField {
     targetField?: string;
     filter?: Record<string, any>;
     dependsOn?: string;
+    disableImportAutoCreate?: boolean;
     chartScopeRootNames?: string[];
     requireLeaf?: boolean;
     requireDetail?: boolean;
@@ -228,6 +229,7 @@ export interface BlockDefinition {
         targetModule: string;
         targetField: string;
         filter?: Record<string, any>;
+        disableImportAutoCreate?: boolean;
         chartScopeRootNames?: string[];
         requireLeaf?: boolean;
         requireDetail?: boolean;
