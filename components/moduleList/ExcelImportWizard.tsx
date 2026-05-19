@@ -39,7 +39,11 @@ import { syncCustomerLevelsByInvoiceCustomers } from "../../utils/customerLeveli
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from "../../utils/assigneeSupport";
 import { buildClientFallbackSystemCode, supportsSystemCode } from "../../utils/systemCode";
-import { getPreferredRelationTargetField, getRelationLabelFallbackFields } from "../../utils/relationTargetField";
+import {
+  getPreferredRelationTargetField,
+  getRelationLabelFallbackFields,
+  getRelationSelectableFields,
+} from "../../utils/relationTargetField";
 import { toFaErrorMessage } from "../../utils/errorMessageFa";
 import DynamicSelectField from "../DynamicSelectField";
 import PersianDatePicker from "../PersianDatePicker";
@@ -200,6 +204,10 @@ const ATTENDANCE_IMPORTABLE_READONLY_FIELD_KEYS = new Set([
   "created_at",
   "updated_at",
 ]);
+const INVOICE_IMPORTABLE_READONLY_FIELD_KEYS = new Set([
+  "created_at",
+  "updated_at",
+]);
 const DUPLICATE_FIELD_CANDIDATES_BY_MODULE: Record<string, string[]> = {
   attendance_logs: ["employee_id", "attendance_date", "log_type", "check_in_time", "check_out_time"],
   customers: ["legacy_contact_code", "mobile_1", "national_code", "national_id", "accounting_code", "email", "phone", "full_name"],
@@ -320,7 +328,8 @@ const supportsAssigneeField = (moduleId: string): boolean => supportsGlobalAssig
 const supportsAssigneeTypeField = (moduleId: string): boolean => supportsGlobalAssigneeType(moduleId);
 const isExplicitlyImportableReadonlyField = (moduleId: string, fieldKey: string): boolean =>
   (moduleId === "customers" && CUSTOMER_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey))
-  || (moduleId === "attendance_logs" && ATTENDANCE_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey));
+  || (moduleId === "attendance_logs" && ATTENDANCE_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey))
+  || ((moduleId === "invoices" || moduleId === "purchase_invoices") && INVOICE_IMPORTABLE_READONLY_FIELD_KEYS.has(fieldKey));
 const isPersistableImportField = (moduleId: string, fieldKey: string): boolean =>
   !NON_PERSISTED_IMPORT_FIELD_KEYS[moduleId]?.has(fieldKey);
 
@@ -507,12 +516,30 @@ const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope;
   [normalizeKey("شماره ی فاکتور")]: { scope: "header", key: "legacy_invoice_number" },
   [normalizeKey("شماره فاکتور")]: { scope: "header", key: "legacy_invoice_number" },
   [normalizeKey("موضوع")]: { scope: "header", key: "name" },
+  [normalizeKey("نوع فاکتور")]: { scope: "header", key: "legacy_invoice_type" },
   [normalizeKey("تاريخ فاکتور")]: { scope: "header", key: "invoice_date" },
   [normalizeKey("تاریخ فاکتور")]: { scope: "header", key: "invoice_date" },
   [normalizeKey("وضعیت فاکتور")]: { scope: "header", key: "legacy_status" },
   [normalizeKey("وضعیت فاکتور حسابداری")]: { scope: "header", key: "legacy_accounting_status" },
   [normalizeKey("نام مخاطب")]: { scope: "header", key: "customer_id" },
-  [normalizeKey("نام سازمان")]: { scope: "header", key: "customer_id" },
+  [normalizeKey("نام سازمان")]: { scope: "header", key: "legacy_organization_name" },
+  [normalizeKey("مجموع آیتم های فاکتور")]: { scope: "header", key: "legacy_items_total_amount" },
+  [normalizeKey("مبلغ کل فاکتور")]: { scope: "header", key: "total_invoice_amount" },
+  [normalizeKey("دپارتمان  های اجرایی")]: { scope: "header", key: "execution_departments" },
+  [normalizeKey("دپارتمان های اجرایی")]: { scope: "header", key: "execution_departments" },
+  [normalizeKey("مجموع قبل از مالیات")]: { scope: "header", key: "subtotal_before_tax" },
+  [normalizeKey("استان")]: { scope: "header", key: "province" },
+  [normalizeKey("شهر")]: { scope: "header", key: "city" },
+  [normalizeKey("کد پستی")]: { scope: "header", key: "postal_code" },
+  [normalizeKey("آدرس")]: { scope: "header", key: "address" },
+  [normalizeKey("نوع فاکتور حسابداری")]: { scope: "header", key: "legacy_accounting_type" },
+  [normalizeKey("کد لیام")]: { scope: "header", key: "liam_code" },
+  [normalizeKey("کد حسابداری بازاریاب")]: { scope: "header", key: "marketer_accounting_code" },
+  [normalizeKey("درصد تخفیف")]: { scope: "header", key: "invoice_discount_percent" },
+  [normalizeKey("میزان تخفیف")]: { scope: "header", key: "invoice_discount_amount" },
+  [normalizeKey("هزینه حمل و نقل و جابجایی")]: { scope: "header", key: "shipping_amount" },
+  [normalizeKey("زمان ایجاد")]: { scope: "header", key: "created_at" },
+  [normalizeKey("زمان ویرایش")]: { scope: "header", key: "updated_at" },
   [normalizeKey("توضیحات")]: { scope: "header", key: "description" },
   [normalizeKey("نمونه متن های توضیحات")]: { scope: "header", key: "legacy_ready_text" },
   [normalizeKey("منبع")]: { scope: "header", key: "legacy_source" },
@@ -525,19 +552,47 @@ const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope;
   [normalizeKey("نام آیتم")]: { scope: "item", key: "product_id" },
   [normalizeKey("مقدار / تعداد")]: { scope: "item", key: "quantity" },
   [normalizeKey("مقدار/تعداد")]: { scope: "item", key: "quantity" },
+  [normalizeKey("قیمت واحد")]: { scope: "item", key: "unit_price" },
   [normalizeKey("لیست قیمت")]: { scope: "item", key: "unit_price" },
   [normalizeKey("پیش فرض فروش")]: { scope: "item", key: "is_default_sell_price" },
   [normalizeKey("پیش‌فرض فروش")]: { scope: "item", key: "is_default_sell_price" },
   [normalizeKey("قیمت خرید")]: { scope: "item", key: "buy_price" },
   [normalizeKey("درصد سود")]: { scope: "item", key: "profit_percentage" },
   [normalizeKey("قیمت خالص")]: { scope: "item", key: "total_price" },
+  [normalizeKey("مبلغ کل (ردیف)")]: { scope: "item", key: "total_price" },
   [normalizeKey("مالیات بر ارزش افزوده")]: { scope: "item", key: "vat" },
   [normalizeKey("میزان تخفیف آیتم")]: { scope: "item", key: "discount" },
+  [normalizeKey("درصد تخفیف آیتم")]: { scope: "item", key: "discount_percent" },
   [normalizeKey("یادداشت آیتم")]: { scope: "item", key: "description" },
 };
 
+const INVOICE_LEGACY_IMPORT_FALLBACK_FIELDS: ImportFieldDescriptor[] = [
+  { key: "legacy_invoice_type", labels: { fa: "نوع فاکتور سیستم قبلی", en: "Legacy Invoice Type" }, type: FieldType.TEXT, scope: "header" },
+  { key: "legacy_organization_name", labels: { fa: "نام سازمان در فایل قبلی", en: "Legacy Organization Name" }, type: FieldType.TEXT, scope: "header" },
+  { key: "legacy_items_total_amount", labels: { fa: "مجموع آیتم‌های فاکتور در فایل قبلی", en: "Legacy Items Total" }, type: FieldType.PRICE, scope: "header" },
+  { key: "execution_departments", labels: { fa: "دپارتمان‌های اجرایی", en: "Execution Departments" }, type: FieldType.TAGS, scope: "header" },
+  { key: "subtotal_before_tax", labels: { fa: "مجموع قبل از مالیات", en: "Subtotal Before Tax" }, type: FieldType.PRICE, scope: "header" },
+  { key: "province", labels: { fa: "استان", en: "Province" }, type: FieldType.TEXT, scope: "header" },
+  { key: "city", labels: { fa: "شهر", en: "City" }, type: FieldType.TEXT, scope: "header" },
+  { key: "postal_code", labels: { fa: "کد پستی", en: "Postal Code" }, type: FieldType.TEXT, scope: "header" },
+  { key: "address", labels: { fa: "آدرس", en: "Address" }, type: FieldType.LONG_TEXT, scope: "header" },
+  { key: "legacy_accounting_type", labels: { fa: "نوع فاکتور حسابداری سیستم قبلی", en: "Legacy Accounting Type" }, type: FieldType.TEXT, scope: "header" },
+  { key: "liam_code", labels: { fa: "کد لیام", en: "Liam Code" }, type: FieldType.TEXT, scope: "header" },
+  { key: "marketer_accounting_code", labels: { fa: "کد حسابداری بازاریاب", en: "Marketer Accounting Code" }, type: FieldType.TEXT, scope: "header" },
+  { key: "invoice_discount_percent", labels: { fa: "درصد تخفیف فاکتور", en: "Invoice Discount Percent" }, type: FieldType.PERCENTAGE, scope: "header" },
+  { key: "invoice_discount_amount", labels: { fa: "میزان تخفیف فاکتور", en: "Invoice Discount Amount" }, type: FieldType.PRICE, scope: "header" },
+  { key: "shipping_amount", labels: { fa: "هزینه حمل و نقل و جابجایی", en: "Shipping Amount" }, type: FieldType.PRICE, scope: "header" },
+  { key: "created_at", labels: { fa: "زمان ایجاد", en: "Created At" }, type: FieldType.DATETIME, readonly: true, nature: FieldNature.STANDARD, scope: "header" },
+  { key: "updated_at", labels: { fa: "زمان ویرایش", en: "Updated At" }, type: FieldType.DATETIME, readonly: true, nature: FieldNature.STANDARD, scope: "header" },
+];
+
+const INVOICE_ITEM_IMPORT_FALLBACK_FIELDS: ImportFieldDescriptor[] = [
+  { key: "discount_percent", labels: { fa: "درصد تخفیف آیتم", en: "Item Discount Percent" }, type: FieldType.PERCENTAGE, scope: "item" },
+];
+
 const splitByDelimiters = (value: string): string[] =>
-  value
+  String(value || "")
+    .replace(/\|\s*##\s*\|/g, "\n")
     .split(/[,،;|\n\r]+/g)
     .map((item) => sanitizeImportedTextValue(item))
     .filter(Boolean);
@@ -858,6 +913,78 @@ const parseNumber = (value: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const getImportedRowValue = (row: Record<string, string>, aliases: string[]): string => {
+  const aliasKeys = new Set(aliases.map((alias) => normalizeKey(alias)).filter(Boolean));
+  for (const [key, value] of Object.entries(row)) {
+    if (aliasKeys.has(normalizeKey(key))) {
+      return String(value ?? "").trim();
+    }
+  }
+  return "";
+};
+
+const setPayloadTextIfEmpty = (
+  payload: Record<string, unknown>,
+  key: string,
+  value: unknown
+) => {
+  if (!isValueEmpty(payload[key]) || isValueEmpty(value)) return;
+  const sanitized = sanitizeImportedTextValue(value);
+  if (!sanitized) return;
+  payload[key] = sanitized;
+};
+
+const setPayloadNumberIfEmpty = (
+  payload: Record<string, unknown>,
+  key: string,
+  value: unknown
+) => {
+  if (!isValueEmpty(payload[key]) || isValueEmpty(value)) return;
+  const parsed = parseNumber(String(value ?? ""));
+  if (parsed === null) return;
+  payload[key] = parsed;
+};
+
+const setPayloadDateTimeIfEmpty = (
+  payload: Record<string, unknown>,
+  key: string,
+  value: unknown
+) => {
+  if (!isValueEmpty(payload[key]) || isValueEmpty(value)) return;
+  const normalized = normalizeImportedDateValue(String(value ?? ""), FieldType.DATETIME);
+  if (!normalized) return;
+  payload[key] = normalized;
+};
+
+const applyLegacyInvoiceSourceColumns = (
+  payload: Record<string, unknown>,
+  row: Record<string, string>
+): Record<string, unknown> => {
+  const next = { ...payload };
+
+  setPayloadTextIfEmpty(next, "legacy_organization_name", getImportedRowValue(row, ["نام سازمان"]));
+  setPayloadTextIfEmpty(next, "legacy_invoice_type", getImportedRowValue(row, ["نوع فاکتور"]));
+  setPayloadTextIfEmpty(next, "legacy_accounting_type", getImportedRowValue(row, ["نوع فاکتور حسابداری"]));
+  setPayloadTextIfEmpty(next, "legacy_accounting_status", getImportedRowValue(row, ["وضعیت فاکتور حسابداری"]));
+  setPayloadTextIfEmpty(next, "liam_code", getImportedRowValue(row, ["کد لیام"]));
+  setPayloadTextIfEmpty(next, "marketer_accounting_code", getImportedRowValue(row, ["کد حسابداری بازاریاب"]));
+  setPayloadTextIfEmpty(next, "province", getImportedRowValue(row, ["استان"]));
+  setPayloadTextIfEmpty(next, "city", getImportedRowValue(row, ["شهر"]));
+  setPayloadTextIfEmpty(next, "postal_code", getImportedRowValue(row, ["کد پستی"]));
+  setPayloadTextIfEmpty(next, "address", getImportedRowValue(row, ["آدرس"]));
+
+  setPayloadNumberIfEmpty(next, "legacy_items_total_amount", getImportedRowValue(row, ["مجموع آیتم های فاکتور"]));
+  setPayloadNumberIfEmpty(next, "subtotal_before_tax", getImportedRowValue(row, ["مجموع قبل از مالیات"]));
+  setPayloadNumberIfEmpty(next, "shipping_amount", getImportedRowValue(row, ["هزینه حمل و نقل و جابجایی"]));
+  setPayloadNumberIfEmpty(next, "invoice_discount_amount", getImportedRowValue(row, ["میزان تخفیف"]));
+  setPayloadNumberIfEmpty(next, "invoice_discount_percent", getImportedRowValue(row, ["درصد تخفیف"]));
+
+  setPayloadDateTimeIfEmpty(next, "created_at", getImportedRowValue(row, ["زمان ایجاد"]));
+  setPayloadDateTimeIfEmpty(next, "updated_at", getImportedRowValue(row, ["زمان ویرایش"]));
+
+  return next;
+};
+
 const guessTargetField = (
   sourceColumn: string,
   fields: Array<Pick<ImportFieldDescriptor, "key" | "labels">>
@@ -974,6 +1101,88 @@ const getLookupValue = (map: Map<string, string>, source: unknown): string | und
   return undefined;
 };
 
+const getLooseLookupValue = (map: Map<string, string>, source: unknown): string | undefined => {
+  const sourceKeys = buildLookupKeys(source).filter((key) => key.length >= 12);
+  if (!sourceKeys.length || map.size === 0) return undefined;
+
+  const matchedIds = new Set<string>();
+  for (const sourceKey of sourceKeys) {
+    for (const [lookupKey, id] of map.entries()) {
+      if (lookupKey.length < 12) continue;
+      if (sourceKey.includes(lookupKey) || lookupKey.includes(sourceKey)) {
+        matchedIds.add(id);
+        if (matchedIds.size > 1) return undefined;
+      }
+    }
+  }
+
+  return matchedIds.size === 1 ? Array.from(matchedIds)[0] : undefined;
+};
+
+const PRODUCT_FUZZY_STOP_WORDS = new Set([
+  "و",
+  "یا",
+  "به",
+  "از",
+  "در",
+  "با",
+  "برای",
+  "کالا",
+  "خدمت",
+  "محصول",
+  "گرم",
+  "عرض",
+  "طول",
+  "خام",
+]);
+
+const getFuzzyLookupTokens = (value: unknown): string[] => {
+  const normalized = normalizeText(stripLegacyReferencePrefix(value));
+  if (!normalized) return [];
+  return Array.from(
+    new Set(
+      normalized
+        .split(/\s+/g)
+        .map((item) => item.trim())
+        .filter((item) => item.length >= 2)
+        .filter((item) => !PRODUCT_FUZZY_STOP_WORDS.has(item))
+    )
+  );
+};
+
+const scoreFuzzyRelationCandidate = (rawValue: string, row: Record<string, unknown>, targetField: string): number => {
+  const sourceTokens = getFuzzyLookupTokens(rawValue);
+  if (!sourceTokens.length) return 0;
+  const candidateText = normalizeText(
+    [
+      row[targetField],
+      row.name,
+      row.address,
+      row.manual_code,
+      row.crm_code,
+      row.accounting_code,
+      row.product_identifier,
+      row.catalog_code,
+    ]
+      .map((item) => String(item ?? "").trim())
+      .filter(Boolean)
+      .join(" ")
+  );
+  if (!candidateText) return 0;
+
+  const candidateKey = normalizeKey(candidateText);
+  const sourceKey = normalizeKey(rawValue);
+  let score = 0;
+  sourceTokens.forEach((token) => {
+    if (candidateText.split(/\s+/g).includes(token)) score += /\d/.test(token) ? 3 : 2;
+    else if (candidateText.includes(token)) score += 1;
+  });
+  if (sourceKey && candidateKey && (sourceKey.includes(candidateKey) || candidateKey.includes(sourceKey))) {
+    score += 8;
+  }
+  return score;
+};
+
 const buildFieldMatchValues = (fieldKey: string, value: unknown, fieldType?: FieldType): string[] => {
   const raw = stripLegacyReferencePrefix(value);
   if (!raw) return [];
@@ -1039,6 +1248,19 @@ const isIntegerOutOfRangeError = (error: unknown): boolean => {
   return code === "22003" || text.includes("out of range for type integer");
 };
 
+const filterKnownRelationFields = (targetModule: string, fields: string[]): string[] => {
+  const selectableFields = getRelationSelectableFields(targetModule);
+  const selectableSet = new Set(selectableFields);
+  return Array.from(
+    new Set(
+      fields
+        .map((field) => String(field || "").trim())
+        .filter(Boolean)
+        .filter((field) => selectableSet.size === 0 || field === "id" || selectableSet.has(field))
+    )
+  );
+};
+
 const getRelationLookupColumns = (targetModule: string, targetField: string): string[] => {
   const columns = new Set<string>(["id", targetField]);
   if (supportsSystemCode(targetModule)) {
@@ -1053,9 +1275,29 @@ const getRelationLookupColumns = (targetModule: string, targetField: string): st
     ["name", "manual_code", "crm_code", "accounting_code"].forEach((column) => columns.add(column));
   }
   if (targetModule === "billboards") {
-    ["name", "manual_code"].forEach((column) => columns.add(column));
+    ["address", "name", "manual_code", "catalog_code", "city_name"].forEach((column) => columns.add(column));
   }
-  return Array.from(columns);
+  return filterKnownRelationFields(targetModule, Array.from(columns));
+};
+
+const buildBillboardLookupVariants = (value: unknown): string[] => {
+  const raw = stripLegacyReferencePrefix(value);
+  if (!raw) return [];
+  const variants = new Set<string>();
+  const push = (candidate: string) => {
+    const clean = candidate.trim().replace(/\s+/g, " ");
+    if (clean) variants.add(clean);
+  };
+
+  push(raw);
+  push(raw.replace(/^تابلو(?:ی)?\s+تبلیغاتی\s+/u, ""));
+  push(raw.replace(/^تابلو(?:ی)?\s+/u, ""));
+
+  Array.from(variants).forEach((candidate) => {
+    push(candidate.replace(/\s*[-–—]\s*[\d۰-۹٠-٩.٫/]+\s*[*×xX]\s*[\d۰-۹٠-٩.٫/]+\s*$/u, ""));
+  });
+
+  return Array.from(variants);
 };
 
 const getRelationLookupCandidates = (
@@ -1072,11 +1314,13 @@ const getRelationLookupCandidates = (
   if (targetModule === "billboards") {
     return [
       row[targetField],
+      row.address,
       row.name,
       row.system_code,
       row.manual_code,
+      row.catalog_code,
     ]
-      .map((value) => String(value ?? "").trim())
+      .flatMap((value) => buildBillboardLookupVariants(value))
       .filter(Boolean);
   }
   return [row[targetField], row.system_code]
@@ -1085,17 +1329,36 @@ const getRelationLookupCandidates = (
 };
 
 const getRelationLookupFields = (targetModule: string, targetField: string): string[] =>
-  Array.from(
-    new Set(
-      [
-        targetField,
-        ...getRelationLabelFallbackFields(targetModule),
-        ...(supportsSystemCode(targetModule) ? ["system_code"] : []),
-        ...(targetModule === "customers" ? ["legacy_contact_code", "mobile_1"] : []),
-      ]
-        .map((item) => String(item || "").trim())
-        .filter(Boolean)
-    )
+  filterKnownRelationFields(
+    targetModule,
+    [
+      targetField,
+      ...getRelationLabelFallbackFields(targetModule),
+      ...(supportsSystemCode(targetModule) ? ["system_code"] : []),
+      ...(targetModule === "customers" ? ["legacy_contact_code", "mobile_1"] : []),
+    ]
+  );
+
+const getRelationImportSources = (
+  relationConfig: ImportFieldDescriptor["relationConfig"]
+): Array<{ targetModule: string; targetField?: string }> => {
+  if (!relationConfig) return [];
+  const sources = Array.isArray(relationConfig.sourceModules) && relationConfig.sourceModules.length > 0
+    ? relationConfig.sourceModules
+    : [relationConfig];
+  return sources
+    .map((source) => ({
+      targetModule: String(source?.targetModule || relationConfig.targetModule || "").trim(),
+      targetField: source?.targetField || relationConfig.targetField,
+    }))
+    .filter((source) => Boolean(source.targetModule));
+};
+
+const supportsLooseRelationLookup = (field: ImportFieldDescriptor): boolean =>
+  field.scope === "item"
+  && field.key === "product_id"
+  && getRelationImportSources(field.relationConfig).some((source) =>
+    ["products", "product_bundles", "billboards"].includes(source.targetModule)
   );
 
 const getRelationSelectVariants = (targetModule: string, targetField: string): string[] => {
@@ -1147,32 +1410,99 @@ const findRelationRecordByValue = async (
 
   const lookupFields = getRelationLookupFields(targetModule, targetField);
   const selectVariants = getRelationSelectVariants(targetModule, targetField);
+  const searchValues = targetModule === "billboards" ? buildBillboardLookupVariants(value) : [value];
 
-  for (const lookupField of lookupFields) {
-    for (const selectExpr of selectVariants) {
-      try {
-        const matchValues = buildFieldMatchValues(lookupField, value);
-        if (matchValues.length === 0) continue;
-        const existingResult = (await withTimeout(
-          (matchValues.length > 1
-            ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(2)
-            : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(2)),
-          20000,
-          label
-        )) as unknown as QueryResult<Record<string, unknown>[]>;
-        if (existingResult.error) throw existingResult.error;
-        if ((existingResult.data || []).length > 1) {
-          throw new Error(
-            `در ماژول «${targetModule}» بیش از یک رکورد با مقدار «${value}» پیدا شد. مقدار تطبیق را دقیق‌تر کنید.`
-          );
+  for (const searchValue of searchValues) {
+    if (!searchValue) continue;
+    for (const lookupField of lookupFields) {
+      for (const selectExpr of selectVariants) {
+        try {
+          const matchValues = buildFieldMatchValues(lookupField, searchValue);
+          if (matchValues.length === 0) continue;
+          const existingResult = (await withTimeout(
+            (matchValues.length > 1
+              ? supabase.from(targetModule).select(selectExpr).in(lookupField, matchValues).limit(2)
+              : supabase.from(targetModule).select(selectExpr).eq(lookupField, matchValues[0]).limit(2)),
+            20000,
+            label
+          )) as unknown as QueryResult<Record<string, unknown>[]>;
+          if (existingResult.error) throw existingResult.error;
+          if ((existingResult.data || []).length > 1) {
+            throw new Error(
+              `در ماژول «${targetModule}» بیش از یک رکورد با مقدار «${value}» پیدا شد. مقدار تطبیق را دقیق‌تر کنید.`
+            );
+          }
+          const matched = existingResult.data?.[0];
+          if (matched?.id) return matched;
+        } catch (error) {
+          if (!isMissingColumnError(error)) throw error;
         }
-        const matched = existingResult.data?.[0];
-        if (matched?.id) return matched;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+const findFuzzyRelationRecordByValue = async (
+  targetModule: string,
+  targetField: string,
+  rawValue: string,
+  label: string
+): Promise<Record<string, unknown> | undefined> => {
+  if (!["products", "product_bundles", "billboards"].includes(targetModule)) return undefined;
+
+  const value = stripLegacyReferencePrefix(rawValue);
+  const tokens = getFuzzyLookupTokens(value);
+  if (!value || tokens.length < 2) return undefined;
+
+  const lookupFields = getRelationLookupFields(targetModule, targetField).filter((field) =>
+    ["name", "address"].includes(field)
+  );
+  if (!lookupFields.length) return undefined;
+
+  const selectExpr = getRelationLookupColumns(targetModule, targetField).join(", ") || "id";
+  const primaryTokens = tokens
+    .filter((token) => !/^\d+$/.test(token))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 3);
+  const searchTokens = primaryTokens.length > 0 ? primaryTokens : tokens.slice(0, 2);
+
+  const candidatesById = new Map<string, Record<string, unknown>>();
+  for (const lookupField of lookupFields) {
+    for (const token of searchTokens) {
+      try {
+        const result = (await withTimeout(
+          supabase
+            .from(targetModule)
+            .select(selectExpr)
+            .ilike(lookupField, `%${token}%`)
+            .limit(25),
+          20000,
+          `${label} - جستجوی تقریبی`
+        )) as unknown as QueryResult<Record<string, unknown>[]>;
+        if (result.error) throw result.error;
+        (result.data || []).forEach((row) => {
+          const id = String(row.id || "").trim();
+          if (id) candidatesById.set(id, row);
+        });
       } catch (error) {
         if (!isMissingColumnError(error)) throw error;
       }
     }
   }
+
+  const scored = Array.from(candidatesById.values())
+    .map((row) => ({
+      row,
+      score: scoreFuzzyRelationCandidate(value, row, targetField),
+    }))
+    .filter((item) => item.score >= 5)
+    .sort((a, b) => b.score - a.score);
+
+  if (!scored.length) return undefined;
+  if (scored.length === 1) return scored[0].row;
+  if (scored[0].score >= scored[1].score + 3) return scored[0].row;
 
   return undefined;
 };
@@ -1413,6 +1743,11 @@ const finalizeInvoiceHeaderPayload = (payload: Record<string, unknown>): Record<
 };
 
 const finalizeInvoiceItemPayload = (payload: Record<string, unknown>): Record<string, unknown> => {
+  if (isValueEmpty(payload.discount) && !isValueEmpty(payload.discount_percent)) {
+    payload.discount = payload.discount_percent;
+    payload.discount_type = "percent";
+  }
+
   if (isValueEmpty(payload.total_price)) {
     const calculatedTotal = calculateRow(payload, RowCalculationType.INVOICE_ROW);
     if (Number.isFinite(calculatedTotal) && calculatedTotal > 0) {
@@ -1501,6 +1836,14 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
       .map((field) => toImportField(field, "header"));
 
+    if (moduleId === "invoices") {
+      INVOICE_LEGACY_IMPORT_FALLBACK_FIELDS.forEach((field) => {
+        if (!fields.some((item) => item.key === field.key)) {
+          fields.push(field);
+        }
+      });
+    }
+
     if (supportsAssigneeField(moduleId) && !fields.some((field) => field.key === "assignee_id")) {
       fields.push({
         key: "assignee_id",
@@ -1520,7 +1863,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
   const itemImportableFields = useMemo<ImportFieldDescriptor[]>(() => {
     if (!invoiceItemsBlock?.tableColumns?.length) return [];
-    return invoiceItemsBlock.tableColumns
+    const fields: ImportFieldDescriptor[] = invoiceItemsBlock.tableColumns
       .filter((column) => IMPORTABLE_TYPES.has(column.type))
       .map((column: any) => ({
         key: column.key,
@@ -1532,6 +1875,12 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         readonly: column.readonly,
         scope: "item" as const,
       }));
+    INVOICE_ITEM_IMPORT_FALLBACK_FIELDS.forEach((field) => {
+      if (!fields.some((item) => item.key === field.key)) {
+        fields.push(field);
+      }
+    });
+    return fields;
   }, [invoiceItemsBlock]);
 
   const headerFieldByKey = useMemo(() => {
@@ -2576,33 +2925,61 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       const exact = getLookupValue(map, value);
       if (exact) return exact;
 
+      const loose = supportsLooseRelationLookup(field) ? getLooseLookupValue(map, value) : undefined;
+      if (loose) {
+        setLookupValue(map, value, loose);
+        return loose;
+      }
+
       const targetModule = String(field.relationConfig?.targetModule || "").trim();
       if (!targetModule) {
         return undefined;
       }
 
-      const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig?.targetField);
-      const selectVariants = getRelationSelectVariants(targetModule, targetField);
-      const existingRow = await findRelationRecordByValue(
-        targetModule,
-        targetField,
-        value,
-        `جستجوی رابطه (${field.labels.fa})`
-      );
-
-      if (existingRow?.id) {
-        const existingId = String(existingRow.id);
-        setLookupValue(map, value, existingId);
-        getRelationLookupCandidates(targetModule, existingRow, targetField).forEach((candidate) =>
-          setLookupValue(map, candidate, existingId)
+      const sources = getRelationImportSources(field.relationConfig);
+      for (const source of sources) {
+        const sourceTargetField = getPreferredRelationTargetField(source.targetModule, source.targetField);
+        const existingRow = await findRelationRecordByValue(
+          source.targetModule,
+          sourceTargetField,
+          value,
+          `جستجوی رابطه (${field.labels.fa})`
         );
-        return existingId;
+
+        if (existingRow?.id) {
+          const existingId = String(existingRow.id);
+          setLookupValue(map, value, existingId);
+          getRelationLookupCandidates(source.targetModule, existingRow, sourceTargetField).forEach((candidate) =>
+            setLookupValue(map, candidate, existingId)
+          );
+          return existingId;
+        }
+
+        const fuzzyRow = supportsLooseRelationLookup(field)
+          ? await findFuzzyRelationRecordByValue(
+              source.targetModule,
+              sourceTargetField,
+              value,
+              `جستجوی رابطه (${field.labels.fa})`
+            )
+          : undefined;
+
+        if (fuzzyRow?.id) {
+          const fuzzyId = String(fuzzyRow.id);
+          setLookupValue(map, value, fuzzyId);
+          getRelationLookupCandidates(source.targetModule, fuzzyRow, sourceTargetField).forEach((candidate) =>
+            setLookupValue(map, candidate, fuzzyId)
+          );
+          return fuzzyId;
+        }
       }
 
-      if (!RELATION_AUTOCREATE_TARGET_MODULES.has(targetModule)) {
+      if (field.relationConfig?.disableImportAutoCreate || !RELATION_AUTOCREATE_TARGET_MODULES.has(targetModule)) {
         return undefined;
       }
 
+      const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig?.targetField);
+      const selectVariants = getRelationSelectVariants(targetModule, targetField);
       const payload = buildRelationAutoCreatePayload(targetModule, value);
       if (!payload) return undefined;
 
@@ -2812,38 +3189,41 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         continue;
       }
 
-      const targetModule = field.relationConfig.targetModule;
-      const targetField = getPreferredRelationTargetField(targetModule, field.relationConfig.targetField);
-      const selectVariants = getRelationSelectVariants(targetModule, targetField);
+      const sources = getRelationImportSources(field.relationConfig);
+      for (const source of sources) {
+        const targetModule = source.targetModule;
+        const targetField = getPreferredRelationTargetField(targetModule, source.targetField);
+        const selectVariants = getRelationSelectVariants(targetModule, targetField);
 
-      let data: any[] | null = null;
-      for (const selectExpr of selectVariants) {
-        try {
-            const result = await withTimeout(
-              supabase
-                .from(targetModule)
-                .select(selectExpr)
-                .limit(5000),
-              20000,
-              `دریافت داده مرجع (${field.labels.fa})`
-            );
-          data = (result.data || []) as any[];
-          break;
-        } catch (error) {
-          if (!isMissingColumnError(error)) throw error;
+        let data: any[] | null = null;
+        for (const selectExpr of selectVariants) {
+          try {
+              const result = await withTimeout(
+                supabase
+                  .from(targetModule)
+                  .select(selectExpr)
+                  .limit(5000),
+                20000,
+                `دریافت داده مرجع (${field.labels.fa})`
+              );
+            data = (result.data || []) as any[];
+            break;
+          } catch (error) {
+            if (!isMissingColumnError(error)) throw error;
+          }
         }
+
+        const rows = ((data || []) as unknown) as Record<string, unknown>[];
+        rows.forEach((item) => {
+          const id = String(item.id ?? "");
+          if (!id) return;
+          setLookupValue(map, id, id);
+
+          getRelationLookupCandidates(targetModule, item, targetField).forEach((candidate) =>
+            setLookupValue(map, candidate, id)
+          );
+        });
       }
-
-      const rows = ((data || []) as unknown) as Record<string, unknown>[];
-      rows.forEach((item) => {
-        const id = String(item.id ?? "");
-        if (!id) return;
-        setLookupValue(map, id, id);
-
-        getRelationLookupCandidates(targetModule, item, targetField).forEach((candidate) =>
-          setLookupValue(map, candidate, id)
-        );
-      });
 
       lookupMap[lookupKey] = map;
     }
@@ -3203,13 +3583,19 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
         return sum + (Number.isFinite(nextTotal) ? nextTotal : 0);
       }, 0);
       const payload: Record<string, unknown> = { ...rawPayload, invoiceItems: normalizedItems };
-      payload.total_invoice_amount = totalAmount;
+      const parsedTotalAmount = parseNumber(String(payload.total_invoice_amount ?? ""));
+      const numericTotalAmount = Number(payload.total_invoice_amount ?? NaN);
+      payload.total_invoice_amount =
+        parsedTotalAmount ?? (Number.isFinite(numericTotalAmount) ? numericTotalAmount : totalAmount);
       const parsedReceivedAmount = parseNumber(String(payload.total_received_amount ?? ""));
       const numericReceivedAmount = Number(payload.total_received_amount ?? 0);
       const receivedAmount =
         parsedReceivedAmount ?? (Number.isFinite(numericReceivedAmount) ? numericReceivedAmount : 0);
       payload.total_received_amount = receivedAmount;
-      payload.remaining_balance = totalAmount - receivedAmount;
+      const parsedRemainingAmount = parseNumber(String(payload.remaining_balance ?? ""));
+      const numericRemainingAmount = Number(payload.remaining_balance ?? NaN);
+      payload.remaining_balance =
+        parsedRemainingAmount ?? (Number.isFinite(numericRemainingAmount) ? numericRemainingAmount : Number(payload.total_invoice_amount || 0) - receivedAmount);
       return payload;
     },
     [normalizeInvoiceItemForStorage, supportsGroupedInvoiceImport]
@@ -3481,6 +3867,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       if (importMode === "grouped_invoice") {
         const headerMappings = mappingRows.filter((row) => row.targetScope === "header");
         const itemMappings = mappingRows.filter((row) => row.targetScope === "item");
+        const productItemMapping = itemMappings.find((row) => row.targetFieldKey === "product_id");
 
         for (let idx = 0; idx < groupedData.records.length; idx += 1) {
           const record = groupedData.records[idx];
@@ -3495,16 +3882,31 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               headerImportableFields,
               importContext
             );
+            const headerPayloadWithLegacyColumns = moduleId === "invoices"
+              ? applyLegacyInvoiceSourceColumns(headerPayloadRaw, record.firstRow)
+              : headerPayloadRaw;
             const linkedRelations = await resolveRelatedLinksForRow(record.firstRow, importContext);
             const headerPayload = finalizeInvoiceHeaderPayload({
-              ...headerPayloadRaw,
+              ...headerPayloadWithLegacyColumns,
               ...linkedRelations,
             });
+            const rawMarketerValue = moduleId === "invoices"
+              ? sanitizeImportedTextValue(getImportedRowValue(record.firstRow, ["بازاریاب"]))
+              : "";
+            if (rawMarketerValue && isValueEmpty(headerPayload.assignee_id)) {
+              throw new Error(`بازاریاب «${rawMarketerValue}» در کاربران/پروفایل‌های موجود پیدا نشد.`);
+            }
             const itemPayloads: Record<string, unknown>[] = [];
             for (const row of record.rows) {
               const itemPayload = finalizeInvoiceItemPayload(
                 await buildPayloadFromMappings(row, itemMappings, itemFieldByKey, itemImportableFields, importContext)
               );
+              const rawProductValue = productItemMapping
+                ? sanitizeImportedTextValue(row[productItemMapping.sourceColumn] ?? "")
+                : "";
+              if (rawProductValue && isValueEmpty(itemPayload.product_id)) {
+                throw new Error(`آیتم «${rawProductValue}» در کالاها/خدمات مرتبط پیدا نشد.`);
+              }
               if (Object.keys(itemPayload).length > 0) itemPayloads.push(itemPayload);
             }
 
@@ -3604,8 +4006,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
               headerImportableFields,
               importContext
             );
+            const payloadRawWithLegacyColumns = moduleId === "invoices"
+              ? applyLegacyInvoiceSourceColumns(payloadRaw, row)
+              : payloadRaw;
             const linkedRelations = await resolveRelatedLinksForRow(row, importContext);
-            const payloadRawWithLinks = { ...payloadRaw, ...linkedRelations };
+            const payloadRawWithLinks = { ...payloadRawWithLegacyColumns, ...linkedRelations };
             const payloadPrepared =
               moduleId === "tasks"
                 ? attachTaskCompletionIfNeeded(payloadRawWithLinks as Record<string, unknown>)
