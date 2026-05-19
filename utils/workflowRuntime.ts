@@ -27,7 +27,6 @@ import { sendSmsViaGateway } from './smsGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { NoteAttachment, serializeNoteContent } from './noteContent';
 import { fetchAssigneeDirectory, fetchRecordTagsMap } from './referenceData';
-import { escapeRubikaAutoLinkText } from './rubikaLinkText';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
@@ -1636,55 +1635,6 @@ const buildAttachmentNameText = (attachments: Array<{ name?: string; url?: strin
   return `پیوست‌ها:\n${lines.join('\n')}`;
 };
 
-const buildRubikaLinkedAttachmentMessage = (
-  baseText: string,
-  attachments: Array<{ name?: string; url?: string }>
-) => {
-  const normalizedBaseText = String(baseText || '').trim();
-  const lines: Array<{ text: string; linkUrl?: string }> = [];
-  if (normalizedBaseText) {
-    lines.push({ text: normalizedBaseText });
-  }
-  (attachments || []).forEach((item, index) => {
-    const name = String(item?.name || `فایل ${index + 1}`).trim() || `فایل ${index + 1}`;
-    const url = String(item?.url || '').trim();
-    lines.push({ text: `پیوست: ${escapeRubikaAutoLinkText(name)}`, linkUrl: url || undefined });
-  });
-
-  if (lines.length === 0) {
-    return { text: '', metadata: undefined as Record<string, any> | undefined };
-  }
-
-  let text = '';
-  let cursor = 0;
-  const metaDataParts: Array<Record<string, any>> = [];
-  lines.forEach((line, index) => {
-    if (index > 0) {
-      text += '\n';
-      cursor += 1;
-    }
-    const segment = String(line.text || '');
-    const startIndex = cursor;
-    text += segment;
-    cursor += segment.length;
-    if (line.linkUrl) {
-      metaDataParts.push({
-        type: 'Link',
-        from_index: startIndex,
-        length: segment.length,
-        link_url: line.linkUrl,
-      });
-    }
-  });
-
-  return {
-    text,
-    metadata: metaDataParts.length > 0
-      ? { meta_data_parts: metaDataParts }
-      : undefined,
-  };
-};
-
 const resolveConfiguredActionValue = async (
   moduleId: string,
   config: Record<string, any>,
@@ -2046,11 +1996,8 @@ export const executeWorkflowAction = async (
           },
         })
       : [];
-    const rubikaLinkedMessage = isRubika && externalAttachments.length > 0
-      ? buildRubikaLinkedAttachmentMessage(rawMessageText, externalAttachments)
-      : null;
     const messageText = isRubika && externalAttachments.length > 0
-      ? (String(rubikaLinkedMessage?.text || '').trim() || 'پیوست ارسال شد')
+      ? (rawMessageText || 'پیوست ارسال شد')
       : rawMessageText;
     const fallbackText = isRubika && externalAttachments.length > 0
       ? [rawMessageText, buildAttachmentNameText(externalAttachments)].filter(Boolean).join('\n')
@@ -2103,8 +2050,8 @@ export const executeWorkflowAction = async (
         await sendCounterpartyBotGroupMessage({
           group,
           text: messageText,
-          extraPayload: rubikaLinkedMessage?.metadata ? { metadata: rubikaLinkedMessage.metadata } : undefined,
           fallbackText,
+          attachments,
           payload: {
             attachments,
             workflow_action_type: action.type,
@@ -2120,6 +2067,8 @@ export const executeWorkflowAction = async (
         channel,
         chatId,
         text: messageText,
+        attachments: isRubika ? attachments : undefined,
+        fallbackText: isRubika ? fallbackText : undefined,
         title: titleText || undefined,
         moduleId,
         recordId: currentRecord?.id ? String(currentRecord.id) : undefined,

@@ -25,7 +25,10 @@
       "Bash(head -20 grep -rn \"Vazirmatn\" App.css ls *.css)",
       "Bash(ls d:\\\\Kalamapp\\\\database_v1_phase*.sql)",
       "Bash(ls -la /d/Kalamapp/*.tsx /d/Kalamapp/*.ts)",
-      "Bash(grep -rn \"subscription_status\\\\|plan_code\\\\|trial_ends_at\\\\|is_trial\" d:/Kalamapp/database_v1_phase1*.sql)"
+      "Bash(grep -rn \"subscription_status\\\\|plan_code\\\\|trial_ends_at\\\\|is_trial\" d:/Kalamapp/database_v1_phase1*.sql)",
+      "Bash(xargs ls:*)",
+      "Bash(sort -k9)",
+      "Bash(grep -l \"payroll_slips\\\\|payroll_calculation\" /d/Kalamapp/database_v1_phase*.sql)"
     ]
   }
 }

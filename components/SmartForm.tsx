@@ -232,13 +232,14 @@ const resolveSmartFormPopupContainer = (trigger?: HTMLElement | null) => {
   return document.body;
 };
 
-const SmartForm: React.FC<SmartFormProps> = ({ 
+const SmartForm: React.FC<SmartFormProps> = ({
   module, visible, onCancel, onSave, recordId, title, isBulkEdit = false,
   initialValues: initialValuesProp,
   displayMode = 'modal',
   onPersisted,
   overlayZIndex,
 }) => {
+  const fieldPopupZIndexBase = typeof overlayZIndex === 'number' ? Math.max(overlayZIndex + 100, 4000) : 4000;
   const initialValues = initialValuesProp ?? EMPTY_INITIAL_VALUES;
   const initialValuesSignature = useMemo(() => safeJsonStringify(initialValuesProp ?? {}), [initialValuesProp]);
   const hasInitialValuesProp = initialValuesSignature !== '{}';
@@ -2386,7 +2387,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             variant="borderless"
                             placeholder="جستجو یا انتخاب مسئول / نقش"
                             className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300')}
-                            styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: 4000 }) } }}
+                            styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: fieldPopupZIndexBase }) } }}
                             loading={assigneesLoading}
                             options={assigneeOptions}
                             showSearch
@@ -2450,6 +2451,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             moduleId={module.id}
                             recordId={recordId}
                             allValues={currentValues}
+                            overlayZIndexBase={fieldPopupZIndexBase}
                             popupContainer={resolveSmartFormPopupContainer}
                             preferLocalPopupContainer
                           />
@@ -2495,9 +2497,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                  : ''
                            }
                          >
-                           <SmartFieldRenderer 
-                             field={preparedField} 
-                             value={(currentValues as any)?.[preparedField.key]} 
+                           <SmartFieldRenderer
+                             field={preparedField}
+                             value={(currentValues as any)?.[preparedField.key]}
                              onChange={(val) => {
                                form.setFieldValue(preparedField.key, val);
                                setFormData((prev: any) => ({
@@ -2511,6 +2513,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             moduleId={module.id}
                             recordId={recordId}
                             allValues={currentValues}
+                            overlayZIndexBase={fieldPopupZIndexBase}
                             popupContainer={resolveSmartFormPopupContainer}
                           />
                         </div>
@@ -2612,7 +2615,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   ? 'md:col-span-2 lg:col-span-3'
                                   : ''}
                               >
-                                 <SmartFieldRenderer 
+                                 <SmartFieldRenderer
                                   field={preparedField}
                                   value={fieldValue}
                                   recordId={recordId}
@@ -2630,6 +2633,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   onOptionsUpdate={loadDynamicOptions}
                                   moduleId={module.id}
                                   allValues={currentValues}
+                                  overlayZIndexBase={fieldPopupZIndexBase}
                                   popupContainer={resolveSmartFormPopupContainer}
                                   preferLocalPopupContainer
                                 />

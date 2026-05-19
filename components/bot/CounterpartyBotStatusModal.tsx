@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Input, Modal, Select, Skeleton } from 'antd';
+import { Button, Checkbox, Input, Modal, Select, Skeleton } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import {
@@ -61,6 +61,8 @@ export type CounterpartyBotStatusModalProps = {
   lastInboundText: string;
   allowedUserIds: string[];
   allowedRoleIds: string[];
+  aiAutoReplyEnabled: boolean;
+  aiCounterpartyGuide: string;
   userOptions: Array<{ label: string; value: string }>;
   roleOptions: Array<{ label: string; value: string }>;
   onClose: () => void;
@@ -70,6 +72,8 @@ export type CounterpartyBotStatusModalProps = {
   onChangeChannel: (channel: BotChannel) => void;
   onChangeAllowedUserIds: (value: string[]) => void;
   onChangeAllowedRoleIds: (value: string[]) => void;
+  onChangeAiAutoReplyEnabled: (value: boolean) => void;
+  onChangeAiCounterpartyGuide: (value: string) => void;
 };
 
 const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
@@ -86,6 +90,8 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   lastInboundText,
   allowedUserIds,
   allowedRoleIds,
+  aiAutoReplyEnabled,
+  aiCounterpartyGuide,
   userOptions,
   roleOptions,
   onClose,
@@ -95,6 +101,8 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   onChangeChannel,
   onChangeAllowedUserIds,
   onChangeAllowedRoleIds,
+  onChangeAiAutoReplyEnabled,
+  onChangeAiCounterpartyGuide,
 }) => {
   const normalizedUserOptions = React.useMemo(
     () => ensureSelectedOptions(userOptions, allowedUserIds, 'کاربر'),
@@ -174,6 +182,27 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               placeholder="بعد از اولین پیام گروه به‌صورت خودکار ثبت می‌شود"
               readOnly
             />
+          </div>
+          <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-700/40 dark:bg-violet-900/20">
+            <Checkbox
+              checked={aiAutoReplyEnabled}
+              onChange={(event) => onChangeAiAutoReplyEnabled(Boolean(event.target.checked))}
+            >
+              پاسخگویی خودکار توسط هوش مصنوعی
+            </Checkbox>
+            {aiAutoReplyEnabled ? (
+              <div className="mt-2">
+                <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">
+                  توضیحات به هوش مصنوعی راجع به این مشتری/تامین‌کننده
+                </div>
+                <Input.TextArea
+                  value={aiCounterpartyGuide}
+                  onChange={(event) => onChangeAiCounterpartyGuide(event.target.value)}
+                  autoSize={{ minRows: 3, maxRows: 7 }}
+                  placeholder="نکات اختصاصی این مشتری/تامین‌کننده برای پاسخگویی دقیق‌تر بات..."
+                />
+              </div>
+            ) : null}
           </div>
           <div>
             <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای این گروه بات</div>

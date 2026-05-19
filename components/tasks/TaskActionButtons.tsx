@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Modal } from 'antd';
-import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined, EyeOutlined } from '@ant-design/icons';
+import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined, EyeOutlined, ReadOutlined } from '@ant-design/icons';
 import OverlayEventBoundary from '../OverlayEventBoundary';
 import PersianDatePicker from '../PersianDatePicker';
 import { isTaskDoneStatus } from '../../utils/taskCompletion';
@@ -8,6 +8,9 @@ import { updateTaskDueDateWithAutomation, updateTaskStatusWithAutomation } from 
 import { getTaskStatusSwatchColor } from '../../utils/processTaskStatusOptions';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveOverlayPopupContainer, resolveParentOverlayZIndex, resolveStableOverlayRoot } from '../../utils/popupContainer';
+import { getInstructionIdsFromTask, instructionStatusOptions } from '../../utils/instructionSupport';
+import { supabase } from '../../supabaseClient';
+import TaskInstructionsModal from './TaskInstructionsModal';
 
 type TaskActionButtonsProps = {
   task: any;
@@ -38,8 +41,13 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   const [savingStart, setSavingStart] = useState(false);
   const [savingReview, setSavingReview] = useState(false);
   const [savingComplete, setSavingComplete] = useState(false);
+  const [instructionsModalOpen, setInstructionsModalOpen] = useState(false);
+  const [loadingInstructions, setLoadingInstructions] = useState(false);
+  const [loadedInstructions, setLoadedInstructions] = useState<any[]>([]);
+  const [activeInstructionId, setActiveInstructionId] = useState<string | null>(null);
   const normalizedStatus = String(task?.status || '').toLowerCase();
   const isDone = isTaskDoneStatus(task?.status);
+  const taskInstructionIds = useMemo(() => getInstructionIdsFromTask(task), [task]);
   const isInProgress = normalizedStatus === 'in_progress';
   const isInReview = normalizedStatus === 'review';
   const actionSizePx = size === 'large' ? 40 : size === 'middle' ? 36 : 30;
@@ -70,6 +78,40 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   };
 
   const getStatusColor = (status: string) => getTaskStatusSwatchColor(status, task);
+
+  const handleOpenInstructionsModal = async (event?: React.SyntheticEvent) => {
+    stopEvent(event);
+    if (taskInstructionIds.length === 0) return;
+    setInstructionsModalOpen(true);
+    if (loadedInstructions.length > 0) return;
+    setLoadingInstructions(true);
+    try {
+      const { data, error } = await supabase
+        .from('instructions')
+        .select('id, name, system_code, status, department, goal, body, image_url')
+        .in('id', taskInstructionIds);
+      if (error) throw error;
+      const withStatus = (data || []).map((item) => {
+        const statusOption = instructionStatusOptions.find((o) => o.value === item?.status);
+        return {
+          ...item,
+          status_label: statusOption?.label || item?.status || null,
+          status_color: statusOption?.color || 'default',
+        };
+      });
+      const ordered = taskInstructionIds
+        .map((id) => withStatus.find((item) => String(item?.id || '') === id))
+        .filter(Boolean);
+      setLoadedInstructions(ordered);
+      if (ordered.length > 0 && !activeInstructionId) {
+        setActiveInstructionId(String(ordered[0]?.id || ''));
+      }
+    } catch {
+      message.error('بارگذاری دستورالعمل‌ها ناموفق بود.');
+    } finally {
+      setLoadingInstructions(false);
+    }
+  };
 
   const getActionButtonStyle = (
     targetStatus?: string,
@@ -192,6 +234,19 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   return (
     <>
       <div ref={overlayAnchorRef} className="flex items-center justify-center gap-1.5">
+        {taskInstructionIds.length > 0 ? (
+          <Button
+            type="text"
+            size={size}
+            icon={<ReadOutlined />}
+            className={`task-action-button ${buttonClassName}`}
+            style={getActionButtonStyle(undefined)}
+            title="مشاهده دستورالعمل‌ها"
+            aria-label="مشاهده دستورالعمل‌ها"
+            loading={loadingInstructions}
+            onClick={handleOpenInstructionsModal}
+          />
+        ) : null}
         <Button
           type="text"
           size={size}
@@ -246,6 +301,15 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
           onClick={handleComplete}
         />
       </div>
+
+      <TaskInstructionsModal
+        open={instructionsModalOpen}
+        loading={loadingInstructions}
+        instructions={loadedInstructions}
+        activeInstructionId={activeInstructionId}
+        onSelectInstruction={(id) => setActiveInstructionId(id)}
+        onClose={() => setInstructionsModalOpen(false)}
+      />
 
       <Modal
         open={rescheduleOpen}

@@ -90,6 +90,58 @@ const fetchRecordPhoneNumberIds = async (entityType: string, entityId: string) =
     return Array.from(new Set((data || []).map((row: any) => String(row?.phone_number_id || '').trim()).filter(Boolean)));
 };
 
+const resolveLatestTimestamp = (values: Array<string | null | undefined>) =>
+  values.filter(Boolean).sort().pop() || null;
+
+const fetchLatestEmployeeFinancialOverviewAt = async (employeeId: string) => {
+  const [payrollRes, advanceRes] = await Promise.all([
+    supabase
+      .from('payroll_slips')
+      .select('id, created_at')
+      .eq('employee_id', employeeId)
+      .order('created_at', { ascending: false })
+      .limit(3000),
+    supabase
+      .from('employee_advances')
+      .select('id, created_at')
+      .eq('employee_id', employeeId)
+      .order('created_at', { ascending: false })
+      .limit(3000),
+  ]);
+
+  const payrollIds = Array.from(new Set((payrollRes.data || []).map((row: any) => String(row?.id || '').trim()).filter(Boolean)));
+  const advanceIds = Array.from(new Set((advanceRes.data || []).map((row: any) => String(row?.id || '').trim()).filter(Boolean)));
+
+  const operationRequests: PromiseLike<any>[] = [];
+  if (payrollIds.length > 0) {
+    operationRequests.push(
+      supabase
+        .from('cash_bank_operations')
+        .select('created_at')
+        .in('payroll_slip_id', payrollIds)
+        .order('created_at', { ascending: false })
+        .limit(1),
+    );
+  }
+  if (advanceIds.length > 0) {
+    operationRequests.push(
+      supabase
+        .from('cash_bank_operations')
+        .select('created_at')
+        .in('employee_advance_id', advanceIds)
+        .order('created_at', { ascending: false })
+        .limit(1),
+    );
+  }
+
+  const operationResponses = operationRequests.length > 0 ? await Promise.all(operationRequests) : [];
+  return resolveLatestTimestamp([
+    payrollRes.data?.[0]?.created_at,
+    advanceRes.data?.[0]?.created_at,
+    ...operationResponses.map((response: any) => response?.data?.[0]?.created_at),
+  ]);
+};
+
 const getModuleTableName = (moduleId?: string | null) => {
   const normalized = String(moduleId || '').trim();
   return MODULES[normalized]?.table || normalized;
@@ -289,26 +341,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                             .pop() || null;
                     }
 
-                    const { data: employeeRow } = await supabase
-                        .from('employees')
-                        .select('related_profile_id')
-                        .eq('id', recordId)
-                        .maybeSingle();
-                    const employeeScopeIds = Array.from(new Set([recordId, String(employeeRow?.related_profile_id || '').trim()].filter(Boolean)));
-                    const [opsRes, payrollRes, advanceRes, barterRes] = await Promise.all([
-                        employeeScopeIds.length > 1
-                            ? supabase.from('cash_bank_operations').select('created_at').in('employee_id', employeeScopeIds).order('created_at', { ascending: false }).limit(1)
-                            : supabase.from('cash_bank_operations').select('created_at').eq('employee_id', employeeScopeIds[0]).order('created_at', { ascending: false }).limit(1),
-                        supabase.from('payroll_slips').select('created_at').eq('employee_id', recordId).order('created_at', { ascending: false }).limit(1),
-                        supabase.from('employee_advances').select('created_at').eq('employee_id', recordId).order('created_at', { ascending: false }).limit(1),
-                        employeeScopeIds.length > 1
-                            ? supabase.from('barters').select('created_at').in('employee_id', employeeScopeIds).order('created_at', { ascending: false }).limit(1)
-                            : supabase.from('barters').select('created_at').eq('employee_id', employeeScopeIds[0]).order('created_at', { ascending: false }).limit(1),
-                    ]);
-                    return [opsRes.data?.[0]?.created_at, payrollRes.data?.[0]?.created_at, advanceRes.data?.[0]?.created_at, barterRes.data?.[0]?.created_at]
-                        .filter(Boolean)
-                        .sort()
-                        .pop() || null;
+                    return await fetchLatestEmployeeFinancialOverviewAt(recordId);
                 }
 
                 if ((tab as RelatedTabConfig).relationType === 'product_customers') {

@@ -6,6 +6,7 @@ import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from 
 import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCurrencyConfig } from '../../utils/currency';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
+import { getResolvedCurrentOrgId, loadScopedCompanySettings } from '../../utils/companySettings';
 
 const CompanyTab: React.FC = () => {
   const { message } = App.useApp();
@@ -22,12 +23,7 @@ const CompanyTab: React.FC = () => {
   }, []);
 
   const fetchData = async () => {
-    const { data } = await supabase
-      .from('company_settings')
-      .select('*')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data } = await loadScopedCompanySettings(supabase);
 
     if (data) {
       form.setFieldsValue({
@@ -153,7 +149,11 @@ const CompanyTab: React.FC = () => {
           throw new Error('UPDATE_NO_ROW');
         }
       } else {
-        const { data, error } = await supabase.from('company_settings').insert([payload]).select('id').single();
+        const currentOrgId = await getResolvedCurrentOrgId(supabase);
+        const insertPayload = currentOrgId
+          ? { ...payload, org_id: currentOrgId }
+          : payload;
+        const { data, error } = await supabase.from('company_settings').insert([insertPayload]).select('id').single();
         if (error) throw error;
         if (data?.id) setRecordId(String(data.id));
       }

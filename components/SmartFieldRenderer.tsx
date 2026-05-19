@@ -70,7 +70,6 @@ import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
-  resolveOverlayPopupContainer,
   resolveSelectPopupContainer,
 } from '../utils/popupContainer';
 
@@ -2157,7 +2156,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         );
 
       case FieldType.PHONE:
-        return <PhoneFieldInput value={value} onChange={onChange} disabled={!forceEditMode || isReadonly} placeholder={compactMode ? undefined : fieldLabel} />;
+        return <PhoneFieldInput value={value} onChange={onChange} disabled={!forceEditMode || isReadonly} placeholder={compactMode ? undefined : fieldLabel} compact={compactMode} />;
       
       case FieldType.LONG_TEXT:
       case FieldType.SUPER_LONG_TEXT:
@@ -2354,10 +2353,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
           return (
             <div className="flex flex-col gap-1 w-full">
-              <div className="flex gap-1 w-full min-w-0">
+              <div className="flex w-full min-w-0 flex-wrap items-start gap-1">
                 <AdaptiveSelectField
                     {...commonProps}
-                    style={{ ...((commonProps as any)?.style || {}), width: 'auto', flex: 1, minWidth: 0 }}
+                    style={{ ...((commonProps as any)?.style || {}), width: '100%', flex: '1 1 180px', minWidth: 0 }}
                     className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'min-w-0')}
                     showSearch
                     options={filteredOptions}
@@ -3223,7 +3222,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   const watchedQuickCreateValues = Form.useWatch([], effectiveForm) || {};
   const childOverlayZIndexBase = overlayZIndexBase + 100;
   const quickCreatePopupContainer = useCallback((triggerNode?: HTMLElement | null) => {
-    return resolveOverlayPopupContainer(triggerNode);
+    return resolveSelectPopupContainer(triggerNode);
   }, []);
   const clearPendingAutoNameToggleWrite = useCallback(() => {
     if (pendingAutoNameToggleFrameRef.current !== null && typeof window !== 'undefined') {
@@ -3480,7 +3479,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         disableRequired
         overlayZIndexBase={childOverlayZIndexBase}
         popupContainer={quickCreatePopupContainer}
-        preferLocalPopupContainer
       />
     );
   };
@@ -3571,7 +3569,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                     getPopupContainer={quickCreatePopupContainer}
                     modalContainer={quickCreatePopupContainer}
                     overlayZIndexBase={childOverlayZIndexBase}
-                    preferLocalPopupContainer
                     onChange={(value) => {
                       const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
                       const normalizedType = String(assignee_type || 'user');

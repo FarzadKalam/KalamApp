@@ -22,6 +22,8 @@ describe('CounterpartyBotStatusModal', () => {
           lastInboundText=""
           allowedUserIds={[]}
           allowedRoleIds={[]}
+          aiAutoReplyEnabled={false}
+          aiCounterpartyGuide=""
           userOptions={[
             { label: 'کاربر اول', value: 'user-1' },
             { label: 'کاربر دوم', value: 'user-2' },
@@ -37,6 +39,8 @@ describe('CounterpartyBotStatusModal', () => {
           onChangeChannel={vi.fn()}
           onChangeAllowedUserIds={onChangeAllowedUserIds}
           onChangeAllowedRoleIds={onChangeAllowedRoleIds}
+          onChangeAiAutoReplyEnabled={vi.fn()}
+          onChangeAiCounterpartyGuide={vi.fn()}
         />
       </App>
     );

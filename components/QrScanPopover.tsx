@@ -5,6 +5,7 @@ import { QrcodeOutlined } from '@ant-design/icons';
 import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '../supabaseClient';
 import { BRANDING_UPDATED_EVENT } from '../theme/brandTheme';
+import { loadScopedCompanySettings } from '../utils/companySettings';
 
 interface QrScanResult {
   raw: string;
@@ -27,12 +28,7 @@ const loadQrScanEnabled = async (): Promise<boolean> => {
   if (!qrScanEnabledPromise) {
     qrScanEnabledPromise = (async () => {
       try {
-        const { data, error } = await supabase
-          .from('company_settings')
-          .select('qr_scan_enabled')
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        const { data, error } = await loadScopedCompanySettings(supabase);
         if (error) {
           console.warn('Could not read qr_scan_enabled from company settings', error);
           cachedQrScanEnabled = false;

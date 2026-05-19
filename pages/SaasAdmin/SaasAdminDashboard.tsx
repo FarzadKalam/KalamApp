@@ -238,7 +238,7 @@ const SaasAdminDashboard: React.FC = () => {
         title={<span className="font-black text-slate-800">آخرین سازمان‌های ثبت‌شده</span>}
         className="rounded-2xl border-0 shadow-sm"
         extra={
-          <a href="/taze-system/orgs" className="text-sm text-slate-600 hover:text-slate-900">
+          <a href="/saas_orgs" className="text-sm text-slate-600 hover:text-slate-900">
             مشاهده همه
           </a>
         }

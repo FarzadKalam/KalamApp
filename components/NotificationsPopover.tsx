@@ -38,6 +38,7 @@ import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/re
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns, selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
 import AiSparkleIcon from './ai/AiSparkleIcon';
+import CounterpartyBotStatusModal from './bot/CounterpartyBotStatusModal';
 import {
   buildNoteConversations,
   buildSmsThreads,
@@ -258,6 +259,23 @@ const normalizeTabForVariant = (
     return CHAT_TAB_KEYS.includes(key) ? key : 'notes';
   }
   return ALERT_TAB_KEYS.includes(key) ? key : 'tasks';
+};
+const buildEnglishActivationBase = (value: any) => {
+  const ascii = String(value || '')
+    .normalize('NFKD')
+    .replace(/[^\x00-\x7F]/g, ' ')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toUpperCase();
+  if (!ascii) return '';
+  const words = ascii.split(/\s+/).filter(Boolean).slice(0, 3);
+  return words.join('-').slice(0, 20);
+};
+
+const createBotActivationCode = (englishName?: string) => {
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const base = buildEnglishActivationBase(englishName);
+  return base ? `KALAM-${base}-${random}` : `KALAM-${random}`;
 };
 const isSectionTabKey = (value: DrawerTabKey): value is NotificationSectionKey =>
   value === 'notes' || value === 'tasks' || value === 'responsibilities' || value === 'bot_messages' || value === 'sms_messages' || value === 'voip_calls';
@@ -914,6 +932,21 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
   const [botSuggesting, setBotSuggesting] = useState(false);
+  const [botStatusModalOpen, setBotStatusModalOpen] = useState(false);
+  const [botStatusModalLoading, setBotStatusModalLoading] = useState(false);
+  const [botStatusModalSaving, setBotStatusModalSaving] = useState(false);
+  const [botStatusChannel, setBotStatusChannel] = useState<'rubika' | 'telegram' | 'bale'>('rubika');
+  const [botStatusGroupTitle, setBotStatusGroupTitle] = useState('');
+  const [botStatusCurrentStatus, setBotStatusCurrentStatus] = useState('pending_join');
+  const [botStatusActivationCode, setBotStatusActivationCode] = useState('');
+  const [botStatusCountdown, setBotStatusCountdown] = useState(0);
+  const [botStatusWatching, setBotStatusWatching] = useState(false);
+  const [botStatusLastInboundAt, setBotStatusLastInboundAt] = useState('');
+  const [botStatusLastInboundText, setBotStatusLastInboundText] = useState('');
+  const [botStatusAllowedUserIds, setBotStatusAllowedUserIds] = useState<string[]>([]);
+  const [botStatusAllowedRoleIds, setBotStatusAllowedRoleIds] = useState<string[]>([]);
+  const [botStatusAiAutoReplyEnabled, setBotStatusAiAutoReplyEnabled] = useState(false);
+  const [botStatusAiCounterpartyGuide, setBotStatusAiCounterpartyGuide] = useState('');
   const [botAiPopoverOpen, setBotAiPopoverOpen] = useState(false);
   const [botGroupSearch, setBotGroupSearch] = useState('');
   const [botMessageSearch, setBotMessageSearch] = useState('');
@@ -1054,11 +1087,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const noteConversationMessageIdsRef = useRef<Set<string>>(new Set());
   const botConversationKeyRef = useRef<string | null>(null);
   const botConversationMessageIdsRef = useRef<Set<string>>(new Set());
+  const noteInitialAnchorDoneRef = useRef(false);
+  const botInitialAnchorDoneRef = useRef(false);
   const selectedConversationFetchSeqRef = useRef(0);
   const botMessagesFetchSeqRef = useRef(0);
   const botMessagesRef = useRef<CounterpartyBotMessageRow[]>([]);
   const botMessagesGroupIdRef = useRef<string | null>(null);
   const hydratingBotMessageIdsRef = useRef<Set<string>>(new Set());
+  const botStatusWatchTimerRef = useRef<number | null>(null);
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -1079,6 +1115,236 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     () => botGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
     [botGroups, selectedBotGroupId]
   );
+  const clearBotStatusWatchTimer = useCallback(() => {
+    if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(botStatusWatchTimerRef.current);
+      botStatusWatchTimerRef.current = null;
+    }
+  }, []);
+
+  const loadBotStatusRow = useCallback(async (
+    group: CounterpartyBotGroupRow,
+    preferredChannel?: string | null,
+  ) => {
+    const nextPreferred = String(preferredChannel || group?.channel_type || 'rubika').trim();
+    let selectedChannel = ['rubika', 'telegram', 'bale'].includes(nextPreferred) ? nextPreferred : 'rubika';
+    let groupTitle = String(group?.group_title || '').trim();
+    let currentStatus = String(group?.status || 'pending_join').trim();
+    let activationCode = createBotActivationCode(String(group?.counterparty_label || '').trim());
+    let lastInboundAt = String(group?.last_inbound_at || '').trim();
+    let lastInboundText = '';
+    let allowedUserIds: string[] = [];
+    let allowedRoleIds: string[] = [];
+    let aiAutoReplyEnabled = false;
+    let aiCounterpartyGuide = '';
+
+    let query = supabase
+      .from('counterparty_bot_groups')
+      .select('id, channel_type, status, group_title, metadata, last_inbound_at')
+      .limit(50);
+    query = String(group?.target_type || '').trim() === 'customers'
+      ? query.eq('customer_id', String(group?.customer_id || '').trim())
+      : query.eq('supplier_id', String(group?.supplier_id || '').trim());
+    const { data: rows, error } = await query;
+    if (error) throw error;
+    const rowMap = new Map((rows || []).map((row: any) => [String(row?.channel_type || '').trim(), row] as const));
+    const preferredRow = rowMap.get(selectedChannel) || (rows || [])[0] || null;
+    if (preferredRow) {
+      selectedChannel = String(preferredRow.channel_type || selectedChannel).trim() || selectedChannel;
+      groupTitle = String(preferredRow.group_title || '').trim();
+      currentStatus = String(preferredRow.status || currentStatus).trim() || 'pending_join';
+      const metadata = (preferredRow?.metadata && typeof preferredRow.metadata === 'object') ? preferredRow.metadata : {};
+      const existingCode = String(metadata?.activation_code || '').trim().toUpperCase();
+      if (existingCode) activationCode = existingCode;
+      allowedUserIds = Array.isArray(metadata?.allowed_user_ids) ? metadata.allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [];
+      allowedRoleIds = Array.isArray(metadata?.allowed_role_ids) ? metadata.allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [];
+      aiAutoReplyEnabled = Boolean(metadata?.ai_auto_reply_enabled);
+      aiCounterpartyGuide = String(metadata?.ai_counterparty_guide || '').trim();
+      lastInboundAt = String(preferredRow?.last_inbound_at || '').trim();
+      const preferredGroupId = String(preferredRow?.id || '').trim();
+      if (preferredGroupId) {
+        const { data: inboundRows } = await supabase
+          .from('counterparty_bot_messages')
+          .select('created_at, content_text')
+          .eq('bot_group_id', preferredGroupId)
+          .eq('direction', 'inbound')
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (Array.isArray(inboundRows) && inboundRows[0]) {
+          lastInboundAt = String(inboundRows[0]?.created_at || lastInboundAt || '').trim();
+          lastInboundText = String(inboundRows[0]?.content_text || '').trim();
+        }
+      }
+    }
+
+    setBotStatusChannel(selectedChannel as 'rubika' | 'telegram' | 'bale');
+    setBotStatusGroupTitle(groupTitle);
+    setBotStatusCurrentStatus(currentStatus === 'pending_join_link' ? 'pending_join' : currentStatus);
+    setBotStatusActivationCode(activationCode);
+    setBotStatusLastInboundAt(lastInboundAt);
+    setBotStatusLastInboundText(lastInboundText);
+    setBotStatusAllowedUserIds(allowedUserIds);
+    setBotStatusAllowedRoleIds(allowedRoleIds);
+    setBotStatusAiAutoReplyEnabled(aiAutoReplyEnabled);
+    setBotStatusAiCounterpartyGuide(aiCounterpartyGuide);
+  }, []);
+
+  const saveBotStatusSettings = useCallback(async (options?: { forceCapture?: boolean; captureSeconds?: number }) => {
+    if (!selectedBotGroup) return;
+    const nextChannel = ['rubika', 'telegram', 'bale'].includes(botStatusChannel) ? botStatusChannel : 'rubika';
+    let existingQuery = supabase
+      .from('counterparty_bot_groups')
+      .select('id, status, bot_chat_id, metadata')
+      .eq('channel_type', nextChannel)
+      .limit(1);
+    existingQuery = selectedBotGroup.target_type === 'customers'
+      ? existingQuery.eq('customer_id', String(selectedBotGroup.customer_id || '').trim())
+      : existingQuery.eq('supplier_id', String(selectedBotGroup.supplier_id || '').trim());
+    const { data: existingRows, error: existingError } = await existingQuery;
+    if (existingError) throw existingError;
+    const existingRow = Array.isArray(existingRows) ? existingRows[0] : null;
+    const existingStatus = String(existingRow?.status || '').trim() === 'pending_join_link' ? 'pending_join' : String(existingRow?.status || '').trim();
+    const existingChatId = String(existingRow?.bot_chat_id || '').trim();
+    const forceCapture = options?.forceCapture === true;
+    const nextStatus = forceCapture ? 'pending_join' : ((existingStatus === 'active' && existingChatId) ? 'active' : 'pending_join');
+    const existingMetadata = (existingRow?.metadata && typeof existingRow.metadata === 'object') ? existingRow.metadata : {};
+    const captureSeconds = Number(options?.captureSeconds || 30);
+    const nowIso = new Date().toISOString();
+    const payload: Record<string, any> = {
+      target_type: selectedBotGroup.target_type === 'customers' ? 'customers' : 'suppliers',
+      channel_type: nextChannel,
+      status: nextStatus,
+      group_title: String(botStatusGroupTitle || '').trim() || null,
+      metadata: {
+        ...existingMetadata,
+        activation_code: String(botStatusActivationCode || '').trim().toUpperCase(),
+        activation_required: true,
+        capture_mode: forceCapture,
+        capture_started_at: forceCapture ? nowIso : null,
+        capture_expires_at: forceCapture ? new Date(Date.now() + Math.max(10, captureSeconds) * 1000).toISOString() : null,
+        last_capture_channel: nextChannel,
+        allowed_user_ids: botStatusAllowedUserIds,
+        allowed_role_ids: botStatusAllowedRoleIds,
+        ai_auto_reply_enabled: botStatusAiAutoReplyEnabled,
+        ai_counterparty_guide: String(botStatusAiCounterpartyGuide || '').trim() || null,
+        activation_confirmation_sent: forceCapture ? false : Boolean(existingMetadata?.activation_confirmation_sent),
+        last_capture_error: null,
+        activation_updated_at: nowIso,
+      },
+      updated_by: null,
+      customer_id: selectedBotGroup.target_type === 'customers' ? selectedBotGroup.customer_id : null,
+      supplier_id: selectedBotGroup.target_type === 'suppliers' ? selectedBotGroup.supplier_id : null,
+    };
+    if (existingRow?.id) {
+      const { error } = await supabase.from('counterparty_bot_groups').update(payload).eq('id', String(existingRow.id));
+      if (error) throw error;
+    } else {
+      const { error } = await supabase.from('counterparty_bot_groups').insert([payload]);
+      if (error) throw error;
+    }
+  }, [botStatusActivationCode, botStatusAiAutoReplyEnabled, botStatusAiCounterpartyGuide, botStatusAllowedRoleIds, botStatusAllowedUserIds, botStatusChannel, botStatusGroupTitle, selectedBotGroup]);
+
+  const handleOpenBotStatusModal = useCallback(async () => {
+    if (!selectedBotGroup) return;
+    setBotStatusModalOpen(true);
+    setBotStatusModalLoading(true);
+    clearBotStatusWatchTimer();
+    setBotStatusWatching(false);
+    setBotStatusCountdown(0);
+    try {
+      await loadBotStatusRow(selectedBotGroup, selectedBotGroup.channel_type);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'خواندن تنظیم گروه بات ناموفق بود.'));
+    } finally {
+      setBotStatusModalLoading(false);
+    }
+  }, [clearBotStatusWatchTimer, loadBotStatusRow, message, selectedBotGroup]);
+  const handleCloseBotStatusModal = useCallback(() => {
+    clearBotStatusWatchTimer();
+    setBotStatusWatching(false);
+    setBotStatusCountdown(0);
+    setBotStatusModalOpen(false);
+  }, [clearBotStatusWatchTimer]);
+  const handleSaveBotStatusModal = useCallback(async () => {
+    if (!selectedBotGroup) return;
+    try {
+      setBotStatusModalSaving(true);
+      await saveBotStatusSettings();
+      await loadBotStatusRow(selectedBotGroup, botStatusChannel);
+      message.success('وضعیت گروه بات ذخیره شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره وضعیت گروه بات ناموفق بود.'));
+    } finally {
+      setBotStatusModalSaving(false);
+    }
+  }, [botStatusChannel, loadBotStatusRow, message, saveBotStatusSettings, selectedBotGroup]);
+  const handleStartBotBindWatch = useCallback(async () => {
+    if (!selectedBotGroup) return;
+    try {
+      setBotStatusModalSaving(true);
+      await saveBotStatusSettings({ forceCapture: true, captureSeconds: 30 });
+      await loadBotStatusRow(selectedBotGroup, botStatusChannel);
+      clearBotStatusWatchTimer();
+      setBotStatusWatching(true);
+      setBotStatusCountdown(30);
+      let remaining = 30;
+      botStatusWatchTimerRef.current = window.setInterval(async () => {
+        remaining -= 1;
+        setBotStatusCountdown(Math.max(remaining, 0));
+        if (remaining % 2 === 0) {
+          try {
+            await loadBotStatusRow(selectedBotGroup, botStatusChannel);
+          } catch {
+            // ignore poll error
+          }
+        }
+        if (remaining <= 0) {
+          clearBotStatusWatchTimer();
+          setBotStatusWatching(false);
+          setBotStatusCountdown(0);
+          message.info('زمان انتظار bind تمام شد. در صورت نیاز دوباره شروع کنید.');
+        }
+      }, 1000);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'شروع حالت انتظار bind ناموفق بود.'));
+      setBotStatusWatching(false);
+      setBotStatusCountdown(0);
+    } finally {
+      setBotStatusModalSaving(false);
+    }
+  }, [botStatusChannel, clearBotStatusWatchTimer, loadBotStatusRow, message, saveBotStatusSettings, selectedBotGroup]);
+  const handleChangeBotStatusChannel = useCallback(async (value: 'rubika' | 'telegram' | 'bale') => {
+    const nextChannel = String(value || 'rubika') as 'rubika' | 'telegram' | 'bale';
+    setBotStatusChannel(nextChannel);
+    if (!selectedBotGroup) return;
+    try {
+      setBotStatusModalLoading(true);
+      await loadBotStatusRow(selectedBotGroup, nextChannel);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'خواندن تنظیمات کانال ناموفق بود.'));
+    } finally {
+      setBotStatusModalLoading(false);
+    }
+  }, [loadBotStatusRow, message, selectedBotGroup]);
+  const handleCopyBotActivationCode = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(String(botStatusActivationCode || '').trim());
+      message.success('کد فعال‌سازی کپی شد.');
+    } catch {
+      message.error('کپی کد فعال‌سازی ناموفق بود.');
+    }
+  }, [botStatusActivationCode, message]);
+  useEffect(() => () => {
+    clearBotStatusWatchTimer();
+  }, [clearBotStatusWatchTimer]);
+  const systemAvatarSrc = useMemo(() => {
+    if (typeof document === 'undefined') return '/favicon.svg';
+    const faviconHref = String(
+      document.querySelector<HTMLLinkElement>("link[rel~='icon']")?.href
+      || '/favicon.svg'
+    ).trim();
+    return faviconHref || '/favicon.svg';
+  }, []);
   const selectedBotModuleId = useMemo(() => {
     if (!selectedBotGroup) return null;
     return String(selectedBotGroup.target_type || '').trim() === 'customers' ? 'customers' : 'suppliers';
@@ -3380,6 +3646,20 @@ useEffect(() => {
     if (selectedChatGroupId) return `group:${selectedChatGroupId}`;
     return `direct:${selectedNoteUserId}`;
   }, [selectedChatGroupId, selectedNoteUserId]);
+  const isUnreadNoteRow = useCallback((note: any) => {
+    const noteId = String(note?.id || '').trim();
+    if (!noteId) return false;
+    const authorId = String(note?.author_id || '').trim();
+    const currentUserId = String(profile.id || '').trim();
+    if (authorId && currentUserId && authorId === currentUserId) return false;
+    return !isNotificationRead('notes', 'note', noteId, false);
+  }, [isNotificationRead, profile.id]);
+  const isUnreadBotRow = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
+    const rowId = String(row?.id || '').trim();
+    if (!rowId) return false;
+    if (String(row?.direction || '').trim() === 'outbound') return false;
+    return !isNotificationRead('bot_messages', 'counterparty_bot_message', rowId, seenBotMessageIds.has(rowId));
+  }, [isNotificationRead, seenBotMessageIds]);
   const isSelectedConversationLoaded = !selectedConversationKey || (
     selectedConversationNotesKey === selectedConversationKey && !loadingSelectedConversationNotes
   );
@@ -3512,7 +3792,7 @@ useEffect(() => {
       return {
         id: SYSTEM_MESSAGES_USER_ID,
         display_name: 'پیام‌های سیستم',
-        avatar_url: null,
+        avatar_url: systemAvatarSrc,
         role_id: null,
       };
     }
@@ -3520,7 +3800,7 @@ useEffect(() => {
       return null;
     }
     return directoryUserMap[String(selectedNoteUserId)] || inferredDirectUsers.find((user) => String(user.id) === String(selectedNoteUserId)) || null;
-  }, [directoryUserMap, inferredDirectUsers, selectedChatGroupId, selectedNoteUserId]);
+  }, [directoryUserMap, inferredDirectUsers, selectedChatGroupId, selectedNoteUserId, systemAvatarSrc]);
   const orderedFilteredNotes = useMemo(
     () => [...filteredNotes].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     [filteredNotes]
@@ -3544,6 +3824,16 @@ useEffect(() => {
       return haystack.includes(normalizedNoteMessageSearch);
     });
   }, [authorNameMap, directoryUserMap, normalizedNoteMessageSearch, orderedFilteredNotes]);
+  const firstUnreadNoteDomId = useMemo(() => {
+    const firstUnread = displayedChatNotes.find((note: any) => isUnreadNoteRow(note));
+    const noteId = String(firstUnread?.id || '').trim();
+    return noteId ? `note-message-${noteId}` : null;
+  }, [displayedChatNotes, isUnreadNoteRow]);
+  const firstUnreadBotMessageDomId = useMemo(() => {
+    const firstUnread = botMessages.find((row) => isUnreadBotRow(row));
+    const rowId = String(firstUnread?.id || '').trim();
+    return rowId ? `bot-message-${rowId}` : null;
+  }, [botMessages, isUnreadBotRow]);
   const activeConversationRoleLabel = useMemo(() => {
     if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return 'اعلان‌های گردش کارها و اتوماسیون‌ها';
     if (selectedChatGroup) {
@@ -3720,6 +4010,7 @@ useEffect(() => {
 
   const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow) => extractBotMessageAttachments(row), []);
   const hydrateBotMessagesMedia = useCallback(async (rows: CounterpartyBotMessageRow[]) => {
+    const hasBrokenRubikaStorageUrl = (url: string) => /https?:\/\/botapi\.rubika\.ir\/storage\/v1\/object\/public\//i.test(String(url || '').trim());
     const pendingRows = (rows || []).filter((row) => {
       if (String(row?.direction || '') !== 'inbound') return false;
       if (String(selectedBotGroup?.channel_type || '').trim() !== 'rubika') return false;
@@ -3727,7 +4018,10 @@ useEffect(() => {
       if (!rowId || hydratingBotMessageIdsRef.current.has(rowId)) return false;
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const fileId = String((payload as any)?.media_file_id || '').trim();
-      const hasUsableAttachment = getBotMessageAttachments(row).some((item) => String(item?.url || '').trim());
+      const hasUsableAttachment = getBotMessageAttachments(row).some((item) => {
+        const url = String(item?.url || '').trim();
+        return Boolean(url) && !hasBrokenRubikaStorageUrl(url);
+      });
       return Boolean(fileId && !hasUsableAttachment);
     });
     if (pendingRows.length === 0) return;
@@ -3917,6 +4211,35 @@ useEffect(() => {
       currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
     });
   }
+  const scrollConversationToAnchor = useCallback((
+    container: HTMLDivElement | null,
+    domId: string | null | undefined,
+    fallback: 'bottom' | 'none' = 'bottom',
+  ) => {
+    if (!container) return false;
+    const normalizedId = String(domId || '').trim();
+    if (!normalizedId) {
+      if (fallback === 'bottom') {
+        container.scrollTop = container.scrollHeight;
+        return true;
+      }
+      return false;
+    }
+    if (typeof document === 'undefined') {
+      if (fallback === 'bottom') container.scrollTop = container.scrollHeight;
+      return false;
+    }
+    const target = document.getElementById(normalizedId);
+    if (!target) {
+      if (fallback === 'bottom') {
+        container.scrollTop = container.scrollHeight;
+        return true;
+      }
+      return false;
+    }
+    target.scrollIntoView({ behavior: 'auto', block: 'center' });
+    return true;
+  }, []);
   const scrollMessageIntoView = useCallback((domId: string) => {
     if (typeof document === 'undefined') return;
     const normalizedId = String(domId || '').trim();
@@ -4212,8 +4535,9 @@ useEffect(() => {
     setNoteViewportReady(!selectedNoteUserId);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
-    noteShouldStickToBottomRef.current = true;
-    noteForceScrollToBottomRef.current = true;
+    noteShouldStickToBottomRef.current = false;
+    noteForceScrollToBottomRef.current = false;
+    noteInitialAnchorDoneRef.current = false;
     setNoteNewIncomingCount(0);
     noteConversationKeyRef.current = null;
     noteConversationMessageIdsRef.current = new Set();
@@ -4221,8 +4545,9 @@ useEffect(() => {
 
   useEffect(() => {
     setBotViewportReady(!selectedBotGroupId);
-    botShouldStickToBottomRef.current = true;
-    botForceScrollToBottomRef.current = true;
+    botShouldStickToBottomRef.current = false;
+    botForceScrollToBottomRef.current = false;
+    botInitialAnchorDoneRef.current = false;
     setBotNewIncomingCount(0);
     botConversationKeyRef.current = null;
     botConversationMessageIdsRef.current = new Set();
@@ -4304,8 +4629,9 @@ useEffect(() => {
         );
         setSelectedConversationNotesKey(requestConversationKey);
         setLoadingSelectedConversationNotes(false);
-        noteShouldStickToBottomRef.current = true;
-        noteForceScrollToBottomRef.current = true;
+        noteShouldStickToBottomRef.current = false;
+        noteForceScrollToBottomRef.current = false;
+        noteInitialAnchorDoneRef.current = false;
       } catch (error) {
         if (!cancelled && requestSeq === selectedConversationFetchSeqRef.current) {
           console.warn('Failed to fetch selected conversation history.', error);
@@ -4326,45 +4652,63 @@ useEffect(() => {
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
     if (!isSelectedConversationLoaded) return;
+    if (!noteViewportReady) {
+      const scrolledToUnread = scrollConversationToAnchor(
+        notesScrollContainerRef.current,
+        firstUnreadNoteDomId,
+        'bottom',
+      );
+      noteInitialAnchorDoneRef.current = true;
+      noteShouldStickToBottomRef.current = !scrolledToUnread || !firstUnreadNoteDomId;
+      noteForceScrollToBottomRef.current = false;
+      setNoteViewportReady(true);
+      return;
+    }
     const shouldForceScroll = noteForceScrollToBottomRef.current;
     if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
     scrollNotesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     noteForceScrollToBottomRef.current = false;
-    if (!noteViewportReady) {
-      setNoteViewportReady(true);
-    }
-  }, [activeDrawerSection, displayedChatNotes, isSelectedConversationLoaded, noteViewportReady, open]);
+  }, [activeDrawerSection, displayedChatNotes, firstUnreadNoteDomId, isSelectedConversationLoaded, noteViewportReady, open, scrollConversationToAnchor]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
+    if (!noteViewportReady) return;
     const unreadLikeEntries = noteLikeNotifications
       .filter((item) => !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false))
       .map((item) => ({ section: 'notes' as const, sourceType: 'note_like', sourceId: String(item.source_id || '') }))
       .filter((item) => item.sourceId);
     markNotificationEntriesRead(unreadLikeEntries);
     if (!selectedNoteUserId) return;
-    if (!noteShouldStickToBottomRef.current) return;
     markNotesAsSeen(displayedChatNotes);
-  }, [activeDrawerSection, displayedChatNotes, isNotificationRead, markNotificationEntriesRead, markNotesAsSeen, noteLikeNotifications, open, selectedNoteUserId]);
+  }, [activeDrawerSection, displayedChatNotes, isNotificationRead, markNotificationEntriesRead, markNotesAsSeen, noteLikeNotifications, noteViewportReady, open, selectedNoteUserId]);
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
     if (loadingBotMessages) return;
+    if (!botViewportReady) {
+      const scrolledToUnread = scrollConversationToAnchor(
+        botMessagesScrollContainerRef.current,
+        firstUnreadBotMessageDomId,
+        'bottom',
+      );
+      botInitialAnchorDoneRef.current = true;
+      botShouldStickToBottomRef.current = !scrolledToUnread || !firstUnreadBotMessageDomId;
+      botForceScrollToBottomRef.current = false;
+      setBotViewportReady(true);
+      return;
+    }
     const shouldForceScroll = botForceScrollToBottomRef.current;
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
     scrollBotMessagesToBottom(shouldForceScroll ? 'auto' : 'smooth');
     botForceScrollToBottomRef.current = false;
-    if (!botViewportReady) {
-      setBotViewportReady(true);
-    }
-  }, [activeDrawerSection, botMessages, botViewportReady, loadingBotMessages, open, selectedBotGroupId]);
+  }, [activeDrawerSection, botMessages, botViewportReady, firstUnreadBotMessageDomId, loadingBotMessages, open, scrollConversationToAnchor, selectedBotGroupId]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
+    if (!botViewportReady) return;
     if (!selectedBotGroupId) return;
-    if (!botShouldStickToBottomRef.current) return;
     markBotMessagesAsSeen(botMessages);
-  }, [activeDrawerSection, botMessages, markBotMessagesAsSeen, open, selectedBotGroupId]);
+  }, [activeDrawerSection, botMessages, botViewportReady, markBotMessagesAsSeen, open, selectedBotGroupId]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'sms_messages') return;
@@ -5409,10 +5753,15 @@ useEffect(() => {
               >
                 <div className="flex items-center gap-3">
                   <Avatar size={36} className="!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200">
-                    <BellOutlined />
+                    <img src={systemAvatarSrc} alt="System" className="h-full w-full object-cover" />
                   </Avatar>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">پیام‌های سیستم</div>
+                    <div className="truncate text-sm font-medium flex items-center gap-1.5">
+                      <span>پیام‌های سیستم</span>
+                      {systemNoteStats.unreadCount > 0 ? (
+                        <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                      ) : null}
+                    </div>
                     <div className="text-[11px] text-gray-400">
                       {systemNoteStats.noteCount > 0 ? `${toPersianNumber(String(systemNoteStats.noteCount))} پیام` : 'بدون پیام'}
                     </div>
@@ -5449,6 +5798,9 @@ useEffect(() => {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium flex items-center gap-1.5">
                         <span>{item.displayName}</span>
+                        {item.unreadCount > 0 ? (
+                          <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                        ) : null}
                         {item.isGroup ? <TeamOutlined className="text-[11px] text-amber-500" /> : null}
                       </div>
                       <div className="text-[11px] text-gray-400">
@@ -5592,8 +5944,7 @@ useEffect(() => {
                 const mentionRoles = (note.mention_role_ids || []).map((id: string) => roleLookup[String(id)] || id);
                 const noteReadReceipts = normalizeReadReceipts(note.metadata);
                 const noteLikeReceipts = normalizeLikeReceipts(note.metadata);
-                const noteId = String(note.id || '');
-                const isUnreadNote = !isMine && !isNotificationRead('notes', 'note', noteId, false);
+                const isUnreadNote = isUnreadNoteRow(note);
                 const likedByMe = Boolean(likeReceiptMapFromBox(note.metadata)[String(profile.id || '').trim()]);
 
                 return (
@@ -5834,11 +6185,12 @@ useEffect(() => {
                   <Badge count={systemNoteStats.unreadCount > 0 ? toPersianNumber(String(systemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
                     <Avatar
                       size={38}
+                      src={systemAvatarSrc}
                       className={`!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200 ${
                         selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''
                       }`}
                     >
-                      <BellOutlined />
+                      {!systemAvatarSrc ? <BellOutlined /> : null}
                     </Avatar>
                   </Badge>
                 </div>
@@ -5869,10 +6221,13 @@ useEffect(() => {
                       {item.isGroup ? <TeamOutlined /> : <LeftOutlined />}
                     </span>
                   </div>
-                  <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
-                    {item.displayName}
-                  </span>
-                </button>
+                    <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
+                      {item.displayName}
+                    </span>
+                    {item.unreadCount > 0 ? (
+                      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                    ) : null}
+                  </button>
               ))}
             </div>
           </div>
@@ -6835,7 +7190,12 @@ useEffect(() => {
                         <RobotOutlined />
                       </Avatar>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{rowTitle}</div>
+                        <div className="truncate text-sm font-medium flex items-center gap-1.5">
+                          <span>{rowTitle}</span>
+                          {unreadCount > 0 ? (
+                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                          ) : null}
+                        </div>
                         <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
                       </div>
                       {unreadCount > 0 ? (
@@ -6853,14 +7213,22 @@ useEffect(() => {
 
         <div className="flex flex-col flex-1 min-h-0 min-w-0 bg-white/82 dark:bg-[#1a1518]">
           <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="flex items-center gap-3">
-              <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
-                <RobotOutlined />
-              </Avatar>
-              <div className="min-w-0">
-                <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{groupTitle}</div>
-                <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">وضعیت: {statusLabel} | پلتفرم: {channelLabel}</div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-3">
+                <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
+                  <RobotOutlined />
+                </Avatar>
+                <div className="min-w-0">
+                  <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{groupTitle}</div>
+                  <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">وضعیت: {statusLabel} | پلتفرم: {channelLabel}</div>
+                </div>
               </div>
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                disabled={!selectedGroup}
+                onClick={() => void handleOpenBotStatusModal()}
+              />
             </div>
             {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id) ? (
               <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -6926,7 +7294,7 @@ useEffect(() => {
                 const botReadReceipts = normalizeReadReceipts(payload);
                 const botMessageId = String(row.id || '').trim();
                 const isPersistedBotMessage = isUuidValue(botMessageId);
-                const isUnreadBotMessage = !outgoing && !isNotificationRead('bot_messages', 'counterparty_bot_message', botMessageId, seenBotMessageIds.has(botMessageId));
+                const isUnreadBotMessage = isUnreadBotRow(row);
                 return (
                   <div key={row.id}>
                     <SharedNoteCard
@@ -7142,6 +7510,9 @@ useEffect(() => {
                     <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
                       {rowTitle}
                     </span>
+                    {unreadCount > 0 ? (
+                      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                    ) : null}
                   </button>
                 );
               })}
@@ -8020,6 +8391,40 @@ useEffect(() => {
           />
         </div>
       ) : null}
+      <CounterpartyBotStatusModal
+        open={botStatusModalOpen}
+        loading={botStatusModalLoading}
+        saving={botStatusModalSaving}
+        watching={botStatusWatching}
+        countdown={botStatusCountdown}
+        channel={botStatusChannel}
+        groupTitle={botStatusGroupTitle}
+        currentStatus={botStatusCurrentStatus}
+        activationCode={botStatusActivationCode}
+        lastInboundAt={botStatusLastInboundAt}
+        lastInboundText={botStatusLastInboundText}
+        allowedUserIds={botStatusAllowedUserIds}
+        allowedRoleIds={botStatusAllowedRoleIds}
+        aiAutoReplyEnabled={botStatusAiAutoReplyEnabled}
+        aiCounterpartyGuide={botStatusAiCounterpartyGuide}
+        userOptions={directoryUsers.map((user: any) => ({
+          label: String(user?.display_name || user?.id || '-').trim(),
+          value: String(user?.id || '').trim(),
+        })).filter((item) => item.value)}
+        roleOptions={directoryRoles.map((role: any) => ({
+          label: String(role?.title || role?.id || '-').trim(),
+          value: String(role?.id || '').trim(),
+        })).filter((item) => item.value)}
+        onClose={handleCloseBotStatusModal}
+        onSave={() => void handleSaveBotStatusModal()}
+        onStartBindWatch={() => void handleStartBotBindWatch()}
+        onCopyActivationCode={() => void handleCopyBotActivationCode()}
+        onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
+        onChangeAllowedUserIds={setBotStatusAllowedUserIds}
+        onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
+        onChangeAiAutoReplyEnabled={setBotStatusAiAutoReplyEnabled}
+        onChangeAiCounterpartyGuide={setBotStatusAiCounterpartyGuide}
+      />
       <Modal
         title={editingGroup ? 'ویرایش گروه' : 'ایجاد گروه جدید'}
         open={groupModalOpen}

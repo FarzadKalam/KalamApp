@@ -49,6 +49,19 @@ export const customerModule: ModuleDefinition = {
     { key: 'last_name', labels: { fa: 'نام خانوادگی', en: 'Last Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.4, isTableColumn: true, logic: { visibleIf: { field: 'person_type', operator: LogicOperator.EQUALS, value: 'real' } } },
     { key: 'legal_name', labels: { fa: 'نام حقوقی', en: 'Legal Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.45, logic: { visibleIf: { field: 'person_type', operator: LogicOperator.EQUALS, value: 'legal' } } },
     { key: 'business_name', labels: { fa: 'نام کسب و کار', en: 'Business' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.5, isTableColumn: true },
+    {
+      key: 'persona_id',
+      labels: { fa: 'پرسونا', en: 'Persona' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 1.51,
+      relationConfig: {
+        targetModule: 'personas',
+        targetField: 'display_name',
+        filter: { persona_type: 'customer' },
+      },
+      isTableColumn: true,
+    },
 
     { key: 'system_code', labels: { fa: 'کد اشتراک', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, hideInCreateForm: true, isTableColumn: true },
     { key: 'legacy_contact_code', labels: { fa: 'کد سیستم قبلی', en: 'Legacy Contact Code' }, type: FieldType.TEXT, blockId: 'basic_info', order: 4.46, isTableColumn: false },

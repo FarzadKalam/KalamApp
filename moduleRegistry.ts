@@ -17,8 +17,10 @@ import { calculationFormulasModule } from './modules/calculationFormulasConfig';
 import { productionGroupOrdersModule } from './modules/productionGroupOrdersConfig';
 import { projectsModule } from './modules/projectsConfig';
 import { marketingLeadsModule } from './modules/marketingLeadsConfig';
+import { personasModule } from './modules/personasConfig';
 import { processTemplatesModule } from './modules/processTemplatesConfig';
 import { processRunsModule } from './modules/processRunsConfig';
+import { instructionsModule } from './modules/instructionsConfig';
 import { fiscalYearsConfig } from './modules/fiscalYearsConfig';
 import { chartOfAccountsConfig } from './modules/chartOfAccountsConfig';
 import { journalEntriesConfig } from './modules/journalEntriesConfig';
@@ -51,6 +53,8 @@ import { employeeContractsConfig } from './modules/employeeContractsConfig';
 import { employeePenaltyRequestsModule } from './modules/employeePenaltyRequestsConfig';
 import { recruitmentApplicantsConfig } from './modules/recruitmentApplicantsConfig';
 import { surveysModule } from './modules/surveysConfig';
+import { saasOrgsConfig } from './modules/saasOrgsConfig';
+import { saasDemoRequestsConfig } from './modules/saasDemoRequestsConfig';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
 import { supportsGlobalAssignee } from './utils/assigneeSupport';
 import { getAssigneeLabel } from './utils/assigneeLabel';
@@ -160,6 +164,8 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   purchase_invoices: purchaseInvoicesConfig,
   projects: projectsModule,
   marketing_leads: marketingLeadsModule,
+  personas: personasModule,
+  instructions: instructionsModule,
   process_templates: processTemplatesModule,
   process_runs: processRunsModule,
   tasks: tasksModule,
@@ -196,6 +202,8 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   employee_contracts: employeeContractsConfig,
   recruitment_applicants: recruitmentApplicantsConfig,
   surveys: surveysModule,
+  saas_orgs: saasOrgsConfig,
+  saas_demo_requests: saasDemoRequestsConfig,
 };
 
 export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(

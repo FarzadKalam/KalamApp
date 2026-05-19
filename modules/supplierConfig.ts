@@ -48,6 +48,19 @@ export const supplierModule: ModuleDefinition = {
       isTableColumn: true,
     },
     { key: 'mobile_1', labels: { fa: 'موبایل تماس', en: 'Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 6, isTableColumn: true },
+    {
+      key: 'persona_id',
+      labels: { fa: 'پرسونا', en: 'Persona' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 6.1,
+      relationConfig: {
+        targetModule: 'personas',
+        targetField: 'display_name',
+        filter: { persona_type: 'supplier' },
+      },
+      isTableColumn: true,
+    },
 
     { key: 'prefix', labels: { fa: 'پیشوند', en: 'Prefix' }, type: FieldType.SELECT, blockId: 'basic_info', options: [{ label: 'آقای', value: 'آقای' }, { label: 'خانم', value: 'خانم' }] },
     { key: 'first_name', labels: { fa: 'نام رابط', en: 'Contact First Name' }, type: FieldType.TEXT, blockId: 'basic_info' },
@@ -77,7 +90,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'supply_count', labels: { fa: 'تعداد فاکتور خرید', en: 'Supply Count' }, type: FieldType.NUMBER, blockId: 'financial_info', readonly: true },
     { key: 'total_paid', labels: { fa: 'جمع پرداختی‌ها', en: 'Total Paid' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true },
   
-    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.1, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.2, nature: FieldNature.STANDARD, isTableColumn: true },
 ],
   blocks: [
     {

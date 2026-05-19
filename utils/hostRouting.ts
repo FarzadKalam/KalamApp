@@ -14,6 +14,11 @@ export const isSaasAppHost = (hostname = getCurrentHostname()) => {
   return normalizeHostname(hostname) === "app.tazesystem.ir";
 };
 
+export const isLocalHost = (hostname = getCurrentHostname()) => {
+  const normalized = normalizeHostname(hostname);
+  return normalized === "localhost" || normalized === "127.0.0.1";
+};
+
 export const isTenantHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
   if (!normalized.endsWith(".tazesystem.ir")) return false;

@@ -41,6 +41,7 @@ import {
 } from './printPagination';
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { getCachedAuthUser } from '../sessionCache';
+import { loadScopedCompanySettings } from '../companySettings';
 import {
   canViewPrintTemplateFieldPath,
   filterSystemTemplateFieldOptions,
@@ -2719,7 +2720,7 @@ export const usePrintManager = ({
     let isMounted = true;
     const loadDependencies = async () => {
       try {
-        const companyReq = supabase.from('company_settings').select('*').limit(1).maybeSingle();
+        const companyReq = loadScopedCompanySettings(supabase);
         const filesCountReq =
           moduleId && data?.id
             ? (async () => {

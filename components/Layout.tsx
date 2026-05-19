@@ -475,6 +475,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'خرید و فروش',
         children: [
           { key: '/marketing_leads', label: 'بازاریابی' },
+          { key: '/personas', label: 'پرسونا', disabled: !canViewModule('personas') },
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
           { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
@@ -557,6 +558,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
           { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
+          { key: '/instructions', label: 'دستورالعمل‌ها', disabled: !canViewModule('instructions') },
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'مدیریت فایل‌ها' },
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
@@ -568,8 +570,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'تازه سیستم',
         children: [
           { key: '/taze-system', label: 'داشبورد SaaS' },
-          { key: '/taze-system/orgs', label: 'سازمان‌ها' },
-          { key: '/taze-system/requests', label: 'درخواست‌های دمو' },
+          { key: '/saas_orgs', label: 'سازمان‌ها' },
+          { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
         ],
       }] : []),
@@ -599,8 +601,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/settings':
           return canViewSettingsRoot;
         case '/taze-system':
-        case '/taze-system/orgs':
-        case '/taze-system/requests':
+        case '/saas_orgs':
+        case '/saas_demo_requests':
         case '/taze-system/plans':
           return canViewSaasAdmin;
         case '/accounting/account-review':

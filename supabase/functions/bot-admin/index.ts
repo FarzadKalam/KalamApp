@@ -87,6 +87,13 @@ const normalizeBaseUrl = (value: string, channel: BotChannel) => {
   return `https://${raw.replace(/\/+$/, '')}`;
 };
 
+const normalizeGenericBaseUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
+  return `https://${raw.replace(/\/+$/, '')}`;
+};
+
 const normalizeRubikaSettings = (settings: Record<string, any> | null | undefined) => ({
   ...(settings && typeof settings === 'object' ? settings : {}),
   api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
@@ -126,7 +133,7 @@ const pickWebhookPublicBase = (
     Deno.env.get('PUBLIC_API_BASE_URL')
   );
   if (explicitBase) {
-    return forceHttpsIfPublic(normalizeBaseUrl(explicitBase, 'rubika'));
+    return forceHttpsIfPublic(normalizeGenericBaseUrl(explicitBase));
   }
 
   const forwardedProto = pick(headers?.get('x-forwarded-proto'), headers?.get('x-forwarded-protocol'));
@@ -197,7 +204,7 @@ const pickPublicApiBaseUrl = (
     Deno.env.get('VITE_SUPABASE_URL'),
   ];
   for (const candidate of candidates) {
-    const normalized = normalizeBaseUrl(String(candidate || '').trim(), 'rubika');
+    const normalized = normalizeGenericBaseUrl(String(candidate || '').trim());
     if (normalized && isPublicHost(normalized)) return normalized;
   }
 

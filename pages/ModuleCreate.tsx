@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartForm from "../components/SmartForm";
-import { Result, Spin } from "antd";
+import { App, Result, Spin } from "antd";
 import { supabase } from "../supabaseClient";
 import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from "../utils/processTaskCustomFields";
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY } from "../utils/processTaskStatusOptions";
@@ -19,6 +19,8 @@ import { syncRecordTags } from "../utils/recordTags";
 import { copyProcessTemplateStagesRelations, copyProductionOrderRelations } from "../utils/recordCopy";
 import { normalizeOperationalDocumentTotals } from "../utils/operationalDocumentTotals";
 import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolicy";
+import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIONS_MODULE_ID, normalizeInstructionIdList } from "../utils/instructionSupport";
+import { syncProcessTemplateStageInstructionLinks } from "../utils/processTemplateStageInstructions";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -46,6 +48,9 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
       ),
       [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
         stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
+      ),
+      instruction_ids: normalizeInstructionIdList(
+        stage?.instruction_ids || stage?.metadata?.instruction_ids
       ),
       weight: Number(stage?.weight || stage?.metadata?.weight || 0),
       duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
@@ -106,15 +111,20 @@ const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) =
       if (insertError) throw insertError;
     }
   }
+
+  await syncProcessTemplateStageInstructionLinks(supabase, templateId, nextStages);
 };
 
 export const ModuleCreate = () => {
   const { moduleId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const moduleConfig = moduleId ? MODULES[moduleId] : null;
+  const { message: messageApi } = App.useApp();
+  const baseModuleConfig = moduleId ? MODULES[moduleId] : null;
   const [permissionLoading, setPermissionLoading] = useState(true);
   const [canCreate, setCanCreate] = useState(true);
+  const [instructionUsers, setInstructionUsers] = useState<any[]>([]);
+  const [instructionRoles, setInstructionRoles] = useState<any[]>([]);
   const initialValuesFromState = (location.state as any)?.initialValues || {};
   const copySource = (location.state as any)?.copySource as
     | { sourceRecordId?: string; copyRelations?: boolean }
@@ -167,6 +177,46 @@ export const ModuleCreate = () => {
     };
   }, [moduleId]);
 
+  useEffect(() => {
+    if (moduleId !== INSTRUCTIONS_MODULE_ID) return;
+    let active = true;
+    const loadInstructionActors = async () => {
+      try {
+        const [usersRes, rolesRes] = await Promise.all([
+          supabase.from('profiles').select('id, full_name, email, mobile_1').limit(500),
+          supabase.from('org_roles').select('id, title').limit(300),
+        ]);
+        if (!active) return;
+        setInstructionUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+        setInstructionRoles(Array.isArray(rolesRes.data) ? rolesRes.data : []);
+      } catch {
+        if (!active) return;
+        setInstructionUsers([]);
+        setInstructionRoles([]);
+      }
+    };
+    void loadInstructionActors();
+    return () => {
+      active = false;
+    };
+  }, [moduleId]);
+
+  const moduleConfig = useMemo(() => {
+    if (!baseModuleConfig) return null;
+    if (moduleId !== INSTRUCTIONS_MODULE_ID) return baseModuleConfig;
+    return buildInstructionModuleConfig(baseModuleConfig, {
+      moduleOptions: buildInstructionModuleOptions(),
+      userOptions: instructionUsers.map((user: any) => ({
+        value: String(user?.id || ''),
+        label: String(user?.full_name || user?.email || user?.mobile_1 || user?.id || '').trim() || '-',
+      })).filter((option: any) => option.value),
+      roleOptions: instructionRoles.map((role: any) => ({
+        value: String(role?.id || ''),
+        label: String(role?.title || role?.id || '').trim() || '-',
+      })).filter((option: any) => option.value),
+    });
+  }, [baseModuleConfig, instructionRoles, instructionUsers, moduleId]);
+
   if (!moduleConfig) {
     return <Result status="404" title="ماژول یافت نشد" />;
   }
@@ -200,6 +250,22 @@ export const ModuleCreate = () => {
           onCancel={() => navigate(-1)}
           onSave={async (values, meta) => {
             try {
+              if (moduleConfig.formAdapter?.save) {
+                const result = await moduleConfig.formAdapter.save({
+                  mode: "create",
+                  values,
+                  currentValues: initialValuesFromState || {},
+                });
+                const nextId = String(result?.id || "").trim();
+                messageApi.success("ثبت شد");
+                if (nextId) {
+                  navigate(`/${moduleId}/${nextId}`);
+                  return;
+                }
+                navigate(`/${moduleId}`);
+                return;
+              }
+
               const selectedTags = Array.isArray(meta?.selectedTags) ? meta.selectedTags : [];
               const authUser = await getCachedAuthUser(supabase);
               const userId = authUser?.id || null;
@@ -403,4 +469,3 @@ export const ModuleCreate = () => {
     </div>
   );
 };
-
