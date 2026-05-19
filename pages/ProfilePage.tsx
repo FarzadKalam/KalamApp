@@ -18,7 +18,7 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { profilesModule } from '../modules/profilesConfig'; // کانفیگ جدید را ایمپورت کنید
 import { FieldType, ModuleField } from '../types';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
-import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate, type PhoneLoginCandidateCheck } from '../utils/phoneAuth';
+import { assertPhoneAvailableForOrg, getPhoneOtpStatusMeta, getPhoneOwnershipErrorMessage, lookupPhoneLoginCandidate, lookupPhoneSignupInvite, type PhoneLoginCandidateCheck } from '../utils/phoneAuth';
 import { getOtpErrorMessage, normalizeOtpToken, verifyPhoneChangeOtp } from '../utils/otpAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
@@ -504,9 +504,8 @@ const ProfilePage: React.FC = () => {
                     throw new Error('شماره موبایل معتبر نیست.');
                 }
                 const existingCandidate = await lookupPhoneLoginCandidate(normalizedPhone);
-                if (existingCandidate?.exists_in_profiles) {
-                    throw new Error('برای این شماره موبایل قبلا کاربر ثبت شده است.');
-                }
+                const existingInvite = await lookupPhoneSignupInvite(normalizedPhone);
+                assertPhoneAvailableForOrg(existingCandidate, existingInvite, currentOrgId, { allowSameOrgPendingInvite: true });
 
                 const invitePayload = {
                     org_id: currentOrgId,
@@ -518,7 +517,7 @@ const ProfilePage: React.FC = () => {
                     is_active: values.is_active !== false,
                 };
 
-                const { data: existingInvite, error: inviteLookupError } = await supabase
+                const { data: existingInviteRow, error: inviteLookupError } = await supabase
                     .from('phone_signup_invites')
                     .select('id')
                     .eq('phone_e164', normalizedPhone)
@@ -527,11 +526,11 @@ const ProfilePage: React.FC = () => {
 
                 if (inviteLookupError) throw inviteLookupError;
 
-                const { error } = existingInvite?.id
+                const { error } = existingInviteRow?.id
                     ? await supabase
                         .from('phone_signup_invites')
                         .update(invitePayload)
-                        .eq('id', existingInvite.id)
+                        .eq('id', existingInviteRow.id)
                     : await supabase
                         .from('phone_signup_invites')
                         .insert([invitePayload]);
@@ -544,7 +543,8 @@ const ProfilePage: React.FC = () => {
             form.resetFields();
             setAvatarUrl(null);
         } catch (err: any) {
-            message.error(toFaErrorMessage(err, 'ذخیره پروفایل ناموفق بود.'));
+            const ownershipMessage = getPhoneOwnershipErrorMessage(err, '');
+            message.error(ownershipMessage || toFaErrorMessage(err, 'ذخیره پروفایل ناموفق بود.'));
         } finally {
             setSubmitting(false);
         }

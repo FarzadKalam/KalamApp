@@ -12,7 +12,8 @@ import {
 import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } from "./currency";
 import { getCachedAuthUser } from "./sessionCache";
 import { loadScopedCompanySettings } from "./companySettings";
-import { isLocalHost, isTazeSystemFamilyHost } from "./hostRouting";
+import { loadScopedIntegrationSettings } from "./integrationSettings";
+import { isLocalHost, isSharedAppHost, isTenantHost, isTazeSystemFamilyHost } from "./hostRouting";
 
 export const BRANDING_CACHE_KEY = "erp:branding-cache";
 
@@ -26,6 +27,22 @@ type RuntimeBrandingResult = {
 };
 
 const RUNTIME_BRANDING_TTL_MS = 5 * 60_000;
+
+const getCurrentHostname = () =>
+  typeof window !== "undefined"
+    ? String(window.location.hostname || "").trim().toLowerCase()
+    : "";
+
+const shouldUseCachedBranding = (hostname = getCurrentHostname()) =>
+  Boolean(
+    hostname && (
+      isTenantHost(hostname)
+      || (!isLocalHost(hostname) && !isTazeSystemFamilyHost(hostname))
+    )
+  );
+
+const getBrandingCacheStorageKey = (hostname = getCurrentHostname()) =>
+  `${BRANDING_CACHE_KEY}:${hostname || "unknown-host"}`;
 
 let runtimeBrandingPromise: Promise<RuntimeBrandingResult> | null = null;
 let runtimeBrandingCache: {
@@ -80,8 +97,10 @@ const buildRuntimeBranding = (
 
 export const readCachedBranding = (): BrandingConfig | null => {
   if (typeof window === "undefined") return null;
+  const hostname = getCurrentHostname();
+  if (!shouldUseCachedBranding(hostname)) return null;
   try {
-    const raw = window.localStorage.getItem(BRANDING_CACHE_KEY);
+    const raw = window.localStorage.getItem(getBrandingCacheStorageKey(hostname));
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
@@ -168,7 +187,10 @@ export const applyBrandingRuntime = (branding: BrandingConfig) => {
   setRuntimeAttribute(BRAND_LOGO_ATTRIBUTE, branding.logoUrl);
   setRuntimeAttribute(BRAND_ICON_ATTRIBUTE, branding.iconUrl);
   applyFavicon(branding.iconUrl);
-  window.localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify(branding));
+  const hostname = getCurrentHostname();
+  if (shouldUseCachedBranding(hostname)) {
+    window.localStorage.setItem(getBrandingCacheStorageKey(hostname), JSON.stringify(branding));
+  }
 };
 
 const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
@@ -190,17 +212,15 @@ const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
 const loadAuthenticatedBranding = async (): Promise<RuntimeBrandingResult> => {
   const [companyResult, themeResult] = await Promise.all([
     loadScopedCompanySettings(supabase as any),
-    supabase
-      .from("integration_settings")
-      .select("id, settings")
-      .eq("connection_type", BRANDING_INTEGRATION_CONNECTION_TYPE)
-      .eq("provider", BRANDING_INTEGRATION_PROVIDER)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    loadScopedIntegrationSettings(supabase as any, {
+      connectionType: BRANDING_INTEGRATION_CONNECTION_TYPE,
+      provider: BRANDING_INTEGRATION_PROVIDER,
+      columns: "id, settings",
+    }),
   ]);
 
-  return buildRuntimeBranding(companyResult.data, themeResult.data?.settings);
+  const themeRow = themeResult.data as Record<string, any> | null | undefined;
+  return buildRuntimeBranding(companyResult.data, themeRow?.settings);
 };
 
 export const clearRuntimeBrandingCache = () => {
@@ -223,25 +243,26 @@ export const loadRuntimeBranding = async (
   }
 
   const pending = (async () => {
-    const hostname =
-      typeof window !== "undefined"
-        ? String(window.location.hostname || "").trim().toLowerCase()
-        : "";
+    const hostname = getCurrentHostname();
     const authUser = await getCachedAuthUser(supabase).catch(() => null);
-    const preferAuthenticatedBranding =
-      Boolean(authUser?.id) && (isLocalHost(hostname) || !isTazeSystemFamilyHost(hostname));
+    const sharedHost = isSharedAppHost(hostname);
+    const allowPublicBranding =
+      !isLocalHost(hostname) && (sharedHost || isTenantHost(hostname) || !isTazeSystemFamilyHost(hostname));
+
+    if (authUser?.id && !sharedHost) {
+      return await loadAuthenticatedBranding();
+    }
 
     try {
-      if (preferAuthenticatedBranding) {
-        return await loadAuthenticatedBranding();
+      if (allowPublicBranding) {
+        return await loadPublicBranding();
       }
-      return await loadPublicBranding();
+      return buildRuntimeBranding();
     } catch (publicError) {
-      try {
+      if (authUser?.id) {
         return await loadAuthenticatedBranding();
-      } catch (authError) {
-        throw authError || publicError;
       }
+      throw publicError;
     }
   })();
 

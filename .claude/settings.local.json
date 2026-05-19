@@ -28,7 +28,12 @@
       "Bash(grep -rn \"subscription_status\\\\|plan_code\\\\|trial_ends_at\\\\|is_trial\" d:/Kalamapp/database_v1_phase1*.sql)",
       "Bash(xargs ls:*)",
       "Bash(sort -k9)",
-      "Bash(grep -l \"payroll_slips\\\\|payroll_calculation\" /d/Kalamapp/database_v1_phase*.sql)"
+      "Bash(grep -l \"payroll_slips\\\\|payroll_calculation\" /d/Kalamapp/database_v1_phase*.sql)",
+      "Bash(grep -l \"p_hostname\" d:/Kalamapp/database*.sql)",
+      "Bash(grep -r \"resolve_saas_org_context\" d:/Kalamapp/database*.sql)",
+      "Bash(grep -l \"resolve_saas_org_context\" d:/Kalamapp/database*.sql)",
+      "Bash(grep -n \"from\\('personas'\\)\\\\|from\\('instructions'\\)\" d:\\\\\\\\Kalamapp\\\\\\\\supabase\\\\\\\\functions\\\\\\\\bot-admin\\\\\\\\index.ts)",
+      "Bash(grep -E \"\\\\.\\(tsx|ts|jsx|js\\)$\")"
     ]
   }
 }

@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient';
+import { listScopedIntegrationSettings } from './integrationSettings';
 
 export type IntegrationConnectionType =
   | 'sms'
@@ -104,15 +105,13 @@ export const getActiveIntegrationSettings = async (
     ? LEGACY_CONNECTION_TYPE_MAP[normalizedChannel]
     : [connectionType];
 
-  const { data, error } = await supabase
-    .from('integration_settings')
-    .select('*')
-    .in('connection_type', connectionTypes)
-    .eq('is_active', true)
-    .limit(20);
+  const { data, error } = await listScopedIntegrationSettings(supabase as any, {
+    connectionTypes,
+    isActive: true,
+  });
 
   if (error) throw error;
-  return pickPreferredIntegrationRecord((data || []) as IntegrationSettingsRecord[], connectionType);
+  return pickPreferredIntegrationRecord(((data || []) as unknown) as IntegrationSettingsRecord[], connectionType);
 };
 
 export const getActiveChannelSettings = async (
@@ -122,16 +121,16 @@ export const getActiveChannelSettings = async (
 };
 
 export const listActiveNotificationBotOptions = async (): Promise<Array<{ label: string; value: string }>> => {
-  const { data, error } = await supabase
-    .from('integration_settings')
-    .select('connection_type, provider, settings, is_active, created_at, updated_at')
-    .in('connection_type', ['telegram_bot', 'telegram', 'bale_bot', 'bale', 'rubika_bot', 'rubika'])
-    .eq('is_active', true);
+  const { data, error } = await listScopedIntegrationSettings(supabase as any, {
+    connectionTypes: ['telegram_bot', 'telegram', 'bale_bot', 'bale', 'rubika_bot', 'rubika'],
+    columns: 'connection_type, provider, settings, is_active, created_at, updated_at',
+    isActive: true,
+  });
 
   if (error) throw error;
 
   const bestByChannel = new Map<NotificationBotChannel, IntegrationSettingsRecord>();
-  ((data || []) as IntegrationSettingsRecord[]).forEach((row) => {
+  (((data || []) as unknown) as IntegrationSettingsRecord[]).forEach((row) => {
     const channel = normalizeBotConnectionType(row?.connection_type);
     if (!channel) return;
     const next = pickPreferredIntegrationRecord(
@@ -155,16 +154,16 @@ export const listActiveNotificationBotOptions = async (): Promise<Array<{ label:
 };
 
 export const listActiveNotificationBots = async (): Promise<ActiveNotificationBotEntry[]> => {
-  const { data, error } = await supabase
-    .from('integration_settings')
-    .select('connection_type, settings, is_active, created_at, updated_at')
-    .in('connection_type', ['telegram_bot', 'telegram', 'bale_bot', 'bale', 'rubika_bot', 'rubika'])
-    .eq('is_active', true);
+  const { data, error } = await listScopedIntegrationSettings(supabase as any, {
+    connectionTypes: ['telegram_bot', 'telegram', 'bale_bot', 'bale', 'rubika_bot', 'rubika'],
+    columns: 'connection_type, settings, is_active, created_at, updated_at',
+    isActive: true,
+  });
 
   if (error) throw error;
 
   const bestByChannel = new Map<NotificationBotChannel, IntegrationSettingsRecord>();
-  ((data || []) as IntegrationSettingsRecord[]).forEach((row) => {
+  (((data || []) as unknown) as IntegrationSettingsRecord[]).forEach((row) => {
     const channel = normalizeBotConnectionType(row?.connection_type);
     if (!channel) return;
     const next = pickPreferredIntegrationRecord(

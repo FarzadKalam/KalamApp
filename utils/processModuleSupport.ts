@@ -10,6 +10,7 @@ export const PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS = new Set([
   'process_templates',
   'process_runs',
   'tasks',
+  'instructions',
 ]);
 
 const PROCESS_DRAFT_FIELD_KEYS = new Set([

@@ -15,9 +15,15 @@ type DemoDataAdminStatus = {
   warning?: string | null;
 };
 
-const invokeDemoDataAdmin = async <T = DemoDataAdminStatus>(action: DemoDataAdminAction) => {
+const invokeDemoDataAdmin = async <T = DemoDataAdminStatus>(
+  action: DemoDataAdminAction,
+  options?: { orgId?: string | null },
+) => {
   const { data, error } = await supabase.functions.invoke("demo-data-admin", {
-    body: { action },
+    body: {
+      action,
+      org_id: options?.orgId || null,
+    },
   });
   if (error) throw error;
   if (data?.success === false) {
@@ -26,7 +32,8 @@ const invokeDemoDataAdmin = async <T = DemoDataAdminStatus>(action: DemoDataAdmi
   return (data || {}) as T;
 };
 
-export const seedCurrentOrgDemoData = async () => invokeDemoDataAdmin<DemoDataAdminStatus>("seed_org_demo_data");
+export const seedCurrentOrgDemoData = async (options?: { orgId?: string | null }) =>
+  invokeDemoDataAdmin<DemoDataAdminStatus>("seed_org_demo_data", options);
 
 export const clearCurrentOrgDemoData = async () => invokeDemoDataAdmin<DemoDataAdminStatus>("clear_org_demo_data");
 

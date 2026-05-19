@@ -31,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { signOutLocalSession } from '../utils/authSession';
 import { MODULES } from '../moduleRegistry';
 import NotificationsPopover from './NotificationsPopover';
 import GlobalTaskProcessModalHost from './tasks/GlobalTaskProcessModalHost';
@@ -303,23 +304,33 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }
     let cancelled = false;
 
-    Promise.all([
-      getCurrentOrgDemoSeedStatus().catch(() => null),
-      getOrgSaasStatus().catch(() => null),
-    ]).then(([seedRes, saasRes]) => {
+    (async () => {
+      const saasRes = await getOrgSaasStatus().catch(() => null);
       if (cancelled) return;
-      setIsDemoOrg(Boolean(seedRes?.is_demo ?? saasRes?.is_demo));
-      setHasDemoBatch(Boolean(seedRes?.has_seeded_batch));
+
+      const nextIsDemoOrg = Boolean(saasRes?.is_demo);
+      setIsDemoOrg(nextIsDemoOrg);
+      setHasDemoBatch(false);
       if (saasRes) {
         setOrgIsReadonly(Boolean(saasRes.is_readonly));
         setOrgTrialEndsAt(saasRes.trial_ends_at ?? null);
         setOrgTrialDaysLeft(resolveTrialDaysLeft(saasRes.trial_ends_at ?? null));
       }
-    });
+
+      if (!nextIsDemoOrg) return;
+
+      const seedRes = await getCurrentOrgDemoSeedStatus().catch(() => null);
+      if (cancelled) return;
+      setHasDemoBatch(Boolean(seedRes?.has_seeded_batch));
+    })();
     return () => { cancelled = true; };
   }, [currentUserProfile?.org_id]);
 
   const handleClearDemoData = useCallback(async () => {
+    if (!isDemoOrg) {
+      messageApi.warning('حذف داده‌های دمو فقط برای سازمان‌های دمو فعال است.');
+      return;
+    }
     setClearingDemoData(true);
     try {
       await clearCurrentOrgDemoData();
@@ -330,7 +341,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     } finally {
       setClearingDemoData(false);
     }
-  }, [messageApi]);
+  }, [isDemoOrg, messageApi]);
 
   const handleRequestRenewal = useCallback(async () => {
     setRenewalRequesting(true);
@@ -431,8 +442,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       okType: 'danger',
       onOk: async () => {
         try {
-          const { error } = await supabase.auth.signOut();
-          if (error) throw error;
+          await signOutLocalSession();
           navigate('/login');
           messageApi.success('با موفقیت خارج شدید');
         } catch (error) {

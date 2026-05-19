@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getResolvedCurrentOrgId, loadScopedCompanySettings } from './companySettings';
+import { loadScopedIntegrationSettings } from './integrationSettings';
 
 type CustomerRank = 'normal' | 'silver' | 'gold' | 'vip';
 
@@ -181,11 +182,10 @@ const isMissingCustomerLevelingColumnError = (error: any) => {
 };
 
 const loadIntegrationLevelingConfig = async (supabase: SupabaseClient): Promise<CustomerLevelingConfig | null> => {
-  const { data, error } = await supabase
-    .from('integration_settings')
-    .select('settings')
-    .eq('connection_type', 'site')
-    .maybeSingle();
+  const { data, error } = await loadScopedIntegrationSettings(supabase, {
+    connectionType: 'site',
+    columns: 'settings',
+  });
 
   if (error) {
     const raw = String(error?.message || error?.details || '');
@@ -193,7 +193,8 @@ const loadIntegrationLevelingConfig = async (supabase: SupabaseClient): Promise<
     throw error;
   }
 
-  const settings = data?.settings && typeof data.settings === 'object' ? data.settings : {};
+  const row = data as Record<string, any> | null | undefined;
+  const settings = row?.settings && typeof row.settings === 'object' ? row.settings : {};
   const config = (settings as any)?.[LEVELING_INTEGRATION_KEY];
   if (!config) return null;
   return normalizeLevelingConfig(config);
@@ -201,24 +202,26 @@ const loadIntegrationLevelingConfig = async (supabase: SupabaseClient): Promise<
 
 const saveIntegrationLevelingConfig = async (supabase: SupabaseClient, config: CustomerLevelingConfig) => {
   const normalized = normalizeLevelingConfig(config);
-  const { data: existing } = await supabase
-    .from('integration_settings')
-    .select('id, provider, is_active, settings')
-    .eq('connection_type', 'site')
-    .maybeSingle();
+  const currentOrgId = await getResolvedCurrentOrgId(supabase);
+  const { data: existing } = await loadScopedIntegrationSettings(supabase, {
+    connectionType: 'site',
+    columns: 'id, provider, is_active, settings',
+  });
+  const existingRow = existing as Record<string, any> | null | undefined;
 
   const mergedSettings = {
-    ...(existing?.settings && typeof existing.settings === 'object' ? existing.settings : {}),
+    ...(existingRow?.settings && typeof existingRow.settings === 'object' ? existingRow.settings : {}),
     [LEVELING_INTEGRATION_KEY]: normalized,
   };
 
   const payload: any = {
+    org_id: currentOrgId,
     connection_type: 'site',
-    provider: existing?.provider || 'rest_api',
-    is_active: existing?.is_active ?? true,
+    provider: existingRow?.provider || 'rest_api',
+    is_active: existingRow?.is_active ?? true,
     settings: mergedSettings,
   };
-  if (existing?.id) payload.id = existing.id;
+  if (existingRow?.id) payload.id = existingRow.id;
 
   const { error } = await supabase
     .from('integration_settings')

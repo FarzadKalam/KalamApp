@@ -10,7 +10,11 @@ import {
 import { supabase } from '../supabaseClient';
 import { seedCurrentOrgDemoData } from '../utils/demoDataAdmin';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
+import { signOutLocalSession } from '../utils/authSession';
+import { getInternalAppUrl } from '../utils/hostRouting';
+import { assertDemoOtpRequestAllowed, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
 import {
+  getDemoProvisionErrorMessage,
   getOwnerSetupErrorMessage,
   isBrandPaletteKey,
   isValidOwnerEmail,
@@ -28,9 +32,18 @@ type SlugState = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
 type ProvisionResult = {
   success: boolean;
+  org_id?: string;
   slug: string;
   redirect_host: string;
   trial_days: number;
+};
+
+type WizardAuthenticatedProfile = {
+  id?: string;
+  org_id?: string | null;
+  role_id?: string | null;
+  role?: string | null;
+  is_active?: boolean | null;
 };
 
 // ─── Constants ───────────────────────────────────────
@@ -325,6 +338,9 @@ const SaasPortalPage: React.FC = () => {
     setError('');
     setLoading(true);
     try {
+      const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
+      const invite = await lookupPhoneSignupInvite(normalizedPhone);
+      assertDemoOtpRequestAllowed(candidate, invite);
       await requestSmsOtp(supabase.auth, normalizedPhone);
       setStep('otp');
       setOtpCooldown(OTP_RESEND_SECONDS);
@@ -335,6 +351,33 @@ const SaasPortalPage: React.FC = () => {
     }
   };
 
+  const resolveAuthenticatedDemoSessionState = useCallback(async () => {
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+    if (userError || !userData?.user?.id) {
+      throw new Error('__otp_phone_not_allowed__');
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, org_id, role_id, role, is_active')
+      .eq('id', userData.user.id)
+      .maybeSingle();
+
+    if (profileError) throw profileError;
+    const currentProfile = (profile || null) as WizardAuthenticatedProfile | null;
+    if (currentProfile?.is_active === false) {
+      throw new Error('__otp_user_inactive__');
+    }
+
+    const { data: ctx, error: ctxError } = await supabase.rpc('get_current_saas_context');
+    if (ctxError) throw ctxError;
+
+    return {
+      profile: currentProfile,
+      saasContext: ctx as any,
+    };
+  }, []);
+
   const handleVerifyOtp = async () => {
     const token = normalizeOtpToken(otpCode);
     if (token.length < 4) { setError('کد تایید را وارد کنید.'); return; }
@@ -342,19 +385,32 @@ const SaasPortalPage: React.FC = () => {
     setLoading(true);
     try {
       await verifySmsOtp(supabase.auth, normalizedPhone as string, token);
+      const { profile, saasContext } = await resolveAuthenticatedDemoSessionState();
 
-      // بررسی آیا کاربر قبلاً سازمان دارد
-      const { data: ctx } = await supabase.rpc('get_current_saas_context');
-      if (ctx?.org_id && ctx?.slug) {
-        // کاربر قبلاً دمو گرفته — ریدایرکت به سازمانش
+      if (saasContext?.org_id && saasContext?.slug) {
         clearWizardState();
-        window.location.href = `https://${ctx.slug}${TAZE_SUFFIX}`;
+        window.location.href = `https://${saasContext.slug}${TAZE_SUFFIX}`;
+        return;
+      }
+
+      if (profile?.org_id) {
+        clearWizardState();
+        window.location.href = getInternalAppUrl();
         return;
       }
 
       setStep('info');
     } catch (err: any) {
-      setError(getOtpErrorMessage(err, 'خطا در تایید کد'));
+      const mappedError = getOtpErrorMessage(err, 'خطا در تایید کد');
+      const raw = String(err?.message || '');
+      if (
+        raw.includes('__otp_user_inactive__')
+        || raw.includes('__demo_phone_belongs_to_existing_org__')
+        || raw.includes('__demo_phone_existing_auth_user__')
+      ) {
+        await signOutLocalSession();
+      }
+      setError(mappedError);
     } finally {
       setLoading(false);
     }
@@ -383,11 +439,14 @@ const SaasPortalPage: React.FC = () => {
           fullName: fullName.trim(),
           email: normalizedEmail,
           password: ownerPassword,
+          skipProfileUpsert: true,
         },
       });
       if (ownerSetupError) throw ownerSetupError;
       if (ownerSetupData?.success === false) {
-        throw new Error(String(ownerSetupData?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.'));
+        const ownerSetupReason = String(ownerSetupData?.reason_code || '').trim();
+        const ownerSetupMessage = String(ownerSetupData?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.').trim();
+        throw new Error(ownerSetupReason ? `${ownerSetupReason}: ${ownerSetupMessage}` : ownerSetupMessage);
       }
 
       setStep('provisioning');
@@ -408,13 +467,19 @@ const SaasPortalPage: React.FC = () => {
       if (rpcErr) throw rpcErr;
 
       const result = data as ProvisionResult;
-      if (!result?.success) throw new Error('provisioning failed');
+      if (!result?.success) {
+        const resultMessage = String((data as any)?.message || '').trim();
+        const resultStatus = String((data as any)?.status || '').trim();
+        const resultReasonCode = String((data as any)?.failure_code || (data as any)?.reason_code || '').trim();
+        const errorParts = [resultStatus, resultReasonCode, resultMessage || 'provisioning failed'].filter(Boolean);
+        throw new Error(errorParts.join(': '));
+      }
 
       setProvisionResult(result);
       clearWizardState();
 
       try {
-        const seedResult = await seedCurrentOrgDemoData();
+        const seedResult = await seedCurrentOrgDemoData({ orgId: result.org_id || null });
         if (String(seedResult?.warning || '').trim()) {
           setProvisionWarning(String(seedResult.warning).trim());
         }
@@ -446,18 +511,24 @@ const SaasPortalPage: React.FC = () => {
         userMsg = getOwnerSetupErrorMessage(err);
         setStep('info');
         inlineInfoError = true;
-      } else if (msg.includes('slug') || msg.includes('available')) {
-        userMsg = 'این آدرس قبلاً انتخاب شده. آدرس دیگری انتخاب کنید.';
-        setStep('info');
-        inlineInfoError = true;
-      } else if (msg.includes('demo') && msg.includes('limit')) {
-        userMsg = 'شما قبلاً از نسخه دمو استفاده کرده‌اید. برای اطلاعات بیشتر با ما تماس بگیرید.';
-        setStep('error');
-      } else if (msg.includes('marketing_leads') && msg.includes('description')) {
-        userMsg = 'زیرساخت نسخه SaaS روی سرور کامل نیست و migration سازگار با لیدهای بازاریابی باید اجرا شود.';
-        setStep('error');
       } else {
-        setStep('error');
+        userMsg = getDemoProvisionErrorMessage(err, userMsg);
+        if (msg.includes('slug') || msg.includes('available')) {
+          setStep('info');
+          inlineInfoError = true;
+        } else if (
+          msg.includes('needs_admin_review')
+          || msg.includes('profile_already_attached')
+          || msg.includes('profile_exists_without_org')
+        ) {
+          setStep('error');
+        } else if (msg.includes('demo') && msg.includes('limit')) {
+          setStep('error');
+        } else if (msg.includes('marketing_leads') && msg.includes('description')) {
+          setStep('error');
+        } else {
+          setStep('error');
+        }
       }
       if (inlineInfoError) {
         setError(userMsg);

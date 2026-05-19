@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Card, Empty, Spin, Tag } from 'antd';
 import { NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -39,6 +39,7 @@ const PROCESS_RECORD_SCAN_EXCLUDED_MODULE_IDS = new Set([
   'voip_call_reports',
   'petty_funds',
   'surveys',
+  'instructions',
 ]);
 
 const TASK_PROCESS_COLUMNS = [
@@ -233,6 +234,7 @@ const OurProcessesWidget: React.FC = () => {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_LIMIT);
   const [canLoadMore, setCanLoadMore] = useState(false);
   const [canViewWidget, setCanViewWidget] = useState(true);
+  const unavailableProcessModulesRef = useRef<Set<string>>(new Set());
 
   const addItem = useCallback((map: Map<string, ProcessWidgetItem>, item: ProcessWidgetItem) => {
     if (!item.moduleId || !item.recordId || !MODULES[item.moduleId]) return;
@@ -361,6 +363,7 @@ const OurProcessesWidget: React.FC = () => {
       const templateIds = new Set<string>();
 
       await Promise.all(getProcessModuleIds(access).map(async (moduleId) => {
+        if (unavailableProcessModulesRef.current.has(moduleId)) return;
         const module = MODULES[moduleId] as any;
         const result = await runSelectWithCompatibleColumns<any[]>({
           cacheKey: `dashboard:our-processes:records:${moduleId}`,
@@ -372,7 +375,18 @@ const OurProcessesWidget: React.FC = () => {
               .order('created_at', { ascending: false })
               .limit(processRecordLimit),
         });
-        if (result.error) return;
+        if (result.error) {
+          const errorText = String(result.error?.message || result.error?.details || '').toLowerCase();
+          if (
+            String(result.error?.code || '').toUpperCase() === '42P01'
+            || errorText.includes('does not exist')
+            || errorText.includes('relation')
+            || errorText.includes('table')
+          ) {
+            unavailableProcessModulesRef.current.add(moduleId);
+          }
+          return;
+        }
 
         (result.data || []).forEach((record: any) => {
           const recordId = normalizeId(record?.id);

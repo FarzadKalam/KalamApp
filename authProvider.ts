@@ -1,5 +1,6 @@
 import { AuthBindings } from "@refinedev/core";
 import { supabase } from "./supabaseClient";
+import { signOutLocalSession } from "./utils/authSession";
 
 type CachedUserState = {
   user: any | null;
@@ -78,16 +79,7 @@ export const authProvider: AuthBindings = {
   },
   logout: async () => {
     clearCachedUser();
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      return {
-        success: false,
-        error: {
-          name: "LogoutError",
-          message: error.message,
-        },
-      };
-    }
+    await signOutLocalSession();
     return {
       success: true,
       redirectTo: "/login",
@@ -108,7 +100,7 @@ export const authProvider: AuthBindings = {
     }
 
     if (session && expiresAt && expiresAt <= Date.now()) {
-      await supabase.auth.signOut();
+      await signOutLocalSession();
     }
 
     return {

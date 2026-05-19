@@ -23,6 +23,7 @@ type UserAdminBody = {
   avatarUrl?: string | null;
   isActive?: boolean;
   token?: string | null;
+  skipProfileUpsert?: boolean;
 };
 
 const corsHeaders = {
@@ -192,14 +193,23 @@ const fetchRole = async (supabaseUrl: string, serviceRoleKey: string, roleId?: s
   return Array.isArray(rows) ? rows[0] || null : null;
 };
 
-const fetchPendingInviteByPhone = async (supabaseUrl: string, serviceRoleKey: string, phoneE164?: string | null) => {
+const fetchPendingInviteByPhone = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  phoneE164?: string | null,
+  orgId?: string | null,
+) => {
   const normalizedPhone = normalizeIranMobileE164(phoneE164);
   if (!normalizedPhone) return null;
+  const normalizedOrgId = String(orgId || '').trim();
 
   const url = restUrl(supabaseUrl, 'phone_signup_invites');
   url.searchParams.set('phone_e164', `eq.${normalizedPhone}`);
   url.searchParams.set('consumed_at', 'is.null');
   url.searchParams.set('select', 'id,org_id,is_active');
+  if (normalizedOrgId) {
+    url.searchParams.set('org_id', `eq.${normalizedOrgId}`);
+  }
   url.searchParams.set('order', 'created_at.desc');
   url.searchParams.set('limit', '1');
 
@@ -211,6 +221,37 @@ const fetchPendingInviteByPhone = async (supabaseUrl: string, serviceRoleKey: st
     const raw = await response.text();
     throw new Error(raw || 'خطا در خواندن دعوت‌های شماره موبایل');
   }
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows[0] || null : null;
+};
+
+const fetchPendingInviteConflictByPhone = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  phoneE164?: string | null,
+  orgId?: string | null,
+) => {
+  const normalizedPhone = normalizeIranMobileE164(phoneE164);
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedPhone || !normalizedOrgId) return null;
+
+  const url = restUrl(supabaseUrl, 'phone_signup_invites');
+  url.searchParams.set('phone_e164', `eq.${normalizedPhone}`);
+  url.searchParams.set('consumed_at', 'is.null');
+  url.searchParams.set('org_id', `neq.${normalizedOrgId}`);
+  url.searchParams.set('select', 'id,org_id,is_active');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '1');
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(raw || 'خطا در بررسی تعارض دعوت‌های شماره موبایل');
+  }
+
   const rows = await response.json();
   return Array.isArray(rows) ? rows[0] || null : null;
 };
@@ -756,6 +797,7 @@ Deno.serve(async (request) => {
       const fullName = String(body?.fullName || '').trim();
       const email = normalizeEmail(body?.email);
       const password = String(body?.password || '').trim();
+      const skipProfileUpsert = body?.skipProfileUpsert === true;
 
       if (!targetUserId) {
         return json(401, { success: false, message: 'نشست کاربر معتبر نیست.' });
@@ -791,11 +833,13 @@ Deno.serve(async (request) => {
         email_confirm: true,
       });
 
-      const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
-        id: targetUserId,
-        full_name: fullName,
-        email,
-      });
+      const profile = skipProfileUpsert
+        ? await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId)
+        : await upsertProfile(supabaseUrl, serviceRoleKey, {
+          id: targetUserId,
+          full_name: fullName,
+          email,
+        });
 
       return json(200, {
         success: true,
@@ -868,6 +912,27 @@ Deno.serve(async (request) => {
       const resolvedRole = await resolveRoleForOrg(supabaseUrl, serviceRoleKey, roleId, body?.orgId || callerProfile.org_id);
       const targetOrgId = resolvedRole.orgId || callerProfile.org_id || null;
       assertOrgAccess(callerProfile, callerRole, targetOrgId, softwareRole);
+      const pendingInviteConflict = await fetchPendingInviteConflictByPhone(
+        supabaseUrl,
+        serviceRoleKey,
+        normalizedPhone,
+        targetOrgId,
+      );
+      if (pendingInviteConflict?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این شماره در یک سازمان دیگر دعوت فعال وجود دارد و ایجاد کاربر مستقیم برای آن مجاز نیست.',
+          reason_code: 'phone_invite_org_conflict',
+          conflict_invite_id: pendingInviteConflict.id,
+          conflict_org_id: pendingInviteConflict.org_id || null,
+        });
+      }
+      const sameOrgPendingInvite = await fetchPendingInviteByPhone(
+        supabaseUrl,
+        serviceRoleKey,
+        normalizedPhone,
+        targetOrgId,
+      );
 
       const authUser = await createAuthUser(supabaseUrl, serviceRoleKey, {
         email: email || undefined,
@@ -910,9 +975,8 @@ Deno.serve(async (request) => {
         throw new Error('ایجاد پروفایل کاربر نهایی نشد.');
       }
 
-      const pendingInvite = await fetchPendingInviteByPhone(supabaseUrl, serviceRoleKey, normalizedPhone);
-      if (pendingInvite?.id) {
-        await updatePendingInviteAsConsumed(supabaseUrl, serviceRoleKey, pendingInvite.id, createdAuthUserId);
+      if (sameOrgPendingInvite?.id) {
+        await updatePendingInviteAsConsumed(supabaseUrl, serviceRoleKey, sameOrgPendingInvite.id, createdAuthUserId);
       }
 
       return json(200, {
@@ -984,7 +1048,6 @@ Deno.serve(async (request) => {
           conflictProfileId: phoneRepair.conflictProfileId || null,
         });
       }
-
       const resolvedRole = await resolveRoleForOrg(
         supabaseUrl,
         serviceRoleKey,
@@ -993,6 +1056,21 @@ Deno.serve(async (request) => {
       );
       const targetOrgId = resolvedRole.orgId || targetProfile.org_id || callerProfile.org_id || null;
       assertOrgAccess(callerProfile, callerRole, targetOrgId, softwareRole);
+      const pendingInviteConflict = await fetchPendingInviteConflictByPhone(
+        supabaseUrl,
+        serviceRoleKey,
+        normalizedPhone,
+        targetOrgId,
+      );
+      if (pendingInviteConflict?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این شماره در یک سازمان دیگر دعوت فعال وجود دارد و ثبت آن روی این کاربر مجاز نیست.',
+          reason_code: 'phone_invite_org_conflict',
+          conflict_invite_id: pendingInviteConflict.id,
+          conflict_org_id: pendingInviteConflict.org_id || null,
+        });
+      }
 
       const authPayload: Record<string, any> = {
         email: email || undefined,
@@ -1067,6 +1145,21 @@ Deno.serve(async (request) => {
           conflictProfileId: phoneRepair.conflictProfileId || null,
         });
       }
+      const pendingInviteConflict = await fetchPendingInviteConflictByPhone(
+        supabaseUrl,
+        serviceRoleKey,
+        normalizedPhone,
+        targetProfile.org_id,
+      );
+      if (pendingInviteConflict?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این شماره در یک سازمان دیگر دعوت فعال وجود دارد و ارسال کد تایید برای آن امن نیست.',
+          reason_code: 'phone_invite_org_conflict',
+          conflict_invite_id: pendingInviteConflict.id,
+          conflict_org_id: pendingInviteConflict.org_id || null,
+        });
+      }
 
       const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId);
       const currentAuthPhone = normalizeIranMobileE164(authUser?.phone || '');
@@ -1119,6 +1212,21 @@ Deno.serve(async (request) => {
           message: 'این شماره موبایل الان روی یک کاربر دیگر ثبت شده است و تایید آن برای این کاربر ممکن نیست.',
           conflictUserId: phoneRepair.conflictUserId || null,
           conflictProfileId: phoneRepair.conflictProfileId || null,
+        });
+      }
+      const pendingInviteConflict = await fetchPendingInviteConflictByPhone(
+        supabaseUrl,
+        serviceRoleKey,
+        normalizedPhone,
+        targetProfile.org_id,
+      );
+      if (pendingInviteConflict?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این شماره در یک سازمان دیگر دعوت فعال وجود دارد و تایید آن روی این کاربر امن نیست.',
+          reason_code: 'phone_invite_org_conflict',
+          conflict_invite_id: pendingInviteConflict.id,
+          conflict_org_id: pendingInviteConflict.org_id || null,
         });
       }
 

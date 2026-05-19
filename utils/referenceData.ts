@@ -1,6 +1,7 @@
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { fetchSessionBootstrap } from './sessionCache';
+import { runSelectWithCompatibleColumns } from './selectCompat';
 import { getMergedTaskTypeOptions } from './taskMeta';
 
 type DynamicOptionRow = { label: string; value: string };
@@ -42,6 +43,16 @@ const dynamicOptionsPromiseCache = new Map<string, Promise<DynamicOptionRow[]>>(
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
 const RECORD_TAGS_FETCH_CHUNK_SIZE = 25;
+const ASSIGNEE_DIRECTORY_USER_COLUMNS = [
+  'id',
+  'full_name',
+  'first_name',
+  'last_name',
+  'email',
+  'mobile_1',
+  'avatar_url',
+  'role_id',
+] as const;
 
 const formulaOptionsCache: {
   data: DynamicOptionRow[] | null;
@@ -323,15 +334,7 @@ export const fetchAssigneeDirectory = async (
     const snapshot = await fetchSessionBootstrap(supabaseClient, options);
     const orgId = String(snapshot.orgId || '').trim();
 
-    let usersQuery = supabaseClient
-      .from('profiles')
-      .select('id, full_name, email, mobile_1, avatar_url, role_id')
-      .limit(300);
     const preferTreeSchema = assigneeDirectoryCache.supportsRoleTreeSchema !== false;
-
-    if (orgId) {
-      usersQuery = usersQuery.eq('org_id', orgId);
-    }
 
     const buildRoleQuery = (mode: 'org' | 'extra', treeSchema: boolean) => {
       let query = treeSchema
@@ -363,12 +366,26 @@ export const fetchAssigneeDirectory = async (
           .not('role_id', 'is', null)
       : Promise.resolve({ data: [] as any[], error: null });
 
-    const [{ data: users }, orgRolesResult, extraRolesResult, extraRoleIdsResult] = await Promise.all([
-      usersQuery,
+    const [userResult, orgRolesResult, extraRolesResult, extraRoleIdsResult] = await Promise.all([
+      runSelectWithCompatibleColumns<any[]>({
+        cacheKey: orgId ? 'assignee-directory:users:org' : 'assignee-directory:users:global',
+        columns: ASSIGNEE_DIRECTORY_USER_COLUMNS,
+        execute: (selectExpr) => {
+          let query = supabaseClient
+            .from('profiles')
+            .select(selectExpr)
+            .limit(300);
+          if (orgId) {
+            query = query.eq('org_id', orgId);
+          }
+          return query;
+        },
+      }),
       buildRoleQuery('org', preferTreeSchema),
       orgId ? buildRoleQuery('extra', preferTreeSchema) : Promise.resolve({ data: [] as any[], error: null }),
       extraRoleIdsQuery,
     ]);
+    const users = userResult.data || [];
 
     let roles = mergeRoleRows(orgRolesResult?.data || [], extraRolesResult?.data || []);
     const roleTreeMissing =

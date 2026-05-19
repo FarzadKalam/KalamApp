@@ -1,3 +1,5 @@
+import { runSelectWithCompatibleColumns } from './selectCompat';
+
 type SessionBootstrapSnapshot = {
   user: any | null;
   profile: any | null;
@@ -18,6 +20,26 @@ const EMPTY_SNAPSHOT: SessionBootstrapSnapshot = {
   permissions: null,
   loadedAt: 0,
 };
+
+const SESSION_PROFILE_COLUMNS = [
+  'id',
+  'full_name',
+  'avatar_url',
+  'role',
+  'role_id',
+  'org_id',
+  'is_active',
+  'voip_enabled',
+  'voip_operator_code',
+  'voip_extension',
+  'voip_service_id',
+  'voip_dial_mode',
+] as const;
+
+const SESSION_ROLE_COLUMNS = [
+  'permissions',
+  'org_id',
+] as const;
 
 type AuthUserCacheStore = {
   user: any | null;
@@ -136,20 +158,32 @@ export const fetchSessionBootstrap = async (
 
     sessionBootstrapCache.cacheKey = cacheKey;
     const pending = (async () => {
-      const { data: profile } = await supabaseClient
-        .from('profiles')
-        .select('id, full_name, avatar_url, role, role_id, org_id, is_active, voip_enabled, voip_operator_code, voip_extension, voip_service_id, voip_dial_mode')
-        .eq('id', user.id)
-        .maybeSingle();
+      const profileResult = await runSelectWithCompatibleColumns<any | null>({
+        cacheKey: 'session-bootstrap:profile',
+        columns: SESSION_PROFILE_COLUMNS,
+        execute: (selectExpr) =>
+          supabaseClient
+            .from('profiles')
+            .select(selectExpr)
+            .eq('id', user.id)
+            .maybeSingle(),
+      });
+      const profile = profileResult.data || null;
 
       let permissions: Record<string, any> | null = null;
       let resolvedOrgId: string | null = profile?.org_id ? String(profile.org_id) : null;
       if (profile?.role_id) {
-        const { data: role } = await supabaseClient
-          .from('org_roles')
-          .select('permissions, org_id')
-          .eq('id', profile.role_id)
-          .maybeSingle();
+        const roleResult = await runSelectWithCompatibleColumns<any | null>({
+          cacheKey: 'session-bootstrap:role',
+          columns: SESSION_ROLE_COLUMNS,
+          execute: (selectExpr) =>
+            supabaseClient
+              .from('org_roles')
+              .select(selectExpr)
+              .eq('id', profile.role_id)
+              .maybeSingle(),
+        });
+        const role = roleResult.data || null;
         permissions = (role?.permissions || null) as Record<string, any> | null;
         if (!resolvedOrgId && role?.org_id) {
           resolvedOrgId = String(role.org_id);

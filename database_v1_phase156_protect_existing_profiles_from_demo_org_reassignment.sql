@@ -1,142 +1,18 @@
 -- =====================================================
--- KalamApp - Phase 149 SaaS owner setup, branding seed, and host hardening
--- Date: 2026-05-17
--- Type: Additive / non-breaking migration
+-- KalamApp - Phase 156 protect existing profiles from demo org reassignment
+-- Date: 2026-05-19
+-- Type: Corrective migration
 -- Goal:
---   1) Capture owner email + branding choice during self-service onboarding
---   2) Seed tenant company_settings + branding integration on provision
---   3) Mark wildcard tenant hosts as active without per-tenant DNS dependency
---   4) Prevent unknown *.tazesystem.ir hosts from falling back to another org
+--   1) Never reassign an existing profile to a demo org during self-service provisioning
+--   2) Force ambiguous existing profiles into admin review instead of mutation
 -- =====================================================
 
 begin;
 
-alter table public.saas_onboarding_requests
-  add column if not exists owner_email text,
-  add column if not exists industry text,
-  add column if not exists brand_palette_key text;
-
-do $$
-begin
-  alter table public.company_settings
-    drop constraint if exists chk_company_settings_brand_palette_key;
-
-  alter table public.company_settings
-    add constraint chk_company_settings_brand_palette_key
-    check (
-      brand_palette_key in (
-        'executive_indigo',
-        'corporate_blue',
-        'deep_ocean',
-        'ruby_red',
-        'amber_navy',
-        'kalam_sky'
-      )
-    );
-end
-$$;
-
-do $$
-begin
-  alter table public.integration_settings
-    drop constraint if exists integration_settings_connection_type_check;
-
-  alter table public.integration_settings
-    add constraint integration_settings_connection_type_check
-    check (
-      connection_type in (
-        'sms',
-        'email',
-        'site',
-        'module_settings',
-        'print_templates',
-        'telegram_bot',
-        'bale_bot',
-        'rubika_bot',
-        'portal',
-        'voip',
-        'saas',
-        'ui_theme'
-      )
-    ) not valid;
-end
-$$;
-
-create or replace function public.get_public_branding(p_hostname text default null)
-returns table (
-  org_id uuid,
-  company_settings jsonb,
-  branding_settings jsonb
-)
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_hostname text := lower(trim(coalesce(p_hostname, '')));
-  v_host_label text := split_part(v_hostname, '.', 1);
-  v_org_id uuid;
-  v_tenant_context jsonb;
-  v_is_taze_family boolean := (
-    v_hostname = 'tazesystem.ir'
-    or v_hostname = 'www.tazesystem.ir'
-    or v_hostname = 'app.tazesystem.ir'
-    or v_hostname like '%.tazesystem.ir'
-  );
-begin
-  if v_hostname <> '' then
-    v_tenant_context := public.resolve_saas_org_context(null, null, v_hostname);
-    if v_tenant_context is not null and coalesce(v_tenant_context->>'org_id', '') <> '' then
-      v_org_id := (v_tenant_context->>'org_id')::uuid;
-    elsif not v_is_taze_family and v_host_label <> '' then
-      select o.id
-        into v_org_id
-      from public.organizations o
-      where lower(coalesce(o.slug, '')) = v_host_label
-      order by o.created_at asc nulls last
-      limit 1;
-    end if;
-  end if;
-
-  if v_org_id is null then
-    if v_is_taze_family and v_hostname not in ('tazesystem.ir', 'www.tazesystem.ir', 'app.tazesystem.ir') then
-      return;
-    end if;
-  end if;
-
-  return query
-  with company_row as (
-    select to_jsonb(cs.*) as payload
-    from public.company_settings cs
-    where (
-      (v_org_id is null and cs.org_id is null)
-      or cs.org_id = v_org_id
-    )
-    order by cs.updated_at desc nulls last, cs.created_at desc nulls last
-    limit 1
-  ),
-  branding_row as (
-    select coalesce(to_jsonb(i.settings), '{}'::jsonb) as payload
-    from public.integration_settings i
-    where i.connection_type = 'ui_theme'
-      and coalesce(i.provider, '') = 'branding'
-      and (
-        (v_org_id is null and i.org_id is null)
-        or i.org_id = v_org_id
-      )
-    order by i.updated_at desc nulls last, i.created_at desc nulls last
-    limit 1
-  )
-  select
-    v_org_id,
-    coalesce((select payload from company_row), '{}'::jsonb),
-    coalesce((select payload from branding_row), '{}'::jsonb);
-end;
-$$;
-
 drop function if exists public.provision_self_service_demo(text, text, text, text, text, text);
+drop function if exists public.provision_self_service_demo(text, text, text, text, text, text, text, text, text);
 
-create or replace function public.provision_self_service_demo(
+create function public.provision_self_service_demo(
   p_full_name text,
   p_mobile text,
   p_business_name text,

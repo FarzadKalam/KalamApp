@@ -709,6 +709,14 @@ const insertAutomationNote = async (
   if (!scope.hasLinkedRecord) return;
 
   const mentionTarget = await expandChatGroupsToMentionTarget(mergeMentionTargets(target));
+  if (mentionTarget.userIds.length === 0 && mentionTarget.roleIds.length === 0) {
+    console.info('Skipped process automation system note without explicit recipients.', {
+      processAutomationRuleId: String(rule?.id || '').trim() || null,
+      moduleId: scope.module_id,
+      recordId: scope.record_id,
+    });
+    return;
+  }
 
   const payload: Record<string, any> = {
     module_id: scope.module_id,

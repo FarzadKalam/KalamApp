@@ -21,6 +21,7 @@ const json = (status: number, payload: Record<string, any>) =>
 const ALLOWED_DEMO_ROLES = new Set(['super_admin', 'admin', 'manager']);
 
 const now = () => new Date();
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const todayIso = (daysOffset = 0) => {
   const value = new Date();
@@ -154,14 +155,36 @@ const verifyCaller = async (client: any, request: Request) => {
   return data.user;
 };
 
-const requireCallerOrgAccess = async (client: any, callerUserId: string) => {
+const loadCallerProfile = async (client: any, callerUserId: string) => {
   const { data: profile, error: profileError } = await client
     .from('profiles')
     .select('id, org_id, role, role_id, full_name, email, mobile_1')
     .eq('id', callerUserId)
     .maybeSingle();
-  if (profileError || !profile?.id || !profile?.org_id) {
+  if (profileError) throw profileError;
+  return profile || null;
+};
+
+const requireCallerOrgAccess = async (client: any, callerUserId: string, requestedOrgId?: string | null) => {
+  const normalizedRequestedOrgId = String(requestedOrgId || '').trim() || null;
+  let profile: any = null;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    profile = await loadCallerProfile(client, callerUserId);
+    const profileOrgId = String(profile?.org_id || '').trim() || null;
+    if (profile?.id && profileOrgId && (!normalizedRequestedOrgId || profileOrgId === normalizedRequestedOrgId)) {
+      break;
+    }
+    if (attempt < 3) {
+      await sleep(350);
+    }
+  }
+
+  if (!profile?.id || !profile?.org_id) {
     throw new Error('پروفایل کاربر یا سازمان جاری پیدا نشد.');
+  }
+  if (normalizedRequestedOrgId && String(profile.org_id) !== normalizedRequestedOrgId) {
+    throw new Error('سازمان جاری کاربر با سازمان درخواستی هم‌خوانی ندارد.');
   }
   if (!ALLOWED_DEMO_ROLES.has(normalizeRole(profile.role))) {
     throw new Error('دسترسی کافی برای مدیریت داده‌های دمو ندارید.');
@@ -1489,7 +1512,8 @@ Deno.serve(async (request) => {
     const caller = await verifyCaller(client, request);
     const body = await request.json().catch(() => ({}));
     const action = String(body?.action || '').trim() as DemoDataAction;
-    const context = await requireCallerOrgAccess(client, caller.id);
+    const requestedOrgId = String(body?.org_id || '').trim() || null;
+    const context = await requireCallerOrgAccess(client, caller.id, requestedOrgId);
 
     if (action === 'get_demo_seed_status') {
       const activeBatch = await getActiveBatch(client, String(context.profile.org_id));

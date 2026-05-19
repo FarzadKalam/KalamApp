@@ -452,6 +452,61 @@ describe('Login OTP and password flows', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   }, 15000);
 
+  it('blocks invited otp login when invite conflicts with another org ownership', async () => {
+    rpcState.mockImplementation(async (fn: string) => {
+      if (fn === 'check_phone_login_candidate') {
+        return {
+          data: {
+            exists_in_profiles: false,
+            exists_in_auth: false,
+            has_phone_identity: false,
+            is_active: false,
+          },
+          error: null,
+        };
+      }
+      if (fn === 'lookup_phone_signup_invite') {
+        return {
+          data: {
+            exists: true,
+            is_active: true,
+            org_id: 'org-2',
+          },
+          error: null,
+        };
+      }
+      if (fn === 'consume_phone_signup_invite') {
+        return {
+          data: {
+            success: false,
+            reason: 'profile_org_conflict',
+            existing_org_id: 'org-1',
+          },
+          error: null,
+        };
+      }
+      return { data: null, error: null };
+    });
+    authState.signInWithOtp.mockResolvedValue({ error: null });
+    authState.verifyOtp.mockResolvedValue({ error: null });
+    authState.getUser.mockResolvedValue({ data: { user: { id: 'user-invite-conflict', phone: '+989121234567', email: 'conflict@test.local' } }, error: null });
+
+    renderLogin();
+    await switchToOtpTab();
+    setOtpPhone('09121234567');
+    clickRequestOtp();
+    await screen.findByText('ورود با کد');
+
+    fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByText('ورود با کد'));
+
+    await waitFor(() => {
+      expect(authState.signOut).toHaveBeenCalled();
+    });
+    expect(document.body.textContent || '').toContain('به یک سازمان دیگر متصل یا برای آن رزرو شده است');
+    expect(mockNavigate).not.toHaveBeenCalled();
+  }, 15000);
+
   it('blocks password login for inactive users after successful auth', async () => {
     getDbState().profiles = [
       {

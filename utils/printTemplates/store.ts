@@ -2,6 +2,8 @@ import { MODULES } from '../../moduleRegistry';
 import { BlockType } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { getCachedAuthUser } from '../sessionCache';
+import { getResolvedCurrentOrgId } from '../companySettings';
+import { loadScopedIntegrationSettings } from '../integrationSettings';
 import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
@@ -625,11 +627,11 @@ const normalizeStore = (settings: any): Record<string, StoredPrintTemplate[]> =>
 
 export const loadPrintTemplatesStore = async () => {
   try {
-    const { data, error } = await supabase
-      .from('integration_settings')
-      .select('id, provider, settings')
-      .eq('connection_type', PRINT_TEMPLATES_CONNECTION_TYPE)
-      .maybeSingle();
+    const { data, error } = await loadScopedIntegrationSettings(supabase as any, {
+      connectionType: PRINT_TEMPLATES_CONNECTION_TYPE,
+      columns: 'id, provider, settings',
+    });
+    const row = data as Record<string, any> | null | undefined;
 
     if (error) {
       const code = String((error as any)?.code || '').toUpperCase();
@@ -638,14 +640,14 @@ export const loadPrintTemplatesStore = async () => {
       if (!isMissingRow) throw error;
     }
 
-    const templatesByModule = normalizeStore(data?.settings || {});
+    const templatesByModule = normalizeStore(row?.settings || {});
     if (Object.keys(templatesByModule).length > 0) {
       writeLocalStore(templatesByModule);
     }
 
     return {
-      rowId: data?.id ? String(data.id) : null,
-      provider: String(data?.provider || 'tiptap'),
+      rowId: row?.id ? String(row.id) : null,
+      provider: String(row?.provider || 'tiptap'),
       templatesByModule: Object.keys(templatesByModule).length > 0 ? templatesByModule : normalizeStore(readLocalStore()),
       storage: Object.keys(templatesByModule).length > 0 ? 'remote' : 'local',
     };
@@ -668,8 +670,10 @@ export const savePrintTemplatesStore = async (params: {
   writeLocalStore(params.templatesByModule);
   const authUser = await getCachedAuthUser(supabase);
   const userId = authUser?.id || null;
+  const currentOrgId = await getResolvedCurrentOrgId(supabase as any);
 
   const payload: Record<string, any> = {
+    org_id: currentOrgId,
     connection_type: PRINT_TEMPLATES_CONNECTION_TYPE,
     provider: params.provider || 'tiptap',
     is_active: true,

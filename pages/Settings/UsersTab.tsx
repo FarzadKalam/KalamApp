@@ -20,7 +20,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { getOtpErrorMessage, normalizeOtpToken } from '../../utils/otpAuth';
-import { getPhoneOtpStatusMeta, lookupPhoneLoginCandidate } from '../../utils/phoneAuth';
+import { assertPhoneAvailableForOrg, getPhoneOtpStatusMeta, getPhoneOwnershipErrorMessage, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
@@ -524,9 +524,8 @@ const UsersTab: React.FC = () => {
         setEditingUser(updatedRecord);
       } else {
         const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
-        if (candidate?.exists_in_profiles) {
-          throw new Error('برای این شماره موبایل قبلا کاربر ثبت شده است.');
-        }
+        const invite = await lookupPhoneSignupInvite(normalizedPhone);
+        assertPhoneAvailableForOrg(candidate, invite, seedInvite?.org_id || currentOrgId, { allowSameOrgPendingInvite: true });
 
         const created = await invokeUserAdmin({
           action: 'create_user',
@@ -582,7 +581,8 @@ const UsersTab: React.FC = () => {
         }
       }
     } catch (error) {
-      message.error(toFaErrorMessage(error as any, 'ذخیره کاربر ناموفق بود'));
+      const ownershipMessage = getPhoneOwnershipErrorMessage(error, '');
+      message.error(ownershipMessage || toFaErrorMessage(error as any, 'ذخیره کاربر ناموفق بود'));
     } finally {
       setSubmitting(false);
     }

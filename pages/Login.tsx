@@ -7,9 +7,10 @@ import { readRuntimeBranding } from '../utils/brandingRuntime';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getDefaultAuthenticatedAppPath, isSaasAppHost } from '../utils/hostRouting';
 import { getOtpErrorMessage, normalizeOtpPhone, normalizeOtpToken, OTP_RESEND_SECONDS, requestSmsOtp, verifySmsOtp } from '../utils/otpAuth';
-import { consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
+import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../utils/phoneAuth';
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
+import { signOutLocalSession } from '../utils/authSession';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -171,14 +172,12 @@ const Login = () => {
     preferredRoleId?: string | null
   ) => {
     let orgId = preferredOrgId || null;
-    if (!orgId) {
-      const { data: org } = await supabase
-        .from('organizations')
-        .select('id')
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      orgId = org?.id || null;
+    if (!orgId && !preferredRoleId) {
+      return {
+        orgId: null,
+        roleId: null,
+        roleName: String(preferredRoleName || '').trim().toLowerCase() || null,
+      };
     }
 
     const normalizedRoleName = String(preferredRoleName || '').trim().toLowerCase();
@@ -260,6 +259,10 @@ const Login = () => {
       };
     }
 
+    if ((!profile?.org_id && !updates.org_id) || (!profile?.role_id && !updates.role_id)) {
+      throw new Error('__otp_profile_org_access_incomplete__');
+    }
+
     const { error } = await supabase.from('profiles').update(updates).eq('id', profile.id);
     if (error) throw error;
 
@@ -333,7 +336,7 @@ const Login = () => {
 
     if (profileError) throw profileError;
     if (profile?.is_active === false) {
-      await supabase.auth.signOut();
+      await signOutLocalSession();
       throw new Error('__otp_user_inactive__');
     }
 
@@ -390,15 +393,27 @@ const Login = () => {
 
     const inviteResult = await consumePhoneSignupInvite(phoneNumber, userId, userEmail);
     if (inviteResult?.success) return;
+    if (inviteResult?.reason === 'profile_org_conflict') {
+      await signOutLocalSession();
+      throw new Error('__otp_phone_invite_org_conflict__');
+    }
+    if (inviteResult?.reason === 'multiple_profiles') {
+      await signOutLocalSession();
+      throw new Error('__otp_phone_multiple_profiles__');
+    }
+    if (inviteResult?.reason === 'profile_inactive') {
+      await signOutLocalSession();
+      throw new Error('__otp_user_inactive__');
+    }
 
     const candidate = await lookupPhoneLoginCandidate(phoneNumber);
     if ((candidate?.exists_in_profiles || candidate?.exists_in_auth) && candidate?.is_active !== false) {
       const conflictProfile = await findExistingProfileConflict(phoneNumber, userEmail, userId);
       if (conflictProfile?.id) {
         try {
-          const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
-          if (repairResult?.repaired) {
-            await supabase.auth.signOut();
+            const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
+            if (repairResult?.repaired) {
+            await signOutLocalSession();
             const { error: resendError } = await supabase.auth.signInWithOtp({
               phone: phoneNumber,
             });
@@ -415,34 +430,15 @@ const Login = () => {
           }
         }
 
-        await supabase.auth.signOut();
+        await signOutLocalSession();
         throw new Error('__otp_phone_profile_conflict__');
       }
 
-      const resolvedAccess = await resolveOrganizationAccess('viewer', null);
-      const mobileLocal = normalizeIranMobile(phoneNumber)?.replace(/^\+98/, '0') || '';
-      const { error: insertProfileError } = await supabase.from('profiles').upsert([
-        {
-          id: userId,
-          org_id: resolvedAccess.orgId,
-          role_id: resolvedAccess.roleId,
-          role: resolvedAccess.roleName || 'viewer',
-          full_name: userData.user.user_metadata?.full_name || userEmail || 'کاربر',
-          email: userEmail,
-          mobile_1: mobileLocal || null,
-          is_active: true,
-        },
-      ]);
-      if (!insertProfileError) {
-        return;
-      }
-      if (String((insertProfileError as any)?.code || '') === '23505') {
-        await supabase.auth.signOut();
-        throw new Error('__otp_phone_profile_conflict__');
-      }
+      await signOutLocalSession();
+      throw new Error('__otp_profile_org_access_incomplete__');
     }
 
-    await supabase.auth.signOut();
+    await signOutLocalSession();
     if (inviteResult?.reason === 'invite_inactive') {
       throw new Error('__otp_phone_invite_inactive__');
     }
@@ -489,38 +485,7 @@ const Login = () => {
     try {
       const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
       const invite = await lookupPhoneSignupInvite(normalizedPhone);
-      const hasInvite = !!invite?.exists;
-      const canUseExistingPhoneIdentity =
-        candidate?.exists_in_auth === true &&
-        candidate?.has_phone_identity === true &&
-        candidate?.is_active !== false;
-      const hasActiveProfileInUsersList =
-        candidate?.exists_in_profiles === true &&
-        candidate?.is_active !== false;
-      const hasActiveInviteInUsersList =
-        hasInvite &&
-        invite?.is_active !== false;
-
-      if (candidate?.exists_in_profiles) {
-        if (candidate.is_active === false) {
-          throw new Error('__otp_user_inactive__');
-        }
-      } else {
-        if (invite?.is_active === false) {
-          throw new Error('__otp_phone_invite_inactive__');
-        }
-      }
-
-      if (hasActiveProfileInUsersList && !canUseExistingPhoneIdentity) {
-        if (candidate?.exists_in_auth) {
-          throw new Error(candidate?.has_phone_identity ? '__otp_phone_not_allowed__' : '__otp_phone_identity_missing__');
-        }
-        throw new Error('__otp_phone_not_synced__');
-      }
-
-      if (!hasActiveInviteInUsersList && !canUseExistingPhoneIdentity) {
-        throw new Error('__otp_phone_not_allowed__');
-      }
+      assertLoginOtpRequestAllowed(candidate, invite);
 
       const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone);
       setOtpRequestedFor(requestedPhone);

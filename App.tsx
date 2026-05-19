@@ -40,6 +40,7 @@ import {
 } from "./utils/moduleSettingsRuntime";
 import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
+import { signOutLocalSession } from "./utils/authSession";
 
 // تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
 
@@ -373,6 +374,8 @@ function App() {
         if (authLifecycleRef.current.initialized) return;
         authLifecycleRef.current.initialized = true;
         if (!nextUserId) {
+          clearRuntimeBrandingCache();
+          void loadBranding(true);
           applyModuleSettingsStoreToRegistry(null);
           setModuleSettingsVersion((prev) => prev + 1);
           setModuleSettingsReady(true);
@@ -410,15 +413,22 @@ function App() {
         return;
       }
 
-      if ((eventName === "SIGNED_OUT" || eventName === "TOKEN_REFRESH_FAILED") && !isPublic) {
+      if (eventName === "SIGNED_OUT" || eventName === "TOKEN_REFRESH_FAILED") {
         authLifecycleRef.current.userId = null;
         clearSessionBootstrapCache();
         clearCurrentUserRoleContextCache();
         clearReferenceDataCache();
+        clearRuntimeBrandingCache();
+        void loadBranding(true);
         applyModuleSettingsStoreToRegistry(null);
         setModuleSettingsVersion((prev) => prev + 1);
         setModuleSettingsReady(true);
-        window.location.replace("/login");
+        if (eventName === "TOKEN_REFRESH_FAILED") {
+          void signOutLocalSession();
+        }
+        if (!isPublic) {
+          window.location.replace("/login");
+        }
       }
     });
 

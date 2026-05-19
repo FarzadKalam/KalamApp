@@ -3,7 +3,7 @@
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
 type BotAdminBody = {
-  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file' | 'edit_message' | 'delete_message';
+  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file' | 'edit_message' | 'delete_message' | 'diagnose_rubika_runtime';
   channel?: BotChannel | string;
   connectionId?: string;
   cursor?: string | number | null;
@@ -45,7 +45,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_ADMIN_BUILD = 'bot-admin-2026-04-11-16';
+const BOT_ADMIN_BUILD = 'bot-admin-2026-05-19-01';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -453,6 +453,34 @@ const getConnectionRecord = async (
   if (!row) throw new Error('تنظیمات بات برای این کانال پیدا نشد.');
   if (row.is_active !== true) throw new Error('این بات غیرفعال است.');
   return row;
+};
+
+const getConnectionRecordLoose = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  channel: BotChannel,
+  connectionId: string
+) => {
+  const connectionTypes = channel === 'telegram'
+    ? ['telegram_bot', 'telegram']
+    : channel === 'bale'
+      ? ['bale_bot', 'bale']
+      : ['rubika_bot', 'rubika'];
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
+  url.searchParams.set('id', `eq.${connectionId}`);
+  url.searchParams.set('connection_type', `in.(${connectionTypes.join(',')})`);
+  url.searchParams.set('select', 'id,org_id,provider,settings,is_active,connection_type,created_at,updated_at');
+  url.searchParams.set('limit', '20');
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'خطا در خواندن تنظیمات بات');
+
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? (parsed[0] || null) : parsed;
 };
 
 const getDisplayName = (obj: Record<string, any> | null | undefined) => {
@@ -1749,6 +1777,110 @@ const importRubikaFileToStorage = async ({
   };
 };
 
+const diagnoseRubikaRuntime = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  requestUrl,
+  requestHeaders,
+  integration,
+  fileId,
+  chatId,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  requestUrl: string;
+  requestHeaders: Headers;
+  integration: Record<string, any>;
+  fileId?: string | null;
+  chatId?: string | null;
+}) => {
+  const settings = normalizeRubikaSettings(integration?.settings || {});
+  const token = String(settings?.bot_token || '').trim();
+  const webhookSecret = String(settings?.webhook_secret || '').trim();
+  const publicBaseUrl = pickPublicApiBaseUrl(requestUrl, requestHeaders, settings);
+  const normalizedFileId = String(fileId || '').trim();
+  const normalizedChatId = String(chatId || '').trim();
+  const missingRequirements: string[] = [];
+
+  if (!integration?.id || integration?.is_active !== true) {
+    missingRequirements.push('integration_missing_or_inactive');
+  }
+  if (!token) {
+    missingRequirements.push('rubika_token_missing');
+  }
+  if (!publicBaseUrl) {
+    missingRequirements.push('public_api_base_url_missing');
+  }
+
+  let resolvedFileDiagnostic: Record<string, any> | null = null;
+  if (normalizedFileId && token) {
+    try {
+      const resolved = await resolveRubikaFileUrl(settings, normalizedFileId);
+      const downloadUrl = String(resolved?.file_url || '').trim();
+      resolvedFileDiagnostic = {
+        requested_file_id: normalizedFileId,
+        file_url_available: Boolean(downloadUrl),
+        file_url_host: downloadUrl ? (() => {
+          try {
+            return new URL(downloadUrl).host;
+          } catch {
+            return null;
+          }
+        })() : null,
+        provider_result: resolved?.provider_result || null,
+      };
+      if (!downloadUrl) {
+        missingRequirements.push('rubika_file_resolve_failed');
+      }
+    } catch (error: any) {
+      resolvedFileDiagnostic = {
+        requested_file_id: normalizedFileId,
+        file_url_available: false,
+        error_message: String(error?.message || 'rubika file resolve failed'),
+      };
+      missingRequirements.push('rubika_file_resolve_failed');
+    }
+  } else if (normalizedFileId) {
+    missingRequirements.push('rubika_token_missing');
+  }
+
+  const integrationProbeUrl = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/integration_settings`);
+  integrationProbeUrl.searchParams.set('id', `eq.${String(integration?.id || '').trim()}`);
+  integrationProbeUrl.searchParams.set('select', 'id');
+  const integrationProbeResponse = await fetch(integrationProbeUrl.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+
+  return {
+    success: missingRequirements.length === 0,
+    error_code: missingRequirements.length > 0 ? missingRequirements[0] : null,
+    missing_requirements: missingRequirements,
+    diagnostic: {
+      integration: {
+        id: String(integration?.id || '').trim() || null,
+        org_id: String(integration?.org_id || '').trim() || null,
+        is_active: integration?.is_active === true,
+        connection_type: String(integration?.connection_type || '').trim() || null,
+        provider: String(integration?.provider || '').trim() || null,
+        integration_row_probe_ok: integrationProbeResponse.ok,
+      },
+      rubika: {
+        chat_id_provided: Boolean(normalizedChatId),
+        file_id_provided: Boolean(normalizedFileId),
+        bot_token_present: Boolean(token),
+        webhook_secret_present: Boolean(webhookSecret),
+      },
+      public_base_url: {
+        value: publicBaseUrl || null,
+        source_detected: Boolean(publicBaseUrl),
+        bucket: DEFAULT_FILE_STORAGE_BUCKET,
+      },
+      file_import: resolvedFileDiagnostic,
+    },
+  };
+};
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -1794,8 +1926,29 @@ Deno.serve(async (req) => {
     if (!connectionId) {
       return json(400, { success: false, message: 'connectionId الزامی است.' });
     }
-    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file', 'edit_message', 'delete_message'].includes(action)) {
+    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file', 'edit_message', 'delete_message', 'diagnose_rubika_runtime'].includes(action)) {
       return json(400, { success: false, message: 'action معتبر نیست.' });
+    }
+
+    if (action === 'diagnose_rubika_runtime') {
+      if (channel !== 'rubika') {
+        return json(400, {
+          success: false,
+          error_code: 'rubika_channel_required',
+          message: 'diagnose_rubika_runtime فقط برای روبیکا پشتیبانی می‌شود.',
+        });
+      }
+      const integration = await getConnectionRecordLoose(supabaseUrl, serviceRoleKey, channel, connectionId);
+      const diagnostic = await diagnoseRubikaRuntime({
+        supabaseUrl,
+        serviceRoleKey,
+        requestUrl: req.url,
+        requestHeaders: req.headers,
+        integration,
+        fileId: fileId || null,
+        chatId: chatId || null,
+      });
+      return json(diagnostic.success ? 200 : 400, diagnostic);
     }
 
     const integration = await getConnectionRecord(supabaseUrl, serviceRoleKey, channel, connectionId);
@@ -1914,23 +2067,35 @@ Deno.serve(async (req) => {
       if (!fileId) {
         return json(400, { success: false, message: 'fileId الزامی است.' });
       }
-      const imported = await importRubikaFileToStorage({
-        supabaseUrl,
-        serviceRoleKey,
-        requestUrl: req.url,
-        requestHeaders: req.headers,
-        integration,
-        fileId,
-        fileName: fileName || null,
-        messageId: messageId || null,
-      });
-      return json(200, {
-        success: true,
-        channel,
-        message_id: messageId || null,
-        file_id: fileId,
-        ...imported,
-      });
+      try {
+        const imported = await importRubikaFileToStorage({
+          supabaseUrl,
+          serviceRoleKey,
+          requestUrl: req.url,
+          requestHeaders: req.headers,
+          integration,
+          fileId,
+          fileName: fileName || null,
+          messageId: messageId || null,
+        });
+        return json(200, {
+          success: true,
+          channel,
+          message_id: messageId || null,
+          file_id: fileId,
+          ...imported,
+        });
+      } catch (error: any) {
+        return json(200, {
+          success: false,
+          channel,
+          message_id: messageId || null,
+          file_id: fileId,
+          retryable: false,
+          error_code: 'rubika_file_import_failed',
+          message: String(error?.message || 'بازیابی فایل روبیکا ناموفق بود.'),
+        });
+      }
     }
 
     const result = await pollChannelUpdates(supabaseUrl, serviceRoleKey, integration, channel, cursor);

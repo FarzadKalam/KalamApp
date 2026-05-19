@@ -1,5 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
+import { loadScopedIntegrationSettings } from './integrationSettings';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
@@ -1037,16 +1038,15 @@ const normalizeSmsUrl = (url: string, mode: 'rest' | 'soap') => {
 };
 
 const sendSmsDirectLegacy = async (to: string[], text: string) => {
-  const { data: smsRow, error: smsErr } = await supabase
-    .from('integration_settings')
-    .select('*')
-    .eq('connection_type', 'sms')
-    .eq('is_active', true)
-    .maybeSingle();
+  const { data: smsRow, error: smsErr } = await loadScopedIntegrationSettings(supabase as any, {
+    connectionType: 'sms',
+    isActive: true,
+  });
   if (smsErr) throw smsErr;
-  if (!smsRow) throw new Error('تنظیمات سامانه پیامک فعال نیست.');
+  const smsSettingsRow = smsRow as Record<string, any> | null | undefined;
+  if (!smsSettingsRow) throw new Error('تنظیمات سامانه پیامک فعال نیست.');
 
-  const settings = (smsRow.settings || {}) as Record<string, any>;
+  const settings = (smsSettingsRow.settings || {}) as Record<string, any>;
   const mode = String(settings.mode || 'rest') as 'rest' | 'soap';
   const baseUrl = normalizeSmsUrl(
     String(
@@ -1933,6 +1933,14 @@ export const executeWorkflowAction = async (
     };
     const noteRows: Record<string, any>[] = [];
     const hasDirectRecipients = recipients.mentionUserIds.length > 0 || recipients.mentionRoleIds.length > 0;
+    if (!hasDirectRecipients && recipients.groupTargets.length === 0) {
+      console.info('Skipped workflow system note without explicit recipients.', {
+        workflowActionId: (action as any)?.id || null,
+        moduleId: scope.module_id,
+        recordId: scope.record_id,
+      });
+      return;
+    }
     if (hasDirectRecipients || recipients.groupTargets.length === 0) {
       noteRows.push({
         module_id: scope.module_id,

@@ -233,6 +233,8 @@ SmsDrawerComposer.displayName = 'SmsDrawerComposer';
 const MAX_ITEMS = 10;
 const NOTIFICATIONS_CACHE_TTL_MS = 45_000;
 const ASSIGNED_NOTE_PAIRS_TTL_MS = 3 * 60 * 1000;
+const BOT_MEDIA_HYDRATION_MAX_FAILURES = 1;
+const BOT_MEDIA_HYDRATION_BACKOFF_MS = 30 * 60 * 1000;
 const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
 const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
@@ -1094,6 +1096,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const botMessagesRef = useRef<CounterpartyBotMessageRow[]>([]);
   const botMessagesGroupIdRef = useRef<string | null>(null);
   const hydratingBotMessageIdsRef = useRef<Set<string>>(new Set());
+  const botHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
+  const loggedBotHydrationFailuresRef = useRef<Set<string>>(new Set());
   const botStatusWatchTimerRef = useRef<number | null>(null);
 
   const tasksConfig = MODULES['tasks'];
@@ -2032,7 +2036,51 @@ useEffect(() => {
     return pairs;
   };
 
-  const fetchNotes = async () => {
+  const populateNoteAuthorNames = async (rows: any[]) => {
+    const authorIds = Array.from(new Set((rows || []).map((note: any) => note?.author_id).filter(Boolean)));
+    if (authorIds.length === 0) {
+      setAuthorNameMap({});
+      return;
+    }
+
+    const { userNameMap } = await buildDirectoryMaps();
+    const map = authorIds.reduce<Record<string, string>>((acc, authorId) => {
+      acc[String(authorId)] = userNameMap[String(authorId)] || String(authorId);
+      return acc;
+    }, {});
+    setAuthorNameMap(map);
+  };
+
+  const fetchNotesByIds = async (noteIds: string[]) => {
+    const uniqueIds = Array.from(new Set((noteIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return [] as any[];
+
+    const collected: any[] = [];
+    for (let index = 0; index < uniqueIds.length; index += 80) {
+      const idBatch = uniqueIds.slice(index, index + 80);
+      const { data, error } = await supabase
+        .from('notes')
+        .select(NOTE_SELECT_FIELDS)
+        .in('id', idBatch)
+        .order('created_at', { ascending: false });
+      if (shouldPauseNotesPolling(error)) {
+        notesPollingPausedRef.current = true;
+        if (!notesPollingPauseLoggedRef.current) {
+          notesPollingPauseLoggedRef.current = true;
+          console.warn('Notes polling paused due to backend error.', error);
+        }
+        return [] as any[];
+      }
+      if (error) throw error;
+      if (Array.isArray(data) && data.length > 0) {
+        collected.push(...data);
+      }
+    }
+
+    return collected;
+  };
+
+  const fetchNotesLegacy = async () => {
     if (!profile.id) return [];
     if (notesPollingPausedRef.current) return [];
     const userId = profile.id;
@@ -2152,16 +2200,45 @@ useEffect(() => {
     });
     const result = Array.from(uniq.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     await buildRecordTitleMap(result.map((n) => ({ module_id: n.module_id, record_id: n.record_id })));
-    const authorIds = Array.from(new Set(result.map((n: any) => n.author_id).filter(Boolean)));
-    if (authorIds.length) {
-      const { userNameMap } = await buildDirectoryMaps();
-      const map = authorIds.reduce<Record<string, string>>((acc, authorId) => {
-        acc[String(authorId)] = userNameMap[String(authorId)] || String(authorId);
-        return acc;
-      }, {});
-      setAuthorNameMap(map);
-    }
+    await populateNoteAuthorNames(result);
     return result;
+  };
+
+  const fetchNotes = async () => {
+    if (!profile.id) return [];
+    if (notesPollingPausedRef.current) return [];
+
+    const inboxItems = await fetchNotificationInboxSection('notes', 260);
+    if (inboxItems === null) {
+      setNoteLikeNotifications([]);
+      return fetchNotesLegacy();
+    }
+
+    const nextLikeNotifications = inboxItems.filter((item) => String(item?.source_type || '').trim() === 'note_like');
+    setNoteLikeNotifications(nextLikeNotifications);
+
+    const noteItems = inboxItems.filter((item) => String(item?.source_type || '').trim() === 'note');
+    const noteIds = noteItems.map((item) => String(item?.source_id || '').trim()).filter(Boolean);
+    if (noteIds.length === 0) {
+      setAuthorNameMap({});
+      return [];
+    }
+
+    const rows = await fetchNotesByIds(noteIds);
+    const rowsById = new Map((rows || []).map((row: any) => [String(row?.id || '').trim(), row]));
+    const orderedRows = noteIds
+      .map((id) => rowsById.get(id))
+      .filter(Boolean) as any[];
+    const uniqueRows = Array.from(new Map(
+      orderedRows.map((row: any) => [String(row?.id || '').trim(), row])
+    ).values());
+
+    await buildRecordTitleMap(uniqueRows.map((row: any) => ({
+      module_id: row.module_id,
+      record_id: row.record_id,
+    })));
+    await populateNoteAuthorNames(uniqueRows);
+    return uniqueRows;
   };
 
   const fetchTasks = async () => {
@@ -2585,10 +2662,6 @@ useEffect(() => {
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
     if (shouldLoadNotes) setNotes(notesData);
-    if (shouldLoadNotes) {
-      const inboxItems = await safeFetch(() => fetchNotificationInboxSection('notes', 200), 'notes', null as NotificationInboxItemRow[] | null);
-      setNoteLikeNotifications((inboxItems || []).filter((item) => String(item?.source_type || '') === 'note_like'));
-    }
     if (shouldLoadTasks) setTasks(tasksData);
     if (shouldLoadResponsibilities) setResponsibilities(responsibilitiesData);
     if (shouldLoadSmsMessages) setSmsMessages(smsData);
@@ -4011,11 +4084,20 @@ useEffect(() => {
   const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow) => extractBotMessageAttachments(row), []);
   const hydrateBotMessagesMedia = useCallback(async (rows: CounterpartyBotMessageRow[]) => {
     const hasBrokenRubikaStorageUrl = (url: string) => /https?:\/\/botapi\.rubika\.ir\/storage\/v1\/object\/public\//i.test(String(url || '').trim());
+    const now = Date.now();
     const pendingRows = (rows || []).filter((row) => {
       if (String(row?.direction || '') !== 'inbound') return false;
       if (String(selectedBotGroup?.channel_type || '').trim() !== 'rubika') return false;
       const rowId = String(row?.id || '').trim();
       if (!rowId || hydratingBotMessageIdsRef.current.has(rowId)) return false;
+      const failureState = botHydrationFailuresRef.current.get(rowId);
+      if (
+        failureState
+        && failureState.attempts >= BOT_MEDIA_HYDRATION_MAX_FAILURES
+        && now - failureState.lastAttemptAt < BOT_MEDIA_HYDRATION_BACKOFF_MS
+      ) {
+        return false;
+      }
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const fileId = String((payload as any)?.media_file_id || '').trim();
       const hasUsableAttachment = getBotMessageAttachments(row).some((item) => {
@@ -4048,7 +4130,22 @@ useEffect(() => {
           },
         });
         if (error) throw error;
-        if (!data?.success || !String(data?.file_url || '').trim()) continue;
+        if (!data?.success || !String(data?.file_url || '').trim()) {
+          const failureMessage = String(data?.message || 'بازیابی فایل پیام بات ناموفق بود.').trim();
+          botHydrationFailuresRef.current.set(rowId, {
+            attempts: BOT_MEDIA_HYDRATION_MAX_FAILURES,
+            lastAttemptAt: Date.now(),
+          });
+          if (!loggedBotHydrationFailuresRef.current.has(rowId)) {
+            loggedBotHydrationFailuresRef.current.add(rowId);
+            console.info('Skipped Rubika bot message attachment hydration.', {
+              messageId: rowId,
+              fileId,
+              reason: failureMessage,
+            });
+          }
+          continue;
+        }
         const nextPayload = {
           ...(payload || {}),
           attachments: [{
@@ -4072,8 +4169,21 @@ useEffect(() => {
           mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
           payload: nextPayload,
         } : item));
+        botHydrationFailuresRef.current.delete(rowId);
+        loggedBotHydrationFailuresRef.current.delete(rowId);
       } catch (error) {
-        console.warn('Could not hydrate Rubika bot message attachment', error);
+        botHydrationFailuresRef.current.set(rowId, {
+          attempts: BOT_MEDIA_HYDRATION_MAX_FAILURES,
+          lastAttemptAt: Date.now(),
+        });
+        if (!loggedBotHydrationFailuresRef.current.has(rowId)) {
+          loggedBotHydrationFailuresRef.current.add(rowId);
+          console.info('Skipped Rubika bot message attachment hydration after controlled failure.', {
+            messageId: rowId,
+            fileId,
+            error: toFaErrorMessage(error as any, 'خطای نامشخص'),
+          });
+        }
       } finally {
         hydratingBotMessageIdsRef.current.delete(rowId);
       }
@@ -4578,14 +4688,16 @@ useEffect(() => {
         let nextNotes: any[] = [];
 
         if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
-          const { data, error } = await supabase
-            .from('notes')
-            .select(NOTE_SELECT_FIELDS)
-            .or('source_type.eq.system,metadata->>source_type.eq.system')
-            .order('created_at', { ascending: false })
-            .limit(120);
-          if (error) throw error;
-          nextNotes = (data || []).filter((note: any) => isSystemNote(note));
+          const inboxItems = await fetchNotificationInboxSection('notes', 160);
+          const systemNoteIds = (inboxItems || [])
+            .filter((item) => (
+              String(item?.source_type || '').trim() === 'note'
+              && String(item?.category || '').trim() === 'system'
+            ))
+            .map((item) => String(item?.source_id || '').trim())
+            .filter(Boolean)
+            .slice(0, 120);
+          nextNotes = await fetchNotesByIds(systemNoteIds);
         } else if (selectedChatGroupId) {
           const { data, error } = await supabase
             .from('notes')

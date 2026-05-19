@@ -209,6 +209,25 @@ describe('workflow action recipients', () => {
       title: 'ارسال پیامک خودکار',
     }));
   });
+
+  it('skips workflow system notes that do not resolve any explicit recipients', async () => {
+    await executeWorkflowAction(
+      {
+        id: 'action-empty-note',
+        type: 'send_note_sms',
+        config: {
+          note_text: 'بدون گیرنده',
+          recipient_assignees: [],
+          recipient_fields: [],
+        },
+      },
+      'customers',
+      { id: '55555555-5555-4555-8555-555555555555' }
+    );
+
+    expect(mocks.insertNotesWithFallback).not.toHaveBeenCalled();
+    expect(mocks.sendNoteSmsNotifications).not.toHaveBeenCalled();
+  });
 });
 
 describe('send_to_next_stages workflow action', () => {

@@ -1,66 +1,13 @@
 -- =====================================================
--- KalamApp - Phase 149 SaaS owner setup, branding seed, and host hardening
--- Date: 2026-05-17
--- Type: Additive / non-breaking migration
+-- KalamApp - Phase 155 tenant branding and demo provision fix
+-- Date: 2026-05-19
+-- Type: Additive / corrective migration
 -- Goal:
---   1) Capture owner email + branding choice during self-service onboarding
---   2) Seed tenant company_settings + branding integration on provision
---   3) Mark wildcard tenant hosts as active without per-tenant DNS dependency
---   4) Prevent unknown *.tazesystem.ir hosts from falling back to another org
+--   1) Prevent public branding fallback from leaking another org on shared hosts
+--   2) Recreate provision_self_service_demo safely with the 9-arg signature
 -- =====================================================
 
 begin;
-
-alter table public.saas_onboarding_requests
-  add column if not exists owner_email text,
-  add column if not exists industry text,
-  add column if not exists brand_palette_key text;
-
-do $$
-begin
-  alter table public.company_settings
-    drop constraint if exists chk_company_settings_brand_palette_key;
-
-  alter table public.company_settings
-    add constraint chk_company_settings_brand_palette_key
-    check (
-      brand_palette_key in (
-        'executive_indigo',
-        'corporate_blue',
-        'deep_ocean',
-        'ruby_red',
-        'amber_navy',
-        'kalam_sky'
-      )
-    );
-end
-$$;
-
-do $$
-begin
-  alter table public.integration_settings
-    drop constraint if exists integration_settings_connection_type_check;
-
-  alter table public.integration_settings
-    add constraint integration_settings_connection_type_check
-    check (
-      connection_type in (
-        'sms',
-        'email',
-        'site',
-        'module_settings',
-        'print_templates',
-        'telegram_bot',
-        'bale_bot',
-        'rubika_bot',
-        'portal',
-        'voip',
-        'saas',
-        'ui_theme'
-      )
-    ) not valid;
-end
-$$;
 
 create or replace function public.get_public_branding(p_hostname text default null)
 returns table (
@@ -135,8 +82,9 @@ end;
 $$;
 
 drop function if exists public.provision_self_service_demo(text, text, text, text, text, text);
+drop function if exists public.provision_self_service_demo(text, text, text, text, text, text, text, text, text);
 
-create or replace function public.provision_self_service_demo(
+create function public.provision_self_service_demo(
   p_full_name text,
   p_mobile text,
   p_business_name text,
