@@ -8,6 +8,7 @@ import { serializeNoteContent } from '../utils/noteContent';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
 import { getActiveChannelSettings } from '../utils/channelSettings';
+import { loadProfilesWithCompat } from '../utils/profileDirectory';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 
@@ -111,12 +112,12 @@ const ShareTargetPage: React.FC = () => {
           .trim();
 
         const [directory, groupsResult, botGroupsResult] = await Promise.all([
-          supabase
-            .from('profiles')
-            .select('id, full_name, email, mobile_1, avatar_url, role_id')
-            .eq('org_id', orgId)
-            .order('full_name', { ascending: true })
-            .limit(500),
+          loadProfilesWithCompat(supabase, {
+            orgId,
+            limit: 500,
+            cacheKey: `share-target:profiles:${orgId}`,
+            orderByFullName: true,
+          }),
           supabase
             .from('chat_groups')
             .select('id, name, user_ids, role_ids')

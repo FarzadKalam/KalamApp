@@ -75,6 +75,9 @@ const statusColor: Record<string, string> = {
   draft: 'default',
 };
 
+const SAAS_ADMIN_ORGS_SELECT =
+  'org_id, org_name, slug, status, plan_code, is_demo, is_readonly, trial_ends_at, resolved_host, dns_status, dns_last_error, arvan_record_id, dns_attempt_count, primary_contact_mobile, provisioning_source, provisioned_at, owner_name, owner_email';
+
 const SaasAdminOrgs: React.FC = () => {
   const { message: messageApi } = App.useApp();
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
@@ -96,7 +99,7 @@ const SaasAdminOrgs: React.FC = () => {
       setError(null);
       let query = supabase
         .from('saas_admin_orgs_view')
-        .select('*')
+        .select(SAAS_ADMIN_ORGS_SELECT)
         .order('provisioned_at', { ascending: false });
 
       if (statusFilter) query = query.eq('status', statusFilter);

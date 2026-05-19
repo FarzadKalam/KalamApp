@@ -39,6 +39,8 @@ export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const SAAS_ADMIN_PERMISSION_FIELDS = [
   { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
+  { key: 'edit_orgs', label: 'ویرایش سازمان‌ها' },
+  { key: 'edit_requests', label: 'ویرایش درخواست‌های دمو' },
 ];
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },

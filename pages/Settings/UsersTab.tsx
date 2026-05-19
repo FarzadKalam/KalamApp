@@ -19,6 +19,7 @@ import { DeleteOutlined, PlusOutlined, SaveOutlined, UploadOutlined, UserOutline
 import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { loadProfilesWithCompat } from '../../utils/profileDirectory';
 import { getOtpErrorMessage, normalizeOtpToken } from '../../utils/otpAuth';
 import { assertPhoneAvailableForOrg, getPhoneOtpStatusMeta, getPhoneOwnershipErrorMessage, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
@@ -199,11 +200,11 @@ const UsersTab: React.FC = () => {
     try {
       const [{ data: usersData, error: usersError }, { data: rolesData, error: rolesError }, { data: invitesData, error: invitesError }] =
         await Promise.all([
-          supabase
-            .from('profiles')
-            .select('id, org_id, role, role_id, full_name, email, mobile_1, avatar_url, is_active, voip_enabled, voip_operator_code, voip_extension, voip_service_id, voip_dial_mode, created_at, org_roles(title)')
-            .eq('org_id', currentOrgId)
-            .order('created_at', { ascending: false }),
+          loadProfilesWithCompat(supabase, {
+            orgId: currentOrgId,
+            limit: 1000,
+            cacheKey: `settings-users:profiles:${currentOrgId}`,
+          }),
           supabase.from('org_roles').select('*').eq('org_id', currentOrgId).order('created_at', { ascending: true }),
           supabase
             .from('phone_signup_invites')

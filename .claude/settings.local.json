@@ -33,7 +33,24 @@
       "Bash(grep -r \"resolve_saas_org_context\" d:/Kalamapp/database*.sql)",
       "Bash(grep -l \"resolve_saas_org_context\" d:/Kalamapp/database*.sql)",
       "Bash(grep -n \"from\\('personas'\\)\\\\|from\\('instructions'\\)\" d:\\\\\\\\Kalamapp\\\\\\\\supabase\\\\\\\\functions\\\\\\\\bot-admin\\\\\\\\index.ts)",
-      "Bash(grep -E \"\\\\.\\(tsx|ts|jsx|js\\)$\")"
+      "Bash(grep -E \"\\\\.\\(tsx|ts|jsx|js\\)$\")",
+      "Bash(node -e \"const d=require\\('./package.json'\\); console.log\\('DEPS:', Object.keys\\(d.dependencies||{}\\).join\\(', '\\)\\); console.log\\('SCRIPTS:', Object.keys\\(d.scripts||{}\\).join\\(', '\\)\\)\")",
+      "Bash(grep -r \"kalam_try_uuid\" d:\\\\Kalamapp\\\\database_v1_phase*.sql)",
+      "Bash(grep -rn \"saas_plans\" d:/Kalamapp/database_v1_phase14*.sql d:/Kalamapp/database_v1_phase15*.sql)",
+      "Bash(grep -n \"admin_saas_extend_org_trial\\\\|admin_saas_set_org_status\" d:/Kalamapp/database_v1_phase14*.sql d:/Kalamapp/database_v1_phase15*.sql)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'INPUT=$(cat); CMD=$(echo \"$INPUT\" | node -e \"process.stdin.resume();let d=``;process.stdin.on(`data`,c=>d+=c);process.stdin.on(`end`,()=>{try{console.log(JSON.parse(d).tool_input?.command||``)}catch{}})\"); if echo \"$CMD\" | grep -qE \"git[[:space:]]+commit\" && ! echo \"$CMD\" | grep -q \"\\-\\-no-verify\"; then cd /d/Kalamapp && npx tsc --noEmit --skipLibCheck 2>&1 | tail -20 | grep -i error && echo \"TypeScript errors found\" && exit 2; fi; exit 0'"
+          }
+        ]
+      }
     ]
   }
 }

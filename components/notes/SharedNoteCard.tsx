@@ -19,6 +19,7 @@ import { isImageFileLike } from '../../utils/imagePreview';
 import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 import ResilientImage from '../common/ResilientImage';
+import FileExtensionTile from '../files/FileExtensionTile';
 
 interface SharedNoteCardProps {
   authorName: string;
@@ -26,7 +27,8 @@ interface SharedNoteCardProps {
   text: string;
   attachments: NoteAttachment[];
   avatarUrl?: string | null;
-  avatarFallback?: string;
+  avatarFallback?: React.ReactNode;
+  avatarClassName?: string;
   mentionUsers?: string[];
   mentionRoles?: string[];
   replyText?: string | null;
@@ -51,6 +53,7 @@ interface SharedNoteCardProps {
   onDelete?: () => void;
   onForward?: () => void;
   onLike?: () => void;
+  onAttachmentClick?: (attachment: NoteAttachment) => void | Promise<void>;
   variant?: 'default' | 'ai';
   renderTemplateBold?: boolean;
   animateOnMount?: boolean;
@@ -112,6 +115,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   attachments,
   avatarUrl,
   avatarFallback,
+  avatarClassName,
   mentionUsers = [],
   mentionRoles = [],
   replyText,
@@ -136,6 +140,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onDelete,
   onForward,
   onLike,
+  onAttachmentClick,
   variant = 'default',
   renderTemplateBold = false,
   animateOnMount = false,
@@ -250,6 +255,9 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
     void navigator.clipboard?.writeText(raw);
   };
   const normalizedText = String(text || '').trim();
+  const resolvedAvatarFallback = typeof avatarFallback === 'string'
+    ? (String(avatarFallback || authorName || '?').trim().slice(0, 1) || '?')
+    : (avatarFallback ?? (String(authorName || '?').trim().slice(0, 1) || '?'));
 
   const cardStyle: React.CSSProperties = variant === 'ai'
     ? {
@@ -327,18 +335,38 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       );
     }
     if (!isImage) {
+      const hasUrl = Boolean(String(attachment?.url || '').trim());
       return (
-        <a
+        <button
           key={`${attachment.url}-${label}`}
-          href={attachment.url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px]"
-          style={attachmentStyle}
+          type="button"
+          className="group relative w-[168px] overflow-hidden rounded-xl border p-0 text-right transition hover:opacity-95"
+          style={{ ...attachmentStyle, background: 'transparent' }}
+          onClick={() => {
+            if (onAttachmentClick) {
+              void onAttachmentClick(attachment);
+              return;
+            }
+            if (hasUrl) {
+              downloadAttachment(attachment);
+            }
+          }}
+          title={hasUrl ? `دانلود ${label}` : `دریافت ${label}`}
         >
-          <PaperClipOutlined />
-          <span className="max-w-[180px] truncate">{label}</span>
-        </a>
+          <div className="h-24 w-full overflow-hidden rounded-xl border-0">
+            <FileExtensionTile
+              fileName={label}
+              url={attachment.url}
+              mimeType={attachment.mimeType}
+              compact
+              className={!hasUrl ? 'opacity-90 grayscale-[0.08]' : ''}
+            />
+          </div>
+          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-black/60 px-2 py-1 text-[9px] text-white">
+            <span className="truncate">{hasUrl ? 'دانلود فایل' : 'دریافت فایل'}</span>
+            <PaperClipOutlined />
+          </span>
+        </button>
       );
     }
 
@@ -411,9 +439,9 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       <Avatar
         size={26}
         src={avatarUrl || undefined}
-        className={`mt-0.5 shrink-0 ${variant === 'ai' ? '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]' : ''}`}
+        className={`mt-0.5 shrink-0 ${avatarClassName || ''} ${variant === 'ai' ? '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]' : ''}`.trim()}
       >
-        {!avatarUrl && (variant === 'ai' ? <AiSparkleIcon className="h-4 w-4" /> : (avatarFallback || authorName || '?').slice(0, 1))}
+        {!avatarUrl && (variant === 'ai' ? <AiSparkleIcon className="h-4 w-4" /> : resolvedAvatarFallback)}
       </Avatar>
       <div className={`relative min-w-0 max-w-[calc(100%-2.3rem)] ${isMine ? 'pr-0' : 'pl-2'}`}>
         {unreadIndicator ? (

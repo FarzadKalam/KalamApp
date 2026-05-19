@@ -61,6 +61,17 @@ import {
   markPayrollLedgerEntriesIncluded,
   sumPayrollLedgerEntries,
 } from '../utils/payrollLedger';
+
+const HR_TASK_FETCH_LIMIT = 1500;
+const HR_STATS_FETCH_LIMIT = 1500;
+const HR_GOAL_SELECT =
+  'id, org_id, module_id, name, description, goal_scope, period_unit, subperiod_unit, metric_type, metric_field_key, date_field_key, target_value, levels_enabled, bronze_value, silver_value, gold_value, assignee_user_ids, assignee_role_ids, conditions_all, conditions_any, config, is_active, created_at, updated_at, created_by, updated_by';
+const HR_EMPLOYEE_SELECT =
+  'id, full_name, related_profile_id, employment_status, employment_type, salary_type, default_work_schedule_id, has_flexible_hours, expected_daily_minutes, grace_minutes_for_late, overtime_auto_approve, leave_auto_approve, mission_auto_approve, base_salary, hourly_rate, overtime_rate, late_penalty_rate, early_bonus_rate, production_bonus_rate, commission_percentage, hire_date, seniority_base_amount, seniority_formula_id, monthly_paid_leave_hours, insurance_subject, employee_insurance_rate, employer_insurance_rate';
+const HR_PROFILE_SELECT =
+  'id, full_name, role, salary_type, default_work_schedule_id, has_flexible_hours, expected_daily_minutes, grace_minutes_for_late, overtime_auto_approve, leave_auto_approve, mission_auto_approve, base_salary, hourly_rate, overtime_rate, late_penalty_rate, early_bonus_rate, production_bonus_rate, commission_percentage';
+const HR_TASK_SELECT =
+  'id, name, status, assignee_id, assignee_role_id, assignee_type, due_date, due_at, completed_at, created_at, wage, produced_qty, spent_hours, actual_hours, duration_hours, estimated_hours, related_to_module, related_production_order, production_line_id, weight';
 import {
   evaluateActivityPerformanceRules,
   type ActivityPerformanceEntry,
@@ -1370,16 +1381,16 @@ const HRPage: React.FC = () => {
 
     try {
       const [employeesResult, profilesResult, tasksResult, formulasResult] = await Promise.all([
-        supabase.from('employees').select('*').order('full_name', { ascending: true }),
-        supabase.from('profiles').select('*').order('full_name', { ascending: true }),
+        supabase.from('employees').select(HR_EMPLOYEE_SELECT).order('full_name', { ascending: true }),
+        supabase.from('profiles').select(HR_PROFILE_SELECT).order('full_name', { ascending: true }),
         supabase
           .from('tasks')
-          .select('*')
+          .select(HR_TASK_SELECT)
           .or('assignee_type.eq.user,assignee_type.is.null')
           .not('assignee_id', 'is', null)
           .lte('created_at', monthEnd.toISOString())
           .order('created_at', { ascending: false })
-          .limit(5000),
+          .limit(HR_TASK_FETCH_LIMIT),
         supabase
           .from('calculation_formulas')
           .select('id, name')
@@ -1499,7 +1510,7 @@ const HRPage: React.FC = () => {
               .eq('period_start', periodStart)
               .eq('period_end', periodEnd)
               .neq('status', 'voided')
-              .limit(5000)
+              .limit(HR_STATS_FETCH_LIMIT)
             : Promise.resolve({ data: [], error: null } as any),
         ]);
 
@@ -1568,7 +1579,7 @@ const HRPage: React.FC = () => {
           .gte('occurred_at', monthStart.toISOString())
           .lte('occurred_at', monthEnd.toISOString())
           .order('occurred_at', { ascending: false })
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
         supabase
           .from('work_schedules')
           .select('id, title, status, is_active, effective_from, effective_to, employee_id, weekly_plan, created_at, updated_at')
@@ -1579,34 +1590,34 @@ const HRPage: React.FC = () => {
             .from('leave_requests')
             .select('id, employee_id, assignee_id, related_profile_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
             .order('created_at', { ascending: false })
-            .limit(5000);
+            .limit(HR_STATS_FETCH_LIMIT);
           if (!primary.error || !isMissingLeaveOptionalColumnError(primary.error)) return primary;
           return supabase
             .from('leave_requests')
             .select('id, employee_id, status, leave_type, start_date, end_date, total_days, total_minutes, notes, created_at, updated_at')
             .order('created_at', { ascending: false })
-            .limit(5000);
+            .limit(HR_STATS_FETCH_LIMIT);
         })(),
         supabase
           .from('overtime_requests')
           .select('id, employee_id, status, work_date, start_time, end_time, total_minutes, notes, created_at, updated_at')
           .order('created_at', { ascending: false })
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
         supabase
           .from('mission_requests')
           .select('id, employee_id, status, start_date, end_date, destination, notes, created_at, updated_at')
           .order('created_at', { ascending: false })
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
         supabase
           .from('employee_bonus_requests')
           .select('id, employee_id, title, status, effective_date, reason, notes, created_at, updated_at')
           .order('created_at', { ascending: false })
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
         supabase
           .from('employee_penalty_requests')
           .select('id, employee_id, title, status, effective_date, reason, notes, created_at, updated_at')
           .order('created_at', { ascending: false })
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
       ]);
 
       const nextSupportStats: HrSupportStats = { ...EMPTY_HR_SUPPORT_STATS };
@@ -2020,7 +2031,7 @@ const HRPage: React.FC = () => {
         const [goalsResult, formulasResult, roleContext, directory] = await Promise.all([
           supabase
             .from('goals')
-            .select('*')
+            .select(HR_GOAL_SELECT)
             .eq('is_active', true)
             .order('updated_at', { ascending: false }),
           supabase
@@ -3344,14 +3355,14 @@ const HRPage: React.FC = () => {
           .eq('assignee_id', assigneeId)
           .lte('invoice_date', periodEnd)
           .order('invoice_date', { ascending: false })
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
         supabase
           .from('payroll_calculation_entries')
           .select('id, details, status')
           .eq('source_type', 'commission')
           .eq('employee_id', employeeIdValue)
           .neq('status', 'voided')
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
         supabase
           .from('commission_drafts')
           .select('id, source_key, employee_id, assignee_id, period_start, period_end, source_basis, percent_mode, eligibility_event_type, eligibility_event_at, invoice_id, invoice_item_key, entitled_amount, posted_amount, remaining_amount, decision_status, decision_reason, deferred_from_period, deferred_to_period, manual_decision_by, manual_decision_at, draft_status, details')
@@ -3359,7 +3370,7 @@ const HRPage: React.FC = () => {
           .eq('source_basis', values.basis)
           .eq('percent_mode', values.percent_mode)
           .neq('draft_status', 'canceled')
-          .limit(5000),
+          .limit(HR_STATS_FETCH_LIMIT),
       ]);
       if (invoicesResult.error) throw invoicesResult.error;
       if (existingResult.error && !isMissingPayrollLedgerError(existingResult.error)) throw existingResult.error;

@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+dist/
+build/
+out/
+.vite/
+
+# Coverage & test artifacts
+coverage/
+*.lcov
+.nyc_output/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS & editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Secrets & env
+.env
+.env.local
+.env.*.local
+secrets/
+
+# Large static assets
+public/fonts/
+public/images/
+font/
+
+# Temp & diagnostics
+tmp/
+dist/
+gcm-diagnose.log
+
+# Old/backup database files
+database-old-*.sql

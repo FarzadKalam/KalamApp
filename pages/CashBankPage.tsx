@@ -63,6 +63,10 @@ const STATUS_LABEL: Record<string, string> = {
   closed: 'بسته',
 };
 
+const CASH_BANK_FETCH_LIMIT = 1200;
+const CASH_BANK_OPERATION_SELECT =
+  'id, operation_type, payment_type, status, operation_date, amount, sales_invoice_id, purchase_invoice_id, customer_id, supplier_id, employee_id, bank_account_id, cash_box_id, petty_fund_id, payment_bank_account_id, payment_cash_box_id, payment_petty_fund_id, receipt_bank_account_id, receipt_cash_box_id, receipt_petty_fund_id, cheque_id, description, created_at';
+
 const statusColor = (status?: string) =>
   ['received', 'cleared'].includes(String(status))
     ? 'success'
@@ -210,36 +214,52 @@ const CashBankPage: React.FC = () => {
         supabase
           .from('cheques')
           .select('id, cheque_type, status, amount, issue_date, due_date, party_type, party_id, serial_no, sayad_id, bank_account_id, notes, metadata, created_at')
-          .limit(3000),
+          .order('created_at', { ascending: false })
+          .limit(CASH_BANK_FETCH_LIMIT),
         runSelectWithCompatibleColumns<any[]>({
           cacheKey: 'cash-bank-page:invoices',
           columns: [...buildRecordTitleSelectColumns('invoices'), 'invoice_date', 'customer_id', 'payments', 'created_at'],
-          execute: (selectExpr) => supabase.from('invoices').select(selectExpr).limit(3000),
+          execute: (selectExpr) =>
+            supabase
+              .from('invoices')
+              .select(selectExpr)
+              .order('created_at', { ascending: false })
+              .limit(CASH_BANK_FETCH_LIMIT),
         }),
         runSelectWithCompatibleColumns<any[]>({
           cacheKey: 'cash-bank-page:purchase-invoices',
           columns: [...buildRecordTitleSelectColumns('purchase_invoices'), 'invoice_date', 'supplier_id', 'payments', 'created_at'],
-          execute: (selectExpr) => supabase.from('purchase_invoices').select(selectExpr).limit(3000),
+          execute: (selectExpr) =>
+            supabase
+              .from('purchase_invoices')
+              .select(selectExpr)
+              .order('created_at', { ascending: false })
+              .limit(CASH_BANK_FETCH_LIMIT),
         }),
-        supabase.from('cash_bank_operations').select('*').limit(3000),
+        supabase
+          .from('cash_bank_operations')
+          .select(CASH_BANK_OPERATION_SELECT)
+          .order('created_at', { ascending: false })
+          .limit(CASH_BANK_FETCH_LIMIT),
         supabase
           .from('barters')
           .select('id, name, system_code, status, barter_type, barter_date, initial_amount, remaining_amount, customer_id, supplier_id, employee_id, source_invoice_id, source_purchase_invoice_id, notes, created_at')
-          .limit(3000),
+          .order('created_at', { ascending: false })
+          .limit(CASH_BANK_FETCH_LIMIT),
         runSelectWithCompatibleColumns<any[]>({
           cacheKey: 'cash-bank-page:customers',
           columns: ['id', 'full_name', 'business_name', 'system_code', 'first_name', 'last_name', 'legal_name', 'notes'],
-          execute: (selectExpr) => supabase.from('customers').select(selectExpr).limit(3000),
+          execute: (selectExpr) => supabase.from('customers').select(selectExpr).limit(CASH_BANK_FETCH_LIMIT),
         }),
         runSelectWithCompatibleColumns<any[]>({
           cacheKey: 'cash-bank-page:suppliers',
           columns: ['id', 'business_name', 'full_name', 'system_code', 'first_name', 'last_name', 'legal_name', 'notes'],
-          execute: (selectExpr) => supabase.from('suppliers').select(selectExpr).limit(3000),
+          execute: (selectExpr) => supabase.from('suppliers').select(selectExpr).limit(CASH_BANK_FETCH_LIMIT),
         }),
         runSelectWithCompatibleColumns<any[]>({
           cacheKey: 'cash-bank-page:profiles',
           columns: ['id', 'full_name', 'first_name', 'last_name'],
-          execute: (selectExpr) => supabase.from('profiles').select(selectExpr).limit(3000),
+          execute: (selectExpr) => supabase.from('profiles').select(selectExpr).limit(CASH_BANK_FETCH_LIMIT),
         }),
       ]);
 

@@ -52,6 +52,11 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { extractBotMessageAttachments } from '../utils/messageAttachments';
 import AdaptiveScopePicker from './messaging/AdaptiveScopePicker';
+import { useNotificationConversationList } from '../hooks/useNotificationConversationList';
+import { useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
+import { useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
+import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
+import type { NotificationConversationSummary } from '../utils/notificationConversationRpc';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 
@@ -358,6 +363,62 @@ type ConversationListItem = {
   groupId?: string | null;
   isGroup?: boolean;
 };
+
+type ConversationAvatarModel = {
+  src?: string | null;
+  className?: string;
+  fallback: React.ReactNode;
+};
+
+const UnifiedConversationAvatar: React.FC<{
+  size: number;
+  src?: string | null;
+  className?: string;
+  fallback: React.ReactNode;
+}> = ({ size, src, className, fallback }) => (
+  <Avatar size={size} src={src || undefined} className={className}>
+    {!src ? fallback : null}
+  </Avatar>
+);
+
+const buildNoteConversationAvatarModel = ({
+  kind,
+  displayName,
+  avatarUrl,
+  systemAvatarSrc,
+}: {
+  kind: 'system' | 'direct' | 'group';
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  systemAvatarSrc?: string | null;
+}): ConversationAvatarModel => {
+  if (kind === 'system') {
+    return {
+      src: systemAvatarSrc || null,
+      className: '!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200',
+      fallback: <BellOutlined />,
+    };
+  }
+  if (kind === 'group') {
+    return {
+      src: null,
+      className: '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300',
+      fallback: <TeamOutlined />,
+    };
+  }
+  const normalizedDisplayName = String(displayName || '?').trim();
+  return {
+    src: avatarUrl || null,
+    className: '',
+    fallback: normalizedDisplayName.slice(0, 1) || '?',
+  };
+};
+
+const buildBotConversationAvatarModel = (): ConversationAvatarModel => ({
+  src: null,
+  className: '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300',
+  fallback: <RobotOutlined />,
+});
 
 type UiNotificationItem = {
   id: string;
@@ -684,6 +745,13 @@ const isChatGroupSelection = (value: string | null | undefined) =>
 const getChatGroupSelectionId = (value: string | null | undefined) =>
   isChatGroupSelection(value) ? String(value).slice(CHAT_GROUP_PREFIX.length) : null;
 
+const buildDirectConversationKey = (currentUserId: string, otherUserId: string) => {
+  const left = String(currentUserId || '').trim();
+  const right = String(otherUserId || '').trim();
+  if (!left || !right) return null;
+  return left <= right ? `direct:${left}:${right}` : `direct:${right}:${left}`;
+};
+
 const isMissingColumnError = (error: any, columnName: string) => {
   const code = String(error?.code || '').toUpperCase();
   if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
@@ -929,7 +997,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [tasks, setTasks] = useState<any[]>([]);
   const [responsibilities, setResponsibilities] = useState<any[]>([]);
   const [botGroups, setBotGroups] = useState<CounterpartyBotGroupRow[]>([]);
-  const [botMessages, setBotMessages] = useState<CounterpartyBotMessageRow[]>([]);
   const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(null);
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
@@ -994,7 +1061,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
   const [noteLinkedAttachments, setNoteLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [noteSmsNotificationEnabled, setNoteSmsNotificationEnabled] = useState(false);
-  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(null);
+  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(SYSTEM_MESSAGES_USER_ID);
   const [noteUserSearch, setNoteUserSearch] = useState('');
   const [noteMessageSearch, setNoteMessageSearch] = useState('');
   const [noteMentionPickerOpen, setNoteMentionPickerOpen] = useState(false);
@@ -1017,9 +1084,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [previewRecord, setPreviewRecord] = useState<{ moduleId: string; recordId: string; label?: string } | null>(null);
   const [taskProcessModalTask, setTaskProcessModalTask] = useState<any | null>(null);
   const [taskProcessHostKey] = useState(0);
-  const [selectedConversationNotes, setSelectedConversationNotes] = useState<any[] | null>(null);
-  const [selectedConversationNotesKey, setSelectedConversationNotesKey] = useState<string | null>(null);
-  const [loadingSelectedConversationNotes, setLoadingSelectedConversationNotes] = useState(false);
   const [noteViewportReady, setNoteViewportReady] = useState(true);
   const [botViewportReady, setBotViewportReady] = useState(true);
   const [seenNoteIds, setSeenNoteIds] = useState<Set<string>>(() => loadSeenSet(SEEN_NOTES_STORAGE_KEY));
@@ -1065,7 +1129,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const liveRefreshTimerRef = useRef<number | null>(null);
   const liveSectionRefreshTimersRef = useRef<Partial<Record<NotificationSectionKey, number>>>({});
   const realtimeDisabledRef = useRef(false);
-  const realtimeChannelSubscribedRef = useRef(false);
   const refreshAllRef = useRef<((notify?: boolean, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshSectionRef = useRef<((section: NotificationSectionKey, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshAllInFlightRef = useRef(false);
@@ -1091,7 +1154,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const botConversationMessageIdsRef = useRef<Set<string>>(new Set());
   const noteInitialAnchorDoneRef = useRef(false);
   const botInitialAnchorDoneRef = useRef(false);
-  const selectedConversationFetchSeqRef = useRef(0);
   const botMessagesFetchSeqRef = useRef(0);
   const botMessagesRef = useRef<CounterpartyBotMessageRow[]>([]);
   const botMessagesGroupIdRef = useRef<string | null>(null);
@@ -1115,9 +1177,50 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const moduleOptions = Object.values(MODULES)
     .filter((mod: any) => mod?.id && (mod?.table || mod?.id))
     .map((mod: any) => ({ label: mod.titles?.fa || mod.id, value: mod.id }));
+  const {
+    items: rpcBotConversationSummaries,
+    available: botConversationSummaryAvailable,
+    refresh: refreshBotConversationSummaries,
+  } = useNotificationConversationList({
+    supabase,
+    section: 'bot_messages',
+    enabled: open && variant === 'chat' && Boolean(profile.id),
+  });
+  const botSummaryMap = useMemo(() => {
+    const map = new Map<string, NotificationConversationSummary>();
+    (rpcBotConversationSummaries || []).forEach((item) => {
+      const botGroupId = String(item?.bot_group_id || '').trim();
+      if (botGroupId) {
+        map.set(botGroupId, item);
+      }
+    });
+    return map;
+  }, [rpcBotConversationSummaries]);
+  const effectiveBotGroups = useMemo(() => {
+    if (!(botConversationSummaryAvailable && rpcBotConversationSummaries)) return botGroups;
+    return botGroups
+      .map((row) => {
+        const summary = botSummaryMap.get(String(row.id)) || null;
+        return summary ? {
+          ...row,
+          group_title: String(summary.title || row.group_title || '').trim() || row.group_title,
+          status: String(summary.status || row.status || '').trim() || row.status,
+          channel_type: String(summary.channel_type || row.channel_type || '').trim() || row.channel_type,
+          counterparty_label: summary.counterparty_label || row.counterparty_label || null,
+          bot_chat_id: summary.bot_chat_id || row.bot_chat_id || null,
+        } : row;
+      })
+      .sort((left, right) => {
+        const leftSummary = botSummaryMap.get(String(left.id));
+        const rightSummary = botSummaryMap.get(String(right.id));
+        const leftTime = new Date(leftSummary?.latest_message_at || left.last_inbound_at || left.last_outbound_at || left.updated_at || 0).getTime() || 0;
+        const rightTime = new Date(rightSummary?.latest_message_at || right.last_inbound_at || right.last_outbound_at || right.updated_at || 0).getTime() || 0;
+        return rightTime - leftTime;
+      });
+  }, [botConversationSummaryAvailable, botGroups, botSummaryMap, rpcBotConversationSummaries]);
   const selectedBotGroup = useMemo(
-    () => botGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
-    [botGroups, selectedBotGroupId]
+    () => effectiveBotGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
+    [effectiveBotGroups, selectedBotGroupId]
   );
   const clearBotStatusWatchTimer = useCallback(() => {
     if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
@@ -1525,10 +1628,6 @@ useEffect(() => {
   useEffect(() => {
     persistSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY, seenVoipCallIds);
   }, [seenVoipCallIds]);
-
-  useEffect(() => {
-    botMessagesRef.current = botMessages;
-  }, [botMessages]);
 
   useEffect(() => {
     if (variant !== 'chat') {
@@ -2492,6 +2591,12 @@ useEffect(() => {
       if (showSkeleton) setLoadingNotes(true);
       const notesData = await safeSectionFetch(() => fetchNotes(), 'notes', [] as any[]);
       setNotes(notesData);
+      if (selectedConversationKey) {
+        await safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
+      }
+      if (noteConversationSummaryAvailable) {
+        await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
+      }
       lastLoadedAtRef.current.notes = Date.now();
       if (showSkeleton) setLoadingNotes(false);
       return;
@@ -2523,9 +2628,16 @@ useEffect(() => {
       const resolvedGroupId = String(selectedBotGroupId || groups[0]?.id || '').trim();
       await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       if (resolvedGroupId) {
-        await safeSectionFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+        if (botTimelineAvailable) {
+          await safeSectionFetch(() => refreshBotTimeline(), 'bot_messages', null as any);
+        } else {
+          await safeSectionFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+        }
       } else {
         setBotMessages([]);
+      }
+      if (botConversationSummaryAvailable) {
+        await safeSectionFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
       }
       lastLoadedAtRef.current.bot_messages = Date.now();
       if (showSkeleton) setLoadingBotMessages(false);
@@ -2662,6 +2774,12 @@ useEffect(() => {
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
     if (shouldLoadNotes) setNotes(notesData);
+    if (shouldLoadNotes && selectedConversationKey) {
+      await safeFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
+    }
+    if (shouldLoadNotes && noteConversationSummaryAvailable) {
+      await safeFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
+    }
     if (shouldLoadTasks) setTasks(tasksData);
     if (shouldLoadResponsibilities) setResponsibilities(responsibilitiesData);
     if (shouldLoadSmsMessages) setSmsMessages(smsData);
@@ -2674,9 +2792,16 @@ useEffect(() => {
       const resolvedGroupId = String(selectedBotGroupId || botGroupsData[0]?.id || '').trim();
       await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       if (resolvedGroupId) {
-        await safeFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+        if (botTimelineAvailable) {
+          await safeFetch(() => refreshBotTimeline(), 'bot_messages', null as any);
+        } else {
+          await safeFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+        }
       } else {
         setBotMessages([]);
+      }
+      if (botConversationSummaryAvailable) {
+        await safeFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
       }
     }
     const completedTaskIds = shouldLoadTasks ? tasksData
@@ -2982,6 +3107,36 @@ useEffect(() => {
     setBotNotificationMessages(rows);
     return rows;
   };
+  const loadLegacyBotTimeline = useCallback(async () => {
+    if (!selectedBotGroupId) return [] as CounterpartyBotMessageRow[];
+    return await fetchBotMessages(selectedBotGroupId, { showLoading: false, forceFull: true });
+  }, [selectedBotGroupId]);
+  const {
+    items: botMessages,
+    setItems: setBotMessages,
+    loadingInitial: loadingBotTimelineInitial,
+    loadingOlder: loadingOlderBotMessages,
+    hasMore: botTimelineHasMoreBefore,
+    initialAnchorId: botTimelineInitialAnchorId,
+    available: botTimelineAvailable,
+    refresh: refreshBotTimeline,
+    loadOlder: loadOlderBotMessages,
+  } = useBotConversationTimeline<CounterpartyBotMessageRow>({
+    supabase,
+    enabled: open && Boolean(selectedBotGroupId),
+    botGroupId: selectedBotGroupId,
+    pageSize: 10,
+    fallbackLoadInitial: loadLegacyBotTimeline,
+  });
+  useEffect(() => {
+    setLoadingBotMessages(loadingBotTimelineInitial);
+  }, [loadingBotTimelineInitial]);
+  useEffect(() => {
+    botMessagesRef.current = botMessages;
+    if (selectedBotGroupId) {
+      botMessagesGroupIdRef.current = selectedBotGroupId;
+    }
+  }, [botMessages, selectedBotGroupId]);
 
   const buildCurrentBotSenderPayload = useCallback(() => {
     const userId = String(profile.id || '').trim();
@@ -3220,8 +3375,11 @@ useEffect(() => {
     }
     botShouldStickToBottomRef.current = true;
     botForceScrollToBottomRef.current = true;
-    void fetchBotMessages(selectedBotGroupId, { showLoading: true });
-  }, [activeDrawerSection, open, selectedBotGroupId]);
+    setBotViewportReady(false);
+    if (!botTimelineAvailable) {
+      void fetchBotMessages(selectedBotGroupId, { showLoading: true });
+    }
+  }, [activeDrawerSection, botTimelineAvailable, open, selectedBotGroupId]);
 
   useEffect(() => {
     if (!open) return;
@@ -3248,7 +3406,7 @@ useEffect(() => {
       void fetchBotGroups()
         .then((groups) => fetchBotNotificationMessages(groups))
         .catch((error) => console.warn('Could not refresh bot notification messages', error));
-      if (selectedBotGroupId) {
+      if (selectedBotGroupId && !botTimelineAvailable) {
         void fetchBotMessages(selectedBotGroupId);
       }
     };
@@ -3256,7 +3414,7 @@ useEffect(() => {
       refreshBotFallback();
     }, realtimeDisabledRef.current ? 6000 : 15000);
     return () => window.clearInterval(timer);
-  }, [activeDrawerSection, open, selectedBotGroupId]);
+  }, [activeDrawerSection, botTimelineAvailable, open, selectedBotGroupId]);
 
   useEffect(() => {
     if (!profile.id) return;
@@ -3299,208 +3457,113 @@ useEffect(() => {
     };
   }, [profile.id, profile.role_id, variant]);
 
-  useEffect(() => {
-    if (!profile.id) return;
-    if (realtimeDisabledRef.current) return;
-    realtimeChannelSubscribedRef.current = false;
-    const currentUserId = String(profile.id || '').trim();
-    const currentRoleId = String(profile.role_id || '').trim();
-    if (!currentUserId) return;
-
-    const hasAssigneeMatch = (row: any) => {
-      if (!row || typeof row !== 'object') return false;
-      const assigneeType = String(row.assignee_type || '').trim().toLowerCase();
-      const assigneeId = String(row.assignee_id || '').trim();
-      const assigneeRoleId = String(row.assignee_role_id || '').trim();
-      if (assigneeType === 'user') return assigneeId === currentUserId;
-      if (assigneeType === 'role') {
-        if (!currentRoleId) return false;
-        return assigneeRoleId === currentRoleId || assigneeId === currentRoleId;
-      }
-      return (
-        assigneeId === currentUserId
-        || (!!currentRoleId && (assigneeRoleId === currentRoleId || assigneeId === currentRoleId))
-      );
-    };
-
-    const normalizeIdArray = (value: any): string[] => {
-      if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
-      if (typeof value === 'string' && value.trim().startsWith('{') && value.trim().endsWith('}')) {
-        return value
-          .replace(/^\{|\}$/g, '')
-          .split(',')
-          .map((item) => String(item || '').replace(/"/g, '').trim())
-          .filter(Boolean);
-      }
-      return [];
-    };
-
-    const hasNoteMatch = (row: any) => {
-      if (!row || typeof row !== 'object') return false;
-      const authorId = String(row.author_id || '').trim();
-      if (authorId === currentUserId) return true;
-      const mentionUserIds = normalizeIdArray(row.mention_user_ids);
-      if (mentionUserIds.includes(currentUserId)) return true;
-      if (currentRoleId) {
-        const mentionRoleIds = normalizeIdArray(row.mention_role_ids);
-        if (mentionRoleIds.includes(currentRoleId)) return true;
-      }
-      return false;
-    };
-
-    const hasVoipCallMatch = (row: any) => {
-      if (!row || typeof row !== 'object') return false;
-      if (String(row.direction || '').trim() && String(row.direction || '').trim() !== 'incoming') return false;
-      if (profile.can_view_all_calls) return true;
-      const extension = String(profile.voip_extension || '').trim();
-      if (!extension) return false;
-      return String(row.extension || '').trim() === extension;
-    };
-
-    const scheduleLiveRefresh = (section?: NotificationSectionKey) => {
-      if (liveRefreshTimerRef.current !== null && typeof window !== 'undefined') {
-        window.clearTimeout(liveRefreshTimerRef.current);
-      }
-      if (typeof window === 'undefined') {
-        if (section) {
-          void refreshSectionRef.current?.(section, { force: true });
-        } else {
-          void refreshAllRef.current?.(true, { force: true });
-        }
-        return;
-      }
+  const currentUserId = String(profile.id || '').trim();
+  const currentRoleId = String(profile.role_id || '').trim();
+  const hasAssigneeMatch = useCallback((row: any) => {
+    if (!row || typeof row !== 'object') return false;
+    const assigneeType = String(row.assignee_type || '').trim().toLowerCase();
+    const assigneeId = String(row.assignee_id || '').trim();
+    const assigneeRoleId = String(row.assignee_role_id || '').trim();
+    if (assigneeType === 'user') return assigneeId === currentUserId;
+    if (assigneeType === 'role') {
+      if (!currentRoleId) return false;
+      return assigneeRoleId === currentRoleId || assigneeId === currentRoleId;
+    }
+    return (
+      assigneeId === currentUserId
+      || (!!currentRoleId && (assigneeRoleId === currentRoleId || assigneeId === currentRoleId))
+    );
+  }, [currentRoleId, currentUserId]);
+  const normalizeIdArray = useCallback((value: any): string[] => {
+    if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+    if (typeof value === 'string' && value.trim().startsWith('{') && value.trim().endsWith('}')) {
+      return value
+        .replace(/^\{|\}$/g, '')
+        .split(',')
+        .map((item) => String(item || '').replace(/"/g, '').trim())
+        .filter(Boolean);
+    }
+    return [];
+  }, []);
+  const hasNoteMatch = useCallback((row: any) => {
+    if (!row || typeof row !== 'object') return false;
+    const authorId = String(row.author_id || '').trim();
+    if (authorId === currentUserId) return true;
+    const mentionUserIds = normalizeIdArray(row.mention_user_ids);
+    if (mentionUserIds.includes(currentUserId)) return true;
+    if (currentRoleId) {
+      const mentionRoleIds = normalizeIdArray(row.mention_role_ids);
+      if (mentionRoleIds.includes(currentRoleId)) return true;
+    }
+    return false;
+  }, [currentRoleId, currentUserId, normalizeIdArray]);
+  const hasVoipCallMatch = useCallback((row: any) => {
+    if (!row || typeof row !== 'object') return false;
+    if (String(row.direction || '').trim() && String(row.direction || '').trim() !== 'incoming') return false;
+    if (profile.can_view_all_calls) return true;
+    const extension = String(profile.voip_extension || '').trim();
+    if (!extension) return false;
+    return String(row.extension || '').trim() === extension;
+  }, [profile.can_view_all_calls, profile.voip_extension]);
+  const scheduleLiveRefresh = useCallback((section?: NotificationSectionKey) => {
+    if (liveRefreshTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearTimeout(liveRefreshTimerRef.current);
+    }
+    if (typeof window === 'undefined') {
       if (section) {
-        const currentSectionTimer = liveSectionRefreshTimersRef.current[section];
-        if (typeof currentSectionTimer === 'number') {
-          window.clearTimeout(currentSectionTimer);
-        }
-        liveSectionRefreshTimersRef.current[section] = window.setTimeout(() => {
-          delete liveSectionRefreshTimersRef.current[section];
-          void refreshSectionRef.current?.(section, { force: true });
-        }, 250);
-        return;
-      }
-      liveRefreshTimerRef.current = window.setTimeout(() => {
-        liveRefreshTimerRef.current = null;
+        void refreshSectionRef.current?.(section, { force: true });
+      } else {
         void refreshAllRef.current?.(true, { force: true });
-      }, 400);
-    };
-
-    const mapBroadcastSection = (section: any): NotificationSectionKey | null => {
-      const normalized = String(section || '').trim();
-      if (variant === 'chat') {
-        if (normalized === 'notes') return 'notes';
-        if (normalized === 'bot_messages') return 'bot_messages';
-        if (normalized === 'sms' || normalized === 'sms_messages') return 'sms_messages';
-        if (normalized === 'voip_calls') return 'voip_calls';
-        return null;
       }
-      if (normalized === 'tasks') return 'tasks';
-      if (normalized === 'responsibilities') return 'responsibilities';
-      return null;
-    };
-
-    const channel = supabase.channel(`notifications-live-${variant}-${currentUserId}-${currentRoleId || 'none'}`);
-    const broadcastChannels: any[] = [];
-    const currentOrgId = String(profile.org_id || '').trim();
-    if (currentOrgId) {
-      const broadcastTopics = [
-        `org:${currentOrgId}:notifications`,
-        `org:${currentOrgId}:user:${currentUserId}:notifications`,
-        currentRoleId ? `org:${currentOrgId}:role:${currentRoleId}:notifications` : null,
-      ].filter(Boolean) as string[];
-
-      broadcastTopics.forEach((topic) => {
-        const broadcastChannel = supabase.channel(topic, { config: { private: true } } as any)
-          .on('broadcast', { event: 'notification' }, (message: any) => {
-            const section = mapBroadcastSection(message?.payload?.section);
-            if (section) scheduleLiveRefresh(section);
-          });
-        broadcastChannel.subscribe((status) => {
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            void supabase.removeChannel(broadcastChannel);
-          }
-        });
-        broadcastChannels.push(broadcastChannel);
-      });
+      return;
     }
-
+    if (section) {
+      const currentSectionTimer = liveSectionRefreshTimersRef.current[section];
+      if (typeof currentSectionTimer === 'number') {
+        window.clearTimeout(currentSectionTimer);
+      }
+      liveSectionRefreshTimersRef.current[section] = window.setTimeout(() => {
+        delete liveSectionRefreshTimersRef.current[section];
+        void refreshSectionRef.current?.(section, { force: true });
+      }, 250);
+      return;
+    }
+    liveRefreshTimerRef.current = window.setTimeout(() => {
+      liveRefreshTimerRef.current = null;
+      void refreshAllRef.current?.(true, { force: true });
+    }, 400);
+  }, []);
+  const mapBroadcastSection = useCallback((section: any): NotificationSectionKey | null => {
+    const normalized = String(section || '').trim();
     if (variant === 'chat') {
-      channel
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notes' }, (payload: any) => {
-          if (hasNoteMatch(payload?.new)) scheduleLiveRefresh('notes');
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notes' }, (payload: any) => {
-          if (hasNoteMatch(payload?.new) || hasNoteMatch(payload?.old)) scheduleLiveRefresh('notes');
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_groups' }, () => {
-          scheduleLiveRefresh('bot_messages');
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_messages' }, () => {
-          scheduleLiveRefresh('bot_messages');
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'outbound_messages' }, (payload: any) => {
-          const row = payload?.new || payload?.old || {};
-          if (String(row?.channel_type || '').trim() === 'sms') scheduleLiveRefresh('sms_messages');
-        })
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'voip_call_logs' }, (payload: any) => {
-          if (hasVoipCallMatch(payload?.new)) {
-            setVoipCalls((prev) => [payload.new, ...prev.filter((row) => String(row?.id || '') !== String(payload?.new?.id || ''))].slice(0, 20));
-          }
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'voip_call_logs' }, (payload: any) => {
-          if (hasVoipCallMatch(payload?.new)) {
-            setVoipCalls((prev) => [payload.new, ...prev.filter((row) => String(row?.id || '') !== String(payload?.new?.id || ''))].slice(0, 20));
-          }
-        });
-    } else {
-      channel
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tasks' }, (payload: any) => {
-          if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('tasks');
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tasks' }, (payload: any) => {
-          if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('tasks');
-        });
-
-      RESPONSIBILITY_REALTIME_TABLES.forEach((table) => {
-        channel
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table }, (payload: any) => {
-            if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('responsibilities');
-          })
-          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table }, (payload: any) => {
-            if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('responsibilities');
-          });
-      });
+      if (normalized === 'notes') return 'notes';
+      if (normalized === 'bot_messages') return 'bot_messages';
+      if (normalized === 'sms' || normalized === 'sms_messages') return 'sms_messages';
+      if (normalized === 'voip_calls') return 'voip_calls';
+      return null;
     }
-
-    channel.subscribe((status) => {
-      realtimeChannelSubscribedRef.current = status === 'SUBSCRIBED';
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        realtimeDisabledRef.current = true;
-        realtimeChannelSubscribedRef.current = false;
-        void supabase.removeChannel(channel);
-      }
-    });
-
-    return () => {
-      if (liveRefreshTimerRef.current !== null && typeof window !== 'undefined') {
-        window.clearTimeout(liveRefreshTimerRef.current);
-        liveRefreshTimerRef.current = null;
-      }
-      if (typeof window !== 'undefined') {
-        Object.values(liveSectionRefreshTimersRef.current).forEach((timerId) => {
-          if (typeof timerId === 'number') window.clearTimeout(timerId);
-        });
-      }
-      liveSectionRefreshTimersRef.current = {};
-      if (realtimeChannelSubscribedRef.current) {
-        void supabase.removeChannel(channel);
-      }
-      broadcastChannels.forEach((broadcastChannel) => {
-        void supabase.removeChannel(broadcastChannel);
-      });
-    };
-  }, [profile.can_view_all_calls, profile.id, profile.org_id, profile.role_id, profile.voip_extension, variant]);
+    if (normalized === 'tasks') return 'tasks';
+    if (normalized === 'responsibilities') return 'responsibilities';
+    return null;
+  }, [variant]);
+  useNotificationRealtimeSync({
+    supabase,
+    enabled: Boolean(profile.id) && !realtimeDisabledRef.current,
+    variant,
+    channelKey: `notifications-live-${variant}-${currentUserId}-${currentRoleId || 'none'}`,
+    currentUserId,
+    currentRoleId,
+    currentOrgId: String(profile.org_id || '').trim() || null,
+    mapBroadcastSection,
+    scheduleLiveRefresh,
+    hasNoteMatch,
+    hasAssigneeMatch,
+    hasVoipCallMatch,
+    responsibilityTables: RESPONSIBILITY_REALTIME_TABLES,
+    onVoipUpsert: (row) => {
+      setVoipCalls((prev) => [row, ...prev.filter((item) => String(item?.id || '') !== String(row?.id || ''))].slice(0, 20));
+    },
+  });
 
   const notesCount = notes.filter((n: any) => {
     const authorId = String(n?.author_id || '').trim();
@@ -3517,11 +3580,13 @@ useEffect(() => {
   const responsibilitiesCount = responsibilities.filter((r: any) => (
     !isNotificationRead('responsibilities', getResponsibilitySourceType(r), String(r?.id || ''), seenResponsibilityIds.has(String(r?.id || '')))
   )).length;
-  const botMessagesCount = botNotificationMessages.filter((row) => {
-    const id = String(row?.id || '').trim();
-    return String(row?.direction || '').trim() === 'inbound'
-      && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
-  }).length;
+  const botMessagesCount = botConversationSummaryAvailable && rpcBotConversationSummaries
+    ? (rpcBotConversationSummaries || []).reduce((sum, item) => sum + Number(item?.unread_count || 0), 0)
+    : botNotificationMessages.filter((row) => {
+      const id = String(row?.id || '').trim();
+      return String(row?.direction || '').trim() === 'inbound'
+        && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
+    }).length;
   const smsMessagesCount = smsMessages.filter((row: any) => (
     String(row?.direction || '').trim() === 'inbound'
     && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), false)
@@ -3715,10 +3780,79 @@ useEffect(() => {
   }, [directoryUsers]);
   const selectedConversationKey = useMemo(() => {
     if (!selectedNoteUserId) return null;
-    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return SYSTEM_MESSAGES_USER_ID;
+    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return 'system';
     if (selectedChatGroupId) return `group:${selectedChatGroupId}`;
-    return `direct:${selectedNoteUserId}`;
-  }, [selectedChatGroupId, selectedNoteUserId]);
+    return buildDirectConversationKey(String(profile.id || ''), String(selectedNoteUserId || ''));
+  }, [profile.id, selectedChatGroupId, selectedNoteUserId]);
+  const loadLegacySelectedConversationNotes = useCallback(async () => {
+    if (!profile.id || !selectedNoteUserId) return [] as any[];
+
+    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
+      const inboxItems = await fetchNotificationInboxSection('notes', 160);
+      const systemNoteIds = (inboxItems || [])
+        .filter((item) => (
+          String(item?.source_type || '').trim() === 'note'
+          && String(item?.category || '').trim() === 'system'
+        ))
+        .map((item) => String(item?.source_id || '').trim())
+        .filter(Boolean)
+        .slice(0, 120);
+      return await fetchNotesByIds(systemNoteIds);
+    }
+
+    if (selectedChatGroupId) {
+      const { data, error } = await supabase
+        .from('notes')
+        .select(NOTE_SELECT_FIELDS)
+        .contains('metadata', { chat_group_id: selectedChatGroupId })
+        .order('created_at', { ascending: false })
+        .limit(120);
+      if (error) throw error;
+      return data || [];
+    }
+
+    const currentUserId = String(profile.id || '');
+    const targetUserId = String(selectedNoteUserId || '');
+    const [sentResult, receivedResult] = await Promise.all([
+      supabase
+        .from('notes')
+        .select(NOTE_SELECT_FIELDS)
+        .eq('author_id', currentUserId)
+        .contains('mention_user_ids', [targetUserId])
+        .order('created_at', { ascending: false })
+        .limit(80),
+      supabase
+        .from('notes')
+        .select(NOTE_SELECT_FIELDS)
+        .eq('author_id', targetUserId)
+        .contains('mention_user_ids', [currentUserId])
+        .order('created_at', { ascending: false })
+        .limit(80),
+    ]);
+    if (sentResult.error) throw sentResult.error;
+    if (receivedResult.error) throw receivedResult.error;
+    const unique = new Map<string, any>();
+    [...(sentResult.data || []), ...(receivedResult.data || [])].forEach((note: any) => {
+      unique.set(String(note.id), note);
+    });
+    return Array.from(unique.values());
+  }, [profile.id, selectedChatGroupId, selectedNoteUserId]);
+  const {
+    items: selectedConversationNotes,
+    setItems: setSelectedConversationNotes,
+    loadingInitial: loadingSelectedConversationNotes,
+    loadingOlder: loadingOlderSelectedConversationNotes,
+    hasMore: selectedConversationHasMoreBefore,
+    initialAnchorId: selectedConversationInitialAnchorId,
+    refresh: refreshSelectedConversationTimeline,
+    loadOlder: loadOlderSelectedConversationNotes,
+  } = useInternalConversationTimeline<any>({
+    supabase,
+    enabled: open && activeDrawerSection === 'notes' && Boolean(profile.id) && Boolean(selectedConversationKey),
+    conversationKey: selectedConversationKey,
+    pageSize: 10,
+    fallbackLoadInitial: loadLegacySelectedConversationNotes,
+  });
   const isUnreadNoteRow = useCallback((note: any) => {
     const noteId = String(note?.id || '').trim();
     if (!noteId) return false;
@@ -3733,12 +3867,10 @@ useEffect(() => {
     if (String(row?.direction || '').trim() === 'outbound') return false;
     return !isNotificationRead('bot_messages', 'counterparty_bot_message', rowId, seenBotMessageIds.has(rowId));
   }, [isNotificationRead, seenBotMessageIds]);
-  const isSelectedConversationLoaded = !selectedConversationKey || (
-    selectedConversationNotesKey === selectedConversationKey && !loadingSelectedConversationNotes
-  );
+  const isSelectedConversationLoaded = !selectedConversationKey || !loadingSelectedConversationNotes;
   const filteredNotes = useMemo(() => {
     const sourceNotes = selectedConversationKey
-      ? (selectedConversationNotesKey === selectedConversationKey ? (selectedConversationNotes || []) : [])
+      ? (selectedConversationNotes || [])
       : notes;
     if (!selectedNoteUserId) {
       const currentUserId = String(profile.id || '').trim();
@@ -3759,7 +3891,7 @@ useEffect(() => {
     return sourceNotes.filter((note: any) =>
       isDirectConversationNote(note, currentUserId, targetUserId, noteLookup)
     );
-  }, [noteLookup, notes, profile.id, selectedChatGroupId, selectedConversationKey, selectedConversationNotes, selectedConversationNotesKey, selectedNoteUserId]);
+  }, [noteLookup, notes, profile.id, selectedChatGroupId, selectedConversationKey, selectedConversationNotes, selectedNoteUserId]);
   const inferredDirectUsers = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
     if (!currentUserId) return [] as Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
@@ -3852,13 +3984,95 @@ useEffect(() => {
     }),
     [availableDirectUsers, chatGroups, isNotificationRead, noteLookup, notes, profile.id, roleLookup]
   );
+  const {
+    items: rpcNoteConversationSummaries,
+    available: noteConversationSummaryAvailable,
+    refresh: refreshNoteConversationSummaries,
+  } = useNotificationConversationList({
+    supabase,
+    section: 'notes',
+    enabled: open && variant === 'chat' && Boolean(profile.id),
+  });
+  const noteConversationsFromRpc = useMemo<ConversationListItem[]>(() => {
+    const summaries = rpcNoteConversationSummaries || [];
+    return summaries
+      .filter((item) => String(item?.section || '').trim() === 'notes')
+      .map((item: NotificationConversationSummary) => {
+        const kind = String(item.kind || '').trim();
+        if (kind === 'system') {
+          return {
+            id: SYSTEM_MESSAGES_USER_ID,
+            kind: 'system' as const,
+            displayName: String(item.title || 'پیام‌های سیستم'),
+            noteCount: Number(item.note_count || 0),
+            unreadCount: Number(item.unread_count || 0),
+            latestMessageAt: new Date(item.latest_message_at || 0).getTime() || 0,
+            userId: SYSTEM_MESSAGES_USER_ID,
+            isGroup: false,
+          };
+        }
+        if (kind === 'group') {
+          const groupId = String(item.group_id || '').trim();
+          const chatGroup = groupId ? chatGroupMap[groupId] || null : null;
+          return {
+            id: `${CHAT_GROUP_PREFIX}${groupId}`,
+            kind: 'group' as const,
+            displayName: String(chatGroup?.name || item.title || 'گروه'),
+            noteCount: Number(item.note_count || 0),
+            unreadCount: Number(item.unread_count || 0),
+            latestMessageAt: new Date(item.latest_message_at || 0).getTime() || 0,
+            groupId,
+            isGroup: true,
+          };
+        }
+        const userId = String(item.user_id || '').trim();
+        const directoryUser = userId ? directoryUserMap[userId] || null : null;
+        return {
+          id: userId,
+          kind: 'direct' as const,
+          displayName: String(directoryUser?.display_name || item.title || userId || 'کاربر'),
+          avatarUrl: directoryUser?.avatar_url || item.avatar_url || null,
+          noteCount: Number(item.note_count || 0),
+          unreadCount: Number(item.unread_count || 0),
+          latestMessageAt: new Date(item.latest_message_at || 0).getTime() || 0,
+          roleLabel: (directoryUser?.role_id ? roleLookup[String(directoryUser.role_id)] : null) || item.role_label || null,
+          userId,
+          isGroup: false,
+        };
+      })
+      .filter((item) => Boolean(item.id))
+      .sort((a, b) => {
+        if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
+        if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
+        return String(a.displayName || '').localeCompare(String(b.displayName || ''), 'fa');
+      })
+      .filter((item, index, arr) => arr.findIndex((other) => other.id === item.id) === index);
+  }, [chatGroupMap, directoryUserMap, roleLookup, rpcNoteConversationSummaries]);
+  const effectiveNoteConversations = noteConversationSummaryAvailable && rpcNoteConversationSummaries
+    ? noteConversationsFromRpc.filter((item) => item.kind !== 'system')
+    : noteConversations;
+  const effectiveSystemNoteStats = useMemo(() => {
+    if (!(noteConversationSummaryAvailable && rpcNoteConversationSummaries)) return systemNoteStats;
+    const systemSummary = noteConversationsFromRpc.find((item) => item.kind === 'system');
+    return systemSummary
+      ? {
+          noteCount: systemSummary.noteCount,
+          latestMessageAt: systemSummary.latestMessageAt,
+          unreadCount: systemSummary.unreadCount,
+        }
+      : systemNoteStats;
+  }, [noteConversationSummaryAvailable, noteConversationsFromRpc, rpcNoteConversationSummaries, systemNoteStats]);
   const visibleNoteConversations = useMemo(() => {
     const search = String(noteUserSearch || '').trim().toLowerCase();
-    if (!search) return noteConversations;
-    return noteConversations.filter((item) =>
+    if (!search) return effectiveNoteConversations;
+    return effectiveNoteConversations.filter((item) =>
       String(item.displayName || '').toLowerCase().includes(search)
     );
-  }, [noteConversations, noteUserSearch]);
+  }, [effectiveNoteConversations, noteUserSearch]);
+  const selectedNoteConversationListItem = useMemo(() => {
+    if (!selectedNoteUserId) return null;
+    return effectiveNoteConversations.find((item) => item.id === selectedNoteUserId) || null;
+  }, [effectiveNoteConversations, selectedNoteUserId]);
   const selectedNoteUser = useMemo(() => {
     if (!selectedNoteUserId) return null;
     if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
@@ -3874,6 +4088,19 @@ useEffect(() => {
     }
     return directoryUserMap[String(selectedNoteUserId)] || inferredDirectUsers.find((user) => String(user.id) === String(selectedNoteUserId)) || null;
   }, [directoryUserMap, inferredDirectUsers, selectedChatGroupId, selectedNoteUserId, systemAvatarSrc]);
+  const selectedNoteConversationAvatar = useMemo(() => buildNoteConversationAvatarModel({
+    kind: selectedChatGroup
+      ? 'group'
+      : (selectedNoteConversationListItem?.kind || (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'system' : 'direct')),
+    displayName: selectedNoteConversationListItem?.displayName || selectedChatGroup?.name || selectedNoteUser?.display_name || null,
+    avatarUrl: selectedNoteConversationListItem?.avatarUrl || selectedNoteUser?.avatar_url || null,
+    systemAvatarSrc,
+  }), [selectedChatGroup, selectedNoteConversationListItem, selectedNoteUser, selectedNoteUserId, systemAvatarSrc]);
+  const systemConversationAvatar = useMemo(() => buildNoteConversationAvatarModel({
+    kind: 'system',
+    displayName: 'پیام‌های سیستم',
+    systemAvatarSrc,
+  }), [systemAvatarSrc]);
   const orderedFilteredNotes = useMemo(
     () => [...filteredNotes].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     [filteredNotes]
@@ -3898,28 +4125,68 @@ useEffect(() => {
     });
   }, [authorNameMap, directoryUserMap, normalizedNoteMessageSearch, orderedFilteredNotes]);
   const firstUnreadNoteDomId = useMemo(() => {
-    const firstUnread = displayedChatNotes.find((note: any) => isUnreadNoteRow(note));
-    const noteId = String(firstUnread?.id || '').trim();
+    const noteId = String(
+      selectedConversationInitialAnchorId
+      || displayedChatNotes.find((note: any) => isUnreadNoteRow(note))?.id
+      || ''
+    ).trim();
     return noteId ? `note-message-${noteId}` : null;
-  }, [displayedChatNotes, isUnreadNoteRow]);
+  }, [displayedChatNotes, isUnreadNoteRow, selectedConversationInitialAnchorId]);
   const firstUnreadBotMessageDomId = useMemo(() => {
-    const firstUnread = botMessages.find((row) => isUnreadBotRow(row));
-    const rowId = String(firstUnread?.id || '').trim();
+    const rowId = String(
+      botTimelineInitialAnchorId
+      || botMessages.find((row) => isUnreadBotRow(row))?.id
+      || ''
+    ).trim();
     return rowId ? `bot-message-${rowId}` : null;
-  }, [botMessages, isUnreadBotRow]);
+  }, [botMessages, botTimelineInitialAnchorId, isUnreadBotRow]);
   const activeConversationRoleLabel = useMemo(() => {
     if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return 'اعلان‌های گردش کارها و اتوماسیون‌ها';
     if (selectedChatGroup) {
       const memberCount = resolveGroupMemberUserIds(selectedChatGroup).length;
       return `${toPersianNumber(String(memberCount))} عضو`;
     }
+    if (selectedNoteConversationListItem?.roleLabel) return selectedNoteConversationListItem.roleLabel;
     if (!selectedNoteUser?.role_id) return 'بدون نقش';
     return roleLookup[String(selectedNoteUser.role_id)] || 'بدون نقش';
-  }, [resolveGroupMemberUserIds, roleLookup, selectedChatGroup, selectedNoteUser, selectedNoteUserId]);
+  }, [resolveGroupMemberUserIds, roleLookup, selectedChatGroup, selectedNoteConversationListItem, selectedNoteUser, selectedNoteUserId]);
   const currentUserDisplayName = useMemo(() => (
     directoryUserMap[String(profile.id || '')]?.display_name
     || 'شما'
   ), [directoryUserMap, profile.id]);
+  const currentUserConversationAvatar = useMemo(() => buildNoteConversationAvatarModel({
+    kind: 'direct',
+    displayName: currentUserDisplayName,
+    avatarUrl: directoryUserMap[String(profile.id || '')]?.avatar_url || null,
+  }), [currentUserDisplayName, directoryUserMap, profile.id]);
+  const botConversationAvatar = useMemo(() => buildBotConversationAvatarModel(), []);
+  const resolveNoteBubbleAvatar = useCallback((note: any, isMine: boolean, isSystem: boolean): ConversationAvatarModel => {
+    if (isSystem) return systemConversationAvatar;
+    if (isMine) return currentUserConversationAvatar;
+    if (selectedChatGroup) {
+      return buildNoteConversationAvatarModel({
+        kind: 'group',
+        displayName: selectedChatGroup.name,
+      });
+    }
+    if (selectedNoteConversationListItem) {
+      return buildNoteConversationAvatarModel({
+        kind: selectedNoteConversationListItem.kind,
+        displayName: selectedNoteConversationListItem.displayName,
+        avatarUrl: selectedNoteConversationListItem.avatarUrl || null,
+        systemAvatarSrc,
+      });
+    }
+    const author = directoryUserMap[String(note?.author_id || '')];
+    return buildNoteConversationAvatarModel({
+      kind: 'direct',
+      displayName: note?.author_name || author?.display_name || 'کاربر',
+      avatarUrl: author?.avatar_url || null,
+    });
+  }, [currentUserConversationAvatar, directoryUserMap, selectedChatGroup, selectedNoteConversationListItem, systemAvatarSrc, systemConversationAvatar]);
+  const resolveBotBubbleAvatar = useCallback((outgoing: boolean): ConversationAvatarModel => (
+    outgoing ? currentUserConversationAvatar : botConversationAvatar
+  ), [botConversationAvatar, currentUserConversationAvatar]);
 
   const normalizeReadReceipts = useCallback((box: any): ReadReceiptEntry[] => {
     const map = readReceiptMapFromBox(box);
@@ -4082,6 +4349,112 @@ useEffect(() => {
   };
 
   const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow) => extractBotMessageAttachments(row), []);
+  const mergeHydratedBotMessageAttachment = useCallback((
+    row: CounterpartyBotMessageRow,
+    data: { file_url?: string | null; file_name?: string | null; mime_type?: string | null }
+  ) => {
+    const rowId = String(row?.id || '').trim();
+    if (!rowId) return null;
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const nextPayload = {
+      ...(payload || {}),
+      attachments: [{
+        name: String(row.file_name || data.file_name || 'فایل').trim() || 'فایل',
+        url: String(data.file_url || '').trim(),
+        mime_type: String(data.mime_type || row.mime_type || '').trim() || null,
+        file_type: String(row.message_type || 'file').trim() || 'file',
+      }],
+    };
+    setBotMessages((prev) => prev.map((item) => String(item?.id || '') === rowId ? {
+      ...item,
+      file_url: String(data.file_url || '').trim() || item.file_url,
+      file_name: String(row.file_name || data.file_name || '').trim() || item.file_name,
+      mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
+      payload: nextPayload,
+    } : item));
+    setBotNotificationMessages((prev) => prev.map((item) => String(item?.id || '') === rowId ? {
+      ...item,
+      file_url: String(data.file_url || '').trim() || item.file_url,
+      file_name: String(row.file_name || data.file_name || '').trim() || item.file_name,
+      mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
+      payload: nextPayload,
+    } : item));
+    botHydrationFailuresRef.current.delete(rowId);
+    loggedBotHydrationFailuresRef.current.delete(rowId);
+    return {
+      name: String(row.file_name || data.file_name || 'فایل').trim() || 'فایل',
+      url: String(data.file_url || '').trim(),
+      mimeType: String(data.mime_type || row.mime_type || '').trim() || null,
+      fileType: String(row.message_type || 'file').trim() || 'file',
+    };
+  }, []);
+
+  const importBotMessageAttachment = useCallback(async (
+    row: CounterpartyBotMessageRow,
+    options: { force?: boolean; downloadAfter?: boolean } = {},
+  ) => {
+    const rowId = String(row?.id || '').trim();
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const fileId = String((payload as any)?.media_file_id || '').trim();
+    if (!rowId || !fileId) {
+      throw new Error('شناسه فایل این پیام در دسترس نیست.');
+    }
+    if (String(selectedBotGroup?.channel_type || '').trim() !== 'rubika') {
+      throw new Error('این عملیات فقط برای فایل‌های روبیکا پشتیبانی می‌شود.');
+    }
+    const activeConnection = await getActiveChannelSettings('rubika');
+    const connectionId = String(activeConnection?.id || '').trim();
+    if (!connectionId) {
+      throw new Error('تنظیمات فعال روبیکا پیدا نشد.');
+    }
+    if (!options.force) {
+      const failureState = botHydrationFailuresRef.current.get(rowId);
+      const now = Date.now();
+      if (
+        failureState
+        && failureState.attempts >= BOT_MEDIA_HYDRATION_MAX_FAILURES
+        && now - failureState.lastAttemptAt < BOT_MEDIA_HYDRATION_BACKOFF_MS
+      ) {
+        throw new Error('این فایل اخیراً ناموفق بوده است. کمی بعد دوباره تلاش کنید.');
+      }
+    }
+
+    const { data, error } = await supabase.functions.invoke('bot-admin', {
+      body: {
+        action: 'import_rubika_file',
+        channel: 'rubika',
+        connectionId,
+        messageId: rowId,
+        fileId,
+        fileName: String(row.file_name || '').trim() || undefined,
+      },
+    });
+    if (error) throw error;
+    if (!data?.success || !String(data?.file_url || '').trim()) {
+      const failureMessage = String(data?.message || 'بازیابی فایل پیام بات ناموفق بود.').trim();
+      const retryable = data?.retryable === true;
+      botHydrationFailuresRef.current.set(rowId, {
+        attempts: retryable ? 1 : BOT_MEDIA_HYDRATION_MAX_FAILURES,
+        lastAttemptAt: Date.now(),
+      });
+      const nextError = new Error(failureMessage) as Error & { retryable?: boolean };
+      nextError.retryable = retryable;
+      throw nextError;
+    }
+    const nextAttachment = mergeHydratedBotMessageAttachment(row, data || {});
+    if (options.downloadAfter && nextAttachment?.url && typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = nextAttachment.url;
+      link.download = nextAttachment.name || 'file';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+    return nextAttachment;
+  }, [mergeHydratedBotMessageAttachment, selectedBotGroup?.channel_type]);
+
   const hydrateBotMessagesMedia = useCallback(async (rows: CounterpartyBotMessageRow[]) => {
     const hasBrokenRubikaStorageUrl = (url: string) => /https?:\/\/botapi\.rubika\.ir\/storage\/v1\/object\/public\//i.test(String(url || '').trim());
     const now = Date.now();
@@ -4119,61 +4492,12 @@ useEffect(() => {
       if (!rowId || !fileId) continue;
       hydratingBotMessageIdsRef.current.add(rowId);
       try {
-        const { data, error } = await supabase.functions.invoke('bot-admin', {
-          body: {
-            action: 'import_rubika_file',
-            channel: 'rubika',
-            connectionId,
-            messageId: rowId,
-            fileId,
-            fileName: String(row.file_name || '').trim() || undefined,
-          },
-        });
-        if (error) throw error;
-        if (!data?.success || !String(data?.file_url || '').trim()) {
-          const failureMessage = String(data?.message || 'بازیابی فایل پیام بات ناموفق بود.').trim();
-          botHydrationFailuresRef.current.set(rowId, {
-            attempts: BOT_MEDIA_HYDRATION_MAX_FAILURES,
-            lastAttemptAt: Date.now(),
-          });
-          if (!loggedBotHydrationFailuresRef.current.has(rowId)) {
-            loggedBotHydrationFailuresRef.current.add(rowId);
-            console.info('Skipped Rubika bot message attachment hydration.', {
-              messageId: rowId,
-              fileId,
-              reason: failureMessage,
-            });
-          }
-          continue;
-        }
-        const nextPayload = {
-          ...(payload || {}),
-          attachments: [{
-            name: String(row.file_name || data.file_name || 'فایل').trim() || 'فایل',
-            url: String(data.file_url || '').trim(),
-            mime_type: String(data.mime_type || row.mime_type || '').trim() || null,
-            file_type: String(row.message_type || 'file').trim() || 'file',
-          }],
-        };
-        setBotMessages((prev) => prev.map((item) => String(item?.id || '') === rowId ? {
-          ...item,
-          file_url: String(data.file_url || '').trim() || item.file_url,
-          file_name: String(row.file_name || data.file_name || '').trim() || item.file_name,
-          mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
-          payload: nextPayload,
-        } : item));
-        setBotNotificationMessages((prev) => prev.map((item) => String(item?.id || '') === rowId ? {
-          ...item,
-          file_url: String(data.file_url || '').trim() || item.file_url,
-          file_name: String(row.file_name || data.file_name || '').trim() || item.file_name,
-          mime_type: String(data.mime_type || row.mime_type || '').trim() || item.mime_type,
-          payload: nextPayload,
-        } : item));
-        botHydrationFailuresRef.current.delete(rowId);
-        loggedBotHydrationFailuresRef.current.delete(rowId);
+        await importBotMessageAttachment(row, { force: true });
       } catch (error) {
+        const previousAttempts = botHydrationFailuresRef.current.get(rowId)?.attempts || 0;
+        const retryable = (error as { retryable?: boolean } | null)?.retryable === true;
         botHydrationFailuresRef.current.set(rowId, {
-          attempts: BOT_MEDIA_HYDRATION_MAX_FAILURES,
+          attempts: retryable ? Math.max(previousAttempts, 1) : Math.max(previousAttempts, BOT_MEDIA_HYDRATION_MAX_FAILURES),
           lastAttemptAt: Date.now(),
         });
         if (!loggedBotHydrationFailuresRef.current.has(rowId)) {
@@ -4188,7 +4512,7 @@ useEffect(() => {
         hydratingBotMessageIdsRef.current.delete(rowId);
       }
     }
-  }, [getBotMessageAttachments, selectedBotGroup?.channel_type]);
+  }, [getBotMessageAttachments, importBotMessageAttachment, selectedBotGroup?.channel_type]);
   useEffect(() => {
     void hydrateBotMessagesMedia(botMessages);
   }, [botMessages, hydrateBotMessagesMedia]);
@@ -4640,8 +4964,6 @@ useEffect(() => {
 
   useEffect(() => {
     setSelectedConversationNotes([]);
-    setSelectedConversationNotesKey(null);
-    setLoadingSelectedConversationNotes(Boolean(selectedNoteUserId));
     setNoteViewportReady(!selectedNoteUserId);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
@@ -4655,6 +4977,8 @@ useEffect(() => {
 
   useEffect(() => {
     setBotViewportReady(!selectedBotGroupId);
+    // Mark as loading immediately so the viewport init useLayoutEffect waits for real data
+    if (selectedBotGroupId) setLoadingBotMessages(true);
     botShouldStickToBottomRef.current = false;
     botForceScrollToBottomRef.current = false;
     botInitialAnchorDoneRef.current = false;
@@ -4665,101 +4989,6 @@ useEffect(() => {
     botMessagesRef.current = [];
     botMessagesGroupIdRef.current = null;
   }, [selectedBotGroupId]);
-
-  useEffect(() => {
-    if (!open || !profile.id || !selectedNoteUserId) {
-      setSelectedConversationNotes(null);
-      setSelectedConversationNotesKey(null);
-      setLoadingSelectedConversationNotes(false);
-      setNoteViewportReady(true);
-      return;
-    }
-
-    let cancelled = false;
-    const requestSeq = ++selectedConversationFetchSeqRef.current;
-    const requestConversationKey = selectedChatGroupId
-      ? `group:${selectedChatGroupId}`
-      : (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? SYSTEM_MESSAGES_USER_ID : `direct:${selectedNoteUserId}`);
-
-    const fetchSelectedConversationNotes = async () => {
-      try {
-        setLoadingSelectedConversationNotes(true);
-        setNoteViewportReady(false);
-        let nextNotes: any[] = [];
-
-        if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
-          const inboxItems = await fetchNotificationInboxSection('notes', 160);
-          const systemNoteIds = (inboxItems || [])
-            .filter((item) => (
-              String(item?.source_type || '').trim() === 'note'
-              && String(item?.category || '').trim() === 'system'
-            ))
-            .map((item) => String(item?.source_id || '').trim())
-            .filter(Boolean)
-            .slice(0, 120);
-          nextNotes = await fetchNotesByIds(systemNoteIds);
-        } else if (selectedChatGroupId) {
-          const { data, error } = await supabase
-            .from('notes')
-            .select(NOTE_SELECT_FIELDS)
-            .contains('metadata', { chat_group_id: selectedChatGroupId })
-            .order('created_at', { ascending: false })
-            .limit(120);
-          if (error) throw error;
-          nextNotes = data || [];
-        } else {
-          const currentUserId = String(profile.id || '');
-          const targetUserId = String(selectedNoteUserId || '');
-          const [sentResult, receivedResult] = await Promise.all([
-            supabase
-              .from('notes')
-              .select(NOTE_SELECT_FIELDS)
-              .eq('author_id', currentUserId)
-              .contains('mention_user_ids', [targetUserId])
-              .order('created_at', { ascending: false })
-              .limit(80),
-            supabase
-              .from('notes')
-              .select(NOTE_SELECT_FIELDS)
-              .eq('author_id', targetUserId)
-              .contains('mention_user_ids', [currentUserId])
-              .order('created_at', { ascending: false })
-              .limit(80),
-          ]);
-          if (sentResult.error) throw sentResult.error;
-          if (receivedResult.error) throw receivedResult.error;
-          const unique = new Map<string, any>();
-          [...(sentResult.data || []), ...(receivedResult.data || [])].forEach((note: any) => {
-            unique.set(String(note.id), note);
-          });
-          nextNotes = Array.from(unique.values());
-        }
-
-        if (cancelled || requestSeq !== selectedConversationFetchSeqRef.current) return;
-        setSelectedConversationNotes(
-          nextNotes.sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-        );
-        setSelectedConversationNotesKey(requestConversationKey);
-        setLoadingSelectedConversationNotes(false);
-        noteShouldStickToBottomRef.current = false;
-        noteForceScrollToBottomRef.current = false;
-        noteInitialAnchorDoneRef.current = false;
-      } catch (error) {
-        if (!cancelled && requestSeq === selectedConversationFetchSeqRef.current) {
-          console.warn('Failed to fetch selected conversation history.', error);
-          setSelectedConversationNotes([]);
-          setSelectedConversationNotesKey(requestConversationKey);
-          setLoadingSelectedConversationNotes(false);
-        }
-      }
-    };
-
-    void fetchSelectedConversationNotes();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, profile.id, selectedChatGroupId, selectedNoteUserId]);
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
@@ -4778,7 +5007,10 @@ useEffect(() => {
     }
     const shouldForceScroll = noteForceScrollToBottomRef.current;
     if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
-    scrollNotesToBottom(shouldForceScroll ? 'auto' : 'smooth');
+    // Use 'auto' (instant) on the very first scroll so "My Notes" doesn't animate from top to bottom
+    const noteBehavior = shouldForceScroll || !noteInitialAnchorDoneRef.current ? 'auto' : 'smooth';
+    noteInitialAnchorDoneRef.current = true;
+    scrollNotesToBottom(noteBehavior);
     noteForceScrollToBottomRef.current = false;
   }, [activeDrawerSection, displayedChatNotes, firstUnreadNoteDomId, isSelectedConversationLoaded, noteViewportReady, open, scrollConversationToAnchor]);
 
@@ -4811,7 +5043,10 @@ useEffect(() => {
     }
     const shouldForceScroll = botForceScrollToBottomRef.current;
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
-    scrollBotMessagesToBottom(shouldForceScroll ? 'auto' : 'smooth');
+    // Use 'auto' (instant) on the very first scroll so the chat doesn't animate from old to new messages
+    const botBehavior = shouldForceScroll || !botInitialAnchorDoneRef.current ? 'auto' : 'smooth';
+    botInitialAnchorDoneRef.current = true;
+    scrollBotMessagesToBottom(botBehavior);
     botForceScrollToBottomRef.current = false;
   }, [activeDrawerSection, botMessages, botViewportReady, firstUnreadBotMessageDomId, loadingBotMessages, open, scrollConversationToAnchor, selectedBotGroupId]);
 
@@ -5799,7 +6034,7 @@ useEffect(() => {
     const noteMap = new Map(notes.map((note: any) => [note.id, note]));
     const showConversationSkeleton = loadingNotes || !isSelectedConversationLoaded;
     const hideConversationUntilSettled = !showConversationSkeleton && !noteViewportReady;
-    const panelTitle = selectedChatGroup?.name || (selectedNoteUser ? selectedNoteUser.display_name : 'یادداشت‌های من');
+    const panelTitle = selectedChatGroup?.name || selectedNoteConversationListItem?.displayName || (selectedNoteUser ? selectedNoteUser.display_name : 'یادداشت‌های من');
     const panelSubtitle = selectedChatGroup || selectedNoteUser
       ? activeConversationRoleLabel
       : `${toPersianNumber(String(myNoteStats.noteCount || 0))} یادداشت`;
@@ -5864,23 +6099,21 @@ useEffect(() => {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <Avatar size={36} className="!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200">
-                    <img src={systemAvatarSrc} alt="System" className="h-full w-full object-cover" />
-                  </Avatar>
+                  <UnifiedConversationAvatar
+                    size={36}
+                    src={systemConversationAvatar.src}
+                    className={systemConversationAvatar.className}
+                    fallback={systemConversationAvatar.fallback}
+                  />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium flex items-center gap-1.5">
-                      <span>پیام‌های سیستم</span>
-                      {systemNoteStats.unreadCount > 0 ? (
-                        <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-                      ) : null}
-                    </div>
+                    <div className="truncate text-sm font-medium">پیام‌های سیستم</div>
                     <div className="text-[11px] text-gray-400">
-                      {systemNoteStats.noteCount > 0 ? `${toPersianNumber(String(systemNoteStats.noteCount))} پیام` : 'بدون پیام'}
+                      {effectiveSystemNoteStats.noteCount > 0 ? `${toPersianNumber(String(effectiveSystemNoteStats.noteCount))} پیام` : 'بدون پیام'}
                     </div>
                   </div>
-                  {systemNoteStats.unreadCount > 0 ? (
+                  {effectiveSystemNoteStats.unreadCount > 0 ? (
                     <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
-                      {toPersianNumber(String(systemNoteStats.unreadCount))}
+                      {toPersianNumber(String(effectiveSystemNoteStats.unreadCount))}
                     </span>
                   ) : null}
                 </div>
@@ -5899,32 +6132,38 @@ useEffect(() => {
                       : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <Avatar
-                      size={36}
-                      src={!item.isGroup ? item.avatarUrl || undefined : undefined}
-                      className={item.isGroup ? '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300' : ''}
-                    >
-                      {item.isGroup ? <TeamOutlined /> : (!item.avatarUrl && String(item.displayName || '?').slice(0, 1))}
-                    </Avatar>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium flex items-center gap-1.5">
-                        <span>{item.displayName}</span>
+                  {(() => {
+                    const avatar = buildNoteConversationAvatarModel({
+                      kind: item.kind,
+                      displayName: item.displayName,
+                      avatarUrl: item.avatarUrl,
+                      systemAvatarSrc,
+                    });
+                    return (
+                      <div className="flex items-center gap-3">
+                        <UnifiedConversationAvatar
+                          size={36}
+                          src={avatar.src}
+                          className={avatar.className}
+                          fallback={avatar.fallback}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium flex items-center gap-1.5">
+                            <span>{item.displayName}</span>
+                            {item.isGroup ? <TeamOutlined className="text-[11px] text-amber-500" /> : null}
+                          </div>
+                          <div className="text-[11px] text-gray-400">
+                            {item.noteCount > 0 ? `${toPersianNumber(String(item.noteCount))} پیام` : 'بدون پیام'}
+                          </div>
+                        </div>
                         {item.unreadCount > 0 ? (
-                          <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+                          <span className={`inline-flex min-w-5 h-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white ${item.isGroup ? 'bg-amber-500' : 'bg-red-500'}`}>
+                            {toPersianNumber(String(item.unreadCount))}
+                          </span>
                         ) : null}
-                        {item.isGroup ? <TeamOutlined className="text-[11px] text-amber-500" /> : null}
                       </div>
-                      <div className="text-[11px] text-gray-400">
-                        {item.noteCount > 0 ? `${toPersianNumber(String(item.noteCount))} پیام` : 'بدون پیام'}
-                      </div>
-                    </div>
-                    {item.unreadCount > 0 ? (
-                      <span className={`inline-flex min-w-5 h-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white ${item.isGroup ? 'bg-amber-500' : 'bg-red-500'}`}>
-                        {toPersianNumber(String(item.unreadCount))}
-                      </span>
-                    ) : null}
-                  </div>
+                    );
+                  })()}
                 </button>
               ))}
             </div>
@@ -5936,13 +6175,12 @@ useEffect(() => {
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex items-center gap-3">
                 {selectedChatGroup || selectedNoteUser ? (
-                  <Avatar
+                  <UnifiedConversationAvatar
                     size={withMobileUserRail ? 32 : 36}
-                    src={!selectedChatGroup ? selectedNoteUser?.avatar_url || undefined : undefined}
-                    className={selectedChatGroup ? '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300' : ''}
-                  >
-                    {selectedChatGroup ? <TeamOutlined /> : (!selectedNoteUser?.avatar_url && String(selectedNoteUser?.display_name || '?').slice(0, 1))}
-                  </Avatar>
+                    src={selectedNoteConversationAvatar.src}
+                    className={selectedNoteConversationAvatar.className}
+                    fallback={selectedNoteConversationAvatar.fallback}
+                  />
                 ) : null}
                 <div className="min-w-0">
                   <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{panelTitle}</div>
@@ -6030,7 +6268,19 @@ useEffect(() => {
             ) : data.length === 0 ? (
               <Empty description={normalizedNoteMessageSearch ? 'پیامی با این جستجو پیدا نشد' : 'پیامی یافت نشد'} />
             ) : (
-              data.map((note: any) => {
+              <>
+                {selectedNoteUserId && selectedConversationHasMoreBefore ? (
+                  <div className="flex justify-center pb-1">
+                    <Button
+                      size="small"
+                      loading={loadingOlderSelectedConversationNotes}
+                      onClick={() => void loadOlderSelectedConversationNotes()}
+                    >
+                      مشاهده پیام‌های قبلی
+                    </Button>
+                  </div>
+                ) : null}
+                {data.map((note: any) => {
                 const recordKey = `${note.module_id}:${note.record_id}`;
                 const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id, module_id: note.module_id }, note.module_id);
                 const isSystem = isSystemNote(note);
@@ -6058,6 +6308,7 @@ useEffect(() => {
                 const noteLikeReceipts = normalizeLikeReceipts(note.metadata);
                 const isUnreadNote = isUnreadNoteRow(note);
                 const likedByMe = Boolean(likeReceiptMapFromBox(note.metadata)[String(profile.id || '').trim()]);
+                const noteAvatar = resolveNoteBubbleAvatar(note, Boolean(isMine), isSystem);
 
                 return (
                   <div key={note.id}>
@@ -6066,8 +6317,9 @@ useEffect(() => {
                       createdAtLabel={safeJalaliFormat(note.created_at, 'YYYY/MM/DD HH:mm')}
                       text={parsedContent.text}
                       attachments={parsedContent.attachments}
-                      avatarUrl={author?.avatar_url || null}
-                      avatarFallback={authorName}
+                      avatarUrl={noteAvatar.src}
+                      avatarFallback={noteAvatar.fallback}
+                      avatarClassName={noteAvatar.className}
                       mentionUsers={mentionUsers}
                       mentionRoles={mentionRoles}
                       replyText={replyParsedContent?.text || null}
@@ -6130,7 +6382,8 @@ useEffect(() => {
                     />
                   </div>
                 );
-              })
+                })}
+              </>
             )}
           </div>
           {selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID && noteNewIncomingCount > 0 ? (
@@ -6294,16 +6547,13 @@ useEffect(() => {
                 title="پیام‌های سیستم"
               >
                 <div className="relative">
-                  <Badge count={systemNoteStats.unreadCount > 0 ? toPersianNumber(String(systemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
-                    <Avatar
+                  <Badge count={effectiveSystemNoteStats.unreadCount > 0 ? toPersianNumber(String(effectiveSystemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
+                    <UnifiedConversationAvatar
                       size={38}
-                      src={systemAvatarSrc}
-                      className={`!bg-slate-200 !text-slate-700 dark:!bg-white/10 dark:!text-slate-200 ${
-                        selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''
-                      }`}
-                    >
-                      {!systemAvatarSrc ? <BellOutlined /> : null}
-                    </Avatar>
+                      src={systemConversationAvatar.src}
+                      className={`${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${systemConversationAvatar.className || ''}`.trim()}
+                      fallback={systemConversationAvatar.fallback}
+                    />
                   </Badge>
                 </div>
                 <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
@@ -6316,30 +6566,36 @@ useEffect(() => {
                   key={item.id}
                   type="button"
                   onClick={() => setSelectedNoteUserId((prev) => (prev === item.id ? null : item.id))}
-                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
+                  className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
                   title={item.displayName}
                 >
-                  <div className="relative">
-                    <Badge count={item.unreadCount > 0 ? toPersianNumber(String(item.unreadCount)) : 0} size="small" offset={[-2, 2]}>
-                      <Avatar
-                        size={38}
-                        src={!item.isGroup ? item.avatarUrl || undefined : undefined}
-                        className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${item.isGroup ? '!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300' : ''}`}
-                      >
-                        {item.isGroup ? <TeamOutlined /> : (!item.avatarUrl && String(item.displayName || '?').slice(0, 1))}
-                      </Avatar>
-                    </Badge>
-                    <span className="absolute -left-1 bottom-0 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] text-[rgb(var(--brand-700-rgb))] shadow-sm dark:bg-[rgba(var(--app-dark-surface-rgb),0.96)] dark:text-[rgb(var(--brand-300-rgb))]">
-                      {item.isGroup ? <TeamOutlined /> : <LeftOutlined />}
-                    </span>
-                  </div>
-                    <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
-                      {item.displayName}
-                    </span>
-                    {item.unreadCount > 0 ? (
-                      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-                    ) : null}
-                  </button>
+                  {(() => {
+                    const avatar = buildNoteConversationAvatarModel({
+                      kind: item.kind,
+                      displayName: item.displayName,
+                      avatarUrl: item.avatarUrl,
+                      systemAvatarSrc,
+                    });
+                    return (
+                      <div className="relative">
+                        <Badge count={item.unreadCount > 0 ? toPersianNumber(String(item.unreadCount)) : 0} size="small" offset={[-2, 2]}>
+                          <UnifiedConversationAvatar
+                            size={38}
+                            src={avatar.src}
+                            className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${avatar.className || ''}`.trim()}
+                            fallback={avatar.fallback}
+                          />
+                        </Badge>
+                        <span className="absolute -left-1 bottom-0 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] text-[rgb(var(--brand-700-rgb))] shadow-sm dark:bg-[rgba(var(--app-dark-surface-rgb),0.96)] dark:text-[rgb(var(--brand-300-rgb))]">
+                          {item.isGroup ? <TeamOutlined /> : <LeftOutlined />}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                  <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
+                    {item.displayName}
+                  </span>
+                </button>
               ))}
             </div>
           </div>
@@ -7022,17 +7278,25 @@ useEffect(() => {
     const botMessageMap = new Map(botMessages.map((row) => [String(row.id), row]));
     const normalizedGroupSearch = String(botGroupSearch || '').trim().toLowerCase();
     const normalizedMessageSearch = String(botMessageSearch || '').trim().toLowerCase();
-    const botUnreadByGroup = botNotificationMessages.reduce<Record<string, number>>((acc, row) => {
-      const groupId = String(row?.bot_group_id || '').trim();
-      const id = String(row?.id || '').trim();
-      if (!groupId || !id || String(row?.direction || '').trim() !== 'inbound') return acc;
-      if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))) return acc;
-      acc[groupId] = (acc[groupId] || 0) + 1;
-      return acc;
-    }, {});
+    const sidebarBotGroups = effectiveBotGroups;
+    const botUnreadByGroup = botConversationSummaryAvailable && rpcBotConversationSummaries
+      ? (rpcBotConversationSummaries || []).reduce<Record<string, number>>((acc, item) => {
+          const groupId = String(item?.bot_group_id || '').trim();
+          if (!groupId) return acc;
+          acc[groupId] = Number(item?.unread_count || 0);
+          return acc;
+        }, {})
+      : botNotificationMessages.reduce<Record<string, number>>((acc, row) => {
+          const groupId = String(row?.bot_group_id || '').trim();
+          const id = String(row?.id || '').trim();
+          if (!groupId || !id || String(row?.direction || '').trim() !== 'inbound') return acc;
+          if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))) return acc;
+          acc[groupId] = (acc[groupId] || 0) + 1;
+          return acc;
+        }, {});
     const showBotTimelineSkeleton = loadingBotMessages;
     const hideBotTimelineUntilSettled = !showBotTimelineSkeleton && !botViewportReady && Boolean(selectedGroup);
-    const filteredBotGroups = botGroups.filter((row) => {
+    const filteredBotGroups = sidebarBotGroups.filter((row) => {
       if (!normalizedGroupSearch) return true;
       const title = String(row.group_title || '').trim().toLowerCase();
       const link = String(row.group_join_link || '').trim().toLowerCase();
@@ -7193,7 +7457,14 @@ useEffect(() => {
         setBotMentionPickerOpen(false);
         const groups = await fetchBotGroups();
         await fetchBotNotificationMessages(groups);
-        await fetchBotMessages(selectedGroup.id, { forceFull: true });
+        if (botConversationSummaryAvailable) {
+          await refreshBotConversationSummaries();
+        }
+        if (botTimelineAvailable) {
+          await refreshBotTimeline();
+        } else {
+          await fetchBotMessages(selectedGroup.id, { forceFull: true });
+        }
         message.success('پیام بات ارسال شد.');
       } catch (error: any) {
         if (optimisticBotMessageId) {
@@ -7302,12 +7573,7 @@ useEffect(() => {
                         <RobotOutlined />
                       </Avatar>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium flex items-center gap-1.5">
-                          <span>{rowTitle}</span>
-                          {unreadCount > 0 ? (
-                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-                          ) : null}
-                        </div>
+                        <div className="truncate text-sm font-medium">{rowTitle}</div>
                         <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
                       </div>
                       {unreadCount > 0 ? (
@@ -7386,10 +7652,33 @@ useEffect(() => {
             ) : filteredBotMessages.length === 0 ? (
               <Empty description="پیامی برای این گروه ثبت نشده است." />
             ) : (
-              filteredBotMessages.map((row) => {
+              <>
+                {botTimelineHasMoreBefore ? (
+                  <div className="flex justify-center pb-1">
+                    <Button
+                      size="small"
+                      loading={loadingOlderBotMessages}
+                      onClick={() => void loadOlderBotMessages()}
+                    >
+                      مشاهده پیام‌های قبلی
+                    </Button>
+                  </div>
+                ) : null}
+                {filteredBotMessages.map((row) => {
                 const outgoing = String(row.direction || '') === 'outbound';
                 const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
                 const parsedAttachments = getBotMessageAttachments(row);
+                const fileId = String((payload as any)?.media_file_id || '').trim();
+                const displayAttachments = parsedAttachments.length > 0
+                  ? parsedAttachments
+                  : (String(row.file_name || '').trim() && fileId
+                    ? [{
+                      name: String(row.file_name || '').trim(),
+                      url: '',
+                      mimeType: String(row.mime_type || '').trim() || null,
+                      fileType: String(row.message_type || 'file').trim() || 'file',
+                    }]
+                    : []);
                 const replyToId = String(payload?.reply_to_message_id || '').trim();
                 const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
                 const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
@@ -7400,9 +7689,10 @@ useEffect(() => {
                   fileType: item.fileType,
                 } as any)) : [];
                 const body = String(row.content_text || '').trim()
-                  || (parsedAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
+                  || (displayAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
                 const isEditing = editingBotMessageId === row.id;
                 const author = resolveBotMessageAuthor(row);
+                const botAvatar = resolveBotBubbleAvatar(outgoing);
                 const botReadReceipts = normalizeReadReceipts(payload);
                 const botMessageId = String(row.id || '').trim();
                 const isPersistedBotMessage = isUuidValue(botMessageId);
@@ -7413,14 +7703,37 @@ useEffect(() => {
                       authorName={author.name}
                       createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
                       text={body}
-                      attachments={parsedAttachments.map((item) => ({
+                      attachments={displayAttachments.map((item) => ({
                         name: item.name,
                         url: item.url,
                         mimeType: item.mimeType,
                         fileType: item.fileType,
                       } as any))}
-                      avatarUrl={author.avatarUrl}
-                      avatarFallback={author.fallback}
+                      onAttachmentClick={async (attachment) => {
+                        const normalizedUrl = String(attachment?.url || '').trim();
+                        const isImage = attachment?.fileType === 'image';
+                        if (normalizedUrl) {
+                          if (!isImage && typeof document !== 'undefined') {
+                            const link = document.createElement('a');
+                            link.href = normalizedUrl;
+                            link.download = String(attachment?.name || 'file').trim() || 'file';
+                            link.target = '_blank';
+                            link.rel = 'noopener noreferrer';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                          }
+                          return;
+                        }
+                        try {
+                          await importBotMessageAttachment(row, { force: true, downloadAfter: true });
+                        } catch (error) {
+                          message.error(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود.'));
+                        }
+                      }}
+                      avatarUrl={botAvatar.src}
+                      avatarFallback={botAvatar.fallback}
+                      avatarClassName={botAvatar.className}
                       mentionUsers={[]}
                       mentionRoles={[]}
                       replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
@@ -7456,7 +7769,14 @@ useEffect(() => {
                         if (error) throw error;
                         setEditingBotMessageId(null);
                         setEditingBotMessageValue('');
-                        await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+                        if (botConversationSummaryAvailable) {
+                          await refreshBotConversationSummaries();
+                        }
+                        if (botTimelineAvailable) {
+                          await refreshBotTimeline();
+                        } else {
+                          await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+                        }
                       } : undefined}
                       onCancelEdit={() => {
                         setEditingBotMessageId(null);
@@ -7472,12 +7792,20 @@ useEffect(() => {
                         await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
                         const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', row.id);
                         if (error) throw error;
-                        await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+                        if (botConversationSummaryAvailable) {
+                          await refreshBotConversationSummaries();
+                        }
+                        if (botTimelineAvailable) {
+                          await refreshBotTimeline();
+                        } else {
+                          await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+                        }
                       } : undefined}
                     />
                   </div>
                 );
-              })
+                })}
+              </>
             )}
           </div>
           {selectedGroup && botNewIncomingCount > 0 ? (
@@ -7622,9 +7950,6 @@ useEffect(() => {
                     <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
                       {rowTitle}
                     </span>
-                    {unreadCount > 0 ? (
-                      <span className="inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
-                    ) : null}
                   </button>
                 );
               })}

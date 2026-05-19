@@ -1,7 +1,8 @@
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { fetchSessionBootstrap } from './sessionCache';
-import { runSelectWithCompatibleColumns } from './selectCompat';
+import { normalizePublicAssetUrl } from './assetUrl';
+import { loadProfilesWithCompat } from './profileDirectory';
 import { getMergedTaskTypeOptions } from './taskMeta';
 
 type DynamicOptionRow = { label: string; value: string };
@@ -43,17 +44,6 @@ const dynamicOptionsPromiseCache = new Map<string, Promise<DynamicOptionRow[]>>(
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
 const RECORD_TAGS_FETCH_CHUNK_SIZE = 25;
-const ASSIGNEE_DIRECTORY_USER_COLUMNS = [
-  'id',
-  'full_name',
-  'first_name',
-  'last_name',
-  'email',
-  'mobile_1',
-  'avatar_url',
-  'role_id',
-] as const;
-
 const formulaOptionsCache: {
   data: DynamicOptionRow[] | null;
   expiresAt: number;
@@ -185,6 +175,7 @@ const normalizeUsers = (rows: any[]) =>
     ...user,
     id: String(user?.id || ''),
     role_id: user?.role_id ? String(user.role_id) : null,
+    avatar_url: normalizePublicAssetUrl(user?.avatar_url) || null,
     display_name:
       String(user?.full_name || '').trim() ||
       [user?.first_name, user?.last_name].map((part) => String(part || '').trim()).filter(Boolean).join(' ') ||
@@ -336,7 +327,18 @@ export const fetchAssigneeDirectory = async (
 
     const preferTreeSchema = assigneeDirectoryCache.supportsRoleTreeSchema !== false;
 
+    if (!orgId) {
+      return {
+        users: [],
+        roles: [],
+      };
+    }
+
     const buildRoleQuery = (mode: 'org' | 'extra', treeSchema: boolean) => {
+      if (mode === 'extra') {
+        return Promise.resolve({ data: [] as any[], error: null });
+      }
+
       let query = treeSchema
         ? supabaseClient
             .from('org_roles')
@@ -347,15 +349,7 @@ export const fetchAssigneeDirectory = async (
             .select('id, org_id, title, is_system')
             .limit(400);
 
-      if (orgId) {
-        if (mode === 'org') {
-          query = query.eq('org_id', orgId);
-        } else {
-          query = query.or('is_system.eq.true,org_id.is.null');
-        }
-      }
-
-      return query;
+      return query.eq('org_id', orgId);
     };
 
     const extraRoleIdsQuery = orgId
@@ -367,19 +361,10 @@ export const fetchAssigneeDirectory = async (
       : Promise.resolve({ data: [] as any[], error: null });
 
     const [userResult, orgRolesResult, extraRolesResult, extraRoleIdsResult] = await Promise.all([
-      runSelectWithCompatibleColumns<any[]>({
+      loadProfilesWithCompat(supabaseClient, {
+        orgId: orgId || null,
+        limit: 300,
         cacheKey: orgId ? 'assignee-directory:users:org' : 'assignee-directory:users:global',
-        columns: ASSIGNEE_DIRECTORY_USER_COLUMNS,
-        execute: (selectExpr) => {
-          let query = supabaseClient
-            .from('profiles')
-            .select(selectExpr)
-            .limit(300);
-          if (orgId) {
-            query = query.eq('org_id', orgId);
-          }
-          return query;
-        },
       }),
       buildRoleQuery('org', preferTreeSchema),
       orgId ? buildRoleQuery('extra', preferTreeSchema) : Promise.resolve({ data: [] as any[], error: null }),
@@ -399,7 +384,7 @@ export const fetchAssigneeDirectory = async (
       assigneeDirectoryCache.supportsRoleTreeSchema = false;
       const [fallbackOrgRoles, fallbackExtraRoles] = await Promise.all([
         buildRoleQuery('org', false),
-        orgId ? buildRoleQuery('extra', false) : Promise.resolve({ data: [] as any[] }),
+        Promise.resolve({ data: [] as any[] }),
       ]);
       roles = mergeRoleRows(
         (fallbackOrgRoles?.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 })),
@@ -411,12 +396,8 @@ export const fetchAssigneeDirectory = async (
       roles = (roles || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }));
     } else if ((!roles || roles.length === 0) && (orgRolesResult?.error || extraRolesResult?.error)) {
       const [fallbackOrgRoles, fallbackExtraRoles] = await Promise.all([
-        orgId
-          ? supabaseClient.from('org_roles').select('*').eq('org_id', orgId).limit(400)
-          : supabaseClient.from('org_roles').select('*').limit(400),
-        orgId
-          ? supabaseClient.from('org_roles').select('*').or('is_system.eq.true,org_id.is.null').limit(400)
-          : Promise.resolve({ data: [] as any[] }),
+        supabaseClient.from('org_roles').select('*').eq('org_id', orgId).limit(400),
+        Promise.resolve({ data: [] as any[] }),
       ]);
       roles = mergeRoleRows(fallbackOrgRoles?.data || [], fallbackExtraRoles?.data || []);
     }
@@ -432,8 +413,8 @@ export const fetchAssigneeDirectory = async (
 
     if (assignedRoleIds.length > 0) {
       const missingRolesResult = assigneeDirectoryCache.supportsRoleTreeSchema === false
-        ? await supabaseClient.from('org_roles').select('id, org_id, title, is_system').in('id', assignedRoleIds)
-        : await supabaseClient.from('org_roles').select('id, org_id, title, parent_id, sort_order, is_system').in('id', assignedRoleIds);
+        ? await supabaseClient.from('org_roles').select('id, org_id, title, is_system').eq('org_id', orgId).in('id', assignedRoleIds)
+        : await supabaseClient.from('org_roles').select('id, org_id, title, parent_id, sort_order, is_system').eq('org_id', orgId).in('id', assignedRoleIds);
       const missingRoles = assigneeDirectoryCache.supportsRoleTreeSchema === false
         ? (missingRolesResult?.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }))
         : (missingRolesResult?.data || []);

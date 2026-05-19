@@ -49,6 +49,7 @@ export interface OrgStory {
 
 export interface OrgStoryView {
   id: string;
+  org_id: string;
   story_id: string;
   user_id: string;
   viewed_at: string;
@@ -56,6 +57,7 @@ export interface OrgStoryView {
 
 export interface OrgStoryReaction {
   id: string;
+  org_id: string;
   story_id: string;
   user_id: string;
   user_name: string | null;

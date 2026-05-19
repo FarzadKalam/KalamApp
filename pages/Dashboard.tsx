@@ -48,6 +48,7 @@ import StoryViewerModal from '../components/stories/StoryViewerModal';
 import StoryEditorModal from '../components/stories/StoryEditorModal';
 import { notifyStorySms } from '../utils/storyNotification';
 import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
+import { fetchActiveOrgStoriesWithMeta } from '../utils/orgStories';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -728,47 +729,11 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
 // پیش‌بارگذاری استوری‌ها در موازات bootstrap داشبورد
 const fetchInitialStories = async (orgId: string, userId: string): Promise<OrgStoryWithMeta[]> => {
   try {
-    const now = new Date().toISOString();
-    const { data: rawStories } = await supabase
-      .from('org_stories')
-      .select('*')
-      .eq('org_id', orgId)
-      .eq('is_active', true)
-      .lte('published_at', now)
-      .or(`expires_at.is.null,expires_at.gt.${now}`)
-      .order('is_pinned', { ascending: false })
-      .order('published_at', { ascending: false });
-
-    if (!rawStories?.length) return [];
-
-    const storyIds = rawStories.map((s: any) => s.id);
-    const [{ data: views }, { data: reactions }] = await Promise.all([
-      supabase.from('org_story_views').select('*').in('story_id', storyIds),
-      supabase.from('org_story_reactions').select('*').in('story_id', storyIds),
-    ]);
-
-    const viewedIds = new Set(
-      (views ?? []).filter((v: any) => v.user_id === userId).map((v: any) => v.story_id)
-    );
-
-    return (rawStories as any[])
-      .map((story) => {
-        const storyReactions = (reactions ?? []).filter((r: any) => r.story_id === story.id);
-        const myReaction = storyReactions.find((r: any) => r.user_id === userId) ?? null;
-        const viewerCount = (views ?? []).filter((v: any) => v.story_id === story.id).length;
-        return {
-          ...story,
-          isViewedByMe: viewedIds.has(story.id),
-          myReaction,
-          reactions: storyReactions,
-          viewerCount,
-        };
-      })
-      .sort((a: any, b: any) => {
-        if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-        if (a.isViewedByMe !== b.isViewedByMe) return a.isViewedByMe ? 1 : -1;
-        return new Date(b.published_at).getTime() - new Date(a.published_at).getTime();
-      });
+    return await fetchActiveOrgStoriesWithMeta({
+      supabaseClient: supabase,
+      orgId,
+      currentUserId: userId,
+    });
   } catch {
     return [];
   }
@@ -918,7 +883,7 @@ const Dashboard: React.FC = () => {
 
   const handleMarkViewed = useCallback(async (storyId: string) => {
     if (!currentUserId) return;
-    await supabase.rpc('record_story_view', { p_story_id: storyId, p_user_id: currentUserId });
+    await supabase.rpc('record_story_view', { p_story_id: storyId });
   }, [currentUserId]);
 
   const handleReact = useCallback(async (storyId: string, emoji: string) => {
@@ -934,7 +899,15 @@ const Dashboard: React.FC = () => {
           ...s,
           myReaction: isToggleOff
             ? null
-            : { id: '', story_id: storyId, user_id: currentUserId, user_name: null, emoji, created_at: new Date().toISOString() },
+            : {
+                id: '',
+                org_id: String(orgId || ''),
+                story_id: storyId,
+                user_id: currentUserId,
+                user_name: null,
+                emoji,
+                created_at: new Date().toISOString(),
+              },
         };
       })
     );
@@ -944,7 +917,7 @@ const Dashboard: React.FC = () => {
     } else {
       await supabase.from('org_story_reactions').upsert({ story_id: storyId, user_id: currentUserId, emoji });
     }
-  }, [currentUserId, storyViewerList]);
+  }, [currentUserId, orgId, storyViewerList]);
 
   return (
     <>

@@ -26,9 +26,11 @@ import {
   ReloadOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
-  DragOutlined,
   DeleteOutlined,
   StarOutlined,
+  StarFilled,
+  UpOutlined,
+  DownOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 
@@ -158,7 +160,7 @@ type PlanRow = {
   storage_gb: number | null;
   highlight_tag: string | null;
   custom_price_label: string | null;
-  display_features: string[];
+  display_features: (string | { text: string; featured: boolean })[];
   enabled_modules: Record<string, boolean>;
   enabled_features: Record<string, any>;
   created_at: string;
@@ -194,8 +196,10 @@ const SaasAdminPlans: React.FC = () => {
   // state ماژول‌ها و فیچرها برای picker
   const [selectedModules, setSelectedModules] = useState<string[]>([]);
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
-  // display features list
-  const [displayFeatures, setDisplayFeatures] = useState<string[]>([]);
+  // display features list — هر آیتم: { text, featured }
+  // featured: نمایش در صفحه اول (حداکثر ۶ مورد)
+  type DisplayFeature = { text: string; featured: boolean };
+  const [displayFeatures, setDisplayFeatures] = useState<DisplayFeature[]>([]);
   const [newFeatureText, setNewFeatureText] = useState('');
 
   const load = useCallback(async () => {
@@ -216,6 +220,15 @@ const SaasAdminPlans: React.FC = () => {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // تبدیل display_features از فرمت قدیمی (string[]) یا جدید ({text,featured}[])
+  const parseDisplayFeatures = (raw: any[]): { text: string; featured: boolean }[] => {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((item, i) => {
+      if (typeof item === 'string') return { text: item, featured: i < 6 };
+      return { text: String(item?.text ?? ''), featured: Boolean(item?.featured) };
+    });
+  };
 
   const openNew = () => {
     setEditing(null);
@@ -241,7 +254,7 @@ const SaasAdminPlans: React.FC = () => {
     setEditing(plan);
     setSelectedModules(modulesToArray(plan.enabled_modules));
     setSelectedFeatures(featuresToArray(plan.enabled_features));
-    setDisplayFeatures(Array.isArray(plan.display_features) ? plan.display_features : []);
+    setDisplayFeatures(parseDisplayFeatures(Array.isArray(plan.display_features) ? plan.display_features : []));
     setNewFeatureText('');
     form.setFieldsValue({
       code: plan.code,
@@ -268,12 +281,33 @@ const SaasAdminPlans: React.FC = () => {
   const addDisplayFeature = () => {
     const text = newFeatureText.trim();
     if (!text) return;
-    setDisplayFeatures((prev) => [...prev, text]);
+    setDisplayFeatures((prev) => [...prev, { text, featured: false }]);
     setNewFeatureText('');
   };
 
   const removeDisplayFeature = (idx: number) =>
     setDisplayFeatures((prev) => prev.filter((_, i) => i !== idx));
+
+  const toggleFeatured = (idx: number) => {
+    setDisplayFeatures((prev) => {
+      const featuredCount = prev.filter((f, i) => f.featured && i !== idx).length;
+      if (!prev[idx].featured && featuredCount >= 6) {
+        void messageApi.warning('حداکثر ۶ ویژگی می‌توانند در صفحه اول نمایش داده شوند');
+        return prev;
+      }
+      return prev.map((f, i) => i === idx ? { ...f, featured: !f.featured } : f);
+    });
+  };
+
+  const moveFeature = (idx: number, dir: -1 | 1) => {
+    const newIdx = idx + dir;
+    setDisplayFeatures((prev) => {
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const arr = [...prev];
+      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+      return arr;
+    });
+  };
 
   const handleSave = async () => {
     try {
@@ -303,7 +337,8 @@ const SaasAdminPlans: React.FC = () => {
         messageApi.success('پلن جدید ایجاد شد');
       }
       setDrawerOpen(false);
-      void load();
+      // تاخیر کوتاه تا animation بسته شدن drawer تمام شود، سپس reload
+      setTimeout(() => { void load(); }, 300);
     } catch (err: any) {
       if (err?.errorFields) return;
       messageApi.error(err?.message || 'خطا در ذخیره');
@@ -624,12 +659,49 @@ const SaasAdminPlans: React.FC = () => {
               <Form.Item name="highlight_tag" label="برچسب هایلایت">
                 <Input placeholder="مثال: پیشنهادی" className="w-48" />
               </Form.Item>
-              <Form.Item label="امکانات نمایشی (بولت‌های سایت)">
-                <div className="space-y-2">
+              <Form.Item
+                label={
+                  <span>
+                    امکانات نمایشی (بولت‌های سایت)
+                    <span className="mr-2 text-xs font-normal text-amber-500">
+                      ⭐ ستاره‌دار = صفحه اول (حداکثر ۶)
+                    </span>
+                  </span>
+                }
+              >
+                <div className="space-y-1.5">
                   {displayFeatures.map((f, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <DragOutlined className="text-gray-300 cursor-move" />
-                      <span className="flex-1 text-sm text-slate-700">{f}</span>
+                    <div
+                      key={idx}
+                      className={`flex items-center gap-1 rounded-lg px-2 py-1.5 border transition-colors ${
+                        f.featured
+                          ? 'bg-amber-50 border-amber-200'
+                          : 'border-gray-100 hover:border-gray-200'
+                      }`}
+                    >
+                      <Tooltip title={f.featured ? 'ستاره‌دار — نمایش در صفحه اول' : 'کلیک کن تا ستاره‌دار شود'}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={f.featured ? <StarFilled className="text-amber-400" /> : <StarOutlined className="text-gray-300" />}
+                          onClick={() => toggleFeatured(idx)}
+                        />
+                      </Tooltip>
+                      <span className="flex-1 text-sm text-slate-700">{f.text}</span>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<UpOutlined />}
+                        disabled={idx === 0}
+                        onClick={() => moveFeature(idx, -1)}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<DownOutlined />}
+                        disabled={idx === displayFeatures.length - 1}
+                        onClick={() => moveFeature(idx, 1)}
+                      />
                       <Button
                         type="text"
                         size="small"
@@ -639,6 +711,11 @@ const SaasAdminPlans: React.FC = () => {
                       />
                     </div>
                   ))}
+                  {displayFeatures.length === 0 && (
+                    <div className="text-xs text-gray-400 py-2 text-center">
+                      هنوز ویژگی‌ای اضافه نشده
+                    </div>
+                  )}
                   <div className="flex gap-2 mt-2">
                     <Input
                       value={newFeatureText}

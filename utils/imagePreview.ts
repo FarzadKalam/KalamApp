@@ -1,3 +1,5 @@
+import { normalizePublicAssetUrl } from './assetUrl';
+
 export type ImagePreviewPreset = 'avatar' | 'thumb' | 'card' | 'hero' | 'gallery';
 
 type PreviewPresetConfig = {
@@ -70,7 +72,7 @@ const toRenderPath = (pathname: string): string | null => {
 };
 
 export const buildImagePreviewUrl = (rawUrl: string | null | undefined, preset: ImagePreviewPreset = 'card'): string => {
-  const normalized = String(rawUrl || '').trim();
+  const normalized = normalizePublicAssetUrl(rawUrl);
   if (!normalized) return '';
   if (normalized.startsWith('data:') || normalized.startsWith('blob:')) return normalized;
 
@@ -103,7 +105,7 @@ export const getImagePreviewCandidates = (
   rawUrl: string | null | undefined,
   preset: ImagePreviewPreset = 'card',
 ): string[] => {
-  const normalized = String(rawUrl || '').trim();
+  const normalized = normalizePublicAssetUrl(rawUrl);
   if (!normalized) return [];
   const previewUrl = buildImagePreviewUrl(normalized, preset);
   if (!previewUrl || previewUrl === normalized) {
@@ -120,7 +122,7 @@ export const isImageFileLike = (
   const normalizedMime = String(mimeType || '').trim().toLowerCase();
   if (normalizedMime.startsWith('image/')) return true;
 
-  const normalizedUrl = String(url || '').trim();
+  const normalizedUrl = normalizePublicAssetUrl(url);
   if (normalizedUrl.startsWith('data:image/')) return true;
 
   const extension = getValueExtension(String(fileName || '').trim()) || getValueExtension(normalizedUrl);

@@ -115,25 +115,13 @@ const getCurrentOrgId = async (supabaseClient: any, explicitOrgId?: string | nul
 };
 
 const getCounterLastNumber = async (
-  supabaseClient: any,
-  tableName: string,
-  orgId: string | null,
-  prefix: string
+  _supabaseClient: any,
+  _tableName: string,
+  _orgId: string | null,
+  _prefix: string
 ): Promise<number | null> => {
-  try {
-    const { data, error } = await supabaseClient
-      .from('system_code_counters')
-      .select('last_number')
-      .eq('table_name', tableName)
-      .eq('org_scope', orgId || '__global__')
-      .eq('prefix', prefix)
-      .maybeSingle();
-    if (error || data?.last_number === undefined || data?.last_number === null) return null;
-    const numeric = Number(data.last_number);
-    return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
-  } catch {
-    return null;
-  }
+  // شمارنده‌های سیستمی باید فقط از مسیر RPC/تابع کنترل‌شده خوانده شوند.
+  return null;
 };
 
 const getRpcLastNumber = async (

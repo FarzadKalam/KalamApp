@@ -1,7 +1,19 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { normalizePublicAssetUrl } from './assetUrl';
 import { fetchSessionBootstrap } from './sessionCache';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+
+const normalizeCompanyAssetFields = (row: any) => {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    ...row,
+    logo_url: normalizePublicAssetUrl(row.logo_url) || null,
+    icon_url: normalizePublicAssetUrl(row.icon_url) || null,
+    signature_image_url: normalizePublicAssetUrl(row.signature_image_url) || null,
+    stamp_image_url: normalizePublicAssetUrl(row.stamp_image_url) || null,
+  };
+};
 
 export const getResolvedCurrentOrgId = async (supabase: SupabaseClient) => {
   const session = await fetchSessionBootstrap(supabase);
@@ -26,6 +38,7 @@ export const loadScopedCompanySettings = async (supabase: SupabaseClient) => {
   if (!result.error && result.data) {
     return {
       ...result,
+      data: normalizeCompanyAssetFields(result.data),
       orgId: currentOrgId,
       scope: currentOrgId ? 'org' as const : 'global' as const,
     };
@@ -42,6 +55,7 @@ export const loadScopedCompanySettings = async (supabase: SupabaseClient) => {
 
     return {
       ...result,
+      data: normalizeCompanyAssetFields(result.data),
       orgId: currentOrgId,
       scope: 'global-fallback' as const,
     };
@@ -49,6 +63,7 @@ export const loadScopedCompanySettings = async (supabase: SupabaseClient) => {
 
   return {
     ...result,
+    data: normalizeCompanyAssetFields(result.data),
     orgId: currentOrgId,
     scope: 'global' as const,
   };

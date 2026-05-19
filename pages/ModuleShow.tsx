@@ -1755,8 +1755,29 @@ const ModuleShow: React.FC = () => {
       }
 
       const permissions = context.permissions || {};
-      const modulePerms = permissions?.[moduleId] || {};
       const journalPerms = permissions?.journal_entries || {};
+
+      // برای ماژول‌های SaaS Admin، دسترسی edit از __saas_admin sub-field خوانده می‌شود
+      const SAAS_ADMIN_EDIT_MAP: Record<string, string> = {
+        saas_orgs: 'edit_orgs',
+        saas_demo_requests: 'edit_requests',
+      };
+      if (SAAS_ADMIN_EDIT_MAP[moduleId]) {
+        const saasPerms = (permissions?.['__saas_admin'] || {}) as Record<string, any>;
+        const canViewSaas = saasPerms.view !== false;
+        const canEditSaas = Boolean(saasPerms[SAAS_ADMIN_EDIT_MAP[moduleId]]);
+        setFieldPermissions({});
+        setModulePermissions({
+          view: canViewSaas ? true : false,
+          edit: canEditSaas,
+          delete: false,
+          record_scope: 'all',
+        });
+        setCanIssueAccountingEntry(false);
+        return;
+      }
+
+      const modulePerms = permissions?.[moduleId] || {};
       const perms = modulePerms.fields || {};
       setFieldPermissions(perms);
       setModulePermissions({

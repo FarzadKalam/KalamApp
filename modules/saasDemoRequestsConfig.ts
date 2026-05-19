@@ -7,7 +7,7 @@ import {
   ModuleNature,
   ViewMode,
 } from '../types';
-import { saasDemoRequestRecordActions } from '../utils/saasAdminModules';
+import { saasDemoRequestRecordActions, saveSaasDemoRequest } from '../utils/saasAdminModules';
 
 const statusOptions = [
   { value: 'draft', label: 'draft' },
@@ -25,7 +25,10 @@ export const saasDemoRequestsConfig: ModuleDefinition = {
   systemManaged: true,
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  disableInlineFieldEditing: true,
+  // ویرایش inline از طریق __saas_admin.edit_requests کنترل می‌شود (ModuleShow.tsx)
+  formAdapter: {
+    save: saveSaasDemoRequest,
+  },
   recordActions: saasDemoRequestRecordActions,
   fields: [
     {

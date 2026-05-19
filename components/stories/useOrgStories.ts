@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import type {
-  OrgStory,
-  OrgStoryReaction,
-  OrgStoryView,
-  OrgStoryWithMeta,
-} from './storyTypes';
+import type { OrgStoryWithMeta } from './storyTypes';
+import { fetchActiveOrgStoriesWithMeta } from '../../utils/orgStories';
 
 interface UseOrgStoriesOptions {
   orgId: string | null;
@@ -37,83 +33,24 @@ export const useOrgStories = ({
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const isMountedRef = useRef(true);
 
-  const buildWithMeta = useCallback(
-    (
-      rawStories: OrgStory[],
-      views: OrgStoryView[],
-      reactions: OrgStoryReaction[]
-    ): OrgStoryWithMeta[] => {
-      const viewedIds = new Set(
-        views.filter((v) => v.user_id === currentUserId).map((v) => v.story_id)
-      );
-
-      return rawStories
-        .map((story) => {
-          const storyReactions = reactions.filter((r) => r.story_id === story.id);
-          const myReaction = storyReactions.find((r) => r.user_id === currentUserId) ?? null;
-          const viewerCount = views.filter((v) => v.story_id === story.id).length;
-
-          return {
-            ...story,
-            isViewedByMe: viewedIds.has(story.id),
-            myReaction,
-            reactions: storyReactions,
-            viewerCount,
-          };
-        })
-        .sort((a, b) => {
-          // پین‌شده‌ها اول
-          if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-          // دیده‌نشده‌ها قبل از دیده‌شده‌ها
-          if (a.isViewedByMe !== b.isViewedByMe) return a.isViewedByMe ? 1 : -1;
-          // جدیدترین اول
-          return new Date(b.published_at).getTime() - new Date(a.published_at).getTime();
-        });
-    },
-    [currentUserId]
-  );
-
   const fetchData = useCallback(async () => {
     if (!orgId || !enabled) return;
-    // فقط loading نشان می‌دهیم اگر داده اولیه نداریم
     if (!hasInitialDataRef.current) setLoading(true);
     try {
-      const now = new Date().toISOString();
-
-      // استوری‌های فعال و منتشرشده
-      const { data: rawStories, error: storiesError } = await supabase
-        .from('org_stories')
-        .select('*')
-        .eq('org_id', orgId)
-        .eq('is_active', true)
-        .lte('published_at', now)
-        .or(`expires_at.is.null,expires_at.gt.${now}`)
-        .order('is_pinned', { ascending: false })
-        .order('published_at', { ascending: false });
-
-      if (storiesError || !rawStories?.length) {
-        if (isMountedRef.current) setStories([]);
-        return;
-      }
-
-      const storyIds = rawStories.map((s: OrgStory) => s.id);
-
-      // بازدیدها و واکنش‌ها را موازی fetch می‌کنیم
-      const [{ data: views }, { data: reactions }] = await Promise.all([
-        supabase.from('org_story_views').select('*').in('story_id', storyIds),
-        supabase.from('org_story_reactions').select('*').in('story_id', storyIds),
-      ]);
+      const nextStories = await fetchActiveOrgStoriesWithMeta({
+        supabaseClient: supabase,
+        orgId,
+        currentUserId,
+      });
 
       if (isMountedRef.current) {
-        setStories(
-          buildWithMeta(rawStories as OrgStory[], (views ?? []) as OrgStoryView[], (reactions ?? []) as OrgStoryReaction[])
-        );
+        setStories(nextStories);
         hasInitialDataRef.current = true;
       }
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
-  }, [orgId, enabled, buildWithMeta]);
+  }, [currentUserId, enabled, orgId]);
 
   // Realtime subscription
   useEffect(() => {
@@ -130,12 +67,12 @@ export const useOrgStories = ({
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'org_story_reactions' },
+        { event: '*', schema: 'public', table: 'org_story_reactions', filter: `org_id=eq.${orgId}` },
         () => { fetchData(); }
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'org_story_views' },
+        { event: '*', schema: 'public', table: 'org_story_views', filter: `org_id=eq.${orgId}` },
         () => { fetchData(); }
       )
       .subscribe();
@@ -159,12 +96,9 @@ export const useOrgStories = ({
   const markViewed = useCallback(
     async (storyId: string) => {
       if (!currentUserId) return;
-      // از تابع RPC استفاده می‌کنیم تا شمارنده هم به‌روز شود
       await supabase.rpc('record_story_view', {
         p_story_id: storyId,
-        p_user_id: currentUserId,
       });
-      // به‌روزرسانی local state
       setStories((prev) =>
         prev.map((s) =>
           s.id === storyId ? { ...s, isViewedByMe: true } : s
@@ -182,14 +116,12 @@ export const useOrgStories = ({
       if (!story) return;
 
       if (story.myReaction) {
-        // حذف واکنش موجود
         await supabase
           .from('org_story_reactions')
           .delete()
           .eq('story_id', storyId)
           .eq('user_id', currentUserId);
       } else {
-        // افزودن واکنش جدید
         await supabase.from('org_story_reactions').upsert({
           story_id: storyId,
           user_id: currentUserId,

@@ -1,6 +1,38 @@
 import { supabase } from '../supabaseClient';
 import type { ModuleFormAdapterContext, ModuleRecordAction } from '../types';
 
+// ── ذخیره درخواست دمو از طریق admin_saas_edit_request RPC ──────────────────
+export const saveSaasDemoRequest = async ({ mode, recordId, values }: ModuleFormAdapterContext) => {
+  if (mode !== 'update' || !recordId) {
+    throw new Error('ایجاد درخواست دمو از این طریق پشتیبانی نمی‌شود.');
+  }
+
+  // فقط فیلدهایی که مقدار دارند را به patch اضافه می‌کنیم
+  const patch: Record<string, any> = {};
+  const editableKeys = [
+    'full_name', 'mobile', 'organization_name', 'requested_slug',
+    'status', 'is_demo_request', 'email', 'industry',
+    'employee_count_band', 'discovery_source', 'business_name',
+    'notes',
+    // failure_code و failure_message فقط خواندنی هستند — ادمین نمی‌تواند آن‌ها را ویرایش کند
+  ];
+  for (const key of editableKeys) {
+    if (Object.prototype.hasOwnProperty.call(values, key)) {
+      patch[key] = values[key] ?? null;
+    }
+  }
+
+  const { data, error } = await supabase.rpc('admin_saas_edit_request', {
+    p_request_id: String(recordId),
+    p_patch: patch,
+  });
+  if (error) throw error;
+  if (data?.success === false) {
+    throw new Error(String(data?.message || 'ذخیره درخواست ناموفق بود.'));
+  }
+  return { id: String(recordId) };
+};
+
 type SaasModuleActionResult = {
   message?: string;
   nextRecordId?: string | null;

@@ -42,7 +42,7 @@ export const saasOrgsConfig: ModuleDefinition = {
   systemManaged: true,
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  disableInlineFieldEditing: true,
+  // ویرایش inline از طریق __saas_admin.edit_orgs کنترل می‌شود (ModuleShow.tsx)
   formAdapter: {
     save: saveSaasOrgRecord,
   },

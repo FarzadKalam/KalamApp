@@ -10,6 +10,7 @@ import {
   type BrandingSettingsPayload,
 } from "../theme/brandTheme";
 import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } from "./currency";
+import { normalizePublicAssetUrl } from "./assetUrl";
 import { getCachedAuthUser } from "./sessionCache";
 import { loadScopedCompanySettings } from "./companySettings";
 import { loadScopedIntegrationSettings } from "./integrationSettings";
@@ -84,8 +85,8 @@ const buildRuntimeBranding = (
     app_title: String(rawBranding?.app_title || companyFullName || tradeName || DEFAULT_BRANDING.appTitle),
     short_name: String(rawBranding?.short_name || tradeName || companyFullName || DEFAULT_BRANDING.shortName),
   });
-  branding.logoUrl = String(companyRow.logo_url || "").trim() || null;
-  branding.iconUrl = String(companyRow.icon_url || "").trim() || null;
+  branding.logoUrl = normalizePublicAssetUrl(companyRow.logo_url) || null;
+  branding.iconUrl = normalizePublicAssetUrl(companyRow.icon_url) || null;
 
   const currency = normalizeCurrencyConfig({
     code: String(companyRow.currency_code || "").trim().toUpperCase() as any,
@@ -111,8 +112,8 @@ export const readCachedBranding = (): BrandingConfig | null => {
       app_title: String(snapshot.appTitle || DEFAULT_BRANDING.appTitle),
       palette_key: String(snapshot.paletteKey || DEFAULT_BRANDING.paletteKey) as BrandingSettingsPayload["palette_key"],
     });
-    branding.logoUrl = String(snapshot.logoUrl || "").trim() || null;
-    branding.iconUrl = String(snapshot.iconUrl || "").trim() || null;
+    branding.logoUrl = normalizePublicAssetUrl(snapshot.logoUrl) || null;
+    branding.iconUrl = normalizePublicAssetUrl(snapshot.iconUrl) || null;
     return branding;
   } catch {
     return null;
@@ -175,8 +176,8 @@ export const readRuntimeBranding = (): BrandingConfig => {
   return {
     ...cached,
     appTitle: runtimeTitle?.trim() || cached.appTitle,
-    logoUrl: runtimeLogo?.trim() || cached.logoUrl || null,
-    iconUrl: runtimeIcon?.trim() || cached.iconUrl || null,
+    logoUrl: normalizePublicAssetUrl(runtimeLogo?.trim() || cached.logoUrl) || null,
+    iconUrl: normalizePublicAssetUrl(runtimeIcon?.trim() || cached.iconUrl) || null,
   };
 };
 
