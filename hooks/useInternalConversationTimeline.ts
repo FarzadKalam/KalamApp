@@ -31,6 +31,7 @@ export const useInternalConversationTimeline = <TItem,>({
   const [hasMore, setHasMore] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
 
   const applyPayload = useCallback((payload: NotificationTimelinePayload<TItem>) => {
@@ -38,6 +39,7 @@ export const useInternalConversationTimeline = <TItem,>({
     setHasMore(Boolean(payload.has_more_before));
     setCursor(payload.next_before_cursor || null);
     setInitialAnchorId(payload.first_unread_id || null);
+    setUnreadCount(Number(payload.unread_count || 0));
   }, []);
 
   const loadFallbackInitial = useCallback(async () => {
@@ -138,6 +140,7 @@ export const useInternalConversationTimeline = <TItem,>({
     hasMore,
     cursor,
     initialAnchorId,
+    unreadCount,
     available,
     refresh,
     loadOlder,

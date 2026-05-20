@@ -61,8 +61,31 @@ type PublicPlan = {
   storage_gb: number | null;
   highlight_tag: string | null;
   custom_price_label: string | null;
-  display_features: string[];
+  display_features: Array<string | { text: string; featured?: boolean | null }>;
   trial_days: number;
+};
+
+type PublicPlanFeature = {
+  text: string;
+  featured: boolean;
+};
+
+const parsePublicPlanFeatures = (raw: PublicPlan['display_features']): PublicPlanFeature[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, index) => {
+      if (typeof item === 'string') {
+        return {
+          text: item.trim(),
+          featured: index < 6,
+        };
+      }
+      return {
+        text: String(item?.text ?? '').trim(),
+        featured: Boolean(item?.featured),
+      };
+    })
+    .filter((item) => item.text);
 };
 
 const faq = [
@@ -271,7 +294,10 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
           <div className={`grid gap-5 ${plans.length === 3 ? 'lg:grid-cols-3' : plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
             {plans.map((plan) => {
               const highlighted = !!plan.highlight_tag;
-              const features = Array.isArray(plan.display_features) ? plan.display_features : [];
+              const normalizedFeatures = parsePublicPlanFeatures(plan.display_features);
+              const features = detailed
+                ? normalizedFeatures
+                : normalizedFeatures.filter((item) => item.featured);
               return (
                 <div
                   key={plan.id}
@@ -325,7 +351,7 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
                       {features.map((item, idx) => (
                         <li key={idx} className="flex items-center gap-2 text-sm">
                           <CheckCircleOutlined className={highlighted ? 'text-teal-300' : 'text-teal-600'} />
-                          <span>{item}</span>
+                          <span>{item.text}</span>
                         </li>
                       ))}
                     </ul>

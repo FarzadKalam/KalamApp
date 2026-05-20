@@ -353,6 +353,7 @@ const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
 type ConversationListItem = {
   id: string;
   kind: 'system' | 'direct' | 'group';
+  conversationKey?: string | null;
   displayName: string;
   avatarUrl?: string | null;
   noteCount: number;
@@ -1039,7 +1040,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [showMore, setShowMore] = useState({ notes: false, tasks: false, responsibilities: false });
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
-  const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean }>({ id: null, role_id: null, org_id: null });
+  const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
   const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
   const [assigneeNameMap, setAssigneeNameMap] = useState<Record<string, string>>({});
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
@@ -1181,9 +1182,20 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     items: rpcBotConversationSummaries,
     available: botConversationSummaryAvailable,
     refresh: refreshBotConversationSummaries,
+    setItems: setRpcBotConversationSummaries,
   } = useNotificationConversationList({
     supabase,
     section: 'bot_messages',
+    enabled: open && variant === 'chat' && Boolean(profile.id),
+  });
+  const {
+    items: rpcNoteConversationSummaries,
+    available: noteConversationSummaryAvailable,
+    refresh: refreshNoteConversationSummaries,
+    setItems: setRpcNoteConversationSummaries,
+  } = useNotificationConversationList({
+    supabase,
+    section: 'notes',
     enabled: open && variant === 'chat' && Boolean(profile.id),
   });
   const botSummaryMap = useMemo(() => {
@@ -1594,6 +1606,8 @@ useEffect(() => {
         id: snapshot.user.id,
         role_id: snapshot.roleId || null,
         org_id: snapshot.orgId || snapshot.profile?.org_id || null,
+        full_name: snapshot.profile?.full_name || snapshot.user?.user_metadata?.full_name || null,
+        avatar_url: snapshot.profile?.avatar_url || snapshot.user?.user_metadata?.avatar_url || null,
         voip_extension: snapshot.profile?.voip_extension ? String(snapshot.profile.voip_extension) : null,
         can_view_all_calls: voipAccess.canViewAllCallNotifications,
       });
@@ -3118,6 +3132,7 @@ useEffect(() => {
     loadingOlder: loadingOlderBotMessages,
     hasMore: botTimelineHasMoreBefore,
     initialAnchorId: botTimelineInitialAnchorId,
+    unreadCount: botTimelineUnreadCount,
     available: botTimelineAvailable,
     refresh: refreshBotTimeline,
     loadOlder: loadOlderBotMessages,
@@ -3141,15 +3156,15 @@ useEffect(() => {
   const buildCurrentBotSenderPayload = useCallback(() => {
     const userId = String(profile.id || '').trim();
     const currentUser = directoryUsers.find((user) => String(user?.id || '') === userId) || null;
-    const displayName = String(currentUser?.display_name || '').trim();
-    const avatarUrl = String(currentUser?.avatar_url || '').trim();
+    const displayName = String(currentUser?.display_name || profile.full_name || '').trim();
+    const avatarUrl = String(currentUser?.avatar_url || profile.avatar_url || '').trim();
     return {
       sender_user_id: userId || null,
       sender_profile_id: userId || null,
       sender_display_name: displayName || null,
       sender_avatar_url: avatarUrl || null,
     };
-  }, [directoryUsers, profile.id]);
+  }, [directoryUsers, profile.avatar_url, profile.full_name, profile.id]);
 
   const sendTextToBotGroup = useCallback(async (
     group: CounterpartyBotGroupRow,
@@ -3778,12 +3793,31 @@ useEffect(() => {
     }
     return Array.from(resolved);
   }, [directoryUsers]);
+  const selectedRpcConversationKey = useMemo(() => {
+    if (!noteConversationSummaryAvailable || !Array.isArray(rpcNoteConversationSummaries) || !selectedNoteUserId) {
+      return null;
+    }
+    const matched = rpcNoteConversationSummaries.find((item) => {
+      const kind = String(item?.kind || '').trim();
+      if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
+        return kind === 'system';
+      }
+      if (selectedChatGroupId) {
+        return kind === 'group' && String(item?.group_id || '').trim() === selectedChatGroupId;
+      }
+      return kind === 'direct' && String(item?.user_id || '').trim() === String(selectedNoteUserId || '').trim();
+    });
+    return String(matched?.conversation_key || '').trim() || null;
+  }, [noteConversationSummaryAvailable, rpcNoteConversationSummaries, selectedChatGroupId, selectedNoteUserId]);
   const selectedConversationKey = useMemo(() => {
     if (!selectedNoteUserId) return null;
+    if (selectedRpcConversationKey) {
+      return selectedRpcConversationKey;
+    }
     if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return 'system';
     if (selectedChatGroupId) return `group:${selectedChatGroupId}`;
     return buildDirectConversationKey(String(profile.id || ''), String(selectedNoteUserId || ''));
-  }, [profile.id, selectedChatGroupId, selectedNoteUserId]);
+  }, [profile.id, selectedChatGroupId, selectedNoteUserId, selectedRpcConversationKey]);
   const loadLegacySelectedConversationNotes = useCallback(async () => {
     if (!profile.id || !selectedNoteUserId) return [] as any[];
 
@@ -3844,6 +3878,7 @@ useEffect(() => {
     loadingOlder: loadingOlderSelectedConversationNotes,
     hasMore: selectedConversationHasMoreBefore,
     initialAnchorId: selectedConversationInitialAnchorId,
+    unreadCount: selectedConversationUnreadCount,
     refresh: refreshSelectedConversationTimeline,
     loadOlder: loadOlderSelectedConversationNotes,
   } = useInternalConversationTimeline<any>({
@@ -3984,15 +4019,6 @@ useEffect(() => {
     }),
     [availableDirectUsers, chatGroups, isNotificationRead, noteLookup, notes, profile.id, roleLookup]
   );
-  const {
-    items: rpcNoteConversationSummaries,
-    available: noteConversationSummaryAvailable,
-    refresh: refreshNoteConversationSummaries,
-  } = useNotificationConversationList({
-    supabase,
-    section: 'notes',
-    enabled: open && variant === 'chat' && Boolean(profile.id),
-  });
   const noteConversationsFromRpc = useMemo<ConversationListItem[]>(() => {
     const summaries = rpcNoteConversationSummaries || [];
     return summaries
@@ -4003,6 +4029,7 @@ useEffect(() => {
           return {
             id: SYSTEM_MESSAGES_USER_ID,
             kind: 'system' as const,
+            conversationKey: String(item.conversation_key || 'system'),
             displayName: String(item.title || 'پیام‌های سیستم'),
             noteCount: Number(item.note_count || 0),
             unreadCount: Number(item.unread_count || 0),
@@ -4017,6 +4044,7 @@ useEffect(() => {
           return {
             id: `${CHAT_GROUP_PREFIX}${groupId}`,
             kind: 'group' as const,
+            conversationKey: String(item.conversation_key || `group:${groupId}`),
             displayName: String(chatGroup?.name || item.title || 'گروه'),
             noteCount: Number(item.note_count || 0),
             unreadCount: Number(item.unread_count || 0),
@@ -4030,6 +4058,7 @@ useEffect(() => {
         return {
           id: userId,
           kind: 'direct' as const,
+          conversationKey: String(item.conversation_key || '').trim() || null,
           displayName: String(directoryUser?.display_name || item.title || userId || 'کاربر'),
           avatarUrl: directoryUser?.avatar_url || item.avatar_url || null,
           noteCount: Number(item.note_count || 0),
@@ -4101,6 +4130,61 @@ useEffect(() => {
     displayName: 'پیام‌های سیستم',
     systemAvatarSrc,
   }), [systemAvatarSrc]);
+  const patchLocalNoteConversationSummary = useCallback((conversationId: string | null, patch: { unreadCount?: number; noteCount?: number }) => {
+    const normalizedConversationId = String(conversationId || '').trim();
+    if (!normalizedConversationId) return;
+    setRpcNoteConversationSummaries((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      let changed = false;
+      const next = prev.map((item) => {
+        const kind = String(item?.kind || '').trim();
+        const itemId = kind === 'system'
+          ? SYSTEM_MESSAGES_USER_ID
+          : (kind === 'group'
+            ? `${CHAT_GROUP_PREFIX}${String(item?.group_id || '').trim()}`
+            : String(item?.user_id || '').trim());
+        const nextUnreadCount = typeof patch.unreadCount === 'number' ? patch.unreadCount : Number(item?.unread_count || 0);
+        const nextNoteCount = typeof patch.noteCount === 'number' ? patch.noteCount : Number(item?.note_count || 0);
+        if (
+          itemId !== normalizedConversationId
+          || (
+            Number(item?.unread_count || 0) === nextUnreadCount
+            && Number(item?.note_count || 0) === nextNoteCount
+          )
+        ) {
+          return item;
+        }
+        changed = true;
+        return { ...item, unread_count: nextUnreadCount, note_count: nextNoteCount };
+      });
+      return changed ? next : prev;
+    });
+  }, [setRpcNoteConversationSummaries]);
+  const patchLocalBotConversationSummary = useCallback((botGroupId: string | null, patch: { unreadCount?: number; noteCount?: number }) => {
+    const normalizedBotGroupId = String(botGroupId || '').trim();
+    if (!normalizedBotGroupId) return;
+    setRpcBotConversationSummaries((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      let changed = false;
+      const next = prev.map((item) => {
+        const itemGroupId = String(item?.bot_group_id || '').trim();
+        const nextUnreadCount = typeof patch.unreadCount === 'number' ? patch.unreadCount : Number(item?.unread_count || 0);
+        const nextNoteCount = typeof patch.noteCount === 'number' ? patch.noteCount : Number(item?.note_count || 0);
+        if (
+          itemGroupId !== normalizedBotGroupId
+          || (
+            Number(item?.unread_count || 0) === nextUnreadCount
+            && Number(item?.note_count || 0) === nextNoteCount
+          )
+        ) {
+          return item;
+        }
+        changed = true;
+        return { ...item, unread_count: nextUnreadCount, note_count: nextNoteCount };
+      });
+      return changed ? next : prev;
+    });
+  }, [setRpcBotConversationSummaries]);
   const orderedFilteredNotes = useMemo(
     () => [...filteredNotes].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
     [filteredNotes]
@@ -4140,6 +4224,52 @@ useEffect(() => {
     ).trim();
     return rowId ? `bot-message-${rowId}` : null;
   }, [botMessages, botTimelineInitialAnchorId, isUnreadBotRow]);
+  useEffect(() => {
+    if (!noteConversationSummaryAvailable) return;
+    if (!open || activeDrawerSection !== 'notes') return;
+    if (!selectedNoteUserId || loadingSelectedConversationNotes) return;
+    const hasVisibleUnread = displayedChatNotes.some((note: any) => isUnreadNoteRow(note));
+    if (selectedConversationUnreadCount > 0 || selectedConversationInitialAnchorId || hasVisibleUnread) return;
+    patchLocalNoteConversationSummary(selectedNoteUserId, {
+      unreadCount: 0,
+      noteCount: displayedChatNotes.length === 0 && !selectedConversationHasMoreBefore ? 0 : undefined,
+    });
+  }, [
+    activeDrawerSection,
+    displayedChatNotes,
+    isUnreadNoteRow,
+    loadingSelectedConversationNotes,
+    noteConversationSummaryAvailable,
+    open,
+    patchLocalNoteConversationSummary,
+    selectedConversationHasMoreBefore,
+    selectedConversationInitialAnchorId,
+    selectedConversationUnreadCount,
+    selectedNoteUserId,
+  ]);
+  useEffect(() => {
+    if (!botConversationSummaryAvailable) return;
+    if (!open || activeDrawerSection !== 'bot_messages') return;
+    if (!selectedBotGroupId || loadingBotMessages) return;
+    const hasVisibleUnread = botMessages.some((row) => isUnreadBotRow(row));
+    if (botTimelineUnreadCount > 0 || botTimelineInitialAnchorId || hasVisibleUnread) return;
+    patchLocalBotConversationSummary(selectedBotGroupId, {
+      unreadCount: 0,
+      noteCount: botMessages.length === 0 && !botTimelineHasMoreBefore ? 0 : undefined,
+    });
+  }, [
+    activeDrawerSection,
+    botConversationSummaryAvailable,
+    botMessages,
+    botTimelineHasMoreBefore,
+    botTimelineInitialAnchorId,
+    botTimelineUnreadCount,
+    isUnreadBotRow,
+    loadingBotMessages,
+    open,
+    patchLocalBotConversationSummary,
+    selectedBotGroupId,
+  ]);
   const activeConversationRoleLabel = useMemo(() => {
     if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return 'اعلان‌های گردش کارها و اتوماسیون‌ها';
     if (selectedChatGroup) {
@@ -4152,41 +4282,33 @@ useEffect(() => {
   }, [resolveGroupMemberUserIds, roleLookup, selectedChatGroup, selectedNoteConversationListItem, selectedNoteUser, selectedNoteUserId]);
   const currentUserDisplayName = useMemo(() => (
     directoryUserMap[String(profile.id || '')]?.display_name
+    || String(profile.full_name || '').trim()
     || 'شما'
-  ), [directoryUserMap, profile.id]);
+  ), [directoryUserMap, profile.full_name, profile.id]);
   const currentUserConversationAvatar = useMemo(() => buildNoteConversationAvatarModel({
     kind: 'direct',
     displayName: currentUserDisplayName,
-    avatarUrl: directoryUserMap[String(profile.id || '')]?.avatar_url || null,
-  }), [currentUserDisplayName, directoryUserMap, profile.id]);
+    avatarUrl: directoryUserMap[String(profile.id || '')]?.avatar_url || profile.avatar_url || null,
+  }), [currentUserDisplayName, directoryUserMap, profile.avatar_url, profile.id]);
   const botConversationAvatar = useMemo(() => buildBotConversationAvatarModel(), []);
   const resolveNoteBubbleAvatar = useCallback((note: any, isMine: boolean, isSystem: boolean): ConversationAvatarModel => {
     if (isSystem) return systemConversationAvatar;
     if (isMine) return currentUserConversationAvatar;
-    if (selectedChatGroup) {
-      return buildNoteConversationAvatarModel({
-        kind: 'group',
-        displayName: selectedChatGroup.name,
-      });
-    }
-    if (selectedNoteConversationListItem) {
-      return buildNoteConversationAvatarModel({
-        kind: selectedNoteConversationListItem.kind,
-        displayName: selectedNoteConversationListItem.displayName,
-        avatarUrl: selectedNoteConversationListItem.avatarUrl || null,
-        systemAvatarSrc,
-      });
-    }
     const author = directoryUserMap[String(note?.author_id || '')];
     return buildNoteConversationAvatarModel({
       kind: 'direct',
       displayName: note?.author_name || author?.display_name || 'کاربر',
       avatarUrl: author?.avatar_url || null,
     });
-  }, [currentUserConversationAvatar, directoryUserMap, selectedChatGroup, selectedNoteConversationListItem, systemAvatarSrc, systemConversationAvatar]);
-  const resolveBotBubbleAvatar = useCallback((outgoing: boolean): ConversationAvatarModel => (
-    outgoing ? currentUserConversationAvatar : botConversationAvatar
-  ), [botConversationAvatar, currentUserConversationAvatar]);
+  }, [currentUserConversationAvatar, directoryUserMap, systemConversationAvatar]);
+  const resolveBotBubbleAvatar = useCallback((author: { avatarUrl?: string | null; fallback?: React.ReactNode } | null | undefined, outgoing: boolean): ConversationAvatarModel => {
+    if (!outgoing) return botConversationAvatar;
+    return {
+      src: author?.avatarUrl || currentUserConversationAvatar.src || null,
+      className: currentUserConversationAvatar.className,
+      fallback: author?.fallback || currentUserConversationAvatar.fallback,
+    };
+  }, [botConversationAvatar, currentUserConversationAvatar]);
 
   const normalizeReadReceipts = useCallback((box: any): ReadReceiptEntry[] => {
     const map = readReceiptMapFromBox(box);
@@ -4758,8 +4880,14 @@ useEffect(() => {
     markNotificationEntriesRead(
       Array.from(readableIds).map((sourceId) => ({ section: 'notes' as const, sourceType: 'note', sourceId }))
     );
+    if (selectedNoteUserId) {
+      patchLocalNoteConversationSummary(selectedNoteUserId, { unreadCount: 0 });
+    }
+    if (noteConversationSummaryAvailable) {
+      void refreshNoteConversationSummaries();
+    }
     void persistNoteReadReceipts(readableRows, readAt);
-  }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, persistNoteReadReceipts, profile.id]);
+  }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, persistNoteReadReceipts, profile.id, refreshNoteConversationSummaries, selectedNoteUserId]);
 
   const persistBotReadReceipts = useCallback(async (rows: CounterpartyBotMessageRow[], readAt: string) => {
     const currentUserId = String(profile.id || '').trim();
@@ -4823,6 +4951,12 @@ useEffect(() => {
       markNotificationEntriesRead(
         unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }))
       );
+      if (selectedBotGroupId) {
+        patchLocalBotConversationSummary(selectedBotGroupId, { unreadCount: 0 });
+      }
+      if (botConversationSummaryAvailable) {
+        void refreshBotConversationSummaries();
+      }
     }
     if (messageIds.size === 0) return;
 
@@ -4834,7 +4968,7 @@ useEffect(() => {
     setBotMessages((prev) => prev.map(applyReceipt));
     setBotNotificationMessages((prev) => prev.map(applyReceipt));
     void persistBotReadReceipts(receiptRows, readAt);
-  }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, persistBotReadReceipts, profile.id]);
+  }, [botConversationSummaryAvailable, buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, patchLocalBotConversationSummary, persistBotReadReceipts, profile.id, refreshBotConversationSummaries, selectedBotGroupId]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const taskIds = (rows || [])
@@ -7692,7 +7826,7 @@ useEffect(() => {
                   || (displayAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
                 const isEditing = editingBotMessageId === row.id;
                 const author = resolveBotMessageAuthor(row);
-                const botAvatar = resolveBotBubbleAvatar(outgoing);
+                const botAvatar = resolveBotBubbleAvatar(author, outgoing);
                 const botReadReceipts = normalizeReadReceipts(payload);
                 const botMessageId = String(row.id || '').trim();
                 const isPersistedBotMessage = isUuidValue(botMessageId);
