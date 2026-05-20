@@ -74,6 +74,23 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   const normalizedModuleId = String(moduleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
   const hasRecordScope = Boolean(normalizedModuleId && normalizedRecordId);
+  const uploadAccept = useMemo(() => {
+    if (!Array.isArray(fileTypes) || fileTypes.length === 0) return undefined;
+    const acceptParts = new Set<string>();
+    if (fileTypes.includes('image')) acceptParts.add('image/*');
+    if (fileTypes.includes('video')) acceptParts.add('video/*');
+    if (fileTypes.includes('file')) {
+      acceptParts.add('.pdf');
+      acceptParts.add('.doc');
+      acceptParts.add('.docx');
+      acceptParts.add('.xls');
+      acceptParts.add('.xlsx');
+      acceptParts.add('.txt');
+      acceptParts.add('.zip');
+      acceptParts.add('.rar');
+    }
+    return Array.from(acceptParts).join(',');
+  }, [fileTypes]);
   const resolveScope = (folderKey: string) => {
     const normalized = String(folderKey || '').trim();
     if (normalized.startsWith('record:')) {
@@ -238,15 +255,16 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
       width={980}
       zIndex={zIndex}
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-gray-500">فایل‌های موجود را انتخاب کنید یا از همین‌جا فایل جدید اضافه کنید.</div>
-        <Button icon={<UploadOutlined />} onClick={() => uploadInputRef.current?.click()} disabled={!onUploadFiles}>
+        <Button icon={<UploadOutlined />} onClick={() => uploadInputRef.current?.click()} disabled={!onUploadFiles} className="!h-auto whitespace-normal py-2">
           آپلود از دستگاه
         </Button>
         <input
           ref={uploadInputRef}
           type="file"
           multiple={multiple}
+          accept={uploadAccept}
           className="hidden"
           onChange={handleUploadInputChange}
         />

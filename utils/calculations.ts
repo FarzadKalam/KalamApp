@@ -2,6 +2,18 @@ import { RowCalculationType, SummaryCalculationType, BlockType } from '../types'
 
 const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
 const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
+const normalizeInvoiceGlobalDiscountType = (value: any): 'percent' | 'amount' =>
+    String(value || '').trim().toLowerCase() === 'percent' ? 'percent' : 'amount';
+
+const resolveInvoiceGlobalDiscountAmount = (subtotal: number, type: 'percent' | 'amount', rawValue: any) => {
+    const safeSubtotal = Math.max(0, Number(subtotal) || 0);
+    if (safeSubtotal <= 0) return 0;
+    const value = Math.max(0, Number(rawValue) || 0);
+    const rawAmount = type === 'percent'
+        ? (safeSubtotal * Math.min(100, value)) / 100
+        : value;
+    return Math.min(safeSubtotal, rawAmount);
+};
 
 export const calculateRow = (row: any, type: RowCalculationType = RowCalculationType.SIMPLE_MULTIPLY) => {
     const lengthVal = parseFloat(row.length);
@@ -57,9 +69,16 @@ export const calculateSummary = (data: any, blocks: any[], summaryConfig: any) =
         const items = data[itemBlockId] || [];
         const itemRowCalculationType = invoiceBlock?.rowCalculationType || RowCalculationType.SIMPLE_MULTIPLY;
         
-        const totalInvoice = items.reduce((sum: number, item: any) => {
+        const subtotalInvoice = items.reduce((sum: number, item: any) => {
             return sum + (parseFloat(item.total_price) || calculateRow(item, itemRowCalculationType));
         }, 0);
+        const globalDiscountType = normalizeInvoiceGlobalDiscountType(data?.global_discount_type);
+        const globalDiscountAmount = resolveInvoiceGlobalDiscountAmount(
+            subtotalInvoice,
+            globalDiscountType,
+            data?.global_discount_value
+        );
+        const totalInvoice = Math.max(0, subtotalInvoice - globalDiscountAmount);
 
         const paymentBlock = blocks.find((b: any) => b.id === 'payments');
         const payments = data[paymentBlock?.id || 'payments'] || [];

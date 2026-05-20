@@ -71,7 +71,23 @@ const HR_EMPLOYEE_SELECT =
 const HR_PROFILE_SELECT =
   'id, full_name, role, salary_type, default_work_schedule_id, has_flexible_hours, expected_daily_minutes, grace_minutes_for_late, overtime_auto_approve, leave_auto_approve, mission_auto_approve, base_salary, hourly_rate, overtime_rate, late_penalty_rate, early_bonus_rate, production_bonus_rate, commission_percentage';
 const HR_TASK_SELECT =
-  'id, name, status, assignee_id, assignee_role_id, assignee_type, due_date, due_at, completed_at, created_at, wage, produced_qty, spent_hours, actual_hours, duration_hours, estimated_hours, related_to_module, related_production_order, production_line_id, weight';
+  'id, name, status, assignee_id, due_date, created_at, wage, produced_qty, spent_hours, estimated_hours, related_to_module, related_production_order, production_line_id';
+const HR_PROFILE_SELECT_FALLBACK = 'id, full_name, role';
+const HR_PROFILE_SELECT_MINIMAL = 'id, full_name';
+const HR_TASK_SELECT_FALLBACK =
+  'id, name, status, assignee_id, due_date, created_at, wage, produced_qty, spent_hours, estimated_hours';
+const HR_TASK_SELECT_MINIMAL =
+  'id, name, status, assignee_id, created_at, spent_hours, wage, produced_qty';
+const isMissingSelectColumnError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  if (code === 'PGRST204') return true;
+  return text.includes('column') && (
+    text.includes('does not exist') ||
+    text.includes('could not find') ||
+    text.includes('schema cache')
+  );
+};
 import {
   evaluateActivityPerformanceRules,
   type ActivityPerformanceEntry,
@@ -1380,17 +1396,20 @@ const HRPage: React.FC = () => {
     else setLoading(true);
 
     try {
-      const [employeesResult, profilesResult, tasksResult, formulasResult] = await Promise.all([
-        supabase.from('employees').select(HR_EMPLOYEE_SELECT).order('full_name', { ascending: true }),
-        supabase.from('profiles').select(HR_PROFILE_SELECT).order('full_name', { ascending: true }),
-        supabase
+      const buildHrTasksQuery = (selectExpr: string) => {
+        let query = supabase
           .from('tasks')
-          .select(HR_TASK_SELECT)
-          .or('assignee_type.eq.user,assignee_type.is.null')
+          .select(selectExpr)
           .not('assignee_id', 'is', null)
-          .lte('created_at', monthEnd.toISOString())
+          .lte('created_at', monthEnd.toISOString());
+        return query
           .order('created_at', { ascending: false })
-          .limit(HR_TASK_FETCH_LIMIT),
+          .limit(HR_TASK_FETCH_LIMIT);
+      };
+
+      const [employeesResult, initialTasksResult, formulasResult] = await Promise.all([
+        supabase.from('employees').select(HR_EMPLOYEE_SELECT).order('full_name', { ascending: true }),
+        buildHrTasksQuery(HR_TASK_SELECT),
         supabase
           .from('calculation_formulas')
           .select('id, name')
@@ -1398,9 +1417,37 @@ const HRPage: React.FC = () => {
       ]);
 
       if (employeesResult.error) throw employeesResult.error;
-      if (profilesResult.error) throw profilesResult.error;
-      if (tasksResult.error) throw tasksResult.error;
       if (formulasResult.error) throw formulasResult.error;
+
+      let tasksResult = initialTasksResult;
+      if (tasksResult.error && isMissingSelectColumnError(tasksResult.error)) {
+        tasksResult = await buildHrTasksQuery(HR_TASK_SELECT_FALLBACK);
+      }
+      if (tasksResult.error && isMissingSelectColumnError(tasksResult.error)) {
+        tasksResult = await buildHrTasksQuery(HR_TASK_SELECT_MINIMAL);
+      }
+      if (tasksResult.error) throw tasksResult.error;
+
+      let profilesResult: { data: any[] | null; error: any } = { data: [], error: null };
+      if ((employeesResult.data || []).length === 0) {
+        profilesResult = await supabase
+          .from('profiles')
+          .select(HR_PROFILE_SELECT)
+          .order('full_name', { ascending: true });
+        if (profilesResult.error && isMissingSelectColumnError(profilesResult.error)) {
+          profilesResult = await supabase
+            .from('profiles')
+            .select(HR_PROFILE_SELECT_FALLBACK)
+            .order('full_name', { ascending: true });
+        }
+        if (profilesResult.error && isMissingSelectColumnError(profilesResult.error)) {
+          profilesResult = await supabase
+            .from('profiles')
+            .select(HR_PROFILE_SELECT_MINIMAL)
+            .order('full_name', { ascending: true });
+        }
+        if (profilesResult.error) throw profilesResult.error;
+      }
 
       const normalizedEmployees = (employeesResult.data || []).map((row: any) => ({
         id: String(row?.id),

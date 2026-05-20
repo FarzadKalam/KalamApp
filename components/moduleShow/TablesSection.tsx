@@ -102,7 +102,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
       setSummaryRefreshing(true);
       const { data: latest, error } = await supabase
         .from(module.id)
-        .select('invoiceItems,payments,total_invoice_amount,total_received_amount,remaining_balance,updated_at')
+        .select('invoiceItems,payments,total_invoice_amount,total_received_amount,remaining_balance,global_discount_type,global_discount_value,updated_at')
         .eq('id', data.id)
         .single();
       if (error) throw error;
@@ -112,6 +112,8 @@ const TablesSection: React.FC<TablesSectionProps> = ({
         total_invoice_amount: latest?.total_invoice_amount || 0,
         total_received_amount: latest?.total_received_amount || 0,
         remaining_balance: latest?.remaining_balance || 0,
+        global_discount_type: latest?.global_discount_type || 'amount',
+        global_discount_value: latest?.global_discount_value || 0,
         updated_at: latest?.updated_at || null,
       });
     } catch (err) {
@@ -469,6 +471,8 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               mode={block.externalDataConfig ? 'local' : 'db'}
               moduleId={module.id}
               recordId={data.id}
+              invoiceGlobalDiscountType={data?.global_discount_type ?? null}
+              invoiceGlobalDiscountValue={data?.global_discount_value ?? null}
               relationOptions={relationOptions}
               dynamicOptions={dynamicOptions}
               canEditModule={canEditModule && !(productionLocked && String(block.id).startsWith('items_'))}

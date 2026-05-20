@@ -1586,6 +1586,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
         } else if (summaryData && (module.id === 'products' || module.id === 'production_boms' || module.id === 'production_orders')) {
           values['production_cost'] = summaryData.total;
       }
+      if (module.id === 'invoices' || module.id === 'purchase_invoices') {
+        const discountType = String(formData?.global_discount_type || values?.global_discount_type || '').trim().toLowerCase();
+        values.global_discount_type = discountType === 'percent' ? 'percent' : 'amount';
+        values.global_discount_value = Math.max(
+          0,
+          Number(formData?.global_discount_value ?? values?.global_discount_value ?? 0) || 0
+        );
+      }
       if (module.id === 'tasks') {
         values = attachTaskCompletionIfNeeded(values, {
           previousCompletedAt: initialRecord?.completed_at ?? null,
@@ -2734,6 +2742,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                 canViewField={(fieldKey) =>
                                   canViewField(`${block.id}.${fieldKey}`) && canViewField(fieldKey)
                                 }
+                                invoiceGlobalDiscountType={String((currentValues as any)?.global_discount_type || '') || null}
+                                invoiceGlobalDiscountValue={(currentValues as any)?.global_discount_value}
+                                onInvoiceGlobalDiscountChange={({ type, amount }) => {
+                                  const patch = {
+                                    global_discount_type: type,
+                                    global_discount_value: amount,
+                                  };
+                                  form.setFieldsValue(patch);
+                                  setFormData((prev: any) => ({ ...prev, ...patch }));
+                                }}
                                 readOnly={module.id === 'products' && block.id === 'product_inventory' && !!recordId}
                                 onChange={(newData: any[]) => {
                                   const newFormData = { ...formData, [block.id]: newData };
@@ -2790,6 +2808,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                   canViewField={(fieldKey) =>
                                     canViewField(`${block.id}.${fieldKey}`) && canViewField(fieldKey)
                                   }
+                                    invoiceGlobalDiscountType={String((currentValues as any)?.global_discount_type || '') || null}
+                                    invoiceGlobalDiscountValue={(currentValues as any)?.global_discount_value}
+                                    onInvoiceGlobalDiscountChange={({ type, amount }) => {
+                                      const patch = {
+                                        global_discount_type: type,
+                                        global_discount_value: amount,
+                                      };
+                                      form.setFieldsValue(patch);
+                                      setFormData((prev: any) => ({ ...prev, ...patch }));
+                                    }}
                                     onChange={(newData: any[]) => {
                                         const newFormData = { ...formData, [block.id]: newData };
                                         setFormData(newFormData);

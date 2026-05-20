@@ -1194,6 +1194,24 @@ export const usePrintManager = ({
     const rawRemaining = toNumberSafe(
       data?.remaining_balance ?? data?.remaining_amount ?? data?.due_amount ?? data?.balance
     );
+    const hasLegacyDiscountPercent = data?.invoice_discount_percent !== null
+      && data?.invoice_discount_percent !== undefined
+      && String(data?.invoice_discount_percent).trim() !== '';
+    const globalDiscountType = String(
+      data?.global_discount_type
+      ?? (hasLegacyDiscountPercent ? 'percent' : 'amount')
+    )
+      .trim()
+      .toLowerCase() === 'percent'
+      ? 'percent'
+      : 'amount';
+    const globalDiscountValue = Math.max(
+      0,
+      toNumberSafe(
+        data?.global_discount_value
+        ?? (globalDiscountType === 'percent' ? data?.invoice_discount_percent : data?.invoice_discount_amount)
+      )
+    );
 
     const hasRawRemaining =
       data?.remaining_balance !== undefined ||
@@ -1202,17 +1220,37 @@ export const usePrintManager = ({
       data?.balance !== undefined;
 
     const received = rawReceived > 0 ? rawReceived : paymentsTotal;
+    const computedGlobalDiscountAmount = Math.min(
+      Math.max(itemsTotal, 0),
+      globalDiscountType === 'percent'
+        ? (Math.max(itemsTotal, 0) * Math.min(globalDiscountValue, 100)) / 100
+        : globalDiscountValue
+    );
     const total =
       rawTotal > 0
         ? rawTotal
         : itemsTotal > 0
-          ? itemsTotal
+          ? Math.max(itemsTotal - computedGlobalDiscountAmount, 0)
           : rawRemaining > 0 || received > 0
             ? rawRemaining + received
             : 0;
     const remaining = hasRawRemaining ? rawRemaining : Math.max(total - received, 0);
 
-    return { total, received, remaining };
+    const globalDiscountAmount = Math.min(
+      Math.max(total > 0 && rawTotal > 0 ? itemsTotal : Math.max(itemsTotal, total), 0),
+      globalDiscountType === 'percent'
+        ? (Math.max(total > 0 && rawTotal > 0 ? itemsTotal : Math.max(itemsTotal, total), 0) * Math.min(globalDiscountValue, 100)) / 100
+        : globalDiscountValue
+    );
+
+    return {
+      total,
+      received,
+      remaining,
+      globalDiscountType,
+      globalDiscountValue,
+      globalDiscountAmount,
+    };
   }, [data]);
   const packageSummary = useMemo(() => {
     if (moduleId !== 'product_bundles') {
@@ -1399,6 +1437,11 @@ export const usePrintManager = ({
       return '<div style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;">اقلامی ثبت نشده است.</div>';
     }
 
+    const itemsSubtotal = items.reduce((sum: number, item: any) => {
+      const rowTotal = toNumberSafe(item?.total_price);
+      if (rowTotal > 0) return sum + rowTotal;
+      return sum + (toNumberSafe(item?.quantity) * toNumberSafe(item?.unit_price));
+    }, 0);
     const rows = items
       .map((item: any) => {
         const productName = getInvoiceItemTitle(item, resolveBillboardPrintLabel);
@@ -1406,7 +1449,11 @@ export const usePrintManager = ({
         const quantity = toPersianNumber(String(item?.quantity || 0));
         const unitPrice = formatPersianPrice(Number(item?.unit_price || 0));
         const vat = item?.vat === null || item?.vat === undefined || item?.vat === '' ? '' : getDisplayValue(item.vat);
-        const total = formatPersianPrice(Number(item?.quantity || 0) * Number(item?.unit_price || 0));
+        const total = formatPersianPrice(
+          toNumberSafe(item?.total_price) > 0
+            ? toNumberSafe(item?.total_price)
+            : (toNumberSafe(item?.quantity) * toNumberSafe(item?.unit_price))
+        );
         return `
           <tr>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;vertical-align:top;"><div style="font-weight:700;">${productName}</div>${deliveryTime ? `<div style="margin-top:2px;font-size:${getReducedPrintFontSize(11)};color:#64748b;line-height:1.7;${MULTILINE_PRINT_STYLE}">زمان تحویل: ${deliveryTime}</div>` : ''}</td>
@@ -1418,6 +1465,21 @@ export const usePrintManager = ({
         `;
       })
       .join('');
+    const discountSummaryRow = invoiceSummary.globalDiscountAmount > 0
+      ? `
+        <tr>
+          <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:700;background:rgba(var(--brand-50-rgb),0.32);">تخفیف کل (${invoiceSummary.globalDiscountType === 'percent' ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}٪` : `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`})</td>
+          <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;color:#b91c1c;">-${formatPersianPrice(invoiceSummary.globalDiscountAmount)}</td>
+        </tr>
+      `
+      : '';
+    const finalTotal = Math.max(itemsSubtotal - invoiceSummary.globalDiscountAmount, 0);
+    const finalSummaryRow = `
+      <tr>
+        <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:800;background:rgba(var(--brand-500-rgb),0.08);">جمع کل نهایی</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;font-weight:800;">${formatPersianPrice(finalTotal)}</td>
+      </tr>
+    `;
 
     return `
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -1430,10 +1492,10 @@ export const usePrintManager = ({
             <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">جمع</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rows}${discountSummaryRow}${finalSummaryRow}</tbody>
       </table>
     `;
-  }, [resolveBillboardPrintLabel]);
+  }, [invoiceSummary.globalDiscountAmount, invoiceSummary.globalDiscountType, invoiceSummary.globalDiscountValue, resolveBillboardPrintLabel, resolvedCurrencyLabel, toPersianNumber]);
 
   const getFieldOptionLabel = useCallback(
     (fieldKey: string, rawValue: any, blockId?: string) => {
@@ -2049,6 +2111,23 @@ export const usePrintManager = ({
       if (path === 'record.remaining_balance') {
         const rawRemaining = data?.remaining_balance;
         return rawRemaining === null || rawRemaining === undefined || rawRemaining === '' ? formatPersianPrice(invoiceSummary.remaining) : formatPersianPrice(rawRemaining);
+      }
+      if (path === 'record.global_discount_type') {
+        return invoiceSummary.globalDiscountType === 'percent' ? 'درصد' : 'مبلغ';
+      }
+      if (path === 'record.global_discount_value') {
+        return invoiceSummary.globalDiscountType === 'percent'
+          ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}٪`
+          : formatPersianPrice(invoiceSummary.globalDiscountValue);
+      }
+      if (path === 'record.global_discount_amount') {
+        return formatPersianPrice(invoiceSummary.globalDiscountAmount);
+      }
+      if (path === 'record.global_discount_display') {
+        if (invoiceSummary.globalDiscountType === 'percent') {
+          return `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}٪`;
+        }
+        return `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`.trim();
       }
       if (path === 'record.package_gross_total') return formatPersianPrice(packageSummary.gross);
       if (path === 'record.package_discount_total') return formatPersianPrice(packageSummary.discount);
