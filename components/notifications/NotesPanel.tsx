@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge, Button, Empty, Input, Modal, Popover, Skeleton } from 'antd';
-import { DeleteOutlined, EditOutlined, LeftOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined, TeamOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, LeftOutlined, LinkOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined, TeamOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -56,6 +56,8 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     selectedConversationHasMoreBefore,
     loadingOlderSelectedConversationNotes,
     loadOlderSelectedConversationNotes,
+    myNotesHasMoreBefore,
+    loadOlderMyNotes,
     recordTitleMap,
     formatRecordLabel,
     isSystemNote,
@@ -128,6 +130,10 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     const panelSubtitle = selectedChatGroup || selectedNoteUser
       ? activeConversationRoleLabel
       : `${toPersianNumber(String(myNoteStats.noteCount || 0))} یادداشت`;
+    const activeConversationClass = 'border border-[rgba(var(--brand-500-rgb),0.34)] bg-[rgba(var(--brand-500-rgb),0.14)] text-[rgb(var(--brand-900-rgb))] shadow-[inset_3px_0_0_rgba(var(--brand-500-rgb),0.72),0_6px_18px_rgba(var(--brand-500-rgb),0.12)] dark:border-[rgba(var(--brand-300-rgb),0.38)] dark:bg-[rgba(var(--brand-300-rgb),0.16)] dark:text-white dark:shadow-[inset_3px_0_0_rgba(var(--brand-300-rgb),0.72)]';
+    const inactiveConversationClass = 'border border-transparent text-gray-700 hover:bg-white/80 dark:text-gray-200 dark:hover:bg-white/[0.055]';
+    const activeRailClass = 'bg-[rgba(var(--brand-500-rgb),0.14)] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.22)] dark:bg-[rgba(var(--brand-300-rgb),0.15)] dark:shadow-[inset_0_0_0_1px_rgba(var(--brand-300-rgb),0.24)]';
+    const inactiveRailClass = 'hover:bg-white/75 dark:hover:bg-white/5';
 
     return (
       <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
@@ -167,8 +173,8 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                 }}
                 className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                   !selectedNoteUserId
-                    ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                    : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
+                    ? activeConversationClass
+                    : inactiveConversationClass
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -184,8 +190,8 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                 }}
                 className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                   selectedNoteUserId === SYSTEM_MESSAGES_USER_ID
-                    ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                    : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
+                    ? activeConversationClass
+                    : inactiveConversationClass
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -218,8 +224,8 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                   }}
                   className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                     selectedNoteUserId === item.id
-                      ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                      : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
+                      ? activeConversationClass
+                      : inactiveConversationClass
                   }`}
                 >
                   {(() => {
@@ -359,12 +365,15 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
               <Empty description={normalizedNoteMessageSearch ? 'پیامی با این جستجو پیدا نشد' : 'پیامی یافت نشد'} />
             ) : (
               <>
-                {selectedNoteUserId && selectedConversationHasMoreBefore ? (
-                  <div className="flex justify-center pb-1">
+                {(selectedNoteUserId ? selectedConversationHasMoreBefore : myNotesHasMoreBefore) ? (
+                  <div className="flex justify-center pb-2">
                     <Button
+                      type="text"
                       size="small"
-                      loading={loadingOlderSelectedConversationNotes}
-                      onClick={() => void loadOlderSelectedConversationNotes()}
+                      icon={<UpOutlined />}
+                      loading={selectedNoteUserId ? loadingOlderSelectedConversationNotes : false}
+                      onClick={() => selectedNoteUserId ? void loadOlderSelectedConversationNotes() : loadOlderMyNotes()}
+                      className="text-xs text-gray-400 hover:!text-gray-600 dark:text-gray-500 dark:hover:!text-gray-300"
                     >
                       مشاهده پیام‌های قبلی
                     </Button>
@@ -495,20 +504,6 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
           ) : null}
 
           <SharedNoteComposer
-            header={(
-              <div className="flex flex-col gap-2">
-                <AdaptiveScopePicker
-                  moduleId={noteModuleId}
-                  recordId={noteRecordId}
-                  moduleOptions={moduleOptions}
-                  recordOptions={noteRecordOptions}
-                  onModuleChange={handleNoteScopeModuleChange}
-                  onRecordChange={handleNoteScopeRecordChange}
-                  compact={withMobileUserRail}
-                  disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
-                />
-              </div>
-            )}
             value={noteText}
             onChange={handleNoteTextChange}
             onSubmit={submitNote}
@@ -561,12 +556,40 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
             enableImagePasteAndDrop
             submitDisabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0)}
             extraActions={(
-              <Button
-                type="text"
-                size="small"
-                icon={<SnippetsOutlined />}
-                onClick={() => openReadyTextsModal('notes')}
-              />
+              <>
+                <Popover
+                  trigger="click"
+                  placement="topLeft"
+                  content={(
+                    <div className="w-[320px] max-w-[78vw]">
+                      <div className="mb-2 text-xs font-semibold text-gray-600 dark:text-gray-200">اتصال به رکورد</div>
+                      <AdaptiveScopePicker
+                        moduleId={noteModuleId}
+                        recordId={noteRecordId}
+                        moduleOptions={moduleOptions}
+                        recordOptions={noteRecordOptions}
+                        onModuleChange={handleNoteScopeModuleChange}
+                        onRecordChange={handleNoteScopeRecordChange}
+                        compact={false}
+                        disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
+                      />
+                    </div>
+                  )}
+                >
+                  <Button
+                    type={noteModuleId || noteRecordId ? 'primary' : 'text'}
+                    size="small"
+                    icon={<LinkOutlined />}
+                    disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
+                  />
+                </Popover>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SnippetsOutlined />}
+                  onClick={() => openReadyTextsModal('notes')}
+                />
+              </>
             )}
           />
         </div>
@@ -619,7 +642,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
               <button
                 type="button"
                 onClick={() => setSelectedNoteUserId(null)}
-                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
+                className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${!selectedNoteUserId ? activeRailClass : inactiveRailClass}`}
               >
                 <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border text-[10px] font-bold ${
                   !selectedNoteUserId
@@ -634,7 +657,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
               <button
                 type="button"
                 onClick={() => setSelectedNoteUserId((prev: any) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID))}
-                className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'bg-[rgba(var(--brand-500-rgb),0.08)] dark:bg-[rgba(var(--brand-500-rgb),0.12)]' : 'hover:bg-white/75 dark:hover:bg-white/5'}`}
+                className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? activeRailClass : inactiveRailClass}`}
                 title="پیام‌های سیستم"
               >
                 <div className="relative">
@@ -642,7 +665,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                     <UnifiedConversationAvatar
                       size={38}
                       src={systemConversationAvatar.src}
-                      className={`${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${systemConversationAvatar.className || ''}`.trim()}
+                      className={`${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''} ${systemConversationAvatar.className || ''}`.trim()}
                       fallback={systemConversationAvatar.fallback}
                     />
                   </Badge>
@@ -657,7 +680,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                   key={item.id}
                   type="button"
                   onClick={() => setSelectedNoteUserId((prev: any) => (prev === item.id ? null : item.id))}
-                  className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${selectedNoteUserId === item.id ? 'bg-[rgba(var(--brand-500-rgb),0.08)] dark:bg-[rgba(var(--brand-500-rgb),0.12)]' : 'hover:bg-white/75 dark:hover:bg-white/5'}`}
+                  className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${selectedNoteUserId === item.id ? activeRailClass : inactiveRailClass}`}
                   title={item.displayName}
                 >
                   {(() => {
@@ -673,7 +696,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                           <UnifiedConversationAvatar
                             size={38}
                             src={avatar.src}
-                            className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${avatar.className || ''}`.trim()}
+                            className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''} ${avatar.className || ''}`.trim()}
                             fallback={avatar.fallback}
                           />
                         </Badge>

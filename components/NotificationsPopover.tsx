@@ -21,7 +21,6 @@ import SmsMessagesPanel from './notifications/SmsMessagesPanel';
 import BotMessagesPanel from './notifications/BotMessagesPanel';
 import NotesPanel from './notifications/NotesPanel';
 import RelatedRecordPopover from './RelatedRecordPopover';
-import ProductionStagesField from './ProductionStagesField';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
@@ -56,6 +55,7 @@ import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSyn
 import type { NotificationConversationSummary } from '../utils/notificationConversationRpc';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
+const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 
 const renderNotificationTemplate = async (
   template: string,
@@ -1055,6 +1055,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [taskProcessHostKey] = useState(0);
   const [noteViewportReady, setNoteViewportReady] = useState(true);
   const [botViewportReady, setBotViewportReady] = useState(true);
+  const [myNotesDisplayLimit, setMyNotesDisplayLimit] = useState(15);
   const [seenNoteIds, setSeenNoteIds] = useState<Set<string>>(() => loadSeenSet(SEEN_NOTES_STORAGE_KEY));
   const [seenTaskIds, setSeenTaskIds] = useState<Set<string>>(() => loadSeenSet(SEEN_TASKS_STORAGE_KEY));
   const [seenResponsibilityIds, setSeenResponsibilityIds] = useState<Set<string>>(() => loadSeenSet(SEEN_RESP_STORAGE_KEY));
@@ -1085,6 +1086,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const skipNextDrawerPopStateRef = useRef(false);
   const drawerCloseSnapshotRef = useRef<DrawerCloseSnapshot | null>(null);
   const notesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingNoteScrollRestoreRef = useRef<number | null>(null);
   const noteShouldStickToBottomRef = useRef(true);
   const noteForceScrollToBottomRef = useRef(false);
   const lastLoadedAtRef = useRef<Record<NotificationSectionKey, number>>({
@@ -1113,6 +1115,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     pairs: { module_id: string; record_id: string }[];
   }>({ loadedAt: 0, userId: '', roleId: '', pairs: [] });
   const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingBotScrollRestoreRef = useRef<number | null>(null);
   const botShouldStickToBottomRef = useRef(true);
   const botForceScrollToBottomRef = useRef(false);
   const smsMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -3928,6 +3931,21 @@ useEffect(() => {
     pageSize: 10,
     fallbackLoadInitial: loadLegacySelectedConversationNotes,
   });
+  const loadOlderNotesWithPreserve = useCallback(async () => {
+    const container = notesScrollContainerRef.current;
+    if (container) pendingNoteScrollRestoreRef.current = container.scrollHeight;
+    await loadOlderSelectedConversationNotes();
+  }, [loadOlderSelectedConversationNotes]);
+  const loadOlderMyNotesWithPreserve = useCallback(() => {
+    const container = notesScrollContainerRef.current;
+    if (container) pendingNoteScrollRestoreRef.current = container.scrollHeight;
+    setMyNotesDisplayLimit((prev) => prev + 15);
+  }, []);
+  const loadOlderBotWithPreserve = useCallback(async () => {
+    const container = botMessagesScrollContainerRef.current;
+    if (container) pendingBotScrollRestoreRef.current = container.scrollHeight;
+    await loadOlderBotMessages();
+  }, [loadOlderBotMessages]);
   const isUnreadNoteRow = useCallback((note: any) => {
     const noteId = String(note?.id || '').trim();
     if (!noteId) return false;
@@ -4261,8 +4279,12 @@ useEffect(() => {
     () => String(noteMessageSearch || '').trim().toLowerCase(),
     [noteMessageSearch]
   );
+  const myNotesHasMoreBefore = !selectedNoteUserId && orderedFilteredNotes.length > myNotesDisplayLimit;
   const displayedChatNotes = useMemo(() => {
-    if (!normalizedNoteMessageSearch) return orderedFilteredNotes;
+    if (!normalizedNoteMessageSearch) {
+      if (!selectedNoteUserId) return orderedFilteredNotes.slice(-myNotesDisplayLimit);
+      return orderedFilteredNotes;
+    }
     return orderedFilteredNotes.filter((note: any) => {
       const parsedContent = parseNoteContent(note.content);
       const authorLabel = String(
@@ -4275,7 +4297,7 @@ useEffect(() => {
       const haystack = `${parsedContent.text || ''} ${authorLabel} ${attachmentNames}`.toLowerCase();
       return haystack.includes(normalizedNoteMessageSearch);
     });
-  }, [authorNameMap, directoryUserMap, normalizedNoteMessageSearch, orderedFilteredNotes]);
+  }, [authorNameMap, directoryUserMap, myNotesDisplayLimit, normalizedNoteMessageSearch, orderedFilteredNotes, selectedNoteUserId]);
   const firstUnreadNoteDomId = useMemo(() => {
     const noteId = String(
       selectedConversationInitialAnchorId
@@ -5158,7 +5180,8 @@ useEffect(() => {
 
   useEffect(() => {
     setSelectedConversationNotes([]);
-    setNoteViewportReady(!selectedNoteUserId);
+    setNoteViewportReady(false);
+    setMyNotesDisplayLimit(15);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
     noteShouldStickToBottomRef.current = false;
@@ -5199,9 +5222,22 @@ useEffect(() => {
       setNoteViewportReady(true);
       return;
     }
+    // Preserve scroll position after loading older messages
+    if (pendingNoteScrollRestoreRef.current !== null) {
+      const savedScrollHeight = pendingNoteScrollRestoreRef.current;
+      pendingNoteScrollRestoreRef.current = null;
+      const container = notesScrollContainerRef.current;
+      if (container) {
+        const diff = container.scrollHeight - savedScrollHeight;
+        if (diff > 0) {
+          container.scrollTop += diff;
+          return;
+        }
+      }
+    }
     const shouldForceScroll = noteForceScrollToBottomRef.current;
     if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
-    // Use 'auto' (instant) on the very first scroll so "My Notes" doesn't animate from top to bottom
+    // Use 'auto' (instant) on the very first scroll so the chat doesn't animate from top to bottom
     const noteBehavior = shouldForceScroll || !noteInitialAnchorDoneRef.current ? 'auto' : 'smooth';
     noteInitialAnchorDoneRef.current = true;
     scrollNotesToBottom(noteBehavior);
@@ -5234,6 +5270,19 @@ useEffect(() => {
       botForceScrollToBottomRef.current = false;
       setBotViewportReady(true);
       return;
+    }
+    // Preserve scroll position after loading older messages
+    if (pendingBotScrollRestoreRef.current !== null) {
+      const savedScrollHeight = pendingBotScrollRestoreRef.current;
+      pendingBotScrollRestoreRef.current = null;
+      const container = botMessagesScrollContainerRef.current;
+      if (container) {
+        const diff = container.scrollHeight - savedScrollHeight;
+        if (diff > 0) {
+          container.scrollTop += diff;
+          return;
+        }
+      }
     }
     const shouldForceScroll = botForceScrollToBottomRef.current;
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
@@ -6263,7 +6312,9 @@ useEffect(() => {
         handleNotesScroll,
         selectedConversationHasMoreBefore,
         loadingOlderSelectedConversationNotes,
-        loadOlderSelectedConversationNotes,
+        loadOlderSelectedConversationNotes: loadOlderNotesWithPreserve,
+        myNotesHasMoreBefore,
+        loadOlderMyNotes: loadOlderMyNotesWithPreserve,
         recordTitleMap,
         formatRecordLabel,
         isSystemNote,
@@ -6636,7 +6687,7 @@ useEffect(() => {
         hideBotTimelineUntilSettled={hideBotTimelineUntilSettled}
         botTimelineHasMoreBefore={botTimelineHasMoreBefore}
         loadingOlderBotMessages={loadingOlderBotMessages}
-        loadOlderBotMessages={loadOlderBotMessages}
+        loadOlderBotMessages={loadOlderBotWithPreserve}
         botMessagesScrollContainerRef={botMessagesScrollContainerRef}
         handleBotMessagesScroll={handleBotMessagesScroll}
         getBotMessageAttachments={getBotMessageAttachments}
@@ -6966,18 +7017,20 @@ useEffect(() => {
       ) : null}
       {taskProcessTarget ? (
         <div className="hidden" aria-hidden="true">
-          <ProductionStagesField
-            key={`${taskProcessHostKey}-${String(taskProcessModalTask?.id || '')}`}
-            recordId={taskProcessTarget.recordId}
-            moduleId={taskProcessTarget.moduleId}
-            autoOpenTaskId={taskProcessModalTask?.id ? String(taskProcessModalTask.id) : null}
-            readOnly
-            compact
-            cardCompact
-            allowReportEditInReadOnly
-            lazyLoad
-            onlyLineId={taskProcessTarget.lineId}
-          />
+          <React.Suspense fallback={null}>
+            <ProductionStagesField
+              key={`${taskProcessHostKey}-${String(taskProcessModalTask?.id || '')}`}
+              recordId={taskProcessTarget.recordId}
+              moduleId={taskProcessTarget.moduleId}
+              autoOpenTaskId={taskProcessModalTask?.id ? String(taskProcessModalTask.id) : null}
+              readOnly
+              compact
+              cardCompact
+              allowReportEditInReadOnly
+              lazyLoad
+              onlyLineId={taskProcessTarget.lineId}
+            />
+          </React.Suspense>
         </div>
       ) : null}
       <CounterpartyBotStatusModal

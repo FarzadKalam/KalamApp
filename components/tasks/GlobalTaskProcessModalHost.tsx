@@ -1,10 +1,11 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App } from 'antd';
 import { supabase } from '../../supabaseClient';
-import ProductionStagesField from '../ProductionStagesField';
 import { OPEN_TASK_PROCESS_MODAL_EVENT } from '../../utils/taskProcessModalEvents';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
+
+const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
 type TaskProcessTarget = {
   moduleId: string;
@@ -116,19 +117,21 @@ const GlobalTaskProcessModalHost: React.FC = () => {
       {loading ? null : (
         target && task?.id ? (
           <div style={{ display: 'none' }} aria-hidden="true">
-            <ProductionStagesField
-              key={`${hostKey}-${String(task.id)}`}
-              recordId={target.recordId}
-              moduleId={target.moduleId}
-              autoOpenTaskId={String(task.id)}
-              readOnly
-              compact
-              cardCompact
-              allowReportEditInReadOnly
-              lazyLoad={false}
-              onlyLineId={target.lineId}
-              forceProcessRecordMode
-            />
+            <React.Suspense fallback={null}>
+              <ProductionStagesField
+                key={`${hostKey}-${String(task.id)}`}
+                recordId={target.recordId}
+                moduleId={target.moduleId}
+                autoOpenTaskId={String(task.id)}
+                readOnly
+                compact
+                cardCompact
+                allowReportEditInReadOnly
+                lazyLoad={false}
+                onlyLineId={target.lineId}
+                forceProcessRecordMode
+              />
+            </React.Suspense>
           </div>
         ) : null
       )}

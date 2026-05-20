@@ -58,6 +58,7 @@ export const useInternalConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
+  const itemsRef = useRef<TItem[]>([]);
 
   // True when the current view was already populated from cache.
   // refresh() uses this to skip the loading skeleton for the background fetch.
@@ -68,12 +69,30 @@ export const useInternalConversationTimeline = <TItem,>({
     if (enabled) setAvailable(true);
   }, [enabled]);
 
-  const applyPayload = useCallback((payload: NotificationTimelinePayload<TItem>) => {
-    setItemsState(sortByDate(payload.items || []));
+  const applyPayload = useCallback((
+    payload: NotificationTimelinePayload<TItem>,
+    options?: { preserveExistingItemsOnEmpty?: boolean; mergeWithExisting?: boolean },
+  ) => {
+    let nextItems = sortByDate(payload.items || []);
+    if (options?.preserveExistingItemsOnEmpty && nextItems.length === 0 && itemsRef.current.length > 0) {
+      return false;
+    }
+    if (options?.mergeWithExisting && itemsRef.current.length > 0 && nextItems.length > 0) {
+      const merged = [...itemsRef.current, ...nextItems];
+      const unique = new Map<string, TItem>();
+      merged.forEach((item: any) => {
+        const key = String(item?.id || '').trim();
+        if (key) unique.set(key, item);
+      });
+      nextItems = sortByDate(Array.from(unique.values()));
+    }
+    itemsRef.current = nextItems;
+    setItemsState(nextItems);
     setHasMore(Boolean(payload.has_more_before));
     setCursor(payload.next_before_cursor || null);
     setInitialAnchorId(payload.first_unread_id || null);
     setUnreadCount(Number(payload.unread_count || 0));
+    return true;
   }, []);
 
   // Track the last key that triggered loading so we can detect key changes
@@ -95,13 +114,19 @@ export const useInternalConversationTimeline = <TItem,>({
       setLoadingInitial(false);
     } else {
       cacheAppliedRef.current = false;
+      itemsRef.current = [];
+      setItemsState([]);
+      setHasMore(false);
+      setCursor(null);
+      setInitialAnchorId(null);
+      setUnreadCount(0);
       setLoadingInitial(true);
     }
   }, [enabled, conversationKey, applyPayload]);
 
-  const loadFallbackInitial = useCallback(async () => {
+  const loadFallbackInitial = useCallback(async (options?: { preserveExistingItemsOnEmpty?: boolean }) => {
     if (!fallbackLoadInitial) {
-      applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
+      applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>, options);
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
     const fallbackItems = await fallbackLoadInitial();
@@ -109,7 +134,7 @@ export const useInternalConversationTimeline = <TItem,>({
       ...EMPTY_TIMELINE_PAYLOAD,
       items: sortByDate(fallbackItems || []),
     } as NotificationTimelinePayload<TItem>;
-    applyPayload(payload);
+    applyPayload(payload, options);
     return payload;
   }, [applyPayload, fallbackLoadInitial]);
 
@@ -126,7 +151,7 @@ export const useInternalConversationTimeline = <TItem,>({
 
     try {
       if (!available) {
-        return await loadFallbackInitial();
+        return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
 
       const { data, error } = await supabase.rpc('get_internal_conversation_timeline', {
@@ -138,13 +163,22 @@ export const useInternalConversationTimeline = <TItem,>({
       if (error) {
         if (isMissingRpcError(error)) {
           setAvailable(false);
-          return await loadFallbackInitial();
+          return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
         }
         throw error;
       }
       const payload = normalizeTimelinePayload<TItem>(data);
-      applyPayload(payload);
-      _internalTimelineCache.set(conversationKey, { payload, fetchedAt: Date.now() });
+      if ((payload.items || []).length === 0 && fallbackLoadInitial) {
+        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
+        if ((fallbackPayload.items || []).length > 0) {
+          _internalTimelineCache.set(conversationKey, { payload: fallbackPayload, fetchedAt: Date.now() });
+          return fallbackPayload;
+        }
+      }
+      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
+      if (applied) {
+        _internalTimelineCache.set(conversationKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
+      }
       return payload;
     } finally {
       setLoadingInitial(false);
@@ -179,6 +213,7 @@ export const useInternalConversationTimeline = <TItem,>({
           if (key) unique.set(key, item);
         });
         const next = sortByDate(Array.from(unique.values()));
+        itemsRef.current = next;
         // Persist the expanded history into cache
         const existing = _internalTimelineCache.get(conversationKey);
         if (existing) {
@@ -218,6 +253,7 @@ export const useInternalConversationTimeline = <TItem,>({
           typeof updater === 'function'
             ? (updater as (p: TItem[]) => TItem[])(prev)
             : updater;
+        itemsRef.current = next;
         if (conversationKey) {
           const existing = _internalTimelineCache.get(conversationKey);
           if (existing) {

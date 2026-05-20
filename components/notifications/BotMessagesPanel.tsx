@@ -1,6 +1,6 @@
 import React from 'react';
 import { App, Avatar, Badge, Button, Empty, Input, Popover, Skeleton } from 'antd';
-import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
+import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -273,6 +273,10 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
   const groupTitle = String(selectedGroup?.group_title || '').trim() || String(selectedGroup?.group_join_link || '').trim() || 'گروه بدون عنوان';
   const canSend = Boolean(String(selectedGroup?.bot_chat_id || '').trim());
+  const activeConversationClass = 'border border-[rgba(var(--brand-500-rgb),0.34)] bg-[rgba(var(--brand-500-rgb),0.14)] text-[rgb(var(--brand-900-rgb))] shadow-[inset_3px_0_0_rgba(var(--brand-500-rgb),0.72),0_6px_18px_rgba(var(--brand-500-rgb),0.12)] dark:border-[rgba(var(--brand-300-rgb),0.38)] dark:bg-[rgba(var(--brand-300-rgb),0.16)] dark:text-white dark:shadow-[inset_3px_0_0_rgba(var(--brand-300-rgb),0.72)]';
+  const inactiveConversationClass = 'border border-transparent text-gray-700 hover:bg-white/80 dark:text-gray-200 dark:hover:bg-white/[0.055]';
+  const activeRailClass = 'bg-[rgba(var(--brand-500-rgb),0.14)] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.22)] dark:bg-[rgba(var(--brand-300-rgb),0.15)] dark:shadow-[inset_0_0_0_1px_rgba(var(--brand-300-rgb),0.24)]';
+  const inactiveRailClass = 'hover:bg-white/75 dark:hover:bg-white/5';
 
   return (
     <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
@@ -305,8 +309,8 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                   key={row.id}
                   className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
                     active
-                      ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                      : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
+                      ? activeConversationClass
+                      : inactiveConversationClass
                   }`}
                   onClick={() => {
                     setMobileBotSearchOpen(false);
@@ -399,11 +403,14 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
           ) : (
             <>
               {botTimelineHasMoreBefore ? (
-                <div className="flex justify-center pb-1">
+                <div className="flex justify-center pb-2">
                   <Button
+                    type="text"
                     size="small"
+                    icon={<UpOutlined />}
                     loading={loadingOlderBotMessages}
                     onClick={() => void loadOlderBotMessages()}
+                    className="text-xs text-gray-400 hover:!text-gray-600 dark:text-gray-500 dark:hover:!text-gray-300"
                   >
                     مشاهده پیام‌های قبلی
                   </Button>
@@ -679,14 +686,14 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                     setMobileBotSearchOpen(false);
                     setSelectedBotGroupId(String(row.id));
                   }}
-                  className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${active ? 'bg-[rgba(var(--brand-500-rgb),0.08)] dark:bg-[rgba(var(--brand-500-rgb),0.12)]' : 'hover:bg-white/75 dark:hover:bg-white/5'}`}
+                  className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${active ? activeRailClass : inactiveRailClass}`}
                   title={rowTitle}
                 >
                   <Badge count={unreadCount > 0 ? toPersianNumber(String(unreadCount)) : 0} size="small" offset={[-2, 2]}>
                     <Avatar
                       size={38}
                       className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${
-                        active ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''
+                        active ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''
                       }`}
                     >
                       <RobotOutlined />

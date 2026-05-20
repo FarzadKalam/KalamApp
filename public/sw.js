@@ -1,9 +1,10 @@
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const SHELL_CACHE = `tazesystem-shell-${CACHE_VERSION}`;
 const PAGE_CACHE = `tazesystem-pages-${CACHE_VERSION}`;
 const ASSET_CACHE = `tazesystem-assets-${CACHE_VERSION}`;
 const DATA_CACHE = `tazesystem-data-${CACHE_VERSION}`;
 const ALL_CACHES = [SHELL_CACHE, PAGE_CACHE, ASSET_CACHE, DATA_CACHE];
+const VERSION_MANIFEST_PATH = '/version.json';
 
 const APP_SHELL = [
   '/',
@@ -127,6 +128,7 @@ const putInCache = async (cacheName, request, response, maxEntries) => {
 const matchShell = () => caches.match('/index.html', { ignoreSearch: true });
 
 const isStaticAssetRequest = (requestUrl, request) => {
+  if (requestUrl.pathname === VERSION_MANIFEST_PATH) return false;
   if (requestUrl.pathname.startsWith('/assets/')) return true;
   if (requestUrl.pathname.startsWith('/font/')) return true;
   if (requestUrl.pathname.startsWith('/calendar/')) return true;
@@ -182,6 +184,18 @@ const handleDataRequest = async (request) => {
   }
 };
 
+const handleVersionManifestRequest = async (request) => {
+  const response = await fetch(request, { cache: 'no-store' });
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  headers.set('Pragma', 'no-cache');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+};
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)).catch(() => undefined)
@@ -220,6 +234,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (!shouldHandleRequest(requestUrl, request)) return;
+
+  if (requestUrl.pathname === VERSION_MANIFEST_PATH) {
+    event.respondWith(handleVersionManifestRequest(request));
+    return;
+  }
 
   if (request.mode === 'navigate') {
     event.respondWith(handleNavigationRequest(event));

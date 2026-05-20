@@ -60,7 +60,13 @@
       "Bash(grep -i \"secretariat_documents\" d:/Kalamapp/database_v1_phase*.sql)",
       "Bash(grep -rn \"secretariat_documents\" d:/Kalamapp/database_v1_phase*.sql)",
       "Bash(grep -rln \"secretariat\" d:/Kalamapp/database_v1_phase*.sql)",
-      "Bash(grep -l \"secretariat\" d:/Kalamapp/database_v1_phase1*.sql)"
+      "Bash(grep -l \"secretariat\" d:/Kalamapp/database_v1_phase1*.sql)",
+      "Bash(grep -h \"^export const.*Module: ModuleDefinition\" modules/*Config.ts)",
+      "Bash(sed \"s/.*export const //\")",
+      "Bash(sed \"s/Module:.*//\")",
+      "Bash(grep -v \"//\")",
+      "Bash(awk ':*)",
+      "Bash(grep -l \"assignee_id\\\\|assignee_type\" d:/Kalamapp/modules/*.ts)"
     ]
   },
   "hooks": {

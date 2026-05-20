@@ -4,8 +4,16 @@ import { fetchSessionBootstrap } from './sessionCache';
 import { normalizePublicAssetUrl } from './assetUrl';
 import { loadProfilesWithCompat } from './profileDirectory';
 import { getMergedTaskTypeOptions } from './taskMeta';
+import { doesProcessTemplateSupportModule } from './processTargets';
 
 type DynamicOptionRow = { label: string; value: string };
+type ProcessTemplateOptionRow = {
+  id: string;
+  name?: string | null;
+  module_id?: string | null;
+  module_ids?: string[] | null;
+  is_active?: boolean | null;
+};
 export type AssigneeDirectory = {
   users: Array<{
     id: string;
@@ -41,6 +49,24 @@ const assigneeDirectoryCache: {
 
 const dynamicOptionsCache = new Map<string, { data: DynamicOptionRow[]; expiresAt: number }>();
 const dynamicOptionsPromiseCache = new Map<string, Promise<DynamicOptionRow[]>>();
+const tagOptionsCache: {
+  data: DynamicOptionRow[] | null;
+  expiresAt: number;
+  promise: Promise<DynamicOptionRow[]> | null;
+} = {
+  data: null,
+  expiresAt: 0,
+  promise: null,
+};
+const processTemplateRowsCache: {
+  data: ProcessTemplateOptionRow[] | null;
+  expiresAt: number;
+  promise: Promise<ProcessTemplateOptionRow[]> | null;
+} = {
+  data: null,
+  expiresAt: 0,
+  promise: null,
+};
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
 const RECORD_TAGS_FETCH_CHUNK_SIZE = 25;
@@ -229,6 +255,12 @@ export const clearReferenceDataCache = () => {
 
   dynamicOptionsCache.clear();
   dynamicOptionsPromiseCache.clear();
+  tagOptionsCache.data = null;
+  tagOptionsCache.expiresAt = 0;
+  tagOptionsCache.promise = null;
+  processTemplateRowsCache.data = null;
+  processTemplateRowsCache.expiresAt = 0;
+  processTemplateRowsCache.promise = null;
   recordTagsCache.clear();
   recordTagsPromiseCache.clear();
 
@@ -482,6 +514,98 @@ export const fetchDynamicOptionsByCategory = async (
 
   dynamicOptionsPromiseCache.set(normalizedCategory, pending);
   return pending;
+};
+
+export const fetchTagOptions = async (
+  supabaseClient: any,
+  options?: { force?: boolean }
+): Promise<DynamicOptionRow[]> => {
+  if (!options?.force && tagOptionsCache.data && tagOptionsCache.expiresAt > Date.now()) {
+    return tagOptionsCache.data;
+  }
+
+  if (!options?.force && tagOptionsCache.promise) {
+    return tagOptionsCache.promise;
+  }
+
+  tagOptionsCache.promise = (async () => {
+    const { data, error } = await supabaseClient
+      .from('tags')
+      .select('id, title')
+      .order('title', { ascending: true });
+    if (error) throw error;
+
+    const normalized = (data || [])
+      .map((row: any) => ({
+        label: String(row?.title || 'بدون عنوان').trim(),
+        value: String(row?.id || '').trim(),
+      }))
+      .filter((item: DynamicOptionRow) => item.value);
+
+    tagOptionsCache.data = normalized;
+    tagOptionsCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
+    tagOptionsCache.promise = null;
+    return normalized;
+  })().catch((error) => {
+    tagOptionsCache.promise = null;
+    throw error;
+  });
+
+  return tagOptionsCache.promise;
+};
+
+export const fetchProcessTemplateRows = async (
+  supabaseClient: any,
+  options?: { force?: boolean }
+): Promise<ProcessTemplateOptionRow[]> => {
+  if (!options?.force && processTemplateRowsCache.data && processTemplateRowsCache.expiresAt > Date.now()) {
+    return processTemplateRowsCache.data;
+  }
+
+  if (!options?.force && processTemplateRowsCache.promise) {
+    return processTemplateRowsCache.promise;
+  }
+
+  processTemplateRowsCache.promise = (async () => {
+    const { data, error } = await supabaseClient
+      .from('process_templates')
+      .select('id, name, module_id, module_ids, is_active')
+      .order('name', { ascending: true });
+    if (error) throw error;
+
+    const rows = (data || []).map((row: any) => ({
+      id: String(row?.id || '').trim(),
+      name: row?.name || null,
+      module_id: row?.module_id || null,
+      module_ids: Array.isArray(row?.module_ids) ? row.module_ids : [],
+      is_active: row?.is_active,
+    })).filter((row: ProcessTemplateOptionRow) => row.id);
+
+    processTemplateRowsCache.data = rows;
+    processTemplateRowsCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
+    processTemplateRowsCache.promise = null;
+    return rows;
+  })().catch((error) => {
+    processTemplateRowsCache.promise = null;
+    throw error;
+  });
+
+  return processTemplateRowsCache.promise;
+};
+
+export const fetchProcessTemplateOptions = async (
+  supabaseClient: any,
+  moduleScopeId?: string | null,
+  options?: { force?: boolean }
+): Promise<DynamicOptionRow[]> => {
+  const rows = await fetchProcessTemplateRows(supabaseClient, options);
+  return rows
+    .filter((row) => row?.is_active !== false && doesProcessTemplateSupportModule(row, moduleScopeId))
+    .map((row) => ({
+      label: String(row?.name || 'بدون عنوان').trim(),
+      value: String(row?.id || '').trim(),
+    }))
+    .filter((item) => item.value);
 };
 
 export const fetchDynamicOptionsMap = async (
