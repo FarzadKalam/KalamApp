@@ -494,6 +494,7 @@ const getImportFieldDefaultValueForPayload = (
   if (field.defaultValue === undefined) return undefined;
   if (!isLogicVisibleForPayload(field.logic, payload)) return undefined;
   const resolvedDefaultValue = resolveImportFieldDefaultValue(field);
+  if (field.type === FieldType.RELATION && typeof resolvedDefaultValue === "boolean") return undefined;
   return isValueEmpty(resolvedDefaultValue) ? undefined : resolvedDefaultValue;
 };
 

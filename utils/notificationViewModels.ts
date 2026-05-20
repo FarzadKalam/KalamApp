@@ -122,6 +122,16 @@ const getNoteMentionUserIds = (note: any) =>
     ? note.mention_user_ids.map((id: string) => String(id))
     : [];
 
+const isAutomatedPersonalNote = (note: any) => {
+  if (String(note?.metadata?.chat_group_id || '').trim()) return false;
+  const sourceType = String(note?.source_type || note?.metadata?.source_type || '').trim();
+  return (
+    sourceType === 'system'
+    || sourceType === 'ai'
+    || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id)
+  );
+};
+
 export const buildSmsThreads = ({
   messages,
   recordTitleMap = {},
@@ -327,6 +337,7 @@ export const buildNoteConversations = ({
       stats.latestMessageAt = Math.max(stats.latestMessageAt, noteTime);
       return;
     }
+    if (isAutomatedPersonalNote(note)) return;
 
     if (!normalizedCurrentUserId) return;
     const mentionUserIds = getNoteMentionUserIds(note);

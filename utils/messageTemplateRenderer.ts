@@ -264,9 +264,10 @@ const resolveModuleLabel = (fieldContext: TemplateFieldContext, value: unknown):
   const raw = String(value ?? '').trim();
   if (!raw) return null;
   const fieldKey = String(fieldContext.key || '').trim();
-  if (!/(^|_)module(_id|s)?$/i.test(fieldKey) && !/(^|_)related_to_module$/i.test(fieldKey)) return null;
+  if (!/(^|_)module(_ids?|s)$/i.test(fieldKey) && !/(^|_)related_to_module$/i.test(fieldKey)) return null;
   const moduleConfig = MODULES[raw];
-  return String(moduleConfig?.titles?.fa || '').trim() || null;
+  const label = String(moduleConfig?.titles?.fa || '').trim();
+  return label ? label.replace(/^مدیریت\s+/u, '').trim() : null;
 };
 
 const resolveOptionLabel = (
