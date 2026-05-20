@@ -1294,6 +1294,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     }
   };
 
+  const handleImagePickerUpload = (files: File[]) => {
+    const nextFile = files[0];
+    if (!nextFile || uploading || !forceEditMode || isReadonly) return;
+    setIsImagePickerOpen(false);
+    void handleImageUpload(nextFile);
+  };
+
   const loadGlobalImageGallery = async () => {
     setGlobalImageGalleryLoading(true);
     try {
@@ -2608,6 +2615,13 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         }
         if (canShowFilesGallery) {
           const isEditable = !!forceEditMode && !isReadonly;
+          const useCompactFileButtons = !!compactMode;
+          const fileActionsWrapperClass = useCompactFileButtons
+            ? 'grid grid-cols-2 gap-1'
+            : 'grid grid-cols-1 gap-2 sm:grid-cols-2';
+          const fileActionButtonClass = useCompactFileButtons
+            ? 'w-full !h-auto min-h-[32px] px-2 py-1 text-[11px] leading-4 whitespace-normal'
+            : 'w-full justify-center !h-auto whitespace-normal py-2';
           return (
             <div className="flex flex-col gap-2">
               {/* Image preview */}
@@ -2625,25 +2639,25 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               )}
 
               {/* Action buttons */}
-              <div className="flex gap-2">
+              <div className={fileActionsWrapperClass}>
                 <Button
-                  size="middle"
+                  size={useCompactFileButtons ? 'small' : 'middle'}
                   icon={<UploadOutlined />}
                   onClick={() => setIsGalleryOpen(true)}
                   disabled={!isEditable}
-                  className="flex-1"
+                  className={fileActionButtonClass}
                 >
-                  آپلود / مدیریت فایل‌ها
+                  آپلود و مدیریت فایل‌ها
                 </Button>
                 <Button
-                  size="middle"
+                  size={useCompactFileButtons ? 'small' : 'middle'}
                   icon={<CheckOutlined />}
                   onClick={() => setIsImagePickerOpen(true)}
                   disabled={!isEditable}
-                  className="flex-1"
+                  className={fileActionButtonClass}
                   type="dashed"
                 >
-                  انتخاب از فایل‌ها
+                  انتخاب فایل
                 </Button>
               </div>
               {!!value && isEditable && (
@@ -2673,6 +2687,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 title="انتخاب تصویر برای فیلد"
                 multiple={false}
                 fileTypes={['image']}
+                onUploadFiles={handleImagePickerUpload}
                 onSelect={(attachments) => {
                   const url = String(attachments[0]?.url || '').trim();
                   if (url) onChange(url);

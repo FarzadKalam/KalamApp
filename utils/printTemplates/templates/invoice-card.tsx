@@ -104,6 +104,21 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
     );
   };
 
+  const invoiceItems = Array.isArray(data?.invoiceItems) ? data.invoiceItems : [];
+  const itemsSubtotal = invoiceItems.reduce((sum: number, item: any) => {
+    const rowTotal = Number(item?.total_price || 0);
+    if (Number.isFinite(rowTotal) && rowTotal > 0) return sum + rowTotal;
+    return sum + (Number(item?.quantity || 0) * Number(item?.unit_price || 0));
+  }, 0);
+  const globalDiscountType = String(data?.global_discount_type || '').trim().toLowerCase() === 'percent' ? 'percent' : 'amount';
+  const globalDiscountValue = Math.max(0, Number(data?.global_discount_value || 0));
+  const globalDiscountAmount = Math.min(
+    Math.max(itemsSubtotal, 0),
+    globalDiscountType === 'percent'
+      ? (Math.max(itemsSubtotal, 0) * Math.min(globalDiscountValue, 100)) / 100
+      : globalDiscountValue
+  );
+
   return (
     <div 
       className="print-card invoice-print-card" 
@@ -447,11 +462,13 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
               {formatPersianPrice(data.total_invoice_amount || 0)}
             </span>
           </div>
-          {data.total_discount && data.total_discount > 0 && (
+          {globalDiscountAmount > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: isMobilePrint ? '2px' : '3px', color: '#d97706', gap: '2px' }}>
               <span>تخفیف:</span>
               <span style={{ fontSize: isMobilePrint ? '6px' : '7px' }}>
-                {formatPersianPrice(data.total_discount)}
+                {globalDiscountType === 'percent'
+                  ? `${toPersianNumber(String(globalDiscountValue))}٪ (${formatPersianPrice(globalDiscountAmount)})`
+                  : formatPersianPrice(globalDiscountAmount)}
               </span>
             </div>
           )}

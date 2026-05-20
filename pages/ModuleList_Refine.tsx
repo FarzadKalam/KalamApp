@@ -655,7 +655,7 @@ export const ModuleListRefine: React.FC<{
   );
   const showContentSkeleton = queryPending && !hasQueryResult;
   const bulkBuildSourceModule = getBulkBuildSourceModule(resolvedModuleId);
-  const isListPageSizeReady = viewMode !== ViewMode.LIST || Number(pageSize || 0) === DEFAULT_LIST_PAGE_SIZE;
+  const isListPageSizeReady = viewMode !== ViewMode.LIST || Number(pageSize || 0) > 0;
   const totalFilteredRecordCount = useMemo(
     () => {
       if (resolvedModuleId === "cash_bank_operations" && cashBankFallbackRows.length > 0) {

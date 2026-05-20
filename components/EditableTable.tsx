@@ -93,6 +93,23 @@ const roundMoney = (value: number) => {
   return Math.round(value * 100) / 100;
 };
 
+const normalizeInvoiceGlobalDiscountType = (value: any): 'percent' | 'amount' =>
+  String(value || '').trim().toLowerCase() === 'percent' ? 'percent' : 'amount';
+
+const resolveInvoiceGlobalDiscountAmount = (
+  subtotal: number,
+  type: 'percent' | 'amount',
+  rawValue: any
+) => {
+  const safeSubtotal = Math.max(0, roundMoney(subtotal));
+  if (safeSubtotal <= 0) return 0;
+  const value = Math.max(0, toSafeNumber(rawValue));
+  const rawAmount = type === 'percent'
+    ? (safeSubtotal * Math.min(100, value)) / 100
+    : value;
+  return Math.min(safeSubtotal, roundMoney(rawAmount));
+};
+
 const calculatePriceWithProfit = (buyPrice: any, profitPercentage: any) => {
   const base = toSafeNumber(buyPrice);
   const profit = toSafeNumber(profitPercentage);
@@ -137,6 +154,9 @@ interface EditableTableProps {
   isMobile?: boolean;
   readOnly?: boolean;
   focusRowKey?: string | null;
+  invoiceGlobalDiscountType?: string | null;
+  invoiceGlobalDiscountValue?: number | string | null;
+  onInvoiceGlobalDiscountChange?: (value: { type: 'percent' | 'amount'; amount: number }) => void;
 }
 
 const EditableTable: React.FC<EditableTableProps> = ({
@@ -155,6 +175,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
   canViewField,
   readOnly,
   focusRowKey,
+  invoiceGlobalDiscountType,
+  invoiceGlobalDiscountValue,
+  onInvoiceGlobalDiscountChange,
 }) => {
   const { message: msg } = App.useApp();
   const isReadOnly = block?.readonly === true || readOnly === true || canEditModule === false;
@@ -201,6 +224,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [dimensionsPopoverRowKey, setDimensionsPopoverRowKey] = useState<string | null>(null);
   const [calendarPopoverRowKey, setCalendarPopoverRowKey] = useState<string | null>(null);
   const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
+  const [currentInvoiceGlobalDiscountType, setCurrentInvoiceGlobalDiscountType] = useState<'percent' | 'amount'>(
+    () => normalizeInvoiceGlobalDiscountType(invoiceGlobalDiscountType)
+  );
+  const [currentInvoiceGlobalDiscountValue, setCurrentInvoiceGlobalDiscountValue] = useState<number>(
+    () => Math.max(0, toSafeNumber(invoiceGlobalDiscountValue))
+  );
   const shelfAutoLoadRef = useRef<Record<string, string>>({});
   const dataRef = useRef<any[]>(Array.isArray(initialData) ? initialData : []);
   const tempDataRef = useRef<any[]>([]);
@@ -242,6 +271,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
     window.addEventListener('resize', updateViewportFlag);
     return () => window.removeEventListener('resize', updateViewportFlag);
   }, []);
+
+  useEffect(() => {
+    if (!isAnyInvoiceItems) return;
+    setCurrentInvoiceGlobalDiscountType(normalizeInvoiceGlobalDiscountType(invoiceGlobalDiscountType));
+    setCurrentInvoiceGlobalDiscountValue(Math.max(0, toSafeNumber(invoiceGlobalDiscountValue)));
+  }, [invoiceGlobalDiscountType, invoiceGlobalDiscountValue, isAnyInvoiceItems]);
 
   const productsModule = MODULES['products'];
   const { label: currencyLabel } = useCurrencyConfig();
@@ -1588,8 +1623,38 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
   };
 
-  const addRow = async () => {
+  const buildRowsForEditing = () => {
+    const preparedData = data.map((row, i) => ({
+      ...normalizeRowForEdit(row),
+      key: row.key || row.id || `edit_${i}`,
+      total_price: calculateRow(normalizeRowForEdit(row), block.rowCalculationType),
+    }));
+    const withDefaults = preparedData.map((row: any) => {
+      const nextRow = { ...row };
+      (block.tableColumns || []).forEach((col: any) => {
+        if (nextRow[col.key] === undefined && col.defaultValue !== undefined) {
+          nextRow[col.key] = col.defaultValue;
+        }
+      });
+      if (isAnyInvoiceItems) {
+        if (!nextRow.discount_type) nextRow.discount_type = 'amount';
+        if (!nextRow.vat_type) nextRow.vat_type = 'percent';
+        if (!nextRow.product_type) nextRow.product_type = 'goods';
+      }
+      if (isProductStockMovements) {
+        if (!nextRow.voucher_type) nextRow.voucher_type = 'incoming';
+        if (!nextRow.source) nextRow.source = 'opening_balance';
+        if (!nextRow.main_unit) nextRow.main_unit = currentProductUnits.mainUnit || null;
+        if (!nextRow.sub_unit) nextRow.sub_unit = currentProductUnits.subUnit || null;
+      }
+      return nextRow;
+    });
+    return JSON.parse(JSON.stringify(withDefaults));
+  };
+
+  const addRow = async (baseRows?: any[]) => {
     if (isReadOnly) return;
+    const editingRows = Array.isArray(baseRows) ? baseRows : tempData;
     const visibleColumns = (block.tableColumns || []).filter((c: any) =>
       (canViewField ? canViewField(c.key) !== false : true) &&
       !(isAnyInvoiceItems && c.key === 'package_id')
@@ -1663,7 +1728,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
       if (!toSafeNumber(newRow.amount)) {
         try {
-          const remainingAmount = await getPaymentBlockDefaultAmount(Array.isArray(tempData) ? tempData : []);
+          const remainingAmount = await getPaymentBlockDefaultAmount(Array.isArray(editingRows) ? editingRows : []);
           if (remainingAmount > 0) {
             newRow.amount = remainingAmount;
           }
@@ -1676,7 +1741,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       newRow.row_key = ensurePaymentRowKey(newRow);
     }
 
-    const newData = normalizePaymentRows([...tempData, newRow]);
+    const newData = normalizePaymentRows([...editingRows, newRow]);
     setTempData(newData);
     if (mode === 'local' && onChange) onChange(newData);
   };
@@ -1775,32 +1840,20 @@ const EditableTable: React.FC<EditableTableProps> = ({
     setUserToggledCollapse(true);
     setIsCollapsed(false);
     setIsEditing(true);
-    const preparedData = data.map((row, i) => ({
-      ...normalizeRowForEdit(row),
-      key: row.key || row.id || `edit_${i}`,
-      total_price: calculateRow(normalizeRowForEdit(row), block.rowCalculationType),
-    }));
-    const withDefaults = preparedData.map((row: any) => {
-      const nextRow = { ...row };
-      (block.tableColumns || []).forEach((col: any) => {
-        if (nextRow[col.key] === undefined && col.defaultValue !== undefined) {
-          nextRow[col.key] = col.defaultValue;
-        }
-      });
-      if (isAnyInvoiceItems) {
-        if (!nextRow.discount_type) nextRow.discount_type = 'amount';
-        if (!nextRow.vat_type) nextRow.vat_type = 'percent';
-        if (!nextRow.product_type) nextRow.product_type = 'goods';
-      }
-      if (isProductStockMovements) {
-        if (!nextRow.voucher_type) nextRow.voucher_type = 'incoming';
-        if (!nextRow.source) nextRow.source = 'opening_balance';
-        if (!nextRow.main_unit) nextRow.main_unit = currentProductUnits.mainUnit || null;
-        if (!nextRow.sub_unit) nextRow.sub_unit = currentProductUnits.subUnit || null;
-      }
-      return nextRow;
-    });
-    setTempData(JSON.parse(JSON.stringify(withDefaults)));
+    setTempData(buildRowsForEditing());
+  };
+
+  const addPaymentFromHeader = async () => {
+    if (isReadOnly) return;
+    if (!isEditing) {
+      setUserToggledCollapse(true);
+      setIsCollapsed(false);
+      setIsEditing(true);
+      const baseRows = buildRowsForEditing();
+      await addRow(baseRows);
+      return;
+    }
+    await addRow();
   };
 
   const cancelEdit = () => {
@@ -1833,13 +1886,21 @@ const EditableTable: React.FC<EditableTableProps> = ({
       totalField: string;
       paidField: string;
       remainingField: string;
+      globalDiscountType?: 'percent' | 'amount';
+      globalDiscountValue?: number;
     }
   ) => {
-    const totalAmount = (Array.isArray(itemRows) ? itemRows : []).reduce((sum: number, row: any) => {
+    const subtotalAmount = (Array.isArray(itemRows) ? itemRows : []).reduce((sum: number, row: any) => {
       const rowTotal = parseFloat(row?.total_price);
       if (Number.isFinite(rowTotal)) return sum + rowTotal;
       return sum + calculateRow(row || {}, config.rowCalculationType);
     }, 0);
+    const globalDiscountAmount = resolveInvoiceGlobalDiscountAmount(
+      subtotalAmount,
+      config.globalDiscountType || 'amount',
+      config.globalDiscountValue || 0
+    );
+    const totalAmount = Math.max(0, roundMoney(subtotalAmount - globalDiscountAmount));
 
     const hasStatusColumn = (Array.isArray(paymentRows) ? paymentRows : [])
       .some((row: any) => row && Object.prototype.hasOwnProperty.call(row, 'status'));
@@ -1856,7 +1917,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
     };
   };
 
-  const calculateInvoiceFinancialFields = (invoiceItemsRows: any[], paymentRows: any[]) => calculateFinancialFields(
+  const calculateInvoiceFinancialFields = (
+    invoiceItemsRows: any[],
+    paymentRows: any[],
+    globalDiscountType: 'percent' | 'amount' = currentInvoiceGlobalDiscountType,
+    globalDiscountValue: number = currentInvoiceGlobalDiscountValue
+  ) => calculateFinancialFields(
     invoiceItemsRows,
     paymentRows,
     {
@@ -1864,6 +1930,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       totalField: 'total_invoice_amount',
       paidField: 'total_received_amount',
       remainingField: 'remaining_balance',
+      globalDiscountType,
+      globalDiscountValue,
     }
   );
 
@@ -3413,7 +3481,25 @@ const EditableTable: React.FC<EditableTableProps> = ({
         const currentPayments = Array.isArray(currentInvoiceRow?.payments) ? currentInvoiceRow.payments : [];
         const nextInvoiceItems = block?.id === 'invoiceItems' ? dataToSave : currentInvoiceItems;
         const nextPayments = block?.id === 'payments' ? dataToSave : currentPayments;
-        Object.assign(updatePayload, calculateInvoiceFinancialFields(nextInvoiceItems, nextPayments));
+        const nextGlobalDiscountType = block?.id === 'invoiceItems'
+          ? currentInvoiceGlobalDiscountType
+          : normalizeInvoiceGlobalDiscountType(currentInvoiceRow?.global_discount_type);
+        const nextGlobalDiscountValue = block?.id === 'invoiceItems'
+          ? Math.max(0, toSafeNumber(currentInvoiceGlobalDiscountValue))
+          : Math.max(0, toSafeNumber(currentInvoiceRow?.global_discount_value));
+        if (block?.id === 'invoiceItems') {
+          updatePayload.global_discount_type = nextGlobalDiscountType;
+          updatePayload.global_discount_value = nextGlobalDiscountValue;
+        }
+        Object.assign(
+          updatePayload,
+          calculateInvoiceFinancialFields(
+            nextInvoiceItems,
+            nextPayments,
+            nextGlobalDiscountType,
+            nextGlobalDiscountValue
+          )
+        );
       }
       if ((isExpenseItems || isExpensePayments) && recordId) {
         const { data: fetchedExpenseRow, error: summarySourceError } = await supabase
@@ -4699,6 +4785,37 @@ const EditableTable: React.FC<EditableTableProps> = ({
   ];
 
   const sourceRows = isEditing ? tempData : data;
+  const updateInvoiceGlobalDiscount = (patch: Partial<{ type: 'percent' | 'amount'; amount: number }>) => {
+    const nextType = patch.type || currentInvoiceGlobalDiscountType;
+    const nextAmount = Math.max(0, toSafeNumber(
+      patch.amount !== undefined ? patch.amount : currentInvoiceGlobalDiscountValue
+    ));
+    setCurrentInvoiceGlobalDiscountType(nextType);
+    setCurrentInvoiceGlobalDiscountValue(nextAmount);
+    onInvoiceGlobalDiscountChange?.({ type: nextType, amount: nextAmount });
+  };
+  const hasPersistedRows = Array.isArray(data) && data.length > 0;
+  const isPaymentsTable = block?.id === 'payments' && isOperationalPayments;
+  const paymentsActionNounFa = isInvoicePayments ? 'دریافت' : 'پرداخت';
+  const resolveTableRowKey = (record: any, index?: number) => {
+    const directKey = getRowKey(record);
+    if (directKey) return String(directKey);
+    const candidates = [
+      record?.row_key,
+      record?.id,
+      record?._cash_bank_operation_id,
+      record?.asset_id,
+      record?.entry_id,
+      record?.system_code,
+      record?.file_url,
+      record?.created_at,
+    ];
+    for (const candidate of candidates) {
+      const normalized = String(candidate || '').trim();
+      if (normalized) return `${block.id || 'row'}_${normalized}`;
+    }
+    return `${block.id || 'row'}_${index ?? 0}`;
+  };
   const stackedRowGroupA = ['attachment', 'payment_type', 'cheque_id', 'barter_id', 'cheque_status', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
     ? ['target_account', 'responsible_id', 'description']
@@ -4890,7 +5007,16 @@ const EditableTable: React.FC<EditableTableProps> = ({
               محاسبه قیمت
             </Button>
           )}
-          {mode === 'db' && !isEditing && !isReadOnly && <Button size="small" icon={<EditOutlined />} onClick={startEdit}>ویرایش لیست</Button>}
+          {mode === 'db' && !isEditing && !isReadOnly && isPaymentsTable && !hasPersistedRows && (
+            <Button size="small" icon={<PlusOutlined />} onClick={() => { void addPaymentFromHeader(); }}>
+              {`افزودن ${paymentsActionNounFa}`}
+            </Button>
+          )}
+          {mode === 'db' && !isEditing && !isReadOnly && (!isPaymentsTable || hasPersistedRows) && (
+            <Button size="small" icon={<EditOutlined />} onClick={startEdit}>
+              {isPaymentsTable ? `ویرایش ${paymentsActionNounFa}` : 'ویرایش لیست'}
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -4943,7 +5069,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               ))
             )}
             {(isEditing || mode === 'local') && !isReadOnly && (
-              <Button type="dashed" block icon={<PlusOutlined />} onClick={addRow}>افزودن ردیف جدید</Button>
+              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => { void addRow(); }}>افزودن ردیف جدید</Button>
             )}
             {renderStackedSummary()}
           </div>
@@ -4953,7 +5079,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           columns={columns}
           pagination={false}
           size="middle"
-          rowKey={(record: any, index?: number) => getRowKey(record) || `${block.id || 'row'}_${index ?? 0}`}
+          rowKey={(record: any, index?: number) => resolveTableRowKey(record, index)}
           locale={{ emptyText: <Empty description="لیست خالی است" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
           className="custom-erp-table font-medium editable-table-main"
           tableLayout="auto"
@@ -4965,7 +5091,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           )}
           expandable={tableExpandable as any}
           footer={(isEditing || mode === 'local') && !isReadOnly ? () => (
-            <Button type="dashed" block icon={<PlusOutlined />} onClick={addRow}>افزودن ردیف جدید</Button>
+            <Button type="dashed" block icon={<PlusOutlined />} onClick={() => { void addRow(); }}>افزودن ردیف جدید</Button>
           ) : undefined}
           summary={(pageData) => {
             if (isProductStockMovements) {
@@ -4998,6 +5124,23 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
             let cellIndex = 0;
             const cells: React.ReactNode[] = [];
+            const pageSubtotal = isAnyInvoiceItems
+              ? pageData.reduce((sum: number, row: any) => {
+                const rowTotal = parseFloat(row?.total_price);
+                if (Number.isFinite(rowTotal)) return sum + rowTotal;
+                return sum + calculateRow(row || {}, RowCalculationType.INVOICE_ROW);
+              }, 0)
+              : 0;
+            const pageGlobalDiscountAmount = isAnyInvoiceItems
+              ? resolveInvoiceGlobalDiscountAmount(
+                pageSubtotal,
+                currentInvoiceGlobalDiscountType,
+                currentInvoiceGlobalDiscountValue
+              )
+              : 0;
+            const pageFinalTotal = isAnyInvoiceItems
+              ? Math.max(0, roundMoney(pageSubtotal - pageGlobalDiscountAmount))
+              : 0;
 
             if (isProductionOrder && isBomItemBlock) {
               cells.push(<Table.Summary.Cell index={cellIndex} key="expand-spacer" />);
@@ -5033,6 +5176,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     const amounts = getInvoiceAmounts(current);
                     return prev + (col.key === 'discount' ? amounts.discountAmount : amounts.vatAmount);
                   }, 0);
+                } else if (isAnyInvoiceItems && col.key === 'total_price') {
+                  total = pageFinalTotal;
                 } else if (isAnyInvoicePayments && col.key === 'amount') {
                   total = pageData.reduce((prev: number, current: any) =>
                     current?.status === 'received' ? prev + (parseFloat(current[col.key]) || 0) : prev,
@@ -5059,6 +5204,53 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
             return (
               <Table.Summary fixed>
+                {isAnyInvoiceItems ? (
+                  <Table.Summary.Row className="bg-[rgba(var(--brand-50-rgb),0.35)] dark:bg-[rgba(var(--brand-900-rgb),0.2)]">
+                    <Table.Summary.Cell index={0} colSpan={columns.length}>
+                      <div className="flex flex-wrap items-center gap-3 py-1">
+                        <span className="text-[rgb(var(--brand-700-rgb))] dark:text-gray-200 font-semibold">تخفیف کل:</span>
+                        {(!isReadOnly && (mode === 'local' || isEditing)) ? (
+                          <>
+                            <Select
+                              size="small"
+                              value={currentInvoiceGlobalDiscountType}
+                              style={{ minWidth: 128 }}
+                              options={[
+                                { label: 'درصد', value: 'percent' },
+                                { label: 'مبلغ', value: 'amount' },
+                              ]}
+                              onChange={(value) => updateInvoiceGlobalDiscount({ type: normalizeInvoiceGlobalDiscountType(value) })}
+                            />
+                            <Space.Compact size="small">
+                              <InputNumber
+                                size="small"
+                                min={0}
+                                max={currentInvoiceGlobalDiscountType === 'percent' ? 100 : undefined}
+                                value={currentInvoiceGlobalDiscountValue}
+                                style={{ minWidth: 130 }}
+                                className="persian-number"
+                                onChange={(value) => updateInvoiceGlobalDiscount({ amount: toSafeNumber(value) })}
+                              />
+                              <Button size="small" disabled>
+                                {currentInvoiceGlobalDiscountType === 'percent' ? '%' : currencyLabel}
+                              </Button>
+                            </Space.Compact>
+                          </>
+                        ) : (
+                          <span className="persian-number text-gray-700 dark:text-gray-200">
+                            {currentInvoiceGlobalDiscountType === 'percent'
+                              ? `${toPersianNumber(currentInvoiceGlobalDiscountValue)}٪`
+                              : `${toPersianNumber(currentInvoiceGlobalDiscountValue.toLocaleString('en-US'))} ${currencyLabel}`
+                            }
+                          </span>
+                        )}
+                        <span className="persian-number text-red-600 dark:text-red-300 text-xs md:text-sm">
+                          ({toPersianNumber(pageGlobalDiscountAmount.toLocaleString('en-US'))} {currencyLabel} -)
+                        </span>
+                      </div>
+                    </Table.Summary.Cell>
+                  </Table.Summary.Row>
+                ) : null}
                 <Table.Summary.Row className="font-bold bg-[rgba(var(--brand-50-rgb),0.65)] dark:bg-[rgba(var(--brand-900-rgb),0.45)]">
                   {cells}
                 </Table.Summary.Row>

@@ -247,6 +247,13 @@ const getInvoiceTemplateConfig = (moduleId: string) => {
 
 const buildInvoiceItemsSummaryRow = () => `
     <tr>
+      <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.52); vertical-align:middle; text-align:center;">تخفیف کل</td>
+      <td colspan="5" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.3); vertical-align:middle; text-align:center;">
+        <div style="${MULTILINE_PRINT_STYLE}">{{record.global_discount_display}}</div>
+      </td>
+      <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:900; background:rgba(239,68,68,0.08); text-align:center; vertical-align:middle;">-{{record.global_discount_amount}} <span style="font-size:8.2px; color:#64748b;">{{company.currency_label}}</span></td>
+    </tr>
+    <tr>
       <td colspan="2" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:800; background:rgba(var(--brand-50-rgb),0.68); vertical-align:middle; text-align:center;">جمع کل</td>
       <td colspan="5" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px 7px; font-weight:700; background:rgba(var(--brand-50-rgb),0.38); vertical-align:middle; text-align:center;">
         <div style="${MULTILINE_PRINT_STYLE}">{{record.total_invoice_amount_words}}</div>
