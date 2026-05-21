@@ -1160,7 +1160,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   } = useNotificationConversationList({
     supabase,
     section: 'bot_messages',
-    enabled: open && variant === 'chat' && Boolean(profile.id),
+    enabled: variant === 'chat' && Boolean(profile.id),
   });
   const {
     items: rpcNoteConversationSummaries,
@@ -1226,6 +1226,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const selectedBotGroup = useMemo(
     () => effectiveBotGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
     [effectiveBotGroups, selectedBotGroupId]
+  );
+  const visibleBotGroupIds = useMemo(
+    () => new Set(effectiveBotGroups.map((row) => String(row.id || '').trim()).filter(Boolean)),
+    [effectiveBotGroups]
   );
   const clearBotStatusWatchTimer = useCallback(() => {
     if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
@@ -3661,12 +3665,16 @@ useEffect(() => {
     !isNotificationRead('responsibilities', getResponsibilitySourceType(r), String(r?.id || ''), seenResponsibilityIds.has(String(r?.id || '')))
   )).length, [responsibilities, seenResponsibilityIds, isNotificationRead]);
   const botMessagesCount = useMemo(() => botConversationSummaryAvailable && rpcBotConversationSummaries
-    ? (rpcBotConversationSummaries || []).reduce((sum, item) => sum + Number(item?.unread_count || 0), 0)
+    ? (rpcBotConversationSummaries || []).reduce((sum, item) => {
+        const groupId = String(item?.bot_group_id || '').trim();
+        if (!groupId || !visibleBotGroupIds.has(groupId)) return sum;
+        return sum + Number(item?.unread_count || 0);
+      }, 0)
     : botNotificationMessages.filter((row) => {
       const id = String(row?.id || '').trim();
       return String(row?.direction || '').trim() === 'inbound'
         && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
-    }).length, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead]);
+    }).length, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead, visibleBotGroupIds]);
   const smsMessagesCount = useMemo(() => smsMessages.filter((row: any) => (
     String(row?.direction || '').trim() === 'inbound'
     && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), false)
@@ -6446,7 +6454,7 @@ useEffect(() => {
     const botUnreadByGroup = botConversationSummaryAvailable && rpcBotConversationSummaries
       ? (rpcBotConversationSummaries || []).reduce<Record<string, number>>((acc, item) => {
           const groupId = String(item?.bot_group_id || '').trim();
-          if (!groupId) return acc;
+          if (!groupId || !visibleBotGroupIds.has(groupId)) return acc;
           acc[groupId] = Number(item?.unread_count || 0);
           return acc;
         }, {})
