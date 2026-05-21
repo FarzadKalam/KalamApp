@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FieldLocation, FieldType } from '../types';
-import { buildListPrintableFields, formatListCellValue } from './listPrintExport';
+import { buildListCatalogHtml, buildListPrintableFields, formatListCellValue } from './listPrintExport';
 
 describe('formatListCellValue assignee display', () => {
   it('renders relation fields as labels instead of UUIDs', () => {
@@ -77,5 +77,24 @@ describe('formatListCellValue assignee display', () => {
     expect(fields.find((field) => field.key === 'address')?.defaultSelected).toBe(false);
     expect(fields.find((field) => field.key === 'name')?.defaultSelected).toBe(true);
     expect(fields.map((field) => field.key)).toEqual(expect.arrayContaining(['name', 'width', 'address']));
+  });
+
+  it('uses transformed preview images for catalog list cards', () => {
+    const html = buildListCatalogHtml(
+      [
+        { key: 'image_url', label: 'تصویر', type: FieldType.IMAGE },
+        { key: 'name', label: 'نام', type: FieldType.TEXT },
+      ],
+      [
+        {
+          image_url: 'https://example.com/storage/v1/object/public/images/products/1/photo.jpg',
+          name: 'محصول نمونه',
+        },
+      ],
+    );
+
+    expect(html).toContain('/storage/v1/render/image/public/images/products/1/photo.jpg');
+    expect(html).toContain('width=520');
+    expect(html).toContain('quality=72');
   });
 });

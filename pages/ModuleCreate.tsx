@@ -12,7 +12,7 @@ import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { syncCustomerLevelsByInvoiceCustomers } from "../utils/customerLeveling";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { syncInvoiceAccountingEntries } from "../utils/accountingAutoPosting";
-import { fetchCurrentUserRoleContext } from "../utils/permissions";
+import { fetchCurrentUserRoleContext, isSaasAdminModuleId, SAAS_ADMIN_PERMISSION_KEY } from "../utils/permissions";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { buildClientFallbackSystemCode, supportsSystemCode } from "../utils/systemCode";
 import { syncRecordTags } from "../utils/recordTags";
@@ -153,6 +153,18 @@ export const ModuleCreate = () => {
         if (!context.userId) {
           if (active) {
             setCanCreate(false);
+            setPermissionLoading(false);
+          }
+          return;
+        }
+
+        if (isSaasAdminModuleId(moduleId)) {
+          const saasPerms = context.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+          const saasFields = saasPerms.fields || {};
+          const editFieldKey = moduleId === "saas_orgs" ? "edit_orgs" : "edit_requests";
+          const canViewSaas = saasPerms.view === true || saasPerms.edit === true || saasFields[editFieldKey] === true;
+          if (active) {
+            setCanCreate(canViewSaas && (saasPerms.edit === true || saasFields[editFieldKey] === true));
             setPermissionLoading(false);
           }
           return;

@@ -5,6 +5,7 @@ import type { AssigneeDirectory } from './referenceData';
 import {
   canAccessAssignedRecord,
   GOALS_PERMISSION_KEY,
+  isSaasAdminModuleId,
   resolveModuleGoalAccessPermissions,
   type PermissionMap,
 } from './permissions';
@@ -119,6 +120,7 @@ export const getGoalUserSelectionValue = (goal?: GoalRecord | null) => {
 
 export const getGoalModuleOptions = (permissions?: PermissionMap | null) =>
   Object.values(MODULES)
+    .filter((module) => !isSaasAdminModuleId(module.id))
     .filter((module) => resolveModuleGoalAccessPermissions(permissions, module.id).canViewGoal)
     .map((module) => ({
       label: module.titles.fa,

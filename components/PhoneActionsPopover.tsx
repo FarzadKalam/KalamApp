@@ -28,7 +28,7 @@ const PhoneActionsPopover: React.FC<PhoneActionsPopoverProps> = ({
   }
 
   return (
-    <span className="inline-flex max-w-full flex-wrap items-center gap-1.5">
+    <span className="inline-flex max-w-full min-w-0 flex-nowrap items-center gap-1.5 overflow-hidden">
       <Popover
         trigger="click"
         placement="bottom"
@@ -44,7 +44,7 @@ const PhoneActionsPopover: React.FC<PhoneActionsPopoverProps> = ({
         )}
       >
         <span
-          className="inline-flex max-w-full min-w-0 cursor-pointer"
+          className="inline-flex min-w-0 flex-1 cursor-pointer"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -59,7 +59,7 @@ const PhoneActionsPopover: React.FC<PhoneActionsPopoverProps> = ({
         phoneValue={value}
         compact={size === 'sm'}
         buttonVariant="text"
-        className="opacity-90"
+        className="shrink-0 opacity-90"
       />
     </span>
   );

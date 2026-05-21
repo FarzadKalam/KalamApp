@@ -39,7 +39,7 @@ import {
   ModuleDefinition,
   ModuleField,
 } from '../../types';
-import { fetchCurrentUserRolePermissions, type PermissionMap } from '../../utils/permissions';
+import { fetchCurrentUserRolePermissions, isSaasAdminModuleId, type PermissionMap } from '../../utils/permissions';
 import {
   AddFieldFormValues,
   EditableModuleSchema,
@@ -419,6 +419,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
   const moduleOptions = useMemo(() => {
     return Object.values(MODULES)
+      .filter((mod) => !isSaasAdminModuleId(mod.id))
       .filter((mod) => canOpenModuleSettings(mod.id))
       .map((mod) => ({
         value: mod.id,
@@ -428,7 +429,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
   const allModuleOptions = useMemo(
     () =>
-      Object.values(MODULES).map((mod) => ({
+      Object.values(MODULES).filter((mod) => !isSaasAdminModuleId(mod.id)).map((mod) => ({
         value: mod.id,
         label: mod.titles.fa,
       })),

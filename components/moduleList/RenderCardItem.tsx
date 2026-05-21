@@ -16,6 +16,7 @@ import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
 import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules";
 import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
 import ResilientImage from "../common/ResilientImage";
+import ProfileAvatar from "../common/ProfileAvatar";
 
 export interface RenderCardItemProps {
   item: any;
@@ -235,9 +236,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       if (user) {
         return (
           <div className="flex items-center gap-1 min-w-0">
-            <Avatar size={18} src={user.avatar_url}>
-              {!user.avatar_url && user.full_name?.[0]}
-            </Avatar>
+            <ProfileAvatar size={18} src={user.avatar_url} name={user.full_name} />
             <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[90px]">
               {user.full_name}
             </span>
@@ -250,7 +249,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       if (role) {
         return (
           <div className="flex items-center gap-1 min-w-0">
-            <Avatar size={18} className="bg-blue-100 text-blue-600">R</Avatar>
+            <ProfileAvatar size={18} className="bg-blue-100 text-blue-600" fallback="R" />
             <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[90px]">
               {role.title}
             </span>

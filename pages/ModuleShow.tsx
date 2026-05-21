@@ -38,11 +38,18 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
+import ProfileAvatar from '../components/common/ProfileAvatar';
 import { applyStockTransferInventory } from '../utils/stockTransferInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
 import { shouldAutoSyncInvoiceAccounting } from '../utils/invoiceAccountingPolicy';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
-import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, type RecordScope } from '../utils/permissions';
+import {
+  canAccessAssignedRecord,
+  fetchCurrentUserRecordAccessContext,
+  isSaasAdminModuleId,
+  SAAS_ADMIN_PERMISSION_KEY,
+  type RecordScope,
+} from '../utils/permissions';
 import { normalizeAutoNameEnabled } from '../utils/autoName';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { buildCopyPayload, detectCopyNameField } from '../utils/recordCopy';
@@ -1762,10 +1769,12 @@ const ModuleShow: React.FC = () => {
         saas_orgs: 'edit_orgs',
         saas_demo_requests: 'edit_requests',
       };
-      if (SAAS_ADMIN_EDIT_MAP[moduleId]) {
-        const saasPerms = (permissions?.['__saas_admin'] || {}) as Record<string, any>;
-        const canViewSaas = saasPerms.view !== false;
-        const canEditSaas = Boolean(saasPerms[SAAS_ADMIN_EDIT_MAP[moduleId]]);
+      if (isSaasAdminModuleId(moduleId)) {
+        const saasPerms = (permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {}) as Record<string, any>;
+        const saasFields = saasPerms.fields || {};
+        const editFieldKey = SAAS_ADMIN_EDIT_MAP[moduleId];
+        const canViewSaas = saasPerms.view === true || saasPerms.edit === true || (editFieldKey ? saasFields[editFieldKey] === true : false);
+        const canEditSaas = canViewSaas && (saasPerms.edit === true || (editFieldKey ? saasFields[editFieldKey] === true : false));
         setFieldPermissions({});
         setModulePermissions({
           view: canViewSaas ? true : false,
@@ -6015,10 +6024,10 @@ const ModuleShow: React.FC = () => {
   if (currentAssigneeId) {
       if (currentAssigneeType === 'user') {
           const u = allUsers.find(u => u.id === currentAssigneeId);
-          if (u) { assigneeIcon = u.avatar_url ? <Avatar src={u.avatar_url} size="small" /> : <Avatar icon={<UserOutlined />} size="small" />; }
+          if (u) { assigneeIcon = <ProfileAvatar src={u.avatar_url} size="small" icon={<UserOutlined />} name={u.full_name || u.display_name} />; }
       } else {
           const r = allRoles.find(r => r.id === currentAssigneeId);
-          if (r) { assigneeIcon = <Avatar icon={<TeamOutlined />} size="small" className="bg-blue-100 text-blue-600" />; }
+          if (r) { assigneeIcon = <ProfileAvatar icon={<TeamOutlined />} size="small" className="bg-blue-100 text-blue-600" fallback={<TeamOutlined />} />; }
       }
   }
   const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });

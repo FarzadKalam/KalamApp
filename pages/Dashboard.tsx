@@ -25,6 +25,7 @@ import {
   DASHBOARD_PERMISSION_KEY,
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
+  isSaasAdminModuleId,
   resolvePreferredRoleModuleIds,
   resolveStoriesPermissions,
   type CurrentUserRecordAccessContext,
@@ -395,7 +396,9 @@ const resolveDashboardModuleIds = (
   preferredModuleIds: string[]
 ) => {
   const next: string[] = [];
-  const visibleModuleIds = Object.keys(MODULES).filter((moduleId) => permissions?.[moduleId]?.view !== false);
+  const visibleModuleIds = Object.keys(MODULES).filter(
+    (moduleId) => !isSaasAdminModuleId(moduleId) && permissions?.[moduleId]?.view !== false
+  );
 
   const pushUnique = (moduleId: string) => {
     if (!moduleId || !MODULES[moduleId] || !visibleModuleIds.includes(moduleId) || next.includes(moduleId)) return;

@@ -29,6 +29,8 @@ import PhoneActionsPopover from '../components/PhoneActionsPopover';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import ProfileAvatar from '../components/common/ProfileAvatar';
+import { emitProfileAvatarUpdated } from '../utils/profileAvatarEvents';
 
 const ProfilePage: React.FC = () => {
   const { id } = useParams();
@@ -365,6 +367,11 @@ const ProfilePage: React.FC = () => {
 
             setRecord((prev: any) => ({ ...(prev || {}), avatar_url: nextAvatarUrl }));
             setAvatarUrl(nextAvatarUrl);
+            emitProfileAvatarUpdated({
+                profileId: String(record.id),
+                avatarUrl: nextAvatarUrl,
+                fullName: String(record.full_name || '').trim() || null,
+            });
             message.success('عکس پروفایل بروزرسانی شد.');
         } catch (error) {
             if (isUploadCanceledError(error)) return false;
@@ -654,14 +661,14 @@ const ProfilePage: React.FC = () => {
                 <div className="h-32 bg-gradient-to-br from-leather-600 to-leather-800 relative"></div>
 
                 <div className="px-6 relative -mt-16">
-                    <Avatar 
+                    <ProfileAvatar 
                         size={128} 
                         src={record.avatar_url} 
                         icon={<UserOutlined />} 
+                        name={record.full_name}
                         className="bg-white border-4 border-white dark:border-[#1a1a1a] shadow-xl text-leather-500 text-5xl mb-4"
                     >
-                        {record.full_name?.[0]?.toUpperCase()}
-                    </Avatar>
+                    </ProfileAvatar>
                     {canEditOwnAvatar ? (
                         <div className="mb-4">
                             <Upload
@@ -897,7 +904,7 @@ const ProfilePage: React.FC = () => {
                 <Form form={form} layout="vertical" onFinish={handleSave}>
                     <div className="flex justify-center mb-6">
                         <div className="text-center">
-                            <Avatar size={80} src={avatarUrl} icon={<UserOutlined />} className="mb-2 bg-gray-100" />
+                            <ProfileAvatar size={80} src={avatarUrl} icon={<UserOutlined />} className="mb-2 bg-gray-100" name={form.getFieldValue('full_name')} />
                             <Upload showUploadList={false} beforeUpload={handleAvatarUpload}>
                                 <Button size="small" icon={<UploadOutlined />}>آپلود عکس</Button>
                             </Upload>

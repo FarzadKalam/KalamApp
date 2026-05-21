@@ -1,5 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
+import { isSaasAdminModuleId } from './permissions';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
 
@@ -325,6 +326,7 @@ export const getSecondaryModuleOptions = (
         .filter((field) => field.type === FieldType.RELATION && field.relationConfig?.targetModule)
         .map((field) => String(field.relationConfig?.targetModule || '').trim())
         .filter((targetModuleId) => !!targetModuleId && !!MODULES[targetModuleId])
+        .filter((targetModuleId) => !isSaasAdminModuleId(targetModuleId))
         .filter((targetModuleId) => !REPORT_BUILDER_EXCLUDED_MODULE_IDS.has(targetModuleId))
         .filter((targetModuleId) => permissions?.[targetModuleId]?.view !== false)
         .map((targetModuleId) => [
@@ -452,6 +454,7 @@ export const getSummableReportFields = (mainModuleId?: string | null, secondaryM
 
 export const getReportModuleOptions = (permissions?: Record<string, { view?: boolean }> | null) =>
   Object.values(MODULES)
+    .filter((module) => !isSaasAdminModuleId(module.id))
     .filter((module) => !REPORT_BUILDER_EXCLUDED_MODULE_IDS.has(module.id))
     .filter((module) => permissions?.[module.id]?.view !== false)
     .map((module) => ({

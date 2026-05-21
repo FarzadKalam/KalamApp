@@ -2,6 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField } from '../types';
 import { getAssigneeLabel } from './assigneeLabel';
 import { supportsGlobalAssignee } from './assigneeSupport';
+import { isSaasAdminModuleId } from './permissions';
 import {
   getProcessTargetModuleFields,
   normalizeProcessTargetModuleIds,
@@ -33,6 +34,7 @@ const PROCESS_DRAFT_FIELD_KEYS = [
 ] as const;
 export const getProjectModuleOptions = () =>
   Object.values(MODULES)
+    .filter((module) => !isSaasAdminModuleId(module.id))
     .map((module) => ({
       label: module.titles?.fa || module.id,
       value: module.id,

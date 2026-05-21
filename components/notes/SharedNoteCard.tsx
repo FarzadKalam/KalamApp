@@ -18,6 +18,7 @@ import { isAudioNoteAttachment, type NoteAttachment } from '../../utils/noteCont
 import { isImageFileLike } from '../../utils/imagePreview';
 import { parseNoteTemplateTextSegments } from '../../utils/noteTemplateText';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
+import ProfileAvatar from '../common/ProfileAvatar';
 import ResilientImage from '../common/ResilientImage';
 import FileExtensionTile from '../files/FileExtensionTile';
 
@@ -436,13 +437,13 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   <>
   <div id={messageDomId} dir="ltr" className={`group/message flex w-full max-w-full scroll-mt-24 overflow-hidden ${isMine ? 'justify-end' : 'justify-start'}`}>
     <div className={`flex min-w-0 max-w-full items-start gap-1.5 ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
-      <Avatar
+      <ProfileAvatar
         size={26}
         src={avatarUrl || undefined}
         className={`mt-0.5 shrink-0 ${avatarClassName || ''} ${variant === 'ai' ? '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]' : ''}`.trim()}
-      >
-        {!avatarUrl && (variant === 'ai' ? <AiSparkleIcon className="h-4 w-4" /> : resolvedAvatarFallback)}
-      </Avatar>
+        fallback={variant === 'ai' ? <AiSparkleIcon className="h-4 w-4" /> : resolvedAvatarFallback}
+        name={authorName}
+      />
       <div className={`relative min-w-0 max-w-[calc(100%-2.3rem)] ${isMine ? 'pr-0' : 'pl-2'}`}>
         {unreadIndicator ? (
           <span

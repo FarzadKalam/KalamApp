@@ -37,6 +37,10 @@ export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
 export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
+export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests'] as const;
+const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
+export const isSaasAdminModuleId = (moduleId?: string | null) =>
+  SAAS_ADMIN_MODULE_ID_SET.has(String(moduleId || '').trim());
 export const SAAS_ADMIN_PERMISSION_FIELDS = [
   { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
   { key: 'edit_orgs', label: 'ویرایش سازمان‌ها' },
@@ -259,6 +263,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
   const defaults: PermissionMap = {};
 
   Object.values(modules).forEach((module) => {
+    if (isSaasAdminModuleId(module.id)) return;
     defaults[module.id] = {
       view: true,
       edit: true,
@@ -357,6 +362,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     fields: createFieldsMap([...STORIES_PERMISSION_FIELDS]),
   };
 
+  defaults[SAAS_ADMIN_PERMISSION_KEY] = {
+    view: false,
+    edit: false,
+    delete: false,
+    record_scope: 'all',
+    fields: createFieldsMap(SAAS_ADMIN_PERMISSION_FIELDS),
+  };
+
   return defaults;
 };
 
@@ -382,7 +395,9 @@ export const resolvePreferredRoleModuleIds = (
   limit = 8
 ) => {
   const fields = permissions?.[MOBILE_FOOTER_PERMISSION_KEY]?.fields || {};
-  const visibleModules = Object.keys(modules).filter((moduleId) => permissions?.[moduleId]?.view !== false);
+  const visibleModules = Object.keys(modules).filter(
+    (moduleId) => !isSaasAdminModuleId(moduleId) && permissions?.[moduleId]?.view !== false
+  );
   const next: string[] = [];
 
   const pushUnique = (moduleId: string) => {

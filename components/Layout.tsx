@@ -56,6 +56,8 @@ import {
   requestTrialRenewal,
   resolveTrialDaysLeft,
 } from '../utils/orgSaasStatus';
+import ProfileAvatar from './common/ProfileAvatar';
+import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -354,7 +356,15 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
   const canViewSettingsRoot = rolePermissions?.[SETTINGS_PERMISSION_KEY]?.view !== false;
-  const canViewSaasAdmin = Boolean(rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY]?.view);
+  const saasAdminPermissions = rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+  const saasAdminPermissionFields = saasAdminPermissions.fields || {};
+  const canViewSaasAdmin = Boolean(
+    saasAdminPermissions.view
+    || saasAdminPermissions.edit
+    || saasAdminPermissionFields.edit_orgs
+    || saasAdminPermissionFields.edit_requests
+    || saasAdminPermissionFields.demo_override
+  );
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
   const canViewCashBank =
     canViewAccountingDashboard &&
@@ -395,6 +405,48 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       return true;
     }
   }, []);
+
+  useEffect(() => {
+    const handleAvatarUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<ProfileAvatarUpdatedDetail>).detail;
+      const profileId = String(detail?.profileId || '').trim();
+      if (!profileId) return;
+      setCurrentUserProfile((prev: any) => {
+        if (String(prev?.id || '') !== profileId) return prev;
+        return {
+          ...(prev || {}),
+          avatar_url: detail?.avatarUrl || null,
+          full_name: detail?.fullName ?? prev?.full_name ?? null,
+        };
+      });
+    };
+
+    window.addEventListener(PROFILE_AVATAR_UPDATED_EVENT, handleAvatarUpdated as EventListener);
+    return () => {
+      window.removeEventListener(PROFILE_AVATAR_UPDATED_EVENT, handleAvatarUpdated as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    const profileId = String(currentUserProfile?.id || currentUser?.id || '').trim();
+    if (!profileId) return;
+
+    const channel = supabase
+      .channel(`layout-profile-avatar-${profileId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${profileId}` },
+        (payload) => {
+          const nextProfile = payload.new as Record<string, any>;
+          setCurrentUserProfile((prev: any) => ({ ...(prev || {}), ...(nextProfile || {}) }));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [currentUser?.id, currentUserProfile?.id]);
 
   const releaseIntervalRunnerLock = useCallback(() => {
     try {
@@ -1186,11 +1238,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             </React.Suspense>
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>
                 <div className="cursor-pointer transition-transform hover:scale-105">
-                   <Avatar 
-                     size="small" 
+                   <ProfileAvatar
+                     size="small"
                      src={resolvedAvatarSrc}
-                     icon={!resolvedAvatarSrc ? <UserOutlined /> : undefined}
-                     className="border border-leather-500 shadow-lg" 
+                     icon={<UserOutlined />}
+                     className="border border-leather-500 shadow-lg"
+                     name={currentUserProfile?.full_name || currentUser?.user_metadata?.full_name || currentUser?.email}
                    />
                 </div>
             </Dropdown>

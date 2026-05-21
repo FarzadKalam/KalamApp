@@ -26,6 +26,7 @@ import {
   VOIP_PERMISSION_FIELDS,
   SAAS_ADMIN_PERMISSION_KEY,
   SAAS_ADMIN_PERMISSION_FIELDS,
+  isSaasAdminModuleId,
   MOBILE_FOOTER_PERMISSION_KEY,
   DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES,
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
@@ -83,6 +84,7 @@ const RolesTab: React.FC = () => {
   const mobileFooterModuleOptions = useMemo(
     () =>
       Object.values(MODULES)
+        .filter((module) => !isSaasAdminModuleId(module.id))
         .map((module) => ({
           label: module.titles.faSingular || module.titles.fa,
           value: module.id,
@@ -845,7 +847,7 @@ const RolesTab: React.FC = () => {
                 </div>
               </div>
               <Collapse defaultActiveKey={[Object.values(MODULES)[0]?.id || 'products']} className="dark:bg-transparent dark:border-gray-800">
-                {Object.values(MODULES).map((module) => {
+                {Object.values(MODULES).filter((module) => !isSaasAdminModuleId(module.id)).map((module) => {
                   const modPerms = getModulePerms(module.id);
                   const fields = collectModulePermissionFields(module);
                   const disabled = modPerms.view === false;
@@ -1442,4 +1444,3 @@ const RolesTab: React.FC = () => {
 };
 
 export default RolesTab;
-

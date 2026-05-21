@@ -27,6 +27,7 @@ import { buildConditionalFieldStateMap, filterConditionallyVisibleFieldsForDatas
 import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRuntime';
 import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 import ResilientImage from './common/ResilientImage';
+import ProfileAvatar from './common/ProfileAvatar';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -1311,11 +1312,12 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         if (user) {
           return (
             <div className="flex min-h-[24px] items-center gap-1">
-              {user.avatar_url ? (
-                <Avatar src={user.avatar_url} size="small" />
-              ) : (
-                <Avatar icon={<UserOutlined />} size="small" />
-              )}
+              <ProfileAvatar
+                src={user.avatar_url}
+                size="small"
+                icon={<UserOutlined />}
+                name={user.full_name || user.display_name}
+              />
               <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]">{user.full_name}</span>
             </div>
           );
@@ -1325,7 +1327,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         if (role) {
           return (
             <div className="flex min-h-[24px] items-center gap-1">
-              <Avatar icon={<TeamOutlined />} size="small" className="bg-blue-100 text-blue-600" />
+              <ProfileAvatar size="small" icon={<TeamOutlined />} className="bg-blue-100 text-blue-600" fallback={<TeamOutlined />} />
               <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]">{role.title}</span>
             </div>
           );

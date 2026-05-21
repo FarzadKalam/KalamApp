@@ -10,6 +10,7 @@ import DynamicSelectField from './DynamicSelectField';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
 import TaskActionButtons from './tasks/TaskActionButtons';
+import ProfileAvatar from './common/ProfileAvatar';
 import TaskHandoverModal, { type StageHandoverConfirm, type StageHandoverGroup, type StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import TaskHandoverFormsModal, {
   type StageHandoverFormListRow,
@@ -4267,17 +4268,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     const avatarSize = displayMode === 'dense' ? 14 : 16;
     const iconClassName = displayMode === 'dense' ? 'text-[9px]' : 'text-[10px]';
-    const avatarSrc = visual.avatarUrl ? (
-      <img src={visual.avatarUrl} alt="" loading="lazy" decoding="async" />
-    ) : undefined;
-
     return (
       <span className="inline-flex shrink-0" title={visual.label}>
-      <Avatar
+      <ProfileAvatar
         size={avatarSize}
-        src={avatarSrc}
+        src={visual.avatarUrl}
         icon={visual.type === 'role' ? <TeamOutlined className={iconClassName} /> : <UserOutlined className={iconClassName} />}
+        name={visual.label}
         className="shrink-0 border border-white/70 bg-white/20 text-white shadow-sm"
+        imageLoading="lazy"
       />
       </span>
     );

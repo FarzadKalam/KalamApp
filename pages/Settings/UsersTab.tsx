@@ -28,6 +28,8 @@ import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '.
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import ProfileAvatar from '../../components/common/ProfileAvatar';
+import { emitProfileAvatarUpdated } from '../../utils/profileAvatarEvents';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
 
@@ -518,6 +520,11 @@ const UsersTab: React.FC = () => {
 
         if (editingUser.id === currentUserId) {
           clearSessionBootstrapCache();
+          emitProfileAvatarUpdated({
+            profileId: String(editingUser.id),
+            avatarUrl: avatarUrl ?? editingUser.avatar_url ?? null,
+            fullName: String(values.full_name || editingUser.full_name || '').trim() || null,
+          });
         }
         message.success('اطلاعات کاربر بروزرسانی شد');
         await fetchData();
@@ -661,11 +668,12 @@ const UsersTab: React.FC = () => {
       render: (text: string, record: UserRow) => {
         const content = (
           <>
-            <Avatar
+            <ProfileAvatar
               src={record.avatar_url}
               icon={<UserOutlined />}
               className="bg-leather-100 text-leather-600 border border-leather-200"
               size={40}
+              name={text || undefined}
             />
             <div className="flex flex-col">
               <span className="font-bold text-gray-700 dark:text-gray-200 group-hover:text-leather-600 transition-colors">
@@ -802,7 +810,7 @@ const UsersTab: React.FC = () => {
         <Form form={form} layout="vertical" onFinish={handleAddOrEditUser}>
           <div className="flex justify-center mb-6">
             <div className="text-center">
-              <Avatar size={80} src={avatarUrl} icon={<UserOutlined />} className="mb-2 bg-gray-100" />
+              <ProfileAvatar size={80} src={avatarUrl} icon={<UserOutlined />} className="mb-2 bg-gray-100" name={form.getFieldValue('full_name')} />
               <Upload showUploadList={false} beforeUpload={handleAvatarUpload}>
                 <Button size="small" icon={<UploadOutlined />}>
                   آپلود عکس

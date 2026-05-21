@@ -19,6 +19,7 @@ import { getGradientPreset } from '../../utils/storyGradients';
 import { STORY_REACTION_EMOJIS } from '../../utils/storyGradients';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import ProfileAvatar from '../common/ProfileAvatar';
 
 interface StoryViewerModalProps {
   open: boolean;
@@ -277,13 +278,12 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             key={v.user_id}
             style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}
           >
-            <Avatar
+            <ProfileAvatar
               size={28}
               src={v.avatar_url || undefined}
               style={{ backgroundColor: 'var(--brand-primary, #3730A3)', flexShrink: 0, fontSize: 11 }}
-            >
-              {v.user_name?.[0] ?? '?'}
-            </Avatar>
+              name={v.user_name || '?'}
+            />
             <div style={{ flex: 1, overflow: 'hidden' }}>
               <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {v.user_name ?? 'کاربر ناشناس'}
@@ -388,13 +388,12 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             zIndex: 20,
           }}
         >
-          <Avatar
+          <ProfileAvatar
             size={36}
             src={currentStory.creator_avatar}
             style={{ backgroundColor: 'var(--brand-primary, #3730A3)', flexShrink: 0 }}
-          >
-            {currentStory.creator_name?.[0]}
-          </Avatar>
+            name={currentStory.creator_name || '?'}
+          />
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <Typography.Text
               strong

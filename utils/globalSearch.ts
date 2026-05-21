@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { FieldType, type ModuleDefinition } from '../types';
 import { getRecordTitle } from './recordTitle';
 import { normalizePhoneDigits, normalizePhoneForStorage } from './phoneNumber';
-import type { PermissionMap } from './permissions';
+import { isSaasAdminModuleId, type PermissionMap } from './permissions';
 
 export type GlobalSearchMatchField = {
   key: string;
@@ -156,7 +156,7 @@ export const buildGlobalSearchModules = (
   permissions?: PermissionMap | null
 ): GlobalSearchModule[] =>
   Object.entries(modules)
-    .filter(([moduleId, module]) => module && permissions?.[moduleId]?.view !== false)
+    .filter(([moduleId, module]) => module && !isSaasAdminModuleId(moduleId) && permissions?.[moduleId]?.view !== false)
     .map(([moduleId, module]) => {
       const keys = getModuleSearchKeys(module);
       const fieldLabels = (module.fields || []).reduce<Record<string, string>>((acc, field: any) => {

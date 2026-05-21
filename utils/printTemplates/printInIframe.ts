@@ -25,20 +25,40 @@ const waitForFonts = async (timeoutMs = 1800) => {
   await Promise.race([fonts.ready, delay(timeoutMs)]);
 };
 
+const parseCssBackgroundUrls = (backgroundImage: string) =>
+  Array.from(String(backgroundImage || '').matchAll(/url\((['"]?)(.*?)\1\)/gi))
+    .map((match) => String(match[2] || '').trim())
+    .filter(Boolean);
+
+const loadImageUrl = (url: string) =>
+  new Promise<void>((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve();
+    image.onerror = () => resolve();
+    image.src = url;
+  });
+
 const waitForImages = async (root: HTMLElement, timeoutMs = 2200) => {
   const pending = Array.from(root.querySelectorAll('img')).filter((img) => !img.complete);
-  if (!pending.length) return;
+  const backgroundUrls = Array.from(root.querySelectorAll<HTMLElement>('*')).flatMap((element) =>
+    parseCssBackgroundUrls(element.style.backgroundImage)
+  );
+  const uniqueBackgroundUrls = Array.from(new Set(backgroundUrls));
+  if (!pending.length && !uniqueBackgroundUrls.length) return;
 
   await Promise.race([
     Promise.allSettled(
-      pending.map(
-        (img) =>
-          new Promise<void>((resolve) => {
-            const finish = () => resolve();
-            img.addEventListener('load', finish, { once: true });
-            img.addEventListener('error', finish, { once: true });
-          })
-      )
+      [
+        ...pending.map(
+          (img) =>
+            new Promise<void>((resolve) => {
+              const finish = () => resolve();
+              img.addEventListener('load', finish, { once: true });
+              img.addEventListener('error', finish, { once: true });
+            })
+        ),
+        ...uniqueBackgroundUrls.map(loadImageUrl),
+      ]
     ),
     delay(timeoutMs),
   ]);

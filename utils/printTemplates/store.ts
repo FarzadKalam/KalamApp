@@ -74,6 +74,21 @@ const DEFAULT_PAGE_MARGINS = {
 const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at']);
 const INVOICE_MODULE_IDS = new Set(['invoices', 'purchase_invoices']);
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
+const CATALOG_FULL_PAGE_MODULE_IDS = new Set(['products', 'billboards']);
+
+export const isCatalogFullPageAvailableForModule = (moduleId: string) =>
+  CATALOG_FULL_PAGE_MODULE_IDS.has(String(moduleId || '').trim());
+
+export const isCatalogFullPagePrintTemplate = (template: Pick<StoredPrintTemplate, 'id' | 'contentHtml'> | null | undefined) => {
+  const templateId = String(template?.id || '').trim();
+  const contentHtml = String(template?.contentHtml || '');
+  return /_catalog_fullpage_(list_)?landscape$/i.test(templateId) || contentHtml.includes('system.list_catalog_fullpage');
+};
+
+export const isPrintTemplateAvailableForModule = (
+  moduleId: string,
+  template: Pick<StoredPrintTemplate, 'id' | 'contentHtml'> | null | undefined,
+) => !isCatalogFullPagePrintTemplate(template) || isCatalogFullPageAvailableForModule(moduleId);
 
 const toRecord = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -1765,8 +1780,12 @@ export const buildDefaultTemplatesForModule = (
   const listPortraitTemplate = buildListA4DefaultTemplate(moduleId, now, 'portrait');
   const listLandscapeTemplate = buildListA4DefaultTemplate(moduleId, now, 'landscape');
   const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(moduleId, now);
-  const catalogFullPageRecord = buildCatalogFullPageRecordTemplate(moduleId, now);
-  const catalogFullPageList = buildCatalogFullPageListTemplate(moduleId, now);
+  const catalogFullPageDefaults = isCatalogFullPageAvailableForModule(moduleId)
+    ? [
+        buildCatalogFullPageRecordTemplate(moduleId, now),
+        buildCatalogFullPageListTemplate(moduleId, now),
+      ]
+    : [];
   const domainSpecificDefaults: StoredPrintTemplate[] = (
     moduleId === 'secretariat_documents'
       ? [buildSecretariatOfficialTemplate(now)]
@@ -1782,7 +1801,7 @@ export const buildDefaultTemplatesForModule = (
   );
 
   if (!isInvoiceModule(moduleId)) {
-    const defaults: StoredPrintTemplate[] = [...domainSpecificDefaults, catalogFullPageRecord, catalogFullPageList, compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
+    const defaults: StoredPrintTemplate[] = [...domainSpecificDefaults, ...catalogFullPageDefaults, compactA4Template, compactA5Template, compactA6Template, listPortraitTemplate, listLandscapeTemplate, listCatalogPortraitTemplate];
     return scope === 'all' ? defaults : defaults.filter((item) => item.scope === scope);
   }
 
@@ -2166,6 +2185,4 @@ export const materializeSystemTemplateForCopy = (
     footerHtml: replaceSystemPlaceholders(template.footerHtml),
   };
 };
-
-
 

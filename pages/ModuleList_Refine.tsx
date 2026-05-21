@@ -22,7 +22,16 @@ import GridView from "../components/moduleList/GridView";
 import MapView from "../components/moduleList/MapView";
 import ModuleCalendarView from "../components/moduleList/CalendarView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
-import { canAccessAssignedRecord, fetchCurrentUserRecordAccessContext, GOALS_PERMISSION_KEY, resolveModuleGoalAccessPermissions, WORKFLOWS_PERMISSION_KEY, type RecordScope } from "../utils/permissions";
+import {
+  canAccessAssignedRecord,
+  fetchCurrentUserRecordAccessContext,
+  GOALS_PERMISSION_KEY,
+  isSaasAdminModuleId,
+  resolveModuleGoalAccessPermissions,
+  SAAS_ADMIN_PERMISSION_KEY,
+  WORKFLOWS_PERMISSION_KEY,
+  type RecordScope,
+} from "../utils/permissions";
 import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
 import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
@@ -1398,6 +1407,24 @@ export const ModuleListRefine: React.FC<{
       }
 
       const permissions = context.permissions || {};
+      if (isSaasAdminModuleId(resolvedModuleId)) {
+        const saasPerms = permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+        const saasFields = saasPerms.fields || {};
+        const editFieldKey = resolvedModuleId === "saas_orgs" ? "edit_orgs" : "edit_requests";
+        const canViewSaas = saasPerms.view === true || saasPerms.edit === true || saasFields[editFieldKey] === true;
+        const canEditSaas = canViewSaas && (saasPerms.edit === true || saasFields[editFieldKey] === true);
+        setModulePermissions({
+          view: canViewSaas,
+          edit: canEditSaas,
+          delete: false,
+          record_scope: "all",
+        });
+        setFieldPermissions({});
+        setCanOpenWorkflows(false);
+        setCanOpenGoals(false);
+        setCanShowGoalCards(false);
+        return;
+      }
       const modulePerms = permissions?.[resolvedModuleId] || {};
       const workflowPerms = permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
       const goalPerms = permissions?.[GOALS_PERMISSION_KEY] || {};

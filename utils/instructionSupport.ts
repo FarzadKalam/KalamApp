@@ -1,5 +1,6 @@
 import { FieldLocation, FieldNature, FieldType, ModuleDefinition, type ModuleField, type SelectOption } from '../types';
 import { MODULES } from '../moduleRegistry';
+import { isSaasAdminModuleId } from './permissions';
 
 export const INSTRUCTIONS_MODULE_ID = 'instructions';
 export const PROCESS_STAGE_INSTRUCTION_IDS_KEY = 'instruction_ids';
@@ -30,6 +31,7 @@ export const normalizeInstructionIdList = (value: unknown): string[] => {
 export const buildInstructionModuleOptions = (): SelectOption[] =>
   Object.values(MODULES)
     .filter((module) => String(module?.id || '').trim() !== INSTRUCTIONS_MODULE_ID)
+    .filter((module) => !isSaasAdminModuleId(module.id))
     .map((module) => ({
       value: String(module.id),
       label: String(module.titles?.faSingular || module.titles?.fa || module.id),

@@ -41,6 +41,7 @@ import {
   getSystemTemplateFieldOptions,
   getPrintTemplateVariables,
   getDefaultFooterSignatures,
+  isPrintTemplateAvailableForModule,
   loadPrintTemplatesStore,
   materializeSystemTemplateForCopy,
   mergeTemplatesWithDefaults,
@@ -52,7 +53,7 @@ import {
 } from '../../utils/printTemplates/store';
 import { buildListPrintableFields } from '../../utils/listPrintExport';
 import { supabase } from '../../supabaseClient';
-import { fetchCurrentUserRolePermissions } from '../../utils/permissions';
+import { fetchCurrentUserRolePermissions, isSaasAdminModuleId } from '../../utils/permissions';
 import {
   filterPrintTemplateVariableOptions,
   filterSystemTemplateFieldOptions,
@@ -173,14 +174,19 @@ const PrintTemplatesTab: React.FC = () => {
 
   const moduleOptions = useMemo(
     () =>
-      Object.values(MODULES).map((module) => ({
+      Object.values(MODULES).filter((module) => !isSaasAdminModuleId(module.id)).map((module) => ({
         value: module.id,
         label: module.titles.fa,
       })),
     []
   );
 
-  const selectedTemplates = templatesByModule[selectedModuleId] || [];
+  const selectedTemplates = useMemo(
+    () => (templatesByModule[selectedModuleId] || []).filter((template) =>
+      isPrintTemplateAvailableForModule(selectedModuleId, template)
+    ),
+    [selectedModuleId, templatesByModule]
+  );
   const currentScope = systemFieldsEditingTemplate?.scope || editingTemplate?.scope || 'record';
   const canViewSelectedModuleField = (fieldKey: string) => {
     if (loadingRolePermissions || rolePermissions === null) return false;
@@ -330,7 +336,7 @@ const PrintTemplatesTab: React.FC = () => {
       setProvider(loaded.provider);
 
       const next = { ...loaded.templatesByModule };
-      Object.keys(MODULES).forEach((moduleId) => {
+      Object.keys(MODULES).filter((moduleId) => !isSaasAdminModuleId(moduleId)).forEach((moduleId) => {
         next[moduleId] = mergeTemplatesWithDefaults(moduleId, next[moduleId] || []);
       });
       setTemplatesByModule(next);

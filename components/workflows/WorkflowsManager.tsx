@@ -5,7 +5,7 @@ import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import WorkflowEditorModal from './WorkflowEditorModal';
 import { WorkflowRecord } from '../../utils/workflowTypes';
-import { WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
+import { isSaasAdminModuleId, WORKFLOWS_PERMISSION_KEY } from '../../utils/permissions';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
 
@@ -58,6 +58,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
   const moduleOptions = useMemo(
     () =>
       Object.values(MODULES)
+        .filter((module) => !isSaasAdminModuleId(module.id))
         .map((module) => ({ label: module.titles.fa, value: module.id }))
         .sort((a, b) => a.label.localeCompare(b.label, 'fa')),
     []

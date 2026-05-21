@@ -22,6 +22,7 @@ import {
   buildDefaultTemplatesForModule,
   getModuleTitle,
   getSystemTemplateFieldOptions,
+  isPrintTemplateAvailableForModule,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
   normalizeDynamicBlockTablesHtml,
@@ -42,6 +43,7 @@ import {
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { getCachedAuthUser } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
+import { buildImagePreviewUrl } from '../imagePreview';
 import {
   canViewPrintTemplateFieldPath,
   filterSystemTemplateFieldOptions,
@@ -545,7 +547,10 @@ export const usePrintManager = ({
 
   const availableTemplates = useMemo<StoredPrintTemplate[]>(() => {
     const merged = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || storedTemplates);
-    const scopedTemplates = merged.filter((tpl) => (tpl.scope || 'record') !== 'list');
+    const scopedTemplates = merged.filter((tpl) =>
+      (tpl.scope || 'record') !== 'list' &&
+      isPrintTemplateAvailableForModule(moduleId, tpl)
+    );
     const activeMerged = scopedTemplates.filter((tpl) => tpl.isActive !== false);
     if (activeMerged.length > 0) return activeMerged;
     return buildDefaultTemplatesForModule(moduleId, 'record').filter((tpl) => tpl.isActive !== false);
@@ -828,6 +833,14 @@ export const usePrintManager = ({
   const recordImageUrl = useMemo(
     () => (recordImageField ? getRecordImageUrl(data, [recordImageField]) : ''),
     [data, recordImageField]
+  );
+  const recordCardImageUrl = useMemo(
+    () => buildImagePreviewUrl(recordImageUrl, 'card'),
+    [recordImageUrl]
+  );
+  const recordHeroImageUrl = useMemo(
+    () => buildImagePreviewUrl(recordImageUrl, 'hero'),
+    [recordImageUrl]
   );
   const recordQrSvgMarkup = useMemo(() => {
     if (!printQrValue) return '';
@@ -1994,13 +2007,13 @@ export const usePrintManager = ({
       }
       if (path === 'system.record_image_url') {
         // Returns just the image URL (no HTML wrapper) — for use in src="" attributes
-        return recordImageUrl || '';
+        return recordHeroImageUrl || '';
       }
       if (path === 'system.compact_tables_blocks') return buildCompactTablesBlocksHtml();
       if (path === 'system.package_summary_table') return buildPackageSummaryTableHtml();
       if (path === 'system.record_image') {
-        if (!isSystemFieldVisible('system.record_image') || !recordImageUrl) return '';
-        return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;"><img src="${recordImageUrl}" alt="\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F" style="display:block;max-width:92px;max-height:92px;object-fit:contain;" /></div>`;
+        if (!isSystemFieldVisible('system.record_image') || !recordCardImageUrl) return '';
+        return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;"><img src="${recordCardImageUrl}" alt="\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F" style="display:block;max-width:92px;max-height:92px;object-fit:contain;" /></div>`;
       }
       if (path === 'system.record_qr') {
         if (!isSystemFieldVisible('system.record_qr') || !recordQrSvgMarkup) return '';
@@ -2260,7 +2273,8 @@ export const usePrintManager = ({
       packageSummary.discount,
       packageSummary.final,
       packageSummary.gross,
-      recordImageUrl,
+      recordCardImageUrl,
+      recordHeroImageUrl,
       recordQrSvgMarkup,
       sellerInfo,
       linkedAttachmentCount,
@@ -2893,9 +2907,5 @@ export const usePrintManager = ({
     renderPrintCard,
   };
 };
-
-
-
-
 
 

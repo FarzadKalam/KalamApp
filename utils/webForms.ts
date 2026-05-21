@@ -1,6 +1,7 @@
 import { MODULES } from "../moduleRegistry";
 import { FieldType, ModuleField } from "../types";
 import { ACCOUNTING_MINIMAL_MODULE_IDS } from "./accountingModules";
+import { isSaasAdminModuleId } from "./permissions";
 
 export type WebFormFieldType =
   | "text"
@@ -159,7 +160,7 @@ const toRecord = (value: unknown): Record<string, any> => {
 
 export const isWebFormTargetModule = (moduleId?: string | null) => {
   const normalized = String(moduleId || "").trim();
-  return !!normalized && !!MODULES[normalized] && !WEB_FORM_EXCLUDED_MODULE_IDS.has(normalized);
+  return !!normalized && !!MODULES[normalized] && !isSaasAdminModuleId(normalized) && !WEB_FORM_EXCLUDED_MODULE_IDS.has(normalized);
 };
 
 export const getWebFormModuleOptions = () =>

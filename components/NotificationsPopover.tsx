@@ -53,6 +53,9 @@ import { useInternalConversationTimeline } from '../hooks/useInternalConversatio
 import { useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
 import type { NotificationConversationSummary } from '../utils/notificationConversationRpc';
+import ProfileAvatar from './common/ProfileAvatar';
+import { preloadAvatarUrls } from '../utils/profileAvatar';
+import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
@@ -254,9 +257,6 @@ const _notifDirectoryCache: {
   users: Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
   roles: Array<{ id: string; title: string }>;
 } = { orgId: null, users: [], roles: [] };
-// Module-level avatar preload set: tracks which image URLs have already been loaded
-// into the browser's in-memory cache within this session.
-const _preloadedAvatarUrls = new Set<string>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
 type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms' | 'voip_calls';
 type DrawerTabKey = NotificationSectionKey | 'assistant';
@@ -377,9 +377,13 @@ const UnifiedConversationAvatar: React.FC<{
   className?: string;
   fallback: React.ReactNode;
 }> = ({ size, src, className, fallback }) => (
-  <Avatar size={size} src={src || undefined} className={className}>
-    {!src ? fallback : null}
-  </Avatar>
+  <ProfileAvatar
+    size={size}
+    src={src || undefined}
+    className={className}
+    fallback={fallback}
+    preset="avatar"
+  />
 );
 
 const buildNoteConversationAvatarModel = ({
@@ -1466,13 +1470,36 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   useEffect(() => {
     const urls = directoryUsers.map(u => u.avatar_url).filter((url): url is string => Boolean(url));
     if (systemAvatarSrc && !systemAvatarSrc.startsWith('/')) urls.push(systemAvatarSrc);
-    urls.forEach(url => {
-      if (_preloadedAvatarUrls.has(url)) return;
-      _preloadedAvatarUrls.add(url);
-      const img = new Image();
-      img.src = url;
-    });
+    preloadAvatarUrls(urls, 'avatar');
   }, [directoryUsers, systemAvatarSrc]);
+  useEffect(() => {
+    const handleAvatarUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<ProfileAvatarUpdatedDetail>).detail;
+      const profileId = String(detail?.profileId || '').trim();
+      if (!profileId) return;
+      const avatarUrl = detail?.avatarUrl || null;
+      const fullName = detail?.fullName || null;
+
+      setProfile((prev) => {
+        if (String(prev?.id || '') !== profileId) return prev;
+        return {
+          ...prev,
+          avatar_url: avatarUrl,
+          full_name: fullName ?? prev.full_name ?? null,
+        };
+      });
+      setDirectoryUsers((prev) => prev.map((user) => (
+        String(user?.id || '') === profileId
+          ? { ...user, avatar_url: avatarUrl, display_name: fullName || user.display_name }
+          : user
+      )));
+    };
+
+    window.addEventListener(PROFILE_AVATAR_UPDATED_EVENT, handleAvatarUpdated as EventListener);
+    return () => {
+      window.removeEventListener(PROFILE_AVATAR_UPDATED_EVENT, handleAvatarUpdated as EventListener);
+    };
+  }, []);
   const selectedBotModuleId = useMemo(() => {
     if (!selectedBotGroup) return null;
     return String(selectedBotGroup.target_type || '').trim() === 'customers' ? 'customers' : 'suppliers';

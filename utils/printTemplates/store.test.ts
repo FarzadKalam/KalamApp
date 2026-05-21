@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDefaultTemplatesForModule,
   buildSystemTemplateFieldOptionsForModule,
   getPrintTemplateVariables,
   getSystemTemplateFieldOptions,
+  isPrintTemplateAvailableForModule,
 } from './store';
 import { BlockType, FieldLocation, FieldType } from '../../types';
 
@@ -44,5 +46,22 @@ describe('print template store grouping', () => {
     expect(variableOptions.find((item) => item.value === 'system.list_summary_table')?.scopes).toContain('list');
     expect(variableOptions.find((item) => item.value === 'summary.totalDebit')?.group).toBe('جمع‌بندی وضعیت مالی');
     expect(variableOptions.find((item) => item.value === 'summary.finalBalanceSide')?.scopes).toContain('list');
+  });
+
+  it('keeps full-page catalog defaults only for products and billboards', () => {
+    const productDefaults = buildDefaultTemplatesForModule('products');
+    const billboardDefaults = buildDefaultTemplatesForModule('billboards');
+    const customerDefaults = buildDefaultTemplatesForModule('customers');
+
+    expect(productDefaults.some((item) => item.id === 'default_products_catalog_fullpage_landscape')).toBe(true);
+    expect(productDefaults.some((item) => item.id === 'default_products_catalog_fullpage_list_landscape')).toBe(true);
+    expect(billboardDefaults.some((item) => item.id === 'default_billboards_catalog_fullpage_landscape')).toBe(true);
+    expect(customerDefaults.some((item) => item.id.includes('_catalog_fullpage_'))).toBe(false);
+    expect(
+      isPrintTemplateAvailableForModule('customers', {
+        id: 'default_customers_catalog_fullpage_list_landscape',
+        contentHtml: '{{system.list_catalog_fullpage}}',
+      })
+    ).toBe(false);
   });
 });

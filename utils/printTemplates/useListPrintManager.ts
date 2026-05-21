@@ -15,6 +15,7 @@ import {
 import {
   buildDefaultTemplatesForModule,
   getModuleTitle,
+  isPrintTemplateAvailableForModule,
   loadPrintTemplatesStore,
   mergeTemplatesWithDefaults,
   type StoredPrintTemplate,
@@ -160,7 +161,11 @@ export const useListPrintManager = ({
 
   const availableTemplates = useMemo(() => {
     const merged = mergeTemplatesWithDefaults(moduleId, templatesByModuleStore[moduleId] || storedTemplates);
-    const scopedTemplates = merged.filter((tpl) => (tpl.scope || 'record') === 'list' && tpl.isActive !== false);
+    const scopedTemplates = merged.filter((tpl) =>
+      (tpl.scope || 'record') === 'list' &&
+      tpl.isActive !== false &&
+      isPrintTemplateAvailableForModule(moduleId, tpl)
+    );
     if (scopedTemplates.length > 0) return scopedTemplates;
     return buildDefaultTemplatesForModule(moduleId, 'list').filter((tpl) => tpl.isActive !== false);
   }, [moduleId, storedTemplates, templatesByModuleStore]);
