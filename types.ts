@@ -265,7 +265,12 @@ summaryConfig?: {
       total?: string;
       received?: string;
       remaining?: string;
-    }
+    };
+    labels?: {
+      total?: string;
+      received?: string;
+      remaining?: string;
+    };
   };
 }
 

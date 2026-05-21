@@ -1481,8 +1481,8 @@ export const usePrintManager = ({
     const discountSummaryRow = invoiceSummary.globalDiscountAmount > 0
       ? `
         <tr>
-          <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:700;background:rgba(var(--brand-50-rgb),0.32);">تخفیف کل (${invoiceSummary.globalDiscountType === 'percent' ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}٪` : `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`})</td>
-          <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;color:#b91c1c;">-${formatPersianPrice(invoiceSummary.globalDiscountAmount)}</td>
+          <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:700;background:rgba(var(--brand-50-rgb),0.32);">تخفیف کل (${invoiceSummary.globalDiscountType === 'percent' ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}%` : `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`})</td>
+          <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;background:#fff;">-${formatPersianPrice(invoiceSummary.globalDiscountAmount)}</td>
         </tr>
       `
       : '';
@@ -1532,6 +1532,14 @@ export const usePrintManager = ({
     (blockId: string, column: any, row: any): string => {
       if (!column) return '-';
       const key = column.key;
+      const rowDiscountAmount = (() => {
+        if (key !== 'discount') return null;
+        const baseAmount = Math.max(0, toNumberSafe(row?.quantity) * toNumberSafe(row?.unit_price));
+        const discountInput = Math.max(0, toNumberSafe(row?.discount));
+        const isPercentDiscount = String(row?.discount_type || '').trim().toLowerCase() === 'percent';
+        if (!isPercentDiscount) return discountInput;
+        return Math.min(baseAmount, (baseAmount * Math.min(discountInput, 100)) / 100);
+      })();
       let rawValue =
         key === 'product_id'
           ? (
@@ -1565,6 +1573,10 @@ export const usePrintManager = ({
 
       if (column.type === 'date' || key.toLowerCase().includes('date')) {
         return rawValue ? toPersianNumber(safeJalaliFormat(rawValue, 'YYYY/MM/DD')) : '-';
+      }
+
+      if (rowDiscountAmount !== null) {
+        return formatPersianPrice(rowDiscountAmount);
       }
 
       if (column.type === 'price' || ['amount', 'unit_price', 'total_price', 'discount', 'vat'].includes(key)) {
@@ -1728,6 +1740,15 @@ export const usePrintManager = ({
                 }
                 if (key === '__invoice_item_meta__') {
                   return buildRowMetaText(blockId, row);
+                }
+                if (key === '__discount_amount__') {
+                  const baseAmount = Math.max(0, toNumberSafe(row?.quantity) * toNumberSafe(row?.unit_price));
+                  const discountInput = Math.max(0, toNumberSafe(row?.discount));
+                  const isPercentDiscount = String(row?.discount_type || '').trim().toLowerCase() === 'percent';
+                  const discountAmount = isPercentDiscount
+                    ? Math.min(baseAmount, (baseAmount * Math.min(discountInput, 100)) / 100)
+                    : discountInput;
+                  return formatPersianPrice(discountAmount);
                 }
                 if (key === 'cheque_status') {
                   const statusValue = row?.cheque_status || row?.status || '';
@@ -2130,7 +2151,7 @@ export const usePrintManager = ({
       }
       if (path === 'record.global_discount_value') {
         return invoiceSummary.globalDiscountType === 'percent'
-          ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}٪`
+          ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}%`
           : formatPersianPrice(invoiceSummary.globalDiscountValue);
       }
       if (path === 'record.global_discount_amount') {
@@ -2138,7 +2159,7 @@ export const usePrintManager = ({
       }
       if (path === 'record.global_discount_display') {
         if (invoiceSummary.globalDiscountType === 'percent') {
-          return `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}٪`;
+          return `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}%`;
         }
         return `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`.trim();
       }
@@ -2609,7 +2630,7 @@ export const usePrintManager = ({
           // Per-page effective body step: exactly the number of content pixels
           // this page should display. For all pages except the last this equals
           // (nextPageStartOffset - pageStartOffset), so the guard begins right
-          // where the next page begins — no overlap, no partial lines.
+          // where the next page begins - no overlap, no partial lines.
           const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
           const effectiveBodyStepPx = nextPageStartOffset !== undefined
             ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
@@ -2907,5 +2928,3 @@ export const usePrintManager = ({
     renderPrintCard,
   };
 };
-
-

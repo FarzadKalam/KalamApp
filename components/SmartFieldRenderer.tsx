@@ -15,7 +15,6 @@ import {
   UserOutlined,
   DownOutlined,
   UpOutlined,
-  CheckOutlined,
 } from '@ant-design/icons';
 import maplibregl from 'maplibre-gl';
 import { ModuleField, FieldType, FieldNature, BlockType } from '../types';
@@ -29,7 +28,6 @@ import ProductionStagesField from './ProductionStagesField';
 import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import QrScanPopover from './QrScanPopover';
-import RecordFilesManager from './RecordFilesManager';
 import FileManagerPickerModal from './files/FileManagerPickerModal';
 import PhoneFieldInput from './PhoneFieldInput';
 import PhoneActionsPopover from './PhoneActionsPopover';
@@ -443,7 +441,7 @@ type ReadyTextItem = {
 };
 
 const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({ 
-  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, canEditFilesManager = true, canDeleteFilesManager = true, disableRequired = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false
+  field, value, onChange, label, type, options, forceEditMode, onOptionsUpdate, allValues = {}, recordId, moduleId, compactMode = false, canViewFilesManager = true, disableRequired = false, overlayZIndexBase = 1400, popupContainer, preferLocalPopupContainer = false
 }) => {
   const { message: msg } = App.useApp();
   const [uploading, setUploading] = useState(false);
@@ -454,7 +452,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [quickCreateDynamicOptions, setQuickCreateDynamicOptions] = useState<Record<string, any[]>>({});
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scannedCode, setScannedCode] = useState('');
-  const [isGalleryOpen, setIsGalleryOpen] = useState(false);
   const [isImagePickerOpen, setIsImagePickerOpen] = useState(false);
   const [isGlobalImageGalleryOpen, setIsGlobalImageGalleryOpen] = useState(false);
   const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
@@ -2617,10 +2614,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
           const isEditable = !!forceEditMode && !isReadonly;
           const useCompactFileButtons = !!compactMode;
           const fileActionsWrapperClass = useCompactFileButtons
-            ? 'grid grid-cols-2 gap-1'
+            ? 'flex flex-wrap items-center justify-end gap-1'
             : 'grid grid-cols-1 gap-2 sm:grid-cols-2';
           const fileActionButtonClass = useCompactFileButtons
-            ? 'w-full !h-auto min-h-[32px] px-2 py-1 text-[11px] leading-4 whitespace-normal'
+            ? '!h-8 max-w-full px-2 text-[11px] whitespace-nowrap overflow-hidden text-ellipsis'
             : 'w-full justify-center !h-auto whitespace-normal py-2';
           return (
             <div className="flex flex-col gap-2">
@@ -2643,21 +2640,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 <Button
                   size={useCompactFileButtons ? 'small' : 'middle'}
                   icon={<UploadOutlined />}
-                  onClick={() => setIsGalleryOpen(true)}
-                  disabled={!isEditable}
-                  className={fileActionButtonClass}
-                >
-                  آپلود و مدیریت فایل‌ها
-                </Button>
-                <Button
-                  size={useCompactFileButtons ? 'small' : 'middle'}
-                  icon={<CheckOutlined />}
                   onClick={() => setIsImagePickerOpen(true)}
                   disabled={!isEditable}
                   className={fileActionButtonClass}
-                  type="dashed"
                 >
-                  انتخاب فایل
+                  آپلود و انتخاب فایل
                 </Button>
               </div>
               {!!value && isEditable && (
@@ -2665,18 +2652,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                   حذف تصویر
                 </Button>
               )}
-
-              {/* Full file manager (upload + manage) */}
-              <RecordFilesManager
-                open={isGalleryOpen}
-                onClose={() => setIsGalleryOpen(false)}
-                moduleId={String(moduleId || '')}
-                recordId={recordId}
-                mainImage={value}
-                onMainImageChange={(url) => onChange(url)}
-                canEdit={!!canEditFilesManager && isEditable}
-                canDelete={!!canDeleteFilesManager && isEditable}
-              />
 
               {/* Picker modal: select a single image from existing files */}
               <FileManagerPickerModal

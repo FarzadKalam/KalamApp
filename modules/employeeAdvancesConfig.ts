@@ -91,7 +91,7 @@ export const employeeAdvancesConfig: ModuleDefinition = {
         { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },
       ],
     },
-    { id: 'summary', titles: { fa: 'خلاصه مالی', en: 'Summary' }, type: BlockType.FIELD_GROUP, order: 3, summaryConfig: { calculationType: SummaryCalculationType.INVOICE_FINANCIALS, fieldMapping: { total: 'amount', received: 'paid_amount', remaining: 'remaining_amount' } } },
+    { id: 'summary', titles: { fa: 'خلاصه مالی', en: 'Summary' }, type: BlockType.FIELD_GROUP, order: 3, summaryConfig: { calculationType: SummaryCalculationType.INVOICE_FINANCIALS, fieldMapping: { total: 'amount', received: 'paid_amount', remaining: 'remaining_amount' }, labels: { total: 'مبلغ مساعده', received: 'پرداخت شده', remaining: 'مانده' } } },
     { id: 'process', titles: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: BlockType.FIELD_GROUP, order: 4 },
   ],
   relatedTabs: [],
