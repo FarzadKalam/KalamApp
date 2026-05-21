@@ -40,7 +40,10 @@ interface StoryEditorModalProps {
   orgId: string;
   currentUserId: string;
   currentUserName: string;
+  currentUserAvatar?: string | null;
   editingStory?: OrgStory | null;
+  canPublishSaasStory?: boolean;
+  canPublishSaasAdminStory?: boolean;
   onClose: () => void;
   onSaved: () => void;
   onNotifySms?: (storyId: string, text: string, recipientIds: string[]) => void;
@@ -59,9 +62,12 @@ const POSITION_PRESETS = [
 const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
   open,
   orgId,
-  currentUserId,
+  currentUserId: _currentUserId,
   currentUserName,
+  currentUserAvatar,
   editingStory,
+  canPublishSaasStory = false,
+  canPublishSaasAdminStory = false,
   onClose,
   onSaved,
   onNotifySms,
@@ -69,6 +75,8 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
   const [slides, setSlides] = useState<StorySlide[]>([]);
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const [isOrgWide, setIsOrgWide] = useState(true);
+  const [isSaasWide, setIsSaasWide] = useState(false);
+  const [isSaasAdminsOnly, setIsSaasAdminsOnly] = useState(false);
   const [viewerUserIds, setViewerUserIds] = useState<string[]>([]);
   const [viewerRoleIds, setViewerRoleIds] = useState<string[]>([]);
   const [mentionUserIds, setMentionUserIds] = useState<string[]>([]);
@@ -102,6 +110,8 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
     if (editingStory) {
       setSlides(editingStory.slides ?? []);
       setIsOrgWide(editingStory.is_org_wide);
+      setIsSaasWide(editingStory.is_saas_wide ?? false);
+      setIsSaasAdminsOnly(editingStory.is_saas_admins_only ?? false);
       setViewerUserIds(editingStory.viewer_user_ids ?? []);
       setViewerRoleIds(editingStory.viewer_role_ids ?? []);
       setMentionUserIds(editingStory.mention_user_ids ?? []);
@@ -109,6 +119,8 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
     } else {
       setSlides([createGradientSlide('brand_indigo')]);
       setIsOrgWide(true);
+      setIsSaasWide(false);
+      setIsSaasAdminsOnly(false);
       setViewerUserIds([]);
       setViewerRoleIds([]);
       setMentionUserIds([]);
@@ -228,12 +240,12 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
     }
     setSaving(true);
     try {
-      const payload = {
-        org_id: orgId,
-        creator_id: currentUserId,
+      const updatePayload = {
         creator_name: currentUserName,
         slides,
         is_org_wide: isOrgWide,
+        is_saas_wide: isSaasWide,
+        is_saas_admins_only: isSaasWide ? isSaasAdminsOnly : false,
         viewer_user_ids: isOrgWide ? [] : viewerUserIds,
         viewer_role_ids: isOrgWide ? [] : viewerRoleIds,
         mention_user_ids: mentionUserIds,
@@ -246,18 +258,26 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
       if (isEdit && editingStory) {
         const { error } = await supabase
           .from('org_stories')
-          .update(payload)
+          .update(updatePayload)
           .eq('id', editingStory.id);
         if (error) throw error;
         storyId = editingStory.id;
       } else {
-        const { data, error } = await supabase
-          .from('org_stories')
-          .insert({ ...payload, published_at: new Date().toISOString() })
-          .select('id')
-          .single();
+        // INSERT از طریق SECURITY DEFINER RPC — creator_id و org_id سرور ست می‌کنه
+        const { data, error } = await supabase.rpc('create_org_story', {
+          p_creator_name: currentUserName,
+          p_creator_avatar: currentUserAvatar || null,
+          p_slides: slides,
+          p_is_org_wide: isOrgWide,
+          p_is_saas_wide: isSaasWide,
+          p_is_saas_admins_only: isSaasWide ? isSaasAdminsOnly : false,
+          p_viewer_user_ids: isOrgWide ? [] : viewerUserIds,
+          p_viewer_role_ids: isOrgWide ? [] : viewerRoleIds,
+          p_mention_user_ids: mentionUserIds,
+          p_expires_at: expiresAt,
+        });
         if (error) throw error;
-        storyId = data.id;
+        storyId = data as string;
       }
 
       // ارسال پیامک اطلاع‌رسانی
@@ -715,6 +735,43 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
               overlayZIndexBase={OVERLAY_Z_BASE}
             />
           </Form.Item>
+
+          {/* انتشار SaaS — فقط برای ادمین‌های SaaS */}
+          {(canPublishSaasStory || canPublishSaasAdminStory) && (
+            <>
+              <Divider style={{ margin: '8px 0' }} />
+              <Form.Item
+                label="انتشار برای کاربران تازه‌سیستم"
+                tooltip="استوری برای همه کاربران همه سازمان‌ها نمایش داده می‌شود"
+                style={{ marginBottom: 10 }}
+              >
+                <Switch
+                  checked={isSaasWide}
+                  onChange={(v) => {
+                    setIsSaasWide(v);
+                    if (!v) setIsSaasAdminsOnly(false);
+                  }}
+                  checkedChildren="فعال"
+                  unCheckedChildren="غیرفعال"
+                  disabled={!canPublishSaasStory && !canPublishSaasAdminStory}
+                />
+              </Form.Item>
+              {isSaasWide && canPublishSaasAdminStory && (
+                <Form.Item
+                  label="فقط برای مدیران سازمان‌ها"
+                  tooltip="استوری فقط برای صاحبان و مدیران اصلی سازمان‌ها نمایش داده می‌شود"
+                  style={{ marginBottom: 10 }}
+                >
+                  <Switch
+                    checked={isSaasAdminsOnly}
+                    onChange={setIsSaasAdminsOnly}
+                    checkedChildren="فعال"
+                    unCheckedChildren="غیرفعال"
+                  />
+                </Form.Item>
+              )}
+            </>
+          )}
 
           <Divider style={{ margin: '8px 0' }} />
 

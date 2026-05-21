@@ -118,25 +118,52 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
           </div>
         </div>
 
-        {/* آواتار سازنده — گوشه پایین */}
-        {story.creator_avatar && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 0,
-              right: 0,
-              width: Math.round(size * 0.36),
-              height: Math.round(size * 0.36),
-              borderRadius: '50%',
-              // جداکننده از CSS var نه hardcode
-              border: `2px solid ${separatorColor}`,
-              backgroundImage: `url(${story.creator_avatar})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              backgroundColor: '#94A3B8',
-            }}
-          />
-        )}
+        {/* آواتار سازنده — همیشه نمایش داده می‌شود، با fallback به حروف اول نام */}
+        {(() => {
+          const badgeSize = Math.round(size * 0.36);
+          const initial = (story.creator_name || '').trim().charAt(0).toUpperCase() || '؟';
+          const badgeStyle: React.CSSProperties = {
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            width: badgeSize,
+            height: badgeSize,
+            borderRadius: '50%',
+            border: `2px solid ${separatorColor}`,
+            backgroundColor: '#94A3B8',
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          };
+          if (story.creator_avatar) {
+            return (
+              <div style={badgeStyle}>
+                <img
+                  src={story.creator_avatar}
+                  alt={story.creator_name || ''}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              </div>
+            );
+          }
+          return (
+            <div style={{ ...badgeStyle, background: 'linear-gradient(135deg, #6B7280, #9CA3AF)' }}>
+              <span style={{
+                color: '#fff',
+                fontSize: Math.max(7, Math.round(badgeSize * 0.45)),
+                fontWeight: 700,
+                lineHeight: 1,
+                fontFamily: 'inherit',
+              }}>
+                {initial}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* نشان پین */}
         {story.is_pinned && (
@@ -156,6 +183,43 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
             }}
           >
             <PushpinFilled style={{ fontSize: 9, color: '#fff' }} />
+          </div>
+        )}
+
+        {/* نشان SaaS — لوگوی تازه‌سیستم */}
+        {story.is_saas_wide && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              width: Math.round(size * 0.36),
+              height: Math.round(size * 0.36),
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)',
+              border: `2px solid ${separatorColor}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              overflow: 'hidden',
+            }}
+          >
+            <img
+              src="/pwa-192.png"
+              alt="تازه‌سیستم"
+              style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+              onError={(e) => {
+                // fallback: حرف "ت" اگر لوگو لود نشد
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                const parent = e.currentTarget.parentElement;
+                if (parent && !parent.querySelector('span')) {
+                  const span = document.createElement('span');
+                  span.textContent = 'ت';
+                  span.style.cssText = `color:#fff;font-size:${Math.max(7, Math.round(size * 0.13))}px;font-weight:bold;font-family:inherit`;
+                  parent.appendChild(span);
+                }
+              }}
+            />
           </div>
         )}
       </div>

@@ -48,6 +48,7 @@ import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { syncRecordTags } from '../utils/recordTags';
 import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRelationOptionsForField, RELATION_DEFAULT_LIMIT } from '../utils/relationOptions';
@@ -656,7 +657,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   }, [fieldOptions, relationExactOption, relationLiveOptions]);
   const isReadonly = field?.readonly === true || field?.nature === FieldNature.SYSTEM;
   const parsedLocation = useMemo(() => parseLocationValue(value), [value]);
-  const relationConfigAny = field.relationConfig as any;
+  const relationConfigAny = (
+    fieldType === FieldType.MULTI_RELATION
+      ? field.multiRelationConfig
+      : field.relationConfig
+  ) as any;
   const isTaskSourceRecordField = moduleId === 'tasks' && field?.key === 'source_record_id';
   const resolvedRelationTargetModuleId = (
     isTaskSourceRecordField
@@ -988,14 +993,25 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     setIsLongTextExpanded(false);
   }, [fieldKey, forceEditMode]);
 
+  const effectiveRelationField = useMemo(() => {
+    if (fieldType === FieldType.MULTI_RELATION && field.multiRelationConfig) {
+      return { ...field, relationConfig: field.multiRelationConfig };
+    }
+    return field;
+  }, [field, fieldType]);
+
   const loadRelationOptions = async (searchText = '', exactId?: string | number | null) => {
-    if (fieldType !== FieldType.RELATION || !field.relationConfig) return;
+    if (fieldType === FieldType.MULTI_RELATION) {
+      if (!field.multiRelationConfig) return;
+    } else if (fieldType !== FieldType.RELATION || !field.relationConfig) {
+      return;
+    }
     if (isTaskSourceRecordField && !resolvedRelationTargetModuleId) {
       setRelationLiveOptions([]);
       missingExactRelationValueRef.current = null;
       return;
     }
-    if (field.relationConfig?.dependsOn) {
+    if (fieldType === FieldType.RELATION && field.relationConfig?.dependsOn) {
       const dependsOnValue = String(allValues?.[field.relationConfig.dependsOn] || '').trim();
       if (!dependsOnValue) {
         setRelationLiveOptions([]);
@@ -1025,7 +1041,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             exactId: exactId ?? null,
             limit: RELATION_DEFAULT_LIMIT,
           })
-        : await fetchRelationOptionsForField(supabase, field, {
+        : await fetchRelationOptionsForField(supabase, effectiveRelationField, {
             allValues,
             search: isExactLookup ? '' : normalizedSearchText,
             exactId: exactId ?? null,
@@ -1137,7 +1153,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
               exactId: value,
               limit: 1,
             })
-          : await fetchRelationOptionsForField(supabase, field, {
+          : await fetchRelationOptionsForField(supabase, effectiveRelationField, {
               allValues,
               exactId: value,
               limit: 1,
@@ -1163,6 +1179,20 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       window.clearTimeout(relationSearchTimerRef.current);
     }
   }, []);
+
+  // بارگذاری label برای مقادیر آرایه MULTI_RELATION
+  useEffect(() => {
+    if (fieldType !== FieldType.MULTI_RELATION) return;
+    const ids = Array.isArray(value) ? value.filter((v: any) => v !== null && v !== undefined && v !== '') : [];
+    if (ids.length === 0) return;
+    ids.forEach((id: any) => {
+      const exists = relationResolvedOptions.some((item: any) => String(item?.value) === String(id));
+      if (!exists) {
+        void loadRelationOptions('', id);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldType, value, relationResolvedOptions]);
 
   if (fieldAny?.dependsOn && allValues) {
       const parentValue = allValues[fieldAny.dependsOn.field];
@@ -2071,6 +2101,27 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                }
                 return <span className="text-gray-800">{formatDisplayText(resolvedLabel, compactMode ? '' : '-')}</span>;
           }
+        if (fieldType === FieldType.MULTI_RELATION) {
+          const multiRelReadValues = Array.isArray(value) ? value.filter(Boolean) : [];
+          if (multiRelReadValues.length === 0) return <span>{compactMode ? '' : '-'}</span>;
+          const multiRelTargetModRead = String(field.multiRelationConfig?.targetModule || '').trim();
+          return (
+            <div className="flex flex-wrap gap-1">
+              {multiRelReadValues.map((id: any) => {
+                const opt = relationResolvedOptions.find((o: any) => String(o?.value) === String(id));
+                const label = opt?.label ? formatDisplayText(opt.label, String(id)) : String(id);
+                if (multiRelTargetModRead) {
+                  return (
+                    <RelatedRecordPopover key={String(id)} moduleId={multiRelTargetModRead} recordId={String(id)} label={label} overlayZIndex={overlayZIndexBase + 40}>
+                      <Tag className="cursor-pointer">{label}</Tag>
+                    </RelatedRecordPopover>
+                  );
+                }
+                return <Tag key={String(id)}>{label}</Tag>;
+              })}
+            </div>
+          );
+        }
         if (fieldType === FieldType.MULTI_SELECT) {
              const values = Array.isArray(value)
                ? value
@@ -2335,6 +2386,64 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 pickerTitle={fieldLabel}
             />
         );
+
+      case FieldType.MULTI_RELATION: {
+        const multiRelNormalizedQuery = String(relationSearchQuery || '').trim();
+        const multiRelIsSearching = multiRelNormalizedQuery.length > 0;
+        const multiRelOptions = multiRelIsSearching ? relationLiveOptions : relationResolvedOptions;
+        const multiRelValues = Array.isArray(value) ? value.filter(Boolean) : [];
+        const multiRelTargetModule = String(field.multiRelationConfig?.targetModule || '').trim();
+        return (
+          <AdaptiveSelectField
+            {...commonProps}
+            mode="multiple"
+            value={multiRelValues}
+            showSearch
+            options={multiRelOptions}
+            loading={relationLoading}
+            optionRender={renderSelectOption}
+            optionFilterProp="searchText"
+            optionLabelProp="label"
+            getPopupContainer={selectPopupContainer}
+            placement={selectPlacement}
+            popupMatchSelectWidth={false}
+            virtual={false}
+            listHeight={isMobileViewport ? 224 : 320}
+            popupStyle={buildStandardSelectPopupRootStyle({ zIndex: selectPopupZIndex + 20, minWidth: 320, maxWidth: 'min(92vw, 420px)' })}
+            overlayZIndexBase={selectPopupZIndex + 20}
+            preferLocalPopupContainer={preferLocalPopupContainer}
+            filterOption={false}
+            searchValue={relationSearchQuery}
+            onChange={(nextValues) => {
+              resetRelationSearchState();
+              onChange(Array.isArray(nextValues) ? nextValues : []);
+            }}
+            notFoundContent={relationLoading ? 'در حال بارگذاری...' : 'موردی یافت نشد'}
+            onOpenChange={(open) => {
+              if (open) {
+                resetRelationSearchState();
+                void loadRelationOptions('');
+              } else {
+                resetRelationSearchState();
+              }
+            }}
+            onSearch={(searchText) => {
+              setRelationSearchQuery(String(searchText || ''));
+              if (relationSearchTimerRef.current) {
+                window.clearTimeout(relationSearchTimerRef.current);
+              }
+              relationSearchTimerRef.current = window.setTimeout(() => {
+                void loadRelationOptions(String(searchText || '').trim());
+              }, 320);
+            }}
+            pickerTitle={fieldLabel}
+            sheetSubtitle={multiRelTargetModule
+              ? `ماژول: ${MODULES[multiRelTargetModule]?.titles?.fa || multiRelTargetModule}`
+              : undefined}
+            mobileSearchPlaceholder="جستجوی رکورد مرتبط..."
+          />
+        );
+      }
 
       case FieldType.RELATION:
         const canQuickCreate = canUseRelationQuickCreate;
@@ -3336,8 +3445,9 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     () => (supportsAssignee
       ? fields.filter((field) => !['assignee_id', 'assignee_type', 'assignee_role_id', 'assignee_combo'].includes(String(field?.key || '')))
       : fields)
-      .filter((field) => String(field?.key || '') !== 'auto_name_enabled'),
-    [fields, supportsAssignee],
+      .filter((field) => String(field?.key || '') !== 'auto_name_enabled')
+      .filter((field) => evaluateLegacyVisibilityRule((field as any)?.logic, watchedQuickCreateValues || {})),
+    [fields, supportsAssignee, watchedQuickCreateValues],
   );
   const primaryFieldKeySet = useMemo(
     () => new Set((primaryFieldKeys || []).map((key) => String(key || '').trim()).filter(Boolean)),
@@ -3448,7 +3558,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
 
   const renderQuickField = (field: ModuleField) => {
     const fieldDynamicOptionsCategory = String((field as any)?.dynamicOptionsCategory || '').trim();
-    const mergedFieldOptions = field.type === FieldType.RELATION
+    const mergedFieldOptions = (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION)
       ? (relationOptions[field.key] || [])
       : mergeSelectOptions(
         field.options as any[],
@@ -3612,6 +3722,4 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     </Modal>
   );
 };
-
-
 

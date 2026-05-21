@@ -53,6 +53,7 @@ const NUMERIC_FIELD_TYPES = new Set<FieldType>([
 
 const ARRAY_FIELD_TYPES = new Set<FieldType>([
   FieldType.MULTI_SELECT,
+  FieldType.MULTI_RELATION,
   FieldType.TAGS,
   FieldType.CHECKLIST,
 ]);
@@ -103,6 +104,7 @@ const normalizeScalarValue = (field: ModuleField | undefined, value: any) => {
     field.type === FieldType.SELECT
     || field.type === FieldType.STATUS
     || field.type === FieldType.RELATION
+    || field.type === FieldType.MULTI_RELATION
     || field.type === FieldType.USER
   ) {
     return normalizeString(scalarValue);

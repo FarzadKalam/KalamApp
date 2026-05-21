@@ -28,6 +28,7 @@ import {
   isSaasAdminModuleId,
   resolvePreferredRoleModuleIds,
   resolveStoriesPermissions,
+  resolveSaasAdminFieldPermission,
   type CurrentUserRecordAccessContext,
   type PermissionMap,
 } from '../utils/permissions';
@@ -759,8 +760,11 @@ const Dashboard: React.FC = () => {
   // ─── استوری‌ها ───────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserName, setCurrentUserName] = useState('');
+  const [currentUserAvatar, setCurrentUserAvatar] = useState<string | null>(null);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [storiesPermissions, setStoriesPermissions] = useState<ReturnType<typeof resolveStoriesPermissions> | null>(null);
+  const [canPublishSaasStory, setCanPublishSaasStory] = useState(false);
+  const [canPublishSaasAdminStory, setCanPublishSaasAdminStory] = useState(false);
   const [storyViewerOpen, setStoryViewerOpen] = useState(false);
   const [storyViewerIndex, setStoryViewerIndex] = useState(0);
   const [storyViewerList, setStoryViewerList] = useState<OrgStoryWithMeta[]>([]);
@@ -821,9 +825,11 @@ const Dashboard: React.FC = () => {
           setCurrentUserName(
             String(profile?.full_name || profile?.display_name || snapshot.user?.email || '')
           );
-          setStoriesPermissions(
-            resolveStoriesPermissions(snapshot.permissions as PermissionMap | null)
-          );
+          setCurrentUserAvatar(profile?.avatar_url ? String(profile.avatar_url) : null);
+          const perms = snapshot.permissions as PermissionMap | null;
+          setStoriesPermissions(resolveStoriesPermissions(perms));
+          setCanPublishSaasStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_story'));
+          setCanPublishSaasAdminStory(resolveSaasAdminFieldPermission(perms, 'publish_saas_admin_story'));
           setInitialStories(fetchedStories);
         }
       } catch (error) {
@@ -1143,7 +1149,10 @@ const Dashboard: React.FC = () => {
           orgId={orgId}
           currentUserId={currentUserId}
           currentUserName={currentUserName}
+          currentUserAvatar={currentUserAvatar}
           editingStory={editingStory}
+          canPublishSaasStory={canPublishSaasStory}
+          canPublishSaasAdminStory={canPublishSaasAdminStory}
           onClose={() => { setStoryEditorOpen(false); setEditingStory(null); }}
           onSaved={() => setStoryRefreshKey((k) => k + 1)}
           onNotifySms={(storyId, text, recipientIds) => {

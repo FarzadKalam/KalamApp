@@ -66,7 +66,12 @@
       "Bash(sed \"s/Module:.*//\")",
       "Bash(grep -v \"//\")",
       "Bash(awk ':*)",
-      "Bash(grep -l \"assignee_id\\\\|assignee_type\" d:/Kalamapp/modules/*.ts)"
+      "Bash(grep -l \"assignee_id\\\\|assignee_type\" d:/Kalamapp/modules/*.ts)",
+      "Bash(grep -n \"SaasAdminPlans\\\\|SaasAdminDashboard\\\\|SaasAdminRequests\" /d/Kalamapp/pages/SaasAdmin/*.tsx)",
+      "Bash(grep -l \"actionButtons\\\\|recordActions\" /d/Kalamapp/modules/*Config.ts)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Include \"*activities*\" -File)",
+      "Bash(Select-Object -First 20)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Include \"types.ts\" -File | Where-Object { $_.FullName -notmatch \"node_modules\" })"
     ]
   },
   "hooks": {

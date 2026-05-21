@@ -161,16 +161,18 @@ const watermarkLayer = watermarkText ? `
     </div>
 
     <!-- LEFT: image area (full-bleed, no gap) -->
-    <div style="flex:1; position:relative; overflow:hidden; min-width:0;">
+    <!-- isolation:isolate creates an explicit stacking context so z-index ordering
+         of the child layers is reliable across all renderers (Gotenberg/Chromium/Safari). -->
+    <div style="flex:1; position:relative; overflow:hidden; min-width:0; isolation:isolate;">
       <!-- 1. Full-cover background image (z:1, lowest) -->
       ${bgLayer}
       <!-- 2. Watermarks (z:2) — above image, below gradient -->
       ${watermarkLayer}
-      <!-- 3. Gradient overlay (z:3) — darkens bottom, sits above watermarks in dark zone -->
-      <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.28) 45%, rgba(0,0,0,0) 72%); z-index:3;"></div>
-      <!-- 4. Title + code fields — anchored to bottom (z:5) -->
+      <!-- 3. Gradient overlay (z:3) — extended dark zone ensures multi-line titles are always readable -->
+      <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.72) 18%, rgba(0,0,0,0.38) 40%, rgba(0,0,0,0.08) 65%, rgba(0,0,0,0) 82%); z-index:3;"></div>
+      <!-- 4. Title + code fields — anchored to bottom (z:5, above gradient:3) -->
       <div style="position:absolute; left:0; right:0; bottom:0; padding:5mm 6mm 6mm; z-index:5;">
-        <div style="color:#fff; font-size:24px; font-weight:900; line-height:1.3; text-shadow:0 3px 20px rgba(0,0,0,0.95); overflow-wrap:anywhere;">${primaryTitle}</div>
+        <div style="color:#fff; font-size:22px; font-weight:900; line-height:1.35; text-shadow:0 2px 16px rgba(0,0,0,0.98), 0 0px 4px rgba(0,0,0,0.9); overflow-wrap:anywhere;">${primaryTitle}</div>
         ${codeSection}
       </div>
     </div>

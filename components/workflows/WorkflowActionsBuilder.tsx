@@ -22,6 +22,7 @@ import {
   WorkflowModuleOption,
   actionTypeOptions,
   createWorkflowRelatedFieldKey,
+  createWorkflowMultiRelationFieldKey,
   createWorkflowId,
   parseWorkflowRelatedFieldKey,
 } from '../../utils/workflowTypes';
@@ -116,6 +117,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_field: '',
         variable_target: 'body',
       };
+    case 'send_telegram_bot':
     case 'send_bale_bot':
     case 'send_rubika_bot':
       return {
@@ -131,6 +133,8 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'update_record':
     case 'send_to_next_stages':
       return { field: '', value_mode: 'static', value: null, source_field: '' };
+    case 'create_standalone_record':
+      return { target_module_id: '', field_mappings: [] };
     case 'create_related_record':
       return { source_module_id: '', target_module_id: '', relation_field_key: '', field_mappings: [] };
     case 'copy_process_template':
@@ -308,6 +312,80 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       ...assigneeRecipientFieldOptions.map((item) => [String(item.value), item] as const),
     ]).values()),
     [additionalRecipientFieldOptions, assigneeRecipientFieldOptions]
+  );
+  const getMultiRelationTargetFieldOptions = useCallback((
+    matcher: (targetField: ModuleField) => boolean,
+    fallbackLabel: string,
+  ) =>
+    communicationFieldSource
+      .filter((field) => field.type === FieldType.MULTI_RELATION && field.multiRelationConfig?.targetModule)
+      .flatMap((field) => {
+        const targetModuleId = String(field.multiRelationConfig?.targetModule || '').trim();
+        const targetFields = MODULES[targetModuleId]?.fields || [];
+        return targetFields
+          .filter((targetField) => !!String(targetField?.key || '').trim() && matcher(targetField))
+          .map((targetField) => ({
+            label: `${getFieldLabel(field)} (${String(targetField?.labels?.fa || fallbackLabel || targetField.key).trim() || fallbackLabel})`,
+            value: createWorkflowMultiRelationFieldKey(
+              field.key,
+              targetModuleId,
+              String(targetField.key || '').trim(),
+            ),
+          }));
+      }),
+    [communicationFieldSource]
+  );
+  const multiRelationProfileRecipientFields = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField) => {
+        const key = String(targetField?.key || '').trim();
+        return key === 'related_profile_id' || key === 'id';
+      },
+      'کاربر مرتبط',
+    ),
+    [getMultiRelationTargetFieldOptions]
+  );
+  const noteRecipientFieldOptions = useMemo(
+    () => Array.from(new Map([
+      ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+      ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+    ]).values()),
+    [recipientFieldOptions, multiRelationProfileRecipientFields]
+  );
+  const multiRelationPhoneFieldOptions = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField) => targetField.type === FieldType.PHONE || /mobile|phone/i.test(String(targetField?.key || '')),
+      'شماره',
+    ),
+    [getMultiRelationTargetFieldOptions]
+  );
+  const multiRelationEmailFieldOptions = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField) => /email/i.test(String(targetField?.key || '')),
+      'ایمیل',
+    ),
+    [getMultiRelationTargetFieldOptions]
+  );
+  const multiRelationTelegramFieldOptions = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField) => String(targetField?.key || '').trim() === 'telegram_chat_id',
+      'تلگرام',
+    ),
+    [getMultiRelationTargetFieldOptions]
+  );
+  const multiRelationBaleFieldOptions = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField) => String(targetField?.key || '').trim() === 'bale_chat_id',
+      'بله',
+    ),
+    [getMultiRelationTargetFieldOptions]
+  );
+  const multiRelationRubikaFieldOptions = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField) => String(targetField?.key || '').trim() === 'rubika_chat_id',
+      'روبیکا',
+    ),
+    [getMultiRelationTargetFieldOptions]
   );
   const assigneeDirectoryOptions = useMemo(() => {
     const optionsByValue = new Map<string, { label: string; value: string }>();
@@ -582,7 +660,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         value: String(opt?.value || ''),
       }));
     }
-    if (field.type === FieldType.RELATION || field.type === FieldType.USER) {
+    if (
+      field.type === FieldType.RELATION
+      || field.type === FieldType.MULTI_RELATION
+      || field.type === FieldType.USER
+    ) {
       return (relationOptions[field.key] || []).map((opt) => ({
         label: String(opt?.label || opt?.value || '-'),
         value: String(opt?.value || ''),
@@ -634,12 +716,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       field.type === FieldType.SELECT ||
       field.type === FieldType.STATUS ||
       field.type === FieldType.RELATION ||
+      field.type === FieldType.MULTI_RELATION ||
       field.type === FieldType.USER
     ) {
       return (
         <AdaptiveSelectField
           {...commonSelectProps}
-          value={value}
+          mode={field.type === FieldType.MULTI_RELATION ? 'multiple' : undefined}
+          value={field.type === FieldType.MULTI_RELATION
+            ? (Array.isArray(value) ? value : value ? [value] : [])
+            : value}
           options={options}
           disabled={disabled}
           onChange={(nextVal) => onValueChange(normalizeWorkflowValueByFieldType(field, nextVal))}
@@ -973,7 +1059,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={recipientFieldOptions}
+              options={noteRecipientFieldOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
               placeholder="گیرنده‌های یادداشت از روی فیلدها"
               className="w-full"
@@ -1024,6 +1110,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const smsRecipientOptions = Array.from(new Map([
         ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...phoneFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationPhoneFieldOptions.map((item) => [String(item.value), item] as const),
       ]).values());
 
       return (
@@ -1080,6 +1167,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const emailRecipientOptions = Array.from(new Map([
         ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...emailFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
       ]).values());
 
       return (
@@ -1128,9 +1216,19 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
 
-    if (actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
+    if (actionType === 'send_telegram_bot' || actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') {
+      const isTelegram = actionType === 'send_telegram_bot';
       const isRubika = actionType === 'send_rubika_bot';
-      const providerLabel = isRubika ? 'روبیکا' : 'بله';
+      const providerLabel = isRubika ? 'روبیکا' : (isTelegram ? 'تلگرام' : 'بله');
+      const botRecipientFieldOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...(isRubika
+          ? multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const)
+          : isTelegram
+            ? multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const)
+            : multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const)),
+      ]).values());
       const selectedRecipientFields = Array.isArray(config.recipient_fields)
         ? config.recipient_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
         : [];
@@ -1185,14 +1283,38 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             </div>
           ) : null}
           {!isRubika ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+                disabled={disabled}
+                options={botRecipientFieldOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+                placeholder={`فیلدهای گیرنده ${providerLabel}`}
+                maxTagCount="responsive"
+              />
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
+                disabled={disabled}
+                options={assigneeDirectoryOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
+                placeholder="کاربر/نقش تکمیلی (اختیاری)"
+                maxTagCount="responsive"
+              />
+            </div>
+          ) : null}
+          {isRubika ? (
             <Select
               {...commonSelectProps}
               mode="multiple"
-              value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
+              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={assigneeDirectoryOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="کاربر/نقش تکمیلی (اختیاری)"
+              options={botRecipientFieldOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+              placeholder="فیلدهای اختصاصی گیرنده روبیکا"
               maxTagCount="responsive"
             />
           ) : null}
@@ -1330,6 +1452,183 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               هنوز الگوی فعالی برای این ماژول پیدا نشد.
             </div>
           ) : null}
+        </div>
+      );
+    }
+
+    if (actionType === 'create_standalone_record') {
+      const targetModuleId = String(config.target_module_id || '');
+      const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
+      const targetFields = (targetModule?.fields || []).filter(
+        (field) => !!field?.key && field?.nature !== 'system' && field?.readonly !== true
+      );
+      const targetWritableOptions = targetFields.map((field) => ({
+        label: getFieldLabel(field),
+        value: field.key,
+      }));
+      const fieldMappings: CreateRelatedFieldMapping[] = Array.isArray(config.field_mappings)
+        ? config.field_mappings
+        : [];
+
+      return (
+        <div className="space-y-2">
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">ماژول رکورد جدید</div>
+            <Select
+              {...commonSelectProps}
+              value={config.target_module_id}
+              disabled={disabled}
+              options={moduleOptions}
+              onChange={(nextVal) => {
+                updateActionConfig(action.id, {
+                  target_module_id: nextVal,
+                  field_mappings: [],
+                });
+              }}
+              placeholder="انتخاب ماژول"
+            />
+          </div>
+
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold">فیلدهای رکورد جدید</div>
+              <Button
+                type="dashed"
+                size="small"
+                icon={<PlusOutlined />}
+                disabled={disabled || !targetModuleId}
+                onClick={() =>
+                  updateActionConfig(action.id, {
+                    field_mappings: [
+                      ...fieldMappings,
+                      { id: createWorkflowId(), field: '', mode: 'static', value: '' },
+                    ],
+                  })
+                }
+              >
+                افزودن فیلد
+              </Button>
+            </div>
+
+            {fieldMappings.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="فیلدی تنظیم نشده است" />
+            ) : (
+              fieldMappings.map((mapping) => {
+                const targetField = targetFields.find((f) => f.key === mapping.field);
+                return (
+                  <div
+                    key={mapping.id}
+                    className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start rounded-lg border border-gray-100 dark:border-gray-800 p-2"
+                  >
+                    <div className="md:col-span-4">
+                      <div className="mb-1 text-xs text-gray-500">فیلد مقصد</div>
+                      <Select
+                        {...commonSelectProps}
+                        value={mapping.field}
+                        disabled={disabled || !targetModuleId}
+                        options={targetWritableOptions}
+                        onChange={(nextVal) =>
+                          updateActionConfig(action.id, {
+                            field_mappings: fieldMappings.map((item) =>
+                              item.id === mapping.id
+                                ? { ...item, field: nextVal, value: '', source_field: '', mode: 'static' }
+                                : item
+                            ),
+                          })
+                        }
+                        placeholder="فیلد مقصد"
+                      />
+                    </div>
+                    <div className="md:col-span-3">
+                      <div className="mb-1 text-xs text-gray-500">نوع مقدار</div>
+                      <Select
+                        {...commonSelectProps}
+                        value={mapping.mode}
+                        disabled={disabled || !mapping.field}
+                        options={[
+                          { label: 'مقدار ثابت', value: 'static' },
+                          { label: 'از فیلد رکورد جاری', value: 'from_source' },
+                          ...(canFieldUseFormula(targetField) ? [{ label: 'محاسبه با فرمول', value: 'formula' }] : []),
+                        ]}
+                        onChange={(nextVal) =>
+                          updateActionConfig(action.id, {
+                            field_mappings: fieldMappings.map((item) =>
+                              item.id === mapping.id
+                                ? { ...item, mode: nextVal, value: '', source_field: '' }
+                                : item
+                            ),
+                          })
+                        }
+                        placeholder="نوع"
+                      />
+                    </div>
+                    <div className="md:col-span-4">
+                      <div className="mb-1 text-xs text-gray-500">مقدار</div>
+                      {mapping.mode === 'from_source' ? (
+                        <Select
+                          {...commonSelectProps}
+                          value={mapping.source_field}
+                          disabled={disabled}
+                          options={sourceVariableFieldOptions}
+                          onChange={(nextVal) =>
+                            updateActionConfig(action.id, {
+                              field_mappings: fieldMappings.map((item) =>
+                                item.id === mapping.id ? { ...item, source_field: nextVal } : item
+                              ),
+                            })
+                          }
+                          placeholder="فیلد منبع"
+                        />
+                      ) : mapping.mode === 'formula' ? (
+                        <Button
+                          size="small"
+                          icon={<SnippetsOutlined />}
+                          disabled={disabled}
+                          onClick={() =>
+                            setFormulaModalTarget({
+                              mode: 'mapping',
+                              actionId: action.id,
+                              mappingId: mapping.id,
+                              fieldKey: mapping.field,
+                            })
+                          }
+                        >
+                          {mapping.formula_name || 'تعریف فرمول'}
+                        </Button>
+                      ) : (
+                        <Input
+                          disabled={disabled}
+                          value={mapping.value ?? ''}
+                          onChange={(e) =>
+                            updateActionConfig(action.id, {
+                              field_mappings: fieldMappings.map((item) =>
+                                item.id === mapping.id ? { ...item, value: e.target.value } : item
+                              ),
+                            })
+                          }
+                          placeholder="مقدار"
+                        />
+                      )}
+                    </div>
+                    <div className="flex justify-end md:col-span-1">
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        icon={<DeleteOutlined />}
+                        disabled={disabled}
+                        onClick={() =>
+                          updateActionConfig(action.id, {
+                            field_mappings: fieldMappings.filter((item) => item.id !== mapping.id),
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       );
     }

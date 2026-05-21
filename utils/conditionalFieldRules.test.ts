@@ -220,4 +220,63 @@ describe('conditionalFieldRules', () => {
     expect(visibleInSomeRows.map((field) => field.key)).toEqual(['mode', 'plate_no']);
     expect(hiddenInAllRows.map((field) => field.key)).toEqual(['mode']);
   });
+
+  it('evaluates multi-relation values as arrays in conditional rules', () => {
+    const fields: ModuleField[] = [
+      {
+        key: 'meeting_employee_ids',
+        type: FieldType.MULTI_RELATION,
+        labels: { fa: 'کارکنان حاضر در جلسه', en: 'Meeting Employees' },
+      } as ModuleField,
+      {
+        key: 'meeting_summary',
+        type: FieldType.TEXT,
+        labels: { fa: 'خلاصه جلسه', en: 'Meeting Summary' },
+      } as ModuleField,
+    ];
+    const settings = normalizeConditionalFieldSettings({
+      rules: [
+        {
+          id: 'show-summary-when-employee-present',
+          targetFieldKey: 'meeting_summary',
+          source: 'user',
+          enabled: true,
+          priority: 100,
+          conditions_all: [
+            {
+              id: 'employee-present',
+              field: 'meeting_employee_ids',
+              operator: 'contains',
+              value: '33333333-3333-4333-8333-333333333333',
+            },
+          ],
+          conditions_any: [],
+          effect: { showField: true },
+        },
+      ],
+    });
+
+    const visibleState = resolveConditionalFieldState(
+      fields[1],
+      {
+        meeting_employee_ids: [
+          '33333333-3333-4333-8333-333333333333',
+          '44444444-4444-4444-8444-444444444444',
+        ],
+      },
+      settings,
+      fields,
+    );
+    const hiddenState = resolveConditionalFieldState(
+      fields[1],
+      {
+        meeting_employee_ids: ['44444444-4444-4444-8444-444444444444'],
+      },
+      settings,
+      fields,
+    );
+
+    expect(visibleState.visible).toBe(true);
+    expect(hiddenState.visible).toBe(false);
+  });
 });

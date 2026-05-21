@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App,
-  Avatar,
   Button,
   Drawer,
   Form,

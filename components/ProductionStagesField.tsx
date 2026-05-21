@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Avatar, Grid } from 'antd';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid } from 'antd';
 import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
@@ -1558,28 +1558,32 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const nextDynamicOptions: Record<string, Array<{ label: string; value: string }>> = {};
     const nextRelationOptions: Record<string, Array<{ label: string; value: string }>> = {};
 
-    await Promise.all(sourceFields.map(async (field) => {
-      if (field.dynamicOptionsCategory && !nextDynamicOptions[field.dynamicOptionsCategory]) {
-        nextDynamicOptions[field.dynamicOptionsCategory] = field.dynamicOptionsCategory === 'task_type'
-          ? taskTypeOptions
-          : await fetchDynamicOptionsByCategory(supabase, field.dynamicOptionsCategory);
-      }
+    await Promise.allSettled(sourceFields.map(async (field) => {
+      try {
+        if (field.dynamicOptionsCategory && !nextDynamicOptions[field.dynamicOptionsCategory]) {
+          nextDynamicOptions[field.dynamicOptionsCategory] = field.dynamicOptionsCategory === 'task_type'
+            ? taskTypeOptions
+            : await fetchDynamicOptionsByCategory(supabase, field.dynamicOptionsCategory);
+        }
 
-      if (field.type === FieldType.USER) {
-        const directory = await fetchAssigneeDirectory(supabase);
-        nextRelationOptions[field.key] = directory.users.map((user) => ({
-          label: String(user.display_name || user.full_name || user.id).trim(),
-          value: String(user.id),
-        }));
-        return;
-      }
+        if (field.type === FieldType.USER) {
+          const directory = await fetchAssigneeDirectory(supabase);
+          nextRelationOptions[field.key] = directory.users.map((user) => ({
+            label: String(user.display_name || user.full_name || user.id).trim(),
+            value: String(user.id),
+          }));
+          return;
+        }
 
-      if (field.type === FieldType.RELATION && field.relationConfig?.targetModule) {
-        nextRelationOptions[field.key] = await fetchRelationOptionsForField(
-          supabase,
-          field as any,
-          { limit: 300 }
-        );
+        if (field.type === FieldType.RELATION && field.relationConfig?.targetModule) {
+          nextRelationOptions[field.key] = await fetchRelationOptionsForField(
+            supabase,
+            field as any,
+            { limit: 300 }
+          );
+        }
+      } catch (error) {
+        console.warn('Could not load process task custom field options', field?.key, error);
       }
     }));
 

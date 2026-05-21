@@ -10,6 +10,7 @@ import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTarget
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
 import {
   parseWorkflowRelatedFieldKey,
+  parseWorkflowMultiRelationFieldKey,
   parseProcessNextStageFieldKey,
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   WorkflowAction,
@@ -257,6 +258,10 @@ const WORKFLOW_OPERATORS_WITHOUT_VALUE = new Set([
   'is_tomorrow',
   'is_friday',
   'is_official_holiday',
+  'is_this_week',
+  'is_last_week',
+  'is_this_month',
+  'is_last_month',
 ]);
 
 const INTERVAL_UNSUPPORTED_OPERATORS = new Set([
@@ -651,6 +656,25 @@ const resolveConditionFieldValue = async (
     return linkedRecord?.[processLinkedMeta.targetFieldKey];
   }
 
+  const multiRelationMeta = parseWorkflowMultiRelationFieldKey(fieldKey);
+  if (multiRelationMeta) {
+    const rawIds = record?.[multiRelationMeta.fieldKey];
+    const ids = Array.from(new Set(normalizeMultiRelationIds(rawIds)));
+    if (ids.length === 0) return [];
+    const values: string[] = [];
+    for (const id of ids) {
+      const relatedRecord = await fetchRelatedRecord(multiRelationMeta.targetModuleId, id, context);
+      const fieldValue = relatedRecord?.[multiRelationMeta.targetPhoneFieldKey];
+      if (fieldValue === null || fieldValue === undefined || fieldValue === '') continue;
+      values.push(...asArray(fieldValue).map((item) => String(item || '').trim()).filter(Boolean));
+    }
+    return normalizeMultiRelationCommunicationValues(
+      multiRelationMeta.targetModuleId,
+      multiRelationMeta.targetPhoneFieldKey,
+      values,
+    );
+  }
+
   const relatedFieldMeta = parseWorkflowRelatedFieldKey(fieldKey);
   if (relatedFieldMeta) {
     const relationId = String(record?.[relatedFieldMeta.relationFieldKey] || '').trim();
@@ -792,6 +816,64 @@ const evaluateResolvedCondition = async (
     case 'is_official_holiday': {
       const summary = await getHolidaySummaryForDate(currentValue);
       return !!summary?.isOfficialHoliday;
+    }
+    case 'is_this_week': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - now.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      endOfWeek.setHours(23, 59, 59, 999);
+      return d.getTime() >= startOfWeek.getTime() && d.getTime() <= endOfWeek.getTime();
+    }
+    case 'is_last_week': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      const now = new Date();
+      const startOfThisWeek = new Date(now);
+      startOfThisWeek.setDate(now.getDate() - now.getDay());
+      startOfThisWeek.setHours(0, 0, 0, 0);
+      const startOfLastWeek = new Date(startOfThisWeek);
+      startOfLastWeek.setDate(startOfThisWeek.getDate() - 7);
+      const endOfLastWeek = new Date(startOfThisWeek);
+      endOfLastWeek.setMilliseconds(-1);
+      return d.getTime() >= startOfLastWeek.getTime() && d.getTime() <= endOfLastWeek.getTime();
+    }
+    case 'is_this_month': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      const now = new Date();
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    }
+    case 'is_last_month': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      const now = new Date();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      return d.getFullYear() === lastMonth.getFullYear() && d.getMonth() === lastMonth.getMonth();
+    }
+    case 'day_of_month_eq': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      return d.getDate() === Number(expectedValue || 0);
+    }
+    case 'day_of_month_neq': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      return d.getDate() !== Number(expectedValue || 0);
+    }
+    case 'day_of_week_eq': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      return d.getDay() === Number(expectedValue || 0);
+    }
+    case 'day_of_week_neq': {
+      const d = parseDate(currentValue);
+      if (!d) return false;
+      return d.getDay() !== Number(expectedValue || 0);
     }
     case 'days_passed_eq': {
       const diff = daysDiffFromNow(currentValue);
@@ -1156,11 +1238,12 @@ const sendSms = async ({
   }
 };
 
-type CommunicationChannel = 'sms' | 'email' | 'bale' | 'rubika';
+type CommunicationChannel = 'sms' | 'email' | 'telegram' | 'bale' | 'rubika';
 
 const getProfileCommunicationSelect = (channel: CommunicationChannel) => {
   if (channel === 'sms') return 'id, mobile_1';
   if (channel === 'email') return 'id, email';
+  if (channel === 'telegram') return 'id, telegram_chat_id';
   if (channel === 'bale') return 'id, bale_chat_id';
   return 'id, rubika_chat_id';
 };
@@ -1191,7 +1274,13 @@ const queryProfilesWithCommunicationFallback = async (
     .in(filterField, values);
   if (!primaryResult.error) return (primaryResult.data || []) as Array<Record<string, any>>;
 
-  const fallbackColumn = channel === 'rubika' ? 'rubika_chat_id' : channel === 'bale' ? 'bale_chat_id' : '';
+  const fallbackColumn = channel === 'rubika'
+    ? 'rubika_chat_id'
+    : channel === 'bale'
+      ? 'bale_chat_id'
+      : channel === 'telegram'
+        ? 'telegram_chat_id'
+        : '';
   if (!fallbackColumn || !isMissingColumnError(primaryResult.error, fallbackColumn)) {
     throw primaryResult.error;
   }
@@ -1212,6 +1301,48 @@ const parseCommunicationRecipientToken = (value: any) => {
   const id = String(match[2] || '').trim();
   if (!id || (kind !== 'user' && kind !== 'role' && kind !== 'chat_group')) return null;
   return { kind: kind as 'user' | 'role' | 'chat_group', id };
+};
+
+const normalizeMultiRelationIds = (value: any): string[] => {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeMultiRelationIds(item));
+  }
+  if (value && typeof value === 'object') {
+    return [
+      String((value as any)?.id || '').trim(),
+      String((value as any)?.value || '').trim(),
+      String((value as any)?.record_id || '').trim(),
+    ].filter(Boolean);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('{') && raw.endsWith('}')) {
+    try {
+      return normalizeMultiRelationIds(JSON.parse(raw));
+    } catch {
+      return [raw];
+    }
+  }
+  return [raw];
+};
+
+const normalizeMultiRelationCommunicationValues = (
+  targetModuleId: string,
+  targetFieldKey: string,
+  values: any[],
+) => {
+  const normalizedTargetModuleId = String(targetModuleId || '').trim();
+  const normalizedTargetFieldKey = String(targetFieldKey || '').trim();
+  if (
+    normalizedTargetFieldKey === 'related_profile_id'
+    || (normalizedTargetModuleId === 'profiles' && normalizedTargetFieldKey === 'id')
+  ) {
+    return values
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .map((value) => `user_${value}`);
+  }
+  return values;
 };
 
 const collectRecipientTargets = (
@@ -1344,7 +1475,7 @@ const resolveRubikaCounterpartyGroupChatIds = async (candidateValues: string[]) 
 };
 
 const resolveCounterpartyBotGroupChatIds = async (
-  channel: 'rubika' | 'bale',
+  channel: 'rubika' | 'bale' | 'telegram',
   customerIds: string[],
   supplierIds: string[]
 ) => {
@@ -1378,7 +1509,7 @@ const resolveCounterpartyBotGroupChatIds = async (
 };
 
 const resolveCounterpartyBotGroupsByChatIds = async (
-  channel: 'rubika' | 'bale',
+  channel: 'rubika' | 'bale' | 'telegram',
   chatIds: string[]
 ) => {
   const normalizedChatIds = Array.from(new Set(
@@ -1397,7 +1528,7 @@ const resolveCounterpartyBotGroupsByChatIds = async (
 };
 
 const resolveCounterpartyBotChatIdsForRecord = async (
-  channel: 'rubika' | 'bale',
+  channel: 'rubika' | 'bale' | 'telegram',
   moduleId: string,
   currentRecord: Record<string, any>
 ) => {
@@ -1512,6 +1643,12 @@ const resolveCommunicationValuesFromFields = async ({
         ...profileRows.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean),
       ];
     }
+    if (channel === 'telegram') {
+      return [
+        ...directValues.map((value) => String(value || '').trim()).filter(Boolean),
+        ...profileRows.map((row) => String(row?.telegram_chat_id || '').trim()).filter(Boolean),
+      ];
+    }
     return [
       ...directValues.map((value) => String(value || '').trim()).filter(Boolean),
       ...profileRows.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean),
@@ -1525,7 +1662,7 @@ const resolveCommunicationValuesFromFields = async ({
   return Array.from(new Set([...uuidOnlyValues, ...groupChatIds]));
 };
 
-const resolveNoteRecipientsFromFields = async ({
+export const resolveNoteRecipientsFromFields = async ({
   currentRecord,
   moduleId,
   recipientFields,
@@ -1981,9 +2118,14 @@ export const executeWorkflowAction = async (
     return;
   }
 
-  if (action.type === 'send_bale_bot' || action.type === 'send_rubika_bot') {
+  if (
+    action.type === 'send_telegram_bot'
+    || action.type === 'send_bale_bot'
+    || action.type === 'send_rubika_bot'
+  ) {
+    const isTelegram = action.type === 'send_telegram_bot';
     const isRubika = action.type === 'send_rubika_bot';
-    const channel: 'bale' | 'rubika' = isRubika ? 'rubika' : 'bale';
+    const channel: 'telegram' | 'bale' | 'rubika' = isTelegram ? 'telegram' : (isRubika ? 'rubika' : 'bale');
     const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
     const attachments = isRubika
       ? await resolveNoteAttachmentsFromFields({
@@ -2029,7 +2171,9 @@ export const executeWorkflowAction = async (
       .filter(Boolean);
     const directFallbackChatId = isRubika
       ? String(currentRecord?.rubika_chat_id || '').trim()
-      : String(currentRecord?.bale_chat_id || '').trim();
+      : isTelegram
+        ? String(currentRecord?.telegram_chat_id || '').trim()
+        : String(currentRecord?.bale_chat_id || '').trim();
     const hasExplicitRecipients = configuredRecipientFields.length > 0 || configuredRecipientAssignees.length > 0;
     const canUseCounterpartyFallbackForExplicitRecipients = isRubika
       && configuredRecipientFields.some((fieldKey) => isCounterpartyRelatedRecipientField(fieldKey))
@@ -2187,6 +2331,50 @@ export const executeWorkflowAction = async (
         userId: user?.id || null,
       });
     }
+    return;
+  }
+
+  if (action.type === 'create_standalone_record') {
+    const targetModuleId = String(config.target_module_id || '').trim();
+    if (!targetModuleId) return;
+
+    const user = await getCurrentAuthUser();
+    const payload: Record<string, any> = {};
+
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    if (orgId) payload.org_id = orgId;
+    if (user?.id) {
+      payload.created_by = user.id;
+      payload.updated_by = user.id;
+    }
+
+    const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
+    const mappingContext: WorkflowEvaluationContext = {
+      moduleId,
+      relatedRecordCache: new Map(),
+      tagsCache: new Map(),
+    };
+    for (const mapping of mappings) {
+      const targetField = String(mapping?.field || '').trim();
+      if (!targetField) continue;
+      if (mapping?.mode === 'from_source' || mapping?.mode === 'from_related') {
+        const sourceField = String(mapping?.source_field || '').trim();
+        payload[targetField] = sourceField
+          ? await resolveConditionFieldValue(sourceField, currentRecord, moduleId, mappingContext)
+          : null;
+        continue;
+      }
+      if (mapping?.mode === 'formula') {
+        payload[targetField] = mapping?.formula_expression_config && typeof mapping.formula_expression_config === 'object'
+          ? evaluateFormulaExpression(mapping.formula_expression_config, currentRecord || {}).value
+          : null;
+        continue;
+      }
+      payload[targetField] = mapping?.value ?? null;
+    }
+
+    const { error } = await supabase.from(getModuleTable(targetModuleId)).insert(payload);
+    if (error) throw error;
     return;
   }
 
@@ -2461,6 +2649,43 @@ const claimIntervalWorkflowRun = async (
   }
 };
 
+const checkIntervalDayCondition = async (
+  condition: string | null | undefined,
+  now: Date
+): Promise<boolean> => {
+  const cond = String(condition || 'any').trim();
+  if (!cond || cond === 'any') return true;
+
+  const dayOfWeek = now.getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+  const dayMap: Record<string, number> = {
+    saturday: 6, sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5,
+  };
+
+  if (cond === 'is_friday') return dayOfWeek === 5;
+  if (cond === 'not_friday') return dayOfWeek !== 5;
+  if (cond === 'is_saturday') return dayOfWeek === dayMap.saturday;
+  if (cond === 'not_saturday') return dayOfWeek !== dayMap.saturday;
+  if (cond === 'is_sunday') return dayOfWeek === dayMap.sunday;
+  if (cond === 'not_sunday') return dayOfWeek !== dayMap.sunday;
+  if (cond === 'is_monday') return dayOfWeek === dayMap.monday;
+  if (cond === 'not_monday') return dayOfWeek !== dayMap.monday;
+  if (cond === 'is_tuesday') return dayOfWeek === dayMap.tuesday;
+  if (cond === 'not_tuesday') return dayOfWeek !== dayMap.tuesday;
+  if (cond === 'is_wednesday') return dayOfWeek === dayMap.wednesday;
+  if (cond === 'not_wednesday') return dayOfWeek !== dayMap.wednesday;
+  if (cond === 'is_thursday') return dayOfWeek === dayMap.thursday;
+  if (cond === 'not_thursday') return dayOfWeek !== dayMap.thursday;
+
+  if (cond === 'is_friday_or_holiday' || cond === 'not_friday_or_holiday') {
+    const summary = await getHolidaySummaryForDate(now).catch(() => null);
+    const isHoliday = !!summary?.isOfficialHoliday;
+    if (cond === 'is_friday_or_holiday') return isHoliday;
+    return !isHoliday;
+  }
+
+  return true;
+};
+
 export const runWorkflowsIntervalTick = async ({
   moduleId,
   workflowId,
@@ -2508,9 +2733,17 @@ export const runWorkflowsIntervalTick = async ({
       intervalValue: clampIntervalValue(workflow.interval_value, 1),
       intervalUnit: normalizeIntervalUnit(workflow.interval_unit || 'day'),
       intervalAt: workflow.interval_at || null,
+      intervalFirstRunAt: workflow.interval_first_run_at || null,
+      intervalMinute: typeof workflow.interval_minute === 'number' ? workflow.interval_minute : null,
+      intervalAllowedFromHour: typeof workflow.interval_allowed_from_hour === 'number' ? workflow.interval_allowed_from_hour : null,
+      intervalAllowedToHour: typeof workflow.interval_allowed_to_hour === 'number' ? workflow.interval_allowed_to_hour : null,
+      intervalDayOfMonth: typeof workflow.interval_day_of_month === 'number' ? workflow.interval_day_of_month : null,
       now,
     });
     if (!due) continue;
+
+    const dayConditionPassed = await checkIntervalDayCondition(workflow.interval_day_condition || null, now);
+    if (!dayConditionPassed) continue;
 
     const claimedAtIso = now.toISOString();
     const claimed = await claimIntervalWorkflowRun(

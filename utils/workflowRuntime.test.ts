@@ -4,10 +4,13 @@ const mocks = vi.hoisted(() => ({
   chatGroups: [] as any[],
   profilesByUser: [] as any[],
   profilesByRole: [] as any[],
+  rowsByTable: {} as Record<string, any[]>,
   from: vi.fn(),
   insertNotesWithFallback: vi.fn(),
   sendNoteSmsNotifications: vi.fn(),
   sendSmsViaGateway: vi.fn(),
+  sendBotMessageViaGateway: vi.fn(),
+  sendCounterpartyBotGroupMessage: vi.fn(),
 }));
 
 vi.mock('../supabaseClient', () => ({
@@ -33,6 +36,11 @@ vi.mock('./smsGateway', () => ({
   sendSmsViaGateway: mocks.sendSmsViaGateway,
 }));
 
+vi.mock('./botGateway', () => ({
+  sendBotMessageViaGateway: mocks.sendBotMessageViaGateway,
+  sendCounterpartyBotGroupMessage: mocks.sendCounterpartyBotGroupMessage,
+}));
+
 import { evaluateWorkflowConditions, executeWorkflowAction, runWorkflowsForEvent } from './workflowRuntime';
 import { createProcessNextStageFieldKey } from './workflowTypes';
 import {
@@ -46,29 +54,36 @@ const DIRECT_USER_ID = '33333333-3333-4333-8333-333333333333';
 const ROLE_ID = '44444444-4444-4444-8444-444444444444';
 
 const makeQuery = (table: string) => ({
-  select: vi.fn(() => ({
-    in: vi.fn(async (field: string, values: string[]) => {
-      if (table === 'chat_groups') {
-        return {
+  select: vi.fn(() => {
+    if (table === 'chat_groups') {
+      return {
+        in: vi.fn(async (_field: string, values: string[]) => ({
           data: mocks.chatGroups.filter((group) => values.includes(String(group.id))),
           error: null,
-        };
-      }
-      if (table === 'profiles' && field === 'id') {
-        return {
-          data: mocks.profilesByUser.filter((profile) => values.includes(String(profile.id))),
-          error: null,
-        };
-      }
-      if (table === 'profiles' && field === 'role_id') {
-        return {
-          data: mocks.profilesByRole.filter((profile) => values.includes(String(profile.role_id))),
-          error: null,
-        };
-      }
-      return { data: [], error: null };
-    }),
-  })),
+        })),
+      };
+    }
+    if (table === 'profiles') {
+      return {
+        in: vi.fn(async (field: string, values: string[]) => {
+          if (field === 'id') {
+            return {
+              data: mocks.profilesByUser.filter((profile) => values.includes(String(profile.id))),
+              error: null,
+            };
+          }
+          if (field === 'role_id') {
+            return {
+              data: mocks.profilesByRole.filter((profile) => values.includes(String(profile.role_id))),
+              error: null,
+            };
+          }
+          return { data: [], error: null };
+        }),
+      };
+    }
+    return createFilterableSelectQuery(mocks.rowsByTable[table] || []);
+  }),
 });
 
 const createFilterableSelectQuery = (rows: any[]) => {
@@ -134,10 +149,13 @@ describe('workflow action recipients', () => {
     mocks.chatGroups = [];
     mocks.profilesByUser = [];
     mocks.profilesByRole = [];
+    mocks.rowsByTable = {};
     mocks.from.mockImplementation((table: string) => makeQuery(table));
     mocks.insertNotesWithFallback.mockResolvedValue(undefined);
     mocks.sendNoteSmsNotifications.mockResolvedValue({ recipients: [] });
     mocks.sendSmsViaGateway.mockResolvedValue({ success: true, sent: 0 });
+    mocks.sendBotMessageViaGateway.mockResolvedValue({ ok: true });
+    mocks.sendCounterpartyBotGroupMessage.mockResolvedValue({ ok: true });
     vi.clearAllMocks();
   });
 
@@ -227,6 +245,83 @@ describe('workflow action recipients', () => {
 
     expect(mocks.insertNotesWithFallback).not.toHaveBeenCalled();
     expect(mocks.sendNoteSmsNotifications).not.toHaveBeenCalled();
+  });
+
+  it('resolves multi relation employee profile targets for workflow notes', async () => {
+    mocks.rowsByTable = {
+      employees: [
+        { id: 'emp-1', related_profile_id: USER_ID },
+        { id: 'emp-2', related_profile_id: DIRECT_USER_ID },
+      ],
+    };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-note-multi-relation',
+        type: 'send_note_sms',
+        config: {
+          note_text: 'یادداشت چندگیرنده',
+          recipient_fields: ['__workflow_multi_relation__meeting_employee_ids::employees::related_profile_id'],
+          recipient_assignees: [],
+        },
+      },
+      'tasks',
+      {
+        id: 'task-1',
+        meeting_employee_ids: ['emp-1', 'emp-2'],
+      }
+    );
+
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledTimes(1);
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledWith([
+      expect.objectContaining({
+        mention_user_ids: [USER_ID, DIRECT_USER_ID],
+        mention_role_ids: [],
+      }),
+    ]);
+    expect(mocks.sendNoteSmsNotifications).toHaveBeenCalledWith(expect.objectContaining({
+      mentionUserIds: [USER_ID, DIRECT_USER_ID],
+      mentionRoleIds: [],
+    }));
+  });
+
+  it('sends telegram bot messages to multi relation chat ids', async () => {
+    mocks.rowsByTable = {
+      customers: [
+        { id: 'customer-1', telegram_chat_id: 'tg-100' },
+        { id: 'customer-2', telegram_chat_id: 'tg-200' },
+      ],
+    };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-telegram-multi-relation',
+        type: 'send_telegram_bot',
+        config: {
+          message: 'سلام تلگرام',
+          recipient_fields: ['__workflow_multi_relation__meeting_customer_ids::customers::telegram_chat_id'],
+          recipient_assignees: [],
+          manual_chat_ids: [],
+        },
+      },
+      'tasks',
+      {
+        id: 'task-2',
+        meeting_customer_ids: ['customer-1', 'customer-2'],
+      }
+    );
+
+    expect(mocks.sendBotMessageViaGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.sendBotMessageViaGateway).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      channel: 'telegram',
+      chatId: 'tg-100',
+      text: 'سلام تلگرام',
+    }));
+    expect(mocks.sendBotMessageViaGateway).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      channel: 'telegram',
+      chatId: 'tg-200',
+      text: 'سلام تلگرام',
+    }));
   });
 });
 

@@ -11,7 +11,7 @@ import {
   PushpinOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Dropdown, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
+import { Button, Dropdown, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
 import { LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import type { OrgStoryWithMeta, StorySlide } from './storyTypes';

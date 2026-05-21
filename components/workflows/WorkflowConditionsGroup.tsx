@@ -55,7 +55,12 @@ const getFieldOptions = (
     return dynamicOptions[field.dynamicOptionsCategory] || [];
   }
   if (
-    (field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS) &&
+    (
+      field.type === FieldType.RELATION
+      || field.type === FieldType.MULTI_RELATION
+      || field.type === FieldType.USER
+      || field.type === FieldType.TAGS
+    ) &&
     relationOptions[field.key]
   ) {
     return relationOptions[field.key] || [];
@@ -226,14 +231,19 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       field.type === FieldType.SELECT ||
       field.type === FieldType.STATUS ||
       field.type === FieldType.RELATION ||
+      field.type === FieldType.MULTI_RELATION ||
       field.type === FieldType.USER
     ) {
       return (
         <AdaptiveSelectField
           {...commonSelectProps}
-          mode={expectsListValue ? 'multiple' : undefined}
+          mode={expectsListValue || field.type === FieldType.MULTI_RELATION ? 'multiple' : undefined}
           options={options}
-          value={expectsListValue ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : [])) : condition.value}
+          value={
+            expectsListValue || field.type === FieldType.MULTI_RELATION
+              ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : []))
+              : condition.value
+          }
           disabled={disabled || isLocked}
           onChange={(nextVal) =>
             updateCondition(condition.id, {

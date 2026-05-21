@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OrgStory, OrgStoryReaction, OrgStoryView, OrgStoryWithMeta } from '../components/stories/storyTypes';
 
 export const ORG_STORY_SELECT =
-  'id, org_id, creator_id, creator_name, creator_avatar, slides, is_org_wide, viewer_user_ids, viewer_role_ids, mention_user_ids, mention_role_ids, published_at, expires_at, is_pinned, is_active, view_count, created_at, updated_at';
+  'id, org_id, creator_id, creator_name, creator_avatar, slides, is_org_wide, is_saas_wide, is_saas_admins_only, viewer_user_ids, viewer_role_ids, mention_user_ids, mention_role_ids, published_at, expires_at, is_pinned, is_active, view_count, created_at, updated_at';
 
 export const ORG_STORY_VIEW_SELECT = 'id, org_id, story_id, user_id, viewed_at';
 export const ORG_STORY_REACTION_SELECT = 'id, org_id, story_id, user_id, user_name, emoji, created_at';
@@ -69,38 +69,57 @@ export const fetchActiveOrgStoriesWithMeta = async ({
   if (!normalizedOrgId) return [];
 
   const now = new Date().toISOString();
-  const { data: rawStories, error: storiesError } = await supabaseClient
-    .from('org_stories')
-    .select(ORG_STORY_SELECT)
-    .eq('org_id', normalizedOrgId)
-    .eq('is_active', true)
-    .lte('published_at', now)
-    .or(`expires_at.is.null,expires_at.gt.${now}`)
-    .order('is_pinned', { ascending: false })
-    .order('published_at', { ascending: false });
 
-  if (storiesError || !Array.isArray(rawStories) || rawStories.length === 0) {
-    return [];
+  // دو query موازی: استوری‌های سازمان خودم + استوری‌های SaaS-wide
+  const [orgResult, saasResult] = await Promise.all([
+    supabaseClient
+      .from('org_stories')
+      .select(ORG_STORY_SELECT)
+      .eq('org_id', normalizedOrgId)
+      .eq('is_active', true)
+      .eq('is_saas_wide', false)
+      .lte('published_at', now)
+      .or(`expires_at.is.null,expires_at.gt.${now}`)
+      .order('is_pinned', { ascending: false })
+      .order('published_at', { ascending: false }),
+    supabaseClient
+      .from('org_stories')
+      .select(ORG_STORY_SELECT)
+      .eq('is_saas_wide', true)
+      .eq('is_active', true)
+      .lte('published_at', now)
+      .or(`expires_at.is.null,expires_at.gt.${now}`)
+      .order('published_at', { ascending: false }),
+  ]);
+
+  // ادغام و deduplicate
+  const seenIds = new Set<string>();
+  const rawStories: OrgStory[] = [];
+  for (const row of [...(orgResult.data || []), ...(saasResult.data || [])]) {
+    const id = String((row as any)?.id || '').trim();
+    if (id && !seenIds.has(id)) {
+      seenIds.add(id);
+      rawStories.push(row as OrgStory);
+    }
   }
 
-  const storyIds = rawStories.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
-  if (storyIds.length === 0) return [];
+  if (rawStories.length === 0) return [];
+
+  const storyIds = rawStories.map((row) => String(row?.id || '').trim()).filter(Boolean);
 
   const [{ data: views }, { data: reactions }] = await Promise.all([
     supabaseClient
       .from('org_story_views')
       .select(ORG_STORY_VIEW_SELECT)
-      .eq('org_id', normalizedOrgId)
       .in('story_id', storyIds),
     supabaseClient
       .from('org_story_reactions')
       .select(ORG_STORY_REACTION_SELECT)
-      .eq('org_id', normalizedOrgId)
       .in('story_id', storyIds),
   ]);
 
   return buildOrgStoriesWithMeta(
-    rawStories as OrgStory[],
+    rawStories,
     (views || []) as OrgStoryView[],
     (reactions || []) as OrgStoryReaction[],
     currentUserId

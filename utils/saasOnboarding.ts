@@ -56,6 +56,12 @@ export const getDemoProvisionErrorMessage = (
 ) => {
   const raw = String((error as any)?.message || "").trim().toLowerCase();
 
+  if (
+    raw.includes("system_code_counters")
+    || (raw.includes("marketing_leads") && raw.includes("permission denied"))
+  ) {
+    return "زیرساخت ثبت نسخه دمو روی سرور کامل نیست و migration امنیتی اخیر باید روی سرور اجرا شود.";
+  }
   if (raw.includes("needs_admin_review") || raw.includes("نیاز به بررسی مدیر دارد")) {
     return "برای این شماره یا حساب، سابقه‌ای در سیستم پیدا شد و ایجاد خودکار دمو متوقف شد. درخواست شما ثبت شد و نیاز به بررسی مدیر دارد.";
   }

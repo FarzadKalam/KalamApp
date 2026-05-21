@@ -40,6 +40,13 @@ const escapeHtml = (value: any) =>
 const getPrintImageUrl = (value: any, preset: 'card' | 'hero' = 'card') =>
   buildImagePreviewUrl(String(value || '').trim(), preset);
 
+/**
+ * For catalog print (PDF via Gotenberg), use the raw storage URL without Supabase Image
+ * Transformation API. The render/image endpoint requires Pro plan and may not be reachable
+ * from within Gotenberg's network context. The raw /object/public/ URL is always accessible.
+ */
+const getCatalogPrintImageUrl = (value: any): string => String(value || '').trim();
+
 const resolveOptionLabel = (options: any[] = [], value: any) => {
   const normalized = String(value ?? '').trim();
   if (!normalized) return '';
@@ -436,7 +443,7 @@ export const buildListCatalogHtml = (
     ? rows.map((row) => {
         const imageHtml = imageField
           ? (() => {
-              const imageUrl = getPrintImageUrl(row?.[imageField.key], 'card');
+              const imageUrl = getCatalogPrintImageUrl(row?.[imageField.key]);
               if (!imageUrl) {
                 return `
 <div style="height:118px; border:1px dashed rgba(148,163,184,0.45); border-radius:14px; background:rgba(248,250,252,0.95); display:flex; align-items:center; justify-content:center; color:#94a3b8; font-size:10px;">
@@ -528,7 +535,7 @@ export const buildListCatalogFullPageHtml = (
 
   return rows
     .map((row, index) => {
-      const imageUrl = imageField ? escapeHtml(getPrintImageUrl(row?.[imageField.key], 'hero')) : '';
+      const imageUrl = imageField ? escapeHtml(getCatalogPrintImageUrl(row?.[imageField.key])) : '';
       const titleValue = titleField
         ? escapeHtml(formatListCellValue(titleField, row, relationOptions, currencyLabel))
         : '';
@@ -567,7 +574,7 @@ export const buildListCatalogFullPageHtml = (
       const qrSectionHtml = publicLink
         ? `<div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2mm; gap:1mm; background:#fff; box-sizing:border-box; overflow:hidden;"><div style="font-size:6px; font-weight:800; color:rgb(var(--brand-600-rgb,37,99,235)); letter-spacing:0.4px; text-align:center; flex-shrink:0;">QR کاتالوگ</div><div style="background:#fff; border:1.5px solid rgb(var(--brand-200-rgb,191,219,254)); border-radius:8px; padding:3px; box-shadow:0 1px 6px rgba(59,130,246,0.1); flex-shrink:0;">${renderToStaticMarkup(React.createElement(QRCode, { value: publicLink, type: 'svg', size: 56, bordered: false }))}</div><a href="${escapeHtml(publicLink)}" target="_blank" style="display:block; font-size:5px; color:rgb(var(--brand-500-rgb,59,130,246)); text-decoration:none; text-align:center; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; border:1px solid rgb(var(--brand-100-rgb,219,234,254)); border-radius:4px; padding:1px 3px; background:rgb(var(--brand-50-rgb,239,246,255)); box-sizing:border-box; flex-shrink:0;">${escapeHtml(publicLink.length > 32 ? `${publicLink.slice(0, 30)}…` : publicLink)}</a></div>`
         : '';
-      const mapImageUrl = getPrintImageUrl(row?.location_image, 'card');
+      const mapImageUrl = getCatalogPrintImageUrl(row?.location_image);
       let mapSectionHtml = '';
       if (mapImageUrl) {
         let googleUrl = '#';

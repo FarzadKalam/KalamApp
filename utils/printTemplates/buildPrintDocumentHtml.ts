@@ -13,9 +13,16 @@ const FONT_FACE_DEFINITION = {
   url: vazirmatnVariableUrl,
 } as const;
 
+// All brand-* RGB variables used across catalog and print layouts.
+// Values are Tailwind blue-* defaults; the actual brand color is read from the DOM
+// via getThemeVariableCss() and overrides these fallbacks when running in the browser.
 const THEME_VARIABLE_FALLBACKS: Record<string, string> = {
-  '--brand-50-rgb': '238 242 255',
-  '--brand-500-rgb': '55 48 163',
+  '--brand-50-rgb': '239 246 255',
+  '--brand-100-rgb': '219 234 254',
+  '--brand-200-rgb': '191 219 254',
+  '--brand-500-rgb': '59 130 246',
+  '--brand-600-rgb': '37 99 235',
+  '--brand-800-rgb': '30 58 138',
 };
 
 let embeddedFontCssPromise: Promise<string> | null = null;

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { App, Avatar, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
+import { App, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
 import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';

@@ -2,7 +2,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import { 
-        Avatar, Button, Tag, Spin, Tabs, Descriptions, message, Drawer, Form, Input, Select, Switch, Upload, Alert, Table, Checkbox
+        Button, Tag, Spin, Tabs, Descriptions, message, Drawer, Form, Input, Select, Switch, Upload, Alert, Table, Checkbox
 } from 'antd';
 import { 
     UserOutlined, ArrowRightOutlined, CheckCircleOutlined, 

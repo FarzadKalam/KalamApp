@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Avatar, Button, Input, Modal, Tag, theme } from 'antd';
+import { Button, Input, Modal, Tag, theme } from 'antd';
 import {
   CheckOutlined,
   CloseOutlined,

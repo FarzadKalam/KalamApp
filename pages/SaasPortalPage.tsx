@@ -338,8 +338,10 @@ const SaasPortalPage: React.FC = () => {
     setError('');
     setLoading(true);
     try {
-      const candidate = await lookupPhoneLoginCandidate(normalizedPhone);
-      const invite = await lookupPhoneSignupInvite(normalizedPhone);
+      const [candidate, invite] = await Promise.all([
+        lookupPhoneLoginCandidate(normalizedPhone),
+        lookupPhoneSignupInvite(normalizedPhone),
+      ]);
       assertDemoOtpRequestAllowed(candidate, invite);
       await requestSmsOtp(supabase.auth, normalizedPhone);
       setStep('otp');

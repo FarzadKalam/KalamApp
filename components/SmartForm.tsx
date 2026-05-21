@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, Button, Spin, Divider, Select, Space, Modal, Checkbox, App, Switch } from 'antd';
-import { UserOutlined, TeamOutlined } from '@ant-design/icons';
+import { TeamOutlined } from '@ant-design/icons';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
+import ProfileAvatar from './common/ProfileAvatar';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
@@ -325,7 +326,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
           }))
       : [];
     return [...module.fields, ...projectProcessRelationFields]
-      .filter((field) => field.type === FieldType.RELATION || (field as any)?.relationConfig?.dependsOn)
+      .filter((field) => (
+        field.type === FieldType.RELATION
+        || field.type === FieldType.MULTI_RELATION
+        || (field as any)?.relationConfig?.dependsOn
+        || (field as any)?.multiRelationConfig?.dependsOn
+      ))
       .map((field) => {
         const rawValue = combinedValues[field.key];
         const normalized = Array.isArray(rawValue)
@@ -515,7 +521,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
     return {
       label,
       value: currentAssigneeComboValue,
-      emoji: normalizedType === 'role' ? <TeamOutlined /> : <UserOutlined />,
+      emoji: normalizedType === 'role'
+        ? <TeamOutlined />
+        : <ProfileAvatar size={20} src={matchedUser?.avatar_url} name={label} />,
       type: normalizedType,
     };
   }, [assignees.roles, assignees.users, assigneesLoading, currentAssigneeComboValue, formData?.assignee_label, formData?.assignee_name, initialRecord?.assignee_label, initialRecord?.assignee_name, optionsBootstrapping]);
@@ -524,7 +532,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const userOptions = assignees.users.map((u) => ({
       label: u.display_name || u.full_name,
       value: `user_${u.id}`,
-      emoji: <UserOutlined />,
+      emoji: <ProfileAvatar size={20} src={u.avatar_url} name={u.display_name || u.full_name} />,
     }));
     const roleOptions = assignees.roles.map((r) => ({
       label: r.title,
@@ -589,13 +597,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const fetchOptionsForField = async (field: any, key: string, exactIds: string[] = []) => {
       try {
         let nextOptions: any[] = [];
+        const relationAwareField = field?.type === FieldType.MULTI_RELATION
+          ? {
+              ...field,
+              relationConfig: field?.multiRelationConfig,
+            }
+          : field;
         if (module.id === 'tasks' && field.key === 'source_record_id') {
           const sourceModuleId = String(currentValues?.related_to_module || currentValues?.source_module_id || '').trim();
           nextOptions = await fetchTaskSourceRecordOptions(supabase, sourceModuleId, {
             exactId: currentValues?.source_record_id ?? null,
           });
         } else {
-          nextOptions = await fetchRelationOptionsForField(supabase, field, {
+          nextOptions = await fetchRelationOptionsForField(supabase, relationAwareField, {
             allValues: currentValues,
           });
 
@@ -605,7 +619,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (missingExactIds.length > 0) {
             const exactResults = await Promise.all(
               missingExactIds.map((exactId) =>
-                fetchRelationOptionsForField(supabase, field, {
+                fetchRelationOptionsForField(supabase, relationAwareField, {
                   allValues: currentValues,
                   exactId,
                   limit: 1,
@@ -627,7 +641,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
     };
 
     for (const field of module.fields) {
-      if (field.type === FieldType.RELATION && field.relationConfig) {
+      const relationConfig = field.type === FieldType.MULTI_RELATION
+        ? field.multiRelationConfig
+        : field.relationConfig;
+      if (relationConfig) {
         await fetchOptionsForField(field, field.key, collectExactIds(currentValues?.[field.key]));
       }
     }
@@ -775,7 +792,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         opt = dynamicOptions[ACTIVE_NOTIFICATION_BOTS_CATEGORY]?.find((o: any) => o.value === val);
         if (opt) return opt.label;
       }
-      if (field.type === FieldType.RELATION) {
+      if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION) {
         const rel = relationOptions[fieldKey]?.find((o: any) => o.value === val);
         if (rel) return rel.label;
       }
@@ -1469,6 +1486,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
           return;
         }
 
+        if (field.type === FieldType.MULTI_RELATION) {
+          if (!Array.isArray(currentValue) || currentValue.length === 0) {
+            values[field.key] = null;
+          }
+          return;
+        }
+
         if (field.type === FieldType.JSON && currentValue === '') {
           delete values[field.key];
         }
@@ -2085,7 +2109,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (module.id === 'tasks' && field.key === 'status') {
       return getTaskStatusOptions(currentValues);
     }
-    if (field.type === FieldType.RELATION) {
+    if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION) {
       return relationOptions[relationKey || field.key];
     }
     if (field.key === 'preferred_notification_channel') {
@@ -2858,7 +2882,3 @@ const SmartForm: React.FC<SmartFormProps> = ({
 };
 
 export default SmartForm;
-
-
-
-

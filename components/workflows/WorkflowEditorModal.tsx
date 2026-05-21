@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   App,
   Button,
   Collapse,
@@ -21,12 +20,12 @@ import {
   fetchProcessTemplateOptions,
   fetchTagOptions,
 } from '../../utils/referenceData';
-import { getRelationOptionSelectVariants, getPreferredRelationTargetField } from '../../utils/relationTargetField';
-import { supportsSystemCode } from '../../utils/systemCode';
+import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import {
   getWorkflowConditionFields,
 } from '../../utils/workflowHelpers';
 import {
+  INTERVAL_DAY_CONDITION_OPTIONS,
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   WorkflowAction,
   WorkflowCondition,
@@ -64,30 +63,16 @@ type FormValues = {
   interval_value?: number;
   interval_unit?: 'hour' | 'day' | 'month';
   interval_at?: string | null;
+  interval_first_run_at?: string | null;
+  interval_minute?: number | null;
+  interval_allowed_from_hour?: number | null;
+  interval_allowed_to_hour?: number | null;
+  interval_day_of_month?: number | null;
+  interval_day_condition?: string | null;
+  interval_days_after_holiday?: number | null;
   batch_size?: number;
   is_active?: boolean;
 };
-
-const mapGenericRowsToOptions = (
-  rows: any[],
-  targetField: string
-) =>
-  (rows || []).map((row: any) => {
-    const label =
-      row?.[targetField] ||
-      row?.name ||
-      row?.title ||
-      row?.full_name ||
-      row?.business_name ||
-      row?.shelf_number ||
-      row?.system_code ||
-      row?.id;
-    const code = row?.system_code ? ` (${row.system_code})` : '';
-    return {
-      label: `${label}${code}`,
-      value: String(row?.id || ''),
-    };
-  }).filter((item) => item.value);
 
 const loadWorkflowFieldOptions = async (
   field: ModuleField,
@@ -125,7 +110,10 @@ const loadWorkflowFieldOptions = async (
     })).filter((item) => item.value);
   }
 
-  const targetModule = String(field?.relationConfig?.targetModule || '').trim();
+  const relationConfig = field.type === FieldType.MULTI_RELATION
+    ? field?.multiRelationConfig
+    : field?.relationConfig;
+  const targetModule = String(relationConfig?.targetModule || '').trim();
   if (!targetModule) {
     return [];
   }
@@ -134,29 +122,14 @@ const loadWorkflowFieldOptions = async (
     return fetchProcessTemplateOptions(supabase, scopeModuleId);
   }
 
-  const targetField = getPreferredRelationTargetField(targetModule, field?.relationConfig?.targetField);
-  const includeSystemCode = supportsSystemCode(targetModule);
-  const selectVariants = getRelationOptionSelectVariants(
-    targetModule,
-    field?.relationConfig?.targetField,
-    includeSystemCode
-  );
+  const effectiveField = field.type === FieldType.MULTI_RELATION
+    ? {
+        ...field,
+        relationConfig,
+      }
+    : field;
 
-  let rows: any[] = [];
-  for (const selectColumns of selectVariants) {
-    const result = await supabase.from(targetModule).select(selectColumns).limit(300);
-    if (!result.error) {
-      rows = result.data || [];
-      break;
-    }
-    const errorCode = String((result.error as any)?.code || '').toUpperCase();
-    const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
-    const isMissingColumn =
-      errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-    if (!isMissingColumn) throw result.error;
-  }
-
-  return mapGenericRowsToOptions(rows, targetField);
+  return fetchRelationOptionsForField(supabase, effectiveField, { limit: 300 });
 };
 
 const loadDynamicAndRelationOptions = async (
@@ -188,6 +161,7 @@ const loadDynamicAndRelationOptions = async (
       field.key === WORKFLOW_ASSIGNEE_FIELD_KEY ||
       String(field.key || '').endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`) ||
       field.type === FieldType.RELATION ||
+      field.type === FieldType.MULTI_RELATION ||
       field.type === FieldType.USER ||
       field.type === FieldType.TAGS
   );
@@ -246,6 +220,10 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
 
   const isEditMode = !!record?.id;
   const triggerType = Form.useWatch('trigger_type', form);
+  const intervalUnit = Form.useWatch('interval_unit', form);
+  const intervalDayCondition = Form.useWatch('interval_day_condition', form);
+
+  const showDaysAfterHoliday = intervalDayCondition === 'not_friday' || intervalDayCondition === 'not_friday_or_holiday';
 
   useEffect(() => {
     if (!open) return;
@@ -260,6 +238,13 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       interval_value: record?.interval_value || undefined,
       interval_unit: (record?.interval_unit as any) || 'day',
       interval_at: record?.interval_at || null,
+      interval_first_run_at: record?.interval_first_run_at || null,
+      interval_minute: record?.interval_minute ?? null,
+      interval_allowed_from_hour: record?.interval_allowed_from_hour ?? null,
+      interval_allowed_to_hour: record?.interval_allowed_to_hour ?? null,
+      interval_day_of_month: record?.interval_day_of_month ?? null,
+      interval_day_condition: record?.interval_day_condition || 'any',
+      interval_days_after_holiday: record?.interval_days_after_holiday ?? null,
       batch_size: record?.batch_size || undefined,
       is_active: record?.is_active ?? true,
     });
@@ -327,16 +312,24 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
 
+      const isInterval = values.trigger_type === 'interval';
       const payload: Record<string, any> = {
         module_id: values.module_id,
         name: values.name?.trim(),
         description: values.description?.trim() || null,
         trigger_type: values.trigger_type,
         execution_mode: values.execution_mode || 'first_match',
-        interval_value: values.trigger_type === 'interval' ? values.interval_value || null : null,
-        interval_unit: values.trigger_type === 'interval' ? values.interval_unit || null : null,
-        interval_at: values.trigger_type === 'interval' ? values.interval_at || null : null,
-        batch_size: values.trigger_type === 'interval' ? values.batch_size || null : null,
+        interval_value: isInterval ? values.interval_value || null : null,
+        interval_unit: isInterval ? values.interval_unit || null : null,
+        interval_at: isInterval ? values.interval_at || null : null,
+        interval_first_run_at: isInterval ? values.interval_first_run_at || null : null,
+        interval_minute: isInterval ? values.interval_minute ?? null : null,
+        interval_allowed_from_hour: isInterval ? values.interval_allowed_from_hour ?? null : null,
+        interval_allowed_to_hour: isInterval ? values.interval_allowed_to_hour ?? null : null,
+        interval_day_of_month: isInterval ? values.interval_day_of_month ?? null : null,
+        interval_day_condition: isInterval ? values.interval_day_condition || null : null,
+        interval_days_after_holiday: isInterval ? values.interval_days_after_holiday ?? null : null,
+        batch_size: isInterval ? values.batch_size || null : null,
         conditions_all: conditionsAll,
         conditions_any: conditionsAny,
         actions,
@@ -435,44 +428,140 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
             <Radio.Group options={workflowExecutionModeOptions} />
           </Form.Item>
           {triggerType === 'interval' && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              <div className="md:col-span-4">
-                <Alert
-                  type="info"
-                  showIcon
-                  message="اجرای زمان‌بندی نیاز به Runner دارد (Cron Job یا Edge Function زمان‌بندی‌شده)."
-                />
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <Form.Item
+                  label="هر"
+                  name="interval_value"
+                  rules={[{ required: true, message: 'مقدار بازه الزامی است.' }]}
+                >
+                  <InputNumber min={1} className="w-full persian-number" placeholder="عدد" />
+                </Form.Item>
+                <Form.Item
+                  label="واحد زمان"
+                  name="interval_unit"
+                  rules={[{ required: true, message: 'واحد بازه را انتخاب کنید.' }]}
+                >
+                  <AdaptiveSelectField
+                    options={intervalUnitOptions}
+                    getPopupContainer={resolveOverlayPopupContainer}
+                    modalContainer={resolveOverlayPopupContainer}
+                    overlayZIndexBase={overlayZIndexBase}
+                  />
+                </Form.Item>
+                <Form.Item label="اولین زمان اجرا" name="interval_first_run_at">
+                  <PersianDatePicker
+                    type="DATETIME"
+                    overlayZIndexBase={overlayZIndexBase}
+                    modalContainer={resolveOverlayPopupContainer}
+                    pickerTitle="اولین زمان اجرا"
+                  />
+                </Form.Item>
+                <Form.Item label="چه تعداد رکورد بررسی شود؟" name="batch_size">
+                  <InputNumber min={1} className="w-full persian-number" placeholder="پیش‌فرض: همه" />
+                </Form.Item>
               </div>
-              <Form.Item
-                label="هر"
-                name="interval_value"
-                rules={[{ required: true, message: 'مقدار بازه الزامی است.' }]}
-              >
-                <InputNumber min={1} className="w-full persian-number" placeholder="عدد" />
-              </Form.Item>
-              <Form.Item
-                label="واحد زمان"
-                name="interval_unit"
-                rules={[{ required: true, message: 'واحد بازه را انتخاب کنید.' }]}
-              >
-                <AdaptiveSelectField
-                  options={intervalUnitOptions}
-                  getPopupContainer={resolveOverlayPopupContainer}
-                  modalContainer={resolveOverlayPopupContainer}
-                  overlayZIndexBase={overlayZIndexBase}
-                />
-              </Form.Item>
-              <Form.Item label="در ساعت" name="interval_at">
-                <PersianDatePicker
-                  type="TIME"
-                  overlayZIndexBase={overlayZIndexBase}
-                  modalContainer={resolveOverlayPopupContainer}
-                  pickerTitle="زمان اجرا"
-                />
-              </Form.Item>
-              <Form.Item label="چه تعداد رکورد بررسی شود؟" name="batch_size">
-                <InputNumber min={1} className="w-full persian-number" placeholder="پیش‌فرض: همه" />
-              </Form.Item>
+
+              {intervalUnit === 'hour' && (
+                <div className="rounded-lg border border-blue-100 dark:border-blue-900/30 bg-blue-50/40 dark:bg-blue-950/20 p-3">
+                  <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-3">تنظیمات اجرای ساعتی</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <Form.Item label="در دقیقه" name="interval_minute" className="mb-0">
+                      <InputNumber
+                        min={0}
+                        max={59}
+                        className="w-full persian-number"
+                        placeholder="۰ تا ۵۹"
+                      />
+                    </Form.Item>
+                    <Form.Item label="از ساعت" name="interval_allowed_from_hour" className="mb-0">
+                      <InputNumber
+                        min={0}
+                        max={23}
+                        className="w-full persian-number"
+                        placeholder="مثال: ۸"
+                        addonAfter="زمان مجاز اجرا"
+                      />
+                    </Form.Item>
+                    <Form.Item label="الی ساعت" name="interval_allowed_to_hour" className="mb-0">
+                      <InputNumber
+                        min={0}
+                        max={23}
+                        className="w-full persian-number"
+                        placeholder="مثال: ۱۸"
+                      />
+                    </Form.Item>
+                  </div>
+                </div>
+              )}
+
+              {intervalUnit === 'day' && (
+                <div className="rounded-lg border border-orange-100 dark:border-orange-900/30 bg-orange-50/40 dark:bg-orange-950/20 p-3">
+                  <p className="text-xs font-semibold text-orange-700 dark:text-orange-300 mb-3">تنظیمات اجرای روزانه</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <Form.Item label="اگر آن روز" name="interval_day_condition" className="mb-0" initialValue="any">
+                      <AdaptiveSelectField
+                        options={INTERVAL_DAY_CONDITION_OPTIONS}
+                        getPopupContainer={resolveOverlayPopupContainer}
+                        modalContainer={resolveOverlayPopupContainer}
+                        overlayZIndexBase={overlayZIndexBase}
+                      />
+                    </Form.Item>
+                    {showDaysAfterHoliday && (
+                      <Form.Item
+                        label="چند روز پس از آخرین جمعه/تعطیلی اجرا شود؟"
+                        name="interval_days_after_holiday"
+                        className="mb-0"
+                      >
+                        <InputNumber min={0} className="w-full persian-number" placeholder="مثال: ۱" />
+                      </Form.Item>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {intervalUnit === 'month' && (
+                <div className="rounded-lg border border-purple-100 dark:border-purple-900/30 bg-purple-50/40 dark:bg-purple-950/20 p-3">
+                  <p className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-3">تنظیمات اجرای ماهانه</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <Form.Item label="در ساعت" name="interval_at" className="mb-0">
+                      <PersianDatePicker
+                        type="TIME"
+                        overlayZIndexBase={overlayZIndexBase}
+                        modalContainer={resolveOverlayPopupContainer}
+                        pickerTitle="ساعت اجرا"
+                      />
+                    </Form.Item>
+                    <Form.Item label="چندمین روز ماه؟" name="interval_day_of_month" className="mb-0">
+                      <InputNumber
+                        min={1}
+                        max={31}
+                        className="w-full persian-number"
+                        placeholder="۱ تا ۳۱"
+                      />
+                    </Form.Item>
+                    <Form.Item label="اگر آن روز" name="interval_day_condition" className="mb-0" initialValue="any">
+                      <AdaptiveSelectField
+                        options={INTERVAL_DAY_CONDITION_OPTIONS}
+                        getPopupContainer={resolveOverlayPopupContainer}
+                        modalContainer={resolveOverlayPopupContainer}
+                        overlayZIndexBase={overlayZIndexBase}
+                      />
+                    </Form.Item>
+                  </div>
+                  {showDaysAfterHoliday && (
+                    <div className="mt-3">
+                      <Form.Item
+                        label="چند روز پس از آخرین جمعه/تعطیلی اجرا شود؟"
+                        name="interval_days_after_holiday"
+                        className="mb-0"
+                      >
+                        <InputNumber min={0} className="w-full persian-number" placeholder="مثال: ۱" />
+                      </Form.Item>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

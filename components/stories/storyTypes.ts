@@ -34,6 +34,8 @@ export interface OrgStory {
   creator_avatar: string | null;
   slides: StorySlide[];
   is_org_wide: boolean;
+  is_saas_wide: boolean;
+  is_saas_admins_only: boolean;
   viewer_user_ids: string[];
   viewer_role_ids: string[];
   mention_user_ids: string[];

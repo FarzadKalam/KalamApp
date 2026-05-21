@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Layout as AntLayout, Menu, Button, Avatar, Dropdown, App, Input, Spin, Popconfirm, Tooltip } from 'antd';
+import { Layout as AntLayout, Menu, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
@@ -82,6 +82,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [isMobile, setIsMobile] = useState(initialIsMobile);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  const [resolvedOrgId, setResolvedOrgId] = useState<string | null | undefined>(undefined);
   const [breadcrumb, setBreadcrumb] = useState<{ moduleTitle?: string; moduleId?: string; recordName?: string } | null>(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -248,9 +249,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         if (user?.id) {
           if (!isMounted) return;
           setCurrentUserProfile(snapshot.profile || null);
+          setResolvedOrgId(snapshot.orgId || null);
           setRolePermissions((snapshot.permissions || {}) as PermissionMap);
         } else {
           setCurrentUserProfile(null);
+          setResolvedOrgId(null);
           setRolePermissions({});
         }
       } finally {
@@ -969,6 +972,41 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     if (moduleId === 'cash_boxes' || moduleId === 'bank_accounts' || moduleId === 'journal_entries') return <BankOutlined />;
     return <AppstoreOutlined />;
   };
+
+  if (rolePermissionsReady && currentUser?.id && resolvedOrgId === null) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100dvh',
+          gap: 16,
+          padding: 24,
+          textAlign: 'center',
+          direction: 'rtl',
+        }}
+      >
+        <ExclamationCircleOutlined style={{ fontSize: 48, color: '#faad14' }} />
+        <div style={{ fontSize: 18, fontWeight: 600 }}>حساب شما به سازمانی متصل نیست</div>
+        <div style={{ color: '#666', maxWidth: 360 }}>
+          فرآیند ثبت‌نام یا دریافت دمو برای این حساب کاربری ناقص مانده است.
+          لطفاً با پشتیبانی تماس بگیرید.
+        </div>
+        <Button
+          type="primary"
+          icon={<LogoutOutlined />}
+          onClick={async () => {
+            await supabase.auth.signOut();
+            window.location.replace('/login');
+          }}
+        >
+          خروج از حساب
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <AntLayout

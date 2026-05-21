@@ -17,6 +17,7 @@ const isRelationLikeField = (field?: any) => {
   const fieldType = normalizeFieldType(field);
   return (
     fieldType === String(FieldType.RELATION).toLowerCase()
+    || fieldType === String(FieldType.MULTI_RELATION).toLowerCase()
     || fieldType === String(FieldType.USER).toLowerCase()
   );
 };
@@ -101,14 +102,23 @@ export const buildRelationValueMap = async (
       if (!ids.length) return [fieldKey, {}] as const;
 
       const isUserField = normalizeFieldType(field) === String(FieldType.USER).toLowerCase();
+      const isMultiRelationField = normalizeFieldType(field) === String(FieldType.MULTI_RELATION).toLowerCase();
       const targetModule = isUserField
         ? 'profiles'
-        : String(field?.relationConfig?.targetModule || '').trim();
+        : String(
+            (isMultiRelationField ? field?.multiRelationConfig?.targetModule : field?.relationConfig?.targetModule)
+            || ''
+          ).trim();
       if (!targetModule) return [fieldKey, {}] as const;
 
       const targetField = getPreferredRelationTargetField(
         targetModule,
-        isUserField ? 'full_name' : String(field?.relationConfig?.targetField || ''),
+        isUserField
+          ? 'full_name'
+          : String(
+              (isMultiRelationField ? field?.multiRelationConfig?.targetField : field?.relationConfig?.targetField)
+              || ''
+            ),
       );
       const targetModuleConfig = MODULES[targetModule];
       const targetTable = targetModuleConfig?.table || targetModule;
@@ -202,7 +212,11 @@ export const formatRecordDisplayValue = (
   const optionLabel = resolveOptionLabel(value, field);
   if (optionLabel) return optionLabel;
 
-  if ((fieldType === String(FieldType.RELATION).toLowerCase() || fieldType === String(FieldType.USER).toLowerCase()) && fieldKey) {
+  if ((
+    fieldType === String(FieldType.RELATION).toLowerCase()
+    || fieldType === String(FieldType.MULTI_RELATION).toLowerCase()
+    || fieldType === String(FieldType.USER).toLowerCase()
+  ) && fieldKey) {
     const relatedLabel = relationValueMap?.[fieldKey]?.[normalizeValueKey(value)];
     if (relatedLabel) return relatedLabel;
     if (UUID_REGEX.test(rawString)) return 'مورد مرتبط';

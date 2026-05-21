@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Button, App, Avatar, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
+import { Button, App, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
 import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -1872,8 +1872,14 @@ const ModuleShow: React.FC = () => {
           : (recordData || {})
       );
       const relationFieldsWithValue = moduleConfig.fields.filter((field) => {
-        if (field.type !== FieldType.RELATION || !field.relationConfig) return false;
+        const relationConfig = field.type === FieldType.MULTI_RELATION
+          ? field.multiRelationConfig
+          : field.relationConfig;
+        if (!relationConfig) return false;
         const rawValue = normalizedRecordData?.[field.key];
+        if (Array.isArray(rawValue)) {
+          return rawValue.some((item: any) => String(item ?? '').trim() !== '');
+        }
         return rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
       });
 
@@ -1885,25 +1891,40 @@ const ModuleShow: React.FC = () => {
         rowIndex?: number;
         relationConfig?: any;
       }>> = relationFieldsWithValue.map(async (field) => {
-        const options = moduleId === 'tasks' && field.key === 'source_record_id'
-          ? await fetchTaskSourceRecordOptions(
-              supabase,
-              String(normalizedRecordData?.related_to_module || normalizedRecordData?.source_module_id || '').trim(),
-              {
-                exactId: normalizedRecordData?.[field.key],
-                limit: 1,
-              }
-            )
-            : await fetchRelationOptionsForField(supabase, field, {
-                allValues: normalizedRecordData,
-                exactId: normalizedRecordData?.[field.key],
-                limit: 1,
-              });
+        const rawValue = normalizedRecordData?.[field.key];
+        const exactIds = Array.isArray(rawValue)
+          ? Array.from(new Set(rawValue.map((item: any) => String(item ?? '').trim()).filter(Boolean)))
+          : (String(rawValue ?? '').trim() ? [String(rawValue).trim()] : []);
+        const relationConfig = field.type === FieldType.MULTI_RELATION
+          ? field.multiRelationConfig
+          : field.relationConfig;
+        const effectiveField = field.type === FieldType.MULTI_RELATION
+          ? { ...field, relationConfig }
+          : field;
+        const optionGroups = await Promise.all(
+          exactIds.map((exactId) => (
+            moduleId === 'tasks' && field.key === 'source_record_id'
+              ? fetchTaskSourceRecordOptions(
+                  supabase,
+                  String(normalizedRecordData?.related_to_module || normalizedRecordData?.source_module_id || '').trim(),
+                  {
+                    exactId,
+                    limit: 1,
+                  }
+                )
+              : fetchRelationOptionsForField(supabase, effectiveField, {
+                  allValues: normalizedRecordData,
+                  exactId,
+                  limit: 1,
+                }).catch(() => [])
+          ))
+        );
+        const options = mergeOptionLists(...optionGroups);
         return {
           keys: [field.key],
           options,
           fieldKey: field.key,
-          relationConfig: field.relationConfig,
+          relationConfig,
         };
       });
 
@@ -4161,7 +4182,14 @@ const ModuleShow: React.FC = () => {
     }
     setSavingField(key);
     let newValue = tempValues[key];
+    const fieldDef = moduleConfig?.fields.find((field) => String(field?.key || '') === String(key));
     if (newValue === '' || newValue === undefined) newValue = null;
+    if (fieldDef?.type === FieldType.MULTI_RELATION) {
+      const normalizedValues = Array.isArray(newValue)
+        ? newValue.map((item: any) => String(item ?? '').trim()).filter(Boolean)
+        : [];
+      newValue = normalizedValues.length > 0 ? normalizedValues : null;
+    }
     try {
       const taskSourceEditKeys = new Set([
         'related_to_module',
@@ -4706,7 +4734,7 @@ const ModuleShow: React.FC = () => {
           ? getProcessTemplateModuleOptions()
           : (field.options || []);
       // اگر MULTI_SELECT است و آرایه است
-      if (field.type === FieldType.MULTI_SELECT && Array.isArray(value)) {
+      if ((field.type === FieldType.MULTI_SELECT || field.type === FieldType.MULTI_RELATION) && Array.isArray(value)) {
           return value.map(v => {
               let opt = effectiveOptions?.find((o: any) => o.value === v);
               if (opt) return opt.label;
@@ -4714,6 +4742,12 @@ const ModuleShow: React.FC = () => {
                   const cat = (field as any).dynamicOptionsCategory;
                   opt = dynamicOptions[cat]?.find((o: any) => o.value === v);
                   if (opt) return opt.label;
+              }
+              if (field.type === FieldType.MULTI_RELATION) {
+                for (const key in relationOptions) {
+                  const found = relationOptions[key]?.find((o: any) => String(o?.value) === String(v));
+                  if (found) return found.label;
+                }
               }
               return getSafeOptionFallback(v);
           }).join(', ');
@@ -4726,7 +4760,7 @@ const ModuleShow: React.FC = () => {
           opt = dynamicOptions[cat]?.find((o: any) => o.value === value);
           if (opt) return opt.label;
       }
-      if (field.type === FieldType.RELATION) {
+      if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION) {
           for (const key in relationOptions) {
               const found = relationOptions[key]?.find((o: any) => String(o?.value) === String(value));
               if (found) return found.label;
@@ -4879,7 +4913,13 @@ const ModuleShow: React.FC = () => {
     if (field.type === FieldType.DATETIME) {
       return formatPersian(value, 'DATETIME') || String(value);
     }
-    if (field.type === FieldType.STATUS || field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT || field.type === FieldType.RELATION) {
+    if (
+      field.type === FieldType.STATUS
+      || field.type === FieldType.SELECT
+      || field.type === FieldType.MULTI_SELECT
+      || field.type === FieldType.MULTI_RELATION
+      || field.type === FieldType.RELATION
+    ) {
       return String(getOptionLabel(field, value));
     }
     return String(value);
@@ -5684,7 +5724,7 @@ const ModuleShow: React.FC = () => {
       ) options = getProcessTemplateModuleOptions();
       else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
       else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
-      else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
+      else if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION) options = relationOptions[field.key];
 
       return (
         <div className="w-full">
@@ -5735,7 +5775,7 @@ const ModuleShow: React.FC = () => {
     else if (moduleId === 'tasks' && field.key === 'related_to_module') options = getTaskModuleOptions();
       else if (moduleId === 'tasks' && field.key === 'status') options = getTaskStatusOptions(displayData);
     else if ((field as any).dynamicOptionsCategory) options = dynamicOptions[(field as any).dynamicOptionsCategory];
-    else if (field.type === FieldType.RELATION) options = relationOptions[field.key];
+    else if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION) options = relationOptions[field.key];
     if (field.key === 'process_template_id' && processDraftFieldKey) {
       options = processTemplateFieldOptions;
     }

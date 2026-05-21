@@ -33,6 +33,7 @@ export type TemplateFieldConfig = {
   type?: unknown;
   dynamicOptionsCategory?: string | null;
   relationConfig?: Record<string, any> | null;
+  multiRelationConfig?: Record<string, any> | null;
   options?: Array<{ label?: unknown; value?: unknown }>;
 };
 
@@ -85,6 +86,7 @@ const mergeTemplateFieldConfig = (
       : fallback?.options,
     dynamicOptionsCategory: primary?.dynamicOptionsCategory || fallback?.dynamicOptionsCategory,
     relationConfig: primary?.relationConfig || fallback?.relationConfig,
+    multiRelationConfig: primary?.multiRelationConfig || fallback?.multiRelationConfig,
   };
 };
 
@@ -318,7 +320,10 @@ const parseListLikeValue = (value: unknown): unknown[] | null => {
 };
 
 const isListFieldType = (fieldType: string) =>
-  fieldType === FieldType.MULTI_SELECT || fieldType === FieldType.CHECKLIST || fieldType === FieldType.TAGS;
+  fieldType === FieldType.MULTI_SELECT
+  || fieldType === FieldType.MULTI_RELATION
+  || fieldType === FieldType.CHECKLIST
+  || fieldType === FieldType.TAGS;
 
 const formatDateLikeValue = (value: unknown, forceDateTime = false): string | null => {
   if (value === null || value === undefined) return null;
@@ -517,8 +522,9 @@ export const collectTemplateRelationFields = (
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) return;
     const fieldContext = resolveFieldContext(moduleId, fieldKey);
-    if (normalizeFieldType(fieldContext.fieldType) !== FieldType.RELATION) return;
-    if (!fieldContext.fieldConfig?.relationConfig) return;
+    const normalizedFieldType = normalizeFieldType(fieldContext.fieldType);
+    if (normalizedFieldType !== FieldType.RELATION && normalizedFieldType !== FieldType.MULTI_RELATION) return;
+    if (!fieldContext.fieldConfig?.relationConfig && !fieldContext.fieldConfig?.multiRelationConfig) return;
     const dedupeKey = `${fieldContext.tokenKey}:${fieldContext.moduleId}:${fieldContext.key}`;
     if (seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
@@ -590,6 +596,7 @@ export const resolveTemplateOptionLabelMaps = async (
   const relationFields = collectTemplateRelationFields(template, normalizedModuleId);
   await Promise.allSettled(
     relationFields.map(async (fieldRef) => {
+      const normalizedFieldType = normalizeFieldType(fieldRef.fieldConfig?.type);
       const rawValue =
         resolveValueFromRecord(record, fieldRef.tokenKey)
         ?? resolveValueFromRecord(record, fieldRef.fieldKey);
@@ -600,11 +607,20 @@ export const resolveTemplateOptionLabelMaps = async (
             .map((value) => String(value ?? '').trim())
             .filter(Boolean)
             .map((value) =>
-              fetchRelationOptionsForField(supabaseClient, fieldRef.fieldConfig, {
-                allValues: record || undefined,
-                exactId: value,
-                limit: 1,
-              }).catch(() => [])
+              fetchRelationOptionsForField(
+                supabaseClient,
+                normalizedFieldType === FieldType.MULTI_RELATION
+                  ? {
+                      ...fieldRef.fieldConfig,
+                      relationConfig: fieldRef.fieldConfig?.multiRelationConfig,
+                    }
+                  : fieldRef.fieldConfig,
+                {
+                  allValues: record || undefined,
+                  exactId: value,
+                  limit: 1,
+                }
+              ).catch(() => [])
             )
         )
       ).flat();

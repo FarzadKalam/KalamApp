@@ -9,12 +9,11 @@ import RecordMessageActions from './RecordMessageActions';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
-import { supportsSystemCode } from '../utils/systemCode';
-import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRecordTagsMap } from '../utils/referenceData';
 import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
+import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import ResilientImage from './common/ResilientImage';
 
 interface RelatedRecordPopoverProps {
@@ -354,72 +353,62 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
         const relationEntries = await Promise.all(
           fields
-            .filter((field: any) => field.type === FieldType.RELATION || field.type === FieldType.USER)
+            .filter((field: any) => (
+              field.type === FieldType.RELATION
+              || field.type === FieldType.MULTI_RELATION
+              || field.type === FieldType.USER
+            ))
             .map(async (field: any) => {
-              const rawValue = data?.[field.key];
+              const rawValue = nextRecord?.[field.key];
               if (isEmptyValue(rawValue)) return [field.key, []] as const;
 
               const normalizedValues = Array.isArray(rawValue)
-                ? rawValue.map((item) => String(item))
-                : [String(rawValue)];
+                ? rawValue.map((item) => String(item ?? '').trim()).filter(Boolean)
+                : [String(rawValue ?? '').trim()].filter(Boolean);
 
-              const targetModule = field.type === FieldType.USER
-                ? 'profiles'
-                : String(field?.relationConfig?.targetModule || '');
-              if (!targetModule) return [field.key, []] as const;
+              if (normalizedValues.length === 0) return [field.key, []] as const;
 
-              const targetField = field.type === FieldType.USER
-                ? 'full_name'
-                : getPreferredRelationTargetField(targetModule, String(field?.relationConfig?.targetField || ''));
-
-              const targetModuleConfig = MODULES[targetModule];
-              const targetTable = targetModuleConfig?.table || targetModule;
-              const includeSystemCode = targetModule !== 'cheques' && supportsSystemCode(targetModule);
-              const selectFields = Array.from(new Set(['id', targetField, ...(includeSystemCode ? ['system_code'] : [])])).join(', ');
-
-              let relatedRows: any[] = [];
-              const primary = await supabase
-                .from(targetTable)
-                .select(selectFields)
-                .in('id', normalizedValues);
-              if (primary.error) {
-                const errorCode = String((primary.error as any)?.code || '').toUpperCase();
-                const errorText = String((primary.error as any)?.message || (primary.error as any)?.details || '').toLowerCase();
-                const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-                if (includeSystemCode && isMissingColumn) {
-                  const fallback = await supabase
-                    .from(targetTable)
-                    .select(Array.from(new Set(['id', targetField])).join(', '))
-                    .in('id', normalizedValues);
-                  relatedRows = (fallback.data || []) as any[];
-                } else {
-                  throw primary.error;
-                }
-              } else {
-                relatedRows = (primary.data || []) as any[];
+              if (field.type === FieldType.USER) {
+                const { data: relatedRows } = await supabase
+                  .from('profiles')
+                  .select('id, full_name')
+                  .in('id', normalizedValues);
+                const byId = new Map<string, { label: string; value: string }>();
+                (relatedRows || []).forEach((row: any) => {
+                  const id = String(row?.id || '').trim();
+                  if (!id) return;
+                  byId.set(id, {
+                    label: String(row?.full_name || row?.id || id).trim(),
+                    value: id,
+                    module: 'profiles',
+                  } as any);
+                });
+                return [field.key, normalizedValues.map((id) => byId.get(id) || { label: id, value: id })] as const;
               }
 
-              const byId = new Map<string, { label: string; value: string }>();
-              (relatedRows || []).forEach((row: any) => {
-                const id = String(row?.id || '');
-                if (!id) return;
-                const baseLabel = String(
-                  row?.[targetField]
-                  || row?.name
-                  || row?.title
-                  || row?.business_name
-                  || row?.full_name
-                  || row?.system_code
-                  || id
-                );
-                const systemCode = row?.system_code ? String(row.system_code) : '';
-                const finalLabel = systemCode && !baseLabel.includes(systemCode)
-                  ? `${baseLabel} (${systemCode})`
-                  : baseLabel;
-                byId.set(id, { label: finalLabel, value: id, module: targetModule } as any);
-              });
-
-              const options = normalizedValues.map((id) => byId.get(id) || { label: id, value: id });
+              const relationConfig = field.type === FieldType.MULTI_RELATION
+                ? field?.multiRelationConfig
+                : field?.relationConfig;
+              if (!relationConfig?.targetModule) return [field.key, []] as const;
+              const effectiveField = field.type === FieldType.MULTI_RELATION
+                ? { ...field, relationConfig }
+                : field;
+              const optionGroups = await Promise.all(
+                normalizedValues.map((exactId) =>
+                  fetchRelationOptionsForField(supabase, effectiveField, {
+                    allValues: nextRecord || undefined,
+                    exactId,
+                    limit: 1,
+                  }).catch(() => [])
+                )
+              );
+              const options = Array.from(
+                new Map(
+                  optionGroups
+                    .flat()
+                    .map((option: any) => [String(option?.value || '').trim(), option] as const)
+                ).values()
+              );
               return [field.key, options] as const;
             })
         );
@@ -475,7 +464,16 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       const fieldKey = String(field?.key || '').trim();
       if (!fieldKey || !canEditField(field) || field.type === FieldType.TAGS) return;
       if (!isEqualFieldValue(record?.[fieldKey], draftRecord?.[fieldKey])) {
-        patch[fieldKey] = draftRecord?.[fieldKey] ?? null;
+        const nextValue = field.type === FieldType.MULTI_RELATION
+          ? (
+              Array.isArray(draftRecord?.[fieldKey])
+                ? draftRecord[fieldKey].map((item: any) => String(item ?? '').trim()).filter(Boolean)
+                : []
+            )
+          : draftRecord?.[fieldKey];
+        patch[fieldKey] = field.type === FieldType.MULTI_RELATION
+          ? (nextValue.length > 0 ? nextValue : null)
+          : (nextValue ?? null);
       }
     });
 
@@ -550,7 +548,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
     const fieldOptions = normalizedField.dynamicOptionsCategory
       ? (dynamicOptions[normalizedField.dynamicOptionsCategory] || [])
-      : (normalizedField.type === FieldType.RELATION
+      : ((normalizedField.type === FieldType.RELATION || normalizedField.type === FieldType.MULTI_RELATION)
         ? (relationOptions[normalizedField.key] || [])
         : (normalizedField.options || []));
 

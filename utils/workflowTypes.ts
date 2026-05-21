@@ -4,15 +4,56 @@ export type WorkflowTriggerType = 'on_create' | 'on_upsert' | 'interval';
 export type WorkflowIntervalUnit = 'hour' | 'day' | 'month';
 export type WorkflowExecutionMode = 'first_match' | 'every_match';
 
+export type IntervalDayCondition =
+  | 'any'
+  | 'is_friday'
+  | 'not_friday'
+  | 'is_friday_or_holiday'
+  | 'not_friday_or_holiday'
+  | 'is_saturday'
+  | 'not_saturday'
+  | 'is_sunday'
+  | 'not_sunday'
+  | 'is_monday'
+  | 'not_monday'
+  | 'is_tuesday'
+  | 'not_tuesday'
+  | 'is_wednesday'
+  | 'not_wednesday'
+  | 'is_thursday'
+  | 'not_thursday';
+
+export const INTERVAL_DAY_CONDITION_OPTIONS: Array<{ label: string; value: IntervalDayCondition }> = [
+  { label: 'فرقی ندارد چه روزی باشد', value: 'any' },
+  { label: 'جمعه باشد', value: 'is_friday' },
+  { label: 'جمعه نباشد', value: 'not_friday' },
+  { label: 'جمعه یا تعطیل رسمی باشد', value: 'is_friday_or_holiday' },
+  { label: 'جمعه یا تعطیل رسمی نباشد', value: 'not_friday_or_holiday' },
+  { label: 'شنبه باشد', value: 'is_saturday' },
+  { label: 'شنبه نباشد', value: 'not_saturday' },
+  { label: 'یکشنبه باشد', value: 'is_sunday' },
+  { label: 'یکشنبه نباشد', value: 'not_sunday' },
+  { label: 'دوشنبه باشد', value: 'is_monday' },
+  { label: 'دوشنبه نباشد', value: 'not_monday' },
+  { label: 'سه‌شنبه باشد', value: 'is_tuesday' },
+  { label: 'سه‌شنبه نباشد', value: 'not_tuesday' },
+  { label: 'چهارشنبه باشد', value: 'is_wednesday' },
+  { label: 'چهارشنبه نباشد', value: 'not_wednesday' },
+  { label: 'پنجشنبه باشد', value: 'is_thursday' },
+  { label: 'پنجشنبه نباشد', value: 'not_thursday' },
+];
+
 export type WorkflowActionType =
   | 'send_note'
   | 'send_note_sms'
   | 'send_sms'
   | 'send_email'
+  | 'send_telegram_bot'
   | 'send_bale_bot'
   | 'send_rubika_bot'
   | 'update_record'
   | 'send_to_next_stages'
+  | 'create_standalone_record'
   | 'create_related_record'
   | 'copy_process_template'
   | 'execute_process'
@@ -33,6 +74,7 @@ export type PublishStoryActionConfig = {
 
 export const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
+const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
 
 export type WorkflowCondition = {
@@ -58,6 +100,13 @@ export type WorkflowRecord = {
   interval_value?: number | null;
   interval_unit?: WorkflowIntervalUnit | null;
   interval_at?: string | null;
+  interval_first_run_at?: string | null;
+  interval_minute?: number | null;
+  interval_allowed_from_hour?: number | null;
+  interval_allowed_to_hour?: number | null;
+  interval_day_of_month?: number | null;
+  interval_day_condition?: IntervalDayCondition | string | null;
+  interval_days_after_holiday?: number | null;
   batch_size?: number | null;
   conditions_all?: WorkflowCondition[] | null;
   conditions_any?: WorkflowCondition[] | null;
@@ -103,10 +152,12 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال یادداشت', value: 'send_note' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال ایمیل', value: 'send_email' },
+  { label: 'ارسال در تلگرام', value: 'send_telegram_bot' },
   { label: 'ارسال در بله', value: 'send_bale_bot' },
   { label: 'ارسال در روبیکا', value: 'send_rubika_bot' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ارسال اطلاعات به مراحل بعد', value: 'send_to_next_stages' },
+  { label: 'ایجاد رکورد مستقل', value: 'create_standalone_record' },
   { label: 'ایجاد رکورد مرتبط', value: 'create_related_record' },
   { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },
   { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
@@ -142,4 +193,19 @@ export const parseWorkflowRelatedFieldKey = (value: string) => {
   const [relationFieldKey, targetModuleId, targetFieldKey] = raw.split('::');
   if (!relationFieldKey || !targetModuleId || !targetFieldKey) return null;
   return { relationFieldKey, targetModuleId, targetFieldKey };
+};
+
+export const createWorkflowMultiRelationFieldKey = (
+  fieldKey: string,
+  targetModuleId: string,
+  targetPhoneFieldKey: string
+) => `${WORKFLOW_MULTI_RELATION_PREFIX}${fieldKey}::${targetModuleId}::${targetPhoneFieldKey}`;
+
+export const parseWorkflowMultiRelationFieldKey = (value: string) => {
+  const normalized = String(value || '');
+  if (!normalized.startsWith(WORKFLOW_MULTI_RELATION_PREFIX)) return null;
+  const raw = normalized.slice(WORKFLOW_MULTI_RELATION_PREFIX.length);
+  const [fieldKey, targetModuleId, targetPhoneFieldKey] = raw.split('::');
+  if (!fieldKey || !targetModuleId || !targetPhoneFieldKey) return null;
+  return { fieldKey, targetModuleId, targetPhoneFieldKey };
 };

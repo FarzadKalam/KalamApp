@@ -24,6 +24,8 @@ import {
   REPORTS_PERMISSION_FIELDS,
   VOIP_PERMISSION_KEY,
   VOIP_PERMISSION_FIELDS,
+  STORIES_PERMISSION_KEY,
+  STORIES_PERMISSION_FIELDS,
   SAAS_ADMIN_PERMISSION_KEY,
   SAAS_ADMIN_PERMISSION_FIELDS,
   isSaasAdminModuleId,
@@ -595,7 +597,7 @@ const RolesTab: React.FC = () => {
     return merged[moduleId] || { view: true, edit: true, delete: true, fields: {} };
   };
 
-  const getPermissionFieldItems = (moduleId: string, fields: Array<{ key: string; label: string }>): PermissionFieldItem[] => {
+  const getPermissionFieldItems = (moduleId: string, fields: ReadonlyArray<{ key: string; label: string }>): PermissionFieldItem[] => {
     const moduleDef = MODULES[moduleId];
     const items = new Map<string, PermissionFieldItem>();
     const fallbackLabelMap = new Map(fields.map((field) => [field.key, field.label]));
@@ -661,7 +663,7 @@ const RolesTab: React.FC = () => {
 
   const renderFieldSwitches = (
     moduleId: string,
-    fields: Array<{ key: string; label: string }>,
+    fields: ReadonlyArray<{ key: string; label: string }>,
     disabled: boolean
   ) => {
     const modPerms = getModulePerms(moduleId);
@@ -1365,6 +1367,73 @@ const RolesTab: React.FC = () => {
                       VOIP_PERMISSION_KEY,
                       VOIP_PERMISSION_FIELDS,
                       getModulePerms(VOIP_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
+                  key={STORIES_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <span className="font-bold">استوری‌ها</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(STORIES_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              STORIES_PERMISSION_KEY,
+                              'view',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(STORIES_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(STORIES_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              STORIES_PERMISSION_KEY,
+                              'edit',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          ویرایش/ایجاد
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(STORIES_PERMISSION_KEY).delete !== false}
+                          disabled={getModulePerms(STORIES_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(
+                              STORIES_PERMISSION_KEY,
+                              'delete',
+                              undefined,
+                              e.target.checked
+                            )
+                          }
+                        >
+                          حذف
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی‌های انتشار و مدیریت
+                    </Divider>
+                    {renderFieldSwitches(
+                      STORIES_PERMISSION_KEY,
+                      STORIES_PERMISSION_FIELDS,
+                      getModulePerms(STORIES_PERMISSION_KEY).view === false
                     )}
                   </div>
                 </Panel>

@@ -91,7 +91,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const priorityOptions = tasksModuleConfig?.fields?.find((field: any) => field.key === 'priority')?.options || [];
   const quickTaskFields = useMemo(
     () => (tasksModuleConfig?.fields || []).filter((field: any) => (
-      ['name', 'status', 'priority', 'task_type', 'due_date', 'description'].includes(String(field?.key || ''))
+      ['name', 'status', 'priority', 'task_type', 'due_date', 'description',
+        'meeting_employee_ids', 'meeting_customer_ids', 'meeting_supplier_ids'].includes(String(field?.key || ''))
     )),
     [tasksModuleConfig],
   );

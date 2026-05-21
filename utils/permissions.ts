@@ -45,6 +45,8 @@ export const SAAS_ADMIN_PERMISSION_FIELDS = [
   { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
   { key: 'edit_orgs', label: 'ویرایش سازمان‌ها' },
   { key: 'edit_requests', label: 'ویرایش درخواست‌های دمو' },
+  { key: 'publish_saas_story', label: 'انتشار استوری برای همه سازمان‌ها' },
+  { key: 'publish_saas_admin_story', label: 'انتشار استوری برای مدیران سازمان‌ها' },
 ];
 export const READY_TEXTS_PERMISSION_FIELDS = [
   { key: '__ready_texts_view', label: 'متن‌های آماده: مشاهده' },
@@ -735,6 +737,17 @@ export const fetchCurrentUserRecordAccessContext = async (
     allowedRoleIds: scoped.allowedRoleIds,
     allowedUserIds: scoped.allowedUserIds,
   };
+};
+
+export const resolveSaasAdminFieldPermission = (
+  permissions: PermissionMap | null | undefined,
+  field: string
+): boolean => {
+  const perm = permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+  const hasView = perm.view === true || perm.edit === true;
+  if (!hasView) return false;
+  const fields = (perm.fields || {}) as Record<string, boolean>;
+  return fields[field] === true;
 };
 
 export const resolveStoriesPermissions = (permissions: PermissionMap | null | undefined) => {

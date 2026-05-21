@@ -28,6 +28,7 @@ export type ProcessAutomationActionType =
   | 'send_note_sms'
   | 'send_sms'
   | 'send_email'
+  | 'send_telegram_bot'
   | 'send_bale_bot'
   | 'send_rubika_bot'
   | 'update_record'

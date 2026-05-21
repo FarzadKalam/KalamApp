@@ -250,6 +250,7 @@ const fieldTypeLabels: Record<FieldType, string> = {
   [FieldType.LINK]: 'لینک',
   [FieldType.LOCATION]: 'موقعیت',
   [FieldType.RELATION]: 'ارتباط با ماژول',
+  [FieldType.MULTI_RELATION]: 'چندارتباطی با ماژول',
   [FieldType.USER]: 'کاربر',
   [FieldType.STATUS]: 'وضعیت',
   [FieldType.PHONE]: 'تلفن',

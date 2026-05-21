@@ -58,8 +58,9 @@ export enum FieldType {
   DATETIME = 'datetime',
   LINK = 'link',
   LOCATION = 'location', 
-  RELATION = 'relation', 
-  USER = 'user',         
+  RELATION = 'relation',
+  MULTI_RELATION = 'multi_relation',
+  USER = 'user',
   STATUS = 'status',  
   PHONE = 'phone',
   JSON = 'json',
@@ -199,6 +200,29 @@ export interface ModuleField {
     }>;
     quickCreateFieldKeys?: string[];
     quickCreateDefaults?: Record<string, any>;
+  };
+  multiRelationConfig?: {
+    targetModule: string;
+    targetField?: string;
+    filter?: Record<string, any>;
+    dependsOn?: string;
+    disableImportAutoCreate?: boolean;
+    chartScopeRootNames?: string[];
+    requireLeaf?: boolean;
+    requireDetail?: boolean;
+    sourceModules?: Array<{
+      targetModule: string;
+      targetField?: string;
+      filter?: Record<string, any>;
+      tagLabel?: string;
+      tagColor?: string;
+      chartScopeRootNames?: string[];
+      requireLeaf?: boolean;
+      requireDetail?: boolean;
+    }>;
+    quickCreateFieldKeys?: string[];
+    quickCreateDefaults?: Record<string, any>;
+    targetPhoneFields?: string[];
   };
   defaultValue?: any;
 }

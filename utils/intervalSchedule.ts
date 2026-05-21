@@ -1,5 +1,18 @@
 export type IntervalUnit = 'hour' | 'day' | 'month';
 
+export type IntervalScheduleParams = {
+  lastRunAt?: string | Date | null;
+  intervalValue?: number | null;
+  intervalUnit?: IntervalUnit | null;
+  intervalAt?: string | null;
+  intervalFirstRunAt?: string | null;
+  intervalMinute?: number | null;
+  intervalAllowedFromHour?: number | null;
+  intervalAllowedToHour?: number | null;
+  intervalDayOfMonth?: number | null;
+  now?: Date;
+};
+
 const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 
@@ -99,24 +112,64 @@ export const getNextIntervalDueAt = ({
   return next;
 };
 
-export const isIntervalDue = ({
-  lastRunAt,
-  intervalValue,
-  intervalUnit,
-  intervalAt,
-  now = new Date(),
-}: {
-  lastRunAt?: string | Date | null;
-  intervalValue?: number | null;
-  intervalUnit?: IntervalUnit | null;
-  intervalAt?: string | null;
-  now?: Date;
-}) => {
-  const next = getNextIntervalDueAt({
+const isHourInAllowedWindow = (
+  hour: number,
+  fromHour: number | null | undefined,
+  toHour: number | null | undefined
+): boolean => {
+  const from = typeof fromHour === 'number' ? fromHour : null;
+  const to = typeof toHour === 'number' ? toHour : null;
+  if (from === null && to === null) return true;
+  if (from !== null && to !== null) {
+    if (from <= to) return hour >= from && hour <= to;
+    return hour >= from || hour <= to;
+  }
+  if (from !== null) return hour >= from;
+  if (to !== null) return hour <= to;
+  return true;
+};
+
+export const isIntervalDue = (params: IntervalScheduleParams): boolean => {
+  const {
     lastRunAt,
     intervalValue,
     intervalUnit,
     intervalAt,
+    intervalFirstRunAt,
+    intervalMinute,
+    intervalAllowedFromHour,
+    intervalAllowedToHour,
+    intervalDayOfMonth,
+    now = new Date(),
+  } = params;
+
+  const normalizedUnit = normalizeIntervalUnit(intervalUnit || 'day');
+
+  if (!lastRunAt && intervalFirstRunAt) {
+    const firstRun = parseDateSafe(intervalFirstRunAt);
+    if (firstRun && now.getTime() < firstRun.getTime()) return false;
+  }
+
+  if (normalizedUnit === 'hour') {
+    if (!isHourInAllowedWindow(now.getHours(), intervalAllowedFromHour, intervalAllowedToHour)) {
+      return false;
+    }
+  }
+
+  if (normalizedUnit === 'month' && intervalDayOfMonth) {
+    const targetDay = Math.min(Math.max(1, intervalDayOfMonth), 31);
+    if (now.getDate() !== targetDay) return false;
+  }
+
+  const effectiveIntervalAt = normalizedUnit === 'hour'
+    ? (typeof intervalMinute === 'number' ? `00:${String(intervalMinute).padStart(2, '0')}` : null)
+    : intervalAt;
+
+  const next = getNextIntervalDueAt({
+    lastRunAt,
+    intervalValue,
+    intervalUnit,
+    intervalAt: effectiveIntervalAt,
     now,
   });
   return now.getTime() >= next.getTime();

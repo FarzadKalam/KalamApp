@@ -27,6 +27,14 @@ export const WORKFLOW_OPERATORS = {
   is_tomorrow: 'فردا باشد',
   is_friday: 'جمعه باشد',
   is_official_holiday: 'تعطیل رسمی باشد',
+  is_this_week: 'همین هفته باشد',
+  is_last_week: 'هفته گذشته باشد',
+  is_this_month: 'همین ماه باشد',
+  is_last_month: 'ماه گذشته باشد',
+  day_of_month_eq: 'روز چندم ماه باشد',
+  day_of_month_neq: 'روز چندم ماه نباشد',
+  day_of_week_eq: 'روز چندم هفته باشد',
+  day_of_week_neq: 'روز چندم هفته نباشد',
   days_passed_gt: 'بیشتر از چند روز گذشته باشد',
   days_passed_lt: 'کمتر از چند روز گذشته باشد',
   days_remaining_gt: 'بیشتر از چند روز مانده باشد',
@@ -106,8 +114,16 @@ const baseDateOperators: WorkflowOperator[] = [
   'is_today',
   'is_yesterday',
   'is_tomorrow',
+  'is_this_week',
+  'is_last_week',
+  'is_this_month',
+  'is_last_month',
   'is_friday',
   'is_official_holiday',
+  'day_of_month_eq',
+  'day_of_month_neq',
+  'day_of_week_eq',
+  'day_of_week_neq',
   'days_passed_eq',
   'days_passed_gt',
   'days_passed_lt',
@@ -149,8 +165,16 @@ const baseDateTimeOperators: WorkflowOperator[] = [
   'is_today',
   'is_yesterday',
   'is_tomorrow',
+  'is_this_week',
+  'is_last_week',
+  'is_this_month',
+  'is_last_month',
   'is_friday',
   'is_official_holiday',
+  'day_of_month_eq',
+  'day_of_month_neq',
+  'day_of_week_eq',
+  'day_of_week_neq',
   'days_passed_eq',
   'days_passed_gt',
   'days_passed_lt',
@@ -179,6 +203,7 @@ export const getWorkflowOperatorsForField = (field?: ModuleField | null): Workfl
     case FieldType.SELECT:
     case FieldType.STATUS:
     case FieldType.RELATION:
+    case FieldType.MULTI_RELATION:
     case FieldType.USER:
     case FieldType.MULTI_SELECT:
     case FieldType.TAGS:
@@ -222,6 +247,10 @@ export const workflowOperatorNeedsValue = (operator?: string) => {
     'is_tomorrow',
     'is_friday',
     'is_official_holiday',
+    'is_this_week',
+    'is_last_week',
+    'is_this_month',
+    'is_last_month',
   ].includes(String(operator || ''));
 };
 
@@ -237,6 +266,10 @@ export const workflowOperatorNumericValue = (operator?: string) => {
     'hours_passed_lt',
     'hours_remaining_gt',
     'hours_remaining_lt',
+    'day_of_month_eq',
+    'day_of_month_neq',
+    'day_of_week_eq',
+    'day_of_week_neq',
   ].includes(String(operator || ''));
 };
 
@@ -245,7 +278,11 @@ export const normalizeWorkflowValueByFieldType = (field: ModuleField | undefined
   if (value === undefined) return value;
   if (value === null) return null;
 
-  if (field.type === FieldType.MULTI_SELECT || field.type === FieldType.TAGS) {
+  if (
+    field.type === FieldType.MULTI_SELECT
+    || field.type === FieldType.MULTI_RELATION
+    || field.type === FieldType.TAGS
+  ) {
     return Array.isArray(value) ? value : value ? [value] : [];
   }
 

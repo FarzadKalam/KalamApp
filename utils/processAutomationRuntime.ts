@@ -8,6 +8,7 @@ import {
   evaluateWorkflowConditionCollection,
   executeWorkflowAction,
   resolveNoteAttachmentsFromFields,
+  resolveNoteRecipientsFromFields,
 } from './workflowRuntime';
 import { renderTemplateText } from './messageTemplateRenderer';
 import {
@@ -53,11 +54,12 @@ type MentionTarget = {
 type CommunicationTarget = {
   phones: string[];
   emails: string[];
+  telegramChatIds: string[];
   baleChatIds: string[];
   rubikaChatIds: string[];
 };
 
-type CommunicationChannel = 'sms' | 'email' | 'bale' | 'rubika';
+type CommunicationChannel = 'sms' | 'email' | 'telegram' | 'bale' | 'rubika';
 
 const isTaskAutomationFieldKey = (fieldKey?: string | null) =>
   String(fieldKey || '').startsWith(TASK_AUTOMATION_FIELD_PREFIX);
@@ -208,23 +210,6 @@ const mergeMentionTargets = (...targets: MentionTarget[]): MentionTarget => ({
   groupIds: Array.from(new Set(targets.flatMap((item) => item.groupIds || []).filter(Boolean))),
 });
 
-const appendMentionTargetToken = (target: MentionTarget, value: any) => {
-  const combo = String(value || '').trim();
-  const match = combo.match(/^(user|role|chat_group)[:_](.+)$/i);
-  if (!match) return;
-  const id = String(match[2] || '').trim();
-  if (!id) return;
-  if (String(match[1] || '').toLowerCase() === 'user') {
-    target.userIds.push(id);
-    return;
-  }
-  if (String(match[1] || '').toLowerCase() === 'chat_group') {
-    target.groupIds = [...(target.groupIds || []), id];
-    return;
-  }
-  target.roleIds.push(id);
-};
-
 const expandChatGroupsToMentionTarget = async (target: MentionTarget): Promise<MentionTarget> => {
   const groupIds = Array.from(new Set((target.groupIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
   if (groupIds.length === 0) {
@@ -271,6 +256,10 @@ const getRequestedCommunicationChannels = (actions: any[]): Set<CommunicationCha
       channels.add('email');
       return;
     }
+    if (actionType === 'send_telegram_bot') {
+      channels.add('telegram');
+      return;
+    }
     if (actionType === 'send_bale_bot') {
       channels.add('bale');
       return;
@@ -286,6 +275,7 @@ const getProfileCommunicationSelect = (channels: Set<CommunicationChannel>) => {
   const columns = ['id'];
   if (channels.has('sms')) columns.push('mobile_1');
   if (channels.has('email')) columns.push('email');
+  if (channels.has('telegram')) columns.push('telegram_chat_id');
   if (channels.has('bale')) columns.push('bale_chat_id');
   if (channels.has('rubika')) columns.push('rubika_chat_id');
   return columns.join(', ');
@@ -315,7 +305,7 @@ const resolveCommunicationTargets = async (
   channels: Set<CommunicationChannel>
 ): Promise<CommunicationTarget> => {
   if (channels.size === 0) {
-    return { phones: [], emails: [], baleChatIds: [], rubikaChatIds: [] };
+    return { phones: [], emails: [], telegramChatIds: [], baleChatIds: [], rubikaChatIds: [] };
   }
 
   const userIds = Array.from(new Set((target?.userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
@@ -331,7 +321,8 @@ const resolveCommunicationTargets = async (
     if (error) {
       const shouldFallback =
         (channels.has('rubika') && isMissingColumnError(error, 'rubika_chat_id'))
-        || (channels.has('bale') && isMissingColumnError(error, 'bale_chat_id'));
+        || (channels.has('bale') && isMissingColumnError(error, 'bale_chat_id'))
+        || (channels.has('telegram') && isMissingColumnError(error, 'telegram_chat_id'));
       if (!shouldFallback) throw error;
       const fallback = await supabase
         .from('profiles')
@@ -353,7 +344,8 @@ const resolveCommunicationTargets = async (
     if (error) {
       const shouldFallback =
         (channels.has('rubika') && isMissingColumnError(error, 'rubika_chat_id'))
-        || (channels.has('bale') && isMissingColumnError(error, 'bale_chat_id'));
+        || (channels.has('bale') && isMissingColumnError(error, 'bale_chat_id'))
+        || (channels.has('telegram') && isMissingColumnError(error, 'telegram_chat_id'));
       if (!shouldFallback) throw error;
       const fallback = await supabase
         .from('profiles')
@@ -370,13 +362,14 @@ const resolveCommunicationTargets = async (
   return {
     phones: Array.from(new Set(allUsers.map((row) => String(row?.mobile_1 || '').trim()).filter(Boolean))),
     emails: Array.from(new Set(allUsers.map((row) => String(row?.email || '').trim()).filter(Boolean))),
+    telegramChatIds: Array.from(new Set(allUsers.map((row) => String(row?.telegram_chat_id || '').trim()).filter(Boolean))),
     baleChatIds: Array.from(new Set(allUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
     rubikaChatIds: Array.from(new Set(allUsers.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean))),
   };
 };
 
 const resolveCounterpartyBotChatIdsFromSource = async (
-  channel: 'rubika' | 'bale',
+  channel: 'rubika' | 'bale' | 'telegram',
   sourceModuleId?: string | null,
   sourceRecord?: Record<string, any> | null
 ) => {
@@ -863,19 +856,26 @@ export const runProcessAutomationsForTaskEvent = async ({
             const actionRecipientFields = Array.isArray((action as any)?.config?.recipient_fields)
               ? (action as any).config.recipient_fields
               : [];
-            const directNoteTarget = actionRecipientFields.reduce((acc: MentionTarget, recipientField: any) => {
-              const rawRecipientField = String(recipientField || '').trim();
-              if (!rawRecipientField) return acc;
-              const resolvedValues = /^(user|role)[:_]/i.test(rawRecipientField)
-                ? [rawRecipientField]
-                : (Array.isArray(actionRecord?.[rawRecipientField])
-                    ? actionRecord[rawRecipientField]
-                    : [actionRecord?.[rawRecipientField]]);
-              resolvedValues.forEach((resolvedValue: any) => {
-                appendMentionTargetToken(acc, resolvedValue);
-              });
-              return acc;
-            }, { userIds: [], roleIds: [], groupIds: [] });
+            const actionRecipientAssignees = Array.isArray((action as any)?.config?.recipient_assignees)
+              ? (action as any).config.recipient_assignees
+              : [];
+            const resolvedNoteRecipients = (
+              actionRecipientFields.length > 0 || actionRecipientAssignees.length > 0
+            )
+              ? await resolveNoteRecipientsFromFields({
+                  currentRecord: actionRecord,
+                  moduleId: sourceContext?.moduleId || 'tasks',
+                  recipientFields: actionRecipientFields,
+                  recipientAssignees: actionRecipientAssignees,
+                })
+              : null;
+            const directNoteTarget: MentionTarget = resolvedNoteRecipients
+              ? {
+                  userIds: resolvedNoteRecipients.mentionUserIds,
+                  roleIds: resolvedNoteRecipients.mentionRoleIds,
+                  groupIds: resolvedNoteRecipients.groupTargets.map((group) => String(group.groupId || '').trim()).filter(Boolean),
+                }
+              : { userIds: [], roleIds: [], groupIds: [] };
             const noteTarget = (
               directNoteTarget.userIds.length > 0
               || directNoteTarget.roleIds.length > 0
@@ -899,7 +899,7 @@ export const runProcessAutomationsForTaskEvent = async ({
           }
 
           const actionType = String(action?.type || '');
-          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_bale_bot', 'send_rubika_bot'].includes(actionType);
+          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_telegram_bot', 'send_bale_bot', 'send_rubika_bot'].includes(actionType);
           if ((!sourceContext?.moduleId || !sourceContext?.record) && !canRunWithoutSourceRecord) continue;
 
           const actionConfig = (action as any)?.config || {};
@@ -926,6 +926,11 @@ export const runProcessAutomationsForTaskEvent = async ({
 
           const hasManualChatIds = Array.isArray(actionConfig?.manual_chat_ids)
             && actionConfig.manual_chat_ids.some((item: any) => String(item || '').trim());
+          if (actionType === 'send_telegram_bot' && communicationTargets.telegramChatIds.length > 0 && actionRecipientFields.length === 0 && !hasManualChatIds) {
+            directConfigPatch.manual_chat_ids = Array.from(new Set([
+              ...communicationTargets.telegramChatIds,
+            ]));
+          }
           if (actionType === 'send_bale_bot' && communicationTargets.baleChatIds.length > 0 && actionRecipientFields.length === 0 && !hasManualChatIds) {
             directConfigPatch.manual_chat_ids = Array.from(new Set([
               ...communicationTargets.baleChatIds,
@@ -936,8 +941,8 @@ export const runProcessAutomationsForTaskEvent = async ({
               ...communicationTargets.rubikaChatIds,
             ]));
           }
-          if ((actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') && actionRecipientFields.length === 0 && !hasManualChatIds) {
-            const fallbackChannel = actionType === 'send_rubika_bot' ? 'rubika' : 'bale';
+          if ((actionType === 'send_telegram_bot' || actionType === 'send_bale_bot' || actionType === 'send_rubika_bot') && actionRecipientFields.length === 0 && !hasManualChatIds) {
+            const fallbackChannel = actionType === 'send_rubika_bot' ? 'rubika' : (actionType === 'send_telegram_bot' ? 'telegram' : 'bale');
             const sourceChatIds = await resolveCounterpartyBotChatIdsFromSource(
               fallbackChannel,
               sourceContext?.moduleId || null,
